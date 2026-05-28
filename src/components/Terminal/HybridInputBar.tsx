@@ -191,7 +191,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const isVoiceFinishing = activeVoicePanelId === terminalId && voiceStatus === "finishing";
     const isVoicePaused = activeVoicePanelId === terminalId && voiceStatus === "paused";
     const isVoiceActiveForPanel =
-      isVoiceRecording || isVoiceConnecting || isVoiceReconnecting || isVoiceFinishing || isVoicePaused;
+      isVoiceRecording ||
+      isVoiceConnecting ||
+      isVoiceReconnecting ||
+      isVoiceFinishing ||
+      isVoicePaused;
     const isVoiceSubmitting = useTerminalInputStore((s) => s.voiceSubmittingPanels.has(terminalId));
 
     const commandContext = { terminalId, cwd, projectId };
