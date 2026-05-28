@@ -129,17 +129,27 @@ export function registerDevPreviewActions(
 
       const partition = buildDevPreviewPartition(projectId, panel.worktreeId, panelId);
       const title = panel.title?.trim() || "Dev preview";
+      const tabId = `tab-${crypto.randomUUID()}`;
 
       const portal = usePortalStore.getState();
       if (!portal.isOpen) {
         portal.setOpen(true);
       }
-      const tabId = portal.createTab(url, title);
 
       const bounds = await getPortalBoundsWithRetry();
       try {
+        // Create the WebContentsView on the dev-preview partition BEFORE the tab
+        // becomes active. PortalVisibilityController auto-creates any active,
+        // not-yet-created tab via a partition-less portal.create; pre-creating
+        // here (and marking it created) makes that path a no-op so the shared
+        // session isn't lost to a racing default-partition view (#9102).
         await window.electron.portal.create({ tabId, url, partition });
-        usePortalStore.getState().markTabCreated(tabId);
+        const store = usePortalStore.getState();
+        store.markTabCreated(tabId);
+        usePortalStore.setState((s) => ({
+          tabs: [...s.tabs, { id: tabId, url, title, partition }],
+          activeTabId: tabId,
+        }));
         if (bounds) {
           await window.electron.portal.show({ tabId, bounds });
         }

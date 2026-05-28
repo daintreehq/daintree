@@ -838,8 +838,15 @@ export function DevPreviewPane({
     });
   }, [currentUrl, proxyOrigin, currentProjectId, id]);
 
+  const isPromotingRef = useRef(false);
   const handlePromoteToPortal = useCallback(() => {
-    void actionService.dispatch("devPreview.promoteToPortal", { panelId: id }, { source: "user" });
+    if (isPromotingRef.current) return;
+    isPromotingRef.current = true;
+    void actionService
+      .dispatch("devPreview.promoteToPortal", { panelId: id }, { source: "user" })
+      .finally(() => {
+        isPromotingRef.current = false;
+      });
   }, [id]);
 
   const handleZoomChange = useCallback((newZoom: number) => {

@@ -26,11 +26,19 @@ test.describe.serial("Core: Dev preview promote to portal", () => {
       "Windows CI: portal not supported with GPU disabled"
     );
 
+    // Set the cookie exactly once (on the dev-preview webview's first load).
+    // Later loads — including the promoted portal tab's own navigation — get NO
+    // Set-Cookie, so the cookie can only be present in the portal view if it
+    // genuinely shares the dev-preview session partition. A view opened on the
+    // default `persist:portal` session would see no cookie and fail the test.
+    let cookieSent = false;
     server = createServer((_req, res) => {
-      res.writeHead(200, {
-        "Content-Type": "text/html",
-        "Set-Cookie": `${COOKIE_NAME}=${COOKIE_VALUE}; Path=/`,
-      });
+      const headers: Record<string, string> = { "Content-Type": "text/html" };
+      if (!cookieSent) {
+        cookieSent = true;
+        headers["Set-Cookie"] = `${COOKIE_NAME}=${COOKIE_VALUE}; Path=/`;
+      }
+      res.writeHead(200, headers);
       res.end(
         "<html><head><title>Promote E2E</title></head><body><h1>Promote E2E</h1></body></html>"
       );
@@ -109,14 +117,18 @@ test.describe.serial("Core: Dev preview promote to portal", () => {
     await expect
       .poll(
         async () =>
-          ctx.app.evaluate(async ({ webContents }, name: string) => {
-            for (const wc of webContents.getAllWebContents()) {
-              if (wc.getType() !== "browserView") continue;
-              const cookies = await wc.session.cookies.get({ name });
-              if (cookies.length > 0) return cookies[0]!.value;
-            }
-            return null;
-          }, COOKIE_NAME),
+          ctx.app.evaluate(
+            async ({ webContents }, { name, urlPart }) => {
+              for (const wc of webContents.getAllWebContents()) {
+                if (wc.getType() !== "browserView") continue;
+                if (!wc.getURL().includes(urlPart)) continue;
+                const cookies = await wc.session.cookies.get({ name });
+                if (cookies.length > 0) return cookies[0]!.value;
+              }
+              return null;
+            },
+            { name: COOKIE_NAME, urlPart: `127.0.0.1:${port}` }
+          ),
         { timeout: T_LONG }
       )
       .toBe(COOKIE_VALUE);

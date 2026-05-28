@@ -6,7 +6,7 @@ import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../..
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
 
-const portalStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
+const portalStoreMock = vi.hoisted(() => ({ getState: vi.fn(), setState: vi.fn() }));
 vi.mock("@/store/portalStore", () => ({ usePortalStore: portalStoreMock }));
 
 const getPortalBoundsWithRetryMock = vi.hoisted(() => vi.fn());
@@ -21,12 +21,13 @@ import { registerDevPreviewActions } from "../devPreviewActions";
 
 const createMock = vi.fn(async () => ({}));
 const showMock = vi.fn(async () => ({}));
-const createTabMock = vi.fn(() => "tab-new");
 const markTabCreatedMock = vi.fn();
 const closeTabMock = vi.fn();
 const setOpenMock = vi.fn();
 
 const BOUNDS = { x: 0, y: 0, width: 800, height: 600 };
+let portalState: { isOpen: boolean; tabs: unknown[]; activeTabId: string | null };
+let order: string[];
 
 function devPreviewPanel(overrides: Record<string, unknown> = {}) {
   return {
@@ -39,6 +40,18 @@ function devPreviewPanel(overrides: Record<string, unknown> = {}) {
     devServerUrl: "http://localhost:3000/",
     location: "grid",
     ...overrides,
+  };
+}
+
+function portalGetState() {
+  return {
+    isOpen: portalState.isOpen,
+    setOpen: setOpenMock,
+    markTabCreated: (id: string) => {
+      order.push("markCreated");
+      markTabCreatedMock(id);
+    },
+    closeTab: closeTabMock,
   };
 }
 
@@ -63,17 +76,20 @@ function setupActions() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  order = [];
+  portalState = { isOpen: false, tabs: [], activeTabId: null };
   getPortalBoundsWithRetryMock.mockResolvedValue(BOUNDS);
   panelStoreMock.getState.mockReturnValue({
     focusedId: "panel-1",
     getTerminal: vi.fn(() => devPreviewPanel()),
   });
-  portalStoreMock.getState.mockReturnValue({
-    isOpen: false,
-    setOpen: setOpenMock,
-    createTab: createTabMock,
-    markTabCreated: markTabCreatedMock,
-    closeTab: closeTabMock,
+  portalStoreMock.getState.mockImplementation(portalGetState);
+  portalStoreMock.setState.mockImplementation((updater: (s: typeof portalState) => object) => {
+    order.push("setState");
+    Object.assign(portalState, updater(portalState));
+  });
+  createMock.mockImplementation(async () => {
+    order.push("create");
   });
   Object.defineProperty(globalThis.window, "electron", {
     value: { portal: { create: createMock, show: showMock } },
@@ -89,29 +105,39 @@ describe("devPreview.promoteToPortal", () => {
     expect(d.kind).toBe("command");
   });
 
-  it("creates a portal tab sharing the dev-preview partition", async () => {
+  it("creates a portal tab on the dev-preview partition before activating it", async () => {
     const { run } = setupActions();
     await run("devPreview.promoteToPortal", undefined, { projectId: "proj" });
 
     expect(setOpenMock).toHaveBeenCalledWith(true);
-    expect(createTabMock).toHaveBeenCalledWith("http://localhost:3000/", "Preview");
-    expect(createMock).toHaveBeenCalledWith({
-      tabId: "tab-new",
-      url: "http://localhost:3000/",
-      partition: "persist:dev-preview-proj-wt-1-panel-1",
-    });
-    expect(markTabCreatedMock).toHaveBeenCalledWith("tab-new");
-    expect(showMock).toHaveBeenCalledWith({ tabId: "tab-new", bounds: BOUNDS });
+    // Critical race guard: the partitioned create must run before the tab is
+    // inserted/activated so PortalVisibilityController never wins with a
+    // partition-less create.
+    expect(order.indexOf("create")).toBeLessThan(order.indexOf("setState"));
+
+    const createArgs = createMock.mock.calls[0]![0] as {
+      tabId: string;
+      url: string;
+      partition: string;
+    };
+    expect(createArgs.url).toBe("http://localhost:3000/");
+    expect(createArgs.partition).toBe("persist:dev-preview-proj-wt-1-panel-1");
+
+    expect(markTabCreatedMock).toHaveBeenCalledWith(createArgs.tabId);
+    expect(portalState.activeTabId).toBe(createArgs.tabId);
+    expect(portalState.tabs).toEqual([
+      {
+        id: createArgs.tabId,
+        url: "http://localhost:3000/",
+        title: "Preview",
+        partition: "persist:dev-preview-proj-wt-1-panel-1",
+      },
+    ]);
+    expect(showMock).toHaveBeenCalledWith({ tabId: createArgs.tabId, bounds: BOUNDS });
   });
 
   it("does not reopen the portal when already open", async () => {
-    portalStoreMock.getState.mockReturnValue({
-      isOpen: true,
-      setOpen: setOpenMock,
-      createTab: createTabMock,
-      markTabCreated: markTabCreatedMock,
-      closeTab: closeTabMock,
-    });
+    portalState.isOpen = true;
     const { run } = setupActions();
     await run("devPreview.promoteToPortal", undefined, { projectId: "proj" });
     expect(setOpenMock).not.toHaveBeenCalled();
@@ -126,7 +152,8 @@ describe("devPreview.promoteToPortal", () => {
     });
     const { run } = setupActions();
     await run("devPreview.promoteToPortal", undefined, { projectId: "proj" });
-    expect(createTabMock).toHaveBeenCalledWith("http://localhost:4000/", "Preview");
+    const createArgs = createMock.mock.calls[0]![0] as { url: string };
+    expect(createArgs.url).toBe("http://localhost:4000/");
   });
 
   it("is a no-op when no URL has loaded", async () => {
@@ -136,8 +163,8 @@ describe("devPreview.promoteToPortal", () => {
     });
     const { run } = setupActions();
     await run("devPreview.promoteToPortal", undefined, { projectId: "proj" });
-    expect(createTabMock).not.toHaveBeenCalled();
     expect(createMock).not.toHaveBeenCalled();
+    expect(portalStoreMock.setState).not.toHaveBeenCalled();
   });
 
   it("throws when the focused panel is not a dev preview", async () => {
@@ -155,8 +182,9 @@ describe("devPreview.promoteToPortal", () => {
     createMock.mockRejectedValueOnce(new Error("ipc boom"));
     const { run } = setupActions();
     await run("devPreview.promoteToPortal", undefined, { projectId: "proj" });
-    expect(closeTabMock).toHaveBeenCalledWith("tab-new");
+    expect(closeTabMock).toHaveBeenCalledTimes(1);
     expect(markTabCreatedMock).not.toHaveBeenCalled();
+    expect(portalStoreMock.setState).not.toHaveBeenCalled();
     expect(logErrorMock).toHaveBeenCalled();
   });
 

@@ -22,9 +22,17 @@ describe("sanitizePartitionToken", () => {
     expect(sanitizePartitionToken(undefined)).toBe("default");
   });
 
-  it("falls back to 'default' when sanitization yields an empty string", () => {
-    expect(sanitizePartitionToken("@@@")).toBe("-");
+  it("falls back to 'default' only when the result is genuinely empty", () => {
     expect(sanitizePartitionToken("")).toBe("default");
+    expect(sanitizePartitionToken("   ")).toBe("default");
+  });
+
+  it("collapses all-delimiter input to a single safe delimiter token", () => {
+    // Disallowed chars become hyphens then collapse; the result is non-empty so
+    // it is kept as-is rather than replaced with 'default'.
+    expect(sanitizePartitionToken("@@@")).toBe("-");
+    expect(sanitizePartitionToken("___")).toBe("___");
+    expect(sanitizePartitionToken("/ /")).toBe("-");
   });
 });
 

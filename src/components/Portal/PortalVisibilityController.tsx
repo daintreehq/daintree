@@ -41,7 +41,11 @@ export function PortalVisibilityController(): null {
         const needsCreation = !state.createdTabs.has(tabId);
 
         if (needsCreation) {
-          await window.electron.portal.create({ tabId, url: tabUrl });
+          // Re-create on the tab's own partition so a promoted dev-preview tab
+          // keeps its shared session after eviction/restart instead of silently
+          // reverting to the default portal session.
+          const partition = state.tabs.find((t) => t.id === tabId)?.partition;
+          await window.electron.portal.create({ tabId, url: tabUrl, partition });
           const postCreateState = usePortalStore.getState();
           const stillExists = postCreateState.tabs.some((t) => t.id === tabId);
           if (!stillExists) {
