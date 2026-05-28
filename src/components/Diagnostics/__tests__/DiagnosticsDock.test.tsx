@@ -243,6 +243,48 @@ describe("DiagnosticsDock — separator keyboard resize", () => {
   });
 });
 
+describe("DiagnosticsDock — badge cap", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+
+  function setErrors(count: number) {
+    useErrorStore.setState({
+      errors: Array.from({ length: count }, (_, i) => ({
+        id: `err-${i}`,
+        type: "unknown" as const,
+        message: `Error ${i}`,
+        retryability: "none" as const,
+        source: "test",
+        timestamp: Date.now(),
+        dismissed: false,
+        fromPreviousSession: false,
+      })),
+    });
+  }
+
+  it("shows exact count when errors <= 99", () => {
+    setErrors(99);
+    const { container } = render(<DiagnosticsDock />);
+    const badge = container.querySelector('[id="diagnostics-problems-tab"] span');
+    expect(badge?.textContent).toBe("99");
+  });
+
+  it("caps at 99+ when errors >= 100", () => {
+    setErrors(100);
+    const { container } = render(<DiagnosticsDock />);
+    const badge = container.querySelector('[id="diagnostics-problems-tab"] span');
+    expect(badge?.textContent).toBe("99+");
+  });
+
+  it("shows no badge when error count is zero", () => {
+    setErrors(0);
+    const { container } = render(<DiagnosticsDock />);
+    const badge = container.querySelector('[id="diagnostics-problems-tab"] span');
+    expect(badge).toBeNull();
+  });
+});
+
 describe("DiagnosticsDock — resize lag suppression", () => {
   beforeEach(() => {
     resetStores();

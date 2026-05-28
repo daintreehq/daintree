@@ -57,10 +57,10 @@ function TabButton({ tab, label, isActive, onClick, badge }: TabButtonProps) {
       {label}
       {badge !== undefined && badge > 0 && (
         <span className="ml-1.5 px-1.5 py-0.5 text-xs tabular-nums bg-status-error/15 text-status-error rounded-full">
-          {badge}
+          {badge > 99 ? "99+" : badge}
         </span>
       )}
-      {isActive && <div className="absolute bottom-0 left-0 right-0 h-px bg-daintree-accent/70" />}
+      {isActive && <div className="absolute bottom-0 left-0 right-0 h-px bg-daintree-text/30" />}
     </button>
   );
 }
