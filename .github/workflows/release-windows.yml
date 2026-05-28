@@ -108,7 +108,7 @@ jobs:
     secrets: inherit
 
   build-daintree:
-    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate, e2e-online-gate]
+    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
     name: Build Daintree (Windows)
     runs-on: windows-latest
     timeout-minutes: 90

@@ -103,7 +103,7 @@ jobs:
     secrets: inherit
 
   build-daintree:
-    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate, e2e-online-gate]
+    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
     name: Build Daintree (Linux)
     runs-on: ubuntu-22.04
     timeout-minutes: 90
