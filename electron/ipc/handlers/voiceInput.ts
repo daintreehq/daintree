@@ -9,6 +9,7 @@ import { VoiceCorrectionService } from "../../services/VoiceCorrectionService.js
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
 import { logDebug } from "../../utils/logger.js";
+import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { applyDictationCommands } from "../../services/voiceDictationCommands.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
@@ -38,6 +39,8 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   paragraphingStrategy: "spoken-command",
   resolveFileLinks: true,
   deviceId: "",
+  organizationId: "",
+  projectId: "",
 };
 
 /** Read voiceInput settings with defaults for fields added after initial store creation. */
@@ -178,7 +181,9 @@ async function parseOpenAIErrorBody(
 }
 
 export async function validateOpenAIKey(
-  apiKey: string
+  apiKey: string,
+  organizationId?: string,
+  projectId?: string
 ): Promise<{ valid: boolean; error?: string }> {
   if (typeof apiKey !== "string" || !apiKey.trim()) {
     return { valid: false, error: "API key is required" };
@@ -187,9 +192,7 @@ export async function validateOpenAIKey(
   try {
     const response = await fetch("https://api.openai.com/v1/models", {
       method: "GET",
-      headers: {
-        Authorization: `Bearer ${apiKey.trim()}`,
-      },
+      headers: buildOpenAIHeaders(apiKey, organizationId, projectId),
       signal: AbortSignal.timeout(10_000),
     });
 
@@ -336,7 +339,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             const signal = sessionController?.signal;
             const correctionSvc = correctionService;
             void (async () => {
-              const tokens = await correctionSvc.detectFileLinkTokens(rawText, { apiKey });
+              const tokens = await correctionSvc.detectFileLinkTokens(rawText, {
+                apiKey,
+                organizationId: liveSettings.organizationId,
+                projectId: liveSettings.projectId,
+              });
               for (const { description } of tokens) {
                 const resolved = await voiceFileLinkResolver.resolve({
                   cwd: projectPath,
@@ -451,7 +458,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   };
 
   const handleValidateApiKey = async (apiKey: string) => {
-    return validateOpenAIKey(apiKey);
+    const settings = getVoiceSettings();
+    return validateOpenAIKey(apiKey, settings.organizationId, settings.projectId);
   };
 
   // Whole-passage cleanup pass. The renderer calls this once after recording
@@ -483,6 +491,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         customInstructions: settings.correctionCustomInstructions,
         projectName: projectInfo.name,
         projectPath: projectInfo.path,
+        organizationId: settings.organizationId,
+        projectId: settings.projectId,
       }
     );
 
