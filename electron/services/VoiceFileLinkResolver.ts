@@ -54,7 +54,14 @@ export class VoiceFileLinkResolver {
         return candidates[0];
       }
 
-      return await this.aiRerank(description, candidates, apiKey, organizationId, projectId, payload.signal);
+      return await this.aiRerank(
+        description,
+        candidates,
+        apiKey,
+        organizationId,
+        projectId,
+        payload.signal
+      );
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return null;
       const msg = formatErrorMessage(error, "Voice file link resolution failed");

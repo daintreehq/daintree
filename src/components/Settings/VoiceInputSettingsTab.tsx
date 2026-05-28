@@ -251,8 +251,7 @@ export function VoiceInputSettingsTab() {
               helpLabel="Get API key"
             />
 
-            {(!settings.openaiApiKey ||
-              !settings.openaiApiKey.startsWith("sk-proj-")) && (
+            {(!settings.openaiApiKey || !settings.openaiApiKey.startsWith("sk-proj-")) && (
               <p className="text-xs text-daintree-text/50">
                 Use a Project API key (starts with <code className="font-mono">sk-proj-</code>) for
                 the best security
@@ -526,8 +525,7 @@ function AdvancedSection({
   update: (patch: Partial<VoiceInputSettings>) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const isLegacyKey =
-    settings.openaiApiKey && !settings.openaiApiKey.startsWith("sk-proj-");
+  const isLegacyKey = settings.openaiApiKey && !settings.openaiApiKey.startsWith("sk-proj-");
 
   return (
     <div className="space-y-2">

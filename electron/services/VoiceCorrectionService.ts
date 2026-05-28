@@ -260,10 +260,7 @@ export class VoiceCorrectionService {
 
   async detectFileLinkTokens(
     utterance: string,
-    settings: Pick<
-      VoiceCorrectionSettings,
-      "apiKey" | "organizationId" | "projectId"
-    >
+    settings: Pick<VoiceCorrectionSettings, "apiKey" | "organizationId" | "projectId">
   ): Promise<Array<{ description: string }>> {
     const trimmed = utterance.trim();
     if (!trimmed) return [];
@@ -274,11 +271,7 @@ export class VoiceCorrectionService {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...buildOpenAIHeaders(
-            settings.apiKey,
-            settings.organizationId,
-            settings.projectId
-          ),
+          ...buildOpenAIHeaders(settings.apiKey, settings.organizationId, settings.projectId),
         },
         signal: this.buildFetchSignal(FILE_LINK_DETECTION_TIMEOUT_MS),
         body: JSON.stringify({
