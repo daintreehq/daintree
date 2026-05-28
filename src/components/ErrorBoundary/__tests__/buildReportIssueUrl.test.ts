@@ -6,6 +6,7 @@ import {
   type NotificationReportInput,
   type ReportIssueInput,
 } from "../buildReportIssueUrl";
+import type { ActionBreadcrumb } from "../../../../shared/types/ipc/crashRecovery";
 
 function getEncodedBodyLength(url: string): number {
   const bodyParam = new URL(url).searchParams.get("body") ?? "";
@@ -209,6 +210,146 @@ describe("buildReportIssueUrl", () => {
     const title = new URL(result.url).searchParams.get("title") ?? "";
     expect(title.length).toBeLessThan(longMessage.length);
     expect(title.endsWith("…")).toBe(true);
+  });
+
+  describe("enrichment sections", () => {
+    const fixedNow = 1_700_000_000_000;
+
+    function makeBreadcrumb(overrides: Partial<ActionBreadcrumb> = {}): ActionBreadcrumb {
+      return {
+        id: "bc-1",
+        actionId: "terminal.spawn",
+        category: "terminal",
+        source: "user",
+        danger: "safe",
+        durationMs: 5,
+        timestamp: fixedNow - 12_000,
+        count: 1,
+        ...overrides,
+      };
+    }
+
+    it("renders system info and recent actions as <details> sections", () => {
+      const systemInfo = "App: 1.0.0 | Electron: 41.0.0 | Node: 22.0.0\nOS: darwin 24 arm64";
+      const recentActions = [
+        makeBreadcrumb(),
+        makeBreadcrumb({
+          id: "bc-2",
+          actionId: "git.commit",
+          source: "keybinding",
+          timestamp: fixedNow - 4_000,
+        }),
+      ];
+      const result = buildReportIssueUrl(makeInput({ systemInfo, recentActions, now: fixedNow }));
+
+      expect(result.usedClipboardFallback).toBe(false);
+      const body = decodeURIComponent(new URL(result.url).searchParams.get("body") ?? "");
+      // GFM requires a blank line after </summary> for inner markdown to render.
+      expect(body).toContain("<details>\n<summary>System info</summary>\n\n");
+      expect(body).toContain("App: 1.0.0 | Electron: 41.0.0");
+      expect(body).toContain("<details>\n<summary>Recent actions (2)</summary>\n\n");
+      expect(body).toContain("-12s terminal.spawn [u]");
+      expect(body).toContain("-4s git.commit [k]");
+      expect(getEncodedBodyLength(result.url)).toBeLessThanOrEqual(URL_BODY_BUDGET);
+    });
+
+    it("omits the system info section when no value is provided", () => {
+      const result = buildReportIssueUrl(makeInput({ now: fixedNow }));
+      expect(result.fullBody).not.toContain("<summary>System info</summary>");
+    });
+
+    it("omits the recent actions section when the array is empty", () => {
+      const result = buildReportIssueUrl(makeInput({ recentActions: [], now: fixedNow }));
+      expect(result.fullBody).not.toContain("Recent actions");
+    });
+
+    it("marks danger and count on breadcrumb lines", () => {
+      const recentActions = [
+        makeBreadcrumb({
+          actionId: "worktree.delete",
+          danger: "confirm",
+          count: 3,
+          timestamp: fixedNow - 30_000,
+        }),
+      ];
+      const result = buildReportIssueUrl(makeInput({ recentActions, now: fixedNow }));
+      const body = decodeURIComponent(new URL(result.url).searchParams.get("body") ?? "");
+      expect(body).toContain("-30s worktree.delete [u] !confirm x3");
+    });
+
+    it("formats minute-scale ages when older than 60 seconds", () => {
+      const recentActions = [makeBreadcrumb({ timestamp: fixedNow - 125_000 })];
+      const result = buildReportIssueUrl(makeInput({ recentActions, now: fixedNow }));
+      const body = decodeURIComponent(new URL(result.url).searchParams.get("body") ?? "");
+      expect(body).toContain("-2m terminal.spawn");
+    });
+
+    it("drops the recent actions section before the system info when budget is tight", () => {
+      // Stack is big enough to force componentStack to drop and stack to be
+      // middle-truncated; actions list is big enough that even after stack
+      // truncation it doesn't fit, but dropping actions alone does.
+      const longStack = Array.from(
+        { length: 1500 },
+        (_, i) => `  at frame${i} (file.ts:${i})`
+      ).join("\n");
+      const recentActions = Array.from({ length: 120 }, (_, i) =>
+        makeBreadcrumb({
+          id: `bc-${i}`,
+          actionId: `category.long_action_id_with_extra_padding_number_${i}_zzz`,
+          timestamp: fixedNow - i * 1000,
+        })
+      );
+      const systemInfo = "App: 1.0.0 | Electron: 41.0.0";
+      const result = buildReportIssueUrl(
+        makeInput({ stack: longStack, recentActions, systemInfo, now: fixedNow })
+      );
+      const body = decodeURIComponent(new URL(result.url).searchParams.get("body") ?? "");
+      expect(getEncodedBodyLength(result.url)).toBeLessThanOrEqual(URL_BODY_BUDGET);
+      expect(body).toContain("<summary>System info</summary>");
+      expect(body).not.toContain("Recent actions");
+      expect(result.usedClipboardFallback).toBe(false);
+    });
+
+    it("drops the system info section when even dropping actions is not enough", () => {
+      // Stack + huge systemInfo combine to overflow even after actions are
+      // dropped, forcing systemInfo to drop too.
+      const longStack = Array.from(
+        { length: 1500 },
+        (_, i) => `  at frame${i} (file.ts:${i})`
+      ).join("\n");
+      const systemInfo = "X".repeat(6000);
+      const recentActions = Array.from({ length: 10 }, () => makeBreadcrumb());
+      const result = buildReportIssueUrl(
+        makeInput({ stack: longStack, recentActions, systemInfo, now: fixedNow })
+      );
+      const body = decodeURIComponent(new URL(result.url).searchParams.get("body") ?? "");
+      expect(getEncodedBodyLength(result.url)).toBeLessThanOrEqual(URL_BODY_BUDGET);
+      expect(body).not.toContain("<summary>System info</summary>");
+      expect(body).not.toContain("Recent actions");
+      expect(result.usedClipboardFallback).toBe(false);
+    });
+
+    it("falls back to clipboard stub if even unenriched body overflows", () => {
+      const longLine = "x".repeat(1200);
+      const stack = Array.from({ length: 25 }, () => longLine).join("\n");
+      const componentStack = Array.from({ length: 10 }, () => longLine).join("\n");
+      const systemInfo = "App: 1.0.0";
+      const recentActions = [makeBreadcrumb()];
+      const result = buildReportIssueUrl(
+        makeInput({ stack, componentStack, systemInfo, recentActions, now: fixedNow })
+      );
+      expect(result.usedClipboardFallback).toBe(true);
+      expect(getEncodedBodyLength(result.url)).toBeLessThanOrEqual(URL_BODY_BUDGET);
+    });
+
+    it("escapes pipe characters in action IDs to keep the line format unambiguous", () => {
+      const recentActions = [
+        makeBreadcrumb({ actionId: "weird|action", timestamp: fixedNow - 1000 }),
+      ];
+      const result = buildReportIssueUrl(makeInput({ recentActions, now: fixedNow }));
+      const body = decodeURIComponent(new URL(result.url).searchParams.get("body") ?? "");
+      expect(body).toContain("-1s weird\\|action [u]");
+    });
   });
 });
 

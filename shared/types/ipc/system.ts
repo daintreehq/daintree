@@ -292,6 +292,24 @@ export interface AgentInstallProgressEvent {
   stream: "stdout" | "stderr";
 }
 
+/**
+ * Lightweight enrichment payload for the "Report issue" deeplink. Fetched
+ * synchronously at click time — must NOT call the slow diagnostics collector
+ * (which spawns subprocesses and runs up to 5s per section). Encoded into
+ * the GitHub URL body as collapsible `<details>` sections, gated by the
+ * Sentry consent state on the renderer side.
+ */
+export interface ReportIssueEnrichment {
+  /** Compact pre-formatted system snapshot (one short line per fact). */
+  systemInfo: string;
+  /**
+   * Up to 10 most-recent action breadcrumbs (oldest first). Already
+   * scrubbed at storage time via `safeArgs`; the URL formatter trims them
+   * further to fit the budget.
+   */
+  recentActions: import("./crashRecovery.js").ActionBreadcrumb[];
+}
+
 /** Status of the installed Daintree CLI tool */
 export interface CliInstallStatus {
   /** Whether the CLI script is installed */

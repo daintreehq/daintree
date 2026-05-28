@@ -18,7 +18,9 @@ import type {
   DiagnosticsInfo,
   DiagnosticsReviewPayload,
   DiagnosticsBundleSavePayload,
+  ReportIssueEnrichment,
 } from "../../../shared/types/ipc/system.js";
+import { getActionBreadcrumbService } from "../../services/ActionBreadcrumbService.js";
 import type * as DiagnosticsCollectorModule from "../../services/DiagnosticsCollector.js";
 import { recordBlinkSample, recordEluSample } from "../../services/ProcessMemoryMonitor.js";
 
@@ -193,6 +195,40 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     }
   };
   handlers.push(typedHandle(CHANNELS.DIAGNOSTICS_GET_INFO, handleGetDiagnosticsInfo));
+
+  const handleGetReportEnrichment = async (): Promise<ReportIssueEnrichment> => {
+    let gpuFlag: "off" | "angle" | "on" | "unknown";
+    try {
+      const { isGpuDisabledByFlag, isGpuAngleFallbackApplied } =
+        await import("../../services/GpuCrashMonitorService.js");
+      const userDataPath = app.getPath("userData");
+      if (isGpuDisabledByFlag(userDataPath)) {
+        gpuFlag = "off";
+      } else if (isGpuAngleFallbackApplied(userDataPath)) {
+        gpuFlag = "angle";
+      } else {
+        gpuFlag = "on";
+      }
+    } catch {
+      gpuFlag = "unknown";
+    }
+
+    const mem = process.memoryUsage();
+    const totalMB = Math.round(os.totalmem() / 1024 / 1024);
+    const freeMB = Math.round(os.freemem() / 1024 / 1024);
+    const heapMB = Math.round((mem.heapUsed / 1024 / 1024) * 10) / 10;
+
+    const lines = [
+      `App: ${app.getVersion()} | Electron: ${process.versions.electron ?? "?"} | Node: ${process.versions.node ?? "?"}`,
+      `OS: ${process.platform} ${os.release()} ${process.arch}`,
+      `Memory: ${totalMB} MB total, ${freeMB} MB free, heap ${heapMB} MB`,
+      `GPU: ${gpuFlag}`,
+    ];
+
+    const recentActions = getActionBreadcrumbService().getRecentActions().slice(-10);
+    return { systemInfo: lines.join("\n"), recentActions };
+  };
+  handlers.push(typedHandle(CHANNELS.SYSTEM_GET_REPORT_ENRICHMENT, handleGetReportEnrichment));
 
   // Renderer report → ProcessMemoryMonitor. webContents id is taken from
   // event.sender.id (cannot be spoofed by the renderer payload).

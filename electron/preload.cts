@@ -1117,6 +1117,8 @@ const api: ElectronAPI = {
 
     getDiagnosticsInfo: () => _unwrappingInvoke(CHANNELS.DIAGNOSTICS_GET_INFO),
 
+    getReportEnrichment: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_REPORT_ENRICHMENT),
+
     onWake: (callback: (data: { sleepDuration: number; timestamp: number }) => void) => {
       return _eventBusOn("system:wake", callback);
     },

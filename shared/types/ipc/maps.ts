@@ -384,6 +384,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [];
     result: DiagnosticsInfo;
   };
+  "system:get-report-enrichment": {
+    args: [];
+    result: import("./system.js").ReportIssueEnrichment;
+  };
   // Renderer reports process.getBlinkMemoryInfo() to ProcessMemoryMonitor.
   // The webContents id is taken from event.sender on the handler side, so
   // a renderer cannot claim to be a different view. All numeric fields are

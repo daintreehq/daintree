@@ -119,6 +119,7 @@ export const CHANNELS = {
   DIAGNOSTICS_GET_PROCESS_METRICS: "diagnostics:get-process-metrics",
   DIAGNOSTICS_GET_HEAP_STATS: "diagnostics:get-heap-stats",
   DIAGNOSTICS_GET_INFO: "diagnostics:get-info",
+  SYSTEM_GET_REPORT_ENRICHMENT: "system:get-report-enrichment",
   SYSTEM_REPORT_BLINK_MEMORY: "system:report-blink-memory",
   SYSTEM_REPORT_RENDERER_ELU: "system:report-renderer-elu",
 

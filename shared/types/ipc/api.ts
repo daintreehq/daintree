@@ -374,6 +374,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getProcessMetrics(): Promise<import("./system.js").ProcessMetricEntry[]>;
     getHeapStats(): Promise<import("./system.js").HeapStats>;
     getDiagnosticsInfo(): Promise<import("./system.js").DiagnosticsInfo>;
+    getReportEnrichment(): Promise<import("./system.js").ReportIssueEnrichment>;
     installAgent(payload: {
       agentId: string;
       methodIndex?: number;

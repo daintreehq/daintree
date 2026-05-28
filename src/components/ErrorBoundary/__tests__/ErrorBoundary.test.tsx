@@ -4,7 +4,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { ErrorBoundary, withErrorBoundary } from "../ErrorBoundary";
 import { useErrorStore } from "@/store/errorStore";
-import { captureRendererException } from "@/utils/rendererSentry";
+import { captureRendererException, getRendererSentryConsent } from "@/utils/rendererSentry";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 
@@ -20,6 +20,7 @@ vi.mock("@/utils/logger", () => ({
 
 vi.mock("@/utils/rendererSentry", () => ({
   captureRendererException: vi.fn(),
+  getRendererSentryConsent: vi.fn(() => ({ level: "off", hasSeenPrompt: false })),
 }));
 
 vi.mock("@/lib/notify", () => ({
@@ -31,7 +32,10 @@ vi.mock("@/lib/utils", () => ({
 }));
 
 interface ElectronMock {
-  system: { openExternal: ReturnType<typeof vi.fn> };
+  system: {
+    openExternal: ReturnType<typeof vi.fn>;
+    getReportEnrichment?: ReturnType<typeof vi.fn>;
+  };
   clipboard?: { writeText: ReturnType<typeof vi.fn> };
 }
 
@@ -42,7 +46,12 @@ function getElectronMock(): ElectronMock {
 
 function installElectronMock(): ElectronMock {
   const mock: ElectronMock = {
-    system: { openExternal: vi.fn().mockResolvedValue(undefined) },
+    system: {
+      openExternal: vi.fn().mockResolvedValue(undefined),
+      getReportEnrichment: vi
+        .fn()
+        .mockResolvedValue({ systemInfo: "App: test", recentActions: [] }),
+    },
     clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -63,6 +72,8 @@ describe("ErrorBoundary", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     // Default: Sentry SDK not initialized → null. Individual tests override.
     vi.mocked(captureRendererException).mockReturnValue(null);
+    // Default: consent gate closed; enrichment fetch is skipped.
+    vi.mocked(getRendererSentryConsent).mockReturnValue({ level: "off", hasSeenPrompt: false });
     installElectronMock();
   });
 
@@ -246,6 +257,126 @@ describe("ErrorBoundary", () => {
     );
   });
 
+  it("does not fetch report enrichment when telemetry consent is off", async () => {
+    vi.mocked(getRendererSentryConsent).mockReturnValue({
+      level: "off",
+      hasSeenPrompt: true,
+    });
+
+    render(
+      <ErrorBoundary variant="section">
+        <ThrowingChild shouldThrow={true} />
+      </ErrorBoundary>
+    );
+
+    fireEvent.click(screen.getByText("Report issue"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const electron = getElectronMock();
+    expect(electron.system.getReportEnrichment).not.toHaveBeenCalled();
+  });
+
+  it("does not fetch enrichment when the consent prompt was never shown", async () => {
+    vi.mocked(getRendererSentryConsent).mockReturnValue({
+      level: "errors",
+      hasSeenPrompt: false,
+    });
+
+    render(
+      <ErrorBoundary variant="section">
+        <ThrowingChild shouldThrow={true} />
+      </ErrorBoundary>
+    );
+
+    fireEvent.click(screen.getByText("Report issue"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const electron = getElectronMock();
+    expect(electron.system.getReportEnrichment).not.toHaveBeenCalled();
+  });
+
+  it("includes enriched sections in the URL body when consent is granted", async () => {
+    vi.mocked(getRendererSentryConsent).mockReturnValue({
+      level: "errors",
+      hasSeenPrompt: true,
+    });
+    const electron = getElectronMock();
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+    (electron.system.getReportEnrichment as any).mockResolvedValue({
+      systemInfo: "App: 1.2.3 | Electron: 41.0.0",
+      recentActions: [
+        {
+          id: "bc-1",
+          actionId: "terminal.spawn",
+          category: "terminal",
+          source: "user",
+          danger: "safe",
+          durationMs: 1,
+          timestamp: Date.now() - 5000,
+          count: 1,
+        },
+      ],
+    });
+
+    render(
+      <ErrorBoundary variant="section">
+        <ThrowingChild shouldThrow={true} />
+      </ErrorBoundary>
+    );
+
+    fireEvent.click(screen.getByText("Report issue"));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(electron.system.getReportEnrichment).toHaveBeenCalledTimes(1);
+    const dispatchCall = vi
+      .mocked(actionService.dispatch)
+      .mock.calls.find(([id]) => id === "system.openExternal");
+    expect(dispatchCall).toBeDefined();
+    const url = (dispatchCall![1] as { url: string }).url;
+    const body = decodeURIComponent(new URL(url).searchParams.get("body") ?? "");
+    expect(body).toContain("<summary>System info</summary>");
+    expect(body).toContain("App: 1.2.3");
+    expect(body).toContain("<summary>Recent actions (1)</summary>");
+    expect(body).toContain("terminal.spawn [u]");
+  });
+
+  it("falls back to unenriched body when the enrichment IPC rejects", async () => {
+    vi.mocked(getRendererSentryConsent).mockReturnValue({
+      level: "errors",
+      hasSeenPrompt: true,
+    });
+    const electron = getElectronMock();
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+    (electron.system.getReportEnrichment as any).mockRejectedValue(new Error("ipc boom"));
+
+    render(
+      <ErrorBoundary variant="section">
+        <ThrowingChild shouldThrow={true} />
+      </ErrorBoundary>
+    );
+
+    fireEvent.click(screen.getByText("Report issue"));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const dispatchCall = vi
+      .mocked(actionService.dispatch)
+      .mock.calls.find(([id]) => id === "system.openExternal");
+    expect(dispatchCall).toBeDefined();
+    const url = (dispatchCall![1] as { url: string }).url;
+    const body = decodeURIComponent(new URL(url).searchParams.get("body") ?? "");
+    // Base error data is preserved on the fallback.
+    expect(body).toContain("Test render error");
+    // But the enrichment sections must be absent when the IPC failed.
+    expect(body).not.toContain("<summary>System info</summary>");
+    expect(body).not.toContain("Recent actions");
+  });
+
   it("copies full report to clipboard and notifies when payload exceeds URL budget", async () => {
     function ThrowGiantStack(): React.ReactElement {
       const error = new Error("Component blew up");
@@ -273,6 +404,9 @@ describe("ErrorBoundary", () => {
     const clipboardArg = electron.clipboard!.writeText.mock.calls[0]![0] as string;
     expect(clipboardArg).toContain("**Component:**");
     expect(clipboardArg).toContain("Component blew up");
+    // The clipboard payload must contain the full untruncated stack — assert
+    // a deep frame that only appears in `fullBody`, never the URL stub.
+    expect(clipboardArg).toContain("at frame29");
 
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({
