@@ -73,6 +73,15 @@ describe("PREBUILT_REDACTIONS", () => {
     expect(apply("ip", "at 12:34:56 today")).toBe("at 12:34:56 today");
   });
 
+  it("does not mangle C++/TS scope-resolution symbols as IPv6", () => {
+    expect(apply("ip", "frame std::vector<int> here")).toBe("frame std::vector<int> here");
+    expect(apply("ip", "in namespace::type::method")).toBe("in namespace::type::method");
+  });
+
+  it("does not redact a quad embedded in a longer dotted run", () => {
+    expect(apply("ip", "version 1.2.3.4.5 build")).toBe("version 1.2.3.4.5 build");
+  });
+
   it("strips POSIX absolute file paths", () => {
     expect(apply("filepath", "open /Users/greg/secret/file.log please")).toBe(
       "open [REDACTED] please"

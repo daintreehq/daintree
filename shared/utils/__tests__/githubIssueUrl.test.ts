@@ -54,6 +54,16 @@ describe("buildDiagnosticsIssueUrl", () => {
     const encoded = encodeURIComponent(body(buildDiagnosticsIssueUrl(meta))).length;
     expect(encoded).toBeLessThanOrEqual(URL_BODY_BUDGET);
   });
+
+  it("caps the body even when metadata fields are pathologically long", () => {
+    const url = buildDiagnosticsIssueUrl({
+      appVersion: "x".repeat(2000),
+      electronVersion: "y".repeat(2000),
+      nodeVersion: "z".repeat(2000),
+      osVersion: "w".repeat(2000),
+    });
+    expect(encodeURIComponent(body(url)).length).toBeLessThanOrEqual(URL_BODY_BUDGET);
+  });
 });
 
 describe("capForBudget", () => {

@@ -70,9 +70,10 @@ export interface DiagnosticsIssueMetadata {
 
 /**
  * Build the GitHub issue URL paired with a saved diagnostics bundle. The body
- * is a short, static template (env summary + repro skeleton + ZIP note), so no
- * staged truncation is needed — but it still routes through `makeUrl` and the
- * shared title budget so a malformed version string can't blow the URL cap.
+ * is a short, static template (env summary + repro skeleton + ZIP note). The
+ * env values come from controlled system APIs so they're short in practice,
+ * but the body is still capped to the shared budget so a pathological version
+ * string can't blow the URL cap, and the title routes through `makeUrl`.
  */
 export function buildDiagnosticsIssueUrl(metadata: DiagnosticsIssueMetadata): string {
   const envParts: string[] = [];
@@ -91,5 +92,5 @@ export function buildDiagnosticsIssueUrl(metadata: DiagnosticsIssueMetadata): st
     `---\n\n` +
     `Diagnostics bundle attached separately — drag the saved ZIP into this issue.\n`;
 
-  return makeUrl("Diagnostics report", body);
+  return makeUrl("Diagnostics report", capForBudget(body, URL_BODY_BUDGET));
 }

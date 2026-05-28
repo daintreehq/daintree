@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import * as CheckboxPrimitive from "@radix-ui/react-checkbox";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
@@ -27,13 +27,21 @@ const TIME_WINDOW_OPTIONS: { id: TimeWindowId; label: string }[] = [
 
 const DEFAULT_TIME_WINDOW: TimeWindowId = "30m";
 
-/** Resolve a time-window option to an absolute ms cutoff (`null` = full history). */
-function computeTimeWindowStart(id: TimeWindowId, appLaunchTimestamp: number): number | null {
+/**
+ * Resolve a time-window option to an absolute ms cutoff (`null` = full history).
+ * `now` is captured once when the dialog opens so the preview and the saved
+ * bundle share an identical cutoff even if the user reviews for a while.
+ */
+function computeTimeWindowStart(
+  id: TimeWindowId,
+  appLaunchTimestamp: number,
+  now: number
+): number | null {
   switch (id) {
     case "5m":
-      return Date.now() - 5 * 60 * 1000;
+      return now - 5 * 60 * 1000;
     case "30m":
-      return Date.now() - 30 * 60 * 1000;
+      return now - 30 * 60 * 1000;
     case "launch":
       return appLaunchTimestamp;
     case "full":
@@ -67,9 +75,13 @@ export function DiagnosticsReviewDialog({
   const [prebuiltIds, setPrebuiltIds] = useState<Set<PrebuiltRedactionId>>(new Set());
   const [timeWindow, setTimeWindow] = useState<TimeWindowId>(DEFAULT_TIME_WINDOW);
   const [showPreview, setShowPreview] = useState(false);
+  // Reference "now" captured at open so the relative windows resolve to a
+  // stable cutoff shared by the preview and the save call.
+  const openedAtRef = useRef(Date.now());
 
   useEffect(() => {
     if (isOpen && reviewPayload) {
+      openedAtRef.current = Date.now();
       const initial: Record<string, boolean> = {};
       for (const key of reviewPayload.sectionKeys) {
         initial[key] = true;
@@ -93,7 +105,11 @@ export function DiagnosticsReviewDialog({
 
   const previewJson = useMemo(() => {
     if (!reviewPayload) return "";
-    const startMs = computeTimeWindowStart(timeWindow, reviewPayload.appLaunchTimestamp);
+    const startMs = computeTimeWindowStart(
+      timeWindow,
+      reviewPayload.appLaunchTimestamp,
+      openedAtRef.current
+    );
     const filtered = filterLogEntriesByTime(
       filterSections(reviewPayload.payload, enabledSections),
       startMs
@@ -131,7 +147,11 @@ export function DiagnosticsReviewDialog({
 
   const handleSave = () => {
     if (!reviewPayload) return;
-    const startMs = computeTimeWindowStart(timeWindow, reviewPayload.appLaunchTimestamp);
+    const startMs = computeTimeWindowStart(
+      timeWindow,
+      reviewPayload.appLaunchTimestamp,
+      openedAtRef.current
+    );
     onSave(enabledSections, effectiveReplacements, startMs);
   };
 

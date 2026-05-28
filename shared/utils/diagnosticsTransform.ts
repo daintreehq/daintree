@@ -118,13 +118,19 @@ export const PREBUILT_REDACTIONS: PrebuiltRedaction[] = [
     id: "ip",
     label: "Strip IP addresses (v4/v6)",
     rules: [
+      // `(?<![\w.])`/`(?![\w.])` keep the quad from matching inside a longer
+      // dotted run (e.g. `1.2.3.4.5`); a standalone 4-part version is still
+      // IP-shaped and gets redacted — an accepted opt-in limitation.
       regexRule(
-        /(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/
+        /(?<![\w.])(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?![\w.])/
       ),
       // Full-form IPv6 requires 4+ groups so `HH:MM:SS` timestamps don't match.
-      regexRule(/(?:[0-9A-Fa-f]{1,4}:){3,7}[0-9A-Fa-f]{1,4}/),
-      // Compressed `::` form (e.g. `fe80::1`, `::1`).
-      regexRule(/(?:[0-9A-Fa-f]{1,4})?::(?:[0-9A-Fa-f]{1,4}:?){0,7}/),
+      // The leading `(?<!\w)` stops a match from starting mid-identifier.
+      regexRule(/(?<!\w)(?:[0-9A-Fa-f]{1,4}:){3,7}[0-9A-Fa-f]{1,4}/),
+      // Compressed `::` form (e.g. `fe80::1`, `::1`). The `(?<!\w)` guard stops
+      // the trailing hex char of an identifier from anchoring the match, so
+      // source symbols like `std::vector` are left intact.
+      regexRule(/(?<!\w)(?:[0-9A-Fa-f]{1,4})?::(?:[0-9A-Fa-f]{1,4}:?){0,7}/),
     ],
   },
   {
