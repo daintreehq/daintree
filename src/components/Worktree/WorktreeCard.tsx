@@ -48,15 +48,10 @@ import { useInputReceiptKey } from "./WorktreeCard/hooks/useInputReceiptKey";
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { CONTEXT_COMPONENTS, WorktreeMenuItems } from "./WorktreeMenuItems";
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
+import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
 import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { isAgentFleetActionEligible, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
@@ -1146,23 +1141,7 @@ export function WorktreeCard({
           onStopDevServer={handleStopDevServer}
           onRestartDevServer={handleRestartDevServer}
         />
-        {pluginItems.length > 0 && (
-          <>
-            <ContextMenuSeparator />
-            {pluginItems.map((entry) => (
-              <ContextMenuItem
-                key={`${entry.pluginId}:${entry.item.actionId}`}
-                onSelect={() =>
-                  void actionService.dispatch(entry.item.actionId, undefined, {
-                    source: "context-menu",
-                  })
-                }
-              >
-                {entry.item.label}
-              </ContextMenuItem>
-            ))}
-          </>
-        )}
+        <PluginContextMenuSection items={pluginItems} />
       </ContextMenuContent>
     </ContextMenu>
   );

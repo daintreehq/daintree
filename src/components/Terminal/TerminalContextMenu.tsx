@@ -14,6 +14,7 @@ import { isBrowserPanel, isDevPreviewPanel, isPtyPanel, isReviewPanel } from "@s
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
+import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
 import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { closeAndAnnounce } from "@/lib/accessibility";
@@ -896,23 +897,7 @@ export function TerminalContextMenu({
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
             Kill Terminal
           </ContextMenuItem>
-          {pluginItems.length > 0 && (
-            <>
-              <ContextMenuSeparator />
-              {pluginItems.map((entry) => (
-                <ContextMenuItem
-                  key={`${entry.pluginId}:${entry.item.actionId}`}
-                  onSelect={() =>
-                    void actionService.dispatch(entry.item.actionId, undefined, {
-                      source: sourceRef.current,
-                    })
-                  }
-                >
-                  {entry.item.label}
-                </ContextMenuItem>
-              ))}
-            </>
-          )}
+          <PluginContextMenuSection items={pluginItems} />
         </ContextMenuContent>
       </ContextMenu>
     </>
