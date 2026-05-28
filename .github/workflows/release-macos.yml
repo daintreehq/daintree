@@ -188,7 +188,24 @@ jobs:
           fi
           npx electron-builder --config electron-builder.config.cjs --publish "$PUBLISH_FLAG" -c.buildDependenciesFromSource=true
 
-      - name: Verify macOS notarization staple
+      - name: Verify macOS hardened runtime flag
+        shell: bash
+        run: |
+          set -euo pipefail
+          apps=(
+            "release/mac-arm64/Daintree.app"
+            "release/mac/Daintree.app"
+            "release/mac-universal/Daintree.app"
+          )
+          for app in "${apps[@]}"; do
+            if [[ ! -d "$app" ]]; then
+              echo "::error::Missing expected macOS app bundle: $app"
+              exit 1
+            fi
+            scripts/ci/verify-hardened-runtime.sh "$app"
+          done
+
+      - name: Verify macOS notarization and Gatekeeper
         if: inputs.skip_notarization != true
         shell: bash
         run: |
@@ -205,12 +222,14 @@ jobs:
               echo "::error::Missing expected macOS app bundle: $app"
               exit 1
             fi
-            echo "--- codesign: $app"
+            echo "--- codesign verify: $app"
             codesign --verify --deep --strict --verbose=4 "$app"
+            echo "--- codesign check-notarization (online): $app"
+            codesign -vvvv -R="notarized" --check-notarization "$app"
             echo "--- stapler validate: $app"
             xcrun stapler validate "$app"
-            echo "--- spctl (diagnostic only): $app"
-            spctl --assess --type execute --verbose --ignore-cache --no-cache "$app" || true
+            echo "--- spctl assess: $app"
+            spctl --assess --type execute --verbose --ignore-cache --no-cache "$app"
           done
 
       - name: Verify macOS TeamIdentifier audit
