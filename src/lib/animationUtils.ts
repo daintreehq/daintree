@@ -36,6 +36,18 @@ export function getUiAnimationDuration(): number {
   return performanceMode ? 0 : UI_ANIMATION_DURATION;
 }
 
+/** Collapse a JS timer duration to 0 when performance mode is active; otherwise
+ *  return it unchanged. Mirrors `getUiAnimationDuration`'s policy — performance
+ *  mode bypasses JS timers, reduced-motion does NOT (CSS owns reduced-motion).
+ *  Reads `document.body` lazily for SSR/JSDOM safety; never at module load. */
+export function getPerformanceModeFloor(ms: number): number {
+  if (typeof document === "undefined") {
+    return ms;
+  }
+  const performanceMode = document.body?.dataset.performanceMode === "true";
+  return performanceMode ? 0 : ms;
+}
+
 export const UI_ENTER_DURATION = DURATION_200;
 export const UI_EXIT_DURATION = 120;
 
@@ -52,6 +64,16 @@ export const UI_PALETTE_EXIT_DURATION = DURATION_100;
  *  drift-contract test in animationUtils.test.ts enforces parity.
  *  See `UI_PALETTE_STALE_DELAY` for the typed-input counterpart. */
 export const UI_DOHERTY_THRESHOLD = 400;
+
+/** Pane-local settle window for `useShouldSuppressLocalError`. Once an active
+ *  global recovery cause clears, local error banners stay suppressed for this
+ *  long before reappearing — absorbs visible flicker when `backendStatus`
+ *  flaps between `"recovering"` and `"connected"`. Stacks on top of the
+ *  500ms recoveryTimer in `src/store/listeners/panel/backendHealth.ts`, so the
+ *  total dead-zone from a backend reconnect to a local banner re-show is
+ *  ~900ms at p50 — intentionally long enough to render the flap invisible.
+ *  Performance mode collapses this to 0 via `getPerformanceModeFloor`. */
+export const LOCAL_ERROR_SETTLE_MS = UI_DOHERTY_THRESHOLD;
 
 /** UX anti-flicker gate for palette typed-input stale dimming. Shorter than
  *  Doherty's 400ms because keystrokes arrive every ~200ms at normal typing
