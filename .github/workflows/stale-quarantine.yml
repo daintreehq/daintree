@@ -1,0 +1,95 @@
+name: Stale Quarantine
+
+on:
+  schedule:
+    # https://crontab.guru/#0_9_*_*_1 — every Monday 09:00 UTC
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Open or update stale-quarantine issues
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const path = require("node:path");
+            const { pathToFileURL } = require("node:url");
+            const { readFile } = require("node:fs/promises");
+
+            const lib = await import(
+              pathToFileURL(path.resolve("scripts/stale-quarantine-lib.mjs")).href
+            );
+            const { collectStaleQuarantines, buildIssueTitle, buildIssueBody } = lib;
+
+            const label = "test-quarantine";
+            const workspace = process.cwd();
+
+            const globber = await glob.create("e2e/**/*.spec.ts");
+            const absPaths = await globber.glob();
+
+            const files = [];
+            for (const absPath of absPaths) {
+              const source = await readFile(absPath, "utf8");
+              // Repo-relative POSIX path so issue titles stay stable across runners.
+              const specPath = path.relative(workspace, absPath).split(path.sep).join("/");
+              files.push({ path: specPath, source });
+            }
+
+            const stale = collectStaleQuarantines(files, new Date());
+            if (stale.length === 0) {
+              core.info("No stale quarantined tests found.");
+              return;
+            }
+
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            // One open issue per spec. Fetch all open test-quarantine issues once
+            // and match by title. per_page 100 is sufficient at current scale —
+            // switch to github.paginate() if quarantined specs ever exceed 100.
+            const { data: openIssues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: label,
+              state: "open",
+              per_page: 100,
+            });
+            const byTitle = new Map(openIssues.map((issue) => [issue.title, issue]));
+
+            for (const { path: specPath, stale: entries } of stale) {
+              const title = buildIssueTitle(specPath);
+              const body = buildIssueBody(specPath, entries, runUrl);
+              const existing = byTitle.get(title);
+
+              if (existing) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existing.number,
+                  body,
+                });
+                core.info(`Commented on #${existing.number} for ${specPath}`);
+              } else {
+                const { data: created } = await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title,
+                  body,
+                  labels: [label],
+                });
+                core.info(`Created #${created.number} for ${specPath}`);
+              }
+            }
