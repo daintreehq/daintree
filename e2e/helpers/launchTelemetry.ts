@@ -270,7 +270,8 @@ export function writeSummary(mode?: LaunchFailureMode): string {
     (summary.crashpad.matched ? ` crashpad=${summary.crashpad.signatures[0]}` : "") +
     (summary.rendererCrash.seen ? " rendererCrash=true" : "") +
     (summary.mainExit.code !== null ? ` exitCode=${summary.mainExit.code}` : "") +
-    (summary.mainExit.signal !== null ? ` exitSignal=${summary.mainExit.signal}` : "");
+    (summary.mainExit.signal !== null ? ` exitSignal=${summary.mainExit.signal}` : "") +
+    (malformedCount > 0 ? ` malformed=${malformedCount}` : "");
 
   const telemetryFile = process.env.E2E_LAUNCH_TELEMETRY_FILE;
   if (telemetryFile) {
