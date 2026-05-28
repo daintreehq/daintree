@@ -376,6 +376,17 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["plugin:validate-action-ids"]["args"]
     ): Promise<IpcInvokeMap["plugin:validate-action-ids"]["result"]>;
   };
+  pluginMcp: {
+    getStderr(
+      ...args: IpcInvokeMap["plugin-mcp:get-stderr"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:get-stderr"]["result"]>;
+    list(
+      ...args: IpcInvokeMap["plugin-mcp:list"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:list"]["result"]>;
+    restart(
+      ...args: IpcInvokeMap["plugin-mcp:restart"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:restart"]["result"]>;
+  };
   portal: {
     closeTab(
       ...args: IpcInvokeMap["portal:close-tab"]["args"]

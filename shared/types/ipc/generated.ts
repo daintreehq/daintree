@@ -555,6 +555,18 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: boolean | undefined;
   };
+  "plugin-mcp:get-stderr": {
+    args: [key: import("./pluginMcp.js").PluginMcpServerKey];
+    result: import("./pluginMcp.js").PluginMcpStderrResult;
+  };
+  "plugin-mcp:list": {
+    args: [];
+    result: import("./pluginMcp.js").PluginMcpServerInfo[];
+  };
+  "plugin-mcp:restart": {
+    args: [key: import("./pluginMcp.js").PluginMcpServerKey];
+    result: void;
+  };
   "plugin:actions-get": {
     args: [];
     result: import("../plugin.js").PluginActionDescriptor[];

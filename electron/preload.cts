@@ -37,6 +37,7 @@ import { buildCommandsPreloadBindings } from "./ipc/handlers/commands.preload.js
 import { buildPortalPreloadBindings } from "./ipc/handlers/portal.preload.js";
 import { buildDevPreviewPreloadBindings } from "./ipc/handlers/devPreview.preload.js";
 import { buildPluginPreloadBindings } from "./ipc/handlers/plugin.preload.js";
+import { buildPluginMcpPreloadBindings } from "./ipc/handlers/pluginMcp.preload.js";
 import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
 import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
 import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
@@ -2474,6 +2475,8 @@ const api: ElectronAPI = {
     onDecorationsChanged: (callback: (payload: { scope: string; paths?: string[] }) => void) =>
       _eventBusOn("plugin:decorations-changed", callback),
   },
+
+  pluginMcp: buildPluginMcpPreloadBindings(_unwrappingInvoke),
 
   crashRecovery: {
     getPending: () => _unwrappingInvoke(CHANNELS.CRASH_RECOVERY_GET_PENDING),

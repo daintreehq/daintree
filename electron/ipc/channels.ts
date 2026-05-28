@@ -811,6 +811,13 @@ export const CHANNELS = {
   /** Bridge: renderer returns the plugin-sourced action dispatch result to the main process. */
   PLUGIN_DISPATCH_ACTION_RESPONSE: "plugin:dispatch-action-response",
 
+  // Plugin MCP supervisor channels (#9233) — stdio MCP servers contributed by
+  // plugin manifests, supervised in the main process via execa. Distinct from
+  // `mcp-server:*`, which covers the in-process inbound MCP server.
+  PLUGIN_MCP_LIST: "plugin-mcp:list",
+  PLUGIN_MCP_GET_STDERR: "plugin-mcp:get-stderr",
+  PLUGIN_MCP_RESTART: "plugin-mcp:restart",
+
   // Config reload channels
   APP_RELOAD_CONFIG: "app:reload-config",
   APP_CONFIG_RELOADED: "app:config-reloaded",

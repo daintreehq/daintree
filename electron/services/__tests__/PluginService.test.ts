@@ -105,6 +105,22 @@ vi.mock("../fileDecorationRegistry.js", () => ({
   scopeMatchesPattern: vi.fn((s: string, p: string) => s === p),
 }));
 
+// Mocked so MCP-server activation tests don't try to spawn real subprocesses
+// or exercise the execa dynamic-import. The supervisor's wiring is verified
+// here; PluginMcpSupervisor's own lifecycle is covered by its dedicated test.
+const mockPluginMcpSupervisor = {
+  start: vi.fn(async () => undefined) as ReturnType<typeof vi.fn>,
+  shutdown: vi.fn(async () => undefined) as ReturnType<typeof vi.fn>,
+  shutdownAll: vi.fn(async () => undefined) as ReturnType<typeof vi.fn>,
+  callTool: vi.fn(),
+  restart: vi.fn(),
+  list: vi.fn(() => []),
+  getStderr: vi.fn(() => ({ pluginId: "", serverId: "", lines: [], totalLines: 0 })),
+};
+vi.mock("../PluginMcpSupervisor.js", () => ({
+  getPluginMcpSupervisor: () => mockPluginMcpSupervisor,
+}));
+
 import { PluginService } from "../PluginService.js";
 import { getPluginManifestSchema } from "../../schemas/plugin.js";
 import {
@@ -4492,7 +4508,8 @@ describe("reserved contribution point warnings", () => {
     );
   });
 
-  it("accepts a contributes.experimental_mcpServers entry and logs a 'not yet implemented' warning", async () => {
+  it("forwards a contributes.experimental_mcpServers entry to the PluginMcpSupervisor (#9233)", async () => {
+    mockPluginMcpSupervisor.start.mockClear();
     await writePlugin("mcp", {
       name: "acme.mcp",
       version: "1.0.0",
@@ -4514,11 +4531,21 @@ describe("reserved contribution point warnings", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Plugin "acme.mcp": contributes.experimental_mcpServers is not yet implemented'
-      )
-    );
+    expect(mockPluginMcpSupervisor.start).toHaveBeenCalledTimes(1);
+    const call = mockPluginMcpSupervisor.start.mock.calls[0]?.[0] as {
+      pluginId: string;
+      contributions: Array<{ id: string; name: string; command: string }>;
+    };
+    expect(call.pluginId).toBe("acme.mcp");
+    expect(call.contributions).toEqual([
+      {
+        id: "linear",
+        name: "Linear MCP",
+        command: "node",
+        args: ["./server.js"],
+        env: { LINEAR_API_KEY: "secret" },
+      },
+    ]);
   });
 
   it("registers a contributes.forgeProviders entry with the forge provider registry", async () => {
@@ -4619,6 +4646,7 @@ describe("reserved contribution point warnings", () => {
   });
 
   it("still processes other contributions when reserved points are present", async () => {
+    mockPluginMcpSupervisor.start.mockClear();
     await writePlugin("mixed", {
       name: "acme.mixed",
       version: "1.0.0",
@@ -4640,9 +4668,8 @@ describe("reserved contribution point warnings", () => {
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("contributes.experimental_views is not yet implemented")
     );
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("contributes.experimental_mcpServers is not yet implemented")
-    );
+    // experimental_mcpServers now reaches the supervisor instead of warning (#9233).
+    expect(mockPluginMcpSupervisor.start).toHaveBeenCalledTimes(1);
   });
 
   it("warns once per category regardless of entry count", async () => {
