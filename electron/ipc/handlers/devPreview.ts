@@ -13,11 +13,13 @@ import type {
   DevPreviewSessionRequest,
   DevPreviewStopByPanelRequest,
   DevPreviewStateChangedPayload,
+  DevPreviewAllSessionsPayload,
   DevPreviewGetByWorktreeRequest,
   DevPreviewDestructivePreviewSizesRequest,
   DevPreviewStopByWorktreeRequest,
   DevPreviewRestartByWorktreeRequest,
   DevPreviewStopDevServerByWorktreeRequest,
+  DevPreviewSessionState,
 } from "../../../shared/types/ipc/devPreview.js";
 import type { DevPreviewSessionService as DevPreviewSessionServiceType } from "../../services/DevPreviewSessionService.js";
 import { getHibernationService } from "../../services/HibernationService.js";
@@ -51,7 +53,11 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
               broadcastToRenderer(CHANNELS.DEV_PREVIEW_STATE_CHANGED, payload);
             },
             restoredEntries,
-            (entries) => manifestMod.writeDevPreviewManifest(app.getPath("userData"), entries)
+            (entries) => manifestMod.writeDevPreviewManifest(app.getPath("userData"), entries),
+            (sessions) => {
+              const payload: DevPreviewAllSessionsPayload = { sessions };
+              broadcastToRenderer(CHANNELS.DEV_PREVIEW_ALL_SESSIONS_CHANGED, payload);
+            }
           );
           return sessionService;
         })
@@ -119,6 +125,16 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
           }
           const svc = await getSessionService();
           return svc.getByWorktree(request.worktreeId);
+        }
+      ),
+      getAllSessions: op(
+        DEV_PREVIEW_METHOD_CHANNELS.getAllSessions,
+        async (): Promise<DevPreviewSessionState[]> => {
+          // Lazy-init guard: with no session service yet, there are no sessions.
+          // Skip the import so the dashboard hydration call doesn't spin up the
+          // service just to return an empty snapshot.
+          if (!sessionService) return [];
+          return sessionService.getAllSessions();
         }
       ),
       getDestructivePreviewMeta: op(

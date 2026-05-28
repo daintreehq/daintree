@@ -5,6 +5,7 @@ import { usePortalStore } from "@/store";
 import { cn } from "@/lib/utils";
 import { PortalToolbar } from "./PortalToolbar";
 import { PortalLaunchpad } from "./PortalLaunchpad";
+import { DevServerDashboard } from "./DevServerDashboard";
 import { PortalTabSkeleton } from "./PortalTabSkeleton";
 import { useSkeletonGate, useSkeletonFloor } from "@/hooks/useDeferredLoading";
 import { PORTAL_MIN_WIDTH, PORTAL_MAX_WIDTH } from "@shared/types";
@@ -29,19 +30,29 @@ import { getElementBoundsAsDip } from "@/lib/portalBounds";
 import { debounce } from "@/utils/debounce";
 
 export function PortalDock() {
-  const { width, activeTabId, tabs, links, createdTabs, setWidth, setOpen, defaultNewTabUrl } =
-    usePortalStore(
-      useShallow((s) => ({
-        width: s.width,
-        activeTabId: s.activeTabId,
-        tabs: s.tabs,
-        links: s.links,
-        createdTabs: s.createdTabs,
-        setWidth: s.setWidth,
-        setOpen: s.setOpen,
-        defaultNewTabUrl: s.defaultNewTabUrl,
-      }))
-    );
+  const {
+    width,
+    activeTabId,
+    tabs,
+    links,
+    createdTabs,
+    setWidth,
+    setOpen,
+    defaultNewTabUrl,
+    showDevDashboard,
+  } = usePortalStore(
+    useShallow((s) => ({
+      width: s.width,
+      activeTabId: s.activeTabId,
+      tabs: s.tabs,
+      links: s.links,
+      createdTabs: s.createdTabs,
+      setWidth: s.setWidth,
+      setOpen: s.setOpen,
+      defaultNewTabUrl: s.defaultNewTabUrl,
+      showDevDashboard: s.showDevDashboard,
+    }))
+  );
   const contentRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLElement>(null);
   const [isResizing, setIsResizing] = useState(false);
@@ -465,6 +476,7 @@ export function PortalDock() {
               <div className="flex-1 bg-daintree-sidebar" />
             )}
           </div>
+          {showDevDashboard && <DevServerDashboard />}
         </aside>
       </ContextMenuTrigger>
       <ContextMenuContent>

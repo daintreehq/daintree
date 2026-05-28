@@ -221,9 +221,15 @@ describe("dev preview session handlers", () => {
     ptyClient.emitData(ensureResult.terminalId!, "ready");
 
     await vi.waitFor(() => {
-      const lastCall = broadcastMock.mock.calls.at(-1);
-      expect(lastCall?.[0]).toBe(CHANNELS.DEV_PREVIEW_STATE_CHANGED);
-      expect(lastCall?.[1]).toEqual({
+      // emitStateChanged now fires both DEV_PREVIEW_STATE_CHANGED and the
+      // cross-worktree DEV_PREVIEW_ALL_SESSIONS_CHANGED, so the running
+      // single-session payload is no longer guaranteed to be the last call.
+      const runningStateCall = broadcastMock.mock.calls.find(
+        ([channel, payload]) =>
+          channel === CHANNELS.DEV_PREVIEW_STATE_CHANGED &&
+          (payload as { state?: { status?: string } })?.state?.status === "running"
+      );
+      expect(runningStateCall?.[1]).toEqual({
         state: expect.objectContaining({
           panelId: "panel-1",
           projectId: "project-1",

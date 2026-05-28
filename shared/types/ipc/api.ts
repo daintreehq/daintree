@@ -145,7 +145,7 @@ import type {
   FileReadPayload,
   FileReadResult,
 } from "./files.js";
-import type { DevPreviewStateChangedPayload } from "./devPreview.js";
+import type { DevPreviewStateChangedPayload, DevPreviewAllSessionsPayload } from "./devPreview.js";
 import type { AppAgentConfig } from "../appAgent.js";
 import type { ActionContext } from "../actions.js";
 import type { AppThemeConfig } from "../appTheme.js";
@@ -762,6 +762,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // onStateChanged is a renderer-only subscription.
   devPreview: GeneratedElectronAPI["devPreview"] & {
     onStateChanged(callback: (data: DevPreviewStateChangedPayload) => void): () => void;
+    onAllSessionsChanged(callback: (data: DevPreviewAllSessionsPayload) => void): () => void;
   };
   git: {
     getFileDiff(cwd: string, filePath: string, status: GitStatus): Promise<string>;

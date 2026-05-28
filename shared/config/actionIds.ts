@@ -415,6 +415,7 @@ export const BUILT_IN_ACTION_IDS = [
   "portal.links.reorder",
   "portal.tabs.reorder",
   "portal.listTabs",
+  "portal.toggleDevDashboard",
 
   // -- helpActions --
   "help.gettingStarted.show",
