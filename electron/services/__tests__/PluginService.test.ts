@@ -1175,12 +1175,7 @@ describe("PluginService manifest command contributions (#9281)", () => {
     await service.initialize();
 
     await expect(
-      service.dispatchHandler(
-        "acme.cmd-nodef",
-        "acme.cmd-nodef.broken",
-        ctx("acme.cmd-nodef"),
-        []
-      )
+      service.dispatchHandler("acme.cmd-nodef", "acme.cmd-nodef.broken", ctx("acme.cmd-nodef"), [])
     ).rejects.toThrow(/no callable default export/);
   });
 
@@ -1289,9 +1284,7 @@ describe("PluginService manifest command contributions (#9281)", () => {
       name: "acme.ns-check",
       version: "1.0.0",
       contributes: {
-        toolbarButtons: [
-          { id: "btn", label: "Btn", iconId: "i", actionId: "acme.ns-check.act" },
-        ],
+        toolbarButtons: [{ id: "btn", label: "Btn", iconId: "i", actionId: "acme.ns-check.act" }],
       },
     });
 
