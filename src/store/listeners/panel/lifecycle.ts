@@ -152,7 +152,6 @@ export async function handleFallbackTriggered(data: {
         supersedeKey: fallbackSupersedeKey,
       });
     } else {
-      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({
         type: "error",
         priority: "high",
@@ -160,6 +159,18 @@ export async function handleFallbackTriggered(data: {
         message: `Could not switch to "${nextPreset.name}": ${result.error ?? "unknown error"}`,
         duration: 12000,
         supersedeKey: fallbackSupersedeKey,
+        action: {
+          label: "Send diagnostics",
+          actionId: "diagnostics.openReview",
+          actionArgs: { scope: { source: "terminal.fallbackActivationFailed" } },
+          onClick: () => {
+            void actionService.dispatch(
+              "diagnostics.openReview",
+              { scope: { source: "terminal.fallbackActivationFailed" } },
+              { source: "user" }
+            );
+          },
+        },
       });
     }
   } finally {

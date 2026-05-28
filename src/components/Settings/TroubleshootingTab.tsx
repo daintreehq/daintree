@@ -16,19 +16,12 @@ import {
 import { cn } from "@/lib/utils";
 import { appClient, systemClient, logsClient } from "@/clients";
 import type { AppState, SystemHealthCheckResult } from "@shared/types";
-import type { DiagnosticsReviewPayload } from "@shared/types/ipc/system";
-import type { ReplacementRule } from "@shared/utils/diagnosticsTransform";
-import {
-  buildDiagnosticsIssueUrl,
-  type DiagnosticsIssueMetadata,
-} from "@shared/utils/githubIssueUrl";
 import { actionService } from "@/services/ActionService";
-import { notify } from "@/lib/notify";
+import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
 import { logError, logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
-import { DiagnosticsReviewDialog } from "./DiagnosticsReviewDialog";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 function SystemHealthSection() {
@@ -97,89 +90,16 @@ function SystemHealthSection() {
   );
 }
 
-/** Pull the GitHub-issue env summary fields out of the untyped review payload. */
-function extractIssueMetadata(payload: Record<string, unknown>): DiagnosticsIssueMetadata {
-  const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
-  const isRecord = (v: unknown): v is Record<string, unknown> =>
-    typeof v === "object" && v !== null;
-  const section = (key: string): Record<string, unknown> | undefined => {
-    const value = payload[key];
-    return isRecord(value) ? value : undefined;
-  };
-  const metadata = section("metadata");
-  const runtime = section("runtime");
-  const os = section("os");
-  return {
-    appVersion: str(metadata?.appVersion),
-    electronVersion: str(metadata?.electronVersion),
-    nodeVersion: str(metadata?.nodeVersion),
-    platform: str(runtime?.platform) ?? str(os?.platform),
-    osVersion: str(os?.version) ?? str(os?.release),
-  };
-}
-
 function DownloadDiagnosticsSection() {
-  const [isCollecting, setIsCollecting] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [reviewOpen, setReviewOpen] = useState(false);
-  const [reviewPayload, setReviewPayload] = useState<DiagnosticsReviewPayload | null>(null);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const isCollecting = useDiagnosticsReviewStore((s) => s.isCollecting);
+  const downloadError = useDiagnosticsReviewStore((s) => s.downloadError);
 
-  const handleOpenReview = async () => {
-    setIsCollecting(true);
-    setDownloadError(null);
-    try {
-      const payload = await systemClient.collectDiagnosticsForReview();
-      setReviewPayload(payload);
-      setReviewOpen(true);
-    } catch (err) {
-      setDownloadError(formatErrorMessage(err, "Failed to collect diagnostics"));
-    } finally {
-      setIsCollecting(false);
-    }
-  };
-
-  const handleSave = async (
-    enabledSections: Record<string, boolean>,
-    replacements: ReplacementRule[],
-    timeWindowStartMs: number | null
-  ) => {
-    setIsSaving(true);
-    try {
-      const payload = reviewPayload?.payload ?? {};
-      const saved = await systemClient.saveDiagnosticsBundle({
-        payload,
-        enabledSections,
-        replacements,
-        timeWindowStartMs,
-      });
-      if (saved) {
-        const issueUrl = buildDiagnosticsIssueUrl(extractIssueMetadata(payload));
-        notify({
-          type: "success",
-          title: "Diagnostics saved",
-          message: "Open a GitHub issue and drag the saved ZIP into it.",
-          // The saved ZIP is already revealed in the OS file manager, so this
-          // is a one-shot action prompt — no durable inbox row needed.
-          transient: true,
-          context: { eventKind: "settings" },
-          action: {
-            label: "Continue to GitHub issue",
-            variant: "primary",
-            onClick: () => {
-              safeFireAndForget(systemClient.openExternal(issueUrl), {
-                context: "Opening GitHub issue from diagnostics save",
-              });
-            },
-          },
-        });
-        setReviewOpen(false);
-      }
-    } catch (err) {
-      setDownloadError(formatErrorMessage(err, "Failed to save diagnostics bundle"));
-    } finally {
-      setIsSaving(false);
-    }
+  const handleOpenReview = () => {
+    void actionService.dispatch(
+      "diagnostics.openReview",
+      { scope: { source: "settings.troubleshooting" } },
+      { source: "user" }
+    );
   };
 
   return (
@@ -191,7 +111,7 @@ function DownloadDiagnosticsSection() {
       <Button
         variant="outline"
         size="sm"
-        onClick={() => void handleOpenReview()}
+        onClick={handleOpenReview}
         disabled={isCollecting}
         className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text mb-3"
       >
@@ -199,13 +119,6 @@ function DownloadDiagnosticsSection() {
         {isCollecting ? "Collecting..." : "Download Diagnostics"}
       </Button>
       {downloadError && <p className="text-xs text-status-error mb-3">{downloadError}</p>}
-      <DiagnosticsReviewDialog
-        isOpen={reviewOpen}
-        onClose={() => setReviewOpen(false)}
-        reviewPayload={reviewPayload}
-        onSave={handleSave}
-        isSaving={isSaving}
-      />
     </SettingsSection>
   );
 }

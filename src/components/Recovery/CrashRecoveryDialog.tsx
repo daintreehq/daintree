@@ -25,6 +25,7 @@ import {
 } from "./recoveryCopy";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
+import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { scrubReportText } from "@shared/utils/reportScrubbers";
 import {
@@ -116,12 +117,23 @@ export function CrashRecoveryDialog({
       try {
         await onResolve(action);
       } catch (err) {
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Recovery failed",
           message: formatErrorMessage(err, "Couldn't complete recovery action"),
           duration: 6000,
+          action: {
+            label: "Send diagnostics",
+            actionId: "diagnostics.openReview",
+            actionArgs: { scope: { source: "recovery.crashRecoveryFailed" } },
+            onClick: () => {
+              void actionService.dispatch(
+                "diagnostics.openReview",
+                { scope: { source: "recovery.crashRecoveryFailed" } },
+                { source: "user" }
+              );
+            },
+          },
         });
       } finally {
         setResolving(false);

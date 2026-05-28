@@ -15,6 +15,7 @@ import {
 } from "@shared/utils/diagnosticsTransform";
 import type { DiagnosticsReviewPayload } from "@shared/types/ipc/system";
 import { safeStringify } from "@/lib/safeStringify";
+import type { DiagnosticsReviewScope } from "@/store/diagnosticsReviewStore";
 
 type TimeWindowId = "5m" | "30m" | "launch" | "full";
 
@@ -63,6 +64,12 @@ interface DiagnosticsReviewDialogProps {
     timeWindowStartMs: number | null
   ) => void;
   isSaving: boolean;
+  /**
+   * Optional scope hint. When `sections` is provided, only those keys start
+   * enabled; sections not listed start unchecked. The user can still toggle
+   * any section manually before saving.
+   */
+  initialScope?: DiagnosticsReviewScope | null;
 }
 
 export function DiagnosticsReviewDialog({
@@ -71,6 +78,7 @@ export function DiagnosticsReviewDialog({
   reviewPayload,
   onSave,
   isSaving,
+  initialScope,
 }: DiagnosticsReviewDialogProps) {
   const [enabledSections, setEnabledSections] = useState<Record<string, boolean>>({});
   const [replacements, setReplacements] = useState<ReplacementRule[]>([
@@ -87,9 +95,17 @@ export function DiagnosticsReviewDialog({
   useEffect(() => {
     if (isOpen && reviewPayload) {
       setOpenedAt(Date.now());
+      const scopedSections = initialScope?.sections;
       const initial: Record<string, boolean> = {};
-      for (const key of reviewPayload.sectionKeys) {
-        initial[key] = true;
+      if (scopedSections && scopedSections.length > 0) {
+        const allow = new Set(scopedSections);
+        for (const key of reviewPayload.sectionKeys) {
+          initial[key] = allow.has(key);
+        }
+      } else {
+        for (const key of reviewPayload.sectionKeys) {
+          initial[key] = true;
+        }
       }
       setEnabledSections(initial);
       setReplacements([{ find: "", replace: "[REDACTED]" }]);
@@ -97,7 +113,7 @@ export function DiagnosticsReviewDialog({
       setTimeWindow(DEFAULT_TIME_WINDOW);
       setShowPreview(false);
     }
-  }, [isOpen, reviewPayload]);
+  }, [isOpen, reviewPayload, initialScope]);
 
   // Active prebuilt toggles contribute regex rules, prepended before the user's
   // literal rules so canonical patterns run first.

@@ -253,6 +253,13 @@ const LazyPanelLimitConfirmDialog = lazy(() =>
   preloadPanelLimitConfirmDialog().then((m) => ({ default: m.PanelLimitConfirmDialog }))
 );
 
+function preloadDiagnosticsReviewDialogHost() {
+  return import("./components/Settings/DiagnosticsReviewDialogHost");
+}
+const LazyDiagnosticsReviewDialogHost = lazy(() =>
+  preloadDiagnosticsReviewDialogHost().then((m) => ({ default: m.DiagnosticsReviewDialogHost }))
+);
+
 function preloadGitPushConfirmDialog() {
   return import("./components/Git/GitPushConfirmDialog");
 }
@@ -1289,6 +1296,18 @@ function AppInner() {
               >
                 <Suspense fallback={null}>
                   <LazyPanelLimitConfirmDialog />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+
+            {isStateLoaded && (
+              <ErrorBoundary
+                variant="component"
+                componentName="DiagnosticsReviewDialogHost"
+                resetKeys={[Number(isStateLoaded)]}
+              >
+                <Suspense fallback={null}>
+                  <LazyDiagnosticsReviewDialogHost />
                 </Suspense>
               </ErrorBoundary>
             )}
