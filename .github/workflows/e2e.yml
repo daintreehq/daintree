@@ -662,6 +662,74 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+      # Extract a flat manifest of failing spec file paths from the JSON reporter
+      # output. Consumed by the nightly notify job for git-blame-based assignee
+      # routing (a separate signal from the structured failure-report dedup).
+      - name: Extract failing spec manifest
+        id: failure-manifest
+        if: always() && inputs.json_report
+        continue-on-error: true
+        shell: bash
+        run: |
+          SUITE="${{ inputs.suite || 'core' }}"
+          # Include matrix name + shard so download-artifact merge-multiple
+          # doesn't overwrite manifests from other platforms or shards.
+          MANIFEST="nightly-failure-manifest-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}.json"
+
+          extract_failures() {
+            if [ ! -f test-results/report.json ]; then
+              echo '{"suite":"'"$SUITE"'","failedSpecs":[],"error":"test-results/report.json not found"}' > "$MANIFEST"
+              return
+            fi
+            node -e "
+              const fs = require('fs');
+              const data = JSON.parse(fs.readFileSync('test-results/report.json', 'utf8'));
+              const failed = new Set();
+
+              function walk(suite) {
+                for (const s of suite.suites || []) walk(s);
+                for (const spec of suite.specs || []) {
+                  const tests = spec.tests || [];
+                  if (tests.some(t => {
+                    const lastResult = t.results?.[t.results.length - 1];
+                    const lastStatus = lastResult?.status;
+                    // Final retry passed but test was flaky — Playwright exits non-zero
+                    // when FAIL_ON_FLAKY_TESTS is set.
+                    if (t.status === 'flaky') return true;
+                    return lastStatus && lastStatus !== 'passed' && lastStatus !== 'skipped';
+                  })) {
+                    if (spec.file) failed.add(spec.file);
+                  }
+                }
+              }
+
+              for (const suite of data.suites || []) walk(suite);
+
+              const manifest = {
+                suite: '$SUITE',
+                platform: '${{ runner.os }}',
+                shard: ${{ matrix.shard }},
+                shardTotal: ${{ matrix.shardTotal }},
+                failedSpecs: [...failed].sort(),
+                timestamp: new Date().toISOString(),
+              };
+              fs.writeFileSync('$MANIFEST', JSON.stringify(manifest));
+            "
+          }
+          extract_failures
+          echo "Manifest written:"
+          cat "$MANIFEST"
+
+      - name: Upload failure manifest
+        if: always() && inputs.json_report
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-manifest-${{ inputs.suite || 'core' }}-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}
+          path: nightly-failure-manifest-*.json
+          retention-days: 3
+          if-no-files-found: ignore
+
       - name: Upload test results
         if: always()
         continue-on-error: true

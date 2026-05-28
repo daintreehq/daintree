@@ -658,12 +658,17 @@ jobs:
       ]
     runs-on: ubuntu-22.04
     permissions:
+      contents: read
       issues: write
       actions: read
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          # Full history required so git blame can attribute failing specs back
+          # to the most recent author since the last green nightly.
+          fetch-depth: 0
 
       - name: Download failure reports
         env:
@@ -716,8 +721,18 @@ jobs:
             echo "No classification artifacts found"
           fi
 
+      - name: Download failure manifests
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: e2e-manifest-*
+          path: .nightly-failure-manifests/
+          merge-multiple: true
+
       - name: Process failures and manage issues
         uses: actions/github-script@v8
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
         with:
           script: |
             const fs = require('node:fs');
@@ -725,6 +740,148 @@ jobs:
 
             const workspace = process.env.GITHUB_WORKSPACE;
             const mod = await import(path.join(workspace, 'scripts/ci/process-nightly-issues.mjs'));
+
+            // ---- Git-blame assignee routing ----
+            // Independent of the per-signature dedup below: aggregate the
+            // shard-level e2e-manifest artifacts into a single set of failing
+            // spec paths, then git-blame those paths since the last green
+            // nightly to pick the most-likely owner. Applied to every issue
+            // created or updated in this run.
+            const failedSpecs = new Set();
+            const manifestDir = path.join(workspace, '.nightly-failure-manifests');
+            if (fs.existsSync(manifestDir)) {
+              for (const file of fs.readdirSync(manifestDir)) {
+                if (!file.endsWith('.json')) continue;
+                try {
+                  const raw = fs.readFileSync(path.join(manifestDir, file), 'utf8');
+                  const m = JSON.parse(raw);
+                  for (const spec of m.failedSpecs || []) {
+                    failedSpecs.add(spec);
+                  }
+                } catch {
+                  // malformed manifest — skip
+                }
+              }
+            }
+
+            let lastGreenDate = null;
+            try {
+              const runs = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'nightly.yml',
+                status: 'success',
+                event: 'schedule',
+                branch: context.payload.repository?.default_branch || 'develop',
+                per_page: 1,
+              });
+              lastGreenDate = runs.data.workflow_runs[0]?.created_at ?? null;
+            } catch (e) {
+              core.warning(`Could not find last green nightly: ${e.message}`);
+            }
+
+            async function blameToAssignee(args, rationaleFn) {
+              try {
+                const { stdout } = await exec.getExecOutput('git', args, { silent: true });
+                const counts = new Map();
+                for (const line of stdout.trim().split('\n')) {
+                  const m = line.match(/^[a-f0-9]{40} (.+ <[^>]+>)$/);
+                  if (m) {
+                    const author = m[1];
+                    counts.set(author, (counts.get(author) || 0) + 1);
+                  }
+                }
+                if (counts.size === 0) return { assignee: null, rationale: '' };
+                const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+                const rationale = rationaleFn(top[0], top[1]);
+                const emailMatch = top[0].match(/<(.+)>/);
+                if (emailMatch) {
+                  const email = emailMatch[1];
+                  const { data: search } = await github.rest.search.users({ q: `${email} in:email` });
+                  if (search.items?.length > 0) {
+                    return { assignee: search.items[0].login, rationale };
+                  }
+                }
+                return { assignee: null, rationale };
+              } catch (e) {
+                core.warning(`Git blame failed: ${e.message}`);
+                return { assignee: null, rationale: '' };
+              }
+            }
+
+            let assignee = null;
+            let assigneeRationale = '';
+            if (lastGreenDate && failedSpecs.size > 0) {
+              const result = await blameToAssignee(
+                ['log', `--since=${lastGreenDate}`, '--format=%H %an <%ae>', '--name-only', '--', ...failedSpecs],
+                (author, n) => `${author} touched ${n} of the failing spec(s) since last green.`,
+              );
+              assignee = result.assignee;
+              assigneeRationale = result.rationale;
+            }
+            if (!assignee && lastGreenDate) {
+              const result = await blameToAssignee(
+                ['log', `--since=${lastGreenDate}`, '--format=%H %an <%ae>'],
+                (author, n) => `${author} had ${n} commit(s) since last green (no spec-level data).`,
+              );
+              assignee = result.assignee;
+              assigneeRationale = result.rationale;
+            }
+            if (assigneeRationale) {
+              console.log(`Routing rationale: ${assigneeRationale}`);
+            }
+
+            async function applyAssignee(issueNumber) {
+              if (!assignee) {
+                try {
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    labels: ['needs-triage'],
+                  });
+                } catch (e) {
+                  core.warning(`Could not add needs-triage label to #${issueNumber}: ${e.message}`);
+                }
+                return;
+              }
+              try {
+                await github.rest.issues.addAssignees({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  assignees: [assignee],
+                });
+              } catch (e) {
+                core.warning(`Could not assign ${assignee} to #${issueNumber}: ${e.message}`);
+                try {
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    labels: ['needs-triage'],
+                  });
+                } catch (e2) {
+                  core.warning(`Could not add needs-triage fallback label to #${issueNumber}: ${e2.message}`);
+                }
+              }
+            }
+
+            // Bootstrap the needs-triage label lazily on first use so older
+            // repos without it don't fail label assignment.
+            if (!assignee) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: 'needs-triage',
+                  color: 'fbca04',
+                  description: 'Nightly failure requires manual triage — no clear owner found',
+                });
+              } catch {
+                // already exists
+              }
+            }
 
             // Collect all failure reports from downloaded artifacts
             const reportsDir = path.join(workspace, 'failure-reports');
@@ -820,15 +977,17 @@ jobs:
                   });
                 }
 
+                await applyAssignee(existing.number);
                 updated++;
               } else {
-                await github.rest.issues.create({
+                const createdIssue = await github.rest.issues.create({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   title,
                   body,
                   labels: [...labels, ...escalateLabels],
                 });
+                await applyAssignee(createdIssue.data.number);
                 created++;
               }
             }
