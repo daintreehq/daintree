@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { BUILT_IN_THEME_SOURCES } from "../builtInThemes/index.js";
 import { getThemeContrastWarnings } from "../contrast.js";
 import { EXTENSION_KEY_REGISTRY, isExtensionKeyRequired } from "../extensionRegistry.js";
+import { THEME_EXTENSION_REGISTRY } from "../extensions.js";
 import { auditSurfaceRamp, auditAccentProminence, auditCrossThemeAccents } from "../oklch.js";
 import { BUILT_IN_APP_SCHEMES } from "../themes.js";
 import { APP_THEME_TOKEN_KEYS, EXTENSION_KEYS } from "../types.js";
@@ -334,6 +335,29 @@ describe("built-in themes", () => {
         `${source.id} dock-shadow alpha ${pinned![1]} below 0.25 visibility threshold`
       ).toBeGreaterThanOrEqual(0.25);
     }
+  });
+
+  it("pins the required extension key classification", () => {
+    // Second gate over the registry-driven parity test above: flipping a key's
+    // `required` flag silently removes its parity/perceptibility protection, so the
+    // required set is asserted by name here. Update intentionally, never to silence.
+    const required = Object.entries(THEME_EXTENSION_REGISTRY)
+      .filter(([, meta]) => meta.required)
+      .map(([key]) => key)
+      .sort();
+    expect(required).toEqual(
+      [
+        "pulse-missed-bg",
+        "pulse-ring-offset",
+        "sidebar-active-bg",
+        "sidebar-hover-bg",
+        "toolbar-control-armed-shadow",
+      ].sort()
+    );
+    expect(
+      (THEME_EXTENSION_REGISTRY["toolbar-control-armed-shadow"] as { darkOnly?: boolean }).darkOnly,
+      "toolbar-control-armed-shadow must stay darkOnly (light themes inherit the CSS fallback)"
+    ).toBe(true);
   });
 });
 

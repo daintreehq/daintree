@@ -89,9 +89,16 @@ export const THEME_EXTENSION_REGISTRY = {
 
 export type ThemeExtensionKey = keyof typeof THEME_EXTENSION_REGISTRY;
 
-/** Keys whose CSS fallback is unsafe to inherit (see `required` above). */
+/**
+ * Keys every built-in theme must define unconditionally. Excludes `darkOnly` keys,
+ * which are required on dark themes but must be absent on light themes — their
+ * requirement is conditional, so they don't belong in an "always present" type.
+ */
 export type RequiredThemeExtensionKey = {
-  [K in ThemeExtensionKey]: (typeof THEME_EXTENSION_REGISTRY)[K]["required"] extends true
+  [K in ThemeExtensionKey]: (typeof THEME_EXTENSION_REGISTRY)[K] extends {
+    required: true;
+    darkOnly?: false | undefined;
+  }
     ? K
     : never;
 }[ThemeExtensionKey];
