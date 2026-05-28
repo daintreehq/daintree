@@ -425,6 +425,7 @@ jobs:
       suite: core
       platform: ${{ inputs.platform || 'all' }}
       json_report: true
+      emit_classification: true
 
   # Six domain buckets, each a reusable-workflow call expanded across the OS
   # matrix inside e2e.yml. e2e.yml auto-shards every full-* suite 4 ways
@@ -451,6 +452,7 @@ jobs:
       platform: ${{ inputs.platform || 'non-windows' }}
       json_report: true
       enable_blob_report: true
+      emit_classification: true
 
   e2e-online:
     needs: [check, test]
@@ -459,6 +461,7 @@ jobs:
       suite: online
       platform: ${{ inputs.platform || 'all' }}
       json_report: true
+      emit_classification: true
     secrets: inherit
 
   # Memory-leak detection — runs the `nightly` E2E suite. e2e.yml forces
@@ -473,6 +476,7 @@ jobs:
       platform: ${{ inputs.platform || 'non-windows' }}
       json_report: true
       enable_blob_report: true
+      emit_classification: true
 
   # Merges Playwright blob reports from every nightly e2e shard into a single
   # unified HTML report. Runs independently of publish — a broken merge must
@@ -685,6 +689,32 @@ jobs:
               gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/${id}/zip" > "failure-reports/${name}.zip"
               unzip -o "failure-reports/${name}.zip" -d "failure-reports/${name}/"
             done
+
+      # Pulls the per-shard e2e-classification-*.json artifacts produced by
+      # scripts/ci/classify-e2e-failures.mjs into /tmp/e2e-classifications/ so
+      # a follow-up can fold bucket labels (Infrastructure / Test-Logic /
+      # Product-Logic / Unclassified) into the per-signature issues that the
+      # github-script step below creates. Failing silently is fine — when the
+      # classifier ran but produced nothing, or when classification artifacts
+      # aren't present at all, the per-signature flow still creates issues
+      # without the bucket enrichment.
+      - name: Download failure classification artifacts
+        id: download-classifications
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -rf /tmp/e2e-classifications
+          mkdir -p /tmp/e2e-classifications
+          if gh run download "${{ github.run_id }}" \
+            --dir /tmp/e2e-classifications \
+            --pattern 'e2e-classification-*' 2>/dev/null; then
+            echo "downloaded=true" >> "$GITHUB_OUTPUT"
+            echo "Downloaded $(ls /tmp/e2e-classifications/*.json 2>/dev/null | wc -l) classification files"
+          else
+            echo "downloaded=false" >> "$GITHUB_OUTPUT"
+            echo "No classification artifacts found"
+          fi
 
       - name: Process failures and manage issues
         uses: actions/github-script@v8

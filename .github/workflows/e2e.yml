@@ -93,6 +93,10 @@ on:
         description: "Enable Playwright blob reporter so downstream jobs can merge reports across shards/OSes (nightly-only)."
         type: boolean
         default: false
+      emit_classification:
+        description: "Enable per-shard failure classification artifact. Set in nightly to feed the auto-issue body. Implies the blob reporter so the JSON results that the classifier reads are written."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -465,7 +469,7 @@ jobs:
           # piggybacks on the same file via `PLAYWRIGHT_JSON_REPORT`.
           PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/report.json
           PLAYWRIGHT_JSON_REPORT: ${{ inputs.json_report && '1' || '' }}
-          PLAYWRIGHT_BLOB_REPORT: ${{ inputs.enable_blob_report && '1' || '' }}
+          PLAYWRIGHT_BLOB_REPORT: ${{ (inputs.enable_blob_report || inputs.emit_classification) && '1' || '' }}
         run: |
           set -euo pipefail
           npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${RETRY_ARGS:-}
@@ -479,7 +483,7 @@ jobs:
           FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
           PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/report.json
           PLAYWRIGHT_JSON_REPORT: ${{ inputs.json_report && '1' || '' }}
-          PLAYWRIGHT_BLOB_REPORT: ${{ inputs.enable_blob_report && '1' || '' }}
+          PLAYWRIGHT_BLOB_REPORT: ${{ (inputs.enable_blob_report || inputs.emit_classification) && '1' || '' }}
         run: |
           set -euo pipefail
           xvfb-run --auto-servernum npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${RETRY_ARGS:-}
@@ -504,7 +508,7 @@ jobs:
           FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
           PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/report.json
           PLAYWRIGHT_JSON_REPORT: ${{ inputs.json_report && '1' || '' }}
-          PLAYWRIGHT_BLOB_REPORT: ${{ inputs.enable_blob_report && '1' || '' }}
+          PLAYWRIGHT_BLOB_REPORT: ${{ (inputs.enable_blob_report || inputs.emit_classification) && '1' || '' }}
         run: |
           set -euo pipefail
 
@@ -608,6 +612,55 @@ jobs:
           COLLECTED=$(find "$FALLBACK_DIR" -type f 2>/dev/null | wc -l)
           echo "[e2e] Fallback crash dump collection: $COLLECTED files"
 
+      # Classification regex table — keep in sync with CLASSIFICATION_RULES in
+      # scripts/ci/classify-e2e-failures.mjs. Rules are ordered; the first match
+      # wins. Specific patterns (spawn EPERM) must precede broad ones (bare
+      # EPERM) so the more actionable bucket is chosen.
+      #
+      # Infrastructure (OS / CI runner resource contention):
+      #   spawn EPERM           -> AV on-access scan
+      #   EBUSY on .tmp paths   -> indexer contention
+      #   EPERM / EACCES / ENOSPC -> permission / disk
+      #
+      # Test-Logic (handshake / timing / stale references):
+      #   CDP target not found / Target.targetCreated timeout -> handshake
+      #   Target/Browser/Page has been closed                -> stale ref
+      #   Protocol error (Target.closeTarget)                -> target close
+      #   Selector timeout / Test timeout                     -> timing
+      #
+      # Product-Logic (renderer crashes, actual bugs):
+      #   WebContents crashed / renderer process crash        -> renderer
+      #   GPU process crash / utility process crash           -> GPU/utility
+      #
+      # Unmatched errors land in Unclassified.
+      # Reads the same `test-results/report.json` that the retry-path and
+      # extract-failures steps already consume — no separate JSON output.
+      - name: Classify e2e failures
+        id: classify
+        if: always() && inputs.emit_classification
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p test-results
+          if [ -f test-results/report.json ]; then
+            node scripts/ci/classify-e2e-failures.mjs \
+              --input test-results/report.json \
+              --output test-results/e2e-failure-classification.json
+          else
+            echo "[e2e] No report.json found; writing empty classification"
+            echo '{"totalUnique":0,"totalAttempts":0,"buckets":{},"failures":[]}' \
+              > test-results/e2e-failure-classification.json
+          fi
+
+      - name: Upload failure classification
+        if: always() && inputs.emit_classification
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-classification-${{ inputs.suite || 'core' }}-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}
+          path: test-results/e2e-failure-classification.json
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Upload test results
         if: always()
