@@ -100,9 +100,11 @@ function SystemHealthSection() {
 /** Pull the GitHub-issue env summary fields out of the untyped review payload. */
 function extractIssueMetadata(payload: Record<string, unknown>): DiagnosticsIssueMetadata {
   const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+  const isRecord = (v: unknown): v is Record<string, unknown> =>
+    typeof v === "object" && v !== null;
   const section = (key: string): Record<string, unknown> | undefined => {
     const value = payload[key];
-    return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+    return isRecord(value) ? value : undefined;
   };
   const metadata = section("metadata");
   const runtime = section("runtime");
@@ -157,6 +159,9 @@ function DownloadDiagnosticsSection() {
           type: "success",
           title: "Diagnostics saved",
           message: "Open a GitHub issue and drag the saved ZIP into it.",
+          // The saved ZIP is already revealed in the OS file manager, so this
+          // is a one-shot action prompt — no durable inbox row needed.
+          transient: true,
           context: { eventKind: "settings" },
           action: {
             label: "Continue to GitHub issue",

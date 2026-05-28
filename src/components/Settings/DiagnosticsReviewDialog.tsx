@@ -27,6 +27,10 @@ const TIME_WINDOW_OPTIONS: { id: TimeWindowId; label: string }[] = [
 
 const DEFAULT_TIME_WINDOW: TimeWindowId = "30m";
 
+function isTimeWindowId(value: string): value is TimeWindowId {
+  return TIME_WINDOW_OPTIONS.some((o) => o.id === value);
+}
+
 /**
  * Resolve a time-window option to an absolute ms cutoff (`null` = full history).
  * `now` is captured once when the dialog opens so the preview and the saved
@@ -219,7 +223,9 @@ export function DiagnosticsReviewDialog({
           </h4>
           <select
             value={timeWindow}
-            onChange={(e) => setTimeWindow(e.target.value as TimeWindowId)}
+            onChange={(e) => {
+              if (isTimeWindowId(e.target.value)) setTimeWindow(e.target.value);
+            }}
             aria-label="Log time window"
             className={cn(
               "h-8 text-xs w-full px-2 rounded border border-daintree-border bg-daintree-bg",
