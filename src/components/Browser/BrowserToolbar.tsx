@@ -15,6 +15,7 @@ import {
   SquareTerminal,
   Code,
   Smartphone,
+  PanelRight,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -68,6 +69,7 @@ interface BrowserToolbarProps {
   onReload: () => void;
   onHardReload?: () => void;
   onOpenExternal: () => void;
+  onPromoteToPortal?: () => void;
   onZoomChange?: (zoomFactor: number) => void;
   onCaptureScreenshot?: () => void;
   onToggleConsole?: () => void;
@@ -102,6 +104,7 @@ export function BrowserToolbar({
   onReload,
   onHardReload,
   onOpenExternal,
+  onPromoteToPortal,
   onZoomChange,
   onCaptureScreenshot,
   onToggleConsole,
@@ -1037,6 +1040,23 @@ export function BrowserToolbar({
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Open DevTools</TooltipContent>
+        </Tooltip>
+      )}
+
+      {onPromoteToPortal && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onPromoteToPortal}
+              className={buttonClass}
+              aria-label="Open in Portal"
+              data-testid="browser-promote-portal"
+            >
+              <PanelRight className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Open in Portal</TooltipContent>
         </Tooltip>
       )}
 

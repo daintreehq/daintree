@@ -2,6 +2,11 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
+import { usePortalStore } from "@/store/portalStore";
+import { isDevPreviewPanel } from "@shared/types/panel";
+import { buildDevPreviewPartition } from "@shared/utils/partitionUtils";
+import { logError } from "@/utils/logger";
+import { getPortalBoundsWithRetry } from "./portalHelpers";
 
 const argsSchema = z
   .object({
@@ -95,6 +100,53 @@ export function registerDevPreviewActions(
     run: async (args: unknown, ctx: ActionContext) => {
       const target = resolveTarget(args, ctx);
       await window.electron.devPreview.reinstallAndRestart(target);
+    },
+  }));
+
+  actions.set("devPreview.promoteToPortal", () => ({
+    id: "devPreview.promoteToPortal",
+    title: "Open in Portal",
+    description:
+      "Open the current dev preview URL in a Portal tab, sharing the same session (cookies, localStorage, IndexedDB). The dev preview stays open; sessionStorage does not carry over.",
+    category: "devServer",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["portal", "promote", "browser", "preview", "session"],
+    argsSchema,
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { panelId, projectId } = resolveTarget(args, ctx);
+      const panel = usePanelStore.getState().getTerminal(panelId);
+      if (!panel || !isDevPreviewPanel(panel)) {
+        throw new Error("Focused panel is not a dev preview");
+      }
+
+      const url = panel.browserUrl?.trim() || panel.devServerUrl?.trim();
+      if (!url) {
+        // Nothing has loaded yet — no-op rather than opening a blank tab.
+        return;
+      }
+
+      const partition = buildDevPreviewPartition(projectId, panel.worktreeId, panelId);
+      const title = panel.title?.trim() || "Dev preview";
+
+      const portal = usePortalStore.getState();
+      if (!portal.isOpen) {
+        portal.setOpen(true);
+      }
+      const tabId = portal.createTab(url, title);
+
+      const bounds = await getPortalBoundsWithRetry();
+      try {
+        await window.electron.portal.create({ tabId, url, partition });
+        usePortalStore.getState().markTabCreated(tabId);
+        if (bounds) {
+          await window.electron.portal.show({ tabId, bounds });
+        }
+      } catch (error) {
+        logError("Failed to promote dev preview to portal", error);
+        usePortalStore.getState().closeTab(tabId);
+      }
     },
   }));
 }

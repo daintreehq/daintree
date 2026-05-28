@@ -435,6 +435,7 @@ export const BUILT_IN_ACTION_IDS = [
   "devPreview.restart",
   "devPreview.restartAndClearCache",
   "devPreview.reinstallAndRestart",
+  "devPreview.promoteToPortal",
 
   // -- envActions --
   "env.global.get",

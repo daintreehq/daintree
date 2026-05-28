@@ -71,6 +71,14 @@ export interface PortalNavEvent {
 export interface PortalCreatePayload {
   tabId: string;
   url: string;
+  /**
+   * Optional Chromium session partition override. When a valid
+   * `persist:dev-preview-*` partition is supplied (promoting a dev preview into
+   * a Portal tab), the new `WebContentsView` shares that session — cookies,
+   * localStorage, and IndexedDB carry over. Invalid values are ignored and the
+   * default `persist:portal` partition is used.
+   */
+  partition?: string;
 }
 
 export interface PortalShowPayload {
