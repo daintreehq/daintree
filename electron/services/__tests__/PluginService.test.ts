@@ -476,6 +476,10 @@ describe("PluginManifestSchema scopes field", () => {
     ["https://192.168.1.1", "scope_url_private_target"],
     ["https://172.16.0.1", "scope_url_private_target"],
     ["https://172.31.255.255", "scope_url_private_target"],
+    ["https://0", "scope_url_private_target"],
+    ["https://0.0.0.0", "scope_url_private_target"],
+    ["https://localhost.", "scope_url_private_target"],
+    ["https://LOCALHOST", "scope_url_private_target"],
     ["https://user:pass@example.com", "scope_url_has_credentials"],
     ["https://example.com/*", "scope_wildcard_rejected"],
     ["https://*.example.com", "scope_wildcard_rejected"],
@@ -3672,24 +3676,55 @@ describe("Plugin action registry", () => {
     }
   );
 
-  it("does NOT raise effectiveDanger for compound exfiltration pair when network:fetch has a tight scope", async () => {
-    await writePlugin("scoped-network", {
-      name: "acme.scoped-network",
+  it.each(["agent:read", "git:read", "fs:project-read", "fs:user-data-read"])(
+    "tight network scope attenuates compound elevation for sensitive-read source %s + network:fetch",
+    async (source) => {
+      const safe = source.replace(/[^a-z]/g, "-");
+      const name = `acme.attenuated-${safe}`;
+      await writePlugin(`attenuated-${safe}`, {
+        name,
+        version: "1.0.0",
+        capabilities: [source, "network:fetch"],
+        scopes: { network: { allowedUrls: ["https://api.example.com/v2"] } },
+      });
+      const svc = new PluginService(tmpDir);
+      await svc.initialize();
+
+      svc.registerPluginAction(name, {
+        ...validContribution(),
+        id: `${name}.doThing`,
+        danger: "safe" as const,
+      });
+
+      expect(svc.listPluginActions().find((a) => a.id === `${name}.doThing`)?.effectiveDanger).toBe(
+        "safe"
+      );
+    }
+  );
+
+  it("scoped network:fetch does NOT suppress flat elevation from fs:project-write", async () => {
+    // The compound attenuation only short-circuits the compound elevation path
+    // — flat-elevated capabilities in CONFIRM_TRIGGERING_CAPABILITIES must
+    // still raise effectiveDanger regardless of any scope.
+    await writePlugin("scoped-with-write", {
+      name: "acme.scoped-with-write",
       version: "1.0.0",
-      capabilities: ["agent:read", "network:fetch"],
-      scopes: { network: { allowedUrls: ["https://api.example.com/v2"] } },
+      capabilities: ["network:fetch", "fs:project-write"],
+      scopes: { network: { allowedUrls: ["https://api.example.com"] } },
     });
     const svc = new PluginService(tmpDir);
     await svc.initialize();
 
-    svc.registerPluginAction("acme.scoped-network", {
+    svc.registerPluginAction("acme.scoped-with-write", {
       ...validContribution(),
-      id: "acme.scoped-network.doThing",
+      id: "acme.scoped-with-write.doThing",
       danger: "safe" as const,
     });
 
-    const action = svc.listPluginActions().find((a) => a.id === "acme.scoped-network.doThing");
-    expect(action?.effectiveDanger).toBe("safe");
+    expect(
+      svc.listPluginActions().find((a) => a.id === "acme.scoped-with-write.doThing")
+        ?.effectiveDanger
+    ).toBe("confirm");
   });
 
   it("raises effectiveDanger for sensitive-read + shell:exec even with network scope (shell is never attenuated)", async () => {

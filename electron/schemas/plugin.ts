@@ -164,7 +164,16 @@ export const PluginCapabilitySchema = z.enum(BUILT_IN_PLUGIN_CAPABILITIES);
  * only — DNS rebinding (a public hostname that resolves to RFC1918 at
  * request time) is out of scope for manifest-level validation. See #9247.
  */
-const PRIVATE_LOOPBACK_HOSTNAME_LITERALS = new Set(["localhost", "ip6-localhost", "ip6-loopback"]);
+// "0.0.0.0" is a Linux/Unix synonym for "any local interface" and routes to
+// loopback on many platforms — it must be rejected alongside "localhost".
+// Trailing-FQDN-dot variants (e.g. "localhost.") are normalized away before
+// the literal check (see `normalizeHostname` below) so we only list bare forms.
+const PRIVATE_LOOPBACK_HOSTNAME_LITERALS = new Set([
+  "localhost",
+  "ip6-localhost",
+  "ip6-loopback",
+  "0.0.0.0",
+]);
 /** IPv4 loopback (127.0.0.0/8). */
 const IPV4_LOOPBACK_REGEX = /^127\./;
 /** IPv4 link-local (169.254.0.0/16). Catches the AWS metadata endpoint. */
@@ -175,18 +184,29 @@ const IPV4_RFC1918_TEN_REGEX = /^10\./;
 const IPV4_RFC1918_192_REGEX = /^192\.168\./;
 /** IPv4 RFC1918 172.16.0.0/12 (172.16.* through 172.31.*). */
 const IPV4_RFC1918_172_REGEX = /^172\.(1[6-9]|2\d|3[0-1])\./;
-/** IPv6 literal loopback (::1) — `new URL()` returns hostname stripped of brackets. */
+/**
+ * IPv6 literal loopback (::1). `new URL("https://[::1]").hostname` is `"[::1]"`
+ * — WHATWG retains the brackets — so the regex matches both the bracketed
+ * form (as returned by `new URL`) and a bare `::1` for completeness.
+ */
 const IPV6_LOOPBACK_REGEX = /^\[?::1\]?$/;
 
+function normalizeHostname(hostname: string): string {
+  // WHATWG URL parsing preserves trailing FQDN dots (RFC 1034 §3.1): the host
+  // "localhost." is structurally identical to "localhost" but would skip a
+  // literal-set check. Strip the trailing dot before any classification.
+  return hostname.replace(/\.$/, "").toLowerCase();
+}
+
 function isPrivateOrLoopbackHostname(hostname: string): boolean {
-  const lower = hostname.toLowerCase();
-  if (PRIVATE_LOOPBACK_HOSTNAME_LITERALS.has(lower)) return true;
-  if (IPV4_LOOPBACK_REGEX.test(lower)) return true;
-  if (IPV4_LINK_LOCAL_REGEX.test(lower)) return true;
-  if (IPV4_RFC1918_TEN_REGEX.test(lower)) return true;
-  if (IPV4_RFC1918_192_REGEX.test(lower)) return true;
-  if (IPV4_RFC1918_172_REGEX.test(lower)) return true;
-  if (IPV6_LOOPBACK_REGEX.test(lower)) return true;
+  const normalized = normalizeHostname(hostname);
+  if (PRIVATE_LOOPBACK_HOSTNAME_LITERALS.has(normalized)) return true;
+  if (IPV4_LOOPBACK_REGEX.test(normalized)) return true;
+  if (IPV4_LINK_LOCAL_REGEX.test(normalized)) return true;
+  if (IPV4_RFC1918_TEN_REGEX.test(normalized)) return true;
+  if (IPV4_RFC1918_192_REGEX.test(normalized)) return true;
+  if (IPV4_RFC1918_172_REGEX.test(normalized)) return true;
+  if (IPV6_LOOPBACK_REGEX.test(normalized)) return true;
   return false;
 }
 
