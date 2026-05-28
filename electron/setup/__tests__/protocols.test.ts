@@ -68,6 +68,7 @@ vi.mock("../../utils/appProtocol.js", () => ({
   resolveAppUrlToDistPath: vi.fn(),
   getMimeType: vi.fn(),
   buildHeaders: vi.fn(),
+  isImmutableAppAsset: vi.fn(() => false),
 }));
 
 // Real-ish flag values matter: the protocol handler passes
@@ -114,7 +115,9 @@ vi.mock("../../ipc/channels.js", () => ({
 }));
 
 import {
+  createPluginProtocolHandler,
   registerDaintreeFileProtocol,
+  registerPluginProtocol,
   registerProtocolsForSession,
   setupWebviewCSP,
 } from "../protocols.js";
@@ -766,15 +769,29 @@ describe("protocol registration", () => {
     vi.clearAllMocks();
   });
 
-  it("registers app and daintree-file protocols on per-project sessions", async () => {
+  it("registers app and daintree-file protocols on per-project sessions when no plugin resolver is cached", async () => {
     const handle = vi.fn();
     const mockSession = { protocol: { handle } } as unknown as Electron.Session;
 
     registerProtocolsForSession(mockSession, "/tmp/dist");
 
+    // plugin:// is skipped here — registerPluginProtocol hasn't been called yet
+    // in this test. Production order is the opposite: registerPluginProtocol runs
+    // in app.whenReady() before any per-project session is created.
     expect(handle).toHaveBeenCalledTimes(2);
     expect(handle).toHaveBeenCalledWith("app", expect.any(Function));
     expect(handle).toHaveBeenCalledWith("daintree-file", expect.any(Function));
+  });
+
+  it("also registers plugin:// on per-project sessions after the resolver is cached", async () => {
+    registerPluginProtocol(() => undefined);
+
+    const handle = vi.fn();
+    const mockSession = { protocol: { handle } } as unknown as Electron.Session;
+
+    registerProtocolsForSession(mockSession, "/tmp/dist");
+
+    expect(handle).toHaveBeenCalledWith("plugin", expect.any(Function));
   });
 
   it("registers the default-session daintree-file protocol", async () => {
@@ -783,6 +800,14 @@ describe("protocol registration", () => {
     registerDaintreeFileProtocol();
 
     expect(protocol.handle).toHaveBeenCalledWith("daintree-file", expect.any(Function));
+  });
+
+  it("registers the default-session plugin protocol", async () => {
+    const { protocol } = await import("electron");
+
+    registerPluginProtocol(() => undefined);
+
+    expect(protocol.handle).toHaveBeenCalledWith("plugin", expect.any(Function));
   });
 });
 
@@ -1146,6 +1171,319 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     try {
       const handler = await captureHandler("daintree-file");
       const response = await handler(makeRequest("/project/file.txt", "/project"));
+
+      expect(response.status).toBe(404);
+      expect(fs.open).not.toHaveBeenCalled();
+    } finally {
+      relativeSpy.mockRestore();
+    }
+  });
+});
+
+describe("createPluginProtocolHandler", () => {
+  type ProtocolHandler = (request: GlobalRequest) => Promise<Response>;
+
+  const PLUGIN_ROOT = path.normalize("/plugins/installed/my-plugin");
+
+  function makeFileHandle(content: string | Buffer = "data") {
+    const buffer = typeof content === "string" ? Buffer.from(content) : content;
+    return {
+      readFile: vi.fn().mockResolvedValue(buffer),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  function buildHandler(
+    overrides: { getPluginDir?: (id: string) => string | undefined } = {}
+  ): ProtocolHandler {
+    const getPluginDir =
+      overrides.getPluginDir ?? ((id: string) => (id === "my-plugin" ? PLUGIN_ROOT : undefined));
+    return createPluginProtocolHandler(getPluginDir);
+  }
+
+  function makeRequest(url: string, init?: RequestInit): GlobalRequest {
+    return new Request(url, init) as GlobalRequest;
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle() as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("text/javascript");
+  });
+
+  it("serves a normal asset inside the plugin root and opens with O_NOFOLLOW", async () => {
+    const fs = await import("fs/promises");
+    const handler = buildHandler();
+    const response = await handler(makeRequest("plugin://my-plugin/dist/index.js"));
+
+    expect(response.status).toBe(200);
+    // open() must use the user-derived candidate (not the realpath-resolved
+    // path) with O_NOFOLLOW so a final-component symlink injected after
+    // realpath is rejected with ELOOP.
+    expect(fs.open).toHaveBeenCalledTimes(1);
+    const openArgs = vi.mocked(fs.open).mock.calls[0];
+    expect(openArgs[0]).toBe(path.normalize("/plugins/installed/my-plugin/dist/index.js"));
+    expect(openArgs[1]).toBe(fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  });
+
+  it("emits the hardened response header set with cross-origin CORP", async () => {
+    const handler = buildHandler();
+    const response = await handler(makeRequest("plugin://my-plugin/dist/index.js"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("text/javascript");
+    // CORP MUST be cross-origin (not same-origin like app://). Same-origin would
+    // break COEP isolation when the plugin embedder eventually opts in.
+    expect(response.headers.get("Cross-Origin-Resource-Policy")).toBe("cross-origin");
+    expect(response.headers.get("Cross-Origin-Opener-Policy")).toBe("same-origin");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Permissions-Policy")).toBeTruthy();
+    // No Cross-Origin-Embedder-Policy header on sub-resources (document sets it).
+    expect(response.headers.get("Cross-Origin-Embedder-Policy")).toBeNull();
+  });
+
+  it("returns 404 for an unknown plugin id", async () => {
+    const fs = await import("fs/promises");
+    const handler = buildHandler();
+    const response = await handler(makeRequest("plugin://does-not-exist/anything.js"));
+
+    expect(response.status).toBe(404);
+    expect(fs.realpath).not.toHaveBeenCalled();
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 for a disabled plugin (getPluginDir returns undefined)", async () => {
+    const fs = await import("fs/promises");
+    const handler = buildHandler({ getPluginDir: () => undefined });
+    const response = await handler(makeRequest("plugin://my-plugin/dist/index.js"));
+
+    expect(response.status).toBe(404);
+    expect(fs.realpath).not.toHaveBeenCalled();
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 for an empty hostname", async () => {
+    const handler = buildHandler();
+    // `plugin:///path` → URL parses hostname as "".
+    const response = await handler(makeRequest("plugin:///dist/index.js"));
+
+    expect(response.status).toBe(404);
+  });
+
+  it("returns 404 for a bare directory request (no path component)", async () => {
+    const fs = await import("fs/promises");
+    const handler = buildHandler();
+    const response = await handler(makeRequest("plugin://my-plugin/"));
+
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("normalizes ../ segments so a traversal URL stays inside the plugin root", async () => {
+    // `path.posix.normalize("/../../etc/passwd")` returns `/etc/passwd`, so the
+    // resolved candidate is `${PLUGIN_ROOT}/etc/passwd` — never `/etc/passwd`
+    // on the host. The leading-slash normalization is the defense; the segment
+    // check below is belt-and-suspenders for vectors that bypass posix.normalize.
+    const fs = await import("fs/promises");
+    const handler = buildHandler();
+    await handler(makeRequest("plugin://my-plugin/../../etc/passwd"));
+
+    const openArgs = vi.mocked(fs.open).mock.calls[0];
+    expect(openArgs?.[0]).toBe(path.normalize("/plugins/installed/my-plugin/etc/passwd"));
+  });
+
+  it("normalizes URL-encoded ../ segments after decode without escaping root", async () => {
+    const fs = await import("fs/promises");
+    const handler = buildHandler();
+    // %2e%2e decodes to `..` — must be subject to the same containment as raw `..`.
+    await handler(makeRequest("plugin://my-plugin/%2e%2e/secret"));
+
+    const openArgs = vi.mocked(fs.open).mock.calls[0];
+    // The path is normalized to plugin-root/secret — never reaches the parent dir.
+    expect(openArgs?.[0]).toBe(path.normalize("/plugins/installed/my-plugin/secret"));
+  });
+
+  it("rejects backslash separators in the pathname (Windows traversal vector)", async () => {
+    const fs = await import("fs/promises");
+    const handler = buildHandler();
+    // Backslashes in URL paths are not valid posix separators; we reject them
+    // outright so a path like `..\..\windows\system32` is never normalized as
+    // a single segment that bypasses the `..` scan.
+    const response = await handler(makeRequest("plugin://my-plugin/foo%5C..%5Cbar"));
+
+    expect(response.status).toBe(404);
+    expect(fs.realpath).not.toHaveBeenCalled();
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("rejects null bytes in the path with 400", async () => {
+    const handler = buildHandler();
+    // %00 is a null byte after decode; must be rejected.
+    const response = await handler(makeRequest("plugin://my-plugin/dist/index.js%00.html"));
+
+    expect(response.status).toBe(400);
+  });
+
+  it("permits paths starting with '..' that aren't parent traversal", async () => {
+    // Regression for the segment-vs-substring check (#4702): `..hidden/file.js`
+    // is a legitimate in-root file and must not be misclassified.
+    const fs = await import("fs/promises");
+    const handler = buildHandler();
+    const response = await handler(makeRequest("plugin://my-plugin/..hidden/file.js"));
+
+    expect(response.status).toBe(200);
+    expect(fs.open).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a symlink whose target resolves outside the plugin root", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    const escapeIn = path.normalize("/plugins/installed/my-plugin/escape");
+    realpath.mockImplementation((p) => {
+      if (p === PLUGIN_ROOT) return Promise.resolve(PLUGIN_ROOT);
+      if (p === escapeIn) return Promise.resolve("/etc/passwd");
+      return Promise.resolve(p as string);
+    });
+
+    const handler = buildHandler();
+    const response = await handler(makeRequest("plugin://my-plugin/escape"));
+
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when O_NOFOLLOW rejects a final-component symlink with ELOOP (TOCTOU)", async () => {
+    const fs = await import("fs/promises");
+    const eloop = Object.assign(new Error("ELOOP"), { code: "ELOOP" });
+    vi.mocked(fs.open).mockRejectedValue(eloop);
+
+    const handler = buildHandler();
+    const response = await handler(makeRequest("plugin://my-plugin/maybe-symlink.js"));
+
+    expect(response.status).toBe(404);
+  });
+
+  it("returns 404 when the file is missing (ENOENT from open)", async () => {
+    const fs = await import("fs/promises");
+    const enoent = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    vi.mocked(fs.open).mockRejectedValue(enoent);
+
+    const handler = buildHandler();
+    const response = await handler(makeRequest("plugin://my-plugin/missing.js"));
+
+    expect(response.status).toBe(404);
+  });
+
+  it("returns 404 when the target is a directory (EISDIR from open)", async () => {
+    const fs = await import("fs/promises");
+    const eisdir = Object.assign(new Error("EISDIR"), { code: "EISDIR" });
+    vi.mocked(fs.open).mockRejectedValue(eisdir);
+
+    const handler = buildHandler();
+    const response = await handler(makeRequest("plugin://my-plugin/somedir"));
+
+    expect(response.status).toBe(404);
+  });
+
+  it("returns 405 with security headers for non-GET/HEAD methods", async () => {
+    const handler = buildHandler();
+    const response = await handler(
+      makeRequest("plugin://my-plugin/dist/index.js", { method: "POST" })
+    );
+
+    expect(response.status).toBe(405);
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Cross-Origin-Resource-Policy")).toBe("cross-origin");
+  });
+
+  it("uses immutable Cache-Control for fingerprinted assets", async () => {
+    const appProtocol = await import("../../utils/appProtocol.js");
+    // The real `isImmutableAppAsset` is imported alongside `getMimeType`, but
+    // the appProtocol module is mocked in this test file. Verify the handler
+    // calls `isImmutableAppAsset` and routes its return to Cache-Control.
+    const fs = await import("fs/promises");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("text/javascript");
+
+    // Stub isImmutableAppAsset to return true (fingerprinted Vite asset).
+    const isImmutableAppAsset = vi.mocked(appProtocol.isImmutableAppAsset);
+    isImmutableAppAsset.mockReturnValue(true);
+
+    const handler = buildHandler();
+    const response = await handler(makeRequest("plugin://my-plugin/assets/index-Ab3Xy789.js"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
+    expect(fs.open).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses no-cache Cache-Control for non-fingerprinted assets", async () => {
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.isImmutableAppAsset).mockReturnValue(false);
+
+    const handler = buildHandler();
+    const response = await handler(makeRequest("plugin://my-plugin/manifest.json"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-cache");
+  });
+
+  it("returns 404 when realpath fails on the plugin root (EACCES)", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation(() => {
+      const err = Object.assign(new Error("EACCES"), { code: "EACCES" });
+      return Promise.reject(err);
+    });
+
+    const handler = buildHandler();
+    const response = await handler(makeRequest("plugin://my-plugin/index.js"));
+
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("closes the file handle even when readFile fails", async () => {
+    const fs = await import("fs/promises");
+    const handle = {
+      readFile: vi.fn().mockRejectedValue(new Error("EIO")),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+    const handler = buildHandler();
+    const response = await handler(makeRequest("plugin://my-plugin/broken.js"));
+
+    expect(response.status).toBe(500);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 500 for unexpected open errors (EACCES) — distinct from the 404 not-found branch", async () => {
+    const fs = await import("fs/promises");
+    const eacces = Object.assign(new Error("EACCES"), { code: "EACCES" });
+    vi.mocked(fs.open).mockRejectedValue(eacces);
+
+    const handler = buildHandler();
+    const response = await handler(makeRequest("plugin://my-plugin/permission-denied.js"));
+
+    expect(response.status).toBe(500);
+  });
+
+  it("blocks via the path.isAbsolute(rel) branch (Windows cross-drive simulation)", async () => {
+    // Symmetry with the daintree-file:// equivalent: forcing path.relative
+    // to return an absolute path isolates the isAbsolute guard from the '..'
+    // branch — same shape as Windows cross-drive (relative('D:\\proj','C:\\win')
+    // === 'C:\\win'). With this branch removed, a cross-drive symlink target
+    // would slip through containment.
+    const fs = await import("fs/promises");
+    const relativeSpy = vi.spyOn(path, "relative").mockReturnValue("/absolute/elsewhere");
+
+    try {
+      const handler = buildHandler();
+      const response = await handler(makeRequest("plugin://my-plugin/file.js"));
 
       expect(response.status).toBe(404);
       expect(fs.open).not.toHaveBeenCalled();
