@@ -25,6 +25,7 @@ import fs from "fs";
 import { existsSync } from "fs";
 import os from "os";
 import { isLinuxWaylandHybridGpu } from "../utils/gpuDetection.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 export let exposeGc: (() => void) | undefined;
 try {
@@ -679,8 +680,7 @@ if (isSmokeTest) {
       if (winJobObject.isAvailable()) {
         console.error("[SMOKE] CHECK: win-job-object native module — OK");
       } else {
-        const loadErr = winJobObject.getLoadError();
-        const msg = loadErr instanceof Error ? loadErr.message : String(loadErr ?? "unknown error");
+        const msg = formatErrorMessage(winJobObject.getLoadError(), "unknown error");
         console.error(`[SMOKE] WARN — win-job-object unavailable: ${msg}`);
       }
     } catch (err) {
