@@ -131,18 +131,15 @@ export function findIssueBySignature(parsedIssues, signature) {
 
 export function deduplicateReports(reports) {
   const seen = new Map();
-  const merged = [];
   for (const report of reports) {
     const existing = seen.get(report.signature);
     if (existing) {
-      if (!existing.oses) existing.oses = [existing.os ?? "unknown"];
-      existing.oses.push(report.os ?? "unknown");
+      existing.oses = [...(existing.oses ?? [existing.os ?? "unknown"]), report.os ?? "unknown"];
     } else {
       seen.set(report.signature, { ...report });
-      merged.push(report);
     }
   }
-  return merged;
+  return [...seen.values()];
 }
 
 export function bucketLabelForSuite(suite) {

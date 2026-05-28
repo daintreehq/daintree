@@ -230,7 +230,7 @@ test("findIssueBySignature", () => {
   assert.equal(findIssueBySignature(issues, "nope"), undefined);
 });
 
-test("deduplicateReports merges same signature", () => {
+test("deduplicateReports merges same signature with oses array", () => {
   const reports = [
     { signature: "abc123", projectName: "core", os: "Linux" },
     { signature: "abc123", projectName: "core", os: "macOS" },
@@ -238,6 +238,11 @@ test("deduplicateReports merges same signature", () => {
   ];
   const deduped = deduplicateReports(reports);
   assert.equal(deduped.length, 2);
+  const merged = deduped.find((d) => d.signature === "abc123");
+  assert.ok(merged);
+  assert.deepEqual(merged.oses, ["Linux", "macOS"]);
+  // input reports not mutated
+  assert.ok(!("oses" in reports[0]));
 });
 
 test("labelsForIssue", () => {

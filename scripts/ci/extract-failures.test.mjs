@@ -254,3 +254,61 @@ test("extractFailures handles multi-project reports", () => {
   assert.equal(failures[0].projectName, "core");
   assert.equal(failures[1].projectName, "full-terminal");
 });
+
+test("extractFailures propagates file to nested describe suites", () => {
+  const report = {
+    suites: [
+      {
+        file: "e2e/core/login.spec.ts",
+        title: "root",
+        suites: [
+          {
+            title: "Login page",
+            specs: [
+              {
+                title: "should reject invalid password",
+                tests: [
+                  {
+                    projectName: "core",
+                    results: [{ status: "failed", errors: [{ message: "timeout" }] }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const failures = extractFailures(report);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].file, "e2e/core/login.spec.ts");
+  assert.deepEqual(failures[0].titlePath, ["root", "Login page", "should reject invalid password"]);
+
+  // Same nested structure, different file → different signature
+  const report2 = { suites: [{ ...report.suites[0], file: "e2e/core/signup.spec.ts" }] };
+  const failures2 = extractFailures(report2);
+  assert.equal(failures2.length, 1);
+  assert.equal(failures2[0].file, "e2e/core/signup.spec.ts");
+  assert.notEqual(failures[0].signature, failures2[0].signature);
+});
+
+test("normalizeError normalizes Windows paths", () => {
+  const posixErr = "Error at /Users/runner/work/repo/e2e/test.spec.ts:42";
+  const winErr = "Error at C:\\Users\\runneradmin\\work\\repo\\e2e\\test.spec.ts:42";
+  assert.equal(normalizeError(winErr), normalizeError(posixErr));
+});
+
+test("computeSignature matches across OS path flavors", () => {
+  const sig1 = computeSignature(
+    "e2e/test.spec.ts",
+    ["suite", "test"],
+    "Error at /Users/runner/work/repo/e2e/test.spec.ts:42:10"
+  );
+  const sig2 = computeSignature(
+    "e2e/test.spec.ts",
+    ["suite", "test"],
+    "Error at C:\\Users\\runneradmin\\work\\repo\\e2e\\test.spec.ts:42:10"
+  );
+  assert.equal(sig1, sig2);
+});

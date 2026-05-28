@@ -7,10 +7,11 @@ function fail(message) {
   process.exit(1);
 }
 
-function walkSuites(suites, parentPath = [], results = []) {
+function walkSuites(suites, parentPath = [], results = [], parentFile = null) {
   for (const suite of suites) {
+    const file = suite.file || parentFile;
     const currentPath = suite.title ? [...parentPath, suite.title] : parentPath;
-    if (suite.suites?.length) walkSuites(suite.suites, currentPath, results);
+    if (suite.suites?.length) walkSuites(suite.suites, currentPath, results, file);
     for (const spec of suite.specs ?? []) {
       const specPath = [...currentPath, spec.title];
       for (const test of spec.tests ?? []) {
@@ -18,7 +19,7 @@ function walkSuites(suites, parentPath = [], results = []) {
           if (result.status === "passed" || result.status === "skipped") continue;
           const primaryError = result.errors?.[0];
           results.push({
-            file: suite.file,
+            file,
             titlePath: specPath,
             projectName: test.projectName,
             status: result.status,
@@ -32,7 +33,11 @@ function walkSuites(suites, parentPath = [], results = []) {
   return results;
 }
 
-const PATH_RE = /\/(?:Users|home|root)\/[\w./-]+/g;
+const POSIX_PATH_RE = /\/(?:Users|home|root|private\/var)\/[\w./-]+/g;
+const WIN_PATH_RE = /[A-Z]:\\[\w\\/\-.]+|[A-Z]:\\\\[\w\\\\/\-.]+/g;
+const WIN_DRIVE_RE = /[A-Z]:(?=<path>|\/)/g;
+const PATH_RE = new RegExp(`${POSIX_PATH_RE.source}|${WIN_PATH_RE.source}`, "g");
+const BSLASH_RE = /\\/g;
 const TIMESTAMP_RE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})/g;
 const LINE_COL_RE = /:\d+:\d+/g;
 const MEM_ADDR_RE = /0x[0-9a-fA-F]{8,}/g;
@@ -41,7 +46,9 @@ const PORT_RE = /:\d{4,5}\b/g;
 
 export function normalizeError(message) {
   return message
+    .replace(BSLASH_RE, "/")
     .replace(PATH_RE, "<path>")
+    .replace(WIN_DRIVE_RE, "")
     .replace(TIMESTAMP_RE, "<timestamp>")
     .replace(LINE_COL_RE, ":<line>:<col>")
     .replace(MEM_ADDR_RE, "0x<addr>")
@@ -63,8 +70,7 @@ export function extractFailures(report) {
   if (!report?.suites) return failures;
 
   for (const suite of report.suites) {
-    const file = suite.file;
-    const suiteFailures = walkSuites([suite]);
+    const suiteFailures = walkSuites([suite], [], [], suite.file);
     for (const f of suiteFailures) {
       failures.push({
         ...f,
@@ -95,7 +101,8 @@ async function main() {
   if (failures.length === 0) {
     console.log("[extract-failures] No failures found");
     if (outputPath) {
-      await readFile(outputPath, "utf8").catch(() => {});
+      const { writeFile } = await import("node:fs/promises");
+      await writeFile(outputPath, "[]", "utf8");
     }
     return;
   }
