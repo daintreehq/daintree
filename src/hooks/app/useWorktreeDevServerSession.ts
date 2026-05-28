@@ -2,17 +2,18 @@ import { useEffect } from "react";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import { useWorktreeDevServerStore } from "@/store/worktreeDevServerStore";
 
-// Dedup guard shared across all rows: `getByWorktree` is a cheap in-memory
-// lookup on the main side, but a worktree can mount in the sidebar and the grid
-// simultaneously — without this set both rows would fire the same hydration.
-const inFlightHydrations = new Set<string>();
-
 /**
  * Reactive read of a worktree's latest dev-server session plus one-shot lazy
  * hydration. `DEV_PREVIEW_STATE_CHANGED` only fires on *changes*, so a server
  * that was already running before the dashboard mounted would never reach the
  * store via the broadcast alone — this primes the entry once via
  * `getByWorktree` when the cache has no record for the worktree yet.
+ *
+ * No cross-row dedup guard: the effect runs once per mount, the store-entry
+ * check short-circuits once data exists, and `getByWorktree` is a cheap
+ * in-memory lookup on the main side. The freshness guard in the store makes
+ * concurrent writes idempotent, so a worktree shown in two places (sidebar +
+ * overview modal) at most fires the lookup twice — simpler and race-free.
  */
 export function useWorktreeDevServerSession(
   worktreeId: string
@@ -23,8 +24,6 @@ export function useWorktreeDevServerSession(
     if (useWorktreeDevServerStore.getState().sessionsByWorktreeId[worktreeId] !== undefined) {
       return;
     }
-    if (inFlightHydrations.has(worktreeId)) return;
-    inFlightHydrations.add(worktreeId);
     let disposed = false;
     window.electron.devPreview
       .getByWorktree({ worktreeId })
@@ -32,10 +31,7 @@ export function useWorktreeDevServerSession(
         if (disposed || !result) return;
         useWorktreeDevServerStore.getState().setSession(worktreeId, result);
       })
-      .catch(() => {})
-      .finally(() => {
-        inFlightHydrations.delete(worktreeId);
-      });
+      .catch(() => {});
     return () => {
       disposed = true;
     };

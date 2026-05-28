@@ -45,7 +45,13 @@ describe("useWorktreeDevServerStateSync", () => {
         devPreview: {
           onStateChanged: (cb: Listener) => {
             listeners.push(cb);
-            return unsubscribe;
+            // Mirror the real IPC contract: the returned cleanup detaches the
+            // handler so no further payloads are delivered.
+            return () => {
+              unsubscribe();
+              const i = listeners.indexOf(cb);
+              if (i >= 0) listeners.splice(i, 1);
+            };
           },
         },
       },
@@ -79,5 +85,13 @@ describe("useWorktreeDevServerStateSync", () => {
     expect(unsubscribe).not.toHaveBeenCalled();
     unmount();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not mutate the store from a broadcast delivered after unmount", () => {
+    const { unmount } = renderHook(() => useWorktreeDevServerStateSync());
+    unmount();
+    // The cleanup detached the handler, so a late broadcast reaches no listener.
+    emit({ state: makeSession("w1", "running") });
+    expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId).toEqual({});
   });
 });

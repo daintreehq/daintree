@@ -53,12 +53,13 @@ describe("worktreeDevServerStore", () => {
     expect(after).toBe(before);
   });
 
-  it("rejects an equal-timestamp duplicate write (no reference churn)", () => {
+  it("applies an equal-timestamp write (last-write-wins for same-ms transitions)", () => {
     const store = useWorktreeDevServerStore.getState();
-    store.setSession("w1", makeSession({ worktreeId: "w1", status: "running", updatedAt: 100 }));
-    const before = useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1;
+    store.setSession("w1", makeSession({ worktreeId: "w1", status: "starting", updatedAt: 100 }));
+    // A synchronous spawn failure can flip starting→error within the same ms;
+    // the latter transition must not be dropped.
     store.setSession("w1", makeSession({ worktreeId: "w1", status: "error", updatedAt: 100 }));
-    expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1).toBe(before);
+    expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1.status).toBe("error");
   });
 
   it("removeSession deletes the entry", () => {

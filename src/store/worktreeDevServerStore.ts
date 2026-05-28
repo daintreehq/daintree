@@ -25,9 +25,12 @@ export const useWorktreeDevServerStore = create<WorktreeDevServerState>((set) =>
     set((state) => {
       const existing = state.sessionsByWorktreeId[worktreeId];
       // Freshness guard: a lazy `getByWorktree` hydration can resolve after a
-      // newer live broadcast already landed. Drop the stale (or duplicate)
-      // write so the row never regresses to an older snapshot.
-      if (existing && session.updatedAt <= existing.updatedAt) return state;
+      // newer live broadcast already landed. Drop only strictly-older writes so
+      // the row never regresses to a stale snapshot. Equal timestamps apply
+      // (last-write-wins): two distinct transitions emitted in the same
+      // millisecond — e.g. a synchronous spawn failure flipping starting→error —
+      // must not silently lose the latter.
+      if (existing && session.updatedAt < existing.updatedAt) return state;
       return {
         sessionsByWorktreeId: { ...state.sessionsByWorktreeId, [worktreeId]: session },
       };
