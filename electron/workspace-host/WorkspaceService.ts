@@ -47,6 +47,7 @@ import {
   parseCheckedOutBranches,
   nextAvailableBranchName,
   ensureNoteFile,
+  assertWorktreePathContained,
 } from "./worktreeUtils.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
 import { ResourceActionExecutor } from "./ResourceActionExecutor.js";
@@ -1629,6 +1630,11 @@ export class WorkspaceService {
       // through programmatic callers) is checked against the right parent
       // rather than against process.cwd.
       const absoluteCreatePath = isAbsolute(path) ? pathResolve(path) : pathResolve(rootPath, path);
+      // Containment gate (#9154): a renderer-supplied path must not escape the
+      // repository's parent directory — the outermost location the worktree
+      // path patterns can produce. Runs before any mkdir/git so an out-of-bounds
+      // target never creates directories or invokes git.
+      await assertWorktreePathContained(rootPath, absoluteCreatePath);
       const parentDir = dirname(absoluteCreatePath);
       if (!existsSync(parentDir)) {
         await mkdir(parentDir, { recursive: true });

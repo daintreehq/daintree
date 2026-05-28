@@ -474,12 +474,34 @@ export const WorktreeSetActivePayloadSchema = z.object({
 });
 
 export const WorktreeCreatePayloadSchema = z.object({
-  rootPath: z.string().min(1),
+  rootPath: z
+    .string()
+    .min(1)
+    .max(4096)
+    // eslint-disable-next-line no-control-regex
+    .regex(/^[^\x00]*$/, "Null bytes not allowed"),
+  // Mirrors CreateWorktreeOptions (shared/types/git.ts). All fields are declared
+  // so none are silently stripped before reaching WorkspaceService.createWorktree
+  // — the PR-dropdown, remote-mode, and branch-reuse paths all depend on the
+  // optional fields surviving parse.
   options: z.object({
     baseBranch: z.string().min(1),
     newBranch: z.string().min(1),
-    path: z.string().min(1),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      // eslint-disable-next-line no-control-regex
+      .regex(/^[^\x00]*$/, "Null bytes not allowed"),
     fromRemote: z.boolean().optional(),
+    useExistingBranch: z.boolean().optional(),
+    provisionResource: z.boolean().optional(),
+    worktreeMode: z.string().optional(),
+    sourcePrNumber: z.number().optional(),
+    sourcePrTitle: z.string().optional(),
+    sourcePrUrl: z.string().optional(),
+    sourcePrState: z.enum(["open", "closed", "merged"]).optional(),
+    sourcePrLinkedIssueNumber: z.number().optional(),
   }),
 });
 
