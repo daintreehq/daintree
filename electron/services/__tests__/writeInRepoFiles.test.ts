@@ -895,7 +895,7 @@ describe("readInRepoRecipes", () => {
     );
     const recipes = await identityFiles.readInRepoRecipes(tmpDir);
     expect(recipes).toHaveLength(1);
-    const terminal = recipes[0]!.terminals[0]! as Record<string, unknown>;
+    const terminal = recipes[0]!.terminals[0]! as unknown as Record<string, unknown>;
     expect(terminal.shell).toBeUndefined();
     expect(terminal.poisoned).toBeUndefined();
     expect(terminal.command).toBe("npm test");

@@ -698,10 +698,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // but one approval shouldn't authorize a full 10-terminal recipe. Apply the
     // cap BEFORE preflightSpawnBatchLimit so a capped agent run can never reach
     // the confirmation-dialog path (which would hang a headless MCP dispatch).
-    if (
-      options?.dispatchSource === "agent" &&
-      validIndices.length > MAX_AGENT_RECIPE_TERMINALS
-    ) {
+    if (options?.dispatchSource === "agent" && validIndices.length > MAX_AGENT_RECIPE_TERMINALS) {
       const dropped = validIndices.splice(MAX_AGENT_RECIPE_TERMINALS);
       for (const index of dropped) {
         results.failed.push({ index, error: "Agent recipe terminal cap reached" });

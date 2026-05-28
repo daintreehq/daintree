@@ -103,8 +103,8 @@ describe("sanitizeRecipeTerminals", () => {
       "title",
       "type",
     ]);
-    expect((result[0] as Record<string, unknown>).shell).toBeUndefined();
-    expect((result[0] as Record<string, unknown>).agentModelId).toBeUndefined();
+    expect((result[0] as unknown as Record<string, unknown>).shell).toBeUndefined();
+    expect((result[0] as unknown as Record<string, unknown>).agentModelId).toBeUndefined();
   });
 
   it("drops terminals with an unknown non-empty exitBehavior but keeps known ones", () => {

@@ -117,8 +117,7 @@ function sanitizeRecipeTerminal(raw: unknown): RecipeTerminal | null {
       recipeType === "dev-preview" && typeof raw.devCommand === "string"
         ? raw.devCommand.trim() || undefined
         : undefined,
-    args:
-      isAgent && typeof raw.args === "string" ? raw.args.trim() || undefined : undefined,
+    args: isAgent && typeof raw.args === "string" ? raw.args.trim() || undefined : undefined,
     exitBehavior:
       typeof raw.exitBehavior === "string" && ALLOWED_EXIT_BEHAVIORS.has(raw.exitBehavior)
         ? (raw.exitBehavior as "keep" | "trash" | "remove")
