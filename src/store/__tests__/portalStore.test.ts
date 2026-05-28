@@ -80,6 +80,18 @@ describe("portalStore", () => {
     vi.restoreAllMocks();
   });
 
+  it("defaults the dev dashboard to off", () => {
+    expect(usePortalStore.getState().showDevDashboard).toBe(false);
+  });
+
+  it("toggles the dev dashboard visibility", () => {
+    expect(usePortalStore.getState().showDevDashboard).toBe(false);
+    usePortalStore.getState().toggleDevDashboard();
+    expect(usePortalStore.getState().showDevDashboard).toBe(true);
+    usePortalStore.getState().toggleDevDashboard();
+    expect(usePortalStore.getState().showDevDashboard).toBe(false);
+  });
+
   it("does not call backend closeTab for unknown tab IDs", () => {
     const before = usePortalStore.getState().tabs;
 

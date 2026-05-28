@@ -114,6 +114,7 @@ import type {
   SaveArtifactOptions,
   ApplyPatchOptions,
   DevPreviewStateChangedPayload,
+  DevPreviewAllSessionsPayload,
 } from "../shared/types/ipc.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
 import type {
@@ -1616,6 +1617,9 @@ const api: ElectronAPI = {
 
     onStateChanged: (callback: (payload: DevPreviewStateChangedPayload) => void) =>
       _typedOn(CHANNELS.DEV_PREVIEW_STATE_CHANGED, callback),
+
+    onAllSessionsChanged: (callback: (payload: DevPreviewAllSessionsPayload) => void) =>
+      _typedOn(CHANNELS.DEV_PREVIEW_ALL_SESSIONS_CHANGED, callback),
   },
 
   // Git API

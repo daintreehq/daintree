@@ -1,5 +1,14 @@
 import { useCallback, useMemo } from "react";
-import { ArrowLeft, ArrowRight, RotateCw, X, Plus, ExternalLink, Link2 } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  RotateCw,
+  X,
+  Plus,
+  ExternalLink,
+  Link2,
+  Server,
+} from "lucide-react";
 import {
   DndContext,
   closestCorners,
@@ -209,6 +218,8 @@ export function PortalToolbar({
   enabledLinks,
 }: PortalToolbarProps) {
   const reorderTabs = usePortalStore((s) => s.reorderTabs);
+  const showDevDashboard = usePortalStore((s) => s.showDevDashboard);
+  const toggleDevDashboard = usePortalStore((s) => s.toggleDevDashboard);
   const closePortalShortcut = useKeybindingDisplay("panel.togglePortal");
   const newTabShortcut = useKeybindingDisplay("portal.newTab");
   const closePortalAriaShortcut = useAriaKeyshortcuts("panel.togglePortal");
@@ -317,6 +328,26 @@ export function PortalToolbar({
         </div>
 
         <div className="flex items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={toggleDevDashboard}
+                aria-label="Toggle dev server dashboard"
+                aria-pressed={showDevDashboard}
+                className={cn(
+                  "p-1 rounded transition-colors",
+                  showDevDashboard
+                    ? "bg-overlay-subtle text-daintree-text"
+                    : "hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text"
+                )}
+              >
+                <Server className="w-3.5 h-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {showDevDashboard ? "Hide dev servers" : "Show dev servers"}
+            </TooltipContent>
+          </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
               <button

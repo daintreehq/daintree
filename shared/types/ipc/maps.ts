@@ -100,7 +100,7 @@ import type {
   FileReadPayload,
   FileReadResult,
 } from "./files.js";
-import type { DevPreviewStateChangedPayload } from "./devPreview.js";
+import type { DevPreviewStateChangedPayload, DevPreviewAllSessionsPayload } from "./devPreview.js";
 import type { ServiceConnectivityPayload } from "./connectivity.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
@@ -1734,6 +1734,7 @@ export interface IpcEventMap {
 
   // Dev Preview events
   "dev-preview:state-changed": DevPreviewStateChangedPayload;
+  "dev-preview:all-sessions-changed": DevPreviewAllSessionsPayload;
 
   // Webview console events
   "webview:console-message": import("./webviewConsole.js").SerializedConsoleRow;

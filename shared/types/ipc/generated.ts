@@ -188,6 +188,10 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./devPreview.js").DevPreviewEnsureRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
   };
+  "dev-preview:get-all-sessions": {
+    args: [];
+    result: import("./devPreview.js").DevPreviewSessionState[];
+  };
   "dev-preview:get-by-worktree": {
     args: [request: import("./devPreview.js").DevPreviewGetByWorktreeRequest];
     result: import("./devPreview.js").DevPreviewSessionState | null;

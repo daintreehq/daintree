@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import {
   getInvalidCommandMessage,
   normalizeNextjsDevCommand,
@@ -105,6 +106,12 @@ const PTY_SUBMIT_AFTER_SPAWN_MS = 100;
 const COMPILE_ARM_MS = 1000;
 const COMPILE_CLEAR_MS = 1500;
 
+// Bounds for the `lastOutput` activity hint surfaced in the cross-worktree
+// dashboard. Only the buffer tail is scanned (the last line is all we need) and
+// the result is capped so a single pathological line can't bloat the snapshot.
+const LAST_OUTPUT_SCAN_BYTES = 2000;
+const LAST_OUTPUT_MAX_CHARS = 120;
+
 // Per-session crash-loop guard. A broken config (missing deps that an install
 // can't fix) otherwise drives an unbounded install→crash→reinstall cycle that
 // burns CPU and battery. The guard counts consecutive fast cycles, backs off
@@ -148,7 +155,12 @@ export class DevPreviewSessionService {
     // for a server the user deliberately stopped). Deliberately NOT invoked from
     // handleExit — a process exit at shutdown must leave the manifest intact so
     // the next launch can offer the restart (#9094).
-    private readonly onPersistManifest: (entries: DevPreviewManifestEntry[]) => void = () => {}
+    private readonly onPersistManifest: (entries: DevPreviewManifestEntry[]) => void = () => {},
+    // Fired alongside onStateChanged with a snapshot of EVERY session (live and
+    // restored), powering the cross-worktree dev-server dashboard. Optional with
+    // a no-op default so the 2-arg test fixtures and other call sites that don't
+    // need the global view are unaffected.
+    private readonly onAllSessionsChanged: (sessions: DevPreviewSessionState[]) => void = () => {}
   ) {
     this.onDataListener = this.handleData.bind(this);
     this.onExitListener = this.handleExit.bind(this);
@@ -230,6 +242,42 @@ export class DevPreviewSessionService {
       }
     }
     return null;
+  }
+
+  /**
+   * Snapshot of every dev-preview session across all worktrees — live sessions
+   * plus any restore placeholders not yet superseded by a live session. Powers
+   * the cross-worktree dashboard and the all-sessions push channel. Mirrors the
+   * restore-placeholder fallback in getByWorktree so the dashboard never misses
+   * a dangling session the worktree-delete dialog already surfaces.
+   */
+  getAllSessions(): DevPreviewSessionState[] {
+    const result: DevPreviewSessionState[] = [];
+    for (const session of this.sessions.values()) {
+      result.push(this.toPublicState(session));
+    }
+    for (const [key, entry] of this.restoredEntries) {
+      // A live session always supersedes its restore placeholder (the entry is
+      // dropped in getOrCreateSession), but guard anyway so a key can't appear
+      // twice if that invariant ever changes.
+      if (this.sessions.has(key)) continue;
+      result.push({
+        panelId: entry.panelId,
+        projectId: entry.projectId,
+        worktreeId: entry.worktreeId,
+        status: "restored-stopped",
+        url: null,
+        predictedUrl: null,
+        error: null,
+        terminalId: null,
+        isRestarting: false,
+        generation: 0,
+        updatedAt: entry.capturedAt,
+        forceKilled: undefined,
+        phaseLabel: undefined,
+      });
+    }
+    return result;
   }
 
   dispose(): void {
@@ -921,7 +969,40 @@ export class DevPreviewSessionService {
       phaseLabel: session.phaseLabel,
       forceKilled: session.forceKilled,
       crashLoopStopped: session.crashLoopStopped || undefined,
+      lastOutput: session.status === "stopped" ? undefined : this.getLastOutputLine(session.buffer),
     };
+  }
+
+  /**
+   * Extract the last non-empty line of a terminal buffer for the dashboard
+   * activity hint. Only the buffer tail is scanned, ANSI/VT control sequences
+   * are stripped (Node 22 native `stripVTControlCharacters`), and the result is
+   * length-capped so one runaway line can't bloat the all-sessions snapshot.
+   */
+  private getLastOutputLine(buffer: string): string | undefined {
+    if (!buffer) return undefined;
+    const stripped = stripVTControlCharacters(buffer.slice(-LAST_OUTPUT_SCAN_BYTES));
+    const lines = stripped.split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const trimmed = lines[i]!.trim();
+      if (trimmed) {
+        return trimmed.length > LAST_OUTPUT_MAX_CHARS
+          ? trimmed.slice(0, LAST_OUTPUT_MAX_CHARS)
+          : trimmed;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Broadcast both the single-session state (per-panel subscribers) and the
+   * all-sessions snapshot (cross-worktree dashboard). Every onStateChanged
+   * call site routes through here so the dashboard never goes stale — including
+   * the compile-timer transitions that bypass updateSession.
+   */
+  private emitStateChanged(session: DevPreviewSession): void {
+    this.onStateChanged(this.toPublicState(session));
+    this.onAllSessionsChanged(this.getAllSessions());
   }
 
   private updateSession(
@@ -958,7 +1039,7 @@ export class DevPreviewSessionService {
     if (updates.crashLoopStopped !== undefined) session.crashLoopStopped = updates.crashLoopStopped;
     session.updatedAt = Date.now();
     session.updatedAtPerformanceMs = performance.now();
-    this.onStateChanged(this.toPublicState(session));
+    this.emitStateChanged(session);
 
     // Snapshot the manifest the moment a session enters a running state so an
     // abrupt crash (SIGKILL/OOM, where shutdown hooks never run) can still
@@ -1489,7 +1570,7 @@ export class DevPreviewSessionService {
           session.compilingClearTimer = setTimeout(() => {
             session.compilingClearTimer = null;
             this.clearCompiling(session);
-            this.onStateChanged(this.toPublicState(session));
+            this.emitStateChanged(session);
           }, COMPILE_CLEAR_MS);
         }
       } else if (session.compilingTimer === null) {
@@ -1509,7 +1590,7 @@ export class DevPreviewSessionService {
           session.compilingClearTimer = setTimeout(() => {
             session.compilingClearTimer = null;
             this.clearCompiling(session);
-            this.onStateChanged(this.toPublicState(session));
+            this.emitStateChanged(session);
           }, COMPILE_CLEAR_MS);
         }, COMPILE_ARM_MS);
       }
@@ -1523,7 +1604,7 @@ export class DevPreviewSessionService {
         session.compilingTimer = null;
       }
       this.clearCompiling(session);
-      this.onStateChanged(this.toPublicState(session));
+      this.emitStateChanged(session);
     }
 
     if (!result.error) return;

@@ -21,6 +21,10 @@ interface PortalState {
   createdTabs: Set<string>;
   links: PortalLink[];
   defaultNewTabUrl: string | null;
+  // Opt-in cross-worktree dev-server dashboard, rendered below the active tab
+  // inside the dock. Off by default so existing users don't get an unexpected
+  // new dock surface; persisted so the choice survives reloads.
+  showDevDashboard: boolean;
 }
 
 interface PortalActions {
@@ -53,6 +57,7 @@ interface PortalActions {
   reorderLinks: (fromIndex: number, toIndex: number) => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
   setDefaultNewTabUrl: (url: string | null) => void;
+  toggleDevDashboard: () => void;
 }
 
 const initialState: PortalState = {
@@ -63,6 +68,7 @@ const initialState: PortalState = {
   createdTabs: new Set<string>(),
   links: [...DEFAULT_SYSTEM_LINKS],
   defaultNewTabUrl: null,
+  showDevDashboard: false,
 };
 
 const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) => {
@@ -399,6 +405,8 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
         console.warn("Invalid URL for default new tab, ignoring:", url);
       }
     },
+
+    toggleDevDashboard: () => set((s) => ({ showDevDashboard: !s.showDevDashboard })),
   };
 };
 
@@ -417,6 +425,7 @@ const portalStoreCreator: StateCreator<
     tabs: state.tabs,
     activeTabId: state.activeTabId,
     defaultNewTabUrl: state.defaultNewTabUrl,
+    showDevDashboard: state.showDevDashboard,
   }),
   merge: (persistedState: unknown, currentState) => {
     const persisted = persistedState as Partial<PortalState>;
@@ -497,5 +506,6 @@ export const usePortalStore = create<PortalState & PortalActions>()(portalStoreC
 registerPersistedStore({
   storeId: "portalStore",
   store: usePortalStore,
-  persistedStateType: "Partial<PortalState> (links, width, tabs, activeTabId, defaultNewTabUrl)",
+  persistedStateType:
+    "Partial<PortalState> (links, width, tabs, activeTabId, defaultNewTabUrl, showDevDashboard)",
 });

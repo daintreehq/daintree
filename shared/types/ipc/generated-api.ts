@@ -84,6 +84,9 @@ export interface GeneratedElectronAPI {
     ensure(
       ...args: IpcInvokeMap["dev-preview:ensure"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:ensure"]["result"]>;
+    getAllSessions(
+      ...args: IpcInvokeMap["dev-preview:get-all-sessions"]["args"]
+    ): Promise<IpcInvokeMap["dev-preview:get-all-sessions"]["result"]>;
     getByWorktree(
       ...args: IpcInvokeMap["dev-preview:get-by-worktree"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:get-by-worktree"]["result"]>;

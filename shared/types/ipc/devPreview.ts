@@ -50,10 +50,22 @@ export interface DevPreviewSessionState {
   // repeated fast install→crash cycles. The session lands in a recoverable
   // "stopped" state (not a permanent lockout); an explicit restart clears it.
   crashLoopStopped?: boolean;
+  // Last non-empty line of the session's terminal output, ANSI-stripped and
+  // length-capped. Surfaced for the cross-worktree dev-server dashboard so each
+  // row can show a one-line activity hint. Omitted while the session is stopped
+  // (the buffer is cleared on stop, so there is nothing meaningful to show).
+  lastOutput?: string;
 }
 
 export interface DevPreviewStateChangedPayload {
   state: DevPreviewSessionState;
+}
+
+// Snapshot of every dev-preview session across all worktrees, pushed on the
+// dedicated DEV_PREVIEW_ALL_SESSIONS_CHANGED channel and returned by the
+// getAllSessions invoke. Powers the cross-worktree dev-server dashboard.
+export interface DevPreviewAllSessionsPayload {
+  sessions: DevPreviewSessionState[];
 }
 
 export interface DevPreviewGetByWorktreeRequest {
