@@ -661,11 +661,7 @@ if (isSmokeTest) {
   // the running app.
   if (process.platform === "win32") {
     try {
-      const mod = (await import("win-job-object")) as {
-        isAvailable: () => boolean;
-        assignProcessToHelpJob: (pid: number) => boolean;
-        getLoadError?: () => unknown;
-      };
+      const mod = await import("win-job-object");
       if (!mod.isAvailable()) {
         const loadErr = mod.getLoadError?.();
         throw new Error(
@@ -691,10 +687,7 @@ if (isSmokeTest) {
   // executable (uses fs.accessSync with X_OK internally).
   if (process.platform === "darwin" || process.platform === "linux") {
     try {
-      const mod = (await import("posix-pty-reaper")) as {
-        getSupervisorPath: () => string | null;
-        isAvailable: () => boolean;
-      };
+      const mod = await import("posix-pty-reaper");
       if (!mod.isAvailable()) {
         const supervisorPath = mod.getSupervisorPath();
         throw new Error(
