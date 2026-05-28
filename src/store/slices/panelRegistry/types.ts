@@ -94,6 +94,16 @@ export interface PanelRegistrySlice {
   beginHydrationBatch: () => HydrationBatchToken;
   /** Apply all panels collected since `beginHydrationBatch` in a single `set()` call. */
   flushHydrationBatch: (token: HydrationBatchToken) => void;
+  /**
+   * Recipe/worktree spawn variant of {@link beginHydrationBatch}. Reuses the same
+   * single-commit machinery so an N-panel recipe run collapses to one `panelIds`
+   * render (one CSS Grid reflow) instead of N. Unlike hydration, it refuses to
+   * supersede an already-active batch (returns `null`) because recipe runs can
+   * overlap; a `null` token is a safe no-op at flush time. See issue #9165.
+   */
+  beginSpawnBatch: () => HydrationBatchToken | null;
+  /** Apply all panels collected since `beginSpawnBatch` in a single `set()`. No-op for a `null` token. */
+  flushSpawnBatch: (token: HydrationBatchToken | null) => void;
   removePanel: (id: string) => void;
   emptyTrash: (ids: string[]) => void;
   updateTitle: (id: string, newTitle: string) => void;

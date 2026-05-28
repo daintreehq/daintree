@@ -413,4 +413,155 @@ describe("hydration batch (#5196)", () => {
       unsubscribe();
     }
   });
+
+  describe("spawn batch aliases (#9165)", () => {
+    it("collapses a recipe spawn burst into a single panelIds render", async () => {
+      const { beginSpawnBatch, flushSpawnBatch, addPanel } = usePanelStore.getState();
+
+      let panelIdsNotifyCount = 0;
+      let lastPanelIds: string[] | undefined;
+      const unsubscribe = usePanelStore.subscribe((state) => {
+        if (state.panelIds !== lastPanelIds) {
+          panelIdsNotifyCount++;
+          lastPanelIds = state.panelIds;
+        }
+      });
+
+      try {
+        lastPanelIds = usePanelStore.getState().panelIds;
+
+        const token = beginSpawnBatch();
+        expect(token).not.toBeNull();
+        for (let i = 0; i < 5; i++) {
+          await addPanel({
+            kind: "browser",
+            requestedId: `spawn-${i}`,
+            cwd: "/",
+            bypassLimits: true,
+            browserUrl: "about:blank",
+          });
+        }
+        // Deferred: panelsById is populated but panelIds hasn't changed yet.
+        expect(usePanelStore.getState().panelsById["spawn-0"]).toBeDefined();
+        expect(panelIdsNotifyCount).toBe(0);
+
+        flushSpawnBatch(token);
+
+        expect(panelIdsNotifyCount).toBe(1);
+        expect(usePanelStore.getState().panelIds).toEqual([
+          "spawn-0",
+          "spawn-1",
+          "spawn-2",
+          "spawn-3",
+          "spawn-4",
+        ]);
+      } finally {
+        unsubscribe();
+      }
+    });
+
+    it("refuses to open a nested batch and sweeps overlapping ids via the active flush", async () => {
+      const { beginSpawnBatch, flushSpawnBatch, addPanel } = usePanelStore.getState();
+
+      // Run A opens the batch.
+      const tokenA = beginSpawnBatch();
+      expect(tokenA).not.toBeNull();
+
+      // An overlapping run B must not supersede A's in-flight batch.
+      const tokenB = beginSpawnBatch();
+      expect(tokenB).toBeNull();
+
+      await addPanel({
+        kind: "browser",
+        requestedId: "a-1",
+        cwd: "/",
+        bypassLimits: true,
+        browserUrl: "about:blank",
+      });
+      // B's panel, added while A's batch is still open, is collected too.
+      await addPanel({
+        kind: "browser",
+        requestedId: "b-1",
+        cwd: "/",
+        bypassLimits: true,
+        browserUrl: "about:blank",
+      });
+
+      // B's flush is a no-op for the null token — nothing is orphaned.
+      flushSpawnBatch(tokenB);
+      expect(usePanelStore.getState().panelIds).toEqual([]);
+
+      // A's flush sweeps up both runs' ids exactly once.
+      flushSpawnBatch(tokenA);
+      expect(usePanelStore.getState().panelIds).toEqual(["a-1", "b-1"]);
+    });
+
+    it("clears an unflushed batch on panelStore.reset() so the next batch can open", async () => {
+      const { beginSpawnBatch } = usePanelStore.getState();
+
+      // Open a batch but never flush it (simulates a reset/throw mid-batch).
+      expect(beginSpawnBatch()).not.toBeNull();
+      // While it's open, a second begin is declined.
+      expect(usePanelStore.getState().beginSpawnBatch()).toBeNull();
+
+      await usePanelStore.getState().reset();
+
+      // reset() discarded the stale batch — a fresh batch opens cleanly.
+      expect(usePanelStore.getState().beginSpawnBatch()).not.toBeNull();
+    });
+
+    it("clears an unflushed batch on clearTerminalStoreForSwitch so a new project's batch can open", () => {
+      const { beginSpawnBatch, clearTerminalStoreForSwitch } = usePanelStore.getState();
+
+      // Spawn opens a batch on the outgoing project and never flushes (project switch fires).
+      expect(beginSpawnBatch()).not.toBeNull();
+      clearTerminalStoreForSwitch();
+
+      // The incoming project's first recipe run must be able to open its own batch.
+      expect(usePanelStore.getState().beginSpawnBatch()).not.toBeNull();
+    });
+
+    it("commits an in-flight spawn batch's ids when hydration starts mid-spawn", async () => {
+      const {
+        beginSpawnBatch,
+        beginHydrationBatch,
+        flushHydrationBatch,
+        flushSpawnBatch,
+        addPanel,
+      } = usePanelStore.getState();
+
+      // Spawn opens a batch and adds one panel.
+      const spawnToken = beginSpawnBatch();
+      expect(spawnToken).not.toBeNull();
+      await addPanel({
+        kind: "browser",
+        requestedId: "spawn-panel",
+        cwd: "/",
+        bypassLimits: true,
+        browserUrl: "about:blank",
+      });
+      expect(usePanelStore.getState().panelIds).toEqual([]);
+
+      // Hydration starts before the spawn's flush — it must inherit the spawn's
+      // collected ids rather than silently strand them in panelsById.
+      const hydrationToken = beginHydrationBatch();
+      expect(usePanelStore.getState().panelIds).toEqual(["spawn-panel"]);
+
+      // The stranded spawn token now sees a mismatch — its flush is a no-op,
+      // and the spawn panel does not get re-appended.
+      flushSpawnBatch(spawnToken);
+      expect(usePanelStore.getState().panelIds).toEqual(["spawn-panel"]);
+
+      // Hydration's own panels flush in its turn, with no duplication.
+      await addPanel({
+        kind: "browser",
+        requestedId: "hydration-panel",
+        cwd: "/",
+        bypassLimits: true,
+        browserUrl: "about:blank",
+      });
+      flushHydrationBatch(hydrationToken);
+      expect(usePanelStore.getState().panelIds).toEqual(["spawn-panel", "hydration-panel"]);
+    });
+  });
 });

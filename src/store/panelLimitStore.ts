@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
+import { notify } from "@/lib/notify";
 
 export const DEFAULT_SOFT_WARNING_LIMIT = 12;
 export const DEFAULT_CONFIRMATION_LIMIT = 20;
@@ -205,4 +206,56 @@ registerPersistedStore({
 
 export function _resetInitPromise(): void {
   _initPromise = null;
+}
+
+/**
+ * Aggregate panel-limit gate for batch spawns (recipes, worktree spin-up).
+ *
+ * Batched `addPanel` defers the `panelIds` append, so the per-call limit check
+ * in `addPanel` would read the same stale count for every panel in the burst
+ * and under-enforce the ceiling. Callers run this once up front against the
+ * pre-batch `currentCount`, spawn only the returned `allowed` count with
+ * `bypassLimits: true`, and report the rest as "Panel limit reached". The
+ * confirmation dialog (if the burst crosses the confirm threshold) is awaited
+ * here, before the batch opens, so it never renders mid-commit. See #9165.
+ *
+ * @returns `allowed` — how many of the requested panels may be spawned now
+ *   (0 when the hard limit is already reached or the user declines the confirm).
+ */
+export async function preflightSpawnBatchLimit(
+  currentCount: number,
+  requestedCount: number
+): Promise<{ allowed: number }> {
+  if (requestedCount <= 0) return { allowed: 0 };
+
+  const { confirmationLimit, hardLimit, warningsDisabled, requestConfirmation } =
+    usePanelLimitStore.getState();
+
+  const available = Math.max(0, hardLimit - currentCount);
+  if (available === 0) {
+    notify({
+      type: "warning",
+      priority: "high",
+      title: "Panel limit reached",
+      message: `Maximum of ${hardLimit} panels reached. Close some panels before adding new ones.`,
+      duration: 5000,
+      context: { eventKind: "uiFeedback" },
+    });
+    return { allowed: 0 };
+  }
+
+  const allowed = Math.min(available, requestedCount);
+  const projected = currentCount + allowed;
+
+  // Mirror `addPanel`'s per-call confirm tier: a panel added while the count is
+  // at or above `confirmationLimit` triggers a confirm. The batch crosses that
+  // threshold exactly when `projected > confirmationLimit`.
+  if (!warningsDisabled && projected > confirmationLimit) {
+    // Pass `null` for memory rather than firing an extra metrics IPC before the
+    // batch — the dialog renders without the memory hint, never blocks on it.
+    const confirmed = await requestConfirmation(projected, null);
+    if (!confirmed) return { allowed: 0 };
+  }
+
+  return { allowed };
 }

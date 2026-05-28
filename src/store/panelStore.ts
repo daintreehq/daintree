@@ -14,6 +14,7 @@ import {
   createWatchedPanelsSlice,
   flushPanelPersistence,
   isHydrationBatchActive,
+  resetBatchState,
   selectOrderedTerminals,
   type PanelRegistrySlice,
   type TerminalFocusSlice,
@@ -700,6 +701,11 @@ export const usePanelStore = create<PanelGridState>()(
       reset: async () => {
         const state = get();
 
+        // Discard any in-flight spawn/hydration batch so a reset mid-batch can't
+        // strand `isHydrationBatchActive()` as `true` and make the next
+        // `beginSpawnBatch()` decline to open. (#9165)
+        resetBatchState();
+
         for (const tid of state.panelIds) {
           try {
             terminalInstanceService.destroy(tid);
@@ -811,6 +817,11 @@ export const usePanelStore = create<PanelGridState>()(
       },
 
       clearTerminalStoreForSwitch: () => {
+        // Discard any in-flight spawn/hydration batch so a project switch mid-batch
+        // can't strand `isHydrationBatchActive()` true and make the next
+        // `beginSpawnBatch()` decline to open on the incoming project. (#9165)
+        resetBatchState();
+
         set({
           panelsById: {},
           panelIds: [],

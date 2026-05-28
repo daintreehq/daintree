@@ -28,9 +28,20 @@ vi.mock("@shared/types", async (importActual) => {
   };
 });
 
+const mockSetFocused = vi.fn();
+const mockBeginSpawnBatch = vi.fn(() => Symbol("spawn-batch"));
+const mockFlushSpawnBatch = vi.fn();
+
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
-    getState: () => ({ addPanel: (...args: unknown[]) => mockAddPanel(...args) }),
+    getState: () => ({
+      addPanel: (...args: unknown[]) => mockAddPanel(...args),
+      panelIds: [],
+      panelsById: {},
+      beginSpawnBatch: mockBeginSpawnBatch,
+      flushSpawnBatch: mockFlushSpawnBatch,
+      setFocused: mockSetFocused,
+    }),
   },
 }));
 
@@ -315,6 +326,39 @@ describe("spawnPanelsFromRecipe", () => {
     });
 
     expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens one spawn batch and flushes it once for a multi-panel recipe", async () => {
+    await spawnPanelsFromRecipe({
+      terminals: [makeTerminal({ title: "T1" }), makeTerminal({ title: "T2" })],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+    });
+
+    expect(mockBeginSpawnBatch).toHaveBeenCalledTimes(1);
+    expect(mockFlushSpawnBatch).toHaveBeenCalledTimes(1);
+    // Flush receives the token returned by begin.
+    expect(mockFlushSpawnBatch).toHaveBeenCalledWith(mockBeginSpawnBatch.mock.results[0]?.value);
+    expect(mockAddPanel).toHaveBeenCalledTimes(2);
+    // EVERY panel bypasses the per-call limit (the batch gated the whole burst).
+    expect(
+      mockAddPanel.mock.calls.every(
+        (c) => (c[0] as { bypassLimits?: boolean })?.bypassLimits === true
+      )
+    ).toBe(true);
+  });
+
+  it("flushes the spawn batch even when a panel spawn throws", async () => {
+    mockAddPanel.mockRejectedValue(new Error("boom"));
+
+    await spawnPanelsFromRecipe({
+      terminals: [makeTerminal()],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+      onPanelSpawned: vi.fn(),
+    });
+
+    expect(mockFlushSpawnBatch).toHaveBeenCalledTimes(1);
   });
 
   it("collects errors from multiple panels and throws single AggregateError", async () => {
