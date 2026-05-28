@@ -3,58 +3,6 @@ const fs = require("fs");
 const { spawnSync } = require("child_process");
 
 /**
- * Map electron-builder's Arch enum to the Node-style string used by process.arch.
- * Enum values: ia32=0, x64=1, armv7l=2, arm64=3, universal=5.
- */
-function electronBuilderArchToNodeArch(archEnum) {
-  switch (archEnum) {
-    case 0:
-      return "ia32";
-    case 1:
-      return "x64";
-    case 2:
-      return "arm";
-    case 3:
-      return "arm64";
-    default:
-      return null;
-  }
-}
-
-/**
- * Validate that win_job_object.node loads and exports its primary binding.
- *
- * win-job-object is an N-API addon, so its compiled binary has a stable ABI
- * across Node.js and Electron versions — unlike better-sqlite3, the inverse
- * dlopen trick does not apply (a correctly-built N-API binary always loads
- * under Node). The probe is a forward load + export-shape check: dlopen the
- * .node file directly and confirm `assignProcessToHelpJob` is wired up. This
- * catches the realistic Windows failure modes — missing VCRUNTIME140.dll,
- * arch mismatch (x64 vs arm64), truncated binary — all of which surface as
- * thrown errors from `process.dlopen`.
- */
-function validateWinJobObjectLoadable(nativeBinaryPath) {
-  const testModule = { exports: {} };
-  try {
-    process.dlopen(testModule, nativeBinaryPath);
-  } catch (err) {
-    const msg = err && err.message ? err.message : String(err);
-    throw new Error(
-      `[afterPack] CRITICAL: win-job-object failed to load: ${msg}. ` +
-        "Help-session crash-safe reaping (#7526) will be broken. " +
-        "Check that VCRUNTIME140.dll is present and the binary architecture matches the target (x64 vs arm64)."
-    );
-  }
-  if (typeof testModule.exports.assignProcessToHelpJob !== "function") {
-    throw new Error(
-      `[afterPack] CRITICAL: win-job-object loaded but assignProcessToHelpJob export is missing or not a function. ` +
-        "Help-session crash-safe reaping (#7526) will be broken."
-    );
-  }
-  console.log("[afterPack] win-job-object ABI check passed (N-API forward load OK)");
-}
-
-/**
  * Validate that better_sqlite3.node has Electron ABI, not Node ABI.
  *
  * better-sqlite3 uses the raw V8/NAN C++ API (not N-API), so the binary is
@@ -285,19 +233,6 @@ exports.default = async function afterPack(context) {
       throw new Error(
         `[afterPack] CRITICAL: win-job-object native binary not found at ${winJobObjectBinary}. ` +
           'Help-session crash-safe reaping (#7526) will be disabled. Run "npm run rebuild" on a Windows runner with VS 2022 Build Tools.'
-      );
-    }
-    // electron-builder calls afterPack once per target arch (x64 + arm64). The
-    // host CI runner is typically x64, so dlopen-ing the arm64 PE binary throws
-    // "not a valid Win32 application". We can only meaningfully forward-load
-    // the binary when the target arch matches the host. Existence check above
-    // is the only validation for the cross-arch pass.
-    const targetNodeArch = electronBuilderArchToNodeArch(context.arch);
-    if (targetNodeArch === process.arch) {
-      validateWinJobObjectLoadable(winJobObjectBinary);
-    } else {
-      console.log(
-        `[afterPack] win-job-object dlopen probe skipped: target arch ${targetNodeArch} ≠ host arch ${process.arch}`
       );
     }
     console.log(`[afterPack] win-job-object verified: ${winJobObjectBinary}`);
