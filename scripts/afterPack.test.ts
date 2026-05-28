@@ -18,10 +18,35 @@ afterAll(() => {
   process.dlopen = originalDlopen;
 });
 
-function createContext(platform: string, appOutDir: string, appName = "Daintree") {
+// electron-builder Arch enum: ia32=0, x64=1, armv7l=2, arm64=3, universal=5.
+function nodeArchToEnum(nodeArch: string): number {
+  switch (nodeArch) {
+    case "ia32":
+      return 0;
+    case "x64":
+      return 1;
+    case "arm":
+      return 2;
+    case "arm64":
+      return 3;
+    default:
+      return 1; // fall back to x64 for unknown host archs in CI
+  }
+}
+
+function createContext(
+  platform: string,
+  appOutDir: string,
+  appName = "Daintree",
+  // Default to the current host arch so the win-job-object dlopen probe runs
+  // in tests (it is skipped when target ≠ host). Tests exercising cross-arch
+  // behavior pass an explicit value.
+  arch: number = nodeArchToEnum(process.arch)
+) {
   return {
     appOutDir,
     electronPlatformName: platform,
+    arch,
     packager: { appInfo: { productFilename: appName } },
   };
 }
@@ -518,6 +543,58 @@ describe("afterPack", () => {
       );
     });
 
+    it("should skip dlopen probe when target arch ≠ host arch (cross-arch packaging)", async () => {
+      mockExistsSync.mockReturnValue(true);
+      const dlopenCalls: string[] = [];
+      process.dlopen = ((mod: { exports: Record<string, unknown> }, filename: string) => {
+        dlopenCalls.push(filename);
+        if (filename.includes("win_job_object")) {
+          // Simulate the cross-arch failure mode in case the probe is wrongly invoked.
+          throw new Error("%1 is not a valid Win32 application.");
+        }
+        throw new Error("NODE_MODULE_VERSION mismatch");
+      }) as typeof process.dlopen;
+
+      const originalArch = process.arch;
+      // Lie about host arch — we want to simulate x64 host packaging arm64
+      Object.defineProperty(process, "arch", { value: "x64", configurable: true });
+      try {
+        // arch = 3 → arm64 (electron-builder Arch enum)
+        await afterPack(createContext("win32", "/build/win", "Daintree", 3));
+      } finally {
+        Object.defineProperty(process, "arch", { value: originalArch, configurable: true });
+      }
+
+      // Probe must be skipped — no dlopen call against win_job_object
+      expect(dlopenCalls.some((p) => p.includes("win_job_object"))).toBe(false);
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining("win-job-object dlopen probe skipped")
+      );
+    });
+
+    it("should run dlopen probe when target arch === host arch (same-arch packaging)", async () => {
+      mockExistsSync.mockReturnValue(true);
+      const dlopenCalls: string[] = [];
+      process.dlopen = ((mod: { exports: Record<string, unknown> }, filename: string) => {
+        dlopenCalls.push(filename);
+        if (filename.includes("win_job_object")) {
+          mod.exports.assignProcessToHelpJob = () => true;
+          return;
+        }
+        throw new Error("NODE_MODULE_VERSION mismatch");
+      }) as typeof process.dlopen;
+
+      const originalArch = process.arch;
+      Object.defineProperty(process, "arch", { value: "arm64", configurable: true });
+      try {
+        await afterPack(createContext("win32", "/build/win", "Daintree", 3));
+      } finally {
+        Object.defineProperty(process, "arch", { value: originalArch, configurable: true });
+      }
+
+      expect(dlopenCalls.some((p) => p.includes("win_job_object"))).toBe(true);
+    });
+
     it("should only run on Windows", async () => {
       mockExistsSync.mockReturnValue(true);
       const dlopenCalls: string[] = [];
@@ -547,7 +624,10 @@ describe("afterPack", () => {
       await afterPack(createContext("linux", "/build/linux"));
 
       expect(mockAccessSync).toHaveBeenCalledWith(
-        expect.stringContaining("daintree_pty_supervisor"),
+        path.join(
+          "/build/linux/resources/app.asar.unpacked",
+          "node_modules/posix-pty-reaper/build/Release/daintree_pty_supervisor"
+        ),
         1 // X_OK from mocked fs.constants
       );
     });

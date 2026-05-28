@@ -2,6 +2,25 @@ const path = require("path");
 const fs = require("fs");
 
 /**
+ * Map electron-builder's Arch enum to the Node-style string used by process.arch.
+ * Enum values: ia32=0, x64=1, armv7l=2, arm64=3, universal=5.
+ */
+function electronBuilderArchToNodeArch(archEnum) {
+  switch (archEnum) {
+    case 0:
+      return "ia32";
+    case 1:
+      return "x64";
+    case 2:
+      return "arm";
+    case 3:
+      return "arm64";
+    default:
+      return null;
+  }
+}
+
+/**
  * Validate that win_job_object.node loads and exports its primary binding.
  *
  * win-job-object is an N-API addon, so its compiled binary has a stable ABI
@@ -197,7 +216,19 @@ exports.default = async function afterPack(context) {
           'Help-session crash-safe reaping (#7526) will be disabled. Run "npm run rebuild" on a Windows runner with VS 2022 Build Tools.'
       );
     }
-    validateWinJobObjectLoadable(winJobObjectBinary);
+    // electron-builder calls afterPack once per target arch (x64 + arm64). The
+    // host CI runner is typically x64, so dlopen-ing the arm64 PE binary throws
+    // "not a valid Win32 application". We can only meaningfully forward-load
+    // the binary when the target arch matches the host. Existence check above
+    // is the only validation for the cross-arch pass.
+    const targetNodeArch = electronBuilderArchToNodeArch(context.arch);
+    if (targetNodeArch === process.arch) {
+      validateWinJobObjectLoadable(winJobObjectBinary);
+    } else {
+      console.log(
+        `[afterPack] win-job-object dlopen probe skipped: target arch ${targetNodeArch} ≠ host arch ${process.arch}`
+      );
+    }
     console.log(`[afterPack] win-job-object verified: ${winJobObjectBinary}`);
   } else {
     // macOS and Linux use pty.node
