@@ -220,6 +220,32 @@ export function initStoreOrchestrator(): () => void {
     )
   );
 
+  // 3b. Voice-dictation lock auto-clear: a trashed panel isn't a valid
+  //     dictation target, but trashPanel doesn't remove the id from
+  //     `panelIds` (it only flips `location` to "trash") — so section-3
+  //     above never fires. Watch the locked panel's `location` directly and
+  //     drop the lock when it transitions to trash. Selector returns a
+  //     primitive (panelId or null) so unrelated `panelsById` mutations don't
+  //     wake this subscription.
+  disposables.add(
+    toDisposable(
+      usePanelStore.subscribe(
+        (state) => {
+          const lockedId = useVoiceRecordingStore.getState().lockedTarget?.panelId;
+          if (!lockedId) return null;
+          return state.panelsById[lockedId]?.location ?? null;
+        },
+        (location) => {
+          if (location !== "trash") return;
+          const lockedId = useVoiceRecordingStore.getState().lockedTarget?.panelId;
+          if (lockedId) {
+            useVoiceRecordingStore.getState().clearLockedTarget(lockedId);
+          }
+        }
+      )
+    )
+  );
+
   // 5a. Fleet-arming panel pruning: drop armed ids when their panels are
   //     removed, trashed, backgrounded, or otherwise become fleet-ineligible.
   //     Lives in the orchestrator so HMR/test teardown cleans the subscription

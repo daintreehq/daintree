@@ -11,6 +11,8 @@ vi.mock("@/store/voiceRecordingStore", () => {
     panelBuffers: {} as Record<string, unknown>,
     correctionEnabled: false,
     isConfigured: false,
+    lockedTarget: null as { panelId: string } | null,
+    recentTargets: [] as Array<unknown>,
   };
   const fns = {
     setLastError: vi.fn(),
@@ -24,10 +26,14 @@ vi.mock("@/store/voiceRecordingStore", () => {
     setElapsedSeconds: vi.fn(),
     appendDelta: vi.fn(),
     completeSegment: vi.fn(),
-    setDraftLengthAtSegmentStart: vi.fn(),
     setSessionDraftStart: vi.fn(),
+    setDraftLengthAtSegmentStart: vi.fn(),
     setActiveParagraphStart: vi.fn(),
     clearPanelBuffer: vi.fn(),
+    lockTarget: vi.fn(),
+    unlockTarget: vi.fn(),
+    clearLockedTarget: vi.fn(),
+    recordRecentTarget: vi.fn(),
   };
   const getState = () => ({ ...state, ...fns });
   const subscribe = vi.fn(() => () => {});

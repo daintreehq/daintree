@@ -32,7 +32,6 @@ import { TerminalRefreshTier as TerminalRefreshTierEnum } from "@/types";
 import { terminalRegistryController } from "@/controllers";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useWorktreeSelectionStore } from "./worktreeStore";
-import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { isAssistantFocused } from "./macroFocusStore";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
 import type { CrashType } from "@shared/types/pty-host";
@@ -491,11 +490,6 @@ export const usePanelStore = create<PanelGridState>()(
 
         // Clear watch when panel is trashed (onTerminalRemoved only fires on full removal)
         get().unwatchPanel(id);
-
-        // Trashed panels aren't valid dictation targets — drop any pinned lock.
-        // Orchestrator section-3 only fires when panels are fully removed from
-        // panelsById, so a trash transition would otherwise leave a stale lock.
-        useVoiceRecordingStore.getState().clearLockedTarget(id);
 
         const updates: Partial<PanelGridState> = {};
 
