@@ -39,6 +39,7 @@ import { useQuickCreatePalette } from "./hooks/useQuickCreatePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
 import { useMcpBridge } from "./hooks/useMcpBridge";
+import { usePluginBridge } from "./hooks/usePluginBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { useSoundPlaybackListener } from "./hooks/useSoundPlaybackListener";
 import { notifyViewPainted, removeStartupSkeleton } from "./utils/removeStartupSkeleton";
@@ -400,6 +401,7 @@ function AppInner() {
   useMainProcessToastListener();
 
   useMcpBridge();
+  usePluginBridge();
   useSoundPlaybackListener();
   const { homeDir } = useHomeDir();
 

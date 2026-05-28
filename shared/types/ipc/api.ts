@@ -1454,6 +1454,22 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       confirmationDecision?: import("./mcpServer.js").McpConfirmationDecision;
     }): void;
   };
+  pluginBridge: {
+    /**
+     * Listen for plugin-sourced action dispatch requests from the main process.
+     * Unlike {@link mcpBridge.onDispatchActionRequest} there is no `confirmed`,
+     * `context`, or `callerInfo`: plugins cannot bypass confirm-gating and don't
+     * override the action context.
+     */
+    onDispatchActionRequest(
+      callback: (payload: { requestId: string; actionId: string; args?: unknown }) => void
+    ): () => void;
+    /** Send the plugin action dispatch result back to the main process. */
+    sendDispatchActionResponse(payload: {
+      requestId: string;
+      result: import("../actions.js").ActionDispatchResult;
+    }): void;
+  };
   // list / toolbarButtons / menuItems / validateActionIds / get|register|
   // unregisterAction / getPanelKinds / getForgeProviders / getDecorations
   // come from GeneratedElectronAPI; invoke + on are variadic plugin RPC

@@ -805,6 +805,10 @@ export const CHANNELS = {
   PLUGIN_SET_AUDIT_ENABLED: "plugin:set-audit-enabled",
   PLUGIN_SET_AUDIT_MAX_RECORDS: "plugin:set-audit-max-records",
   PLUGIN_EXPORT_AUDIT_LOG: "plugin:export-audit-log",
+  /** Bridge: main process dispatches a plugin-sourced action request to the renderer. */
+  PLUGIN_DISPATCH_ACTION_REQUEST: "plugin:dispatch-action-request",
+  /** Bridge: renderer returns the plugin-sourced action dispatch result to the main process. */
+  PLUGIN_DISPATCH_ACTION_RESPONSE: "plugin:dispatch-action-response",
 
   // Config reload channels
   APP_RELOAD_CONFIG: "app:reload-config",

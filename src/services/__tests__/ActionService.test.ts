@@ -271,6 +271,75 @@ describe("ActionService", () => {
       expect(mockRun).toHaveBeenCalled();
     });
 
+    it("executes a safe action dispatched from a plugin source", async () => {
+      const mockRun = vi.fn().mockResolvedValue("ok");
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: mockRun,
+      });
+
+      const result = await service.dispatch("actions.list", undefined, { source: "plugin" });
+      expect(result.ok).toBe(true);
+      expect(mockRun).toHaveBeenCalled();
+    });
+
+    it("returns CONFIRMATION_REQUIRED for a confirm action from a plugin source (no confirmed bypass)", async () => {
+      const mockRun = vi.fn().mockResolvedValue(undefined);
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "test",
+        kind: "command",
+        danger: "confirm",
+        scope: "renderer",
+        run: mockRun,
+      });
+
+      const result = await service.dispatch("actions.list", undefined, { source: "plugin" });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("CONFIRMATION_REQUIRED");
+      expect(mockRun).not.toHaveBeenCalled();
+
+      // Defense-in-depth: the host API never sets `confirmed`, but even a caller
+      // spoofing confirmed:true on a "plugin" dispatch must NOT bypass the gate.
+      const spoofed = await service.dispatch("actions.list", undefined, {
+        source: "plugin",
+        confirmed: true,
+      });
+      expect(spoofed.ok).toBe(false);
+      if (!spoofed.ok) expect(spoofed.error.code).toBe("CONFIRMATION_REQUIRED");
+      expect(mockRun).not.toHaveBeenCalled();
+    });
+
+    it("returns RESTRICTED for a restricted action from a plugin source", async () => {
+      const mockRun = vi.fn().mockResolvedValue(undefined);
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "test",
+        kind: "command",
+        danger: "restricted",
+        scope: "renderer",
+        run: mockRun,
+      });
+
+      const result = await service.dispatch("actions.list", undefined, { source: "plugin" });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("RESTRICTED");
+      expect(mockRun).not.toHaveBeenCalled();
+    });
+
     it("should validate arguments with Zod schema", async () => {
       const nameSchema = z.object({ name: z.string() });
       const action: ActionDefinition<typeof nameSchema, void> = {
@@ -1289,6 +1358,17 @@ describe("ActionService", () => {
       expect(service.getLastAction()?.actionId).toBe("test.user");
 
       await service.dispatch("test.agent" as ActionId, undefined, { source: "agent" });
+      expect(service.getLastAction()?.actionId).toBe("test.user");
+    });
+
+    it("does not capture plugin-source dispatches", async () => {
+      service.register(makeAction("test.user"));
+      service.register(makeAction("test.plugin"));
+
+      await service.dispatch("test.user" as ActionId, undefined, { source: "user" });
+      expect(service.getLastAction()?.actionId).toBe("test.user");
+
+      await service.dispatch("test.plugin" as ActionId, undefined, { source: "plugin" });
       expect(service.getLastAction()?.actionId).toBe("test.user");
     });
 
