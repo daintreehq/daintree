@@ -1778,8 +1778,8 @@ const api: ElectronAPI = {
   webview: {
     setLifecycleState: (webContentsId: number, frozen: boolean): Promise<void> =>
       _unwrappingInvoke(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, webContentsId, frozen),
-    registerPanel: (webContentsId: number, panelId: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.WEBVIEW_REGISTER_PANEL, { webContentsId, panelId }),
+    registerPanel: (webContentsId: number, panelId: string, kind?: string): Promise<void> =>
+      _unwrappingInvoke(CHANNELS.WEBVIEW_REGISTER_PANEL, { webContentsId, panelId, kind }),
     respondToDialog: (dialogId: string, confirmed: boolean, response?: string): Promise<void> =>
       _unwrappingInvoke(CHANNELS.WEBVIEW_DIALOG_RESPONSE, { dialogId, confirmed, response }),
     onDialogRequest: (

@@ -1269,7 +1269,8 @@ export function DevPreviewPane({
   const { currentDialog, handleDialogRespond } = useWebviewDialog(
     id,
     isEvicted ? null : webviewElement,
-    isWebviewReady && !isEvicted
+    isWebviewReady && !isEvicted,
+    "dev-preview"
   );
 
   // Consolidated emulation effect above handles all preset/rotation/DPR changes.

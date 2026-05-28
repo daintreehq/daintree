@@ -797,14 +797,21 @@ export function setupWebviewCSP(): void {
 
         if (!shortcut && !isReload) return;
 
-        const panelId = getWebviewDialogService().getPanelId(contents.id);
+        const dialogService = getWebviewDialogService();
+        const panelId = dialogService.getPanelId(contents.id);
         if (!panelId) return;
 
         const findParentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
 
         if (isReload) {
-          event.preventDefault();
+          // Only dev-preview guests get Cmd/Ctrl+R reload — claiming the key for
+          // other webview kinds (e.g. the browser panel) would swallow it from
+          // the guest page, which has no reload handler of its own here.
+          if (dialogService.getPanelKind(contents.id) !== "dev-preview") return;
+          // preventDefault only when the signal can actually be delivered, so a
+          // window teardown race doesn't eat the key with no reload to show for it.
           if (findParentWindow && !findParentWindow.isDestroyed()) {
+            event.preventDefault();
             getAppWebContents(findParentWindow).send(CHANNELS.WEBVIEW_RELOAD_SHORTCUT, {
               panelId,
             });
