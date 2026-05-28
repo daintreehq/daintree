@@ -35,6 +35,8 @@ describe("VoiceTranscriptionService integration", () => {
         paragraphingStrategy: "spoken-command",
         resolveFileLinks: true,
         deviceId: "",
+        organizationId: "",
+        projectId: "",
       });
 
       expect(result).toEqual({ ok: true });

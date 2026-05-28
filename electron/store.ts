@@ -204,6 +204,8 @@ export interface StoreSchema {
     paragraphingStrategy: string;
     resolveFileLinks: boolean;
     deviceId: string;
+    organizationId: string;
+    projectId: string;
   };
   mcpServer: {
     enabled: boolean;
@@ -457,6 +459,8 @@ const storeOptions = {
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,
       deviceId: "",
+      organizationId: "",
+      projectId: "",
     },
     mcpServer: {
       enabled: false,

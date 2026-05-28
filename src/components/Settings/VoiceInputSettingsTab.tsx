@@ -80,6 +80,8 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
   paragraphingStrategy: "spoken-command",
   resolveFileLinks: true,
   deviceId: "",
+  organizationId: "",
+  projectId: "",
 };
 
 type ApiKeyValidation = "idle" | "testing" | "valid" | "invalid";
@@ -249,12 +251,21 @@ export function VoiceInputSettingsTab() {
               helpLabel="Get API key"
             />
 
+            {(!settings.openaiApiKey || !settings.openaiApiKey.startsWith("sk-proj-")) && (
+              <p className="text-xs text-daintree-text/50">
+                Use a Project API key (starts with <code className="font-mono">sk-proj-</code>) for
+                the best security
+              </p>
+            )}
+
             {settings.openaiApiKey && (
               <p className="text-xs text-daintree-text/50 mt-1">
                 Your API key is stored locally in plain text. Set billing limits on your OpenAI
                 account to cap exposure.
               </p>
             )}
+
+            {settings.openaiApiKey && <AdvancedSection settings={settings} update={update} />}
 
             <SettingsSelect
               label="Language"
@@ -372,7 +383,7 @@ function ApiKeyRow({
   const [validationError, setValidationError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (validation !== "valid" && validation !== "invalid") return;
+    if (validation !== "valid") return;
     const timer = setTimeout(() => {
       setValidation("idle");
       setValidationError(null);
@@ -438,7 +449,13 @@ function ApiKeyRow({
           <input
             type={showKey ? "text" : "password"}
             value={keyInput}
-            onChange={(e) => setKeyInput(e.target.value)}
+            onChange={(e) => {
+              setKeyInput(e.target.value);
+              if (validation === "invalid") {
+                setValidation("idle");
+                setValidationError(null);
+              }
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
@@ -493,6 +510,73 @@ function ApiKeyRow({
           <AlertCircle className="w-3 h-3" />
           {validationError || "Invalid API key"}
         </p>
+      )}
+    </div>
+  );
+}
+
+// ── Advanced section (org/project ID for legacy keys) ──
+
+function AdvancedSection({
+  settings,
+  update,
+}: {
+  settings: VoiceInputSettings;
+  update: (patch: Partial<VoiceInputSettings>) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const isLegacyKey = settings.openaiApiKey && !settings.openaiApiKey.startsWith("sk-proj-");
+
+  return (
+    <div className="space-y-2">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-1.5 text-xs text-daintree-text/40 hover:text-daintree-text/60 transition-colors"
+      >
+        {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+        Advanced
+      </button>
+      {expanded && (
+        <div className="space-y-3">
+          <p className="text-xs text-daintree-text/40">
+            Only needed for legacy user keys (starts with <code className="font-mono">sk-</code>).
+          </p>
+          <div className="space-y-1.5">
+            <label className="text-sm text-daintree-text/70 flex items-center gap-2">
+              <Shield className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
+              Organization ID
+            </label>
+            <input
+              type="text"
+              value={settings.organizationId}
+              onChange={(e) => update({ organizationId: e.target.value })}
+              onBlur={(e) => update({ organizationId: e.target.value.trim() })}
+              placeholder={isLegacyKey ? "org-..." : ""}
+              disabled={!isLegacyKey}
+              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/50 transition-colors disabled:opacity-50"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm text-daintree-text/70 flex items-center gap-2">
+              <Shield className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
+              Project ID
+            </label>
+            <input
+              type="text"
+              value={settings.projectId}
+              onChange={(e) => update({ projectId: e.target.value })}
+              onBlur={(e) => update({ projectId: e.target.value.trim() })}
+              placeholder={isLegacyKey ? "proj_..." : ""}
+              disabled={!isLegacyKey}
+              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/50 transition-colors disabled:opacity-50"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+        </div>
       )}
     </div>
   );
@@ -699,7 +783,7 @@ function DictionarySection({
             }
           }}
           placeholder="Add term…"
-          className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus:border-daintree-accent transition-colors"
+          className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/50 transition-colors"
         />
         <Button
           onClick={onAdd}

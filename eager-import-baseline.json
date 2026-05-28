@@ -318,7 +318,7 @@
     },
     {
       "file": "electron/ipc/handlers/voiceInput.ts",
-      "line": 45,
+      "line": 48,
       "pattern": "sync-store-get"
     },
     {
@@ -1418,57 +1418,57 @@
     },
     {
       "file": "electron/store.ts",
-      "line": 547,
+      "line": 551,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 549,
+      "line": 553,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 564,
+      "line": 568,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 579,
+      "line": 583,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 580,
+      "line": 584,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 582,
+      "line": 586,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 597,
+      "line": 601,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 599,
+      "line": 603,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 616,
+      "line": 620,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 625,
+      "line": 629,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 626,
+      "line": 630,
       "pattern": "sync-fs"
     },
     {

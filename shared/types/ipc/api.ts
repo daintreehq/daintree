@@ -1565,6 +1565,10 @@ export interface VoiceInputSettings {
   resolveFileLinks: boolean;
   /** Microphone device ID to use for recording. Empty string means system default. */
   deviceId: string;
+  /** OpenAI Organization ID for legacy sk- keys. Sent as OpenAI-Organization header. */
+  organizationId: string;
+  /** OpenAI Project ID for legacy sk- keys. Sent as OpenAI-Project header. */
+  projectId: string;
 }
 
 export type HelpAssistantAuditRetention = 7 | 30 | 0;

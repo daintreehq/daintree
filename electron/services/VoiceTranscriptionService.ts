@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import type { VoiceInputSettings, VoiceInputStatus } from "../../shared/types/ipc/api.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
 import { logDebug, logInfo, logWarn, logError } from "../utils/logger.js";
 
 const P = "[VoiceTranscription]";
@@ -216,9 +217,11 @@ export class VoiceTranscriptionService {
     let connection: WebSocket;
     try {
       connection = new WebSocket(OPENAI_REALTIME_URL, {
-        headers: {
-          Authorization: `Bearer ${settings.openaiApiKey}`,
-        },
+        headers: buildOpenAIHeaders(
+          settings.openaiApiKey,
+          settings.organizationId,
+          settings.projectId
+        ),
       });
     } catch (err) {
       const message = formatErrorMessage(err, "Failed to open WebSocket");
