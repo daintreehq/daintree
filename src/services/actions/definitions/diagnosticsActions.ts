@@ -8,6 +8,8 @@ const scopeSchema = z.object({
   sections: z.array(z.string()).optional(),
 });
 
+const argsSchema = z.object({ scope: scopeSchema.optional() }).optional();
+
 export function registerDiagnosticsActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -21,10 +23,13 @@ export function registerDiagnosticsActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ scope: scopeSchema.optional() }).optional(),
+    argsSchema,
     run: async (args: unknown) => {
-      const parsed = (args as { scope?: z.infer<typeof scopeSchema> } | undefined) ?? {};
-      await useDiagnosticsReviewStore.getState().openReview(parsed.scope);
+      // Parse rather than cast so the lint ratchet doesn't grow the
+      // `no-unsafe-type-assertion` baseline; the dispatcher already validates
+      // via argsSchema, so this is effectively a typed re-derive.
+      const parsed = argsSchema.parse(args);
+      await useDiagnosticsReviewStore.getState().openReview(parsed?.scope);
     },
   }));
 }

@@ -159,6 +159,7 @@ export async function handleFallbackTriggered(data: {
         message: `Could not switch to "${nextPreset.name}": ${result.error ?? "unknown error"}`,
         duration: 12000,
         supersedeKey: fallbackSupersedeKey,
+        context: { eventKind: "agent", panelId: terminalId },
         action: {
           label: "Send diagnostics",
           actionId: "diagnostics.openReview",
