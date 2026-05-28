@@ -1555,6 +1555,17 @@ export type MicPermissionStatus =
 
 export type VoiceTranscriptionModel = "gpt-realtime-whisper";
 
+/**
+ * Transcription backend. Each provider owns its own WebSocket protocol, audio
+ * framing, and turn-detection behavior:
+ *
+ * - "openai": OpenAI Realtime (`gpt-realtime-whisper`). No server VAD, so the
+ *   provider drives segmentation with a client-side commit cadence.
+ * - "deepgram": Deepgram Nova-3 streaming. Native server-side VAD / endpointing,
+ *   so no client commit timer is needed.
+ */
+export type VoiceTranscriptionProvider = "openai" | "deepgram";
+
 export type VoiceCorrectionModel = "gpt-5-nano" | "gpt-5-mini";
 
 /**
@@ -1573,8 +1584,12 @@ export type VoiceParagraphingStrategy = "spoken-command" | "manual";
 export interface VoiceInputSettings {
   enabled: boolean;
   openaiApiKey: string;
+  /** API key for the Deepgram transcription provider. Empty string when unset. */
+  deepgramApiKey: string;
   language: string;
   customDictionary: string[];
+  /** Which transcription backend to use. Defaults to "openai". */
+  transcriptionProvider: VoiceTranscriptionProvider;
   transcriptionModel: VoiceTranscriptionModel;
   correctionEnabled: boolean;
   correctionModel: VoiceCorrectionModel;

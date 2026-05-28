@@ -2319,8 +2319,10 @@ const api: ElectronAPI = {
       patch: Partial<{
         enabled: boolean;
         openaiApiKey: string;
+        deepgramApiKey: string;
         language: string;
         customDictionary: string[];
+        transcriptionProvider: "openai" | "deepgram";
         transcriptionModel: "gpt-realtime-whisper";
         correctionEnabled: boolean;
         correctionModel: "gpt-5-nano" | "gpt-5-mini";

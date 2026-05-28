@@ -458,8 +458,10 @@ describe("getVoiceSettings migration", () => {
       vi.mocked(store.set).mock.calls[0] as unknown as [string, Record<string, unknown>]
     )[1];
     expect(persisted).not.toHaveProperty("correctionApiKey");
-    expect(persisted).not.toHaveProperty("deepgramApiKey");
     expect(persisted).not.toHaveProperty("apiKey");
+    // deepgramApiKey and transcriptionProvider are now first-class fields.
+    expect(persisted).toHaveProperty("deepgramApiKey", "");
+    expect(persisted).toHaveProperty("transcriptionProvider", "openai");
   });
 
   it("migrates first-generation apiKey (sk-*) into openaiApiKey", async () => {
@@ -475,7 +477,7 @@ describe("getVoiceSettings migration", () => {
     expect(vi.mocked(store.set)).toHaveBeenCalledOnce();
   });
 
-  it("drops deepgramApiKey without carrying it into openaiApiKey", async () => {
+  it("preserves a stored deepgramApiKey as a first-class field", async () => {
     const { store } = await import("../../../store.js");
     vi.mocked(store.get).mockReturnValueOnce({
       enabled: true,
@@ -484,13 +486,41 @@ describe("getVoiceSettings migration", () => {
 
     const settings = getVoiceSettings();
 
+    // deepgramApiKey now flows through; it does not bleed into openaiApiKey and
+    // is no longer dropped on read.
+    expect(settings.deepgramApiKey).toBe("dg-xxx");
     expect(settings.openaiApiKey).toBe("");
-    // Cleanup is still persisted so the dropped key disappears from disk.
+    // No legacy keys and a valid (defaulted) provider — nothing to persist.
+    expect(vi.mocked(store.set)).not.toHaveBeenCalled();
+  });
+
+  it("defaults an unrecognized transcriptionProvider to openai and persists it", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-present",
+      transcriptionProvider: "bogus-provider",
+    });
+
+    const settings = getVoiceSettings();
+
+    expect(settings.transcriptionProvider).toBe("openai");
     expect(vi.mocked(store.set)).toHaveBeenCalledOnce();
-    const persisted = (
-      vi.mocked(store.set).mock.calls[0] as unknown as [string, Record<string, unknown>]
-    )[1];
-    expect(persisted).not.toHaveProperty("deepgramApiKey");
+  });
+
+  it("keeps a stored deepgram provider choice without resetting it", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      deepgramApiKey: "dg-xxx",
+      transcriptionProvider: "deepgram",
+    });
+
+    const settings = getVoiceSettings();
+
+    expect(settings.transcriptionProvider).toBe("deepgram");
+    // A valid stored provider with no legacy keys triggers no write.
+    expect(vi.mocked(store.set)).not.toHaveBeenCalled();
   });
 
   it("does not overwrite an existing openaiApiKey when legacy fields are present", async () => {

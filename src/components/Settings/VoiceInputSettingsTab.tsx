@@ -36,6 +36,7 @@ import type {
   MicPermissionStatus,
   VoiceCorrectionModel,
   VoiceParagraphingStrategy,
+  VoiceTranscriptionProvider,
 } from "@shared/types";
 
 const LANGUAGES = [
@@ -68,11 +69,30 @@ const CORRECTION_MODELS: {
   },
 ];
 
+const TRANSCRIPTION_PROVIDERS: {
+  value: VoiceTranscriptionProvider;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "openai",
+    label: "OpenAI",
+    description: "Realtime Whisper · spoken-command formatting",
+  },
+  {
+    value: "deepgram",
+    label: "Deepgram",
+    description: "Nova-3 · server-side turn detection",
+  },
+];
+
 const DEFAULT_SETTINGS: VoiceInputSettings = {
   enabled: false,
   openaiApiKey: "",
+  deepgramApiKey: "",
   language: "en",
   customDictionary: [],
+  transcriptionProvider: "openai",
   transcriptionModel: "gpt-realtime-whisper",
   correctionEnabled: false,
   correctionModel: "gpt-5-mini",
@@ -181,7 +201,7 @@ export function VoiceInputSettingsTab() {
       <SettingsSection
         icon={Mic}
         title="Speech-to-text"
-        description="Real-time transcription. Requires an OpenAI API key and microphone access."
+        description="Real-time transcription. Requires a provider API key and microphone access."
         id="voice-speech-to-text"
       >
         <SettingsSwitchCard
@@ -204,14 +224,28 @@ export function VoiceInputSettingsTab() {
               onRefresh={handleRefreshMicPermission}
             />
 
+            <SettingsSelect
+              label="Transcription provider"
+              description="The backend that turns your speech into text"
+              value={settings.transcriptionProvider}
+              onValueChange={(v) =>
+                update({ transcriptionProvider: v as VoiceTranscriptionProvider })
+              }
+              options={TRANSCRIPTION_PROVIDERS.map(({ value, label, description }) => ({
+                value,
+                label,
+                description,
+              }))}
+            />
+
             <div
               role="note"
               className="rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-bg/40 p-3"
             >
               <p className="text-xs text-daintree-text/60 select-text">
-                Microphone audio is streamed over an encrypted connection to OpenAI for
-                transcription using your API key. Audio is not used for model training. OpenAI may
-                retain audio in abuse-monitoring logs for up to 30 days.
+                {settings.transcriptionProvider === "deepgram"
+                  ? "Microphone audio is streamed over an encrypted connection to Deepgram for transcription using your API key. Deepgram does not retain streaming audio or transcripts by default."
+                  : "Microphone audio is streamed over an encrypted connection to OpenAI for transcription using your API key. Audio is not used for model training. OpenAI may retain audio in abuse-monitoring logs for up to 30 days."}
               </p>
             </div>
 
@@ -241,28 +275,50 @@ export function VoiceInputSettingsTab() {
               </button>
             </div>
 
-            <ApiKeyRow
-              label="OpenAI API Key"
-              value={settings.openaiApiKey}
-              placeholder="sk-..."
-              onSave={(key) => update({ openaiApiKey: key })}
-              onValidate={(key) => window.electron?.voiceInput?.validateApiKey(key)}
-              helpUrl="https://platform.openai.com/api-keys"
-              helpLabel="Get API key"
-            />
+            {settings.transcriptionProvider === "deepgram" ? (
+              <>
+                <ApiKeyRow
+                  label="Deepgram API Key"
+                  value={settings.deepgramApiKey}
+                  placeholder="Deepgram API key"
+                  onSave={(key) => update({ deepgramApiKey: key })}
+                  helpUrl="https://console.deepgram.com/"
+                  helpLabel="Get API key"
+                />
 
-            {(!settings.openaiApiKey || !settings.openaiApiKey.startsWith("sk-proj-")) && (
-              <p className="text-xs text-daintree-text/50">
-                Use a Project API key (starts with <code className="font-mono">sk-proj-</code>) for
-                the best security
-              </p>
-            )}
+                {settings.deepgramApiKey && (
+                  <p className="text-xs text-daintree-text/50 mt-1">
+                    Your API key is stored locally in plain text. Set usage limits on your Deepgram
+                    account to cap exposure.
+                  </p>
+                )}
+              </>
+            ) : (
+              <>
+                <ApiKeyRow
+                  label="OpenAI API Key"
+                  value={settings.openaiApiKey}
+                  placeholder="sk-..."
+                  onSave={(key) => update({ openaiApiKey: key })}
+                  onValidate={(key) => window.electron?.voiceInput?.validateApiKey(key)}
+                  helpUrl="https://platform.openai.com/api-keys"
+                  helpLabel="Get API key"
+                />
 
-            {settings.openaiApiKey && (
-              <p className="text-xs text-daintree-text/50 mt-1">
-                Your API key is stored locally in plain text. Set billing limits on your OpenAI
-                account to cap exposure.
-              </p>
+                {(!settings.openaiApiKey || !settings.openaiApiKey.startsWith("sk-proj-")) && (
+                  <p className="text-xs text-daintree-text/50">
+                    Use a Project API key (starts with <code className="font-mono">sk-proj-</code>)
+                    for the best security
+                  </p>
+                )}
+
+                {settings.openaiApiKey && (
+                  <p className="text-xs text-daintree-text/50 mt-1">
+                    Your API key is stored locally in plain text. Set billing limits on your OpenAI
+                    account to cap exposure.
+                  </p>
+                )}
+              </>
             )}
 
             {settings.openaiApiKey && <AdvancedSection settings={settings} update={update} />}
@@ -363,7 +419,11 @@ interface ApiKeyRowProps {
   value: string;
   placeholder: string;
   onSave: (key: string) => void;
-  onValidate: (key: string) => Promise<{ valid: boolean; error?: string } | undefined> | undefined;
+  /**
+   * Remote key validation. When omitted (e.g. providers without a validation
+   * endpoint), the key is saved without a remote check.
+   */
+  onValidate?: (key: string) => Promise<{ valid: boolean; error?: string } | undefined> | undefined;
   helpUrl: string;
   helpLabel: string;
 }
@@ -394,6 +454,13 @@ function ApiKeyRow({
   const handleSave = async () => {
     const key = keyInput.trim();
     if (!key) return;
+    // Providers without a validation endpoint save the key directly.
+    if (!onValidate) {
+      onSave(key);
+      setKeyInput("");
+      setValidation("valid");
+      return;
+    }
     setValidation("testing");
     setValidationError(null);
     try {
