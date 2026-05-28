@@ -1,11 +1,19 @@
 import { useEffect, useEffectEvent, useCallback, useState, useRef, useMemo } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
+import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { DiffViewer } from "@/components/Worktree/DiffViewer";
 import { CodeViewer } from "./CodeViewer";
 import type { CodeViewerHandle } from "./CodeViewer";
 import { filesClient } from "@/clients/filesClient";
 import { actionService } from "@/services/ActionService";
-import { ExternalLink, Copy, Check, Image as ImageIcon } from "lucide-react";
+import {
+  ExternalLink,
+  Copy,
+  Check,
+  Image as ImageIcon,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/formatBytes";
@@ -28,6 +36,14 @@ export interface FileViewerModalProps {
   defaultMode?: "view" | "diff";
   onRetryDiff?: () => void;
   onClose: () => void;
+  /** Element to focus when the dialog closes and its trigger was unmounted. */
+  restoreFocusTo?: RestoreFocusTarget;
+  /** Zero-based position of the current file within the navigable set. */
+  currentFileIndex?: number;
+  /** Total number of files the user can step through. */
+  totalFileCount?: number;
+  /** Step to the previous (-1) or next (1) file in the set. */
+  onNavigateFile?: (delta: -1 | 1) => void;
 }
 
 type ViewMode = "view" | "diff";
@@ -70,6 +86,10 @@ export function FileViewerModal({
   defaultMode,
   onRetryDiff,
   onClose,
+  restoreFocusTo,
+  currentFileIndex,
+  totalFileCount,
+  onNavigateFile,
 }: FileViewerModalProps) {
   // If the file is outside the project root, use its parent directory as the
   // effective root so that the daintree-file:// protocol and files.read IPC
@@ -323,6 +343,45 @@ export function FileViewerModal({
     };
   }, [isOpen, mode]);
 
+  // File stepping in the worktree change set: `[` → previous file, `]` → next.
+  // `n`/`p` are taken by hunk navigation and the arrow keys conflict with split-
+  // diff horizontal scrolling, so brackets (the git-review convention) are the
+  // free keys. The handler is a no-op unless the opener wired `onNavigateFile`.
+  const canStepFiles = Boolean(onNavigateFile) && (totalFileCount ?? 0) > 1;
+  const hasPrevFile = canStepFiles && (currentFileIndex ?? 0) > 0;
+  const hasNextFile = canStepFiles && (currentFileIndex ?? 0) < (totalFileCount ?? 0) - 1;
+
+  const navigateFile = useEffectEvent((delta: -1 | 1) => {
+    if (delta === -1 && hasPrevFile) onNavigateFile?.(-1);
+    if (delta === 1 && hasNextFile) onNavigateFile?.(1);
+  });
+
+  useEffect(() => {
+    if (!isOpen || !canStepFiles) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "[" && e.key !== "]") return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      if (
+        e.target instanceof HTMLElement &&
+        (e.target.tagName === "INPUT" ||
+          e.target.tagName === "TEXTAREA" ||
+          e.target.tagName === "SELECT" ||
+          e.target.isContentEditable)
+      ) {
+        return;
+      }
+
+      e.preventDefault();
+      navigateFile(e.key === "]" ? 1 : -1);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen, canStepFiles]);
+
   // IntersectionObserver tracks the most-visible hunk during free scrolling.
   // Observes tr:first-child (not tbody — table-row-group collapses to 0 height
   // in Chromium and races with layout). The observer is keyed on diffViewType
@@ -421,6 +480,7 @@ export function FileViewerModal({
       onClose={onClose}
       size="6xl"
       maxHeight="max-h-[90vh]"
+      restoreFocusTo={restoreFocusTo}
       data-testid="file-viewer-dialog"
     >
       <AppDialog.Header className="py-3">
@@ -473,6 +533,45 @@ export function FileViewerModal({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* File stepping — previous/next across the worktree change set */}
+          {canStepFiles && (
+            <div className="flex items-center gap-1 shrink-0">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => onNavigateFile?.(-1)}
+                    disabled={!hasPrevFile}
+                    aria-label="Previous file"
+                    className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Previous file ([)</TooltipContent>
+              </Tooltip>
+              <span
+                data-testid="file-position-indicator"
+                className="text-xs text-muted-foreground tabular-nums"
+              >
+                {(currentFileIndex ?? 0) + 1} of {totalFileCount}
+              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => onNavigateFile?.(1)}
+                    disabled={!hasNextFile}
+                    aria-label="Next file"
+                    className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Next file (])</TooltipContent>
+              </Tooltip>
+            </div>
+          )}
           {/* Hunk position indicator — visible during free scroll and n/p nav */}
           {mode === "diff" && hunkCount > 1 && activeHunkIndex >= 0 && (
             <span
