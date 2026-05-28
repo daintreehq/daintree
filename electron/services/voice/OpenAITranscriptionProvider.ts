@@ -189,6 +189,12 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private vadWorker: Worker | null = null;
   private vadWorkerSessionId = 0;
   private isSpeaking = false;
+  // True once the VAD has reported at least one speech-end this connection. The
+  // barge-in clear on speech-start is gated on it: audio buffered after a
+  // speech-end is confirmed silence and safe to drop, but audio buffered before
+  // the first speech-end (e.g. captured before the worker finished loading) may
+  // be real speech, so the first speech-start must not clear it.
+  private vadHasEndedSpeech = false;
   // Set when the worker fails to initialize or crashes. In this mode the VAD
   // can't segment, so we fall back to a periodic backstop commit (no speech
   // gating) — dictation still works, just without speech-aware boundaries.
@@ -1042,6 +1048,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private startVadWorker(mySessionId: number): void {
     this.stopVadWorker();
     this.isSpeaking = false;
+    this.vadHasEndedSpeech = false;
     this.vadDegraded = false;
     this.preRollChunks = [];
     this.preRollBytes = 0;
@@ -1142,29 +1149,39 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private handleVadSpeechStart(): void {
     if (this.isSpeaking) return;
     this.isSpeaking = true;
-    logDebug(`${P} VAD speech-start`, { preRollBytes: this.preRollBytes });
-    // Barge-in: drop whatever silence accumulated in the server buffer since the
-    // last commit so it isn't transcribed, then replay our short pre-roll so the
-    // onset of this utterance — already streamed before the clear — survives.
-    if (this.connection && this.isReady && !this.isDraining) {
-      try {
-        this.connection.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
-        this.bytesSinceCommit = 0;
-      } catch (err) {
-        logWarn(`${P} Failed to clear buffer on speech-start`, {
-          message: formatErrorMessage(err, "clear failed"),
-        });
-      }
-      for (const chunk of this.preRollChunks) {
-        this.sendAudioJson(chunk);
-      }
-    }
     this.startBackstopTimer("vad-speech");
+    logDebug(`${P} VAD speech-start`, { preRollBytes: this.preRollBytes });
+
+    // Barge-in clear: drop the silence the server buffered between the last
+    // commit and now so it isn't transcribed, then replay our short pre-roll so
+    // the onset of this utterance — already streamed before the clear —
+    // survives. Only safe AFTER a speech-end: the audio buffered since a
+    // speech-end commit is VAD-confirmed silence. The first speech-start of a
+    // (re)connection has no such guarantee — audio streamed before the worker
+    // was ready could be real speech — so we leave the buffer intact.
+    if (!this.vadHasEndedSpeech || !this.connection || !this.isReady || this.isDraining) {
+      return;
+    }
+    try {
+      this.connection.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+    } catch (err) {
+      logWarn(`${P} Failed to clear buffer on speech-start`, {
+        message: formatErrorMessage(err, "clear failed"),
+      });
+      // The server buffer was NOT cleared — replaying the pre-roll would
+      // duplicate those bytes. Bail; the socket is likely dropping anyway.
+      return;
+    }
+    this.bytesSinceCommit = 0;
+    for (const chunk of this.preRollChunks) {
+      this.sendAudioJson(chunk);
+    }
   }
 
   private handleVadSpeechEnd(): void {
     if (!this.isSpeaking) return;
     this.isSpeaking = false;
+    this.vadHasEndedSpeech = true;
     this.clearBackstopTimer();
     logDebug(`${P} VAD speech-end — committing segment`);
     this.maybeCommitSegment("vad-end-of-speech");

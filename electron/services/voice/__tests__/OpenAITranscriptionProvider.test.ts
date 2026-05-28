@@ -619,6 +619,24 @@ describe("OpenAITranscriptionProvider", () => {
     service.stop();
   });
 
+  it("feeds the VAD a copy of the chunk, not the buffer sent to OpenAI", async () => {
+    const service = new OpenAITranscriptionProvider();
+    await bringSessionReady(service);
+    const worker = latestVadWorker();
+
+    const chunk = new Uint8Array(64).fill(3).buffer;
+    service.sendAudioChunk(chunk);
+
+    const audioMsg = worker.posted.find((m) => m.type === "audio");
+    expect(audioMsg).toBeDefined();
+    // Must be a distinct ArrayBuffer (chunk.slice(0)) so the transfer to the
+    // worker doesn't detach the buffer still needed for the OpenAI send.
+    expect(audioMsg!.pcm).not.toBe(chunk);
+    expect((audioMsg!.pcm as ArrayBuffer).byteLength).toBe(chunk.byteLength);
+
+    service.stop();
+  });
+
   it("commits the audio buffer on VAD speech-end once enough audio has streamed", async () => {
     const service = new OpenAITranscriptionProvider();
     const { socket } = await bringSessionReady(service);
@@ -635,10 +653,33 @@ describe("OpenAITranscriptionProvider", () => {
     service.stop();
   });
 
-  it("clears the server buffer on VAD speech-start and replays the pre-roll", async () => {
+  it("does not clear on the first speech-start of a connection", async () => {
     const service = new OpenAITranscriptionProvider();
     const { socket } = await bringSessionReady(service);
     const worker = latestVadWorker();
+
+    // The first speech-start has no preceding speech-end, so audio buffered
+    // before the VAD was ready might be real speech — the buffer must be kept.
+    service.sendAudioChunk(new Uint8Array(5_000).buffer);
+    const sentBefore = socket.sent.length;
+    worker.emitSpeechStart();
+
+    const newPayloads = socket.sentJson().slice(sentBefore);
+    expect(newPayloads.some((p) => p.type === "input_audio_buffer.clear")).toBe(false);
+
+    service.stop();
+  });
+
+  it("clears the server buffer on a later speech-start and replays the pre-roll", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+
+    // Complete one segment so a subsequent speech-start is allowed to clear
+    // (the buffer after a speech-end commit is VAD-confirmed silence).
+    feedCommittableAudio(service);
+    worker.emitSpeechStart();
+    worker.emitSpeechEnd();
 
     const chunk = new Uint8Array(5_000).fill(7).buffer;
     service.sendAudioChunk(chunk);
@@ -647,11 +688,48 @@ describe("OpenAITranscriptionProvider", () => {
     worker.emitSpeechStart();
 
     const newPayloads = socket.sentJson().slice(sentBefore);
-    // Barge-in: a clear is sent, then the pre-roll chunk is replayed.
+    // Barge-in: a clear is sent, then the pre-roll is replayed.
     expect(newPayloads[0]).toEqual({ type: "input_audio_buffer.clear" });
     const replayed = newPayloads.filter((p) => p.type === "input_audio_buffer.append");
-    expect(replayed).toHaveLength(1);
-    expect(replayed[0].audio).toBe(Buffer.from(chunk).toString("base64"));
+    expect(replayed.some((p) => p.audio === Buffer.from(chunk).toString("base64"))).toBe(true);
+
+    service.stop();
+  });
+
+  it("does not replay the pre-roll when the speech-start clear send fails", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+
+    feedCommittableAudio(service);
+    worker.emitSpeechStart();
+    worker.emitSpeechEnd();
+
+    service.sendAudioChunk(new Uint8Array(5_000).buffer);
+    const sentBefore = socket.sent.length;
+
+    // The clear send throws — the server buffer was not emptied, so replaying
+    // the pre-roll would duplicate bytes. No appends must follow.
+    socket.send = () => {
+      throw new Error("socket closing");
+    };
+    worker.emitSpeechStart();
+    expect(socket.sent.length).toBe(sentBefore);
+
+    service.stop();
+  });
+
+  it("does not commit a VAD misfire that carries too little audio", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+
+    // A misfire surfaces as speech-start then speech-end with only a tiny blip
+    // of audio — the MIN_COMMIT_BYTES guard must skip the commit.
+    service.sendAudioChunk(new Uint8Array(10).buffer);
+    worker.emitSpeechStart();
+    worker.emitSpeechEnd();
+    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(0);
 
     service.stop();
   });
