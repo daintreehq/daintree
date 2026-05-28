@@ -52,6 +52,11 @@ vi.mock("../../../services/fileDecorationRegistry.js", () => ({
   getFileDecorationImpls: (...args: unknown[]) => mockGetFileDecorationImpls(...args),
 }));
 
+const mockAuditAppend = vi.fn();
+vi.mock("../../../services/PluginActionAuditService.js", () => ({
+  getPluginActionAuditService: () => ({ append: mockAuditAppend }),
+}));
+
 const mockIpcMainHandle = vi.fn();
 const mockIpcMainRemoveHandler = vi.fn();
 vi.mock("electron", () => ({
@@ -197,6 +202,9 @@ describe("registerPluginHandlers", () => {
       ["arg1", "arg2"]
     );
     expect(result).toEqual({ data: "hello" });
+    // Successful invokes are intentionally not audited — they would be
+    // high-frequency and overwhelm the ring buffer (#9240).
+    expect(mockAuditAppend).not.toHaveBeenCalled();
   });
 
   it("PLUGIN_INVOKE handler builds ctx with webContentsId from event.sender.id", async () => {
@@ -238,6 +246,57 @@ describe("registerPluginHandlers", () => {
     );
   });
 
+  it("PLUGIN_INVOKE handler audits dispatch failures (#9240)", async () => {
+    mockDispatchHandler.mockRejectedValue(new Error("No plugin handler registered for x:y"));
+
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 1 },
+    };
+    await expect(invokeHandler(trustedEvent, "x", "y", "arg1")).rejects.toThrow();
+    expect(mockAuditAppend).toHaveBeenCalledTimes(1);
+    const record = mockAuditAppend.mock.calls[0][0];
+    expect(record).toMatchObject({
+      pluginId: "x",
+      actionId: "y",
+      recordType: "ipc-invoke",
+      channel: "plugin:invoke",
+      result: "error",
+    });
+    expect(typeof record.errorMessage).toBe("string");
+    expect(record.errorMessage).toContain("No plugin handler registered");
+    // Hash is computed from a redacted args summary, so it must be a non-empty
+    // hex string (64-char sha256) even when args are present.
+    expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(typeof record.durationMs).toBe("number");
+  });
+
+  it("PLUGIN_INVOKE handler still rethrows when audit append throws", async () => {
+    mockDispatchHandler.mockRejectedValue(new Error("dispatch failed"));
+    mockAuditAppend.mockImplementationOnce(() => {
+      throw new Error("audit broken");
+    });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 1 },
+    };
+    // The original dispatch error must surface — never the audit error.
+    await expect(invokeHandler(trustedEvent, "x", "y")).rejects.toThrow("dispatch failed");
+    errSpy.mockRestore();
+  });
+
   it("PLUGIN_INVOKE handler rejects untrusted senders and does not dispatch", async () => {
     registerPluginHandlers();
     const invokeHandler = mockIpcMainHandle.mock.calls.find(
@@ -252,6 +311,22 @@ describe("registerPluginHandlers", () => {
       invokeHandler(untrustedEvent, "acme.my-plugin", "get-data", "arg1")
     ).rejects.toThrow("plugin:invoke rejected: untrusted sender");
     expect(mockDispatchHandler).not.toHaveBeenCalled();
+    // Untrusted-sender rejection still writes an audit row (#9240 / #8442
+    // audit-even-when-silenced) so a forensic record of the attempted invoke
+    // survives even though the dispatch never ran.
+    expect(mockAuditAppend).toHaveBeenCalledTimes(1);
+    const record = mockAuditAppend.mock.calls[0][0];
+    expect(record).toMatchObject({
+      pluginId: "acme.my-plugin",
+      actionId: "get-data",
+      recordType: "ipc-invoke",
+      channel: "plugin:invoke",
+      result: "restricted",
+      // Args are attacker-controlled and unvalidated — no hash.
+      argsHash: "",
+    });
+    expect(record.errorMessage).toContain("untrusted sender");
+    expect(record.errorMessage).toContain("https://evil.com");
   });
 
   it("PLUGIN_INVOKE handler rejects when senderFrame is missing and does not dispatch", async () => {
@@ -265,6 +340,14 @@ describe("registerPluginHandlers", () => {
       "plugin:invoke rejected: untrusted sender"
     );
     expect(mockDispatchHandler).not.toHaveBeenCalled();
+    // Missing-frame is also recorded as a restricted invoke.
+    expect(mockAuditAppend).toHaveBeenCalledTimes(1);
+    expect(mockAuditAppend.mock.calls[0][0]).toMatchObject({
+      recordType: "ipc-invoke",
+      result: "restricted",
+      pluginId: "acme.my-plugin",
+      actionId: "get-data",
+    });
   });
 
   it("PLUGIN_INVOKE handler rejects invalid args before dispatchHandler runs", async () => {
@@ -741,8 +824,101 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
         },
       },
     ]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const handler = getHandler();
     expect(await handler({}, "s:1", ["a.ts"])).toEqual({ "a.ts": { badge: "3" } });
+    warn.mockRestore();
+  });
+
+  it("audits a rejecting provider (#9240)", async () => {
+    mockGetFileDecorationImpls.mockReturnValue([
+      {
+        pluginId: "p.bad",
+        contributionId: "deco",
+        impl: { provideDecorations: vi.fn().mockRejectedValue(new Error("boom")) },
+      },
+      {
+        pluginId: "p.good",
+        contributionId: "deco",
+        impl: {
+          provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { badge: "3" } }),
+        },
+      },
+    ]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const handler = getHandler();
+    await handler({}, "worktree-diff:/r", ["a.ts"]);
+    // Healthy provider is not audited; only the rejecting one is.
+    expect(mockAuditAppend).toHaveBeenCalledTimes(1);
+    const record = mockAuditAppend.mock.calls[0][0];
+    expect(record).toMatchObject({
+      pluginId: "p.bad",
+      actionId: "deco",
+      recordType: "decoration-failure",
+      result: "error",
+      failureMode: "rejected",
+      scope: "worktree-diff:/r",
+      contributionId: "deco",
+      argsHash: "",
+    });
+    expect(record.errorMessage).toContain("boom");
+    expect(typeof record.durationMs).toBe("number");
+    warn.mockRestore();
+  });
+
+  it("audits a provider that times out (#9240)", async () => {
+    vi.useFakeTimers();
+    try {
+      mockGetFileDecorationImpls.mockReturnValue([
+        {
+          pluginId: "p.hang",
+          contributionId: "deco",
+          impl: { provideDecorations: vi.fn().mockReturnValue(new Promise(() => {})) },
+        },
+        {
+          pluginId: "p.good",
+          contributionId: "deco",
+          impl: {
+            provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { badge: "4" } }),
+          },
+        },
+      ]);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const handler = getHandler();
+      const promise = handler({}, "worktree-diff:/r", ["a.ts"]) as Promise<unknown>;
+      await vi.advanceTimersByTimeAsync(3000);
+      await promise;
+      expect(mockAuditAppend).toHaveBeenCalledTimes(1);
+      const record = mockAuditAppend.mock.calls[0][0];
+      expect(record).toMatchObject({
+        pluginId: "p.hang",
+        actionId: "deco",
+        recordType: "decoration-failure",
+        result: "error",
+        failureMode: "timeout",
+        scope: "worktree-diff:/r",
+        contributionId: "deco",
+      });
+      expect(record.errorMessage).toMatch(/timed out after 3000ms/);
+      warn.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not audit successful decoration settles (#9240)", async () => {
+    mockGetFileDecorationImpls.mockReturnValue([
+      {
+        pluginId: "p.good",
+        contributionId: "deco",
+        impl: {
+          provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { badge: "1" } }),
+        },
+      },
+    ]);
+    const handler = getHandler();
+    await handler({}, "worktree-diff:/r", ["a.ts"]);
+    expect(mockAuditAppend).not.toHaveBeenCalled();
   });
 
   it("omits paths whose merged decoration has no fields", async () => {

@@ -1,7 +1,9 @@
 // eager-import-allow: wires the plugin-audit ring buffer to the synchronous electron-store slice at boot (global service, mirrors ActionBreadcrumbService)
 import { randomUUID } from "node:crypto";
 import type {
+  DecorationFailureMode,
   PluginActionAuditRecord,
+  PluginActionAuditRecordType,
   PluginActionAuditResult,
   PluginAuditConfig,
 } from "../../shared/types/ipc/pluginAudit.js";
@@ -74,6 +76,7 @@ export class PluginActionAuditService {
         this.append({
           pluginId: payload.pluginId,
           actionId: payload.actionId,
+          recordType: "action-dispatch",
           source: payload.source as ActionSource,
           danger: payload.danger as ActionDanger,
           argsHash: typeof payload.argsHash === "string" ? payload.argsHash : "",
@@ -126,13 +129,26 @@ export class PluginActionAuditService {
   append(input: {
     pluginId: string;
     actionId: string;
-    source: ActionSource;
-    danger: ActionDanger;
+    recordType?: PluginActionAuditRecordType;
+    /** Only meaningful when `recordType === "action-dispatch"`. */
+    source?: ActionSource;
+    /** Only meaningful when `recordType === "action-dispatch"`. */
+    danger?: ActionDanger;
     argsHash: string;
     argsPlaintext?: string;
     durationMs: number;
     result: PluginActionAuditResult;
     turnId?: string;
+    /** IPC channel name — `ipc-invoke` records only. */
+    channel?: string;
+    /** Failure mode — `decoration-failure` records only. */
+    failureMode?: DecorationFailureMode;
+    /** Decoration scope — `decoration-failure` records only. */
+    scope?: string;
+    /** Decoration contribution id — `decoration-failure` records only. */
+    contributionId?: string;
+    /** Human-readable failure message — `error` records. */
+    errorMessage?: string;
   }): void {
     if (this.readConfig().auditEnabled === false) return;
     this.hydrate();
@@ -142,15 +158,21 @@ export class PluginActionAuditService {
       ts: Date.now(),
       pluginId: input.pluginId,
       actionId: input.actionId,
-      source: input.source,
-      danger: input.danger,
       argsHash: input.argsHash,
       durationMs: Math.max(0, Math.round(input.durationMs)),
       result: input.result,
       schemaVersion: PLUGIN_AUDIT_SCHEMA_VERSION,
     };
+    if (input.recordType !== undefined) record.recordType = input.recordType;
+    if (input.source !== undefined) record.source = input.source;
+    if (input.danger !== undefined) record.danger = input.danger;
     if (input.argsPlaintext !== undefined) record.argsPlaintext = input.argsPlaintext;
     if (input.turnId !== undefined) record.turnId = input.turnId;
+    if (input.channel !== undefined) record.channel = input.channel;
+    if (input.failureMode !== undefined) record.failureMode = input.failureMode;
+    if (input.scope !== undefined) record.scope = input.scope;
+    if (input.contributionId !== undefined) record.contributionId = input.contributionId;
+    if (input.errorMessage !== undefined) record.errorMessage = input.errorMessage;
 
     this.enqueueAndTrim(record);
   }
