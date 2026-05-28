@@ -88,13 +88,17 @@ Plugin views render inside Daintree's existing panel system. They must share Dai
 
 **Import maps + Vite externals.**
 
-- Plugin bundles declare `external: ["react", "react-dom", "react/jsx-runtime"]`. This strips these modules from the bundle.
-- Daintree's `index.html` injects `<script type="importmap">` mapping the bare specifiers to vendor chunks shipped with Daintree.
-- When the plugin bundle executes in Daintree's renderer, those imports resolve to Daintree's copy.
+- Plugin bundles externalize React via the `@daintreehq/plugin-vite` preset, which sets `build.rollupOptions.external` to `[/^react($|\/)/, /^react-dom($|\/)/]`. The regex form covers every subpath; `external: ["react"]` matches only the literal string `"react"` and silently bundles `react/jsx-runtime` into plugin output.
+- Daintree's `index.html` injects a `<script type="importmap">` at build time, mapping `react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, and `react-dom/client` to the host's `vendor-react` chunk.
+- When the plugin bundle executes in Daintree's renderer, those imports resolve to the host's single React instance.
 
 Chromium (Electron 41) supports import maps natively — no polyfill required.
 
-**`react/jsx-runtime` is not optional.** JSX compiled with the new transform (`jsx: "react-jsx"` in tsconfig) desugars to `jsx()` / `jsxs()` calls imported from `react/jsx-runtime`. If the plugin bundles its own copy of that module, every JSX element creates a React element tied to a different React instance, and hooks inside the plugin view throw at runtime. The `@daintreehq/plugin-vite` config enforces this externalization automatically — plugin authors don't configure it manually.
+**`react/jsx-runtime` is not optional.** JSX compiled with the new transform (`jsx: "react-jsx"` in tsconfig) desugars to `jsx()` / `jsxs()` calls imported from `react/jsx-runtime`. If the plugin bundles its own copy of that module, every JSX element creates a React element tied to a different React instance, and hooks inside the plugin view throw at runtime. The `@daintreehq/plugin-vite` preset enforces this externalization automatically — plugin authors don't configure it manually.
+
+**Inline-script CSP gate.** The host CSP forbids `'unsafe-inline'` for `script-src`, so the inline `<script type="importmap">` is gated by an explicit SHA-256 hash. The build emits the hash both into the `<meta http-equiv="Content-Security-Policy">` tag and into a `dist/importmap-meta.json` sidecar that the Electron main process reads at startup to mirror the hash into the HTTP `Content-Security-Policy` header. The hash MUST stay aligned across both layers — Chromium intersects header and meta, and a divergence silently drops the importmap, leaving plugins with unresolvable bare `react` specifiers.
+
+**Integrity attribute is forbidden on the importmap tag** per the HTML spec. Subresource integrity for the importmap's target chunks (when needed) lives as a top-level `"integrity"` block inside the JSON payload, supported in Chromium 127+.
 
 **Why not Module Federation?** Module Federation handles version negotiation between host and plugin, but adds ~30 KB of runtime and significant build complexity. Daintree controls both the host React version and the plugin template, so negotiation isn't needed.
 

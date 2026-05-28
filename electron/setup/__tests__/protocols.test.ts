@@ -89,6 +89,17 @@ vi.mock("fs/promises", () => ({
   ...fsPromisesMocks,
 }));
 
+const nodeFsMocks = vi.hoisted(() => ({
+  readFileSync: vi.fn<(...args: unknown[]) => string>(() => {
+    throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+  }),
+}));
+
+vi.mock("node:fs", () => ({
+  default: nodeFsMocks,
+  ...nodeFsMocks,
+}));
+
 const mockSend = vi.fn();
 const mockMainWindow = {
   isDestroyed: () => false,
@@ -116,6 +127,7 @@ vi.mock("../../ipc/channels.js", () => ({
 
 import {
   createPluginProtocolHandler,
+  registerAppProtocol,
   registerDaintreeFileProtocol,
   registerPluginProtocol,
   registerProtocolsForSession,
@@ -761,6 +773,154 @@ describe("setupWebviewCSP — partition CSP wiring", () => {
     expect(daintreeResponse?.responseHeaders?.["Content-Security-Policy"]?.[0]).toContain(
       "/* daintree */"
     );
+  });
+});
+
+describe("setupWebviewCSP — host import-map hash sidecar", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    webContentsCreatedListeners.length = 0;
+    // Reset default: sidecar absent unless a test overrides.
+    nodeFsMocks.readFileSync.mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+  });
+
+  it("threads scriptSrcHashes from importmap-meta.json into the daintree CSP in production", async () => {
+    const { getDaintreeAppCSP } = await import("../../utils/webviewCsp.js");
+    const daintreeCspMock = vi.mocked(getDaintreeAppCSP);
+    nodeFsMocks.readFileSync.mockReturnValue(
+      JSON.stringify({ scriptSrcHashes: ["'sha256-abc123'"] })
+    );
+    const original = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+
+    try {
+      registerAppProtocol("/tmp/dist");
+      setupWebviewCSP();
+      expect(daintreeCspMock).toHaveBeenCalledWith(false, {
+        scriptSrcHashes: ["'sha256-abc123'"],
+      });
+    } finally {
+      process.env.NODE_ENV = original;
+    }
+  });
+
+  it("reads importmap-meta.json from the cached dist path", () => {
+    nodeFsMocks.readFileSync.mockReturnValue(JSON.stringify({ scriptSrcHashes: ["'sha256-xyz'"] }));
+    const original = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+
+    try {
+      registerAppProtocol("/custom/dist");
+      setupWebviewCSP();
+      expect(nodeFsMocks.readFileSync).toHaveBeenCalledWith(
+        path.join("/custom/dist", "importmap-meta.json"),
+        "utf8"
+      );
+    } finally {
+      process.env.NODE_ENV = original;
+    }
+  });
+
+  it("falls back to a single-arg CSP call when the sidecar is missing", async () => {
+    const { getDaintreeAppCSP } = await import("../../utils/webviewCsp.js");
+    const daintreeCspMock = vi.mocked(getDaintreeAppCSP);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const original = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+
+    try {
+      registerAppProtocol("/tmp/dist");
+      setupWebviewCSP();
+      expect(daintreeCspMock).toHaveBeenCalledWith(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to load importmap-meta.json sidecar"),
+        expect.anything()
+      );
+    } finally {
+      process.env.NODE_ENV = original;
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("falls back when sidecar JSON is malformed", async () => {
+    const { getDaintreeAppCSP } = await import("../../utils/webviewCsp.js");
+    const daintreeCspMock = vi.mocked(getDaintreeAppCSP);
+    nodeFsMocks.readFileSync.mockReturnValue("not valid json");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const original = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+
+    try {
+      registerAppProtocol("/tmp/dist");
+      setupWebviewCSP();
+      expect(daintreeCspMock).toHaveBeenCalledWith(false);
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      process.env.NODE_ENV = original;
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("falls back when sidecar JSON is missing scriptSrcHashes array", async () => {
+    const { getDaintreeAppCSP } = await import("../../utils/webviewCsp.js");
+    const daintreeCspMock = vi.mocked(getDaintreeAppCSP);
+    nodeFsMocks.readFileSync.mockReturnValue(JSON.stringify({ other: "value" }));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const original = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+
+    try {
+      registerAppProtocol("/tmp/dist");
+      setupWebviewCSP();
+      expect(daintreeCspMock).toHaveBeenCalledWith(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("malformed; missing scriptSrcHashes array")
+      );
+    } finally {
+      process.env.NODE_ENV = original;
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("skips sidecar read entirely in development", async () => {
+    const { getDaintreeAppCSP } = await import("../../utils/webviewCsp.js");
+    const daintreeCspMock = vi.mocked(getDaintreeAppCSP);
+    nodeFsMocks.readFileSync.mockReturnValue(
+      JSON.stringify({ scriptSrcHashes: ["'sha256-should-not-load'"] })
+    );
+    const original = process.env.NODE_ENV;
+    process.env.NODE_ENV = "development";
+
+    try {
+      registerAppProtocol("/tmp/dist");
+      setupWebviewCSP();
+      expect(nodeFsMocks.readFileSync).not.toHaveBeenCalled();
+      expect(daintreeCspMock).toHaveBeenCalledWith(true);
+    } finally {
+      process.env.NODE_ENV = original;
+    }
+  });
+
+  it("filters non-string entries out of scriptSrcHashes", async () => {
+    const { getDaintreeAppCSP } = await import("../../utils/webviewCsp.js");
+    const daintreeCspMock = vi.mocked(getDaintreeAppCSP);
+    nodeFsMocks.readFileSync.mockReturnValue(
+      JSON.stringify({ scriptSrcHashes: ["'sha256-good'", 42, null, "'sha256-also-good'"] })
+    );
+    const original = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+
+    try {
+      registerAppProtocol("/tmp/dist");
+      setupWebviewCSP();
+      expect(daintreeCspMock).toHaveBeenCalledWith(false, {
+        scriptSrcHashes: ["'sha256-good'", "'sha256-also-good'"],
+      });
+    } finally {
+      process.env.NODE_ENV = original;
+    }
   });
 });
 

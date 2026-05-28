@@ -24,6 +24,7 @@ export default defineConfig({
       "scripts/**/*.{test,spec}.{js,ts,mjs}",
       "e2e/helpers/__tests__/*.{test,spec}.{js,ts}",
       "plugins/**/*.{test,spec}.{js,ts,jsx,tsx}",
+      "packages/**/*.{test,spec}.{js,ts,jsx,tsx}",
     ],
     exclude: [
       "node_modules",
