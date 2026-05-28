@@ -52,6 +52,14 @@ export const MenuItemContributionSchema = z.object({
 export const KeybindingContributionSchema = z.object({
   actionId: z.string().min(1),
   combo: z.string().min(1),
+  // Closed to the renderer's KeyScope union (src/services/keybindingUtils.ts).
+  // An unknown scope would never match the active scope and silently produce an
+  // inert binding, so reject it at the manifest gate instead. Defaults to
+  // "global" in the renderer hook when omitted.
+  scope: z
+    .enum(["global", "terminal", "modal", "worktreeList", "portal", "worktreeGrid"])
+    .optional(),
+  description: z.string().min(1).optional(),
   when: z.string().min(1).optional(),
 });
 

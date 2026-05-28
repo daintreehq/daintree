@@ -67,7 +67,14 @@ export interface MenuItemContribution {
 export interface KeybindingContribution {
   actionId: string;
   combo: string;
+  scope?: string;
+  description?: string;
   when?: string;
+}
+
+export interface PluginKeybindingDescriptor {
+  pluginId: string;
+  item: KeybindingContribution;
 }
 
 export interface ContextMenuContribution {

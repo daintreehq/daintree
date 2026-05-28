@@ -73,6 +73,7 @@ import {
 import {
   registerPluginKeybinding,
   unregisterPluginKeybindings,
+  getPluginKeybindings,
 } from "./pluginKeybindingRegistry.js";
 import {
   registerPluginContextMenuItem,
@@ -556,6 +557,8 @@ export class PluginService {
   private menuItemsBroadcastPending = false;
   /** Mirrors {@link toolbarButtonsBroadcastComplete} for menu items. */
   private menuItemsBroadcastComplete = false;
+  private keybindingsBroadcastPending = false;
+  private keybindingsBroadcastComplete = false;
   private disposed = false;
   private readonly disposeRegistrySubscriptions: () => void;
   /**
@@ -1055,6 +1058,9 @@ export class PluginService {
     for (const keybinding of manifest.contributes.keybindings) {
       trackPluginExpression(manifest.name, keybinding.when);
       registerPluginKeybinding(manifest.name, keybinding);
+    }
+    if (manifest.contributes.keybindings.length > 0) {
+      this.scheduleKeybindingsBroadcast(false);
     }
 
     for (const ctxMenu of manifest.contributes.contextMenus) {
@@ -2560,6 +2566,9 @@ export class PluginService {
     runUnloadStep(pluginId, "unregisterPluginKeybindings", () =>
       unregisterPluginKeybindings(pluginId)
     );
+    runUnloadStep(pluginId, "scheduleKeybindingsBroadcast", () =>
+      this.scheduleKeybindingsBroadcast(true)
+    );
     runUnloadStep(pluginId, "unregisterPluginContextMenuItems", () =>
       unregisterPluginContextMenuItems(pluginId)
     );
@@ -3045,6 +3054,24 @@ export class PluginService {
     });
   }
 
+  private scheduleKeybindingsBroadcast(complete: boolean): void {
+    this.keybindingsBroadcastComplete ||= complete;
+    if (this.keybindingsBroadcastPending) {
+      return;
+    }
+    this.keybindingsBroadcastPending = true;
+    queueMicrotask(() => {
+      const isComplete = this.keybindingsBroadcastComplete;
+      this.keybindingsBroadcastPending = false;
+      this.keybindingsBroadcastComplete = false;
+      if (this.disposed) return;
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+        name: "plugin:keybindings-changed",
+        payload: { keybindings: getPluginKeybindings(), complete: isComplete },
+      });
+    });
+  }
+
   /**
    * Replay the current actions / panel-kinds / toolbar-button snapshots to a
    * single target webContents. Used by the cold-start view-ready hook so a
@@ -3079,6 +3106,10 @@ export class PluginService {
       {
         name: "plugin:menu-items-changed",
         payload: { items: getPluginMenuItems(), complete: false },
+      },
+      {
+        name: "plugin:keybindings-changed",
+        payload: { keybindings: getPluginKeybindings(), complete: true },
       },
     ];
     for (const event of events) {

@@ -1818,4 +1818,49 @@ describe("KeybindingService", () => {
       expect(match).toBeUndefined();
     });
   });
+
+  describe("dynamic plugin binding listener notification", () => {
+    it("notifies subscribers when registerBinding adds a binding", () => {
+      const service = new KeybindingService();
+      const listener = vi.fn();
+      service.subscribe(listener);
+
+      service.registerBinding({
+        actionId: "p1.act",
+        combo: "Cmd+Shift+8",
+        scope: "global",
+        priority: 1,
+        pluginId: "p1",
+      });
+
+      expect(listener).toHaveBeenCalled();
+    });
+
+    it("notifies subscribers when removePluginBindings removes a binding", () => {
+      const service = new KeybindingService();
+      service.registerBinding({
+        actionId: "p1.act",
+        combo: "Cmd+Shift+8",
+        scope: "global",
+        priority: 1,
+        pluginId: "p1",
+      });
+
+      const listener = vi.fn();
+      service.subscribe(listener);
+      service.removePluginBindings("p1");
+
+      expect(listener).toHaveBeenCalled();
+    });
+
+    it("does not notify when removePluginBindings matches nothing", () => {
+      const service = new KeybindingService();
+      const listener = vi.fn();
+      service.subscribe(listener);
+
+      service.removePluginBindings("nonexistent");
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+  });
 });

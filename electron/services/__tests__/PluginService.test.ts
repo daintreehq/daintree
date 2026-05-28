@@ -6839,7 +6839,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.pushSnapshotTo(wc);
 
-    expect(send).toHaveBeenCalledTimes(4);
+    expect(send).toHaveBeenCalledTimes(5);
     // Every replay goes through the EVENTS_PUSH channel — the same channel the
     // renderer hooks' persistent push listeners consume, so no renderer-side
     // changes are needed for the cold-restore path.
@@ -6851,6 +6851,16 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     expect(names).toContain("plugin:panel-kinds-changed");
     expect(names).toContain("plugin:toolbar-buttons-changed");
     expect(names).toContain("plugin:menu-items-changed");
+    expect(names).toContain("plugin:keybindings-changed");
+    // The keybindings replay is a full authoritative snapshot — the renderer
+    // hook full-replaces its plugin bindings on every push, so `complete: true`
+    // is consistent with that replace-all semantics.
+    const keybindingsCall = send.mock.calls.find(
+      (c) => (c[1] as { name?: string })?.name === "plugin:keybindings-changed"
+    );
+    expect((keybindingsCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(
+      true
+    );
     // Toolbar and menu-item replays must use `complete: false` so the renderer
     // does not run a stale-prune sweep — replay is a load-style snapshot, not
     // an unload-driven authoritative sweep.
@@ -6880,11 +6890,12 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.pushSnapshotTo(wc);
 
-    expect(send).toHaveBeenCalledTimes(4);
+    expect(send).toHaveBeenCalledTimes(5);
     const names = send.mock.calls.map((c) => (c[1] as { name?: string })?.name);
     expect(names).toContain("plugin:panel-kinds-changed");
     expect(names).toContain("plugin:toolbar-buttons-changed");
     expect(names).toContain("plugin:menu-items-changed");
+    expect(names).toContain("plugin:keybindings-changed");
   });
 
   it("pushSnapshotTo() skips a destroyed webContents", async () => {
@@ -6912,7 +6923,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.activateStartupFinishedPlugins();
     await inFlight;
-    expect(send).toHaveBeenCalledTimes(4);
+    expect(send).toHaveBeenCalledTimes(5);
   });
 
   it("pushSnapshotTo() does not send after dispose()", async () => {

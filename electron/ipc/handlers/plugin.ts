@@ -73,6 +73,7 @@ async function handleMenuItems() {
 }
 
 async function handleKeybindings() {
+  await pluginService.waitForInit();
   return getPluginKeybindings();
 }
 

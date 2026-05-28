@@ -511,6 +511,28 @@ class KeybindingService {
     } else {
       this.bindings.set(config.actionId, [config]);
     }
+    // Dynamic registrations (plugin load) must flush to subscribers — the
+    // shortcuts reference, settings tab, and hint hovers read from this snapshot.
+    this.notifyListeners();
+  }
+
+  removePluginBindings(pluginId: string): void {
+    let changed = false;
+    for (const [actionId, bindings] of this.bindings.entries()) {
+      const filtered = bindings.filter((b) => b.pluginId !== pluginId);
+      if (filtered.length === bindings.length) {
+        continue;
+      }
+      changed = true;
+      if (filtered.length === 0) {
+        this.bindings.delete(actionId);
+      } else {
+        this.bindings.set(actionId, filtered);
+      }
+    }
+    if (changed) {
+      this.notifyListeners();
+    }
   }
 
   removeBinding(actionId: string): void {
