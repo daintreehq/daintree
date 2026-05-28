@@ -497,6 +497,25 @@ describe("DevPreviewSessionService", () => {
     expect(state.error?.type).toBe("oom");
   });
 
+  it("classifies SIGABRT + OOM output as oom (Node.js heap OOM)", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitData(
+      started.terminalId!,
+      "FATAL ERROR: CALL_AND_RETRY_LAST Allocation failed - JavaScript heap out of memory\n"
+    );
+    ptyClient.emitExit(started.terminalId!, 0, 6); // SIGABRT
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("error");
+    expect(state.error?.type).toBe("oom");
+  });
+
   it("classifies SIGKILL without OOM output as unknown", async () => {
     const started = await service.ensure(baseRequest);
     expect(started.status).toBe("starting");

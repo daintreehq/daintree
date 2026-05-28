@@ -1569,18 +1569,20 @@ export class DevPreviewSessionService {
   ): DevServerError | null {
     // Signal-based tier first
     if (signal !== undefined) {
+      // Check OOM output across all crash signals — Node.js heap OOM sends
+      // SIGABRT (6), not SIGKILL (9). Kernel OOM killer uses SIGKILL.
+      if (
+        CRASH_SIGNALS.has(signal) &&
+        /\b(FATAL ERROR|out of memory|heap out of memory|Cannot allocate memory)\b/i.test(
+          recentOutput
+        )
+      ) {
+        return {
+          type: "oom",
+          message: "Dev server was killed — out of memory.",
+        };
+      }
       if (signal === 9) {
-        // SIGKILL — only classify as oom when output confirms it
-        if (
-          /\b(FATAL ERROR|out of memory|heap out of memory|Cannot allocate memory)\b/i.test(
-            recentOutput
-          )
-        ) {
-          return {
-            type: "oom",
-            message: "Dev server was killed — out of memory.",
-          };
-        }
         // SIGKILL without OOM output: fall through to output/exit-code tiers
       } else if (CRASH_SIGNALS.has(signal)) {
         return {

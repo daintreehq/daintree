@@ -56,7 +56,6 @@ const COMPILE_ERROR_PATTERNS = [
   /Module build failed/i,
   /Unable to resolve module/i,
   /Could not resolve/i,
-  /^[A-Z]:\\.*\.tsx?\d+:\d+: error TS\d+:/i,
   /error TS\d+:/i,
 ];
 
