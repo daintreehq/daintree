@@ -381,7 +381,7 @@ export function PortalDock() {
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       const step = e.shiftKey ? RESIZE_STEP_COARSE : RESIZE_STEP_FINE;
-      let nextWidth: number | null = null;
+      let nextWidth: number;
       switch (e.key) {
         case "ArrowLeft":
           nextWidth = width + step;
