@@ -112,7 +112,7 @@ describe("postinstall", () => {
     expect(mockExecSync).toHaveBeenCalledTimes(1);
     expect(mockExecSync).toHaveBeenCalledWith(
       "node node_modules/node-pty/scripts/post-install.js",
-      { stdio: "inherit", cwd: expect.any(String) }
+      { stdio: "inherit", cwd: path.resolve(__dirname, "..") }
     );
     expect(process.exitCode).toBeUndefined();
   });

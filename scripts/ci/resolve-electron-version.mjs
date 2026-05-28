@@ -12,7 +12,7 @@ if (!version || typeof version !== "string" || !version.trim()) {
   process.exit(1);
 }
 
-if (!/^\d+\.\d+\.\d+/.test(version.trim())) {
+if (!/^\d+\.\d+\.\d+$/.test(version.trim())) {
   console.error(`resolve-electron-version: unexpected version format: "${version.trim()}"`);
   process.exit(1);
 }
