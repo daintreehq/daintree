@@ -2,14 +2,15 @@ const path = require("path");
 const fs = require("fs");
 
 /**
- * Validate that better_sqlite3.node was compiled for Electron's ABI, not Node's.
+ * Validate that better_sqlite3.node has Electron ABI, not Node ABI.
  *
- * better-sqlite3 uses the raw V8/NAN C++ API (not N-API), so the compiled
- * binary is ABI-specific. A binary compiled for Node.js will load successfully
- * under Node (which runs afterPack), but crash at Electron runtime with a
+ * better-sqlite3 uses the raw V8/NAN C++ API (not N-API), so the binary is
+ * ABI-specific. Whether the binary was downloaded via prebuild-install or
+ * compiled from source, a Node-ABI binary will load successfully under Node
+ * (which runs afterPack) but crash at Electron runtime with a
  * NODE_MODULE_VERSION mismatch. We exploit this: if dlopen succeeds here
  * (under Node), the binary is wrong; if it fails with an ABI mismatch error,
- * the binary was correctly compiled for Electron.
+ * the binary has the correct Electron ABI.
  */
 function validateBetterSqliteAbi(nativeBinaryPath) {
   const testModule = { exports: {} };
@@ -30,7 +31,7 @@ function validateBetterSqliteAbi(nativeBinaryPath) {
       msg.includes("invalid ELF header") ||
       msg.includes("not a valid Win32 application")
     ) {
-      console.log("[afterPack] better-sqlite3 ABI check passed (compiled for Electron, not Node)");
+      console.log("[afterPack] better-sqlite3 ABI check passed (Electron-ABI binary confirmed)");
       return;
     }
     // Unknown error — warn but don't fail (e.g. missing DLL dependency on Windows)

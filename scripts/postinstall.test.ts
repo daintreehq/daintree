@@ -4,6 +4,7 @@ import Module from "module";
 
 const mockRebuild = vi.fn();
 const mockExecSync = vi.fn();
+const mockSpawnSync = vi.fn();
 
 const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -31,9 +32,7 @@ describe("postinstall", () => {
       if (id === "child_process") {
         return {
           execSync: mockExecSync,
-          exec: vi.fn(),
-          spawn: vi.fn(),
-          spawnSync: vi.fn(),
+          spawnSync: mockSpawnSync,
         };
       }
       return originalRequire.apply(this, [id]);
@@ -50,6 +49,7 @@ describe("postinstall", () => {
     consoleLogSpy.mockImplementation(() => {});
     mockRebuild.mockResolvedValue(undefined);
     mockExecSync.mockReturnValue(undefined);
+    mockSpawnSync.mockReturnValue({ status: 1, stderr: "", stdout: "" });
     process.exitCode = undefined;
 
     setupMocks();
@@ -66,10 +66,10 @@ describe("postinstall", () => {
     restoreMocks();
   });
 
-  it("should rebuild all four modules sequentially", async () => {
+  it("should rebuild all three modules sequentially", async () => {
     await runPostinstall();
 
-    expect(mockRebuild).toHaveBeenCalledTimes(4);
+    expect(mockRebuild).toHaveBeenCalledTimes(3);
     expect(mockRebuild).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
@@ -80,17 +80,11 @@ describe("postinstall", () => {
     expect(mockRebuild).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        onlyModules: ["better-sqlite3"],
-      })
-    );
-    expect(mockRebuild).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
         onlyModules: ["win-job-object"],
       })
     );
     expect(mockRebuild).toHaveBeenNthCalledWith(
-      4,
+      3,
       expect.objectContaining({
         onlyModules: ["posix-pty-reaper"],
       })
@@ -100,7 +94,7 @@ describe("postinstall", () => {
   it("should pass electronVersion and buildPath to every rebuild call", async () => {
     await runPostinstall();
 
-    for (let i = 1; i <= 4; i++) {
+    for (let i = 1; i <= 3; i++) {
       expect(mockRebuild).toHaveBeenNthCalledWith(
         i,
         expect.objectContaining({
@@ -118,7 +112,7 @@ describe("postinstall", () => {
     expect(mockExecSync).toHaveBeenCalledTimes(1);
     expect(mockExecSync).toHaveBeenCalledWith(
       "node node_modules/node-pty/scripts/post-install.js",
-      { stdio: "inherit", cwd: expect.any(String) }
+      { stdio: "inherit", cwd: path.resolve(__dirname, "..") }
     );
     expect(process.exitCode).toBeUndefined();
   });
@@ -128,7 +122,7 @@ describe("postinstall", () => {
 
     await runPostinstall();
 
-    expect(mockRebuild).toHaveBeenCalledTimes(4);
+    expect(mockRebuild).toHaveBeenCalledTimes(3);
     expect(mockExecSync).toHaveBeenCalledTimes(1);
     expect(process.exitCode).toBe(1);
     expect(consoleErrorSpy).toHaveBeenCalled();
@@ -136,28 +130,27 @@ describe("postinstall", () => {
 
   it("should continue rebuilding when a middle module fails", async () => {
     mockRebuild.mockResolvedValueOnce(undefined);
-    mockRebuild.mockRejectedValueOnce(new Error("better-sqlite3 failed"));
+    mockRebuild.mockRejectedValueOnce(new Error("win-job-object failed"));
 
     await runPostinstall();
 
-    expect(mockRebuild).toHaveBeenCalledTimes(4);
+    expect(mockRebuild).toHaveBeenCalledTimes(3);
     expect(mockExecSync).toHaveBeenCalledTimes(1);
     expect(process.exitCode).toBe(1);
 
     const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
-    expect(errorCalls).toMatch(/better-sqlite3/);
+    expect(errorCalls).toMatch(/win-job-object/);
     expect(errorCalls).not.toMatch(/node-pty/);
   });
 
   it("should continue when the last module fails", async () => {
     mockRebuild.mockResolvedValueOnce(undefined);
     mockRebuild.mockResolvedValueOnce(undefined);
-    mockRebuild.mockResolvedValueOnce(undefined);
     mockRebuild.mockRejectedValueOnce(new Error("posix-pty-reaper failed"));
 
     await runPostinstall();
 
-    expect(mockRebuild).toHaveBeenCalledTimes(4);
+    expect(mockRebuild).toHaveBeenCalledTimes(3);
     expect(mockExecSync).toHaveBeenCalledTimes(1);
     expect(process.exitCode).toBe(1);
   });
@@ -167,7 +160,7 @@ describe("postinstall", () => {
 
     await runPostinstall();
 
-    expect(mockRebuild).toHaveBeenCalledTimes(4);
+    expect(mockRebuild).toHaveBeenCalledTimes(3);
     expect(mockExecSync).toHaveBeenCalledTimes(1);
     expect(process.exitCode).toBe(1);
     expect(consoleErrorSpy).toHaveBeenCalled();
@@ -189,7 +182,7 @@ describe("postinstall", () => {
 
     await runPostinstall();
 
-    expect(mockRebuild).toHaveBeenCalledTimes(4);
+    expect(mockRebuild).toHaveBeenCalledTimes(3);
     expect(process.exitCode).toBe(1);
     expect(consoleErrorSpy).toHaveBeenCalled();
 
@@ -212,6 +205,36 @@ describe("postinstall", () => {
 
     const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
     expect(errorCalls).toMatch(/node-pty/);
+    expect(errorCalls).toMatch(/win-job-object/);
+  });
+
+  it("should skip better-sqlite3 rebuild when probe detects Electron ABI (status 1)", async () => {
+    mockSpawnSync.mockReturnValue({ status: 1, stderr: "", stdout: "" });
+
+    await runPostinstall();
+
+    const rebuildCalls = mockRebuild.mock.calls.map((c) => c[0].onlyModules[0]);
+    expect(rebuildCalls).not.toContain("better-sqlite3");
+  });
+
+  it("should rebuild better-sqlite3 when probe detects Node ABI (status 0)", async () => {
+    mockSpawnSync.mockReturnValue({ status: 0, stderr: "", stdout: "" });
+
+    await runPostinstall();
+
+    expect(mockRebuild).toHaveBeenCalledTimes(4);
+    const rebuildCalls = mockRebuild.mock.calls.map((c) => c[0].onlyModules[0]);
+    expect(rebuildCalls).toContain("better-sqlite3");
+  });
+
+  it("should report failure when better-sqlite3 probe exits unexpectedly", async () => {
+    mockSpawnSync.mockReturnValue({ status: 2, stderr: "probe crash", stdout: "" });
+
+    await runPostinstall();
+
+    expect(process.exitCode).toBe(1);
+    const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
     expect(errorCalls).toMatch(/better-sqlite3/);
+    expect(errorCalls).toMatch(/ABI probe failed/);
   });
 });
