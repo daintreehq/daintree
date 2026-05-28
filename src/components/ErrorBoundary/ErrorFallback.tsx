@@ -188,25 +188,15 @@ export function ErrorFallback({
           )}
         </div>
 
-        {(error.stack || errorInfo?.componentStack) && variant !== "component" && (
+        {errorInfo?.componentStack && variant !== "component" && (
           <details className="w-full mt-4">
             <summary className="cursor-pointer text-xs text-daintree-text/60 hover:text-daintree-text/80">
               Technical details
             </summary>
-            {/* Production stacks are scrubbed before display so crash reporters
-                never expose user paths or secrets; dev keeps the raw stack. */}
             <pre className="mt-2 p-3 bg-scrim-soft rounded text-xs text-status-error/80 overflow-auto max-h-48 select-text">
-              {import.meta.env.DEV
-                ? error.stack || "No stack trace available"
-                : scrubReportText(error.stack || "No stack trace available")}
-              {errorInfo?.componentStack && (
-                <>
-                  {"\n\nComponent Stack:\n"}
-                  {import.meta.env.DEV
-                    ? errorInfo.componentStack
-                    : scrubReportText(errorInfo.componentStack)}
-                </>
-              )}
+              {scrubReportText(error.stack || "No stack trace available")}
+              {"\n\nComponent Stack:\n"}
+              {scrubReportText(errorInfo.componentStack)}
             </pre>
           </details>
         )}

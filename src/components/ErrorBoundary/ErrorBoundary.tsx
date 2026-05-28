@@ -194,7 +194,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         } else {
           notify({
             type: "info",
-            title: "Report not copied",
+            title: "Crash report didn't fit",
             message:
               "Couldn't copy the full report. Quote the Error ID shown above when filing the issue.",
             inboxMessage: "Couldn't copy crash report to clipboard.",

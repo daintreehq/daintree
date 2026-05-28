@@ -326,14 +326,14 @@ describe("ErrorBoundary", () => {
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "info",
-        title: "Report not copied",
+        title: "Crash report didn't fit",
         inboxMessage: expect.any(String),
       })
     );
     // Failure branch must NOT be transient — the user needs the inbox entry.
     expect(notify).not.toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Report not copied",
+        title: "Crash report didn't fit",
         transient: true,
       })
     );
@@ -369,7 +369,7 @@ describe("ErrorBoundary", () => {
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "info",
-        title: "Report not copied",
+        title: "Crash report didn't fit",
       })
     );
   });
@@ -528,7 +528,7 @@ describe("ErrorBoundary", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it("surfaces technical details in production mode so crashes reach reporters", () => {
+  it("shows the technical details disclosure in production mode", () => {
     vi.stubEnv("DEV", false);
 
     render(
@@ -537,7 +537,11 @@ describe("ErrorBoundary", () => {
       </ErrorBoundary>
     );
 
-    expect(screen.getByText("Technical details")).toBeTruthy();
+    const summary = screen.getByText("Technical details");
+    const details = summary.closest("details");
+    expect(details).toBeTruthy();
+    // Collapsed by default so non-technical users aren't confronted with a stack trace.
+    expect(details?.hasAttribute("open")).toBe(false);
   });
 
   it("calls onError callback when provided", () => {
