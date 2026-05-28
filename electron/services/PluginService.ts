@@ -247,11 +247,12 @@ export class PluginService {
   private ajv: AjvInstance | null = null;
   private pluginEventCleanups = new Map<string, Array<() => void>>();
   /**
-   * Persisted-settings stores keyed by `{pluginId} {scope} {filePath}` (plugin
-   * ids never contain spaces — see the manifest name pattern). Keyed on the
-   * resolved path (not just scope) so a project switch — which changes the
-   * `project`-scope path — creates a fresh store without evicting the old
-   * project's cache. Entries for a plugin are dropped on unload.
+   * Persisted-settings stores keyed by `{pluginId}\u0000{scope}\u0000{filePath}`.
+   * The NUL (`\u0000`) separator is unambiguous because a valid plugin id can
+   * never contain it (see the manifest name pattern). Keyed on the resolved path
+   * (not just scope) so a project switch — which changes the `project`-scope
+   * path — creates a fresh store without evicting the old project's cache.
+   * Entries for a plugin are dropped on unload.
    */
   private settingsStores = new Map<string, PluginSettingsStore>();
   /**
@@ -1596,7 +1597,7 @@ export class PluginService {
     scope: PluginSettingsScope,
     filePath: string
   ): PluginSettingsStore {
-    const cacheKey = `${pluginId} ${scope} ${filePath}`;
+    const cacheKey = `${pluginId}\u0000${scope}\u0000${filePath}`;
     let store = this.settingsStores.get(cacheKey);
     if (!store) {
       store = new PluginSettingsStore(filePath);
@@ -1645,7 +1646,7 @@ export class PluginService {
 
   private clearPluginSettingsState(pluginId: string): void {
     this.settingsSubscribers.delete(pluginId);
-    const prefix = `${pluginId} `;
+    const prefix = `${pluginId}\u0000`;
     for (const cacheKey of [...this.settingsStores.keys()]) {
       if (cacheKey.startsWith(prefix)) this.settingsStores.delete(cacheKey);
     }
