@@ -916,6 +916,34 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
     );
   });
 
+  it("swallows a serialization error from buildNotificationReportUrl (e.g., lone surrogate)", async () => {
+    // A lone surrogate in the message causes encodeURIComponent (inside
+    // buildNotificationReportUrl) to throw URIError. The handler must catch
+    // it — otherwise the rejection escapes `void handleReportOnGitHub()` as
+    // an unhandled promise. Asserts the click resolves and no dispatch fires.
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({
+          type: "error",
+          message: "\uD800", // lone high surrogate — encodeURIComponent throws
+          correlationId: "corr-bad-1",
+        })}
+      />
+    );
+    await openMenu();
+    const item = screen.getByText("Report on GitHub");
+    await expect(
+      act(async () => {
+        fireEvent.click(item);
+      })
+    ).resolves.toBeUndefined();
+    expect(dispatchMock).not.toHaveBeenCalledWith(
+      "system.openExternal",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
   it("falls back to the bridge openExternal when the action dispatch reports !ok", async () => {
     dispatchMock.mockResolvedValueOnce({ ok: false, error: "blocked" });
     render(

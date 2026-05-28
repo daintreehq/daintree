@@ -470,6 +470,12 @@ function RowOptionsMenu({
       } catch (dispatchError) {
         logError("Failed to open notification report URL", dispatchError);
       }
+    } catch (reportError) {
+      // buildNotificationReportUrl can surface URIError (lone surrogates in
+      // title/message) and JSON.stringify can surface TypeError (circular
+      // refs / BigInt in context). Without this catch the rejection escapes
+      // the `void handleReportOnGitHub()` site as an unhandled promise.
+      logError("Failed to build notification report", reportError);
     } finally {
       setReportInFlight(false);
     }
