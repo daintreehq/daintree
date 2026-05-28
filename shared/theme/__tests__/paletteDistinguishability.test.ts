@@ -68,8 +68,9 @@ function cvdFilter(deficiency: Deficiency) {
 
 function parseColor(s: unknown) {
   if (typeof s !== "string") return undefined;
-  if (s.startsWith("var(") || s.startsWith("color-mix(")) return undefined;
-  return parse(s);
+  const normalized = s.trim();
+  if (normalized.startsWith("var(") || normalized.startsWith("color-mix(")) return undefined;
+  return parse(normalized);
 }
 
 function resolveTokens(
@@ -212,13 +213,21 @@ describe("palette distinguishability", () => {
           for (const catKey of WORKTREE_COLOR_PALETTE) {
             const catValue = scheme.tokens[catKey as AppThemeTokenKey] as string;
             const catParsed = parseColor(catValue);
-            if (!catParsed) continue;
+            if (!catParsed) {
+              failures.push(`${scheme.id} ${deficiency}: could not parse ${catKey}: ${catValue}`);
+              continue;
+            }
             const catCvd = filter(catParsed);
 
             for (const statusKey of STATUS_TOKENS) {
               const statusValue = scheme.tokens[statusKey as AppThemeTokenKey] as string;
               const statusParsed = parseColor(statusValue);
-              if (!statusParsed) continue;
+              if (!statusParsed) {
+                failures.push(
+                  `${scheme.id} ${deficiency}: could not parse ${statusKey}: ${statusValue}`
+                );
+                continue;
+              }
               const statusCvd = filter(statusParsed);
 
               const d = differenceEuclidean("oklab")(catCvd, statusCvd);
@@ -245,11 +254,17 @@ describe("palette distinguishability", () => {
 
       for (const scheme of BUILT_IN_APP_SCHEMES) {
         const values = resolveTokens(scheme, [...ALL_CATEGORY_TOKENS]);
-        if (values.length !== 12) continue;
+        if (values.length !== 12) {
+          failures.push(`${scheme.id}: only ${values.length}/12 category tokens present`);
+          continue;
+        }
 
         for (const deficiency of DEFICIENCIES) {
           const { distances, skipped } = computePairwiseDistances(values, deficiency);
-          if (skipped.length > 0) continue;
+          if (skipped.length > 0) {
+            failures.push(`${scheme.id} ${deficiency}: could not parse: ${skipped.join(", ")}`);
+            continue;
+          }
 
           let pairIdx = 0;
           for (let i = 0; i < ALL_CATEGORY_TOKENS.length; i++) {
