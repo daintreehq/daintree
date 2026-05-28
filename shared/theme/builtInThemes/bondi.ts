@@ -10,10 +10,10 @@ export const theme: BuiltInThemeSource = {
   palette: {
     type: "light",
     surfaces: {
-      grid: "#DBE2E4",
-      sidebar: "#E8E7EF",
-      canvas: "#EDF0F4",
-      panel: "#F7F7FA",
+      grid: "#EDEFF2",
+      sidebar: "#F0F1F4",
+      canvas: "#F5F6F8",
+      panel: "#FAFBFC",
       elevated: "#FFFFFF",
     },
     text: {
