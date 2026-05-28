@@ -543,6 +543,10 @@ export interface GeneratedIpcInvokeMap {
     args: [arg: string | { step: string | null; agentSetupIds?: string[] | undefined } | null];
     result: void;
   };
+  "os-dnd:get-state": {
+    args: [];
+    result: boolean | undefined;
+  };
   "plugin:actions-get": {
     args: [];
     result: import("../plugin.js").PluginActionDescriptor[];

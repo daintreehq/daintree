@@ -1,6 +1,6 @@
 {
-  "count": 1269,
-  "moduleCount": 1269,
+  "count": 1273,
+  "moduleCount": 1273,
   "allowlist": [
     "electron/ipc/errorHandlers.ts",
     "electron/ipc/handlers/agentCapabilities.ts",
@@ -163,12 +163,12 @@
     },
     {
       "file": "electron/ipc/handlers/diagnostics.ts",
-      "line": 55,
+      "line": 65,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/ipc/handlers/diagnostics.ts",
-      "line": 62,
+      "line": 72,
       "pattern": "sync-fs"
     },
     {
@@ -1068,22 +1068,22 @@
     },
     {
       "file": "electron/services/PluginService.ts",
-      "line": 356,
+      "line": 381,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/PluginService.ts",
-      "line": 367,
+      "line": 392,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/PluginService.ts",
-      "line": 384,
+      "line": 409,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/PluginService.ts",
-      "line": 1344,
+      "line": 1536,
       "pattern": "sync-store-get"
     },
     {
@@ -1373,17 +1373,12 @@
     },
     {
       "file": "electron/setup/environment.ts",
-      "line": 60,
+      "line": 71,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/setup/environment.ts",
-      "line": 61,
-      "pattern": "sync-fs"
-    },
-    {
-      "file": "electron/setup/environment.ts",
-      "line": 63,
+      "line": 72,
       "pattern": "sync-fs"
     },
     {
@@ -1393,27 +1388,32 @@
     },
     {
       "file": "electron/setup/environment.ts",
-      "line": 86,
+      "line": 85,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/setup/environment.ts",
-      "line": 155,
+      "line": 97,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/setup/environment.ts",
-      "line": 251,
+      "line": 166,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/setup/environment.ts",
-      "line": 329,
+      "line": 262,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/setup/environment.ts",
-      "line": 643,
+      "line": 340,
+      "pattern": "sync-fs"
+    },
+    {
+      "file": "electron/setup/environment.ts",
+      "line": 654,
       "pattern": "sync-sqlite"
     },
     {
@@ -1683,27 +1683,27 @@
     },
     {
       "file": "electron/window/globalServicesInit.ts",
-      "line": 87,
+      "line": 88,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/window/globalServicesInit.ts",
-      "line": 170,
+      "line": 171,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/window/globalServicesInit.ts",
-      "line": 235,
+      "line": 236,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/window/globalServicesInit.ts",
-      "line": 585,
+      "line": 597,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/window/globalServicesInit.ts",
-      "line": 731,
+      "line": 743,
       "pattern": "sync-store-get"
     },
     {

@@ -45,6 +45,7 @@ import { getWorstSeverity, SEVERITY_WEIGHTS } from "@/lib/notificationSeverity";
 import {
   computeEffectiveNotificationState,
   heroLine,
+  osDndDisplayNote,
   selectKindOffKinds,
   KIND_SHORT_LABEL,
 } from "@/lib/notificationEffectiveState";
@@ -190,6 +191,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     quietHoursWeekdays,
     groupByContext,
     setGroupByContext,
+    osDndActive,
   } = useNotificationSettingsStore(
     useShallow((s) => ({
       notificationsEnabled: s.enabled,
@@ -204,6 +206,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       quietHoursWeekdays: s.quietHoursWeekdays,
       groupByContext: s.groupByContext,
       setGroupByContext: s.setGroupByContext,
+      osDndActive: s.osDndActive,
     }))
   );
 
@@ -230,7 +233,11 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     quietHoursEndMin,
     quietHoursWeekdays,
   });
-  const showMutedPill = isSessionMuted || isScheduledMuted;
+  const isOsDndActive = osDndActive === true;
+  // The OS DND pill is informational only — it surfaces a state the user
+  // chose at the OS level. In-app toasts still fire (the OS already silences
+  // its native banners), but the working-pulse audio is gated in main.
+  const showMutedPill = isSessionMuted || isScheduledMuted || isOsDndActive;
 
   useEffect(() => {
     if (!open) {
@@ -723,21 +730,29 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     setSessionQuietUntil(0);
   };
 
-  const pillLabel = isSessionMuted
-    ? `Muted until ${timeFormatter.format(new Date(quietUntil))}`
-    : "Quiet hours";
+  const pillLabel = (() => {
+    if (isSessionMuted) return `Muted until ${timeFormatter.format(new Date(quietUntil))}`;
+    if (isScheduledMuted) return "Quiet hours";
+    // OS DND case — the in-app gates are off, so name the source plainly.
+    return osDndDisplayNote(osDndActive) ?? "";
+  })();
   // Effective-state summary: with the gates stacked, fold them into a single
   // line that answers "what will fire right now" plus which kinds are switched
   // off. Memoized over the gate inputs so it's a stable value the rest of the
   // render (and the compiler) can lean on.
   const { summaryHeroLine, offLabel } = useMemo(() => {
+    // `isQuiet` only encodes in-app suppression (session mute + scheduled
+    // quiet) — OS DND must never be folded into `isQuiet` because it would
+    // flip kinds to `quiet-gated`, which the hard constraint forbids.
+    const inAppQuiet = isSessionMuted || isScheduledMuted;
     const states = computeEffectiveNotificationState({
       enabled: notificationsEnabled,
-      isQuiet: showMutedPill,
+      isQuiet: inAppQuiet,
       completedEnabled,
       waitingEnabled,
       workingPulseEnabled,
       uiFeedbackSoundEnabled,
+      osDndActive,
     });
     const offKinds = selectKindOffKinds(states);
     return {
@@ -747,11 +762,13 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     };
   }, [
     notificationsEnabled,
-    showMutedPill,
+    isSessionMuted,
+    isScheduledMuted,
     completedEnabled,
     waitingEnabled,
     workingPulseEnabled,
     uiFeedbackSoundEnabled,
+    osDndActive,
   ]);
   const morningLabel = `Until ${timeFormatter.format(new Date(nextOccurrenceTimestamp(8 * 60)))}`;
   const mutedEmptyDescription = (() => {
@@ -1000,7 +1017,10 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 icon={<Bell />}
                 className="py-10"
               />
-            ) : showMutedPill ? (
+            ) : isSessionMuted || isScheduledMuted ? (
+              // OS DND alone does not trigger the "Notifications paused" copy
+              // — in-app toasts still fire, so naming them "paused" would be
+              // misleading. The pill above still surfaces the OS state.
               <div data-testid="notification-muted-empty-state">
                 <EmptyState
                   variant="zero-data"

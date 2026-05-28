@@ -48,6 +48,7 @@ export function NotificationCenterToolbarButton({
     quietHoursStartMin,
     quietHoursEndMin,
     quietHoursWeekdays,
+    osDndActive,
   } = useNotificationSettingsStore(
     useShallow((s) => ({
       enabled: s.enabled,
@@ -56,6 +57,7 @@ export function NotificationCenterToolbarButton({
       quietHoursStartMin: s.quietHoursStartMin,
       quietHoursEndMin: s.quietHoursEndMin,
       quietHoursWeekdays: s.quietHoursWeekdays,
+      osDndActive: s.osDndActive,
     }))
   );
 
@@ -202,6 +204,23 @@ export function NotificationCenterToolbarButton({
     }
   }, [isDndActive, isSessionMuted, notificationsEnabled]);
 
+  // Announce OS DND transitions separately. The OS DND signal is read-only
+  // (it does not gate in-app toasts), but the user benefits from knowing the
+  // bell tooltip just changed. Coerce `undefined` to `false` so an initial
+  // unknown state never narrates a transition.
+  const prevOsDndActiveRef = useRef(osDndActive === true);
+  useEffect(() => {
+    const next = osDndActive === true;
+    const prev = prevOsDndActiveRef.current;
+    prevOsDndActiveRef.current = next;
+    if (!notificationsEnabled) return;
+    if (prev === next) return;
+    // Suppress when in-app DND is already announcing — the in-app signal
+    // takes priority since it changes more user-visible behavior.
+    if (isDndActive) return;
+    setDndAnnouncement(next ? "OS Do Not Disturb active" : "OS Do Not Disturb off");
+  }, [osDndActive, isDndActive, notificationsEnabled]);
+
   if (!notificationsEnabled) return null;
 
   const label = (() => {
@@ -209,6 +228,7 @@ export function NotificationCenterToolbarButton({
       return `Notifications — paused until ${timeFormatter.format(new Date(quietUntil))}`;
     }
     if (isScheduledMuted) return "Notifications — quiet hours active";
+    if (osDndActive === true) return "Notifications — OS Do Not Disturb active";
     if (notificationUnreadCount > 0) return `Notifications — ${notificationUnreadCount} unread`;
     return "Notifications";
   })();

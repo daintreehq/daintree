@@ -50,6 +50,7 @@ import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.pr
 import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
+import { buildOsDndPreloadBindings } from "./ipc/handlers/osDnd.preload.js";
 import { buildAgentCapabilitiesPreloadBindings } from "./ipc/handlers/agentCapabilities.preload.js";
 import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.preload.js";
 import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
@@ -1882,6 +1883,15 @@ const api: ElectronAPI = {
 
     onWake: (callback: (sleepDurationMs: number) => void) =>
       _typedOn(CHANNELS.SYSTEM_SLEEP_ON_WAKE, callback),
+  },
+
+  // OS Do-Not-Disturb / Focus state. Read-only signal — never used to gate
+  // in-app toasts (the OS already silences its native banners).
+  osDnd: {
+    ...buildOsDndPreloadBindings(_unwrappingInvoke),
+
+    onStateChanged: (callback: (payload: { osDndActive: boolean | undefined }) => void) =>
+      _typedOn(CHANNELS.OS_DND_STATE_CHANGED, callback),
   },
 
   // Keybinding API

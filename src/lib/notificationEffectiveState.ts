@@ -50,6 +50,13 @@ export interface EffectiveStateInput {
   waitingEnabled: boolean;
   workingPulseEnabled: boolean;
   uiFeedbackSoundEnabled: boolean;
+  /**
+   * OS-level Do-Not-Disturb / Focus state. Read-only display signal — does
+   * NOT participate in `classifyKind` because the OS already silences its own
+   * native banners; double-gating would hide signals the user cannot observe.
+   * `true`/`false`/`undefined` map to "active"/"off"/"unknown" in the summary.
+   */
+  osDndActive?: boolean | undefined;
 }
 
 export interface KindEffectiveState {
@@ -159,4 +166,14 @@ export function heroLine(states: KindEffectiveState[]): string {
   const interrupting = selectInterruptingKinds(states);
   if (interrupting.length === 0) return "Nothing will interrupt you right now";
   return `Will interrupt you: ${joinLabels(interrupting)}`;
+}
+
+/**
+ * Read-only display string describing the OS-level DND state. Returns `null`
+ * when the signal is unknown (unsupported platform / detection failed) or when
+ * DND is explicitly off — in both cases we don't show anything extra in the
+ * summary. The OS already silences its own banners; this is purely informational.
+ */
+export function osDndDisplayNote(osDndActive: boolean | undefined): string | null {
+  return osDndActive === true ? "OS Do Not Disturb is active" : null;
 }

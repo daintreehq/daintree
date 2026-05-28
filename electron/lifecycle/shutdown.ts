@@ -19,6 +19,7 @@ import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceSe
 import { getHibernationService } from "../services/HibernationService.js";
 import { getIdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
 import { getSystemSleepService } from "../services/SystemSleepService.js";
+import { getOsDndService } from "../services/OsDndService.js";
 import { gitHubTokenHealthService } from "../services/github/GitHubTokenHealthService.js";
 import {
   agentConnectivityService,
@@ -253,6 +254,11 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
               getSystemSleepService().dispose();
             } catch (err) {
               console.warn("[MAIN] SystemSleepService.dispose failed:", err);
+            }
+            try {
+              getOsDndService().dispose();
+            } catch (err) {
+              console.warn("[MAIN] OsDndService.dispose failed:", err);
             }
 
             try {

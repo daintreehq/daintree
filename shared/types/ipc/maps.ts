@@ -1692,6 +1692,10 @@ export interface IpcEventMap {
   "system-sleep:on-suspend": void;
   "system-sleep:on-wake": number;
 
+  // OS Do-Not-Disturb / Focus state transitions. Read-only; never used to
+  // suppress in-app toasts.
+  "os-dnd:state-changed": import("./osDnd.js").OsDndState;
+
   // Menu events
   "menu:action": { actionId: string; args?: unknown };
 
