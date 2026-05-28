@@ -275,6 +275,30 @@ export interface GeneratedIpcInvokeMap {
     args: [filters: import("./events.js").EventFilterOptions];
     result: import("./events.js").EventRecord[];
   };
+  "forge-audit:clear-log": {
+    args: [];
+    result: void;
+  };
+  "forge-audit:export-log": {
+    args: [records: import("./forge.js").ForgeAuditRecord[]];
+    result: boolean;
+  };
+  "forge-audit:get-config": {
+    args: [];
+    result: { enabled: boolean; maxRecords: number };
+  };
+  "forge-audit:get-records": {
+    args: [];
+    result: import("./forge.js").ForgeAuditRecord[];
+  };
+  "forge-audit:get-stats": {
+    args: [];
+    result: import("./forge.js").ForgeAuditStats;
+  };
+  "forge-audit:set-enabled": {
+    args: [enabled: boolean];
+    result: { enabled: boolean; maxRecords: number };
+  };
   "forge:unassign-issue": {
     args: [payload: { cwd: string; issueNumber: number; username: string }];
     result: void;

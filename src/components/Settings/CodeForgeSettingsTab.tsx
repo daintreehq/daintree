@@ -7,11 +7,14 @@ import {
   type ComponentType,
   type ReactNode,
 } from "react";
-import { GitBranch, Key, Check, AlertCircle } from "lucide-react";
+import { GitBranch, Key, Check, AlertCircle, ScrollText } from "lucide-react";
 import { GitHubIcon } from "@/components/icons/brands";
 import type { ForgeProviderContribution, ForgeProviderEntry } from "@shared/types";
+import type { ForgeAuditRecord, ForgeAuditStats } from "@shared/types/ipc/forge";
+import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "@shared/types/ipc/forge";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   ForgeProviderSelectorDropdown,
   type ForgeProviderOption,
@@ -19,8 +22,12 @@ import {
 import { GitHubSettingsTab } from "./GitHubSettingsTab";
 import { ForgeIntegrationsTab } from "./ForgeIntegrationsTab";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
+import { SettingsSection } from "./SettingsSection";
+import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { ForgeAuditLogViewer } from "./ForgeAuditLogViewer";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
+import { appClient } from "@/clients";
 import { logError } from "@/utils/logger";
 
 type ForgeIcon = ComponentType<{ className?: string; size?: number; "aria-hidden"?: boolean }>;
@@ -32,6 +39,7 @@ function getForgeIcon(id: string): ForgeIcon {
 const GENERAL_ID = "general";
 const GITHUB_ID = "github";
 const CREDENTIAL_RESULT_DISPLAY_MS = 5000;
+const COPY_FEEDBACK_MS = 2000;
 
 interface CodeForgeSettingsTabProps {
   activeSubtab: string | null;
@@ -56,6 +64,129 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
     errorMessage: "Couldn't load forge providers",
     timeoutMessage: "Forge providers took too long to load.",
   });
+
+  const [auditRecords, setAuditRecords] = useState<ForgeAuditRecord[]>([]);
+  const [auditEnabled, setAuditEnabled] = useState(true);
+  const [auditMaxRecords, setAuditMaxRecords] = useState(FORGE_AUDIT_DEFAULT_MAX_RECORDS);
+  const [auditStats, setAuditStats] = useState<ForgeAuditStats | null>(null);
+  const [auditLoading, setAuditLoading] = useState(true);
+  const [auditCopied, setAuditCopied] = useState(false);
+  const [auditExported, setAuditExported] = useState(false);
+  const [showAuditClearConfirm, setShowAuditClearConfirm] = useState(false);
+  const [developerMode, setDeveloperMode] = useState(false);
+  const auditCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const auditExportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const refreshAuditRecords = useCallback(async (): Promise<void> => {
+    try {
+      const [recordsResult, statsResult] = await Promise.allSettled([
+        window.electron.forgeAudit.getRecords(),
+        window.electron.forgeAudit.getStats(),
+      ]);
+      if (recordsResult.status === "fulfilled") setAuditRecords(recordsResult.value);
+      else logError("Failed to load forge audit log", recordsResult.reason);
+      if (statsResult.status === "fulfilled") setAuditStats(statsResult.value);
+      else logError("Failed to load forge audit stats", statsResult.reason);
+    } catch (err) {
+      logError("Failed to load forge audit log", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.allSettled([
+      window.electron.forgeAudit.getConfig(),
+      window.electron.forgeAudit.getRecords(),
+      window.electron.forgeAudit.getStats(),
+      appClient.getState(),
+    ])
+      .then(([cfgResult, recordsResult, statsResult, stateResult]) => {
+        if (cancelled) return;
+        if (cfgResult.status === "fulfilled") {
+          setAuditEnabled(cfgResult.value.enabled);
+          setAuditMaxRecords(cfgResult.value.maxRecords);
+        } else {
+          logError("Failed to load forge audit config", cfgResult.reason);
+        }
+        if (recordsResult.status === "fulfilled") {
+          setAuditRecords(recordsResult.value);
+        } else {
+          logError("Failed to load forge audit log", recordsResult.reason);
+        }
+        if (statsResult.status === "fulfilled") {
+          setAuditStats(statsResult.value);
+        } else {
+          logError("Failed to load forge audit stats", statsResult.reason);
+        }
+        if (stateResult.status === "fulfilled" && stateResult.value?.developerMode) {
+          setDeveloperMode(stateResult.value.developerMode.enabled === true);
+        }
+        setAuditLoading(false);
+      })
+      .catch((err) => {
+        logError("Failed to load forge audit settings", err);
+        if (!cancelled) setAuditLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
+      if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
+    };
+  }, []);
+
+  const handleAuditEnabledToggle = useCallback(async () => {
+    try {
+      const next = !auditEnabled;
+      const cfg = await window.electron.forgeAudit.setEnabled(next);
+      setAuditEnabled(cfg.enabled);
+      setAuditMaxRecords(cfg.maxRecords);
+    } catch (err) {
+      logError("Failed to toggle forge audit log", err);
+    }
+  }, [auditEnabled]);
+
+  const handleAuditCopy = useCallback(async (toCopy: ForgeAuditRecord[]) => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(toCopy, null, 2));
+      setAuditCopied(true);
+      if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
+      auditCopyTimeoutRef.current = setTimeout(() => setAuditCopied(false), COPY_FEEDBACK_MS);
+    } catch (err) {
+      logError("Failed to copy forge audit log", err);
+    }
+  }, []);
+
+  const handleAuditExport = useCallback(async (toExport: ForgeAuditRecord[]) => {
+    try {
+      const saved = await window.electron.forgeAudit.exportLog(toExport);
+      if (saved) {
+        setAuditExported(true);
+        if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
+        auditExportTimeoutRef.current = setTimeout(() => setAuditExported(false), COPY_FEEDBACK_MS);
+      }
+    } catch (err) {
+      logError("Failed to export forge audit log", err);
+    }
+  }, []);
+
+  const handleAuditClear = useCallback(async () => {
+    try {
+      await window.electron.forgeAudit.clearLog();
+      setAuditRecords([]);
+      setAuditStats((prev) =>
+        prev ? { ...prev, anomalySignals: [], anomalySuppressed: true } : prev
+      );
+    } catch (err) {
+      logError("Failed to clear forge audit log", err);
+    } finally {
+      setShowAuditClearConfirm(false);
+    }
+  }, []);
 
   const providerOptions = useMemo<ForgeProviderOption[]>(
     () =>
@@ -99,7 +230,41 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
           onSubtabChange={onSubtabChange}
         />
 
-        {isGeneral && <ForgeIntegrationsTab />}
+        {isGeneral && (
+          <>
+            <ForgeIntegrationsTab />
+            <SettingsSection
+              icon={ScrollText}
+              title="Forge audit log"
+              description="Records every forge provider call — list / get / assign / validateToken — with redacted argument summaries. Use it to triage slow providers, failure clusters, and unexpected anomalies surfaced by the audit health snapshot."
+            >
+              <div className="flex flex-col gap-4">
+                <SettingsSwitchCard
+                  id="forge-audit-enable"
+                  title="Record forge provider calls"
+                  subtitle="Append a record each time a forge provider method is invoked"
+                  isEnabled={auditEnabled}
+                  onChange={() => void handleAuditEnabledToggle()}
+                  ariaLabel="Toggle forge audit log"
+                />
+                <ForgeAuditLogViewer
+                  records={auditRecords}
+                  loading={auditLoading}
+                  maxRecords={auditMaxRecords}
+                  anomalySignals={auditStats?.anomalySignals}
+                  anomalySuppressed={auditStats?.anomalySuppressed ?? true}
+                  onRefresh={refreshAuditRecords}
+                  onCopy={handleAuditCopy}
+                  onExport={handleAuditExport}
+                  onClear={() => setShowAuditClearConfirm(true)}
+                  copyFlashActive={auditCopied}
+                  exportFlashActive={auditExported}
+                  developerMode={developerMode}
+                />
+              </div>
+            </SettingsSection>
+          </>
+        )}
 
         {isGitHub && (
           <ForgeProviderCard name="GitHub" Icon={GitHubIcon}>
@@ -123,6 +288,16 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
           </ForgeProviderCard>
         )}
       </div>
+
+      <ConfirmDialog
+        isOpen={showAuditClearConfirm}
+        variant="destructive"
+        onConfirm={() => void handleAuditClear()}
+        onClose={() => setShowAuditClearConfirm(false)}
+        title="Clear forge audit log?"
+        description="This permanently deletes all recorded forge provider calls on this machine. New calls will still be recorded."
+        confirmLabel="Clear log"
+      />
     </div>
   );
 }

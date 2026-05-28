@@ -40,6 +40,7 @@ import { buildPluginPreloadBindings } from "./ipc/handlers/plugin.preload.js";
 import { buildPluginMcpPreloadBindings } from "./ipc/handlers/pluginMcp.preload.js";
 import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
 import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
+import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preload.js";
 import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
 import { buildMilestonesPreloadBindings } from "./ipc/handlers/milestones.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
@@ -2316,6 +2317,8 @@ const api: ElectronAPI = {
     classifyPushError: (payload: { cwd: string; stderr: string }) =>
       _unwrappingInvoke(CHANNELS.FORGE_CLASSIFY_PUSH_ERROR, payload),
   },
+
+  forgeAudit: buildForgeAuditPreloadBindings(_unwrappingInvoke),
 
   // Voice Input API
   voiceInput: {
