@@ -282,6 +282,155 @@ describe("PluginActionAuditService", () => {
     expect(JSON.parse(lines[1]!).actionId).toBe("b");
   });
 
+  describe("non-action-dispatch record types", () => {
+    it("appends an ipc-invoke error record without source/danger", () => {
+      service.append({
+        pluginId: "acme.plugin",
+        actionId: "do-thing",
+        recordType: "ipc-invoke",
+        channel: "plugin:invoke",
+        argsHash: "a".repeat(64),
+        durationMs: 7,
+        result: "error",
+        errorMessage: "boom",
+      });
+      const records = service.getRecords();
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        pluginId: "acme.plugin",
+        actionId: "do-thing",
+        recordType: "ipc-invoke",
+        channel: "plugin:invoke",
+        result: "error",
+        errorMessage: "boom",
+        durationMs: 7,
+      });
+      // No source/danger on non-action records.
+      expect(records[0]!.source).toBeUndefined();
+      expect(records[0]!.danger).toBeUndefined();
+    });
+
+    it("appends an ipc-invoke restricted record with empty argsHash", () => {
+      service.append({
+        pluginId: "acme.plugin",
+        actionId: "do-thing",
+        recordType: "ipc-invoke",
+        channel: "plugin:invoke",
+        argsHash: "",
+        durationMs: 0,
+        result: "restricted",
+        errorMessage: "untrusted sender (url=https://evil.com/)",
+      });
+      const r = service.getRecords()[0]!;
+      expect(r.recordType).toBe("ipc-invoke");
+      expect(r.result).toBe("restricted");
+      expect(r.argsHash).toBe("");
+      expect(r.errorMessage).toBe("untrusted sender (url=https://evil.com/)");
+    });
+
+    it("appends a decoration-failure timeout record", () => {
+      service.append({
+        pluginId: "p.slow",
+        actionId: "deco",
+        recordType: "decoration-failure",
+        result: "error",
+        failureMode: "timeout",
+        scope: "worktree-diff:/r",
+        contributionId: "deco",
+        errorMessage: "timed out after 3000ms",
+        argsHash: "",
+        durationMs: 3000,
+      });
+      const r = service.getRecords()[0]!;
+      expect(r).toMatchObject({
+        recordType: "decoration-failure",
+        failureMode: "timeout",
+        scope: "worktree-diff:/r",
+        contributionId: "deco",
+        errorMessage: "timed out after 3000ms",
+        result: "error",
+        durationMs: 3000,
+      });
+    });
+
+    it("appends a decoration-failure rejected record", () => {
+      service.append({
+        pluginId: "p.broken",
+        actionId: "deco",
+        recordType: "decoration-failure",
+        result: "error",
+        failureMode: "rejected",
+        scope: "worktree-diff:/r",
+        contributionId: "deco",
+        errorMessage: "provider rejected: boom",
+        argsHash: "",
+        durationMs: 5,
+      });
+      const r = service.getRecords()[0]!;
+      expect(r.failureMode).toBe("rejected");
+      expect(r.errorMessage).toBe("provider rejected: boom");
+    });
+
+    it("auditEnabled:false suppresses ipc-invoke and decoration-failure records too", () => {
+      store.saveConfig({ auditEnabled: false });
+      service.append({
+        pluginId: "p",
+        actionId: "ch",
+        recordType: "ipc-invoke",
+        channel: "plugin:invoke",
+        argsHash: "",
+        durationMs: 1,
+        result: "error",
+      });
+      service.append({
+        pluginId: "p",
+        actionId: "c",
+        recordType: "decoration-failure",
+        failureMode: "timeout",
+        scope: "s",
+        contributionId: "c",
+        argsHash: "",
+        durationMs: 3000,
+        result: "error",
+      });
+      expect(service.getRecords()).toEqual([]);
+    });
+
+    it("preserves chronological order across mixed record types", () => {
+      service.append({
+        pluginId: "p",
+        actionId: "a",
+        source: "user",
+        danger: "safe",
+        argsHash: "",
+        durationMs: 1,
+        result: "success",
+      });
+      service.append({
+        pluginId: "p",
+        actionId: "b",
+        recordType: "ipc-invoke",
+        channel: "plugin:invoke",
+        argsHash: "",
+        durationMs: 2,
+        result: "error",
+      });
+      service.append({
+        pluginId: "p",
+        actionId: "c",
+        recordType: "decoration-failure",
+        failureMode: "timeout",
+        scope: "s",
+        contributionId: "c",
+        argsHash: "",
+        durationMs: 3,
+        result: "error",
+      });
+      // Newest-first.
+      expect(service.getRecords().map((r) => r.actionId)).toEqual(["c", "b", "a"]);
+    });
+  });
+
   describe("bus integration", () => {
     it("records only plugin-contributed dispatches", () => {
       service.initialize({ isPlaintextEnabled: () => false });

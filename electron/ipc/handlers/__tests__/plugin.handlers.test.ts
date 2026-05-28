@@ -52,6 +52,11 @@ vi.mock("../../../services/fileDecorationRegistry.js", () => ({
   getFileDecorationImpls: (...args: unknown[]) => mockGetFileDecorationImpls(...args),
 }));
 
+const mockAuditAppend = vi.fn();
+vi.mock("../../../services/PluginActionAuditService.js", () => ({
+  getPluginActionAuditService: () => ({ append: mockAuditAppend }),
+}));
+
 const mockIpcMainHandle = vi.fn();
 const mockIpcMainRemoveHandler = vi.fn();
 vi.mock("electron", () => ({
@@ -197,6 +202,9 @@ describe("registerPluginHandlers", () => {
       ["arg1", "arg2"]
     );
     expect(result).toEqual({ data: "hello" });
+    // Successful invokes are intentionally not audited — they would be
+    // high-frequency and overwhelm the ring buffer (#9240).
+    expect(mockAuditAppend).not.toHaveBeenCalled();
   });
 
   it("PLUGIN_INVOKE handler builds ctx with webContentsId from event.sender.id", async () => {
@@ -238,6 +246,104 @@ describe("registerPluginHandlers", () => {
     );
   });
 
+  it("PLUGIN_INVOKE handler audits dispatch failures (#9240)", async () => {
+    mockDispatchHandler.mockRejectedValue(new Error("No plugin handler registered for x:y"));
+
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 1 },
+    };
+    await expect(invokeHandler(trustedEvent, "x", "y", "arg1")).rejects.toThrow();
+    expect(mockAuditAppend).toHaveBeenCalledTimes(1);
+    const record = mockAuditAppend.mock.calls[0][0];
+    expect(record).toMatchObject({
+      pluginId: "x",
+      actionId: "y",
+      recordType: "ipc-invoke",
+      channel: "plugin:invoke",
+      result: "error",
+    });
+    expect(typeof record.errorMessage).toBe("string");
+    expect(record.errorMessage).toContain("No plugin handler registered");
+    expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(typeof record.durationMs).toBe("number");
+  });
+
+  it("PLUGIN_INVOKE audit hash discriminates by arg content (#9240)", async () => {
+    // The whole point of the hash on `ipc-invoke` records is forensic
+    // grouping: distinct args MUST produce distinct hashes, otherwise the
+    // hash is just a constant marker and adds no value over the recordType.
+    // A summary-based hash collapses arrays to a constant and would fail
+    // this assertion — `stableArgsSha256` is the right primitive.
+    mockDispatchHandler.mockRejectedValue(new Error("boom"));
+
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 1 },
+    };
+    await expect(invokeHandler(trustedEvent, "p", "ch", "arg-A")).rejects.toThrow();
+    await expect(invokeHandler(trustedEvent, "p", "ch", "arg-B")).rejects.toThrow();
+    await expect(invokeHandler(trustedEvent, "p", "ch", "arg-A")).rejects.toThrow();
+    expect(mockAuditAppend).toHaveBeenCalledTimes(3);
+    const hashes = mockAuditAppend.mock.calls.map((c) => c[0].argsHash as string);
+    // Same args → same hash; different args → different hash.
+    expect(hashes[0]).toBe(hashes[2]);
+    expect(hashes[0]).not.toBe(hashes[1]);
+  });
+
+  it("PLUGIN_INVOKE caps the audited URL on untrusted-sender rejection (#9240)", async () => {
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    // A long attacker-controlled URL must not pollute the persistent audit
+    // log with arbitrary content; cap it before it enters errorMessage.
+    const longUrl = `https://evil.test/${"x".repeat(2000)}`;
+    const untrustedEvent = { senderFrame: { url: longUrl }, sender: { id: 1 } };
+    await expect(invokeHandler(untrustedEvent, "p", "ch")).rejects.toThrow(
+      "plugin:invoke rejected: untrusted sender"
+    );
+    expect(mockAuditAppend).toHaveBeenCalledTimes(1);
+    const record = mockAuditAppend.mock.calls[0][0];
+    expect(record.result).toBe("restricted");
+    // 200 chars URL cap + the "untrusted sender (url=...)" wrapping is small,
+    // so the whole errorMessage should stay well under ~300 chars.
+    expect(record.errorMessage.length).toBeLessThan(300);
+    expect(record.errorMessage).toContain("https://evil.test/");
+  });
+
+  it("PLUGIN_INVOKE handler still rethrows when audit append throws", async () => {
+    mockDispatchHandler.mockRejectedValue(new Error("dispatch failed"));
+    mockAuditAppend.mockImplementationOnce(() => {
+      throw new Error("audit broken");
+    });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 1 },
+    };
+    // The original dispatch error must surface — never the audit error.
+    await expect(invokeHandler(trustedEvent, "x", "y")).rejects.toThrow("dispatch failed");
+    errSpy.mockRestore();
+  });
+
   it("PLUGIN_INVOKE handler rejects untrusted senders and does not dispatch", async () => {
     registerPluginHandlers();
     const invokeHandler = mockIpcMainHandle.mock.calls.find(
@@ -252,6 +358,22 @@ describe("registerPluginHandlers", () => {
       invokeHandler(untrustedEvent, "acme.my-plugin", "get-data", "arg1")
     ).rejects.toThrow("plugin:invoke rejected: untrusted sender");
     expect(mockDispatchHandler).not.toHaveBeenCalled();
+    // Untrusted-sender rejection still writes an audit row (#9240 / #8442
+    // audit-even-when-silenced) so a forensic record of the attempted invoke
+    // survives even though the dispatch never ran.
+    expect(mockAuditAppend).toHaveBeenCalledTimes(1);
+    const record = mockAuditAppend.mock.calls[0][0];
+    expect(record).toMatchObject({
+      pluginId: "acme.my-plugin",
+      actionId: "get-data",
+      recordType: "ipc-invoke",
+      channel: "plugin:invoke",
+      result: "restricted",
+      // Args are attacker-controlled and unvalidated — no hash.
+      argsHash: "",
+    });
+    expect(record.errorMessage).toContain("untrusted sender");
+    expect(record.errorMessage).toContain("https://evil.com");
   });
 
   it("PLUGIN_INVOKE handler rejects when senderFrame is missing and does not dispatch", async () => {
@@ -265,6 +387,14 @@ describe("registerPluginHandlers", () => {
       "plugin:invoke rejected: untrusted sender"
     );
     expect(mockDispatchHandler).not.toHaveBeenCalled();
+    // Missing-frame is also recorded as a restricted invoke.
+    expect(mockAuditAppend).toHaveBeenCalledTimes(1);
+    expect(mockAuditAppend.mock.calls[0][0]).toMatchObject({
+      recordType: "ipc-invoke",
+      result: "restricted",
+      pluginId: "acme.my-plugin",
+      actionId: "get-data",
+    });
   });
 
   it("PLUGIN_INVOKE handler rejects invalid args before dispatchHandler runs", async () => {
@@ -741,8 +871,146 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
         },
       },
     ]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const handler = getHandler();
     expect(await handler({}, "s:1", ["a.ts"])).toEqual({ "a.ts": { badge: "3" } });
+    warn.mockRestore();
+  });
+
+  it("audits a rejecting provider (#9240)", async () => {
+    mockGetFileDecorationImpls.mockReturnValue([
+      {
+        pluginId: "p.bad",
+        contributionId: "deco",
+        impl: { provideDecorations: vi.fn().mockRejectedValue(new Error("boom")) },
+      },
+      {
+        pluginId: "p.good",
+        contributionId: "deco",
+        impl: {
+          provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { badge: "3" } }),
+        },
+      },
+    ]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const handler = getHandler();
+    await handler({}, "worktree-diff:/r", ["a.ts"]);
+    // Healthy provider is not audited; only the rejecting one is.
+    expect(mockAuditAppend).toHaveBeenCalledTimes(1);
+    const record = mockAuditAppend.mock.calls[0][0];
+    expect(record).toMatchObject({
+      pluginId: "p.bad",
+      actionId: "deco",
+      recordType: "decoration-failure",
+      result: "error",
+      failureMode: "rejected",
+      scope: "worktree-diff:/r",
+      contributionId: "deco",
+      argsHash: "",
+    });
+    expect(record.errorMessage).toContain("boom");
+    expect(typeof record.durationMs).toBe("number");
+    warn.mockRestore();
+  });
+
+  it("audits a provider that times out (#9240)", async () => {
+    vi.useFakeTimers();
+    try {
+      mockGetFileDecorationImpls.mockReturnValue([
+        {
+          pluginId: "p.hang",
+          contributionId: "deco",
+          impl: { provideDecorations: vi.fn().mockReturnValue(new Promise(() => {})) },
+        },
+        {
+          pluginId: "p.good",
+          contributionId: "deco",
+          impl: {
+            provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { badge: "4" } }),
+          },
+        },
+      ]);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const handler = getHandler();
+      const promise = handler({}, "worktree-diff:/r", ["a.ts"]) as Promise<unknown>;
+      await vi.advanceTimersByTimeAsync(3000);
+      await promise;
+      expect(mockAuditAppend).toHaveBeenCalledTimes(1);
+      const record = mockAuditAppend.mock.calls[0][0];
+      expect(record).toMatchObject({
+        pluginId: "p.hang",
+        actionId: "deco",
+        recordType: "decoration-failure",
+        result: "error",
+        failureMode: "timeout",
+        scope: "worktree-diff:/r",
+        contributionId: "deco",
+      });
+      expect(record.errorMessage).toMatch(/timed out after 3000ms/);
+      warn.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not audit successful decoration settles (#9240)", async () => {
+    mockGetFileDecorationImpls.mockReturnValue([
+      {
+        pluginId: "p.good",
+        contributionId: "deco",
+        impl: {
+          provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { badge: "1" } }),
+        },
+      },
+    ]);
+    const handler = getHandler();
+    await handler({}, "worktree-diff:/r", ["a.ts"]);
+    expect(mockAuditAppend).not.toHaveBeenCalled();
+  });
+
+  it("audited durationMs reflects per-provider settle time, not slowest-provider wall-clock (#9240)", async () => {
+    // A provider that rejects immediately and another that hangs until the
+    // timeout must produce audit records with *different* durationMs values,
+    // proving the time is captured at each provider's settle moment rather
+    // than after `Promise.allSettled` returns.
+    vi.useFakeTimers();
+    try {
+      mockGetFileDecorationImpls.mockReturnValue([
+        {
+          pluginId: "p.fast-fail",
+          contributionId: "deco",
+          impl: {
+            provideDecorations: vi.fn().mockRejectedValue(new Error("immediate reject")),
+          },
+        },
+        {
+          pluginId: "p.hang",
+          contributionId: "deco",
+          impl: { provideDecorations: vi.fn().mockReturnValue(new Promise(() => {})) },
+        },
+      ]);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const handler = getHandler();
+      const promise = handler({}, "s:1", ["a.ts"]) as Promise<unknown>;
+      await vi.advanceTimersByTimeAsync(3000);
+      await promise;
+      expect(mockAuditAppend).toHaveBeenCalledTimes(2);
+      const recordsByPlugin = new Map<string, { durationMs: number }>();
+      for (const call of mockAuditAppend.mock.calls) {
+        recordsByPlugin.set(call[0].pluginId, call[0]);
+      }
+      const fast = recordsByPlugin.get("p.fast-fail")!;
+      const slow = recordsByPlugin.get("p.hang")!;
+      // The rejecting provider settles immediately (microtask after the
+      // race is constructed); the hanging one settles when the 3000ms
+      // timer fires. Allow some slack for the test scheduler.
+      expect(fast.durationMs).toBeLessThan(slow.durationMs);
+      expect(fast.durationMs).toBeLessThan(100);
+      expect(slow.durationMs).toBeGreaterThanOrEqual(3000);
+      warn.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("omits paths whose merged decoration has no fields", async () => {

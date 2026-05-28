@@ -2,7 +2,10 @@ import { ipcMain, dialog } from "electron";
 import { writeFile } from "node:fs/promises";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
-import { getPluginActionAuditService } from "../../services/PluginActionAuditService.js";
+import {
+  getPluginActionAuditService,
+  type PluginActionAuditService,
+} from "../../services/PluginActionAuditService.js";
 import {
   PLUGIN_AUDIT_MAX_RECORDS,
   PLUGIN_AUDIT_MIN_RECORDS,
@@ -11,6 +14,9 @@ import {
 } from "../../../shared/types/ipc/pluginAudit.js";
 import { PLUGIN_METHOD_CHANNELS } from "./plugin.preload.js";
 import { pluginService } from "../../services/PluginService.js";
+import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
+import { stableArgsSha256 } from "../../utils/pluginMcpHash.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   getPluginToolbarButtonIds,
   getToolbarButtonConfig,
@@ -148,6 +154,29 @@ const DECORATION_PROVIDER_TIMEOUT_MS = 3000;
 const DECORATION_TIMEOUT = Symbol("decoration-timeout");
 
 /**
+ * Append an audit record without ever surfacing an audit failure to the
+ * caller. Mirrors `forgeAuditService.safeAppend` — a throw from `append()`
+ * (corrupt store, disk error) must never swallow the handler's return value
+ * or replace the original error. Audit is strictly a side channel; the
+ * `#8442` doctrine is that the record is best-effort, not load-bearing.
+ */
+function safeAppend(input: Parameters<PluginActionAuditService["append"]>[0]): void {
+  try {
+    getPluginActionAuditService().append(input);
+  } catch (err) {
+    console.error("[PluginAudit] Failed to append audit record:", err);
+  }
+}
+
+/**
+ * Cap on attacker-controlled URL strings before they're embedded into an
+ * audit `errorMessage`. The origin and path prefix are forensically useful;
+ * the rest is log pollution and a vector for stuffing secret-like values
+ * into the persistent ring buffer.
+ */
+const UNTRUSTED_URL_MAX_CHARS = 200;
+
+/**
  * A non-empty string is "present" for merge purposes. Empty string counts as
  * absent so it can't block a later provider from supplying a real value.
  */
@@ -187,31 +216,73 @@ async function handleFileDecorationsGet(
   if (impls.length === 0) return {};
 
   const merged: Record<string, FileDecoration> = {};
+  // Per-provider start/end timestamps so audit records carry the true elapsed
+  // time of *each* provider, not the wall-clock of the slowest one. `ends[i]`
+  // is captured inside the race chain at the moment that provider settles,
+  // before `Promise.allSettled` returns — measuring `Date.now()` in the
+  // post-allSettled loop would assign every provider the same wall-clock.
+  const starts: number[] = new Array(impls.length);
+  const ends: number[] = new Array(impls.length);
   const results = await Promise.allSettled(
-    impls.map(({ impl }) =>
-      Promise.race([
+    impls.map(({ impl }, i) => {
+      starts[i] = Date.now();
+      return Promise.race([
         impl.provideDecorations(scope, cleanPaths),
         new Promise<typeof DECORATION_TIMEOUT>((resolve) =>
           setTimeout(() => resolve(DECORATION_TIMEOUT), DECORATION_PROVIDER_TIMEOUT_MS)
         ),
-      ])
-    )
+      ]).then(
+        (v) => {
+          ends[i] = Date.now();
+          return v;
+        },
+        (err: unknown) => {
+          ends[i] = Date.now();
+          throw err;
+        }
+      );
+    })
   );
 
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
     const { pluginId, contributionId } = impls[i];
+    const durationMs = ends[i] - starts[i];
     if (r.status === "rejected") {
       console.warn(
         `[Plugin] fileDecorationProvider "${pluginId}.${contributionId}" failed for scope "${scope}":`,
         r.reason
       );
+      safeAppend({
+        pluginId,
+        actionId: contributionId,
+        recordType: "decoration-failure",
+        result: "error",
+        failureMode: "rejected",
+        scope,
+        contributionId,
+        errorMessage: formatErrorMessage(r.reason, "decoration provider rejected"),
+        argsHash: "",
+        durationMs,
+      });
       continue;
     }
     if (r.value === DECORATION_TIMEOUT) {
       console.warn(
         `[Plugin] fileDecorationProvider "${pluginId}.${contributionId}" timed out after ${DECORATION_PROVIDER_TIMEOUT_MS}ms for scope "${scope}"`
       );
+      safeAppend({
+        pluginId,
+        actionId: contributionId,
+        recordType: "decoration-failure",
+        result: "error",
+        failureMode: "timeout",
+        scope,
+        contributionId,
+        errorMessage: `timed out after ${DECORATION_PROVIDER_TIMEOUT_MS}ms`,
+        argsHash: "",
+        durationMs,
+      });
       continue;
     }
     if (!r.value || typeof r.value !== "object") continue;
@@ -333,8 +404,28 @@ export function registerPluginHandlers(): () => void {
   ipcMain.handle(
     CHANNELS.PLUGIN_INVOKE,
     async (event, pluginId: string, channel: string, ...args: unknown[]) => {
+      const start = Date.now();
       const senderUrl = event.senderFrame?.url;
       if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
+        // Trust check rejected — args are attacker-controlled and unvalidated,
+        // so we record the rejection without hashing the payload (#8442:
+        // audit-even-when-silenced; the security-relevant signal is "an
+        // untrusted frame attempted to invoke this plugin"). Cap the URL
+        // before it lands in the persistent log so a hostile frame can't
+        // stuff arbitrary content into the audit by sending a giant URL.
+        const safeUrl = senderUrl
+          ? scrubSecrets(senderUrl.slice(0, UNTRUSTED_URL_MAX_CHARS))
+          : "unknown";
+        safeAppend({
+          pluginId,
+          actionId: channel,
+          recordType: "ipc-invoke",
+          channel: CHANNELS.PLUGIN_INVOKE,
+          result: "restricted",
+          errorMessage: `untrusted sender (url=${safeUrl})`,
+          argsHash: "",
+          durationMs: Date.now() - start,
+        });
         throw new Error(`plugin:invoke rejected: untrusted sender (url=${senderUrl ?? "unknown"})`);
       }
       const ctx: PluginIpcContext = {
@@ -343,7 +434,33 @@ export function registerPluginHandlers(): () => void {
         webContentsId: event.sender.id,
         pluginId,
       };
-      return await pluginService.dispatchHandler(pluginId, channel, ctx, args);
+      try {
+        return await pluginService.dispatchHandler(pluginId, channel, ctx, args);
+      } catch (err) {
+        // `stableArgsSha256` content-discriminates without persisting any
+        // arg bytes — two structurally identical failed invokes hash the
+        // same, but distinct args produce distinct hashes. (A summary-based
+        // hash via `summarizeMcpArgs` collapses arrays to a constant, which
+        // would defeat forensic grouping.)
+        let argsHash = "";
+        try {
+          argsHash = stableArgsSha256(args);
+        } catch {
+          // Hashing is best-effort — a serialization throw here must not
+          // mask the original handler error.
+        }
+        safeAppend({
+          pluginId,
+          actionId: channel,
+          recordType: "ipc-invoke",
+          channel: CHANNELS.PLUGIN_INVOKE,
+          result: "error",
+          errorMessage: formatErrorMessage(err, "plugin:invoke dispatch failed"),
+          argsHash,
+          durationMs: Date.now() - start,
+        });
+        throw err;
+      }
     }
   );
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.PLUGIN_INVOKE));
