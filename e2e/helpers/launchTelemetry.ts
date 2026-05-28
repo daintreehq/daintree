@@ -102,11 +102,17 @@ function parseProtocolLine(line: string): void {
   if (!isSend && !isRecv) return;
 
   try {
-    // Extract just the JSON portion — the first balanced `{...}` or `[...]`.
-    const jsonMatch = line.match(/[{[].*[}\]]/);
-    if (!jsonMatch) return;
-
-    const payload = JSON.parse(jsonMatch[0]);
+    // Find the JSON payload: locate the first `{` after the directional
+    // marker (►/▸/◀), then slice to end-of-line minus the debug-package
+    // delta suffix (`+Nms`). This avoids false matches on bracketed
+    // prefixes and handles text between the marker and JSON (e.g. "RECV").
+    const markerIdx = Math.max(line.indexOf("►"), line.indexOf("▸"), line.indexOf("◀"));
+    const searchStart = markerIdx >= 0 ? markerIdx + 1 : 0;
+    const openBrace = line.indexOf("{", searchStart);
+    if (openBrace < 0) return;
+    const raw = line.slice(openBrace);
+    const jsonStr = raw.replace(/\s+\+\d+ms\s*$/, "");
+    const payload = JSON.parse(jsonStr);
 
     if (isSend && typeof payload?.method === "string") {
       const id = typeof payload.id === "number" ? payload.id : null;

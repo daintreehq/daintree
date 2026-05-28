@@ -274,6 +274,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       const readySelector = options.waitForSelector ?? '[aria-label="Toggle Sidebar"]';
       await window.locator(readySelector).waitFor({ state: "visible", timeout: launchTimeout });
 
+      disposeTelemetry();
       return { app, window, userDataDir };
     } catch (error) {
       lastError = error;
