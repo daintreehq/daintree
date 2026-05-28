@@ -198,21 +198,21 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       // Route crash dumps and Chromium logs into workspace-relative paths so
       // CI artifact upload captures them. Per-launch uniqueness avoids
       // collisions across parallel Playwright workers and retry attempts.
+      //
+      // crashDumps are redirected via app.setPath("crashDumps") in
+      // electron/setup/environment.ts (reads DAINTREE_E2E_CRASH_DUMPS_DIR).
+      // Chromium logging goes to a file via --enable-logging=file --log-file.
+      // Main-process stdout/stderr is teed to a separate file below.
       const artifactRoot = path.join(ROOT, "daintree-e2e-artifacts");
       const launchId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const crashDumpsDir = path.join(artifactRoot, "crash-dumps", launchId);
       const logsDir = path.join(artifactRoot, "logs");
       const logFile = path.join(logsDir, `electron-main-${launchId}.log`);
+      const teeFile = path.join(logsDir, `electron-main-${launchId}-tee.log`);
       mkdirSync(crashDumpsDir, { recursive: true });
       mkdirSync(logsDir, { recursive: true });
       launchEnv.DAINTREE_E2E_CRASH_DUMPS_DIR = crashDumpsDir;
-      launchEnv.ELECTRON_ENABLE_LOGGING = "file";
-      launchEnv.ELECTRON_LOG_FILE = logFile;
-      args.push(
-        `--crash-reporter-directory=${crashDumpsDir}`,
-        "--enable-logging=file",
-        `--log-file=${logFile}`
-      );
+      args.push("--enable-logging=file", `--log-file=${logFile}`);
 
       app = await electron.launch({
         executablePath: electronPath,
@@ -228,7 +228,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         proc.stdout?.on("data", (chunk: Buffer) => {
           process.stderr.write(`[E2E_STDOUT] ${chunk.toString()}`);
           try {
-            appendFileSync(logFile, `[STDOUT] ${chunk.toString()}`);
+            appendFileSync(teeFile, `[STDOUT] ${chunk.toString()}`);
           } catch {
             /* best-effort file tee */
           }
@@ -236,7 +236,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         proc.stderr?.on("data", (chunk: Buffer) => {
           process.stderr.write(`[E2E_STDERR] ${chunk.toString()}`);
           try {
-            appendFileSync(logFile, `[STDERR] ${chunk.toString()}`);
+            appendFileSync(teeFile, `[STDERR] ${chunk.toString()}`);
           } catch {
             /* best-effort file tee */
           }
