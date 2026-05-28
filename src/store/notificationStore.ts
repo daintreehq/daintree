@@ -2,7 +2,6 @@ import { create } from "zustand";
 import type { ReactNode } from "react";
 import type { ActionId } from "@shared/types/actions";
 import type { NotificationEventKind } from "@/lib/notify";
-import { SEVERITY_WEIGHTS } from "@/lib/notificationSeverity";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useUIStore } from "@/store/uiStore";
 
@@ -101,12 +100,26 @@ export const GRID_BAR_DWELL_FLOOR_MS = 5000;
 /**
  * Severity weights for grid-bar selection. `watch` dominates `high` which
  * dominates `low`; the gap is wide enough that no type bonus
- * (SEVERITY_WEIGHTS max = 3) can lift a lower priority above a higher one.
+ * (GRID_BAR_TYPE_WEIGHTS max = 3) can lift a lower priority above a higher one.
  */
 export const PRIORITY_WEIGHTS: Record<NotificationPriority, number> = {
   watch: 100,
   high: 10,
   low: 0,
+};
+
+/**
+ * Type-severity bonus applied on top of `PRIORITY_WEIGHTS` when comparing
+ * grid-bar candidates. Inlined here (rather than imported from
+ * `notificationSeverity.ts`) to keep the boot-loaded notification store
+ * off a new module edge. A consistency test in `notificationStore.test.ts`
+ * asserts these values track `SEVERITY_WEIGHTS`.
+ */
+const GRID_BAR_TYPE_WEIGHTS: Record<NotificationType, number> = {
+  error: 3,
+  warning: 2,
+  info: 1,
+  success: 0,
 };
 
 /**
@@ -145,8 +158,8 @@ export function selectGridBarNotification(
   return [...candidates].sort((a, b) => {
     const scoreDiff =
       PRIORITY_WEIGHTS[b.priority] +
-      SEVERITY_WEIGHTS[b.type] -
-      (PRIORITY_WEIGHTS[a.priority] + SEVERITY_WEIGHTS[a.type]);
+      GRID_BAR_TYPE_WEIGHTS[b.type] -
+      (PRIORITY_WEIGHTS[a.priority] + GRID_BAR_TYPE_WEIGHTS[a.type]);
     if (scoreDiff !== 0) return scoreDiff;
     return (a.firstShownAt ?? 0) - (b.firstShownAt ?? 0);
   })[0];

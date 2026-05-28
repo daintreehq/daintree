@@ -681,6 +681,34 @@ describe("selectGridBarNotification — selection contract", () => {
     expect(minPriorityGap).toBeGreaterThan(maxTypeBonus);
   });
 
+  it("grid-bar type weights stay in sync with SEVERITY_WEIGHTS", () => {
+    // The selector inlines its own type-weights table to keep
+    // notificationSeverity.ts out of the boot-loaded notification store.
+    // The two must stay consistent — anchor it here so divergence shows up
+    // as a fast unit failure rather than a behavior drift in production.
+    const lowSuccess = makeNotification({
+      id: "lowSuccess",
+      priority: "low",
+      type: "success",
+      firstShownAt: 0,
+    });
+    for (const type of ["success", "info", "warning", "error"] as const) {
+      const candidate = makeNotification({
+        id: `low-${type}`,
+        priority: "low",
+        type,
+        firstShownAt: 1,
+      });
+      // A `low + <type>` candidate must score the same in either weights
+      // table — i.e., it beats `low + success` whenever its type is
+      // stricter, and loses (via firstShownAt tie-break) when equal.
+      const winner = selectGridBarNotification([lowSuccess, candidate], NOW + 6000)?.id;
+      const winnerInExternalTable =
+        SEVERITY_WEIGHTS[type] > SEVERITY_WEIGHTS.success ? candidate.id : lowSuccess.id; // tie → oldest firstShownAt wins
+      expect(winner).toBe(winnerInExternalTable);
+    }
+  });
+
   describe("dwell floor", () => {
     it("keeps the locked notification visible while inside the dwell window", () => {
       const locked = makeNotification({
