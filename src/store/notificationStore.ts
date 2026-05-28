@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { ReactNode } from "react";
 import type { ActionId } from "@shared/types/actions";
 import type { NotificationEventKind } from "@/lib/notify";
+import { SEVERITY_WEIGHTS } from "@/lib/notificationSeverity";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useUIStore } from "@/store/uiStore";
 
@@ -89,6 +90,67 @@ interface NotificationStore {
 }
 
 export const MAX_VISIBLE_TOASTS = 3;
+
+/**
+ * Minimum time a grid-bar notification stays displayed before a
+ * higher-severity newcomer can preempt it. Prevents read-mid-message
+ * disruption when multiple producers contend for the single grid-bar slot.
+ */
+export const GRID_BAR_DWELL_FLOOR_MS = 5000;
+
+/**
+ * Severity weights for grid-bar selection. `watch` dominates `high` which
+ * dominates `low`; the gap is wide enough that no type bonus
+ * (SEVERITY_WEIGHTS max = 3) can lift a lower priority above a higher one.
+ */
+export const PRIORITY_WEIGHTS: Record<NotificationPriority, number> = {
+  watch: 100,
+  high: 10,
+  low: 0,
+};
+
+/**
+ * Single-slot grid-bar selection contract.
+ *
+ * Picks among undismissed `grid-bar` notifications by
+ * `PRIORITY_WEIGHTS[priority] + SEVERITY_WEIGHTS[type]` (highest wins);
+ * ties resolve to the oldest `firstShownAt` (chronological).
+ *
+ * A `lockedId` is the id of the notification currently visible to the
+ * user. While that notification is still within `GRID_BAR_DWELL_FLOOR_MS`
+ * of its `firstShownAt`, it is returned unchanged — a higher-severity
+ * newcomer cannot preempt it mid-read. Once the dwell expires, the
+ * regular score/age ordering applies.
+ *
+ * Pure: callers pass `nowMs` (typically `Date.now()` at render time) so
+ * the selector itself stays time-independent and unit-testable.
+ */
+export function selectGridBarNotification(
+  notifications: Notification[],
+  nowMs: number,
+  lockedId?: string
+): Notification | undefined {
+  const candidates = notifications.filter((n) => n.placement === "grid-bar" && !n.dismissed);
+  if (candidates.length === 0) return undefined;
+  if (candidates.length === 1) return candidates[0];
+
+  if (lockedId !== undefined) {
+    const locked = candidates.find((n) => n.id === lockedId);
+    if (locked !== undefined) {
+      const dwellExpires = (locked.firstShownAt ?? 0) + GRID_BAR_DWELL_FLOOR_MS;
+      if (nowMs < dwellExpires) return locked;
+    }
+  }
+
+  return [...candidates].sort((a, b) => {
+    const scoreDiff =
+      PRIORITY_WEIGHTS[b.priority] +
+      SEVERITY_WEIGHTS[b.type] -
+      (PRIORITY_WEIGHTS[a.priority] + SEVERITY_WEIGHTS[a.type]);
+    if (scoreDiff !== 0) return scoreDiff;
+    return (a.firstShownAt ?? 0) - (b.firstShownAt ?? 0);
+  })[0];
+}
 
 /**
  * Compare two notification messages for the purpose of contentKey bumping.

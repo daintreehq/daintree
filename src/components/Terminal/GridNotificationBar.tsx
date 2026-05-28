@@ -1,13 +1,17 @@
 import React, { useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Info, XCircle } from "lucide-react";
-import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import {
   BANNER_ENTER_DURATION,
   BANNER_EXIT_DURATION,
   LIVE_REGION_SWAP_DELAY,
 } from "@/lib/animationUtils";
-import { useNotificationStore, type Notification } from "@/store/notificationStore";
+import {
+  GRID_BAR_DWELL_FLOOR_MS,
+  selectGridBarNotification,
+  useNotificationStore,
+  type Notification,
+} from "@/store/notificationStore";
 
 const STATUS_CONFIG = {
   success: {
@@ -60,8 +64,18 @@ export interface GridNotificationBarProps {
 }
 
 export function GridNotificationBar({ className }: GridNotificationBarProps) {
-  const notification = useNotificationStore(
-    useShallow((state) => state.notifications.find((item) => item.placement === "grid-bar"))
+  // Tracks the id currently visible to the user so the selector can enforce
+  // the dwell floor. A ref (not state) avoids spurious re-renders when the
+  // lock target changes — the selector reads the ref on every render.
+  const lockedIdRef = useRef<string | undefined>(undefined);
+  // Bumped by the dwell timeout to force a selector re-evaluation after
+  // dwell expires. The store-subscription path won't fire on its own when
+  // only time has passed.
+  const [, setDwellTick] = useState(0);
+  const dwellTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const notification = useNotificationStore((state) =>
+    selectGridBarNotification(state.notifications, Date.now(), lockedIdRef.current)
   );
   const removeNotification = useNotificationStore((state) => state.removeNotification);
 
@@ -166,6 +180,33 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
     }
   }, [notification?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Refresh the dwell lock whenever the displayed notification changes.
+  // When dwell remains, schedule a timeout to re-evaluate the selector
+  // once the floor expires (a higher-severity contender may be waiting).
+  useEffect(() => {
+    if (dwellTimeoutRef.current !== null) {
+      clearTimeout(dwellTimeoutRef.current);
+      dwellTimeoutRef.current = null;
+    }
+    if (!displayedNotification) {
+      lockedIdRef.current = undefined;
+      return;
+    }
+    lockedIdRef.current = displayedNotification.id;
+    const firstShownAt = displayedNotification.firstShownAt ?? Date.now();
+    const dwellRemaining = firstShownAt + GRID_BAR_DWELL_FLOOR_MS - Date.now();
+    if (dwellRemaining <= 0) {
+      // Already past the floor; nudge a re-render so the selector can pick
+      // a higher-severity candidate that arrived during the prior render.
+      setDwellTick((t) => t + 1);
+      return;
+    }
+    dwellTimeoutRef.current = setTimeout(() => {
+      dwellTimeoutRef.current = null;
+      setDwellTick((t) => t + 1);
+    }, dwellRemaining);
+  }, [displayedNotification?.id]);
+
   useEffect(() => {
     return () => {
       if (exitTimeoutRef.current !== null) {
@@ -179,6 +220,10 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
       if (swapTimeoutRef.current !== null) {
         clearTimeout(swapTimeoutRef.current);
         swapTimeoutRef.current = null;
+      }
+      if (dwellTimeoutRef.current !== null) {
+        clearTimeout(dwellTimeoutRef.current);
+        dwellTimeoutRef.current = null;
       }
     };
   }, []);

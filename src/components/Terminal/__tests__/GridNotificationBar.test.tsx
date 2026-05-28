@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { render, act, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useNotificationStore } from "@/store/notificationStore";
+import { GRID_BAR_DWELL_FLOOR_MS, useNotificationStore } from "@/store/notificationStore";
 import {
   BANNER_ENTER_DURATION,
   BANNER_EXIT_DURATION,
@@ -535,5 +535,126 @@ describe("GridNotificationBar reduced motion", () => {
       vi.advanceTimersByTime(1);
     });
     expect(getByText("Second")).toBeTruthy();
+  });
+});
+
+describe("GridNotificationBar selection contract", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    stubMatchMedia(false);
+    useNotificationStore.getState().reset();
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  it("does not preempt a low-priority notification with a high-priority one inside the dwell floor", () => {
+    addGridBar({ message: "Low priority", priority: "low" });
+    const { container, getByText, queryByText } = render(<GridNotificationBar />);
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+    expect(getByText("Low priority")).toBeTruthy();
+
+    // Higher-priority contender arrives well inside the dwell window.
+    act(() => {
+      vi.advanceTimersByTime(1000);
+      addGridBar({ message: "High priority", priority: "high" });
+    });
+
+    // Dwell still active — newcomer is queued, low-priority stays.
+    expect(getByText("Low priority")).toBeTruthy();
+    expect(queryByText("High priority")).toBeNull();
+    expect(getLiveRegion(container)?.textContent).toContain("Low priority");
+  });
+
+  it("preempts the locked notification once the dwell floor elapses", () => {
+    addGridBar({ message: "Low priority", priority: "low" });
+    const { getByText, queryByText } = render(<GridNotificationBar />);
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+    expect(getByText("Low priority")).toBeTruthy();
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+      addGridBar({ message: "High priority", priority: "high" });
+    });
+    // Still locked.
+    expect(queryByText("High priority")).toBeNull();
+
+    // Advance past the dwell floor + the live-region swap delay.
+    act(() => {
+      vi.advanceTimersByTime(GRID_BAR_DWELL_FLOOR_MS);
+    });
+    act(() => {
+      vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY + 16);
+    });
+
+    expect(getByText("High priority")).toBeTruthy();
+    expect(queryByText("Low priority")).toBeNull();
+  });
+
+  it("never lets a lower-priority newcomer preempt a higher-priority displayed notification, even after dwell", () => {
+    addGridBar({ message: "High priority", priority: "high" });
+    const { getByText, queryByText } = render(<GridNotificationBar />);
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+    expect(getByText("High priority")).toBeTruthy();
+
+    // Lower-priority newcomer arrives after dwell has fully elapsed.
+    act(() => {
+      vi.advanceTimersByTime(GRID_BAR_DWELL_FLOOR_MS + 1000);
+      addGridBar({ message: "Low priority", priority: "low" });
+    });
+    act(() => {
+      vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY + 16);
+    });
+
+    // High-priority wins on score regardless of dwell — selection contract,
+    // not just dwell, keeps it visible.
+    expect(getByText("High priority")).toBeTruthy();
+    expect(queryByText("Low priority")).toBeNull();
+  });
+
+  it("picks the winning notification on first mount when multiple grid-bar notifications exist", () => {
+    addGridBar({ message: "Low first", priority: "low" });
+    addGridBar({ message: "High after", priority: "high" });
+
+    const { getByText, queryByText } = render(<GridNotificationBar />);
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+
+    // Old behavior (bare .find()) would show "Low first". New contract picks
+    // the high-priority winner regardless of insertion order.
+    expect(getByText("High after")).toBeTruthy();
+    expect(queryByText("Low first")).toBeNull();
+  });
+
+  it("clears the dwell timer on unmount without firing setState afterwards", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    addGridBar({ message: "Locked", priority: "low" });
+    const { unmount } = render(<GridNotificationBar />);
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+
+    expect(() => {
+      unmount();
+      // Advance past when the dwell timeout would have fired.
+      vi.advanceTimersByTime(GRID_BAR_DWELL_FLOOR_MS * 2);
+    }).not.toThrow();
+
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 });

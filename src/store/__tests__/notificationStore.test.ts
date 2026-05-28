@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { useNotificationStore, MAX_VISIBLE_TOASTS, type Notification } from "../notificationStore";
+import {
+  GRID_BAR_DWELL_FLOOR_MS,
+  MAX_VISIBLE_TOASTS,
+  PRIORITY_WEIGHTS,
+  selectGridBarNotification,
+  useNotificationStore,
+  type Notification,
+} from "../notificationStore";
 import { useNotificationHistoryStore } from "../slices/notificationHistorySlice";
 
 const { getState } = useNotificationStore;
@@ -544,3 +551,184 @@ describe("notificationStore — correlationId collapse", () => {
 // (see src/lib/notify.ts). `addNotification()` itself stays loose because
 // notify() spreads its already-validated payload into the store; the
 // previous DEV-only console.error mirror has been removed as redundant.
+
+describe("selectGridBarNotification — selection contract", () => {
+  const NOW = 10_000;
+
+  function makeNotification(overrides: Partial<Notification> = {}): Notification {
+    return {
+      id: overrides.id ?? "n",
+      type: overrides.type ?? "info",
+      priority: overrides.priority ?? "low",
+      placement: overrides.placement ?? "grid-bar",
+      message: overrides.message ?? "msg",
+      firstShownAt: overrides.firstShownAt ?? NOW,
+      ...overrides,
+    };
+  }
+
+  it("returns undefined for an empty notification list", () => {
+    expect(selectGridBarNotification([], NOW)).toBeUndefined();
+  });
+
+  it("returns undefined when no notifications are grid-bar placement", () => {
+    const toast = makeNotification({ id: "t", placement: "toast" });
+    expect(selectGridBarNotification([toast], NOW)).toBeUndefined();
+  });
+
+  it("returns the only candidate when one grid-bar notification exists", () => {
+    const only = makeNotification({ id: "only" });
+    expect(selectGridBarNotification([only], NOW)?.id).toBe("only");
+  });
+
+  it("excludes dismissed grid-bar notifications", () => {
+    const live = makeNotification({ id: "live" });
+    const gone = makeNotification({ id: "gone", dismissed: true });
+    expect(selectGridBarNotification([gone, live], NOW)?.id).toBe("live");
+  });
+
+  it("higher priority wins over lower priority regardless of insertion order", () => {
+    const lowOlder = makeNotification({
+      id: "low",
+      priority: "low",
+      firstShownAt: NOW - 1000,
+    });
+    const highNewer = makeNotification({
+      id: "high",
+      priority: "high",
+      firstShownAt: NOW,
+    });
+    expect(selectGridBarNotification([lowOlder, highNewer], NOW + 6000)?.id).toBe("high");
+  });
+
+  it("watch beats high and high beats low (priority ordering)", () => {
+    const low = makeNotification({ id: "low", priority: "low", firstShownAt: NOW });
+    const high = makeNotification({ id: "high", priority: "high", firstShownAt: NOW });
+    const watch = makeNotification({ id: "watch", priority: "watch", firstShownAt: NOW });
+    expect(selectGridBarNotification([low, high, watch], NOW + 6000)?.id).toBe("watch");
+    expect(selectGridBarNotification([low, high], NOW + 6000)?.id).toBe("high");
+  });
+
+  it("type severity breaks ties within the same priority (error > warning > info > success)", () => {
+    const info = makeNotification({
+      id: "info",
+      priority: "high",
+      type: "info",
+      firstShownAt: NOW,
+    });
+    const error = makeNotification({
+      id: "error",
+      priority: "high",
+      type: "error",
+      firstShownAt: NOW,
+    });
+    expect(selectGridBarNotification([info, error], NOW + 6000)?.id).toBe("error");
+  });
+
+  it("priority dominates type — no low+error can beat a high+success", () => {
+    const lowError = makeNotification({
+      id: "lowErr",
+      priority: "low",
+      type: "error",
+      firstShownAt: NOW,
+    });
+    const highSuccess = makeNotification({
+      id: "highOk",
+      priority: "high",
+      type: "success",
+      firstShownAt: NOW,
+    });
+    expect(selectGridBarNotification([lowError, highSuccess], NOW + 6000)?.id).toBe("highOk");
+  });
+
+  it("oldest firstShownAt wins among exact score ties (chronological tie-break)", () => {
+    const older = makeNotification({
+      id: "older",
+      priority: "high",
+      type: "info",
+      firstShownAt: NOW - 2000,
+    });
+    const newer = makeNotification({
+      id: "newer",
+      priority: "high",
+      type: "info",
+      firstShownAt: NOW,
+    });
+    expect(selectGridBarNotification([newer, older], NOW + 6000)?.id).toBe("older");
+  });
+
+  it("treats missing firstShownAt as 0 for ordering", () => {
+    const withoutTimestamp = makeNotification({
+      id: "stale",
+      priority: "high",
+      firstShownAt: undefined,
+    });
+    const fresh = makeNotification({
+      id: "fresh",
+      priority: "high",
+      firstShownAt: NOW,
+    });
+    expect(selectGridBarNotification([fresh, withoutTimestamp], NOW + 6000)?.id).toBe("stale");
+  });
+
+  it("PRIORITY_WEIGHTS enforces a wide gap larger than any type bonus", () => {
+    // Sanity: the smallest priority gap (low → high = 10) must exceed the
+    // largest type bonus (error = 3). Guards against future tweaks that
+    // would let a low+error eclipse a high+success.
+    const minPriorityGap = PRIORITY_WEIGHTS.high - PRIORITY_WEIGHTS.low;
+    expect(minPriorityGap).toBeGreaterThan(3);
+  });
+
+  describe("dwell floor", () => {
+    it("keeps the locked notification visible while inside the dwell window", () => {
+      const locked = makeNotification({
+        id: "locked",
+        priority: "low",
+        firstShownAt: NOW,
+      });
+      const newcomer = makeNotification({
+        id: "high",
+        priority: "high",
+        firstShownAt: NOW + 100,
+      });
+      const within = NOW + GRID_BAR_DWELL_FLOOR_MS - 1;
+      expect(selectGridBarNotification([locked, newcomer], within, "locked")?.id).toBe("locked");
+    });
+
+    it("releases to the winner exactly at the dwell expiry boundary", () => {
+      const locked = makeNotification({
+        id: "locked",
+        priority: "low",
+        firstShownAt: NOW,
+      });
+      const newcomer = makeNotification({
+        id: "high",
+        priority: "high",
+        firstShownAt: NOW + 100,
+      });
+      const atExpiry = NOW + GRID_BAR_DWELL_FLOOR_MS;
+      expect(selectGridBarNotification([locked, newcomer], atExpiry, "locked")?.id).toBe("high");
+    });
+
+    it("ignores the dwell lock when the locked id is not in the candidate list", () => {
+      const newcomer = makeNotification({ id: "high", priority: "high", firstShownAt: NOW });
+      const result = selectGridBarNotification([newcomer], NOW + 100, "vanished");
+      expect(result?.id).toBe("high");
+    });
+
+    it("returns the locked notification even when no contender exists", () => {
+      const locked = makeNotification({ id: "alone", firstShownAt: NOW });
+      const within = NOW + GRID_BAR_DWELL_FLOOR_MS - 1;
+      // Single candidate path: dwell trivially satisfied.
+      expect(selectGridBarNotification([locked], within, "alone")?.id).toBe("alone");
+    });
+
+    it("falls through to score ordering when no lockedId is supplied", () => {
+      const low = makeNotification({ id: "low", priority: "low", firstShownAt: NOW });
+      const high = makeNotification({ id: "high", priority: "high", firstShownAt: NOW });
+      // Even within the dwell window of the low one, without a lock there's
+      // nothing to protect — the winner is the high-priority candidate.
+      expect(selectGridBarNotification([low, high], NOW + 100)?.id).toBe("high");
+    });
+  });
+});
