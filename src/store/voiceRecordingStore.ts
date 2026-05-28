@@ -89,6 +89,7 @@ interface VoiceRecordingState {
   setConfigured: (isConfigured: boolean) => void;
   setCorrectionEnabled: (enabled: boolean) => void;
   setAudioLevel: (level: number) => void;
+  setArming: (target: VoiceRecordingTarget) => void;
   beginSession: (target: VoiceRecordingTarget) => void;
   setStatus: (status: VoiceInputStatus) => void;
   setLastError: (error: VoiceInputError | null) => void;
@@ -152,6 +153,16 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       setLastError: (error) => set({ lastError: error }),
 
       setAudioLevel: (audioLevel) => set({ audioLevel }),
+
+      // Atomic single-set transition into the pre-audio confirmation phase.
+      // Fires synchronously before any await in start() so the target panel
+      // and toolbar can paint the arming cue before microphone init begins.
+      setArming: (target) =>
+        set({
+          activeTarget: target,
+          status: "arming",
+          lastError: null,
+        }),
 
       beginSession: (target) =>
         set((state) => ({

@@ -20,6 +20,7 @@ vi.mock("@/store/voiceRecordingStore", () => {
     setStatus: vi.fn(),
     setConfigured: vi.fn(),
     setCorrectionEnabled: vi.fn(),
+    setArming: vi.fn(),
     beginSession: vi.fn(),
     finishSession: vi.fn(),
     setAudioLevel: vi.fn(),
@@ -426,6 +427,114 @@ describe("isActiveVoiceSession helper", () => {
   it("returns false for terminal phases", () => {
     expect(isActiveVoiceSession("idle")).toBe(false);
     expect(isActiveVoiceSession("error")).toBe(false);
+  });
+
+  it("returns false for arming — it is pre-audio, not an active session", () => {
+    // Arming must be excluded so the toggle guard treats a second hotkey
+    // press during arming as continuing the start, not stopping a session
+    // that hasn't begun.
+    expect(isActiveVoiceSession("arming")).toBe(false);
+  });
+});
+
+describe("VoiceRecordingService — arming state", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("toggle() calls setArming() with the target before invoking start()", async () => {
+    setupGlobals();
+
+    const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      useVoiceRecordingStore: {
+        getState: () => { setArming: ReturnType<typeof vi.fn> };
+      };
+    };
+    const setArmingMock = storeModule.useVoiceRecordingStore.getState().setArming;
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const startSpy = vi
+      .spyOn(voiceRecordingService, "start")
+      .mockImplementation(async () => undefined);
+
+    const target = { panelId: "panel-1", panelTitle: "Terminal" };
+    await voiceRecordingService.toggle(target);
+
+    expect(setArmingMock).toHaveBeenCalledWith(target);
+    expect(startSpy).toHaveBeenCalledWith(target);
+    // Ordering: setArming must run before start() so the synchronous cue
+    // paints before any await yields control.
+    expect(setArmingMock.mock.invocationCallOrder[0]).toBeLessThan(
+      startSpy.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("toggle() during arming on the same target aborts via finishSession (no stop())", async () => {
+    setupGlobals();
+
+    const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      useVoiceRecordingStore: {
+        getState: () => { finishSession: ReturnType<typeof vi.fn> };
+      };
+      __state: { activeTarget: { panelId: string } | null; status: string };
+    };
+    storeModule.__state.activeTarget = { panelId: "panel-1" };
+    storeModule.__state.status = "arming";
+    const finishSessionMock = storeModule.useVoiceRecordingStore.getState().finishSession;
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop");
+    const startSpy = vi.spyOn(voiceRecordingService, "start");
+
+    await voiceRecordingService.toggle({ panelId: "panel-1" });
+
+    expect(finishSessionMock).toHaveBeenCalledWith({ nextStatus: "idle" });
+    expect(stopSpy).not.toHaveBeenCalled();
+    expect(startSpy).not.toHaveBeenCalled();
+
+    storeModule.__state.activeTarget = null;
+    storeModule.__state.status = "idle";
+  });
+
+  it("Escape during arming routes through finishSession instead of stop()", async () => {
+    const { windowListeners } = setupGlobals();
+
+    const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      useVoiceRecordingStore: {
+        getState: () => { finishSession: ReturnType<typeof vi.fn> };
+      };
+      __state: { activeTarget: { panelId: string } | null; status: string };
+    };
+    storeModule.__state.activeTarget = { panelId: "panel-1" };
+    storeModule.__state.status = "arming";
+    const finishSessionMock = storeModule.useVoiceRecordingStore.getState().finishSession;
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop");
+
+    voiceRecordingService.initialize();
+
+    const escapeEvent = {
+      key: "Escape",
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    };
+    const keydownListeners = windowListeners["keydown"] ?? [];
+    for (const listener of keydownListeners) {
+      listener(escapeEvent);
+    }
+
+    expect(finishSessionMock).toHaveBeenCalledWith({ nextStatus: "idle" });
+    expect(stopSpy).not.toHaveBeenCalled();
+
+    storeModule.__state.activeTarget = null;
+    storeModule.__state.status = "idle";
   });
 });
 

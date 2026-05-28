@@ -262,7 +262,8 @@ export function Toolbar({
   const hasActiveVoiceRecording = useVoiceRecordingStore(
     (state) =>
       state.activeTarget !== null &&
-      (state.status === "connecting" ||
+      (state.status === "arming" ||
+        state.status === "connecting" ||
         state.status === "recording" ||
         state.status === "paused" ||
         state.status === "finishing")

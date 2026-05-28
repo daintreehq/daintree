@@ -20,6 +20,49 @@ function reset() {
   });
 }
 
+describe("voiceRecordingStore — setArming", () => {
+  beforeEach(reset);
+
+  it("atomically sets status='arming' and activeTarget in a single update", () => {
+    let intermediateStatus: string | null = null;
+    let intermediateTarget: typeof TARGET | null | undefined = undefined;
+    const unsub = useVoiceRecordingStore.subscribe((state) => {
+      // The first subscriber notification reads the new state. If status and
+      // activeTarget were written separately, one snapshot would observe
+      // status=arming with activeTarget=null (or vice versa).
+      if (intermediateStatus === null) {
+        intermediateStatus = state.status;
+        intermediateTarget = state.activeTarget;
+      }
+    });
+    try {
+      useVoiceRecordingStore.getState().setArming(TARGET);
+    } finally {
+      unsub();
+    }
+
+    expect(intermediateStatus).toBe("arming");
+    expect(intermediateTarget).toEqual(TARGET);
+    const final = useVoiceRecordingStore.getState();
+    expect(final.status).toBe("arming");
+    expect(final.activeTarget).toEqual(TARGET);
+  });
+
+  it("clears any prior errorMessage so a fresh arming flow doesn't show stale text", () => {
+    useVoiceRecordingStore.setState({ errorMessage: "Previous failure" });
+    useVoiceRecordingStore.getState().setArming(TARGET);
+    expect(useVoiceRecordingStore.getState().errorMessage).toBeNull();
+  });
+
+  it("transitions cleanly to connecting when beginSession runs after arming", () => {
+    useVoiceRecordingStore.getState().setArming(TARGET);
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    const state = useVoiceRecordingStore.getState();
+    expect(state.status).toBe("connecting");
+    expect(state.activeTarget).toEqual(TARGET);
+  });
+});
+
 describe("voiceRecordingStore — clearPanelBuffer", () => {
   beforeEach(reset);
 

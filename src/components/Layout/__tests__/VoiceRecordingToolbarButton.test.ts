@@ -46,8 +46,10 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
 
     it("placeholder is returned via early-return so an inactive slot never paints orbit chrome", () => {
       // The early return must come AFTER hooks (RAF, refs) but BEFORE the
-      // active button JSX, mirroring VoiceInputButton's gating.
-      expect(source).toMatch(/if\s*\(!isActive\s*\|\|\s*!showOrbit\)\s*{/);
+      // active button JSX, mirroring VoiceInputButton's gating. The guard
+      // now also lets the arming state through so its static accent ring
+      // can paint before audio init begins (#9178).
+      expect(source).toMatch(/if\s*\(!isActive\s*\|\|\s*\(!showOrbit\s*&&\s*!showArming\)\)\s*{/);
       expect(source).toMatch(/return\s+<VoiceRecordingPlaceholder/);
     });
 
@@ -135,6 +137,30 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
     it("uses scoped transition durations — never the broad transition-all", () => {
       // Motion timing rule: never widen scoped transitions to transition-all.
       expect(source).not.toContain("transition-all");
+    });
+  });
+
+  // Issue #9178 — pre-recording arming state.
+  describe("pre-recording arming state (#9178)", () => {
+    it("derives isArming and isActive includes it so the placeholder gives way", () => {
+      expect(source).toMatch(/const\s+isArming\s*=\s*status\s*===\s*"arming"/);
+      expect(source).toMatch(/isActive\s*=[\s\S]*?isArming/);
+    });
+
+    it("shows the arming cue without the Doherty gate — immediate hotkey feedback", () => {
+      // Arming IS the visual confirmation the user expects in <50ms; gating
+      // it behind the 400ms threshold would defeat the feature.
+      expect(source).toMatch(/showArming\s*=\s*isActive\s*&&\s*\(isArming/);
+    });
+
+    it("the tooltip names the target panel during arming so the user can verify before audio opens", () => {
+      expect(source).toMatch(/Arming dictation/);
+    });
+
+    it("the toolbar overflow pin includes arming so the button pops out before audio init", () => {
+      // Arming must survive the overflow filter — otherwise the cue is
+      // invisible whenever the user hides the button.
+      expect(toolbar).toMatch(/state\.status\s*===\s*"arming"/);
     });
   });
 });

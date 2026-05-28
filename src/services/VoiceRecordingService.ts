@@ -299,7 +299,8 @@ class VoiceRecordingService {
 
     this.unsubscribers.push(
       usePanelStore.subscribe((state) => {
-        const activeTarget = useVoiceRecordingStore.getState().activeTarget;
+        const voiceState = useVoiceRecordingStore.getState();
+        const activeTarget = voiceState.activeTarget;
         if (!activeTarget) return;
 
         // If the recording target belongs to a different project than the
@@ -311,6 +312,13 @@ class VoiceRecordingService {
         const panel = found && found.location !== "trash" ? found : undefined;
 
         if (!panel) {
+          // No microphone has opened yet during arming — fall back to
+          // cancelArming() so we don't drive stop() through a non-existent
+          // session.
+          if (voiceState.status === "arming") {
+            this.cancelArming();
+            return;
+          }
           const panelId = activeTarget.panelId;
           void this.stop("Dictation stopped because its panel was closed.", {
             preserveLiveText: true,
@@ -325,6 +333,7 @@ class VoiceRecordingService {
       if (e.key !== "Escape") return;
       const state = useVoiceRecordingStore.getState();
       if (
+        state.status !== "arming" &&
         state.status !== "connecting" &&
         state.status !== "recording" &&
         state.status !== "paused" &&
@@ -333,6 +342,14 @@ class VoiceRecordingService {
         return;
       e.preventDefault();
       e.stopPropagation();
+      // Arming is the pre-audio confirmation window. No session has begun
+      // yet, so route abort through cancelArming() instead of stop() —
+      // stop() would log "no active session" warnings and skip the cleanup
+      // path that resets activeTarget back to null.
+      if (state.status === "arming") {
+        this.cancelArming();
+        return;
+      }
       this.pttActiveKeyCode = null;
       void this.stop("Dictation cancelled.", { preserveLiveText: true });
     };
@@ -436,6 +453,15 @@ class VoiceRecordingService {
       status: state.status,
     });
 
+    // A second press during the pre-audio arming window aborts back to idle.
+    // No microphone has been opened yet, so there is nothing for stop() to
+    // unwind — incrementing startRequestId via cancelArming() is enough to
+    // make the in-flight start() bail at its next staleness check.
+    if (isActiveTarget && state.status === "arming") {
+      this.cancelArming();
+      return;
+    }
+
     if (isActiveTarget && isActive) {
       await this.stop("Dictation stopped.", { preserveLiveText: true });
       return;
@@ -446,7 +472,22 @@ class VoiceRecordingService {
     // targets are a navigation aid, not a session log).
     useVoiceRecordingStore.getState().recordRecentTarget(target);
 
+    // Synchronous pre-audio cue. setArming() resolves under 1ms (Zustand set);
+    // the first await inside start() then carries us to "connecting" within
+    // ~50–200ms, by which point beginSession() has overwritten this state.
+    useVoiceRecordingStore.getState().setArming(target);
     await this.start(target);
+  }
+
+  /**
+   * Abort an in-flight arming window before audio init begins. Bumping
+   * startRequestId invalidates any pending start() so it bails at its next
+   * staleness check; finishSession() returns the store to idle without
+   * touching panel buffers (no transcript exists yet).
+   */
+  private cancelArming(): void {
+    this.startRequestId++;
+    useVoiceRecordingStore.getState().finishSession({ nextStatus: "idle" });
   }
 
   async start(target: VoiceRecordingTarget): Promise<void> {
@@ -585,7 +626,12 @@ class VoiceRecordingService {
       return;
     }
 
-    if (useVoiceRecordingStore.getState().activeTarget) {
+    // Only an actually-started session (connecting/recording/etc.) needs to be
+    // torn down here. The arming state seeds activeTarget synchronously before
+    // start() runs so the UI can paint the cue — treating that as an existing
+    // session would call stop() on a session that never opened a mic.
+    const preStartState = useVoiceRecordingStore.getState();
+    if (preStartState.activeTarget && isActiveVoiceSession(preStartState.status)) {
       logDebug(`${LOG_PREFIX} Stopping existing session before starting new one`);
       await this.stop(undefined, {
         preserveLiveText: true,

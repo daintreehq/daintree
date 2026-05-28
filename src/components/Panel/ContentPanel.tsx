@@ -121,6 +121,13 @@ export interface ContentPanelProps extends BasePanelProps {
   // and the Moon icon in the header.
   isHibernated?: boolean;
 
+  // True when voice dictation is in its pre-audio arming window targeting
+  // this pane. Drives the panel-state-arming border cue (single load-bearing
+  // signal during the ~200ms before the mic opens and recording chrome takes
+  // over). Outranks waiting/working/hibernated because it is user-initiated
+  // and time-bounded.
+  isVoiceArming?: boolean;
+
   // Tab support
   tabs?: TabInfo[];
   groupId?: string;
@@ -184,6 +191,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     isSelected = false,
     isFleetFollower = false,
     isHibernated = false,
+    isVoiceArming = false,
     tabs,
     groupId,
     onTabClick,
@@ -457,15 +465,17 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             "rounded border shadow-[var(--theme-shadow-ambient)] transition-colors duration-300",
           location === "grid" &&
             !isMaximized &&
-            (showSelectedChrome && showGridAttention
-              ? "terminal-selected"
-              : showGridAttention && showGridAgentHighlights && blockedState === "waiting"
-                ? "panel-state-waiting"
-                : showGridAttention && showGridAgentHighlights && isWorkingState
-                  ? "panel-state-working"
-                  : showGridAttention && isHibernated
-                    ? "panel-state-hibernated"
-                    : "border-overlay hover:border-tint/[0.08]"),
+            (showGridAttention && isVoiceArming
+              ? "panel-state-arming"
+              : showSelectedChrome && showGridAttention
+                ? "terminal-selected"
+                : showGridAttention && showGridAgentHighlights && blockedState === "waiting"
+                  ? "panel-state-waiting"
+                  : showGridAttention && showGridAgentHighlights && isWorkingState
+                    ? "panel-state-working"
+                    : showGridAttention && isHibernated
+                      ? "panel-state-hibernated"
+                      : "border-overlay hover:border-tint/[0.08]"),
           location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
           worktreeAccentColor && location === "grid" && !isMaximized && "panel-worktree-identity",
           // Voice-dictation lock border overrides ambient state colours so the

@@ -51,6 +51,7 @@ import {
   useTerminalInputStore,
 } from "@/store";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { errorsClient } from "@/clients";
@@ -417,6 +418,12 @@ function TerminalPaneComponent({
   const isBackendRecovering = backendStatus === "recovering";
 
   const isHibernated = useIsHibernated(id);
+
+  // Pre-audio confirmation cue. Subscribes to both fields so a target swap
+  // mid-arming repaints the right pane on the next render.
+  const isVoiceArming = useVoiceRecordingStore(
+    (s) => s.status === "arming" && s.activeTarget?.panelId === id
+  );
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const preferredTerminalFocusTarget = usePanelStore((state) => state.preferredTerminalFocusTarget);
@@ -1135,6 +1142,7 @@ function TerminalPaneComponent({
       isSelected={isSelected}
       isFleetFollower={isFleetFollower}
       isHibernated={isHibernated}
+      isVoiceArming={isVoiceArming}
       tabs={tabs}
       onTabClick={onTabClick}
       onTabClose={onTabClose}
