@@ -15,6 +15,7 @@ import type {
 import { makeForgeProviderId } from "../../shared/utils/forgeProviderIds.js";
 import { getForgeProviderImpl } from "./forgeProviderRegistry.js";
 import { resolveForgeProvider } from "./forgeProviderResolver.js";
+import { pluginService } from "./PluginService.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 // Deterministic stringify so two windows calling the same method with the same
@@ -179,6 +180,10 @@ async function invoke(req: ForgeRpcRequest): Promise<unknown> {
   if (!req.namespacedId) {
     throw new Error(`Forge RPC ${req.method} requires a namespacedId`);
   }
+  // Implicit activation: force the owning plugin's `activate()` to run before
+  // we try to resolve its impl, so a plugin that only binds during activate()
+  // is reachable on first use without a startup activation gate.
+  await pluginService.activatePluginForForgeProvider(req.namespacedId);
   const impl = getForgeProviderImpl(req.namespacedId);
   if (!impl) {
     throw new Error(`Forge provider "${req.namespacedId}" not registered`);
@@ -210,7 +215,7 @@ async function invoke(req: ForgeRpcRequest): Promise<unknown> {
   }
 }
 
-function invokeResolveProvider(args: unknown[]): ForgeResolveProviderResult | null {
+async function invokeResolveProvider(args: unknown[]): Promise<ForgeResolveProviderResult | null> {
   const [opts] = args as [
     {
       remoteUrl: string | null;
@@ -227,6 +232,8 @@ function invokeResolveProvider(args: unknown[]): ForgeResolveProviderResult | nu
 
   const { pluginId, contribution } = resolved.entry;
   const namespacedId = makeForgeProviderId(pluginId, contribution.id);
+  // Implicit activation before impl lookup — see `invoke` above for rationale.
+  await pluginService.activatePluginForForgeProvider(namespacedId);
   const impl = getForgeProviderImpl(namespacedId);
   if (!impl) return null;
   if (!opts.remoteUrl) return null;

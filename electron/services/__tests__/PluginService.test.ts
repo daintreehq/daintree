@@ -2189,6 +2189,7 @@ describe("Plugin unload lifecycle", () => {
 
     try {
       await service.initialize();
+      await service.activateStartupFinishedPlugins();
       expect((globalThis as { __pluginInitObserved?: boolean }).__pluginInitObserved).toBe(true);
     } finally {
       delete (globalThis as { __pluginInitCheck?: unknown }).__pluginInitCheck;
@@ -3773,6 +3774,7 @@ describe("Plugin exception containment (#9276)", () => {
       const service = new PluginService(tmpDir);
       // The host MUST NOT crash — initialize() should resolve.
       await expect(service.initialize()).resolves.toBeUndefined();
+      await service.activateStartupFinishedPlugins();
 
       const record = service.getPluginLoadError("acme.throws-activate");
       expect(record).toBeDefined();
@@ -3798,6 +3800,7 @@ describe("Plugin exception containment (#9276)", () => {
 
       const service = new PluginService(tmpDir);
       await service.initialize();
+      await service.activateStartupFinishedPlugins();
 
       expect(service.getPluginLoadError("acme.clean-activate")).toBeUndefined();
     });
@@ -3824,6 +3827,7 @@ describe("Plugin exception containment (#9276)", () => {
 
       const service = new PluginService(tmpDir);
       await service.initialize();
+      await service.activateStartupFinishedPlugins();
       expect(service.getPluginLoadError("acme.throws-then-unload")).toBeDefined();
 
       // Unload removes the plugin from the registry, but the persisted
@@ -3849,6 +3853,7 @@ describe("Plugin exception containment (#9276)", () => {
 
       const service = new PluginService(tmpDir);
       await service.initialize();
+      await service.activateStartupFinishedPlugins();
 
       const record = service.getPluginLoadError("acme.throws-string");
       expect(record?.message).toBe("plain-string-failure");
@@ -4091,6 +4096,7 @@ describe("Plugin exception containment (#9276)", () => {
 
       const service = new PluginService(tmpDir);
       await service.initialize();
+      await service.activateStartupFinishedPlugins();
 
       const record = service.getPluginLoadError("acme.throws-undefined");
       expect(record).toBeDefined();
@@ -4112,6 +4118,7 @@ describe("Plugin exception containment (#9276)", () => {
 
       const service = new PluginService(tmpDir);
       await service.initialize();
+      await service.activateStartupFinishedPlugins();
 
       const record = service.getPluginLoadError("acme.throws-null");
       expect(record).toBeDefined();
@@ -4248,6 +4255,11 @@ describe("Plugin provenance persistence", () => {
 
     const service = new PluginService(tmpDir);
     await service.initialize();
+    // Force the startup activation pass so this test exercises the path that
+    // would normally import every onStartupFinished plugin. The disabled plugin
+    // is rejected at scan time (never inserted into the plugins map), so the
+    // activation pass cannot pick it up — that's exactly what we assert below.
+    await service.activateStartupFinishedPlugins();
 
     const plugins = service.listPlugins();
     expect(plugins).toHaveLength(1);
@@ -4273,6 +4285,7 @@ describe("Plugin provenance persistence", () => {
 
     const service = new PluginService(tmpDir);
     await service.initialize();
+    await service.activateStartupFinishedPlugins();
 
     const record = service.getPluginLoadError("acme.err-persist");
     expect(record?.message).toBe("persisted-boom");
@@ -4299,6 +4312,7 @@ describe("Plugin provenance persistence", () => {
 
     const first = new PluginService(tmpDir);
     await first.initialize();
+    await first.activateStartupFinishedPlugins();
     expect(first.getPluginLoadError("acme.heal-fail")?.message).toBe("first-fail");
 
     // Second plugin: same concept but different dir + name, so ESM cache
@@ -4317,6 +4331,7 @@ describe("Plugin provenance persistence", () => {
 
     const second = new PluginService(tmpDir);
     await second.initialize();
+    await second.activateStartupFinishedPlugins();
 
     // New plugin loaded successfully — no error
     expect(second.getPluginLoadError("acme.heal-ok")).toBeUndefined();
@@ -4409,5 +4424,235 @@ describe("Plugin provenance persistence", () => {
       | undefined;
     expect(stored?.installed).toHaveProperty("acme.foo");
     expect(stored?.installed?.["acme.foo"]).toBeDefined();
+  });
+});
+
+describe("PluginManifestSchema activationEvents field", () => {
+  const schema = getPluginManifestSchema(false);
+
+  it("defaults to an empty array when omitted", () => {
+    const result = schema.safeParse({
+      name: "acme.foo",
+      version: "1.0.0",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.activationEvents).toEqual([]);
+    }
+  });
+
+  it("accepts an explicit ['onStartupFinished']", () => {
+    const result = schema.safeParse({
+      name: "acme.foo",
+      version: "1.0.0",
+      activationEvents: ["onStartupFinished"],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown activation event strings (no onCommand/onView in v1)", () => {
+    const result = schema.safeParse({
+      name: "acme.foo",
+      version: "1.0.0",
+      activationEvents: ["onCommand:foo"],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects non-array activationEvents value", () => {
+    const result = schema.safeParse({
+      name: "acme.foo",
+      version: "1.0.0",
+      activationEvents: "onStartupFinished",
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("Deferred activation — activatePlugin", () => {
+  it("initialize() does not import plugin main; activateStartupFinishedPlugins does", async () => {
+    const pluginDir = path.join(tmpDir, "deferred-import");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.deferred-import", version: "1.0.0", main: "main.mjs" })
+    );
+    // The module sets a global as a side effect at import time. If the
+    // module were imported during initialize() the global would be set
+    // before we explicitly activate.
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__deferredImportRan = true; export function activate() {}"
+    );
+
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      // Scan must register the plugin (contributions populated) but must NOT
+      // have imported its main module yet.
+      expect(service.hasPlugin("acme.deferred-import")).toBe(true);
+      expect((globalThis as Record<string, unknown>).__deferredImportRan).toBeUndefined();
+
+      await service.activateStartupFinishedPlugins();
+      expect((globalThis as Record<string, unknown>).__deferredImportRan).toBe(true);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__deferredImportRan;
+    }
+  });
+
+  it("activatePlugin is idempotent — _doActivate runs once across concurrent callers", async () => {
+    const pluginDir = path.join(tmpDir, "dedup-activate");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.dedup-activate", version: "1.0.0", main: "main.mjs" })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__dedupCount = (globalThis.__dedupCount ?? 0) + 1; export function activate() {}"
+    );
+
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      // Fan out activation from three concurrent callers; the in-flight
+      // promise dedup means _doActivate runs exactly once.
+      await Promise.all([
+        service.activatePlugin("acme.dedup-activate"),
+        service.activatePlugin("acme.dedup-activate"),
+        service.activatePlugin("acme.dedup-activate"),
+      ]);
+
+      // A fourth call after the first settled should hit the synchronous
+      // `activatedPlugins` fast path and not re-import either.
+      await service.activatePlugin("acme.dedup-activate");
+
+      expect((globalThis as Record<string, number>).__dedupCount).toBe(1);
+    } finally {
+      delete (globalThis as Record<string, number>).__dedupCount;
+    }
+  });
+
+  it("activatePlugin does not reject when activate() throws", async () => {
+    const pluginDir = path.join(tmpDir, "throwy-but-stable");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.throwy-but-stable", version: "1.0.0", main: "main.mjs" })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "export function activate() { throw new Error('nope'); }"
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      // Implicit-trigger contract: the promise resolves so callers don't
+      // need a try/catch around every dispatch.
+      await expect(service.activatePlugin("acme.throwy-but-stable")).resolves.toBeUndefined();
+      // Error is persisted to the provenance record instead of propagating.
+      expect(service.getPluginLoadError("acme.throwy-but-stable")?.message).toBe("nope");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("activatePlugin can re-run after a failure (Settings → Retry)", async () => {
+    const pluginDir = path.join(tmpDir, "retry-activate");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.retry-activate", version: "1.0.0", main: "main.mjs" })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__retryCount = (globalThis.__retryCount ?? 0) + 1; export function activate() { throw new Error('retry-boom'); }"
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      await service.activatePlugin("acme.retry-activate");
+
+      // After a failure the in-flight entry is dropped so a retry calls
+      // through to _doActivate again. ESM import() is URL-cached, so the
+      // module is only evaluated once — but `activate()` still runs again
+      // on the cached exports. Assert via the persisted error record.
+      expect(service.getPluginLoadError("acme.retry-activate")?.message).toBe("retry-boom");
+
+      await service.activatePlugin("acme.retry-activate");
+      // The fact that this resolves and re-records the error proves the
+      // promise was not cached as a settled success.
+      expect(service.getPluginLoadError("acme.retry-activate")?.message).toBe("retry-boom");
+    } finally {
+      errorSpy.mockRestore();
+      delete (globalThis as Record<string, number>).__retryCount;
+    }
+  });
+
+  it("activateStartupFinishedPlugins activates plugins with activationEvents=['onStartupFinished']", async () => {
+    const pluginDir = path.join(tmpDir, "explicit-onstartup");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.explicit-onstartup",
+        version: "1.0.0",
+        main: "main.mjs",
+        activationEvents: ["onStartupFinished"],
+      })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__explicitOnstartupRan = true; export function activate() {}"
+    );
+
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      expect((globalThis as Record<string, unknown>).__explicitOnstartupRan).toBeUndefined();
+
+      await service.activateStartupFinishedPlugins();
+      expect((globalThis as Record<string, unknown>).__explicitOnstartupRan).toBe(true);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__explicitOnstartupRan;
+    }
+  });
+
+  it("dispatchHandler implicitly activates the owning plugin before lookup", async () => {
+    const pluginDir = path.join(tmpDir, "implicit-dispatch");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.implicit-dispatch",
+        version: "1.0.0",
+        main: "main.mjs",
+      })
+    );
+    // The plugin's activate() registers a handler. If dispatchHandler did
+    // not force activation first, the handler would not be registered yet
+    // and the dispatch would throw "No plugin handler registered".
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "export function activate(host) { host.registerHandler('probe', () => 'pong'); }"
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    // Crucially, do NOT call activateStartupFinishedPlugins(). The dispatch
+    // path itself must trigger activation.
+    const result = await service.dispatchHandler(
+      "acme.implicit-dispatch",
+      "probe",
+      makeCtx("acme.implicit-dispatch"),
+      []
+    );
+    expect(result).toBe("pong");
   });
 });

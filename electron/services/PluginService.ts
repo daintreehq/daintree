@@ -174,6 +174,22 @@ export class PluginService {
   private plugins = new Map<string, LoadedPlugin>();
   private handlerMap = new Map<string, PluginIpcHandler>();
   private cleanupMap = new Map<string, () => void>();
+  /**
+   * Plugin ids whose `activate()` has resolved successfully this session.
+   * Checked synchronously by {@link activatePlugin} as the fast path so a
+   * hot dispatch site (e.g. `dispatchHandler`) doesn't pay an async hop on
+   * every call. Cleared in `unloadPlugin` so a runtime unload+reload cycle
+   * re-runs activation.
+   */
+  private activatedPlugins = new Set<string>();
+  /**
+   * In-flight activation promises keyed by plugin id. Concurrent callers
+   * (e.g. a panel open + an action dispatch racing in the same tick) await
+   * the same promise so `_doActivate` runs exactly once per activation.
+   * On success the entry stays cached until unload; on failure it is
+   * deleted so a Settings → "Retry activation" can re-run.
+   */
+  private activationPromises = new Map<string, Promise<void>>();
   private pluginActions = new Map<string, PluginActionDescriptor>();
   private pluginActionOwners = new Map<string, Set<string>>();
   private actionValidators = new Map<string, ValidateFn>();
@@ -654,43 +670,163 @@ export class PluginService {
     // throw "Unknown plugin" even for a correctly loaded plugin.
     this.plugins.set(manifest.name, plugin);
 
-    if (plugin.resolvedMain) {
-      try {
-        const mod = (await import(pathToFileURL(plugin.resolvedMain).href)) as {
-          activate?: unknown;
-        };
-        if (typeof mod.activate === "function") {
-          const activate = mod.activate as PluginActivate;
-          const { host, revoke } = this.createHost(manifest.name);
-          try {
-            const cleanup = await this.runActivate(manifest.name, activate, host);
-            if (typeof cleanup === "function") {
-              this.cleanupMap.set(manifest.name, cleanup);
-            }
-          } finally {
-            revoke();
-          }
-        }
-        // Successful activation (or a main with no activate fn) clears any
-        // diagnostic record left over from a prior failed attempt — persisted
-        // to the provenance record so it survives a host restart.
-        if (!opts.isBuiltin) {
-          this.upsertInstalledRecord(manifest.name, { loadError: null });
-        }
-      } catch (err) {
-        const loadError = toPluginLoadError(err);
-        if (!opts.isBuiltin) {
-          this.upsertInstalledRecord(manifest.name, { loadError });
-        }
-        console.error(`[PluginService] Failed to load main entry for ${manifest.name}:`, err);
-      }
-    } else {
-      if (!opts.isBuiltin) {
-        this.upsertInstalledRecord(manifest.name, { loadError: null });
-      }
+    // Plugins without a `main` entry contribute no executable code — the
+    // provenance record reflects a clean load immediately. Plugins with a
+    // `main` entry defer the `loadError: null` write to `_doActivate()` so
+    // the record only clears once activation actually succeeds.
+    if (!plugin.resolvedMain && !opts.isBuiltin) {
+      this.upsertInstalledRecord(manifest.name, { loadError: null });
     }
 
     return plugin;
+  }
+
+  /**
+   * In v1 only `"onStartupFinished"` is recognised. An empty `activationEvents`
+   * array is treated the same as `["onStartupFinished"]` — every plugin with a
+   * `main` entry activates at startup unless it explicitly lists other events
+   * (none of which exist yet). When `onCommand:*`, `onView:*` etc. land, a
+   * plugin will be able to opt out of startup activation by omitting
+   * `"onStartupFinished"` from a non-empty list.
+   */
+  private shouldActivateOnStartup(manifest: PluginManifest): boolean {
+    const events = manifest.activationEvents;
+    if (!events || events.length === 0) return true;
+    return events.includes("onStartupFinished");
+  }
+
+  /**
+   * Actually import the plugin's `main` module, create its host, and run
+   * `activate()`. Wrapped by {@link activatePlugin} for idempotency &
+   * concurrent-caller dedup — direct callers will re-import on every call.
+   * Errors are persisted to the provenance record but never rethrown by
+   * `activatePlugin` (which exposes a never-rejecting promise to triggers).
+   */
+  private async _doActivate(pluginId: string): Promise<void> {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin || !plugin.resolvedMain) return;
+    try {
+      const mod = (await import(pathToFileURL(plugin.resolvedMain).href)) as {
+        activate?: unknown;
+      };
+      if (typeof mod.activate === "function") {
+        const activate = mod.activate as PluginActivate;
+        const { host, revoke } = this.createHost(pluginId);
+        try {
+          const cleanup = await this.runActivate(pluginId, activate, host);
+          if (typeof cleanup === "function") {
+            this.cleanupMap.set(pluginId, cleanup);
+          }
+        } finally {
+          revoke();
+        }
+      }
+      // Successful activation (or a main with no activate fn) clears any
+      // diagnostic record left over from a prior failed attempt — persisted
+      // to the provenance record so it survives a host restart.
+      if (!plugin.isBuiltin) {
+        this.upsertInstalledRecord(pluginId, { loadError: null });
+      }
+    } catch (err) {
+      const loadError = toPluginLoadError(err);
+      if (!plugin.isBuiltin) {
+        this.upsertInstalledRecord(pluginId, { loadError });
+      }
+      console.error(`[PluginService] Failed to load main entry for ${pluginId}:`, err);
+      throw err;
+    }
+  }
+
+  /**
+   * Idempotent activation entry point. Concurrent callers share the same
+   * in-flight promise; once activation settles successfully the result is
+   * cached for the plugin's lifetime so subsequent callers return synchronously
+   * via the fast-path `activatedPlugins` check. A rejected activation deletes
+   * the in-flight entry so callers (e.g. Settings "Retry activation") can
+   * re-attempt. Errors are surfaced via the persisted `loadError` record —
+   * this method never rejects, matching the contribution-point trigger
+   * contract that a failed activation must leave routing entries intact.
+   */
+  async activatePlugin(pluginId: string): Promise<void> {
+    if (this.activatedPlugins.has(pluginId)) return;
+    const existing = this.activationPromises.get(pluginId);
+    if (existing) return existing;
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) return;
+
+    const promise = this._doActivate(pluginId).then(
+      () => {
+        this.activatedPlugins.add(pluginId);
+      },
+      () => {
+        // Error is already persisted to the provenance record inside
+        // `_doActivate`. Drop the in-flight entry so a subsequent
+        // `activatePlugin(pluginId)` re-runs activation (Settings → Retry).
+        this.activationPromises.delete(pluginId);
+      }
+    );
+    this.activationPromises.set(pluginId, promise);
+    return promise;
+  }
+
+  /**
+   * Fan out activation for every plugin whose manifest opts into
+   * `"onStartupFinished"` (or whose `activationEvents` is unset / empty —
+   * see {@link shouldActivateOnStartup}). Activations run in parallel via
+   * `Promise.allSettled`; one slow plugin must not block the rest. Wired
+   * fire-and-forget from the `plugin-service` deferred task so the renderer
+   * keeps progressing while plugins warm up in the background.
+   */
+  async activateStartupFinishedPlugins(): Promise<void> {
+    const targets: string[] = [];
+    for (const plugin of this.plugins.values()) {
+      if (!plugin.resolvedMain) continue;
+      if (!this.shouldActivateOnStartup(plugin.manifest)) continue;
+      targets.push(plugin.manifest.name);
+    }
+    if (targets.length === 0) return;
+    await Promise.allSettled(targets.map((id) => this.activatePlugin(id)));
+  }
+
+  /**
+   * Activate the plugin that owns the forge provider matching `namespacedId`
+   * before the forge RPC server looks up its impl. Resolves the owning plugin
+   * via the manifest registry rather than parsing `pluginId.contributionId` —
+   * plugin ids are `publisher.name` (already containing a dot), so a split
+   * would mis-attribute. A no-op if the namespaced id isn't registered.
+   */
+  async activatePluginForForgeProvider(namespacedId: string): Promise<void> {
+    if (typeof namespacedId !== "string" || namespacedId.length === 0) return;
+    for (const [pluginId, plugin] of this.plugins) {
+      for (const contribution of plugin.manifest.contributes.forgeProviders) {
+        if (`${pluginId}.${contribution.id}` === namespacedId) {
+          await this.activatePlugin(pluginId);
+          return;
+        }
+      }
+    }
+  }
+
+  /**
+   * Activate every plugin whose `fileDecorationProviders` declares a scope
+   * matching `scope`. Mirrors the registry-side `getFileDecorationImpls`
+   * filter so the activation set is exactly the impl set that will be queried
+   * once activation resolves. Runs activations in parallel — one slow plugin
+   * must not stall an entire decoration pull.
+   */
+  async activatePluginsForFileDecorationScope(scope: string): Promise<void> {
+    if (typeof scope !== "string" || scope.length === 0) return;
+    const targets = new Set<string>();
+    for (const [pluginId, plugin] of this.plugins) {
+      for (const contribution of plugin.manifest.contributes.fileDecorationProviders) {
+        if (contribution.scopes.some((pattern) => scopeMatchesPattern(scope, pattern))) {
+          targets.add(pluginId);
+          break;
+        }
+      }
+    }
+    if (targets.size === 0) return;
+    await Promise.allSettled([...targets].map((id) => this.activatePlugin(id)));
   }
 
   private createHost(pluginId: string): { host: PluginHostApi; revoke: () => void } {
@@ -1105,6 +1241,11 @@ export class PluginService {
     ctx: PluginIpcContext,
     args: unknown[]
   ): Promise<unknown> {
+    // Implicit activation: the first dispatch into a plugin's channel forces
+    // its `activate()` to run if it hasn't yet, so handlers registered during
+    // activation are available on the very first call. No-op once activated.
+    await this.activatePlugin(pluginId);
+
     const key = `${pluginId}:${channel}`;
     const handler = this.handlerMap.get(key);
     if (!handler) {
@@ -1164,6 +1305,11 @@ export class PluginService {
 
   unloadPlugin(pluginId: string): void {
     if (!this.plugins.has(pluginId)) return;
+    // Drop activation state so a runtime reload (e.g. dev-mode re-scan) can
+    // re-activate from scratch — otherwise the fast-path `activatedPlugins`
+    // hit would short-circuit `_doActivate` after the new manifest landed.
+    this.activatedPlugins.delete(pluginId);
+    this.activationPromises.delete(pluginId);
     const cleanup = this.cleanupMap.get(pluginId);
     if (cleanup) {
       try {

@@ -171,6 +171,11 @@ async function handleFileDecorationsGet(
   if (cleanPaths.length === 0) return {};
   const requested = new Set(cleanPaths);
 
+  // Implicit activation: any plugin that declares a provider for this scope is
+  // forced to `activate()` before the impl lookup, so providers bound during
+  // activate() are queryable on the first pull. No-op once already activated.
+  await pluginService.activatePluginsForFileDecorationScope(scope);
+
   const impls = getFileDecorationImpls(scope);
   if (impls.length === 0) return {};
 

@@ -116,6 +116,7 @@ export interface PluginManifest {
     daintree?: string;
   };
   capabilities?: PluginCapability[];
+  activationEvents?: "onStartupFinished"[];
   contributes: {
     panels: PanelContribution[];
     toolbarButtons: ToolbarButtonContribution[];
