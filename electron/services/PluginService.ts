@@ -2047,6 +2047,16 @@ export class PluginService {
   }
 
   /**
+   * Resolve a plugin id to its installed-on-disk root directory. Returns
+   * `undefined` when the plugin is unknown or was skipped at load (disabled in
+   * Preferences). Used by the `plugin://` protocol handler to map URL hosts to
+   * filesystem roots without exposing the private `plugins` map.
+   */
+  getPluginDir(pluginId: string): string | undefined {
+    return this.plugins.get(pluginId)?.dir;
+  }
+
+  /**
    * Toggle a plugin's disabled state in Preferences (#9284). Persists to
    * `plugins.disabled` in electron-store; the change takes effect on next
    * launch (no synchronous unload — the renderer surfaces a restart-required
