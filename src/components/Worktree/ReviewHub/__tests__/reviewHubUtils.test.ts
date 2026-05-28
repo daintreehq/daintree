@@ -154,6 +154,19 @@ describe("sortFiles", () => {
     ]);
   });
 
+  it("reverses the path tiebreak under churn descending — uniform dir flip", () => {
+    const files = [
+      file("alpha.ts", { insertions: 2, deletions: 2 }),
+      file("zeta.ts", { insertions: 2, deletions: 2 }),
+      file("mike.ts", { insertions: 2, deletions: 2 }),
+    ];
+    expect(sortFiles(files, "churn", "desc").map((f) => f.path)).toEqual([
+      "zeta.ts",
+      "mike.ts",
+      "alpha.ts",
+    ]);
+  });
+
   it("groups by status order when sorting by status", () => {
     const files = [
       file("a.ts", { status: "deleted" }),
@@ -216,6 +229,32 @@ describe("sortFiles", () => {
       "src/a.ts",
       "src/b.ts",
       "dist/bundle.js",
+    ]);
+  });
+
+  it("pins generated files last when sorting by status descending — direction-independent", () => {
+    const files = [
+      file("src/a.ts", { status: "modified" }),
+      file("dist/bundle.js", { status: "added" }),
+      file("src/b.ts", { status: "added" }),
+    ];
+    expect(sortFiles(files, "status", "desc").map((f) => f.path)).toEqual([
+      "src/b.ts",
+      "src/a.ts",
+      "dist/bundle.js",
+    ]);
+  });
+
+  it("pins generated files last when sorting by churn ascending (default first-click direction)", () => {
+    const files = [
+      file("src/util.ts", { insertions: 1, deletions: 0 }),
+      file("yarn.lock", { insertions: 0, deletions: 0 }),
+      file("src/app.ts", { insertions: 5, deletions: 2 }),
+    ];
+    expect(sortFiles(files, "churn", "asc").map((f) => f.path)).toEqual([
+      "src/util.ts",
+      "src/app.ts",
+      "yarn.lock",
     ]);
   });
 

@@ -1932,7 +1932,9 @@ export function ReviewHubContent({
                                           ? prev.sortDir === "asc"
                                             ? "desc"
                                             : "asc"
-                                          : prev.sortDir,
+                                          : v === "churn"
+                                            ? "desc"
+                                            : prev.sortDir,
                                     }))
                                   }
                                 >
@@ -2168,7 +2170,9 @@ export function ReviewHubContent({
                                           ? prev.sortDir === "asc"
                                             ? "desc"
                                             : "asc"
-                                          : prev.sortDir,
+                                          : v === "churn"
+                                            ? "desc"
+                                            : prev.sortDir,
                                     }))
                                   }
                                 >
