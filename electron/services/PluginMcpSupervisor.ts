@@ -251,15 +251,19 @@ export class PluginMcpSupervisor {
     try {
       handle = await this.spawner(resolved);
     } catch (err) {
-      if (state.status !== "stopped") {
+      if (state.status === "spawning") {
         state.status = "crashed";
         state.lastError = formatErrorMessage(err, "MCP supervisor error");
       }
       return;
     }
-    // Same guard after the spawn-await: if a shutdown raced in, kill the
-    // freshly-spawned child immediately rather than registering it as state.
-    if (state.status === "stopped") {
+    // Same guard after the spawn-await: if a shutdown raced in (status flipped
+    // to "stopped" while we were awaiting spawn), kill the freshly-spawned
+    // child immediately rather than registering it as live state. TS narrows
+    // away "stopped" here because the captured-state type tracker can't see
+    // the mutation from a concurrent shutdownOne — the runtime check is real,
+    // the typeof cast just bypasses the dead-code narrowing.
+    if ((state.status as PluginMcpServerStatus) === "stopped") {
       try {
         handle.subprocess.kill();
       } catch {
