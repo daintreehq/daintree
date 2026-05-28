@@ -2334,6 +2334,7 @@ const api: ElectronAPI = {
         paragraphingStrategy: "spoken-command" | "manual";
         resolveFileLinks: boolean;
         deviceId: string;
+        recordingMode: "toggle" | "push-to-talk";
       }>
     ) => _unwrappingInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
     start: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_START),

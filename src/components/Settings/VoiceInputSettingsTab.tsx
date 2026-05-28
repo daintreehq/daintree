@@ -37,6 +37,7 @@ import type {
   VoiceCorrectionModel,
   VoiceParagraphingStrategy,
   VoiceTranscriptionProvider,
+  VoiceRecordingMode,
 } from "@shared/types";
 
 const LANGUAGES = [
@@ -102,6 +103,7 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
   deviceId: "",
   organizationId: "",
   projectId: "",
+  recordingMode: "toggle",
 };
 
 type ApiKeyValidation = "idle" | "testing" | "valid" | "invalid";
@@ -336,6 +338,11 @@ export function VoiceInputSettingsTab() {
               value={settings.paragraphingStrategy ?? "spoken-command"}
               language={settings.language}
               onChange={(v) => update({ paragraphingStrategy: v })}
+            />
+
+            <RecordingModeRow
+              value={settings.recordingMode ?? "toggle"}
+              onChange={(v) => update({ recordingMode: v })}
             />
 
             <DictionarySection
@@ -807,6 +814,34 @@ function ParagraphingStrategyRow({
       options={[
         { value: "spoken-command", label: "Spoken commands" },
         { value: "manual", label: "Manual Enter only" },
+      ]}
+    />
+  );
+}
+
+// ── Recording mode row ──
+
+function RecordingModeRow({
+  value,
+  onChange,
+}: {
+  value: VoiceRecordingMode;
+  onChange: (v: VoiceRecordingMode) => void;
+}) {
+  const description =
+    value === "toggle"
+      ? "Press the dictation shortcut to start, press again to stop."
+      : "Hold the dictation shortcut to record. Releasing the key stops recording without submitting.";
+
+  return (
+    <SettingsSelect
+      label="Recording mode"
+      description={description}
+      value={value}
+      onValueChange={(v) => onChange(v as VoiceRecordingMode)}
+      options={[
+        { value: "toggle", label: "Toggle" },
+        { value: "push-to-talk", label: "Push to talk" },
       ]}
     />
   );

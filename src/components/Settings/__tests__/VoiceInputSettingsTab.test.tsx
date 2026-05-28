@@ -27,7 +27,30 @@ vi.mock("../SettingsSwitchCard", () => ({
 }));
 
 vi.mock("../SettingsSelect", () => ({
-  SettingsSelect: () => null,
+  SettingsSelect: ({
+    label,
+    value,
+    onValueChange,
+    options,
+  }: {
+    label: string;
+    value: string;
+    onValueChange: (v: string) => void;
+    options: Array<{ value: string; label: string }>;
+  }) => (
+    <div data-testid={`settings-select-${label}`}>
+      <span data-testid={`settings-select-value-${label}`}>{value}</span>
+      {options.map((opt) => (
+        <button
+          key={opt.value}
+          data-testid={`settings-select-option-${label}-${opt.value}`}
+          onClick={() => onValueChange(opt.value)}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  ),
 }));
 
 vi.mock("../SettingsTextarea", () => ({
@@ -153,6 +176,69 @@ describe("VoiceInputSettingsTab", () => {
       expect(screen.getByText(/not used for model training/)).toBeTruthy();
       expect(screen.getByText(/abuse-monitoring logs for up to 30 days/)).toBeTruthy();
       expect(screen.getByText(/stored locally in plain text/)).toBeTruthy();
+    });
+  });
+
+  it("renders the recording-mode row with the stored value when voice is enabled", async () => {
+    window.electron = {
+      voiceInput: createVoiceInputApi({
+        getSettings: vi.fn().mockResolvedValue({
+          enabled: true,
+          openaiApiKey: "sk-test",
+          language: "en",
+          customDictionary: [],
+          transcriptionModel: "gpt-realtime-whisper",
+          correctionEnabled: false,
+          correctionModel: "gpt-5-mini",
+          correctionCustomInstructions: "",
+          paragraphingStrategy: "spoken-command",
+          resolveFileLinks: true,
+          deviceId: "",
+          recordingMode: "push-to-talk",
+        }),
+      }),
+    } as unknown as typeof window.electron;
+
+    render(<VoiceInputSettingsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("settings-select-value-Recording mode").textContent).toBe(
+        "push-to-talk"
+      );
+    });
+  });
+
+  it("saves the new recording mode when the user picks 'Push to talk'", async () => {
+    const setSettings = vi.fn().mockResolvedValue(undefined);
+    window.electron = {
+      voiceInput: createVoiceInputApi({
+        getSettings: vi.fn().mockResolvedValue({
+          enabled: true,
+          openaiApiKey: "sk-test",
+          language: "en",
+          customDictionary: [],
+          transcriptionModel: "gpt-realtime-whisper",
+          correctionEnabled: false,
+          correctionModel: "gpt-5-mini",
+          correctionCustomInstructions: "",
+          paragraphingStrategy: "spoken-command",
+          resolveFileLinks: true,
+          deviceId: "",
+          recordingMode: "toggle",
+        }),
+        setSettings,
+      }),
+    } as unknown as typeof window.electron;
+
+    render(<VoiceInputSettingsTab />);
+
+    const pttButton = await screen.findByTestId(
+      "settings-select-option-Recording mode-push-to-talk"
+    );
+    pttButton.click();
+
+    await waitFor(() => {
+      expect(setSettings).toHaveBeenCalledWith({ recordingMode: "push-to-talk" });
     });
   });
 

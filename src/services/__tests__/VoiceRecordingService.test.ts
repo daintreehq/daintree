@@ -1093,3 +1093,322 @@ describe("VoiceRecordingService — provider configuration gating", () => {
     await expect(voiceRecordingService.refreshConfiguration()).resolves.toBe(true);
   });
 });
+describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function buildPttElectronStub() {
+    const stub = buildElectronStub();
+    stub.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "sk-key",
+      correctionEnabled: false,
+      recordingMode: "push-to-talk",
+    });
+    return stub;
+  }
+
+  it("toggleFocusedPanel calls start() in push-to-talk mode (not toggle)", async () => {
+    const electron = buildPttElectronStub();
+    setupGlobals(electron);
+
+    const panel = (await import("@/store/panelStore")) as unknown as {
+      __state: { focusedId: string | null; panelsById: Record<string, unknown> };
+    };
+    panel.__state.focusedId = "panel-1";
+    panel.__state.panelsById = {
+      "panel-1": { id: "panel-1", title: "Terminal", location: "grid" },
+    };
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const startSpy = vi.spyOn(voiceRecordingService, "start").mockResolvedValue();
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(startSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ panelId: "panel-1", panelTitle: "Terminal" })
+    );
+    expect(toggleSpy).not.toHaveBeenCalled();
+  });
+
+  it("toggleFocusedPanel still calls toggle() in toggle mode (regression guard)", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "sk-key",
+      correctionEnabled: false,
+      recordingMode: "toggle",
+    });
+    setupGlobals(electron);
+
+    const panel = (await import("@/store/panelStore")) as unknown as {
+      __state: { focusedId: string | null; panelsById: Record<string, unknown> };
+    };
+    panel.__state.focusedId = "panel-1";
+    panel.__state.panelsById = {
+      "panel-1": { id: "panel-1", title: "Terminal", location: "grid" },
+    };
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const startSpy = vi.spyOn(voiceRecordingService, "start").mockResolvedValue();
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(toggleSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ panelId: "panel-1", panelTitle: "Terminal" })
+    );
+    expect(startSpy).not.toHaveBeenCalled();
+  });
+
+  it("keyup of the matched trigger key stops the PTT session", async () => {
+    const electron = buildPttElectronStub();
+    const { windowListeners } = setupGlobals(electron);
+
+    const { keybindingService } = (await import("@/services/keybindingService")) as unknown as {
+      keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
+    };
+    keybindingService.matchesEvent.mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+V" && e.code === "KeyV"
+    );
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const keydownListeners = windowListeners["keydown"] ?? [];
+    const keyupListeners = windowListeners["keyup"] ?? [];
+    expect(keydownListeners.length).toBeGreaterThan(0);
+    expect(keyupListeners.length).toBeGreaterThan(0);
+
+    // Simulate the PTT keydown (Cmd+Shift+V).
+    const downEvent = {
+      code: "KeyV",
+      key: "V",
+      repeat: false,
+      metaKey: true,
+      shiftKey: true,
+      altKey: false,
+      ctrlKey: false,
+    } as unknown as KeyboardEvent;
+    for (const listener of keydownListeners) listener(downEvent);
+
+    // Simulate the keyup of the same key.
+    const upEvent = { code: "KeyV" } as unknown as KeyboardEvent;
+    for (const listener of keyupListeners) listener(upEvent);
+
+    expect(stopSpy).toHaveBeenCalledWith(
+      "Dictation stopped.",
+      expect.objectContaining({ preserveLiveText: true })
+    );
+  });
+
+  it("MetaLeft keyup stops the session even when the trigger key release is swallowed (macOS)", async () => {
+    const electron = buildPttElectronStub();
+    const { windowListeners } = setupGlobals(electron);
+
+    const { keybindingService } = (await import("@/services/keybindingService")) as unknown as {
+      keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
+    };
+    keybindingService.matchesEvent.mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+V" && e.code === "KeyV"
+    );
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const keydownListeners = windowListeners["keydown"] ?? [];
+    const keyupListeners = windowListeners["keyup"] ?? [];
+
+    const downEvent = {
+      code: "KeyV",
+      key: "V",
+      repeat: false,
+      metaKey: true,
+      shiftKey: true,
+      altKey: false,
+      ctrlKey: false,
+    } as unknown as KeyboardEvent;
+    for (const listener of keydownListeners) listener(downEvent);
+
+    // KeyV keyup never arrives (macOS swallows it); only MetaLeft keyup fires.
+    const metaUpEvent = { code: "MetaLeft" } as unknown as KeyboardEvent;
+    for (const listener of keyupListeners) listener(metaUpEvent);
+
+    expect(stopSpy).toHaveBeenCalled();
+  });
+
+  it("ignores key-repeat keydown events (only the first physical press starts PTT)", async () => {
+    const electron = buildPttElectronStub();
+    const { windowListeners } = setupGlobals(electron);
+
+    const { keybindingService } = (await import("@/services/keybindingService")) as unknown as {
+      keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
+    };
+    keybindingService.matchesEvent.mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+V" && e.code === "KeyV"
+    );
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const keydownListeners = windowListeners["keydown"] ?? [];
+    const keyupListeners = windowListeners["keyup"] ?? [];
+
+    // Only the repeating keydown fires — pttActiveKeyCode must not be set.
+    const repeatEvent = {
+      code: "KeyV",
+      key: "V",
+      repeat: true,
+      metaKey: true,
+      shiftKey: true,
+      altKey: false,
+      ctrlKey: false,
+    } as unknown as KeyboardEvent;
+    for (const listener of keydownListeners) listener(repeatEvent);
+
+    // Now release — keyup should NOT fire stop since no PTT session is tracked.
+    const upEvent = { code: "KeyV" } as unknown as KeyboardEvent;
+    for (const listener of keyupListeners) listener(upEvent);
+
+    expect(stopSpy).not.toHaveBeenCalled();
+  });
+
+  it("window blur stops the session when a PTT press is active", async () => {
+    const electron = buildPttElectronStub();
+    const { windowListeners } = setupGlobals(electron);
+
+    const { keybindingService } = (await import("@/services/keybindingService")) as unknown as {
+      keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
+    };
+    keybindingService.matchesEvent.mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+V" && e.code === "KeyV"
+    );
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const keydownListeners = windowListeners["keydown"] ?? [];
+    const blurListeners = windowListeners["blur"] ?? [];
+    expect(blurListeners.length).toBeGreaterThan(0);
+
+    const downEvent = {
+      code: "KeyV",
+      key: "V",
+      repeat: false,
+      metaKey: true,
+      shiftKey: true,
+      altKey: false,
+      ctrlKey: false,
+    } as unknown as KeyboardEvent;
+    for (const listener of keydownListeners) listener(downEvent);
+
+    for (const listener of blurListeners) listener(new Event("blur"));
+
+    expect(stopSpy).toHaveBeenCalledWith(
+      "Dictation stopped.",
+      expect.objectContaining({ preserveLiveText: true })
+    );
+  });
+
+  it("window blur does NOT call stop when no PTT press is active (toggle mode unaffected)", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "sk-key",
+      correctionEnabled: false,
+      recordingMode: "toggle",
+    });
+    const { windowListeners } = setupGlobals(electron);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const blurListeners = windowListeners["blur"] ?? [];
+    for (const listener of blurListeners) listener(new Event("blur"));
+
+    expect(stopSpy).not.toHaveBeenCalled();
+  });
+
+  it("Shift release alone does NOT stop the PTT session (modifier release ignored)", async () => {
+    const electron = buildPttElectronStub();
+    const { windowListeners } = setupGlobals(electron);
+
+    const { keybindingService } = (await import("@/services/keybindingService")) as unknown as {
+      keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
+    };
+    keybindingService.matchesEvent.mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+V" && e.code === "KeyV"
+    );
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const keydownListeners = windowListeners["keydown"] ?? [];
+    const keyupListeners = windowListeners["keyup"] ?? [];
+
+    const downEvent = {
+      code: "KeyV",
+      key: "V",
+      repeat: false,
+      metaKey: true,
+      shiftKey: true,
+      altKey: false,
+      ctrlKey: false,
+    } as unknown as KeyboardEvent;
+    for (const listener of keydownListeners) listener(downEvent);
+
+    // ShiftLeft release alone — should NOT stop.
+    const shiftUpEvent = { code: "ShiftLeft" } as unknown as KeyboardEvent;
+    for (const listener of keyupListeners) listener(shiftUpEvent);
+
+    expect(stopSpy).not.toHaveBeenCalled();
+  });
+});

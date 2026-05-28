@@ -249,6 +249,7 @@ export type {
   VoiceTranscriptionProvider,
   VoiceCorrectionModel,
   VoiceParagraphingStrategy,
+  VoiceRecordingMode,
   HelpAssistantSettings,
   HelpAssistantAuditRetention,
   HelpAssistantIdleHibernateMinutes,

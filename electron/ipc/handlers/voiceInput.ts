@@ -48,6 +48,7 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   deviceId: "",
   organizationId: "",
   projectId: "",
+  recordingMode: "toggle",
 };
 
 /** Read voiceInput settings with defaults for fields added after initial store creation. */
@@ -89,6 +90,11 @@ export function getVoiceSettings(): VoiceInputSettings {
   // the provider, not the model, is what selects the backend now.
   const staleModel = merged.transcriptionModel !== "gpt-realtime-whisper";
   if (staleModel) merged.transcriptionModel = "gpt-realtime-whisper";
+
+  // Normalize malformed recordingMode values in memory only (no write-back).
+  if (merged.recordingMode !== "toggle" && merged.recordingMode !== "push-to-talk") {
+    merged.recordingMode = "toggle";
+  }
 
   // Persist the cleaned object on first read after upgrade so the legacy key
   // fields disappear from disk and any defaulted/normalized values are written

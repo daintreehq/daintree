@@ -4,10 +4,15 @@ import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
-import { isActiveVoiceSession, type VoiceInputError } from "@shared/types";
+import {
+  isActiveVoiceSession,
+  type VoiceInputError,
+  type VoiceRecordingMode,
+} from "@shared/types";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
+import { keybindingService } from "@/services/keybindingService";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { notify } from "@/lib/notify";
@@ -46,6 +51,11 @@ class VoiceRecordingService {
   private elapsedTimer: ReturnType<typeof setInterval> | null = null;
   private sessionStartedAt = 0;
   private selectedDeviceId = "";
+  private recordingMode: VoiceRecordingMode = "toggle";
+  // KeyboardEvent.code of the physical key (e.g. "KeyV") that started the
+  // current PTT session. `null` when no PTT session is active. Cleared on stop,
+  // window blur, or Escape.
+  private pttActiveKeyCode: string | null = null;
   private unsubscribers: Array<() => void> = [];
   private isStoppingSession = false;
   private stopPromise: Promise<void> | null = null;
@@ -323,12 +333,65 @@ class VoiceRecordingService {
         return;
       e.preventDefault();
       e.stopPropagation();
+      this.pttActiveKeyCode = null;
       void this.stop("Dictation cancelled.", { preserveLiveText: true });
     };
     window.addEventListener("keydown", handleEscapeKey, { capture: true });
     this.unsubscribers.push(() =>
       window.removeEventListener("keydown", handleEscapeKey, { capture: true })
     );
+
+    // Push-to-talk: a capture-phase keydown listener records the physical key
+    // code of the voice shortcut press so the keyup listener can match it. The
+    // actual `start()` call happens via the normal action dispatch chain
+    // (`toggleFocusedPanel` / `toggleAssistant`), which calls `start()`
+    // directly when `recordingMode === "push-to-talk"`. Recording only the
+    // code here avoids racing the action dispatcher.
+    const handlePttKeyDown = (e: KeyboardEvent) => {
+      if (this.recordingMode !== "push-to-talk") return;
+      if (e.repeat) return;
+      const focusedCombo = keybindingService.getEffectiveCombo("voiceInput.toggle");
+      const assistantCombo = keybindingService.getEffectiveCombo("voiceInput.toggleAssistant");
+      const matches =
+        (focusedCombo && keybindingService.matchesEvent(e, focusedCombo)) ||
+        (assistantCombo && keybindingService.matchesEvent(e, assistantCombo));
+      if (!matches) return;
+      this.pttActiveKeyCode = e.code;
+    };
+    window.addEventListener("keydown", handlePttKeyDown, { capture: true });
+    this.unsubscribers.push(() =>
+      window.removeEventListener("keydown", handlePttKeyDown, { capture: true })
+    );
+
+    // Push-to-talk: stop recording on keyup of the trigger key. macOS swallows
+    // the trigger keyup if a modifier (Cmd/Meta) is still held, so MetaLeft/
+    // MetaRight keyup also ends the session as a safety net. Modifier-only
+    // releases (Shift, Alt, Ctrl) do not stop — only the physical trigger key
+    // or Meta release.
+    const handlePttKeyUp = (e: KeyboardEvent) => {
+      if (this.pttActiveKeyCode === null) return;
+      const isTriggerRelease = e.code === this.pttActiveKeyCode;
+      const isMetaRelease = e.code === "MetaLeft" || e.code === "MetaRight";
+      if (!isTriggerRelease && !isMetaRelease) return;
+      this.pttActiveKeyCode = null;
+      void this.stop("Dictation stopped.", { preserveLiveText: true });
+    };
+    window.addEventListener("keyup", handlePttKeyUp, { capture: true });
+    this.unsubscribers.push(() =>
+      window.removeEventListener("keyup", handlePttKeyUp, { capture: true })
+    );
+
+    // Push-to-talk: window blur safety net. Chromium does NOT dispatch a
+    // synthetic keyup when the window loses focus, so a Cmd+Tab mid-press
+    // would otherwise leave the session running indefinitely. Stops the
+    // session if a PTT press was active.
+    const handlePttBlur = () => {
+      if (this.pttActiveKeyCode === null) return;
+      this.pttActiveKeyCode = null;
+      void this.stop("Dictation stopped.", { preserveLiveText: true });
+    };
+    window.addEventListener("blur", handlePttBlur);
+    this.unsubscribers.push(() => window.removeEventListener("blur", handlePttBlur));
 
     void this.refreshConfiguration();
   }
@@ -343,12 +406,14 @@ class VoiceRecordingService {
         : !!settings.openaiApiKey;
     const isConfigured = settings.enabled && hasProviderKey;
     this.selectedDeviceId = settings.deviceId ?? "";
+    this.recordingMode = settings.recordingMode ?? "toggle";
     logDebug(`${LOG_PREFIX} refreshConfiguration`, {
       enabled: settings.enabled,
       provider: settings.transcriptionProvider,
       hasProviderKey,
       isConfigured,
       correctionEnabled: settings.correctionEnabled,
+      recordingMode: this.recordingMode,
     });
     // Keep correction state in sync for live-segment dimming
     useVoiceRecordingStore
@@ -740,6 +805,10 @@ class VoiceRecordingService {
       const { skipRemoteStop = false, preserveLiveText = true, nextStatus = "idle" } = options;
       const shouldAnnounce = options.announce ?? true;
 
+      // Clear any PTT key tracking — the keyup safety net should not fire stop
+      // again on a session that's already winding down.
+      this.pttActiveKeyCode = null;
+
       if (!options.preservePendingStart) {
         this.startRequestId++;
       }
@@ -958,7 +1027,7 @@ class VoiceRecordingService {
           .announce("Daintree Assistant is starting. Try dictation again in a moment.");
         return;
       }
-      await this.toggle(assistantTarget);
+      await this.startOrToggle(assistantTarget);
       return;
     }
 
@@ -975,7 +1044,7 @@ class VoiceRecordingService {
       return;
     }
 
-    await this.toggle(target);
+    await this.startOrToggle(target);
   }
 
   /**
@@ -1007,7 +1076,19 @@ class VoiceRecordingService {
       return;
     }
 
-    await this.toggle(assistantTarget);
+    await this.startOrToggle(assistantTarget);
+  }
+
+  // In push-to-talk mode the keyboard shortcut only ever starts recording; the
+  // keyup listener stops it. In toggle mode the shortcut behaves as before.
+  // Toolbar callers should keep using `toggle()` directly — they have no keyup
+  // analog and must not be affected by the recording-mode setting.
+  private async startOrToggle(target: VoiceRecordingTarget): Promise<void> {
+    if (this.recordingMode === "push-to-talk") {
+      await this.start(target);
+      return;
+    }
+    await this.toggle(target);
   }
 
   async focusActiveTarget(): Promise<boolean> {
