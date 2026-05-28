@@ -1,6 +1,6 @@
 {
-  "count": 1278,
-  "moduleCount": 1278,
+  "count": 1277,
+  "moduleCount": 1277,
   "allowlist": [
     "electron/ipc/errorHandlers.ts",
     "electron/ipc/handlers/agentCapabilities.ts",
