@@ -49,13 +49,12 @@ const STATUS_TOKENS = ["status-success", "status-warning", "status-danger", "sta
 
 const DEFICIENCIES: Deficiency[] = ["protanopia", "deuteranopia", "tritanopia"];
 
-// Half a JND in OKLab (~0.01). This is the absolute floor: any pair below this
-// maps to effectively the same perceived color under CVD simulation.
-// 1 JND ≈ 0.02 represents barely noticeable; half a JND represents functional
-// identity. The Okabe-Ito calibration benchmark is considerably higher
-// (~0.09–0.10), serving as the aspirational target documented in the
-// informational tests below.
-const JND_FLOOR = 0.01;
+// Quarter-JND floor (~0.005 OKLab units). Catches near-identical perceived
+// colors under CVD. 1 JND ≈ 0.02 in OKLab; 0.005 is the floor where two tokens
+// map to functionally the same color. The Okabe-Ito calibration benchmark is
+// considerably higher (~0.09–0.10), serving as the aspirational target
+// documented in the informational tests below.
+const JND_FLOOR = 0.005;
 
 function cvdFilter(deficiency: Deficiency) {
   switch (deficiency) {
