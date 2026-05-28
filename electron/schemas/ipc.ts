@@ -215,6 +215,7 @@ export const TerminalRecipeSchema = z
     lastUsedAt: z.number().finite().optional(),
     usageHistory: z.array(z.number().finite()).max(20).optional(),
     autoAssign: z.enum(["always", "never", "prompt"]).optional(),
+    scope: z.enum(["inrepo"]).optional(),
   })
   .passthrough();
 

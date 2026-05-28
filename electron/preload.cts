@@ -93,6 +93,7 @@ import type {
   GitStatus,
   KeyAction,
   TerminalRecipe,
+  RecipeNameCollision,
   AttachIssuePayload,
   IssueAssociation,
   VoiceInputStatus,
@@ -1360,7 +1361,9 @@ const api: ElectronAPI = {
 
     cancelClone: (): Promise<void> => _unwrappingInvoke(CHANNELS.PROJECT_CLONE_CANCEL),
 
-    getRecipes: (projectId: string): Promise<TerminalRecipe[]> =>
+    getRecipes: (
+      projectId: string
+    ): Promise<{ recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] }> =>
       _unwrappingInvoke(CHANNELS.PROJECT_GET_RECIPES, projectId),
 
     saveRecipes: (projectId: string, recipes: TerminalRecipe[]): Promise<void> =>

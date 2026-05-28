@@ -7,7 +7,6 @@ import {
   nextDuplicateName,
   _resetRecipeFuseCacheForTests,
 } from "../recipeRunnerUtils";
-import { stableInRepoId } from "@shared/utils/recipeFilename";
 import type { TerminalRecipe } from "@/types";
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -192,29 +191,28 @@ describe("nextDuplicateName", () => {
   });
 
   it("strips existing '(Copy)' suffix so duplicating a copy doesn't nest", () => {
-    expect(nextDuplicateName("Foo (Copy)", new Set([stableInRepoId("Foo (Copy)")]))).toBe(
-      "Foo (Copy 2)"
-    );
+    expect(nextDuplicateName("Foo (Copy)", new Set(["Foo (Copy)"]))).toBe("Foo (Copy 2)");
   });
 
   it("strips existing '(Copy N)' suffix and increments past the highest taken slot", () => {
-    const taken = new Set([stableInRepoId("Foo (Copy)"), stableInRepoId("Foo (Copy 2)")]);
+    const taken = new Set(["Foo (Copy)", "Foo (Copy 2)"]);
     expect(nextDuplicateName("Foo (Copy 2)", taken)).toBe("Foo (Copy 3)");
   });
 
-  it("never returns a name that maps to an already-taken stableInRepoId", () => {
-    const taken = new Set([stableInRepoId("Recipe")]);
+  it("never returns a name that is already taken", () => {
+    const taken = new Set(["Recipe", "Recipe (Copy)"]);
     const result = nextDuplicateName("Recipe", taken);
-    expect(taken.has(stableInRepoId(result))).toBe(false);
+    expect(taken.has(result)).toBe(false);
+    expect(result).toBe("Recipe (Copy 2)");
   });
 
-  it("avoids the 200-char truncation collision for very long names", () => {
+  it("pre-truncates very long names so copies don't collide on the on-disk filename", () => {
     // Without root pre-truncation, " (Copy)" gets sliced off by safeRecipeFilename's
-    // 200-char cap and every candidate hashes to the same ID as the original.
+    // 200-char cap and every candidate would map to the same filename on disk.
     const longName = "a".repeat(220);
-    const original = stableInRepoId(longName);
-    const result = nextDuplicateName(longName, new Set([original]));
-    expect(stableInRepoId(result)).not.toBe(original);
+    const result = nextDuplicateName(longName, new Set([longName]));
+    expect(result).not.toBe(longName);
+    expect(result.length).toBeLessThanOrEqual(180 + " (Copy)".length);
   });
 });
 

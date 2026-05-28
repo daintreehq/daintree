@@ -20,12 +20,29 @@ export function safeRecipeFilename(name: string): string {
   return `${base}.json`;
 }
 
-/** Compute the stable in-repo recipe ID from a recipe name. */
+/**
+ * Compute the legacy name-derived in-repo recipe ID.
+ *
+ * New in-repo recipes use an opaque `crypto.randomUUID()` id instead, so this
+ * is retained only for (a) the deterministic backfill of legacy files that
+ * predate the opaque-id scheme and lack an explicit `id`, and (b) detecting
+ * those legacy ids. It must NOT be used to (re)derive an id on a recipe rename
+ * — doing so was the bug that #9195 fixed.
+ */
 export function stableInRepoId(name: string): string {
   return `inrepo-${safeRecipeFilename(name).replace(/\.json$/, "")}`;
 }
 
-/** Check whether a recipe ID denotes an in-repo recipe. */
-export function isInRepoRecipeId(id: string): boolean {
-  return id.startsWith("inrepo-");
+/**
+ * Check whether a recipe denotes an in-repo recipe.
+ *
+ * Accepts either a bare id string (legacy callers — only the `inrepo-` prefix
+ * is checked) or the recipe object, which is preferred because opaque-UUID
+ * in-repo recipes are identified by their `scope: "inrepo"` field, not the id.
+ */
+export function isInRepoRecipeId(idOrRecipe: string | { id: string; scope?: string }): boolean {
+  if (typeof idOrRecipe === "string") {
+    return idOrRecipe.startsWith("inrepo-");
+  }
+  return idOrRecipe.scope === "inrepo" || idOrRecipe.id.startsWith("inrepo-");
 }

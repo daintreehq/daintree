@@ -6,6 +6,7 @@ import type {
   ProjectStats,
   BulkProjectStats,
   TerminalRecipe,
+  RecipeNameCollision,
   TerminalSnapshot,
   TabGroup,
 } from "@shared/types";
@@ -253,7 +254,9 @@ export const projectClient = {
     return window.electron.project.cancelClone();
   },
 
-  getRecipes: (projectId: string): Promise<TerminalRecipe[]> => {
+  getRecipes: (
+    projectId: string
+  ): Promise<{ recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] }> => {
     return window.electron.project.getRecipes(projectId);
   },
 

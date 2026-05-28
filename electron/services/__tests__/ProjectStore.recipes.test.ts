@@ -273,6 +273,77 @@ describe("ProjectStore recipe reconciliation", () => {
     expect(fs2).toHaveLength(1);
     expect(fs2[0]!.id).toBe(recipe.id);
   });
+
+  it("returns an empty collision list when nothing collides", async () => {
+    const recipe = makeRecipe({ id: "recipe-opaque-uuid", name: "Opaque", scope: "inrepo" });
+    await seedInRepo(recipe);
+
+    const collisions = await store.reconcileProjectRecipes(projectPath, projectId);
+    expect(collisions).toEqual([]);
+  });
+
+  it("tags loaded in-repo recipes with scope 'inrepo' (opaque-id recipe detected without prefix)", async () => {
+    const recipe = makeRecipe({ id: "recipe-opaque-uuid", name: "Opaque" });
+    await seedInRepo(recipe);
+
+    const inr = await readInRepo();
+    expect(inr).toHaveLength(1);
+    expect(inr[0]!.scope).toBe("inrepo");
+
+    // Reconcile must treat it as in-repo (case 1/2) via scope, not the id prefix.
+    await store.reconcileProjectRecipes(projectPath, projectId);
+    const fs2 = await readFileStore();
+    expect(fs2.map((r) => r.id)).toContain("recipe-opaque-uuid");
+  });
+
+  it("a legacy file with no id gets a deterministic inrepo- id and is not rewritten on read", async () => {
+    const recipesDir = path.join(projectPath, ".daintree", "recipes");
+    await fs.mkdir(recipesDir, { recursive: true });
+    const filePath = path.join(recipesDir, "legacy.json");
+    const raw =
+      JSON.stringify(
+        { name: "Legacy", terminals: [{ type: "terminal", command: "echo hi" }], createdAt: 1 },
+        null,
+        2
+      ) + "\n";
+    await fs.writeFile(filePath, raw, "utf-8");
+
+    const first = await store.readInRepoRecipes(projectPath);
+    expect(first).toHaveLength(1);
+    expect(first[0]!.id).toBe("inrepo-legacy");
+    expect(first[0]!.scope).toBe("inrepo");
+
+    // Deterministic across reads, and reading never rewrites the file (a random
+    // UUID per read would churn the id and dirty teammates' working trees).
+    const second = await store.readInRepoRecipes(projectPath);
+    expect(second[0]!.id).toBe("inrepo-legacy");
+    expect(await fs.readFile(filePath, "utf-8")).toBe(raw);
+  });
+
+  it("filename collision: the un-promotable recipe is kept (not dropped) and the collision is returned", async () => {
+    // Two distinct project-local recipes whose names slugify to the same
+    // filename — only one can own .daintree/recipes/my-recipe.json.
+    const a = makeRecipe({ id: "recipe-a", name: "My Recipe", projectId });
+    const b = makeRecipe({ id: "recipe-b", name: "my recipe", projectId });
+    await seedFileStore([a, b]);
+
+    const collisions = await store.reconcileProjectRecipes(projectPath, projectId);
+
+    expect(collisions).toHaveLength(1);
+    expect(collisions[0]!.filename).toBe("my-recipe.json");
+    expect([collisions[0]!.keptId, collisions[0]!.droppedId].sort()).toEqual([
+      "recipe-a",
+      "recipe-b",
+    ]);
+
+    // The loser is NOT silently dropped — both survive in ProjectFileStore.
+    const fs2 = await readFileStore();
+    expect(fs2.map((r) => r.id).sort()).toEqual(["recipe-a", "recipe-b"]);
+
+    // Exactly one was promoted to .daintree/.
+    const inr = await readInRepo();
+    expect(inr).toHaveLength(1);
+  });
 });
 
 describe("ProjectStore.writeInRepoRecipeChecked (in-repo recipe staleness guard, #9186)", () => {
@@ -372,9 +443,10 @@ describe("ProjectStore.writeInRepoRecipeChecked (in-repo recipe staleness guard,
     const original = await fs.readFile(oldPath, "utf-8");
     await fs.writeFile(oldPath, original.replace("Old Name", "External Old Name"));
 
+    // Ids are stable across renames now — only the name (and thus filename)
+    // changes. The old-name file's hash was cached under this same id.
     const renamed = {
       ...recipe,
-      id: stableInRepoId("New Name"),
       name: "New Name",
     };
     await expect(
@@ -398,7 +470,6 @@ describe("ProjectStore.writeInRepoRecipeChecked (in-repo recipe staleness guard,
 
     const renamed = {
       ...recipe,
-      id: stableInRepoId("New Forced"),
       name: "New Forced",
     };
     await expect(
