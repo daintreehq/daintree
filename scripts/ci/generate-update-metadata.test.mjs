@@ -56,7 +56,11 @@ describe("generate-update-metadata", () => {
     });
   });
 
-  it("uses the universal macOS ZIP as the top-level updater path", async () => {
+  // electron-updater's MacUpdater.ts picks the first entry whose URL passes the
+  // architecture filter. Native x64 must come first so Intel Macs select it instead
+  // of the larger universal ZIP; arm64 second for Apple Silicon; universal last as a
+  // fallback that should never be picked when a native build exists.
+  it("ranks native macOS ZIPs before the universal ZIP", async () => {
     const dir = await tempDir();
     const releaseDir = path.join(dir, "release");
     await mkdir(releaseDir);
@@ -74,11 +78,59 @@ describe("generate-update-metadata", () => {
       releaseDate: "2026-01-02T03:04:05.000Z",
     });
 
-    expect(metadata.path).toBe("Daintree-1.2.3-universal-mac.zip");
+    expect(metadata.path).toBe("Daintree-1.2.3-mac.zip");
     expect(metadata.files.map((file) => file.url)).toEqual([
-      "Daintree-1.2.3-universal-mac.zip",
       "Daintree-1.2.3-mac.zip",
       "Daintree-1.2.3-arm64-mac.zip",
+      "Daintree-1.2.3-universal-mac.zip",
+    ]);
+  });
+
+  it("ranks explicit -x64-mac.zip before universal when no bare -mac.zip is present", async () => {
+    const dir = await tempDir();
+    const releaseDir = path.join(dir, "release");
+    await mkdir(releaseDir);
+    const packagePath = await writePackageJson(dir);
+    await writeArtifact(releaseDir, "Daintree-1.2.3-arm64-mac.zip", "arm64");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-x64-mac.zip", "x64");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-universal-mac.zip", "universal");
+
+    const metadata = await generateUpdateMetadata({
+      platform: "mac",
+      releaseDir,
+      metadataPath: path.join(releaseDir, "latest-mac.yml"),
+      packagePath,
+      releaseDate: "2026-01-02T03:04:05.000Z",
+    });
+
+    expect(metadata.path).toBe("Daintree-1.2.3-x64-mac.zip");
+    expect(metadata.files.map((file) => file.url)).toEqual([
+      "Daintree-1.2.3-x64-mac.zip",
+      "Daintree-1.2.3-arm64-mac.zip",
+      "Daintree-1.2.3-universal-mac.zip",
+    ]);
+  });
+
+  it("ranks arm64 before universal when no x64 ZIP is present", async () => {
+    const dir = await tempDir();
+    const releaseDir = path.join(dir, "release");
+    await mkdir(releaseDir);
+    const packagePath = await writePackageJson(dir);
+    await writeArtifact(releaseDir, "Daintree-1.2.3-arm64-mac.zip", "arm64");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-universal-mac.zip", "universal");
+
+    const metadata = await generateUpdateMetadata({
+      platform: "mac",
+      releaseDir,
+      metadataPath: path.join(releaseDir, "latest-mac.yml"),
+      packagePath,
+      releaseDate: "2026-01-02T03:04:05.000Z",
+    });
+
+    expect(metadata.path).toBe("Daintree-1.2.3-arm64-mac.zip");
+    expect(metadata.files.map((file) => file.url)).toEqual([
+      "Daintree-1.2.3-arm64-mac.zip",
+      "Daintree-1.2.3-universal-mac.zip",
     ]);
   });
 

@@ -47,10 +47,18 @@ async function artifactEntry(releaseDir, fileName) {
   return entry;
 }
 
+// electron-updater's MacUpdater.ts filters by "arm64" substring: on Apple Silicon
+// only files containing "arm64" are kept; on Intel Macs "arm64" files are excluded.
+// It then picks the first surviving entry. Rank native builds before universal so
+// each architecture selects its own native ZIP and universal is never picked when
+// a native build exists.
 function macZipPriority(fileName) {
-  if (fileName.includes("universal-mac.zip")) return 0;
-  if (fileName.includes("-arm64-mac.zip")) return 2;
-  if (fileName.includes("-x64-mac.zip") || fileName.endsWith("-mac.zip")) return 1;
+  if (fileName.includes("-x64-mac.zip")) return 0;
+  if (fileName.includes("-arm64-mac.zip")) return 1;
+  if (fileName.includes("universal-mac.zip")) return 2;
+  // Bare -mac.zip (no arch suffix) is the x64 build from electron-builder.
+  // Check after arm64 so arm64-mac.zip doesn't match this branch.
+  if (fileName.endsWith("-mac.zip")) return 0;
   return 3;
 }
 
