@@ -1467,4 +1467,35 @@ describe("createPluginProtocolHandler", () => {
     expect(response.status).toBe(500);
     expect(handle.close).toHaveBeenCalledTimes(1);
   });
+
+  it("returns 500 for unexpected open errors (EACCES) — distinct from the 404 not-found branch", async () => {
+    const fs = await import("fs/promises");
+    const eacces = Object.assign(new Error("EACCES"), { code: "EACCES" });
+    vi.mocked(fs.open).mockRejectedValue(eacces);
+
+    const handler = buildHandler();
+    const response = await handler(makeRequest("plugin://my-plugin/permission-denied.js"));
+
+    expect(response.status).toBe(500);
+  });
+
+  it("blocks via the path.isAbsolute(rel) branch (Windows cross-drive simulation)", async () => {
+    // Symmetry with the daintree-file:// equivalent: forcing path.relative
+    // to return an absolute path isolates the isAbsolute guard from the '..'
+    // branch — same shape as Windows cross-drive (relative('D:\\proj','C:\\win')
+    // === 'C:\\win'). With this branch removed, a cross-drive symlink target
+    // would slip through containment.
+    const fs = await import("fs/promises");
+    const relativeSpy = vi.spyOn(path, "relative").mockReturnValue("/absolute/elsewhere");
+
+    try {
+      const handler = buildHandler();
+      const response = await handler(makeRequest("plugin://my-plugin/file.js"));
+
+      expect(response.status).toBe(404);
+      expect(fs.open).not.toHaveBeenCalled();
+    } finally {
+      relativeSpy.mockRestore();
+    }
+  });
 });

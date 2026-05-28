@@ -386,8 +386,13 @@ export function createPluginProtocolHandler(getPluginDir: GetPluginDir) {
       });
     }
 
-    // Segment-by-segment '..' check (#4702) — never use substring `includes('..')`,
-    // which would also reject legitimate paths like `..hidden/file.txt`.
+    // Normalize and re-check for '..'. The leading-slash normalize collapses
+    // every `..` against the root, so the segment scan is redundant for
+    // standard inputs — but cheap defense-in-depth against future changes to
+    // posix.normalize semantics or edge-case inputs that surface a `..` after
+    // decode. #4702: segment match, never substring `includes('..')`, which
+    // would also reject legitimate paths like `..hidden/file.txt`. The actual
+    // traversal defense is the realpath/path.relative containment below.
     const normalizedPosix = path.posix.normalize("/" + decodedPath).slice(1);
     if (normalizedPosix.split("/").some((seg) => seg === "..")) {
       return new Response("Not Found", {
