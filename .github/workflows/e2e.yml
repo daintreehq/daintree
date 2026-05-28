@@ -383,6 +383,13 @@ jobs:
       # (continue-on-error skips the hard-fail). "Re-run all jobs" creates a
       # new run_id — the download fails harmlessly since the artifact doesn't
       # exist, and the arg resolution step falls back to a full-suite rerun.
+      #
+      # Always downloads the attempt-1 artifact (not attempt N-1). This is
+      # intentionally conservative: a shrinking failure set across attempts
+      # risks missing regressions introduced by the retry fix itself. Re-running
+      # the full original failure list on every retry is safer and simpler.
+      # (Playwright #33094: merging retry blobs with primary blobs can duplicate
+      # entries, so per-attempt artifacts are deliberately kept separate.)
       - name: Download failed-specs from prior attempt
         if: github.run_attempt > 1
         continue-on-error: true
@@ -419,8 +426,7 @@ jobs:
              && [ "$SUITE" != "nightly" ] \
              && [ "$SUITE" != "online" ] \
              && [ -z "${{ inputs.test_file }}" ]; then
-            echo "::warning::Retry attempt but no failed-specs artifact found — skipping test run"
-            exit 0
+            echo "::warning::Retry attempt but no failed-specs artifact found — falling back to full suite rerun"
           fi
 
           SHARD_ARGS=""
@@ -526,7 +532,6 @@ jobs:
             jq -r '.suites[] | .. | objects | select(.file != null and .ok == false) | .file' test-results/report.json | sort -u > failed-specs.txt
             echo "[e2e] Extracted $(wc -l < failed-specs.txt) failed spec(s) from JSON report"
           else
-            echo "# Playwright JSON report missing — no failures extracted" > failed-specs.txt
             echo "[e2e] JSON report missing or empty — no failures to extract"
           fi
 

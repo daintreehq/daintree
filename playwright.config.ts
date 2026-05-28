@@ -27,6 +27,10 @@ const useBlobReporter = process.env.PLAYWRIGHT_BLOB_REPORT === "1";
 //      reads the JSON to build signature-keyed failure reports.
 // When both are set the explicit output file wins; otherwise the dedup path
 // falls back to the historical default `playwright-results.json`.
+// Note: blob reporter takes precedence over JSON reporter in the ternary below.
+// If both env vars are set (e.g. PLAYWRIGHT_BLOB_REPORT alongside one of the
+// JSON opt-ins), only the blob reporter is active and no JSON report is
+// produced. No current workflow sets both simultaneously.
 const jsonOutputFile =
   process.env.PLAYWRIGHT_JSON_OUTPUT_FILE ||
   (process.env.PLAYWRIGHT_JSON_REPORT === "1" ? "playwright-results.json" : "");
