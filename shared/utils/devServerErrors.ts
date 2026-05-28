@@ -7,6 +7,9 @@ export type DevServerErrorType =
   | "port-conflict"
   | "missing-dependencies"
   | "permission"
+  | "compile-error"
+  | "oom"
+  | "process-crash"
   | "unknown";
 
 export interface DevServerError {
@@ -43,6 +46,20 @@ const DEPENDENCY_ERROR_PATTERNS = [
   /Error: ENOENT.*node_modules/,
 ];
 
+// Failure-specific compile patterns. Deliberately distinct from UrlDetector's
+// COMPILE_MARKERS which detect active compilation ("compiling...", "[vite] hmr
+// update") — those signal progress; these signal failure.
+const COMPILE_ERROR_PATTERNS = [
+  /Build failed with \d+ errors?/i,
+  /Compilation failed/i,
+  /Failed to compile/i,
+  /Module build failed/i,
+  /Unable to resolve module/i,
+  /Could not resolve/i,
+  /^[A-Z]:\\.*\.tsx?\d+:\d+: error TS\d+:/i,
+  /error TS\d+:/i,
+];
+
 const PERMISSION_ERROR_PATTERNS = [/EACCES/, /permission denied/i, /EPERM/];
 
 export function detectDevServerError(output: string): DevServerError | null {
@@ -73,6 +90,16 @@ export function detectDevServerError(output: string): DevServerError | null {
         message: module ? `Missing dependency: ${module}` : "Missing dependencies detected",
         module,
         recommendedActionId: "devPreview.reinstallAndRestart",
+      };
+    }
+  }
+
+  // Check for compile errors
+  for (const pattern of COMPILE_ERROR_PATTERNS) {
+    if (pattern.test(output)) {
+      return {
+        type: "compile-error",
+        message: "Compilation failed. Check the terminal output for details.",
       };
     }
   }

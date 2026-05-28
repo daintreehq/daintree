@@ -139,7 +139,7 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
         state.pendingSpawns.delete(event.id);
       }
       state.terminalPids.delete(event.id);
-      emitter.emit("exit", event.id, event.exitCode);
+      emitter.emit("exit", event.id, event.exitCode, event.signal);
       return true;
     }
 

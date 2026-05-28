@@ -254,12 +254,12 @@ export class PtyManager extends EventEmitter {
         options,
         {
           emitData: (termId, data) => this.emitData(termId, data),
-          onExit: (termId, exitCode) => {
+          onExit: (termId, exitCode, signal) => {
             // Guard against stale exit events from previous terminal with same ID
             if (this.registry.get(termId) !== terminalProcess) {
               return;
             }
-            this.emit("exit", termId, exitCode);
+            this.emit("exit", termId, exitCode, signal);
             if (!terminalProcess.shouldPreserveOnExit(exitCode)) {
               this.registry.delete(termId);
             }

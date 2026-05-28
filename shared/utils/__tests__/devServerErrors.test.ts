@@ -157,6 +157,52 @@ describe("devServerErrors", () => {
       });
     });
 
+    describe("compile errors", () => {
+      it("detects Vite build failure", () => {
+        const output = "Build failed with 3 errors:\nsrc/App.tsx:10:5: error TS2322: ...";
+        const error = detectDevServerError(output);
+        expect(error?.type).toBe("compile-error");
+      });
+
+      it("detects Webpack compilation failure", () => {
+        const output = "Compilation failed.\nModule not found: Error: Can't resolve './foo'";
+        const error = detectDevServerError(output);
+        expect(error?.type).toBe("compile-error");
+      });
+
+      it("detects 'Failed to compile' message", () => {
+        const output = "Failed to compile.\n./src/index.tsx\nModule build failed: SyntaxError";
+        const error = detectDevServerError(output);
+        expect(error?.type).toBe("compile-error");
+      });
+
+      it("detects Module build failed", () => {
+        const output =
+          "Module build failed (from ./node_modules/babel-loader/lib/index.js):\nSyntaxError: Unexpected token";
+        const error = detectDevServerError(output);
+        expect(error?.type).toBe("compile-error");
+      });
+
+      it("detects TypeScript error lines", () => {
+        const output =
+          "src/components/App.tsx:15:8: error TS2345: Argument of type 'string' is not assignable";
+        const error = detectDevServerError(output);
+        expect(error?.type).toBe("compile-error");
+      });
+
+      it("returns null for active compilation markers (not failures)", () => {
+        const output = "compiling...\n[vite] hmr update /src/App.tsx";
+        const error = detectDevServerError(output);
+        expect(error).toBeNull();
+      });
+
+      it("returns null for normal Vite startup output", () => {
+        const output = "VITE v6.4.1 ready in 234 ms\nLocal: http://localhost:5173/";
+        const error = detectDevServerError(output);
+        expect(error).toBeNull();
+      });
+    });
+
     describe("no error", () => {
       it("returns null for normal output", () => {
         const output = "Server started successfully at http://localhost:3000";
