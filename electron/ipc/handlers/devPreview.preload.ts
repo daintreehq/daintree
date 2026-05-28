@@ -15,6 +15,7 @@ export const DEV_PREVIEW_METHOD_CHANNELS = {
   stopByWorktree: "dev-preview:stop-by-worktree",
   restartByWorktree: "dev-preview:restart-by-worktree",
   stopDevServerByWorktree: "dev-preview:stop-dev-server-by-worktree",
+  getProxyPort: "dev-preview:get-proxy-port",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof DEV_PREVIEW_METHOD_CHANNELS;

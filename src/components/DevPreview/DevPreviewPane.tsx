@@ -74,6 +74,7 @@ import { useDevPreviewLoadLifecycle, type SessionStorageEntry } from "./useDevPr
 
 import { BlockedNavBanner, blockedNavReducer } from "./BlockedNavBanner";
 import { looksLikeOAuthUrl } from "@shared/utils/urlUtils";
+import { buildDevPreviewProxyOrigin } from "@shared/utils/devPreviewProxy";
 
 async function captureWebviewSessionStorage(
   webviewElement: Electron.WebviewTag | null
@@ -303,6 +304,31 @@ export function DevPreviewPane({
     const panelToken = sanitizePartitionToken(id);
     return `persist:dev-preview-${projectToken}-${worktreeToken}-${panelToken}`;
   }, [currentProjectId, worktreeId, id]);
+
+  // Resolve the dev-preview reverse proxy port once, then derive the stable origin this
+  // panel's webview loads (#9100). `undefined` = still fetching (hold navigation until it
+  // settles so we don't flash the unstable direct-localhost origin); `null` = proxy
+  // unavailable, fall back to the legacy direct-localhost behavior.
+  const [proxyPort, setProxyPort] = useState<number | null | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    window.electron.devPreview
+      .getProxyPort()
+      .then(({ port }) => {
+        if (!cancelled) setProxyPort(port);
+      })
+      .catch(() => {
+        if (!cancelled) setProxyPort(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const proxyOrigin = useMemo<string | null | undefined>(() => {
+    if (proxyPort === undefined) return undefined;
+    if (proxyPort === null || !currentProjectId) return null;
+    return buildDevPreviewProxyOrigin(proxyPort, currentProjectId, id);
+  }, [proxyPort, currentProjectId, id]);
 
   const [forceKillBannerDismissed, setForceKillBannerDismissed] = useState(false);
 
@@ -627,12 +653,15 @@ export function DevPreviewPane({
 
   useEffect(() => {
     if (isUnconfigured) return;
-    const nextUrl = url ? computeDevServerUrl(url, currentUrl) : false;
+    // Hold navigation until the proxy port resolution settles, otherwise the pane would
+    // briefly adopt the unstable direct-localhost origin before the proxy origin is known (#9100).
+    if (proxyOrigin === undefined) return;
+    const nextUrl = url ? computeDevServerUrl(url, currentUrl, proxyOrigin) : false;
     if (nextUrl !== false) {
       setHistory((prev) => pushBrowserHistory(prev, nextUrl));
       lastSetUrlRef.current = nextUrl;
     }
-  }, [url, currentUrl, isUnconfigured]);
+  }, [url, currentUrl, isUnconfigured, proxyOrigin]);
 
   useEffect(() => {
     if (isUnconfigured) return;

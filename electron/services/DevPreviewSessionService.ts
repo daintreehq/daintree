@@ -26,6 +26,7 @@ import {
 } from "./DevPreviewRequestValidators.js";
 
 export { normalizeNextjsDevCommand } from "./DevPreviewCommandNormalizer.js";
+import { buildDevPreviewSubdomain } from "../../shared/utils/devPreviewProxy.js";
 import type { DevPreviewManifestEntry } from "./DevPreviewManifestService.js";
 import type { PtyClient } from "./PtyClient.js";
 import { UrlDetector } from "./UrlDetector.js";
@@ -280,6 +281,25 @@ export class DevPreviewSessionService {
       });
     }
     return result;
+  }
+
+  /**
+   * Resolve a dev-preview proxy subdomain (`dp-<projectToken>-<panelToken>`) to the upstream
+   * dev-server port currently allocated for that panel, or null when none is registered (#9100).
+   * Used by DevPreviewProxyService to forward each request to the live upstream port without
+   * coupling to session internals. The portRegistry is keyed by the full (projectId, panelId)
+   * session key; since both halves are sanitized into the subdomain, we rebuild the expected
+   * subdomain per entry and match on equality — avoiding any ambiguous split of a label whose
+   * tokens may themselves contain hyphens.
+   */
+  getUpstreamPortForSubdomain(subdomain: string): number | null {
+    for (const session of this.sessions.values()) {
+      if (buildDevPreviewSubdomain(session.projectId, session.panelId) === subdomain) {
+        const port = this.portRegistry.get(createSessionKey(session.projectId, session.panelId));
+        return port ?? null;
+      }
+    }
+    return null;
   }
 
   dispose(): void {

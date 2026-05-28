@@ -111,3 +111,8 @@ export interface DevPreviewRestartByWorktreeRequest {
 export interface DevPreviewStopDevServerByWorktreeRequest {
   worktreeId: string;
 }
+
+export interface DevPreviewProxyInfo {
+  /** The live port the dev-preview reverse proxy is listening on (#9100). */
+  port: number;
+}

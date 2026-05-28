@@ -3,6 +3,7 @@ import https from "node:https";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DevPreviewSessionService } from "../DevPreviewSessionService.js";
 import * as portAllocator from "../DevPreviewPortAllocator.js";
+import { buildDevPreviewSubdomain } from "../../../shared/utils/devPreviewProxy.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { DevPreviewSessionState } from "../../../shared/types/ipc/devPreview.js";
 
@@ -1596,6 +1597,26 @@ describe("DevPreviewSessionService", () => {
         projectId: baseRequest.projectId,
       });
       expect(state.phaseLabel).toBeUndefined();
+    });
+  });
+
+  describe("getUpstreamPortForSubdomain (#9100)", () => {
+    it("resolves a panel's proxy subdomain to its allocated upstream port", async () => {
+      vi.spyOn(portAllocator, "allocatePort").mockImplementation(
+        async (registry: Map<string, number>, key: string) => {
+          registry.set(key, 4321);
+          return 4321;
+        }
+      );
+
+      await service.ensure(baseRequest);
+
+      const subdomain = buildDevPreviewSubdomain(baseRequest.projectId, baseRequest.panelId);
+      expect(service.getUpstreamPortForSubdomain(subdomain)).toBe(4321);
+    });
+
+    it("returns null for an unknown subdomain", () => {
+      expect(service.getUpstreamPortForSubdomain("dp-nope-nope")).toBeNull();
     });
   });
 });

@@ -20,13 +20,41 @@ import type {
   DevPreviewRestartByWorktreeRequest,
   DevPreviewStopDevServerByWorktreeRequest,
   DevPreviewSessionState,
+  DevPreviewProxyInfo,
 } from "../../../shared/types/ipc/devPreview.js";
 import type { DevPreviewSessionService as DevPreviewSessionServiceType } from "../../services/DevPreviewSessionService.js";
+import type { DevPreviewProxyService as DevPreviewProxyServiceType } from "../../services/DevPreviewProxyService.js";
 import { getHibernationService } from "../../services/HibernationService.js";
 
 export function registerDevPreviewHandlers(deps: HandlerDependencies): () => void {
   let sessionService: DevPreviewSessionServiceType | null = null;
   let sessionServicePromise: Promise<DevPreviewSessionServiceType> | null = null;
+  let proxyService: DevPreviewProxyServiceType | null = null;
+  let proxyServicePromise: Promise<DevPreviewProxyServiceType> | null = null;
+
+  // The reverse proxy (#9100) gives each dev-preview panel a stable `*.localhost` origin.
+  // It starts lazily on the first getProxyPort call (renderer mount) and resolves each
+  // request's subdomain to the live upstream port via the session service — which may not
+  // exist yet, in which case there is no upstream and the proxy returns a 502.
+  async function getProxyService(): Promise<DevPreviewProxyServiceType> {
+    if (proxyService) return proxyService;
+    if (!proxyServicePromise) {
+      proxyServicePromise = import("../../services/DevPreviewProxyService.js")
+        .then(async (mod) => {
+          const svc = new mod.DevPreviewProxyService((subdomain) =>
+            sessionService ? sessionService.getUpstreamPortForSubdomain(subdomain) : null
+          );
+          await svc.start();
+          proxyService = svc;
+          return svc;
+        })
+        .catch((err) => {
+          proxyServicePromise = null;
+          throw err;
+        });
+    }
+    return proxyServicePromise;
+  }
 
   async function getSessionService(): Promise<DevPreviewSessionServiceType> {
     if (sessionService) return sessionService;
@@ -184,6 +212,13 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
           return svc.stopDevServerByWorktree(request.worktreeId);
         }
       ),
+      getProxyPort: op(
+        DEV_PREVIEW_METHOD_CHANNELS.getProxyPort,
+        async (): Promise<DevPreviewProxyInfo> => {
+          const proxy = await getProxyService();
+          return { port: proxy.port };
+        }
+      ),
     },
   });
 
@@ -201,6 +236,9 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
     unsubHibernation();
     if (sessionService) {
       sessionService.dispose();
+    }
+    if (proxyService) {
+      proxyService.dispose();
     }
     cleanups.forEach((dispose) => dispose());
   };

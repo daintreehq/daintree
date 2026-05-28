@@ -3,6 +3,7 @@ import {
   extractLocalhostUrls,
   normalizeBrowserUrl,
   isLocalhostUrl,
+  isDevPreviewProxyUrl,
   isSafeNavigationUrl,
   stripAnsiAndOscCodes,
   isImplicitlyAllowedHost,
@@ -435,6 +436,32 @@ describe("urlUtils", () => {
 
     it("returns true for https IPv6 [::1] URL", () => {
       expect(isLocalhostUrl("https://[::1]:3000")).toBe(true);
+    });
+  });
+
+  describe("isDevPreviewProxyUrl", () => {
+    it("returns true for an http *.localhost subdomain", () => {
+      expect(isDevPreviewProxyUrl("http://dp-proj-panel.localhost:43000/")).toBe(true);
+      expect(isDevPreviewProxyUrl("http://dp-proj-panel.localhost:43000/some/route?q=1")).toBe(
+        true
+      );
+    });
+
+    it("returns false for bare localhost (that's isLocalhostUrl's job)", () => {
+      expect(isDevPreviewProxyUrl("http://localhost:43000/")).toBe(false);
+    });
+
+    it("returns false for https *.localhost (proxy serves plain http only)", () => {
+      expect(isDevPreviewProxyUrl("https://dp-proj-panel.localhost:43000/")).toBe(false);
+    });
+
+    it("does not match a public host that merely embeds 'localhost'", () => {
+      expect(isDevPreviewProxyUrl("http://evil.localhost.example.com:43000/")).toBe(false);
+    });
+
+    it("returns false for remote URLs and invalid input", () => {
+      expect(isDevPreviewProxyUrl("http://example.com")).toBe(false);
+      expect(isDevPreviewProxyUrl("not a url")).toBe(false);
     });
   });
 
