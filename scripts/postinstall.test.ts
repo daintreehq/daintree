@@ -4,6 +4,7 @@ import Module from "module";
 
 const mockRebuild = vi.fn();
 const mockExecSync = vi.fn();
+const mockSpawnSync = vi.fn();
 
 const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -31,9 +32,7 @@ describe("postinstall", () => {
       if (id === "child_process") {
         return {
           execSync: mockExecSync,
-          exec: vi.fn(),
-          spawn: vi.fn(),
-          spawnSync: vi.fn(),
+          spawnSync: mockSpawnSync,
         };
       }
       return originalRequire.apply(this, [id]);
@@ -50,6 +49,7 @@ describe("postinstall", () => {
     consoleLogSpy.mockImplementation(() => {});
     mockRebuild.mockResolvedValue(undefined);
     mockExecSync.mockReturnValue(undefined);
+    mockSpawnSync.mockReturnValue({ status: 1, stderr: "", stdout: "" });
     process.exitCode = undefined;
 
     setupMocks();
@@ -206,5 +206,35 @@ describe("postinstall", () => {
     const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
     expect(errorCalls).toMatch(/node-pty/);
     expect(errorCalls).toMatch(/win-job-object/);
+  });
+
+  it("should skip better-sqlite3 rebuild when probe detects Electron ABI (status 1)", async () => {
+    mockSpawnSync.mockReturnValue({ status: 1, stderr: "", stdout: "" });
+
+    await runPostinstall();
+
+    const rebuildCalls = mockRebuild.mock.calls.map((c) => c[0].onlyModules[0]);
+    expect(rebuildCalls).not.toContain("better-sqlite3");
+  });
+
+  it("should rebuild better-sqlite3 when probe detects Node ABI (status 0)", async () => {
+    mockSpawnSync.mockReturnValue({ status: 0, stderr: "", stdout: "" });
+
+    await runPostinstall();
+
+    expect(mockRebuild).toHaveBeenCalledTimes(4);
+    const rebuildCalls = mockRebuild.mock.calls.map((c) => c[0].onlyModules[0]);
+    expect(rebuildCalls).toContain("better-sqlite3");
+  });
+
+  it("should report failure when better-sqlite3 probe exits unexpectedly", async () => {
+    mockSpawnSync.mockReturnValue({ status: 2, stderr: "probe crash", stdout: "" });
+
+    await runPostinstall();
+
+    expect(process.exitCode).toBe(1);
+    const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
+    expect(errorCalls).toMatch(/better-sqlite3/);
+    expect(errorCalls).toMatch(/ABI probe failed/);
   });
 });
