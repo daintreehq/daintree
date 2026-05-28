@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { Color } from "culori";
 import {
   parse,
   filterDeficiencyProt,
@@ -13,6 +14,7 @@ import { WORKTREE_COLOR_PALETTE } from "../worktreeColors.js";
 import { RED_GREEN_OVERRIDES, BLUE_YELLOW_OVERRIDES } from "../colorVisionOverrides.js";
 import type { AppThemeTokenKey } from "../types.js";
 
+// eslint-disable-next-line react-hooks/rules-of-hooks -- culori config, not a React hook
 useMode(modeOklab);
 
 const OKABE_ITO = [
@@ -90,7 +92,7 @@ function computePairwiseDistances(
   deficiency: Deficiency
 ): { distances: number[]; skipped: string[] } {
   const filter = cvdFilter(deficiency);
-  const parsed: Array<{ color: ReturnType<typeof parse>; raw: string }> = [];
+  const parsed: Array<{ color: Color; raw: string }> = [];
   const skipped: string[] = [];
 
   for (const c of colors) {
