@@ -39,6 +39,11 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
     pendingRestart: false,
     source: "sideload",
     installedAt: 123,
+    archiveHash: null,
+    originalUrl: null,
+    loadError: null,
+    updateAvailable: null,
+    devMode: false,
     ...overrides,
   };
 }
