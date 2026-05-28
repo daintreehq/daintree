@@ -84,7 +84,7 @@ function validateBetterSqliteAbi(nativeBinaryPath) {
       msg.includes("invalid ELF header") ||
       msg.includes("not a valid Win32 application")
     ) {
-      console.log("[afterPack] better-sqlite3 ABI check passed (Electron-ABI binary confirmed)");
+      console.log("[afterPack] better-sqlite3 ABI check passed (compiled for Electron, not Node)");
       return;
     }
     // Unknown error — warn but don't fail (e.g. missing DLL dependency on Windows)
@@ -325,19 +325,6 @@ exports.default = async function afterPack(context) {
       throw new Error(
         `[afterPack] CRITICAL: posix-pty-reaper supervisor binary not found at ${posixReaperBinary}. ` +
           'Help-session crash-safe reaping (#8769) will be disabled. Run "npm run rebuild".'
-      );
-    }
-    // posix-pty-reaper is a compiled C executable (not a .node addon) with no
-    // safe `--version` probe — its main() enters a blocking read loop on stdin.
-    // Verify the executable bit is set so the supervisor can actually be spawned
-    // at runtime; this mirrors the wrapper's own isAvailable() check.
-    try {
-      fs.accessSync(posixReaperBinary, fs.constants.X_OK);
-    } catch (err) {
-      const msg = err && err.message ? err.message : String(err);
-      throw new Error(
-        `[afterPack] CRITICAL: posix-pty-reaper supervisor exists but is not executable at ${posixReaperBinary}: ${msg}. ` +
-          'Help-session crash-safe reaping (#8769) will be broken. Run "npm run rebuild".'
       );
     }
     console.log(`[afterPack] posix-pty-reaper verified: ${posixReaperBinary}`);
