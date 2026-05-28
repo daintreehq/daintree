@@ -302,6 +302,10 @@ export async function initGlobalServices(
       } catch (err) {
         console.error("[MAIN] PluginService initialization failed:", err);
       }
+      // Fire-and-forget — activations fan out in parallel and report errors
+      // via the per-plugin `loadError` provenance record. Awaiting here would
+      // delay subsequent deferred tasks behind the slowest plugin's activate().
+      void pluginService.activateStartupFinishedPlugins();
     },
   });
 

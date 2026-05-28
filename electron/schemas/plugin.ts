@@ -168,6 +168,7 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
         })
         .optional(),
       capabilities: z.array(PluginCapabilitySchema).default([]),
+      activationEvents: z.array(z.literal("onStartupFinished")).default([]),
       contributes: z
         .strictObject({
           panels: z.array(PanelContributionSchema).default([]),

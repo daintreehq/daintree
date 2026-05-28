@@ -1,4 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// forgeRpcServer now imports the PluginService singleton to gate impl lookups
+// behind implicit activation. The singleton constructor calls `app.getVersion()`
+// which is undefined in this test's electron stub — mock the module surface
+// before importing forgeRpcServer so the constructor never runs.
+vi.mock("../PluginService.js", () => ({
+  pluginService: {
+    activatePluginForForgeProvider: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 import { _resetForgeRpcInFlightForTests, dispatchForgeRpc } from "../forgeRpcServer.js";
 import {
   clearForgeProviderImplRegistry,
