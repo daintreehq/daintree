@@ -608,7 +608,6 @@ jobs:
           COLLECTED=$(find "$FALLBACK_DIR" -type f 2>/dev/null | wc -l)
           echo "[e2e] Fallback crash dump collection: $COLLECTED files"
 
-
       - name: Upload test results
         if: always()
         continue-on-error: true
