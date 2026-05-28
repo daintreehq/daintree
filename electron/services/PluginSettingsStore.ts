@@ -24,7 +24,9 @@ export class PluginSettingsStore {
 
   async get<T = unknown>(key: string): Promise<T | undefined> {
     const cache = await this.load();
-    return cache.get(key) as T | undefined;
+    // Return a detached copy so a caller mutating the result can't reach into
+    // the in-memory cache and diverge it from disk.
+    return cloneValue(cache.get(key)) as T | undefined;
   }
 
   /**
@@ -47,7 +49,14 @@ export class PluginSettingsStore {
     const cache = await this.load();
     const had = cache.has(key);
     const prev = cache.get(key);
-    cache.set(key, value);
+    // Detect a no-op before touching disk: an idempotent set should neither
+    // write nor fail (e.g. on a read-only directory).
+    if (had && valuesEqual(prev, value)) return false;
+    // Store a detached, JSON-faithful copy so (a) a caller mutating the original
+    // object can't diverge the cache from disk, and (b) the cache reflects what
+    // actually persists (e.g. NaN/Infinity coerce to null under JSON, in memory
+    // and on disk alike).
+    cache.set(key, cloneValue(value));
     try {
       await this.persist(cache);
     } catch (err) {
@@ -55,7 +64,7 @@ export class PluginSettingsStore {
       else cache.delete(key);
       throw err;
     }
-    return !had || !valuesEqual(prev, value);
+    return true;
   }
 
   private async load(): Promise<Map<string, unknown>> {
@@ -63,7 +72,15 @@ export class PluginSettingsStore {
     if (!this.loadPromise) {
       this.loadPromise = this.readFile();
     }
-    this.cache = await this.loadPromise;
+    try {
+      this.cache = await this.loadPromise;
+    } catch (err) {
+      // Don't permanently poison the instance on a transient/corrupt read —
+      // drop the failed promise so a later access (e.g. after the file is
+      // repaired) re-reads from disk.
+      this.loadPromise = null;
+      throw err;
+    }
     return this.cache;
   }
 
@@ -104,4 +121,14 @@ function valuesEqual(a: unknown, b: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * JSON-faithful clone. Primitives pass through; objects are round-tripped so the
+ * returned value shares no references with the caller's input. Values are always
+ * JSON-serializable here (validated by the host before reaching the store).
+ */
+function cloneValue<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value;
+  return JSON.parse(JSON.stringify(value)) as T;
 }

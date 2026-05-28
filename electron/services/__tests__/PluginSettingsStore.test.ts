@@ -101,6 +101,40 @@ describe("PluginSettingsStore", () => {
     }
   });
 
+  it("recovers on the same instance after a corrupt file is repaired", async () => {
+    const { store, filePath } = storeAt("acme.plugin.json");
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, "{ broken", "utf-8");
+    await expect(store.get("token")).rejects.toThrow(/not valid JSON/);
+
+    // External repair — the same store instance must not stay poisoned.
+    await fs.writeFile(filePath, JSON.stringify({ token: "fixed" }), "utf-8");
+    expect(await store.get<string>("token")).toBe("fixed");
+  });
+
+  it("does not diverge from disk when the caller mutates a stored object", async () => {
+    const { store } = storeAt("acme.plugin.json");
+    const value = { a: 1 };
+    await store.set("config", value);
+    value.a = 2;
+    expect(await store.get<{ a: number }>("config")).toEqual({ a: 1 });
+  });
+
+  const idempotentIt = process.platform === "win32" || process.getuid?.() === 0 ? it.skip : it;
+  idempotentIt("treats an equal-value set as a no-op, even when the dir is read-only", async () => {
+    const dir = path.join(tmpDir, "idem");
+    await fs.mkdir(dir, { recursive: true });
+    const store = new PluginSettingsStore(path.join(dir, "acme.plugin.json"));
+    expect(await store.set("token", "v1")).toBe(true);
+    await fs.chmod(dir, 0o555);
+    try {
+      // Equal value: must skip the write and not fail on the read-only dir.
+      expect(await store.set("token", "v1")).toBe(false);
+    } finally {
+      await fs.chmod(dir, 0o755);
+    }
+  });
+
   it("serializes concurrent writes so all keys are persisted", async () => {
     const { store, filePath } = storeAt("acme.plugin.json");
     await Promise.all([store.set("a", 1), store.set("b", 2), store.set("c", 3), store.set("d", 4)]);
