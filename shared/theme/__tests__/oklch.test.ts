@@ -80,6 +80,34 @@ describe("hexToOklch", () => {
     const c3 = hexToOklch("#f00")!;
     expect(c3.l).toBeCloseTo(c6.l, 3);
   });
+
+  it("returns null for non-string input", () => {
+    expect(hexToOklch(null as unknown as string)).toBeNull();
+    expect(hexToOklch(undefined as unknown as string)).toBeNull();
+    expect(hexToOklch(123 as unknown as string)).toBeNull();
+  });
+
+  it("matches reference values for canonical colors", () => {
+    // Reference values from CSS Color 4 / OKLab reference implementation
+    const red = hexToOklch("#ff0000")!;
+    expect(red.l).toBeCloseTo(0.628, 1);
+    expect(red.c).toBeCloseTo(0.258, 1);
+    expect(red.h).toBeCloseTo(29.2, 0);
+
+    const green = hexToOklch("#00ff00")!;
+    expect(green.l).toBeCloseTo(0.866, 1);
+    expect(green.c).toBeCloseTo(0.295, 1);
+    expect(green.h).toBeCloseTo(142.5, 0);
+
+    const blue = hexToOklch("#0000ff")!;
+    expect(blue.l).toBeCloseTo(0.452, 1);
+    expect(blue.c).toBeCloseTo(0.313, 1);
+    expect(blue.h).toBeCloseTo(264.1, 0);
+
+    const gray = hexToOklch("#808080")!;
+    expect(gray.l).toBeCloseTo(0.598, 1);
+    expect(gray.c).toBeCloseTo(0, 1);
+  });
 });
 
 // --- deltaOklch ---
@@ -102,6 +130,21 @@ describe("deltaOklch", () => {
     // These are close in hue (~20° apart), so ΔE should be moderate
     expect(deltaOklch(a, b)).toBeGreaterThan(0);
     expect(deltaOklch(a, b)).toBeLessThan(0.15);
+  });
+
+  it("handles synthetic hue wraparound at h=350 vs h=10", () => {
+    const a = { l: 0.6, c: 0.2, h: 350 };
+    const b = { l: 0.6, c: 0.2, h: 10 };
+    const de = deltaOklch(a, b);
+    // 20° hue difference, same L and C — should be small
+    expect(de).toBeGreaterThan(0);
+    expect(de).toBeLessThan(0.1);
+  });
+
+  it("returns near-zero for achromatic colors regardless of hue", () => {
+    const a = { l: 0.5, c: 0, h: 0 };
+    const b = { l: 0.5, c: 0, h: 180 };
+    expect(deltaOklch(a, b)).toBeCloseTo(0, 5);
   });
 });
 
@@ -238,7 +281,7 @@ function makeSource(
 }
 
 describe("auditCrossThemeAccents", () => {
-  it("passes when accents are distinct across themes", () => {
+  it("produces no failures for perceptibly distinct accents", () => {
     const sources = [
       makeSource("theme-a", "dark", "#36CE94"),
       makeSource("theme-b", "dark", "#C59A4E"),
@@ -248,14 +291,15 @@ describe("auditCrossThemeAccents", () => {
     expect(result.failures).toHaveLength(0);
   });
 
-  it("warns when two primary accents are too close", () => {
+  it("warns when two primary accents fall below cross-theme threshold", () => {
+    // #36CE94 vs #36CF94 differ by 1 bit in green channel
     const sources = [
       makeSource("theme-a", "dark", "#36CE94"),
-      makeSource("theme-b", "dark", "#36CF94"), // 1-bit difference
+      makeSource("theme-b", "dark", "#36CF94"),
     ];
     const result = auditCrossThemeAccents(sources);
     expect(result.failures).toHaveLength(0);
-    expect(result.warnings.some((w) => w.includes("ΔE"))).toBe(true);
+    expect(result.warnings.some((w) => w.includes("ΔE=0.00") || w.includes("ΔE="))).toBe(true);
   });
 
   it("warns on duplicate accentSecondary hexes", () => {

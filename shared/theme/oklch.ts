@@ -35,7 +35,9 @@ const ACCENT_CANVAS_DL_WARN = 0.2;
 
 // Minimum pairwise ΔE between primary accents of same-polarity themes.
 // Below this, two themes' accents are perceptibly the same color.
-const CROSS_THEME_DE_WARN = 15;
+// ΔE is in OKLab space [0, ~1]; 0.12 is approximately the threshold
+// where two moderately-saturated accents become hard to tell apart.
+const CROSS_THEME_DE_WARN = 0.12;
 
 // --- Conversion ---
 
@@ -45,7 +47,7 @@ const CROSS_THEME_DE_WARN = 15;
  * chain: sRGB gamma decode → LMS (M1) → cbrt → OKLab (M2) → OKLCh.
  */
 export function hexToOklch(hex: string): OklchColor | null {
-  if (!isHexColor(hex)) return null;
+  if (typeof hex !== "string" || !isHexColor(hex)) return null;
   const [r, g, b] = hexToRgb(hex);
   const lr = hexToLinear(r);
   const lg = hexToLinear(g);
@@ -223,6 +225,10 @@ export function auditCrossThemeAccents(sources: BuiltInThemeSource[]): AuditResu
       const color = hexToOklch(source.palette.accent);
       if (color) {
         entries.push({ id: source.id, accent: color });
+      } else {
+        warnings.push(
+          `${label} theme "${source.id}" accent "${source.palette.accent}" is not a parseable hex color — excluded from cross-theme comparison`
+        );
       }
     }
 
