@@ -206,7 +206,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
       dwellTimeoutRef.current = null;
       setDwellTick((t) => t + 1);
     }, dwellRemaining);
-  }, [displayedNotification?.id]);
+  }, [displayedNotification?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     return () => {
