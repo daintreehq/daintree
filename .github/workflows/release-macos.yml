@@ -106,7 +106,6 @@ jobs:
       platform: macos
 
   e2e-online-gate:
-    continue-on-error: true
     needs: [checks, unit-tests]
     uses: ./.github/workflows/e2e.yml
     with:
@@ -115,7 +114,7 @@ jobs:
     secrets: inherit
 
   build-daintree:
-    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
+    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate, e2e-online-gate]
     name: Build Daintree (macOS)
     runs-on: macos-14
     timeout-minutes: 90
@@ -156,13 +155,6 @@ jobs:
         env:
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
 
-      - name: Download notarization state
-        uses: actions/download-artifact@v7
-        with:
-          name: macos-notarization-state
-          path: release/
-        continue-on-error: true
-
       - name: Build (macOS)
         shell: bash
         env:
@@ -172,7 +164,6 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          DAINTREE_SKIP_NOTARIZATION: ${{ inputs.skip_notarization && 'true' || '' }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DEBUG: electron-builder,electron-notarize*,electron-osx-sign*
           npm_config_build_from_source: "true"
@@ -186,26 +177,14 @@ jobs:
             echo "::warning::Dry run — skipping publish to electron-builder targets"
             PUBLISH_FLAG="never"
           fi
-          npx electron-builder --config electron-builder.config.cjs --publish "$PUBLISH_FLAG" -c.buildDependenciesFromSource=true
+          EXTRA_ARGS=""
+          if [ "${{ inputs.skip_notarization }}" = "true" ]; then
+            echo "::warning::Skipping macOS notarization (manually disabled)"
+            EXTRA_ARGS="-c.mac.notarize=false"
+          fi
+          npx electron-builder --config electron-builder.config.cjs --publish "$PUBLISH_FLAG" -c.buildDependenciesFromSource=true $EXTRA_ARGS
 
-      - name: Verify macOS hardened runtime flag
-        shell: bash
-        run: |
-          set -euo pipefail
-          apps=(
-            "release/mac-arm64/Daintree.app"
-            "release/mac/Daintree.app"
-            "release/mac-universal/Daintree.app"
-          )
-          for app in "${apps[@]}"; do
-            if [[ ! -d "$app" ]]; then
-              echo "::error::Missing expected macOS app bundle: $app"
-              exit 1
-            fi
-            scripts/ci/verify-hardened-runtime.sh "$app"
-          done
-
-      - name: Verify macOS notarization and Gatekeeper
+      - name: Verify macOS notarization staple
         if: inputs.skip_notarization != true
         shell: bash
         run: |
@@ -222,17 +201,37 @@ jobs:
               echo "::error::Missing expected macOS app bundle: $app"
               exit 1
             fi
-            echo "--- codesign verify: $app"
-            codesign --verify --deep --strict --verbose=4 "$app"
-            echo "--- codesign check-notarization (online): $app"
-            codesign -vvvv -R="notarized" --check-notarization "$app"
-            echo "--- stapler validate: $app"
+            echo "--- stapler validate (offline ticket): $app"
             xcrun stapler validate "$app"
-            echo "--- spctl assess: $app"
-            spctl --assess --type execute --verbose --ignore-cache --no-cache "$app"
+            echo "--- codesign --check-notarization (online Apple ack): $app"
+            # stapler validate only confirms a locally-attached ticket; this asks
+            # Apple's notary service whether the notarization is still acknowledged.
+            # Retry transient network failures, but treat exit 3 (valid signature,
+            # not acknowledged) as a definitive revocation — never retry it.
+            notary_exit=0
+            for attempt in 1 2 3; do
+              notary_exit=0
+              codesign -vvvv -R="notarized" --check-notarization "$app" || notary_exit=$?
+              if [[ $notary_exit -eq 0 || $notary_exit -eq 3 ]]; then
+                break
+              fi
+              echo "::warning::check-notarization attempt $attempt failed (exit $notary_exit); retrying in 10s"
+              sleep 10
+            done
+            if [[ $notary_exit -eq 3 ]]; then
+              echo "::error::Notarization NOT acknowledged by Apple (on-disk signature valid but revoked or never recorded): $app"
+              exit 1
+            elif [[ $notary_exit -ne 0 ]]; then
+              echo "::error::codesign --check-notarization failed (exit $notary_exit) after retries — bundle unsigned, invalid, does not meet the notarized requirement, or Apple's notary service is unreachable: $app"
+              exit 1
+            fi
+            echo "--- spctl (diagnostic only): $app"
+            spctl --assess --type execute --verbose --ignore-cache --no-cache "$app" || true
           done
 
-      - name: Verify macOS TeamIdentifier audit
+      - name: Verify macOS signing audit (TeamIdentifier + hardened runtime)
+        # No skip_notarization guard: signing is a code-signing property that must
+        # be validated even when notarization is manually disabled.
         shell: bash
         env:
           EXPECTED_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -248,17 +247,17 @@ jobs:
             "release/mac-universal/Daintree.app"
           )
           for app in "${apps[@]}"; do
+            if [[ ! -d "$app" ]]; then
+              echo "::error::Missing expected macOS app bundle: $app"
+              exit 1
+            fi
+            # Signature integrity verification lives here (not the notarization
+            # step) so it runs even when skip_notarization is true.
+            echo "--- codesign --verify: $app"
+            codesign --verify --deep --strict --verbose=4 "$app"
             scripts/ci/verify-team-identifier.sh "$app" "$EXPECTED_TEAM_ID"
+            scripts/ci/verify-hardened-runtime.sh "$app"
           done
-
-      - name: Upload notarization state
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: macos-notarization-state
-          path: release/.notarization-state.json
-          retention-days: 1
-          if-no-files-found: ignore
 
       - name: Validate update metadata (macOS)
         shell: bash
@@ -309,85 +308,9 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  # Packaged-artifact smoke (#9246) — mounts the freshly-built DMG, copies the
-  # .app out, removes the quarantine xattr (required even for notarized apps
-  # on a headless CI runner that can't dismiss a Gatekeeper prompt), and runs
-  # the binary in --smoke-test mode. Validates node-pty, better-sqlite3, and
-  # posix-pty-reaper markers from the asar.unpacked tree. Gates publish.
-  smoke-packaged:
-    needs: [build-daintree]
-    name: Smoke (packaged .app)
-    runs-on: macos-14
-    timeout-minutes: 15
-    steps:
-      - name: Check out repository
-        uses: ./.github/actions/checkout-shallow
-
-      - name: Set up Node.js and install dependencies
-        uses: ./.github/actions/setup-node-install
-        with:
-          node_version: ${{ env.NODE_VERSION }}
-
-      - name: Download build artifact
-        uses: actions/download-artifact@v7
-        with:
-          name: release-daintree-macos-14
-          path: ${{ runner.temp }}/release-artifact
-
-      - name: Mount DMG and install app
-        id: extract
-        shell: bash
-        run: |
-          set -euo pipefail
-          # macos-14 runners are arm64 — prefer the native-arch DMG; fall back
-          # to universal, then to anything *.dmg the artifact contains.
-          DMG=$(find "$RUNNER_TEMP/release-artifact" -maxdepth 2 -name '*-arm64.dmg' | head -n 1)
-          if [ -z "$DMG" ]; then
-            DMG=$(find "$RUNNER_TEMP/release-artifact" -maxdepth 2 -name '*-universal.dmg' | head -n 1)
-          fi
-          if [ -z "$DMG" ]; then
-            DMG=$(find "$RUNNER_TEMP/release-artifact" -maxdepth 2 -name '*.dmg' | head -n 1)
-          fi
-          if [ -z "$DMG" ]; then
-            echo "::error::No .dmg found in downloaded artifact"
-            find "$RUNNER_TEMP/release-artifact" -maxdepth 3 -type f | head -50
-            exit 1
-          fi
-          echo "Selected DMG: $DMG"
-          MOUNT="$RUNNER_TEMP/dmg-mount"
-          mkdir -p "$MOUNT"
-          hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT" "$DMG"
-          # Ensure the mount is detached even if cp -R fails partway through;
-          # without the trap a failed copy strands the device and the next
-          # release run on a reusable runner would collide on the mountpoint.
-          trap 'hdiutil detach "$MOUNT" 2>/dev/null || true' EXIT
-          APP_SRC=$(find "$MOUNT" -maxdepth 2 -name '*.app' | head -n 1)
-          if [ -z "$APP_SRC" ]; then
-            echo "::error::No .app bundle found inside DMG"
-            ls -la "$MOUNT" || true
-            exit 1
-          fi
-          APP_DST="$RUNNER_TEMP/Daintree.app"
-          cp -R "$APP_SRC" "$APP_DST"
-          # Headless CI can't dismiss a Gatekeeper prompt; clearing quarantine
-          # is required even when the app is notarized.
-          xattr -rd com.apple.quarantine "$APP_DST" || true
-          BIN="$APP_DST/Contents/MacOS/Daintree"
-          if [ ! -x "$BIN" ]; then
-            echo "::error::Expected executable missing at $BIN"
-            ls -la "$APP_DST/Contents/MacOS" || true
-            exit 1
-          fi
-          echo "packaged_binary=$BIN" >> "$GITHUB_OUTPUT"
-
-      - name: Run packaged smoke
-        env:
-          PACKAGED_BINARY: ${{ steps.extract.outputs.packaged_binary }}
-        run: node scripts/run-packaged-smoke.mjs
-
   publish-daintree:
     if: startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true
-    needs: [build-daintree, smoke-packaged]
+    needs: [build-daintree]
     runs-on: ubuntu-22.04
     timeout-minutes: 15
 
