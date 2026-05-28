@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceRecordingTarget } from "@/store/voiceRecordingStore";
+import type { VoiceInputError } from "@shared/types";
 
 type VoiceStatusCallback = (status: string) => void;
-type VoiceErrorCallback = (error: string) => void;
+type VoiceErrorCallback = (error: VoiceInputError) => void;
 type VoidCleanup = () => void;
 
 interface MockTrack {
@@ -90,7 +91,7 @@ const runtime = vi.hoisted(() => ({
     isConfigured: false,
   },
   voiceFns: {
-    setError: vi.fn<(message: string | null) => void>(),
+    setLastError: vi.fn<(error: VoiceInputError | null) => void>(),
     announce: vi.fn<(text: string) => void>(),
     setStatus: vi.fn<(status: string) => void>(),
     setConfigured: vi.fn<(configured: boolean) => void>(),
@@ -190,7 +191,7 @@ function resetRuntime(): void {
   runtime.createdWorkletNodes = [];
   Object.values(runtime.voiceInput).forEach((fn) => fn.mockReset());
 
-  runtime.voiceFns.setError.mockImplementation(() => undefined);
+  runtime.voiceFns.setLastError.mockImplementation(() => undefined);
   runtime.voiceFns.announce.mockImplementation(() => undefined);
   runtime.voiceFns.setStatus.mockImplementation((status) => {
     runtime.voiceState.status = status;
@@ -460,7 +461,7 @@ function emitStatus(status: string): void {
   }
 }
 
-function emitError(error: string): void {
+function emitError(error: VoiceInputError): void {
   for (const listener of runtime.errorListeners) {
     listener(error);
   }
@@ -596,14 +597,45 @@ describe("VoiceRecordingService adversarial", () => {
       expect(runtime.voiceFns.setStatus).toHaveBeenCalledWith("finishing");
     });
     emitStatus("idle");
-    emitError("network lost");
+    // A late backend error arriving mid-drain (isStoppingSession === true) must be
+    // suppressed — it would otherwise clobber lastError and prematurely finalize
+    // a session that's already winding down gracefully.
+    emitError({ severity: "fatal", code: "ws_close_1006", message: "network lost" });
     stopDeferred.resolve();
     await stopPromise;
 
     expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
     expect(runtime.voiceFns.finishSession).toHaveBeenCalledTimes(1);
     expect(runtime.voiceFns.announce).toHaveBeenCalledTimes(1);
-    expect(runtime.voiceFns.setError).not.toHaveBeenCalled();
+    // The error is dropped while stopping, so the structured error never reaches
+    // the store — lastError stays whatever it was before the graceful stop.
+    expect(runtime.voiceFns.setLastError).not.toHaveBeenCalled();
+  });
+
+  it("TRANSIENT_ERROR_STORES_STRUCTURED_PAYLOAD_AND_KEEPS_SESSION", async () => {
+    runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+    runtime.voiceState.status = "recording";
+    runtime.voiceState.panelBuffers["panel-1"] = createPanelBuffer();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+
+    const transientError: VoiceInputError = {
+      severity: "transient",
+      code: "rate_limit_exceeded",
+      message: "Rate limited, reconnecting…",
+    };
+    emitError(transientError);
+
+    // The full structured payload — not just a string — is forwarded to the store
+    // so the renderer can branch on code/severity for tooltip and recovery copy.
+    expect(runtime.voiceFns.setLastError).toHaveBeenCalledTimes(1);
+    expect(runtime.voiceFns.setLastError).toHaveBeenCalledWith(transientError);
+    // Transient errors are recoverable: the main process is already reconnecting,
+    // so the session must stay alive (no teardown / no remote stop).
+    expect(runtime.voiceFns.finishSession).not.toHaveBeenCalled();
+    expect(runtime.voiceInput.stop).not.toHaveBeenCalled();
+    expect(runtime.voiceState.activeTarget?.panelId).toBe("panel-1");
   });
 
   it("PAUSE_AUTO_STOPS_AFTER_60S_WHEN_NOT_RESUMED", async () => {
