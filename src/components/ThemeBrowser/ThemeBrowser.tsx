@@ -14,6 +14,7 @@ import {
   resolveAppTheme,
 } from "@shared/theme";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
+import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useOverlayClaim, useImageError } from "@/hooks";
@@ -580,6 +581,10 @@ export function ThemeBrowser() {
       <div aria-live="polite" aria-atomic="true" className="sr-only">
         {previewAnnouncement}
       </div>
+
+      {/* Co-located so store-dispatched announcements reach VoiceOver while
+          this aria-modal subtree holds focus (Chromium 354736464). */}
+      <AccessibilityAnnouncer />
     </div>
   );
 }
