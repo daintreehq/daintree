@@ -18,10 +18,7 @@ import { EVENT_KIND_LABEL, isNotificationEventKind, notify } from "@/lib/notify"
 import type { ActionId } from "@shared/types/actions";
 import type { NotificationType } from "@/store/notificationStore";
 import { DURATION_250 } from "@/lib/animationUtils";
-import { appClient } from "@/clients/appClient";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
-import { buildNotificationReportUrl } from "@/components/ErrorBoundary/buildReportIssueUrl";
-import { logError } from "@/utils/logger";
 import {
   formatNotificationCountAriaLabel,
   formatNotificationCountGlyph,
@@ -406,6 +403,14 @@ function RowOptionsMenu({
     if (entry.type !== "error" && entry.type !== "warning") return;
     setReportInFlight(true);
     try {
+      // Lazy-load the report-flow dependencies so they stay off the boot
+      // path — appClient + buildNotificationReportUrl + logger together push
+      // the renderer eager-import count past budget when imported statically.
+      const [{ appClient }, { buildNotificationReportUrl }, { logError }] = await Promise.all([
+        import("@/clients/appClient"),
+        import("@/components/ErrorBoundary/buildReportIssueUrl"),
+        import("@/utils/logger"),
+      ]);
       let envInfo: Awaited<ReturnType<typeof appClient.getVersionInfo>>;
       try {
         envInfo = await appClient.getVersionInfo();
@@ -477,7 +482,8 @@ function RowOptionsMenu({
       // title/message) and JSON.stringify can surface TypeError (circular
       // refs / BigInt in context). Without this catch the rejection escapes
       // the `void handleReportOnGitHub()` site as an unhandled promise.
-      logError("Failed to build notification report", reportError);
+      // eslint-disable-next-line no-console -- logger was loaded lazily; falls back to console
+      console.warn("Failed to build notification report", reportError);
     } finally {
       setReportInFlight(false);
     }
