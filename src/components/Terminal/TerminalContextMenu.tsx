@@ -140,19 +140,40 @@ export function TerminalContextMenu({
     [terminalId]
   );
 
-  // Recent dictation targets surfaced in the context menu must still resolve to
-  // a live, non-trashed panel that isn't the current one. Persisted entries
-  // come back without a panelId (stripped on rehydrate) and are filtered out
-  // here — they have no live routing destination this session.
-  const liveRecentVoiceTargets = useMemo(
-    () =>
-      recentVoiceTargets.filter((t) => {
-        if (!t.panelId || t.panelId === terminalId) return false;
+  // Recent dictation targets surfaced in the context menu must resolve to a
+  // live, non-trashed PTY panel that isn't the current one. Persisted entries
+  // come back without a panelId (stripped on rehydrate) — we try to match each
+  // to a live panel by (worktreeId + panelTitle) so cross-session recall works
+  // when the user reopens with the same worktree layout. Entries that can't
+  // be resolved are hidden rather than shown as dead links.
+  const liveRecentVoiceTargets = useMemo(() => {
+    const resolved: Array<{ panelId: string; label: string }> = [];
+    const seenIds = new Set<string>([terminalId]);
+    for (const t of recentVoiceTargets) {
+      let livePanelId: string | undefined;
+      if (t.panelId) {
         const panel = panelsById[t.panelId];
-        return panel && panel.location !== "trash";
-      }),
-    [recentVoiceTargets, panelsById, terminalId]
-  );
+        if (panel && panel.location !== "trash") livePanelId = t.panelId;
+      } else if (t.worktreeId && t.panelTitle) {
+        const titleMatch = Object.values(panelsById).find(
+          (panel) =>
+            panel.worktreeId === t.worktreeId &&
+            panel.title === t.panelTitle &&
+            panel.location !== "trash"
+        );
+        if (titleMatch) livePanelId = titleMatch.id;
+      }
+      if (!livePanelId || seenIds.has(livePanelId)) continue;
+      seenIds.add(livePanelId);
+      const label =
+        t.panelTitle?.trim() ||
+        t.worktreeLabel?.trim() ||
+        t.projectName?.trim() ||
+        "Untitled panel";
+      resolved.push({ panelId: livePanelId, label });
+    }
+    return resolved;
+  }, [recentVoiceTargets, panelsById, terminalId]);
 
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
   const terminalBrowser = terminal && isBrowserPanel(terminal) ? terminal : undefined;
@@ -813,22 +834,15 @@ export function TerminalContextMenu({
                 Recent dictation targets
               </ContextMenuSubTrigger>
               <ContextMenuSubContent>
-                {liveRecentVoiceTargets.map((target) => {
-                  const label =
-                    target.panelTitle?.trim() ||
-                    target.worktreeLabel?.trim() ||
-                    target.projectName?.trim() ||
-                    "Untitled panel";
-                  return (
-                    <ContextMenuItem
-                      key={target.panelId}
-                      onSelect={() => handleAction(`recall-voice-target:${target.panelId ?? ""}`)}
-                    >
-                      <Mic className={ICON_CLASS} aria-hidden="true" />
-                      {label}
-                    </ContextMenuItem>
-                  );
-                })}
+                {liveRecentVoiceTargets.map((target) => (
+                  <ContextMenuItem
+                    key={target.panelId}
+                    onSelect={() => handleAction(`recall-voice-target:${target.panelId}`)}
+                  >
+                    <Mic className={ICON_CLASS} aria-hidden="true" />
+                    {target.label}
+                  </ContextMenuItem>
+                ))}
               </ContextMenuSubContent>
             </ContextMenuSub>
           )}

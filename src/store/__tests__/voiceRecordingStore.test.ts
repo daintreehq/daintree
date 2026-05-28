@@ -242,4 +242,35 @@ describe("voiceRecordingStore — recentTargets", () => {
     const recents = useVoiceRecordingStore.getState().recentTargets;
     expect(recents.map((t) => t.panelId)).toEqual(["d", "c", "b"]);
   });
+
+  it("recordRecentTarget dedups a live entry against a rehydrated (no panelId) entry with same worktree+title", () => {
+    useVoiceRecordingStore.setState({
+      recentTargets: [
+        { panelTitle: "Editor", worktreeId: "wt-1", lastUsedAt: 1 },
+      ],
+    });
+    useVoiceRecordingStore.getState().recordRecentTarget({
+      panelId: "p1",
+      panelTitle: "Editor",
+      worktreeId: "wt-1",
+    });
+    const recents = useVoiceRecordingStore.getState().recentTargets;
+    expect(recents).toHaveLength(1);
+    expect(recents[0]?.panelId).toBe("p1");
+  });
+
+  it("recordRecentTarget keeps rehydrated entry with different worktreeId", () => {
+    useVoiceRecordingStore.setState({
+      recentTargets: [
+        { panelTitle: "Editor", worktreeId: "wt-other", lastUsedAt: 1 },
+      ],
+    });
+    useVoiceRecordingStore.getState().recordRecentTarget({
+      panelId: "p1",
+      panelTitle: "Editor",
+      worktreeId: "wt-1",
+    });
+    const recents = useVoiceRecordingStore.getState().recentTargets;
+    expect(recents).toHaveLength(2);
+  });
 });

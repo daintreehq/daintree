@@ -5,6 +5,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 
 function resolveTargetForPanel(panelId: string): {
   panelId: string;
@@ -16,6 +17,11 @@ function resolveTargetForPanel(panelId: string): {
 } | null {
   const panel = usePanelStore.getState().panelsById[panelId];
   if (!panel || panel.location === "trash") return null;
+  // Only PTY-backed panels can receive dictation — browsers and dev-preview
+  // panels have no input surface for the transcript to land in. Without this
+  // guard, hotkey/palette invocations could lock dictation to a browser panel
+  // (no `panelId` arg falls back to focusedId).
+  if (!panelKindHasPty(panel.kind)) return null;
   const currentProject = useProjectStore.getState().currentProject;
   const worktree = panel.worktreeId
     ? getCurrentViewStore().getState().worktrees.get(panel.worktreeId)
