@@ -99,7 +99,9 @@ export function extractFailures(report) {
             const error = result.error;
             const errorText = error
               ? [error.message, error.stack].filter(Boolean).join("\n")
-              : (result.errors ?? []).map((e) => e.message ?? "").join("\n");
+              : (result.errors ?? [])
+                  .map((e) => [e.message, e.stack].filter(Boolean).join("\n"))
+                  .join("\n");
 
             const { bucket, label } = classifyError(errorText);
             const file = error?.location?.file ?? spec.file ?? suite.file ?? "unknown";
