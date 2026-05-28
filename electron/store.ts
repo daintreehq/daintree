@@ -17,6 +17,9 @@ import type { AssistantTurnRecord, McpAuditRecord } from "../shared/types/ipc/mc
 import { MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/mcpServer.js";
 import type { PluginActionAuditRecord } from "../shared/types/ipc/pluginAudit.js";
 import { PLUGIN_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/pluginAudit.js";
+import type { PluginMcpAuditRecord } from "../shared/types/ipc/pluginMcpAudit.js";
+import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/pluginMcpAudit.js";
+import type { PluginMcpConsentRecord } from "../shared/types/pluginMcpConsent.js";
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/forge.js";
 import type { BuiltInAgentId } from "../shared/config/agentIds.js";
@@ -368,6 +371,29 @@ export interface StoreSchema {
     auditMaxRecords: number;
     auditLog?: ForgeAuditRecord[];
   };
+  /**
+   * Inbound plugin-MCP `tools/call` audit ring buffer (#9234). Parallel to
+   * `plugins.auditLog` but scoped to *inbound* MCP tool calls — i.e. calls a
+   * plugin's stdio MCP server makes back into the host. Records never store
+   * raw args, raw tool descriptions, or raw input schemas; only SHA-256 hex
+   * digests. `auditLog` is the persisted ring (trimmed to `auditMaxRecords`);
+   * `auditEnabled` is the kill switch.
+   */
+  pluginMcpAudit: {
+    auditEnabled: boolean;
+    auditMaxRecords: number;
+    auditLog?: PluginMcpAuditRecord[];
+  };
+  /**
+   * Trust-on-first-use (TOFU) consent pins for plugin-MCP tool descriptions
+   * and schemas (#9234). Re-prompting is gated on the raw-bytes hash so a
+   * rug-pull payload hidden in invisible Unicode flips the pin even when the
+   * displayed text looks identical.
+   */
+  pluginMcpConsent: {
+    pins?: PluginMcpConsentRecord[];
+    revoked?: string[];
+  };
 }
 
 const storeOptions = {
@@ -530,6 +556,11 @@ const storeOptions = {
       auditEnabled: true,
       auditMaxRecords: FORGE_AUDIT_DEFAULT_MAX_RECORDS,
     },
+    pluginMcpAudit: {
+      auditEnabled: true,
+      auditMaxRecords: PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS,
+    },
+    pluginMcpConsent: {},
   },
   cwd: process.env.DAINTREE_USER_DATA,
 };

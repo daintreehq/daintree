@@ -248,6 +248,13 @@ const LazyPluginConfirmDialog = lazy(() =>
   preloadPluginConfirmDialog().then((m) => ({ default: m.PluginConfirmDialog }))
 );
 
+function preloadPluginMcpConfirmDialog() {
+  return import("./components/Plugin/PluginMcpConfirmDialog");
+}
+const LazyPluginMcpConfirmDialog = lazy(() =>
+  preloadPluginMcpConfirmDialog().then((m) => ({ default: m.PluginMcpConfirmDialog }))
+);
+
 function preloadPanelLimitConfirmDialog() {
   return import("./components/Terminal/PanelLimitConfirmDialog");
 }
@@ -1242,6 +1249,17 @@ function AppInner() {
               >
                 <Suspense fallback={null}>
                   <LazyPluginConfirmDialog />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+            {isStateLoaded && (
+              <ErrorBoundary
+                variant="component"
+                componentName="PluginMcpConfirmDialog"
+                resetKeys={[Number(isStateLoaded)]}
+              >
+                <Suspense fallback={null}>
+                  <LazyPluginMcpConfirmDialog />
                 </Suspense>
               </ErrorBoundary>
             )}
