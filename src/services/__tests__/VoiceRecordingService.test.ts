@@ -126,7 +126,6 @@ vi.mock("@/services/KeybindingService", () => ({
   },
 }));
 
-
 function buildElectronStub() {
   return {
     voiceInput: {
