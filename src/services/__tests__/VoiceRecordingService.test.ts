@@ -856,3 +856,61 @@ describe("VoiceRecordingService — interim delta handling (#9172)", () => {
     voiceModule.__state.panelBuffers = {};
   });
 });
+
+describe("VoiceRecordingService — provider configuration gating", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("treats a Deepgram-only user (no OpenAI key) as configured", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "",
+      deepgramApiKey: "dg-test",
+      transcriptionProvider: "deepgram",
+      correctionEnabled: false,
+    });
+    setupGlobals(electron);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await expect(voiceRecordingService.refreshConfiguration()).resolves.toBe(true);
+  });
+
+  it("treats a Deepgram user without a Deepgram key as not configured", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      // An OpenAI key must NOT satisfy the Deepgram provider.
+      openaiApiKey: "sk-key",
+      deepgramApiKey: "",
+      transcriptionProvider: "deepgram",
+      correctionEnabled: false,
+    });
+    setupGlobals(electron);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await expect(voiceRecordingService.refreshConfiguration()).resolves.toBe(false);
+  });
+
+  it("treats an OpenAI user with an OpenAI key as configured", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "sk-key",
+      deepgramApiKey: "",
+      transcriptionProvider: "openai",
+      correctionEnabled: false,
+    });
+    setupGlobals(electron);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await expect(voiceRecordingService.refreshConfiguration()).resolves.toBe(true);
+  });
+});

@@ -26,8 +26,10 @@ describe("VoiceTranscriptionService integration", () => {
       const result = await service.start({
         enabled: true,
         openaiApiKey: OPENAI_API_KEY,
+        deepgramApiKey: "",
         language: "en",
         customDictionary: [],
+        transcriptionProvider: "openai",
         transcriptionModel: "gpt-realtime-whisper",
         correctionEnabled: false,
         correctionModel: "gpt-5-mini",

@@ -290,11 +290,18 @@ class VoiceRecordingService {
 
   async refreshConfiguration(): Promise<boolean> {
     const settings = await window.electron.voiceInput.getSettings();
-    const isConfigured = settings.enabled && !!settings.openaiApiKey;
+    // "Configured" means the selected provider has its own API key — Deepgram
+    // uses deepgramApiKey, every other provider uses openaiApiKey.
+    const hasProviderKey =
+      settings.transcriptionProvider === "deepgram"
+        ? !!settings.deepgramApiKey
+        : !!settings.openaiApiKey;
+    const isConfigured = settings.enabled && hasProviderKey;
     this.selectedDeviceId = settings.deviceId ?? "";
     logDebug(`${LOG_PREFIX} refreshConfiguration`, {
       enabled: settings.enabled,
-      hasApiKey: !!settings.openaiApiKey,
+      provider: settings.transcriptionProvider,
+      hasProviderKey,
       isConfigured,
       correctionEnabled: settings.correctionEnabled,
     });

@@ -7,7 +7,10 @@ import { projectStore } from "../../services/ProjectStore.js";
 import { VoiceTranscriptionService } from "../../services/VoiceTranscriptionService.js";
 import { VoiceCorrectionService } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
-import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
+import type {
+  VoiceInputSettings,
+  VoiceTranscriptionProvider,
+} from "../../../shared/types/ipc/api.js";
 import { logDebug } from "../../utils/logger.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { applyDictationCommands } from "../../services/voiceDictationCommands.js";
@@ -27,11 +30,15 @@ let correctionService: VoiceCorrectionService | null = null;
 let sessionController: AbortController | null = null;
 let sessionProjectInfo: { name?: string; path?: string } = {};
 
+const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = ["openai", "deepgram"];
+
 const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   enabled: false,
   openaiApiKey: "",
+  deepgramApiKey: "",
   language: "en",
   customDictionary: [],
+  transcriptionProvider: "openai",
   transcriptionModel: "gpt-realtime-whisper",
   correctionEnabled: false,
   correctionModel: "gpt-5-mini",
@@ -48,17 +55,17 @@ export function getVoiceSettings(): VoiceInputSettings {
   const stored = store.get("voiceInput") as
     | (Partial<VoiceInputSettings> & {
         apiKey?: string;
-        deepgramApiKey?: string;
         correctionApiKey?: string;
       })
     | undefined;
 
-  // Pluck legacy fields so they don't leak into the merged object via spread.
-  const { apiKey, deepgramApiKey, correctionApiKey, ...rest } = stored ?? {};
+  // Pluck truly-legacy key fields so they don't leak into the merged object via
+  // spread. `deepgramApiKey` is now a first-class field, so it flows through
+  // `rest` instead of being dropped.
+  const { apiKey, correctionApiKey, ...rest } = stored ?? {};
   const merged: VoiceInputSettings = { ...VOICE_INPUT_DEFAULTS, ...rest };
 
-  // Migrate prior OpenAI keys into the unified field. The Deepgram key is
-  // dropped — it belonged to a different provider.
+  // Migrate prior OpenAI keys into the unified field.
   if (!merged.openaiApiKey) {
     if (correctionApiKey?.startsWith("sk-")) {
       merged.openaiApiKey = correctionApiKey;
@@ -67,25 +74,42 @@ export function getVoiceSettings(): VoiceInputSettings {
     }
   }
 
-  // Migrate legacy Deepgram model values ('nova-3' / 'nova-2') to the unified OpenAI model.
+  // Default the provider to "openai" only when it's missing or unrecognized
+  // (e.g. settings written before the provider field existed). Crucially this
+  // does NOT reset a valid, user-chosen provider on every read — the prior
+  // migration's habit of force-resetting fields each launch is the #9175 bug.
+  const providerNeedsDefault = !VALID_TRANSCRIPTION_PROVIDERS.includes(
+    merged.transcriptionProvider
+  );
+  if (providerNeedsDefault) merged.transcriptionProvider = "openai";
+
+  // Normalize a stale/invalid transcription model to the only supported value.
+  // The model union is single-valued, so this is a one-shot cleanup of legacy
+  // Deepgram model strings ('nova-3' / 'nova-2'), not a user-choice revert —
+  // the provider, not the model, is what selects the backend now.
   const staleModel = merged.transcriptionModel !== "gpt-realtime-whisper";
   if (staleModel) merged.transcriptionModel = "gpt-realtime-whisper";
 
-  // Persist the cleaned object on first read after upgrade so the legacy
-  // fields disappear from disk. `store.set` with a full object replaces.
+  // Persist the cleaned object on first read after upgrade so the legacy key
+  // fields disappear from disk and any defaulted/normalized values are written
+  // through. `store.set` with a full object replaces.
   if (
     apiKey !== undefined ||
-    deepgramApiKey !== undefined ||
     correctionApiKey !== undefined ||
+    providerNeedsDefault ||
     staleModel
   ) {
     store.set("voiceInput", merged);
   }
 
-  // Env-var override takes absolute precedence over stored key.
-  const envKey = process.env.WHISPER_API_KEY?.trim();
-  if (envKey) {
-    merged.openaiApiKey = envKey;
+  // Env-var overrides take absolute precedence over stored keys.
+  const envOpenAiKey = process.env.WHISPER_API_KEY?.trim();
+  if (envOpenAiKey) {
+    merged.openaiApiKey = envOpenAiKey;
+  }
+  const envDeepgramKey = process.env.DEEPGRAM_API_KEY?.trim();
+  if (envDeepgramKey) {
+    merged.deepgramApiKey = envDeepgramKey;
   }
 
   return merged;

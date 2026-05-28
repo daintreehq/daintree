@@ -195,8 +195,10 @@ export interface StoreSchema {
   voiceInput: {
     enabled: boolean;
     openaiApiKey: string;
+    deepgramApiKey: string;
     language: string;
     customDictionary: string[];
+    transcriptionProvider: string;
     transcriptionModel: string;
     correctionEnabled: boolean;
     correctionModel: string;
@@ -450,8 +452,10 @@ const storeOptions = {
     voiceInput: {
       enabled: false,
       openaiApiKey: "",
+      deepgramApiKey: "",
       language: "en",
       customDictionary: [],
+      transcriptionProvider: "openai",
       transcriptionModel: "gpt-realtime-whisper",
       correctionEnabled: false,
       correctionModel: "gpt-5-mini",

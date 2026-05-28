@@ -246,6 +246,7 @@ export type {
   VoiceInputSettings,
   VoiceInputStatus,
   VoiceTranscriptionModel,
+  VoiceTranscriptionProvider,
   VoiceCorrectionModel,
   VoiceParagraphingStrategy,
   HelpAssistantSettings,
