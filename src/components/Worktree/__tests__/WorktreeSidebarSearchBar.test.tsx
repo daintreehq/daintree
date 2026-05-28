@@ -15,6 +15,7 @@ function resetWorktreeFilterStore() {
     prIssueFilters: new Set(),
     sessionFilters: new Set(),
     activityFilters: new Set(),
+    devServerFilters: new Set(),
     alwaysShowActive: true,
     alwaysShowWaiting: true,
     hideMainWorktree: false,

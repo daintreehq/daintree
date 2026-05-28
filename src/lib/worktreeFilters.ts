@@ -8,8 +8,10 @@ import type {
   PrIssueFilter,
   SessionFilter,
   ActivityFilter,
+  DevServerFilter,
 } from "@/store/worktreeFilterStore";
 import type { ChipState } from "@/components/Worktree/utils/computeChipState";
+import type { DevPreviewSessionState, DevPreviewSessionStatus } from "@shared/types/ipc/devPreview";
 
 export interface DerivedWorktreeMeta {
   terminalCount: number;
@@ -36,6 +38,34 @@ export function matchesQuickStateFilter(
       return meta.chipState === "waiting";
     case "finished":
       return meta.chipState === "complete" || meta.chipState === "cleanup";
+  }
+}
+
+/**
+ * A dev-server status the worktree row surfaces as a live signal. `stopped`,
+ * `restored-stopped`, and the transient `stopping` render nothing, so both the
+ * row indicator and the dev-server facet filter treat them as "no live server".
+ */
+export function isLiveDevServerStatus(status: DevPreviewSessionStatus): boolean {
+  return (
+    status === "running" || status === "starting" || status === "installing" || status === "error"
+  );
+}
+
+export function matchesDevServerFilter(
+  filter: DevServerFilter,
+  session: DevPreviewSessionState | undefined
+): boolean {
+  if (!session) return false;
+  switch (filter) {
+    case "running":
+      return session.status === "running";
+    case "starting":
+      return session.status === "starting" || session.status === "installing";
+    case "error":
+      return session.status === "error";
+    case "hasDevServer":
+      return isLiveDevServerStatus(session.status);
   }
 }
 
@@ -135,13 +165,15 @@ export interface FilterState {
   prIssueFilters: Set<PrIssueFilter>;
   sessionFilters: Set<SessionFilter>;
   activityFilters: Set<ActivityFilter>;
+  devServerFilters: Set<DevServerFilter>;
 }
 
 export function matchesFilters(
   worktree: Worktree | WorktreeState,
   filters: FilterState,
   derived: DerivedWorktreeMeta,
-  isActive: boolean
+  isActive: boolean,
+  sessionsByWorktreeId?: Record<string, DevPreviewSessionState>
 ): boolean {
   // Text search
   if (filters.query.length > 0) {
@@ -217,6 +249,19 @@ export function matchesFilters(
     if (filters.activityFilters.has("last7d") && now - lastActivity < 7 * 24 * 60 * 60 * 1000)
       hasMatch = true;
 
+    if (!hasMatch) return false;
+  }
+
+  // Dev-server filters (OR within category)
+  if (filters.devServerFilters.size > 0) {
+    const session = sessionsByWorktreeId?.[worktree.id];
+    let hasMatch = false;
+    for (const filter of filters.devServerFilters) {
+      if (matchesDevServerFilter(filter, session)) {
+        hasMatch = true;
+        break;
+      }
+    }
     if (!hasMatch) return false;
   }
 
@@ -382,7 +427,8 @@ export function hasAnyFilters(filters: FilterState): boolean {
     filters.typeFilters.size > 0 ||
     filters.prIssueFilters.size > 0 ||
     filters.sessionFilters.size > 0 ||
-    filters.activityFilters.size > 0
+    filters.activityFilters.size > 0 ||
+    filters.devServerFilters.size > 0
   );
 }
 
@@ -435,6 +481,7 @@ export interface ChipCounts {
   prIssue: Record<PrIssueFilter, number>;
   sessions: Record<SessionFilter, number>;
   activity: Record<ActivityFilter, number>;
+  devServer: Record<DevServerFilter, number>;
 }
 
 const STATUS_KEYS: StatusFilter[] = ["active", "dirty", "stale", "idle"];
@@ -458,6 +505,7 @@ const TYPE_KEYS: TypeFilter[] = [
 const PR_ISSUE_KEYS: PrIssueFilter[] = ["hasIssue", "hasPR", "prOpen", "prMerged", "prClosed"];
 const SESSION_KEYS: SessionFilter[] = ["hasTerminals", "working", "waiting", "completed", "exited"];
 const ACTIVITY_KEYS: ActivityFilter[] = ["last15m", "last1h", "last24h", "last7d"];
+const DEV_SERVER_KEYS: DevServerFilter[] = ["running", "starting", "hasDevServer", "error"];
 
 const ACTIVITY_WINDOW_MS: Record<ActivityFilter, number> = {
   last15m: 15 * 60 * 1000,
@@ -479,6 +527,7 @@ export function emptyChipCounts(): ChipCounts {
     prIssue: emptyRecord(PR_ISSUE_KEYS),
     sessions: emptyRecord(SESSION_KEYS),
     activity: emptyRecord(ACTIVITY_KEYS),
+    devServer: emptyRecord(DEV_SERVER_KEYS),
   };
 }
 
@@ -500,7 +549,8 @@ export function computeChipCounts(
   worktrees: readonly (Worktree | WorktreeState)[],
   derivedMetaMap: Map<string, DerivedWorktreeMeta>,
   activeWorktreeId: string | null,
-  filters: FilterState
+  filters: FilterState,
+  sessionsByWorktreeId?: Record<string, DevPreviewSessionState>
 ): ChipCounts {
   const counts = emptyChipCounts();
   const now = Date.now();
@@ -508,7 +558,13 @@ export function computeChipCounts(
   const baseIsActive = (w: (typeof worktrees)[number]) => w.id === activeWorktreeId;
   const getDerived = (id: string) => derivedMetaMap.get(id) ?? DEFAULT_DERIVED_META;
   const matchesGroup = (w: (typeof worktrees)[number], groupKey: keyof FilterState) =>
-    matchesFilters(w, withoutGroup(filters, groupKey), getDerived(w.id), baseIsActive(w));
+    matchesFilters(
+      w,
+      withoutGroup(filters, groupKey),
+      getDerived(w.id),
+      baseIsActive(w),
+      sessionsByWorktreeId
+    );
 
   // Build base set per group — filtered by all OTHER groups + query
   const statusBase = worktrees.filter((w) => matchesGroup(w, "statusFilters"));
@@ -516,6 +572,7 @@ export function computeChipCounts(
   const prIssueBase = worktrees.filter((w) => matchesGroup(w, "prIssueFilters"));
   const sessionsBase = worktrees.filter((w) => matchesGroup(w, "sessionFilters"));
   const activityBase = worktrees.filter((w) => matchesGroup(w, "activityFilters"));
+  const devServerBase = worktrees.filter((w) => matchesGroup(w, "devServerFilters"));
 
   for (const w of statusBase) {
     const statuses = computeStatus(w, baseIsActive(w));
@@ -552,6 +609,14 @@ export function computeChipCounts(
       for (const key of ACTIVITY_KEYS) {
         if (elapsed < ACTIVITY_WINDOW_MS[key]) counts.activity[key]++;
       }
+    }
+  }
+
+  for (const w of devServerBase) {
+    const session = sessionsByWorktreeId?.[w.id];
+    if (!session) continue;
+    for (const key of DEV_SERVER_KEYS) {
+      if (matchesDevServerFilter(key, session)) counts.devServer[key]++;
     }
   }
 

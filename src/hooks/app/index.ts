@@ -22,3 +22,5 @@ export { useAgentWaitingNudge } from "./useAgentWaitingNudge";
 export { useFocusOnActivateIntent } from "./useFocusOnActivateIntent";
 export { useNotificationHistoryPruning } from "./useNotificationHistoryPruning";
 export { useRecipeFocusReload } from "./useRecipeFocusReload";
+export { useWorktreeDevServerStateSync } from "./useWorktreeDevServerStateSync";
+export { useWorktreeDevServerSession } from "./useWorktreeDevServerSession";

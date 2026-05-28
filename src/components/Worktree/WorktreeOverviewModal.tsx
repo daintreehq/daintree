@@ -15,6 +15,7 @@ import {
 import type { WorktreeState, WorktreeSnapshot } from "@/types";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
+import { useWorktreeDevServerStore } from "@/store/worktreeDevServerStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { usePanelStore } from "@/store/panelStore";
@@ -225,6 +226,7 @@ export function WorktreeOverviewModal({
     prIssueFilters,
     sessionFilters,
     activityFilters,
+    devServerFilters,
     alwaysShowActive,
     alwaysShowWaiting,
     pinnedWorktrees,
@@ -240,6 +242,7 @@ export function WorktreeOverviewModal({
       prIssueFilters: state.prIssueFilters,
       sessionFilters: state.sessionFilters,
       activityFilters: state.activityFilters,
+      devServerFilters: state.devServerFilters,
       alwaysShowActive: state.alwaysShowActive,
       alwaysShowWaiting: state.alwaysShowWaiting,
       pinnedWorktrees: state.pinnedWorktrees,
@@ -247,6 +250,7 @@ export function WorktreeOverviewModal({
       quickStateFilter: state.quickStateFilter,
     }))
   );
+  const devServerSessions = useWorktreeDevServerStore((s) => s.sessionsByWorktreeId);
   const clearAllFilters = useWorktreeFilterStore((state) => state.clearAll);
   const hasActiveFilters = useWorktreeFilterStore((state) => state.hasActiveFilters);
   const hasFacetFilters = useWorktreeFilterStore((state) => state.hasFacetFilters);
@@ -325,14 +329,21 @@ export function WorktreeOverviewModal({
 
   const chipCounts = useMemo(() => {
     const candidates = hideMainWorktree ? worktrees.filter((w) => !w.isMainWorktree) : worktrees;
-    return computeChipCounts(candidates, derivedMetaMap, activeWorktreeId, {
-      query,
-      statusFilters,
-      typeFilters,
-      prIssueFilters,
-      sessionFilters,
-      activityFilters,
-    });
+    return computeChipCounts(
+      candidates,
+      derivedMetaMap,
+      activeWorktreeId,
+      {
+        query,
+        statusFilters,
+        typeFilters,
+        prIssueFilters,
+        sessionFilters,
+        activityFilters,
+        devServerFilters,
+      },
+      devServerSessions
+    );
   }, [
     worktrees,
     derivedMetaMap,
@@ -344,6 +355,8 @@ export function WorktreeOverviewModal({
     prIssueFilters,
     sessionFilters,
     activityFilters,
+    devServerFilters,
+    devServerSessions,
   ]);
 
   // Compute aggregate statistics from derivedMetaMap
@@ -388,6 +401,7 @@ export function WorktreeOverviewModal({
       prIssueFilters,
       sessionFilters,
       activityFilters,
+      devServerFilters,
     };
 
     // Filter worktrees
@@ -433,7 +447,7 @@ export function WorktreeOverviewModal({
         return false;
       }
 
-      return matchesFilters(worktree, filters, derived, isActive);
+      return matchesFilters(worktree, filters, derived, isActive, devServerSessions);
     });
 
     // Filter out pinned worktrees that no longer exist
@@ -462,6 +476,8 @@ export function WorktreeOverviewModal({
     prIssueFilters,
     sessionFilters,
     activityFilters,
+    devServerFilters,
+    devServerSessions,
     alwaysShowActive,
     alwaysShowWaiting,
     pinnedWorktrees,
