@@ -338,15 +338,66 @@ describe("DevPreviewProxyService", () => {
       expect(res.status).toBe(403);
     });
 
-    it("rejects a non-GET method on the bootstrap route with 405", async () => {
+    it("rejects a token redeemed against a different panel's origin (panel binding)", async () => {
+      proxy = new DevPreviewProxyService(() => null);
+      const proxyPort = await proxy.start();
+
+      const bootstrapUrl = proxy.mintBrowserToken("panel-1", "proj-1", "/");
+      const { path } = splitBootstrapUrl(bootstrapUrl);
+      // Same token, but hit panel-2's origin — must be rejected and set no cookie.
+      const res = await request(proxyPort, `dp-proj-1-panel-2.localhost:${proxyPort}`, path);
+
+      expect(res.status).toBe(403);
+      expect(res.headers["set-cookie"]).toBeUndefined();
+
+      // And the token must still be valid for its real panel afterwards (a wrong-host
+      // attempt must not burn it).
+      const { host, path: realPath } = splitBootstrapUrl(bootstrapUrl);
+      const real = await request(proxyPort, host, realPath);
+      expect(real.status).toBe(302);
+    });
+
+    it("rejects HEAD without consuming the token, so the real GET still succeeds", async () => {
       proxy = new DevPreviewProxyService(() => null);
       const proxyPort = await proxy.start();
 
       const bootstrapUrl = proxy.mintBrowserToken("panel-1", "proj-1", "/");
       const { host, path } = splitBootstrapUrl(bootstrapUrl);
-      const res = await request(proxyPort, host, path, "POST");
 
-      expect(res.status).toBe(405);
+      const head = await request(proxyPort, host, path, "HEAD");
+      expect(head.status).toBe(405);
+
+      const get = await request(proxyPort, host, path);
+      expect(get.status).toBe(302);
+    });
+
+    it("rejects a non-GET method on the bootstrap route with 405 without consuming the token", async () => {
+      proxy = new DevPreviewProxyService(() => null);
+      const proxyPort = await proxy.start();
+
+      const bootstrapUrl = proxy.mintBrowserToken("panel-1", "proj-1", "/");
+      const { host, path } = splitBootstrapUrl(bootstrapUrl);
+
+      const post = await request(proxyPort, host, path, "POST");
+      expect(post.status).toBe(405);
+
+      // The rejected POST must not have burned the single-use token.
+      const get = await request(proxyPort, host, path);
+      expect(get.status).toBe(302);
+    });
+
+    it("treats a token at exactly its expiry as expired (boundary)", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      proxy = new DevPreviewProxyService(() => null);
+      const proxyPort = await proxy.start();
+
+      const bootstrapUrl = proxy.mintBrowserToken("panel-1", "proj-1", "/");
+      const { host, path } = splitBootstrapUrl(bootstrapUrl);
+
+      // Advance to exactly the 60s TTL — verify and reaper both treat this as expired.
+      vi.setSystemTime(Date.now() + 60_000);
+      const res = await request(proxyPort, host, path);
+      expect(res.status).toBe(403);
     });
   });
 });

@@ -819,14 +819,15 @@ export function DevPreviewPane({
     // the upstream port. Fall back to the raw URL in legacy mode or if minting
     // fails, so the button always opens *something*.
     if (typeof proxyOrigin === "string" && currentProjectId && currentUrl.startsWith(proxyOrigin)) {
-      const { pathname, search } = new URL(currentUrl);
+      // Preserve the hash too — hash-router SPAs keep their route in the fragment.
+      const { pathname, search, hash } = new URL(currentUrl);
       safeFireAndForget(
         (async () => {
           try {
             const { bootstrapUrl } = await window.electron.devPreview.mintBrowserToken({
               panelId: id,
               projectId: currentProjectId,
-              redirectPath: `${pathname}${search}`,
+              redirectPath: `${pathname}${search}${hash}`,
             });
             await window.electron.system.openExternal(bootstrapUrl);
           } catch (err) {

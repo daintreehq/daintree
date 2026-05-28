@@ -8,6 +8,7 @@ import {
   DEV_PREVIEW_PROXY_PORT,
   buildBootstrapUrl,
   buildDevPreviewProxyOrigin,
+  buildDevPreviewSubdomain,
   normalizeBootstrapRedirectPath,
   parseDevPreviewProxyHost,
 } from "../../shared/utils/devPreviewProxy.js";
@@ -269,11 +270,16 @@ export class DevPreviewProxyService {
   }
 
   /**
-   * Verify a token's signature, expiry, and single-use JTI. Returns the payload
-   * on success and consumes the JTI (so a replay fails); returns null on any
-   * failure. Signature comparison is constant-time.
+   * Verify a token's signature, expiry, panel binding, and single-use JTI.
+   * Returns the payload on success and consumes the JTI (so a replay fails);
+   * returns null on any failure. The JTI is consumed only after every other
+   * check passes, so a request to the wrong panel's origin can't burn a token
+   * that is still valid for its real panel. Signature comparison is constant-time.
    */
-  private verifyAndConsumeToken(token: string): BrowserTokenPayload | null {
+  private verifyAndConsumeToken(
+    token: string,
+    requestSubdomain: string | null
+  ): BrowserTokenPayload | null {
     const dot = token.indexOf(".");
     if (dot <= 0) return null;
     const body = token.slice(0, dot);
@@ -296,10 +302,23 @@ export class DevPreviewProxyService {
     } catch {
       return null;
     }
-    if (!payload || typeof payload.jti !== "string" || typeof payload.exp !== "number") {
+    if (
+      !payload ||
+      typeof payload.jti !== "string" ||
+      typeof payload.exp !== "number" ||
+      typeof payload.panelId !== "string" ||
+      typeof payload.projectId !== "string"
+    ) {
       return null;
     }
-    if (Date.now() > payload.exp) {
+    // Panel binding: the token is only valid on the origin of the panel it was
+    // minted for — a token for panel A must not set a session cookie on panel B.
+    if (requestSubdomain !== buildDevPreviewSubdomain(payload.projectId, payload.panelId)) {
+      return null;
+    }
+    // Aligned with reapTokens (exp <= now) so a token at exactly its expiry is
+    // treated as expired by both paths, not accepted by one and reaped by the other.
+    if (Date.now() >= payload.exp) {
       this.pendingTokens.delete(payload.jti);
       return null;
     }
@@ -309,15 +328,19 @@ export class DevPreviewProxyService {
   }
 
   private handleBootstrap(req: http.IncomingMessage, res: http.ServerResponse, url: URL): void {
-    // Only GET (and HEAD) reach the bootstrap — it's opened via the address bar.
-    if (req.method !== "GET" && req.method !== "HEAD") {
-      res.writeHead(405, { Allow: "GET, HEAD", "Content-Type": "text/plain; charset=utf-8" });
+    // The bootstrap is reached only by the browser navigating to the link — a
+    // GET. Reject everything else, including HEAD: a HEAD from a link-preflight
+    // scanner or corporate proxy must not consume the single-use token before
+    // the user's real GET arrives.
+    if (req.method !== "GET") {
+      res.writeHead(405, { Allow: "GET", "Content-Type": "text/plain; charset=utf-8" });
       res.end("Method not allowed.");
       return;
     }
 
     const token = url.searchParams.get("token") ?? "";
-    const payload = token ? this.verifyAndConsumeToken(token) : null;
+    const requestSubdomain = parseDevPreviewProxyHost(req.headers.host);
+    const payload = token ? this.verifyAndConsumeToken(token, requestSubdomain) : null;
     if (!payload) {
       res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
       res.end("This sign-in link is invalid or has expired.");
