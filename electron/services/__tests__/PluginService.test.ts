@@ -121,11 +121,13 @@ vi.mock("../PluginMcpSupervisor.js", () => ({
   getPluginMcpSupervisor: () => mockPluginMcpSupervisor,
 }));
 
+import { z } from "zod";
 import { PluginService } from "../PluginService.js";
 import { getPluginManifestSchema } from "../../schemas/plugin.js";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   type PluginIpcContext,
+  type PluginManifest,
 } from "../../../shared/types/plugin.js";
 import {
   registerPanelKind,
@@ -2200,6 +2202,224 @@ describe("Plugin IPC handler registration", () => {
         [{ name: 42 }]
       );
       expect(result).toBe("cross-plugin-ok");
+    });
+  });
+
+  describe("typed channel registration (registerHandler schema overload)", () => {
+    let typedService: PluginService;
+
+    beforeEach(async () => {
+      await writePlugin("typed-plugin", {
+        name: "acme.typed",
+        version: "1.0.0",
+        capabilities: ["fs:project-read", "git:read"],
+      });
+      typedService = new PluginService(tmpDir);
+      await typedService.initialize();
+    });
+
+    it("registers and dispatches a typed channel with parsed args and result", async () => {
+      const schema = {
+        args: z.object({ name: z.string() }),
+        result: z.object({ greeting: z.string() }),
+      };
+      const handler = vi.fn(async (_ctx, args: { name: string }) => ({
+        greeting: `hello ${args.name}`,
+      }));
+      typedService.registerHandler("acme.typed", "greet", schema, handler);
+
+      const result = await typedService.dispatchHandler(
+        "acme.typed",
+        "greet",
+        makeCtx("acme.typed"),
+        [{ name: "world" }]
+      );
+      expect(result).toEqual({ greeting: "hello world" });
+      // The handler must receive the parsed single payload, not the raw variadic.
+      expect(handler).toHaveBeenCalledWith(expect.anything(), { name: "world" });
+    });
+
+    it("throws SCHEMA_ERROR when args fail Zod validation and never calls the handler", async () => {
+      const schema = {
+        args: z.object({ count: z.number().int().positive() }),
+        result: z.unknown(),
+      };
+      const handler = vi.fn();
+      typedService.registerHandler("acme.typed", "tally", schema, handler);
+
+      await expect(
+        typedService.dispatchHandler("acme.typed", "tally", makeCtx("acme.typed"), [
+          { count: "not-a-number" },
+        ])
+      ).rejects.toThrow(/^SCHEMA_ERROR:/);
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("throws SCHEMA_ERROR when the handler returns a result that fails the result schema", async () => {
+      const schema = {
+        args: z.object({}).passthrough(),
+        result: z.object({ count: z.number() }),
+      };
+      const handler = vi.fn(async () => ({ count: "nope" as unknown as number }));
+      typedService.registerHandler("acme.typed", "broken", schema, handler);
+
+      await expect(
+        typedService.dispatchHandler("acme.typed", "broken", makeCtx("acme.typed"), [{}])
+      ).rejects.toThrow(/^SCHEMA_ERROR: result for channel "broken" failed validation/);
+    });
+
+    it("rejects registration with PERMISSION_REQUIRED when a required capability is not declared", () => {
+      const schema = {
+        args: z.object({}),
+        result: z.object({}),
+        requires: ["fs:project-write" as const],
+      };
+      expect(() =>
+        typedService.registerHandler("acme.typed", "write-stuff", schema, vi.fn())
+      ).toThrow(/^PERMISSION_REQUIRED:/);
+    });
+
+    it("allows registration when every required capability is declared in the manifest", () => {
+      const schema = {
+        args: z.object({}),
+        result: z.object({}),
+        requires: ["fs:project-read" as const, "git:read" as const],
+      };
+      expect(() =>
+        typedService.registerHandler("acme.typed", "read-stuff", schema, vi.fn().mockResolvedValue({}))
+      ).not.toThrow();
+    });
+
+    it("throws PERMISSION_REQUIRED at dispatch when manifest capability disappears after registration (defense-in-depth)", async () => {
+      const schema = {
+        args: z.object({}),
+        result: z.unknown(),
+        requires: ["fs:project-read" as const],
+      };
+      const handler = vi.fn().mockResolvedValue({ ok: true });
+      typedService.registerHandler("acme.typed", "guarded", schema, handler);
+
+      // Tamper with the loaded manifest to simulate a future code path that
+      // removes a capability after registration. The dispatch-time re-check
+      // must reject before the handler runs.
+      const plugin = (typedService as unknown as { plugins: Map<string, { manifest: PluginManifest }> }).plugins.get(
+        "acme.typed"
+      );
+      if (plugin) {
+        plugin.manifest = { ...plugin.manifest, capabilities: [] };
+      }
+
+      await expect(
+        typedService.dispatchHandler("acme.typed", "guarded", makeCtx("acme.typed"), [{}])
+      ).rejects.toThrow(/^PERMISSION_REQUIRED:/);
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("removeHandlers cleans up channel schemas and capability gates", async () => {
+      const schema = {
+        args: z.object({ x: z.number() }),
+        result: z.object({ doubled: z.number() }),
+      };
+      typedService.registerHandler(
+        "acme.typed",
+        "double",
+        schema,
+        async (_ctx, args: { x: number }) => ({ doubled: args.x * 2 })
+      );
+
+      typedService.removeHandlers("acme.typed");
+
+      await expect(
+        typedService.dispatchHandler("acme.typed", "double", makeCtx("acme.typed"), [{ x: 3 }])
+      ).rejects.toThrow(/No plugin handler registered/);
+
+      // Re-register WITHOUT the typed overload — the old schema must be gone
+      // so legacy validation doesn't run on the new untyped handler.
+      typedService.registerHandler(
+        "acme.typed",
+        "double",
+        vi.fn().mockResolvedValue({ doubled: "string-result-not-validated" })
+      );
+      const legacyResult = await typedService.dispatchHandler(
+        "acme.typed",
+        "double",
+        makeCtx("acme.typed"),
+        [{ x: "anything" }]
+      );
+      expect(legacyResult).toEqual({ doubled: "string-result-not-validated" });
+    });
+
+    it("re-registering a typed channel as legacy drops the prior schema", async () => {
+      const schema = {
+        args: z.object({ x: z.number() }),
+        result: z.unknown(),
+      };
+      typedService.registerHandler("acme.typed", "swap", schema, vi.fn().mockResolvedValue("typed"));
+
+      const legacyHandler = vi.fn().mockResolvedValue("legacy");
+      typedService.registerHandler("acme.typed", "swap", legacyHandler);
+
+      // Now the legacy untyped path runs — args validation does not fire,
+      // so a previously-invalid payload would now go through.
+      const result = await typedService.dispatchHandler(
+        "acme.typed",
+        "swap",
+        makeCtx("acme.typed"),
+        [{ x: "string-was-invalid-before" }]
+      );
+      expect(result).toBe("legacy");
+      expect(legacyHandler).toHaveBeenCalledWith(expect.anything(), {
+        x: "string-was-invalid-before",
+      });
+    });
+
+    it("treats missing args as undefined for the typed args schema", async () => {
+      const schema = {
+        args: z.object({ name: z.string() }).optional(),
+        result: z.string(),
+      };
+      const handler = vi.fn(async (_ctx, args: { name: string } | undefined) =>
+        args ? args.name : "anonymous"
+      );
+      typedService.registerHandler("acme.typed", "optional", schema, handler);
+
+      const result = await typedService.dispatchHandler(
+        "acme.typed",
+        "optional",
+        makeCtx("acme.typed"),
+        []
+      );
+      expect(result).toBe("anonymous");
+    });
+
+    it("legacy untyped handler still dispatches alongside typed handlers on the same plugin", async () => {
+      typedService.registerHandler(
+        "acme.typed",
+        "typed-ch",
+        { args: z.string(), result: z.string() },
+        async (_ctx, args: string) => args.toUpperCase()
+      );
+      typedService.registerHandler(
+        "acme.typed",
+        "legacy-ch",
+        vi.fn().mockResolvedValue("legacy-result")
+      );
+
+      const typedResult = await typedService.dispatchHandler(
+        "acme.typed",
+        "typed-ch",
+        makeCtx("acme.typed"),
+        ["hello"]
+      );
+      expect(typedResult).toBe("HELLO");
+
+      const legacyResult = await typedService.dispatchHandler(
+        "acme.typed",
+        "legacy-ch",
+        makeCtx("acme.typed"),
+        ["whatever"]
+      );
+      expect(legacyResult).toBe("legacy-result");
     });
   });
 });
