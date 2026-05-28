@@ -121,6 +121,7 @@ export function auditSurfaceRamp(surfaces: ThemePalette["surfaces"], themeId: st
   for (let i = 1; i < oklchValues.length; i++) {
     const prev = oklchValues[i - 1];
     const curr = oklchValues[i];
+    if (!prev || !curr) continue;
     if (isNaN(prev.l) || isNaN(curr.l)) continue;
 
     const dL = Math.abs(curr.l - prev.l);
@@ -234,10 +235,13 @@ export function auditCrossThemeAccents(sources: BuiltInThemeSource[]): AuditResu
 
     for (let i = 0; i < entries.length; i++) {
       for (let j = i + 1; j < entries.length; j++) {
-        const de = deltaOklch(entries[i].accent, entries[j].accent);
+        const a = entries[i];
+        const b = entries[j];
+        if (!a || !b) continue;
+        const de = deltaOklch(a.accent, b.accent);
         if (de < CROSS_THEME_DE_WARN) {
           warnings.push(
-            `${label} themes "${entries[i].id}" and "${entries[j].id}" primary accents are ΔE=${de.toFixed(2)} — below ${CROSS_THEME_DE_WARN} threshold for distinctness`
+            `${label} themes "${a.id}" and "${b.id}" primary accents are ΔE=${de.toFixed(2)} — below ${CROSS_THEME_DE_WARN} threshold for distinctness`
           );
         }
       }
