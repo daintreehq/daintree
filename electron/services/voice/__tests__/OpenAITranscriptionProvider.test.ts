@@ -300,7 +300,7 @@ describe("OpenAITranscriptionProvider", () => {
     const service = new OpenAITranscriptionProvider();
     const errors: string[] = [];
     service.onEvent((e) => {
-      if (e.type === "error") errors.push(e.message);
+      if (e.type === "error") errors.push(e.error.message);
     });
 
     const startPromise = service.start(BASE_SETTINGS);
@@ -807,7 +807,9 @@ describe("OpenAITranscriptionProvider", () => {
     socket.simulateError(new Error("network down"));
 
     await expect(startPromise).resolves.toEqual({ ok: false, error: "network down" });
-    expect(events.some((e) => e.type === "error" && /network down/.test(e.message))).toBe(true);
+    expect(events.some((e) => e.type === "error" && /network down/.test(e.error.message))).toBe(
+      true
+    );
     expect(events.some((e) => e.type === "status" && e.status === "error")).toBe(true);
   });
 
@@ -815,7 +817,7 @@ describe("OpenAITranscriptionProvider", () => {
     const service = new OpenAITranscriptionProvider();
     const errors: string[] = [];
     service.onEvent((e) => {
-      if (e.type === "error") errors.push(e.message);
+      if (e.type === "error") errors.push(e.error.message);
     });
 
     const { socket } = await bringSessionReady(service);
@@ -1060,7 +1062,7 @@ describe("OpenAITranscriptionProvider", () => {
     const errors: string[] = [];
     service.onEvent((e) => {
       if (e.type === "status") statuses.push(e.status);
-      if (e.type === "error") errors.push(e.message);
+      if (e.type === "error") errors.push(e.error.message);
     });
 
     // Initial drop schedules attempt 1.

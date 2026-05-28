@@ -1,4 +1,8 @@
-import type { VoiceInputSettings, VoiceInputStatus } from "../../../shared/types/ipc/api.js";
+import type {
+  VoiceInputError,
+  VoiceInputSettings,
+  VoiceInputStatus,
+} from "../../../shared/types/ipc/api.js";
 
 export interface CorrectionWord {
   word: string;
@@ -18,7 +22,7 @@ export type VoiceTranscriptionEvent =
   | { type: "delta"; text: string }
   | { type: "complete"; text: string; confidence?: SegmentConfidence }
   | { type: "paragraph_boundary" }
-  | { type: "error"; message: string }
+  | { type: "error"; error: VoiceInputError }
   | { type: "status"; status: VoiceInputStatus };
 
 export type VoiceStartResult = { ok: true } | { ok: false; error: string };

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { VoiceInputStatus, VoiceTranscriptPhase } from "@shared/types";
+import type { VoiceInputError, VoiceInputStatus, VoiceTranscriptPhase } from "@shared/types";
 
 export interface VoiceRecordingTarget {
   panelId: string;
@@ -44,7 +44,7 @@ interface VoiceRecordingState {
   /** Whether AI correction is enabled for the current session. */
   correctionEnabled: boolean;
   status: VoiceInputStatus;
-  errorMessage: string | null;
+  lastError: VoiceInputError | null;
   activeTarget: VoiceRecordingTarget | null;
   elapsedSeconds: number;
   audioLevel: number;
@@ -55,7 +55,7 @@ interface VoiceRecordingState {
   setAudioLevel: (level: number) => void;
   beginSession: (target: VoiceRecordingTarget) => void;
   setStatus: (status: VoiceInputStatus) => void;
-  setError: (message: string | null) => void;
+  setLastError: (error: VoiceInputError | null) => void;
   setElapsedSeconds: (seconds: number) => void;
   appendDelta: (delta: string) => void;
   setSessionDraftStart: (panelId: string, length: number) => void;
@@ -92,7 +92,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
   isConfigured: false,
   correctionEnabled: false,
   status: "idle",
-  errorMessage: null,
+  lastError: null,
   activeTarget: null,
   elapsedSeconds: 0,
   audioLevel: 0,
@@ -109,7 +109,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
     set((state) => ({
       activeTarget: target,
       status: "connecting",
-      errorMessage: null,
+      lastError: null,
       elapsedSeconds: 0,
       panelBuffers: {
         ...state.panelBuffers,
@@ -129,7 +129,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
 
   setStatus: (status) => set({ status }),
 
-  setError: (message) => set({ errorMessage: message }),
+  setLastError: (error) => set({ lastError: error }),
 
   setElapsedSeconds: (elapsedSeconds) => set({ elapsedSeconds }),
 

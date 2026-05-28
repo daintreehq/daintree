@@ -4,12 +4,13 @@ import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
-import { isActiveVoiceSession } from "@shared/types";
+import { isActiveVoiceSession, type VoiceInputError } from "@shared/types";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { notify } from "@/lib/notify";
 
 const LOG_PREFIX = "[VoiceRecording]";
 
@@ -182,15 +183,38 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onError((error) => {
+      voiceInput.onError((error: VoiceInputError) => {
         // During graceful stop, the main process suppresses drain errors.
         // If one leaks through, ignore it to avoid prematurely finalizing.
         if (this.isStoppingSession) {
           logWarn(`${LOG_PREFIX} Ignoring error during stop`, { error });
           return;
         }
-        logError(`${LOG_PREFIX} Received error from backend`, { error });
-        useVoiceRecordingStore.getState().setError(error);
+        logError(`${LOG_PREFIX} Received error from backend`, {
+          severity: error.severity,
+          code: error.code,
+          message: error.message,
+        });
+        useVoiceRecordingStore.getState().setLastError(error);
+
+        // Transient errors (rate-limit, transport drop) are recoverable — the
+        // main process is already reconnecting. Store the error for tooltip
+        // context but keep the session alive; the reconnecting status update
+        // arriving on the same channel will update the UI.
+        if (error.severity === "transient") {
+          return;
+        }
+
+        // Fatal error — tear down the session and surface a toast so the user
+        // knows action is needed (check API key, network, etc.).
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Dictation stopped",
+          // eslint-disable-next-line no-restricted-syntax -- raw error.message: VoiceInputError is constructed internally with well-formed user copy
+          message: error.message,
+          context: { eventKind: "connectivity" },
+        });
         void this.stop("Dictation stopped because the connection failed.", {
           skipRemoteStop: true,
           nextStatus: "error",
@@ -366,7 +390,11 @@ class VoiceRecordingService {
     if (!isConfigured || this.isStartRequestStale(startRequestId)) {
       logWarn(`${LOG_PREFIX} Not configured, aborting start`);
       if (!this.isStartRequestStale(startRequestId)) {
-        useVoiceRecordingStore.getState().setError("Voice input is not configured.");
+        useVoiceRecordingStore.getState().setLastError({
+          severity: "fatal",
+          code: "renderer_error",
+          message: "Voice input is not configured.",
+        });
         useVoiceRecordingStore
           .getState()
           .announce("Voice dictation is not configured. Open Voice settings to continue.");
@@ -386,7 +414,9 @@ class VoiceRecordingService {
     if (micStatus === "denied" || micStatus === "restricted") {
       const message = "Microphone permission denied. Enable it in System Settings and try again.";
       logError(`${LOG_PREFIX} Microphone permission denied at OS level`, { micStatus });
-      useVoiceRecordingStore.getState().setError(message);
+      useVoiceRecordingStore
+        .getState()
+        .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
       useVoiceRecordingStore.getState().announce(message);
       safeFireAndForget(window.electron.voiceInput.openMicSettings(), {
         context: "Opening OS microphone settings",
@@ -403,7 +433,9 @@ class VoiceRecordingService {
       logDebug(`${LOG_PREFIX} OS microphone permission result`, { granted });
       if (!granted) {
         const message = "Microphone permission denied. Enable it in System Settings and try again.";
-        useVoiceRecordingStore.getState().setError(message);
+        useVoiceRecordingStore
+          .getState()
+          .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
         useVoiceRecordingStore.getState().announce(message);
         return;
       }
@@ -426,7 +458,11 @@ class VoiceRecordingService {
         name: error instanceof DOMException ? error.name : "unknown",
         message,
       });
-      useVoiceRecordingStore.getState().setError(message);
+      const micCode =
+        error instanceof DOMException && error.name === "NotAllowedError"
+          ? "mic_permission_denied"
+          : "mic_access_failed";
+      useVoiceRecordingStore.getState().setLastError({ severity: "fatal", code: micCode, message });
       useVoiceRecordingStore.getState().announce(message);
       return;
     }
@@ -557,7 +593,11 @@ class VoiceRecordingService {
     } catch (err) {
       if (this.generation !== generation || this.isStartRequestStale(startRequestId)) return;
       logError(`${LOG_PREFIX} Failed to load pcm-processor worklet`, err);
-      useVoiceRecordingStore.getState().setError("Failed to load the audio processor.");
+      useVoiceRecordingStore.getState().setLastError({
+        severity: "fatal",
+        code: "renderer_error",
+        message: "Failed to load the audio processor.",
+      });
       await this.stop(undefined, { nextStatus: "error", announce: false });
       useVoiceRecordingStore.getState().announce("Voice dictation failed to initialize.");
       return;
@@ -653,7 +693,9 @@ class VoiceRecordingService {
 
     if (!result.ok) {
       logError(`${LOG_PREFIX} Backend start failed`, { error: result.error });
-      useVoiceRecordingStore.getState().setError(result.error);
+      useVoiceRecordingStore
+        .getState()
+        .setLastError({ severity: "fatal", code: "backend_start_failed", message: result.error });
       await this.cleanupAudioCapture();
       useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
       useVoiceRecordingStore.getState().announce("Voice dictation failed to start.");
@@ -884,9 +926,11 @@ class VoiceRecordingService {
     if (isAssistantFocused()) {
       const assistantTarget = this.getAssistantTarget();
       if (!assistantTarget) {
-        useVoiceRecordingStore
-          .getState()
-          .setError("Daintree Assistant is starting — try again in a moment.");
+        useVoiceRecordingStore.getState().setLastError({
+          severity: "fatal",
+          code: "renderer_error",
+          message: "Daintree Assistant is starting — try again in a moment.",
+        });
         useVoiceRecordingStore
           .getState()
           .announce("Daintree Assistant is starting. Try dictation again in a moment.");
@@ -898,7 +942,11 @@ class VoiceRecordingService {
 
     const target = this.getFocusedPanelTarget();
     if (!target) {
-      useVoiceRecordingStore.getState().setError("No focused terminal is available for dictation.");
+      useVoiceRecordingStore.getState().setLastError({
+        severity: "fatal",
+        code: "renderer_error",
+        message: "No focused terminal is available for dictation.",
+      });
       useVoiceRecordingStore
         .getState()
         .announce("Focus a terminal input before starting dictation.");
@@ -928,7 +976,11 @@ class VoiceRecordingService {
     // the user to retry once the session exists.
     const assistantTarget = this.getAssistantTarget();
     if (!assistantTarget) {
-      useVoiceRecordingStore.getState().setError("Start the Daintree Assistant before dictating.");
+      useVoiceRecordingStore.getState().setLastError({
+        severity: "fatal",
+        code: "renderer_error",
+        message: "Start the Daintree Assistant before dictating.",
+      });
       useVoiceRecordingStore.getState().announce("Start the Daintree Assistant before dictating.");
       return;
     }

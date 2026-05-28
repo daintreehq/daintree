@@ -31,7 +31,7 @@ describe("VoiceInputButton", () => {
     useVoiceRecordingStore.setState({
       isConfigured: false,
       status: "idle",
-      errorMessage: null,
+      lastError: null,
       activeTarget: null,
       elapsedSeconds: 0,
       panelBuffers: {},

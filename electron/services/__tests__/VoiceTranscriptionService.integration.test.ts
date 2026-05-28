@@ -49,7 +49,8 @@ describe("VoiceTranscriptionService integration", () => {
 
       const errors = events.filter((e) => e.type === "error");
       if (errors.length > 0) {
-        throw new Error(`Server returned error: ${(errors[0] as { message: string }).message}`);
+        const errEvent = errors[0] as { type: "error"; error: { message: string } };
+        throw new Error(`Server returned error: ${errEvent.error.message}`);
       }
 
       service.stop();

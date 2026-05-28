@@ -9,7 +9,7 @@ function reset() {
     isConfigured: false,
     correctionEnabled: false,
     status: "idle",
-    errorMessage: null,
+    lastError: null,
     activeTarget: null,
     elapsedSeconds: 0,
     audioLevel: 0,
