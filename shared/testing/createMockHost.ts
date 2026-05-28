@@ -191,7 +191,16 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const host: PluginHostApi & MockHostState = {
     pluginId,
     registerAction(descriptor, handler) {
-      registeredActions.push({ descriptor, handler });
+      // Mirror PluginService.registerAction: re-registering the same id
+      // replaces the prior descriptor + handler. Without this, the recording
+      // array would diverge from production semantics and any plugin test
+      // that re-registers an action would silently dispatch the stale handler.
+      const existing = registeredActions.findIndex((r) => r.descriptor.id === descriptor.id);
+      if (existing >= 0) {
+        registeredActions[existing] = { descriptor, handler };
+      } else {
+        registeredActions.push({ descriptor, handler });
+      }
     },
     registerHandler(channel, handler) {
       registeredHandlers.push({ channel, handler });
@@ -263,10 +272,13 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       const override = dispatchOverrides.get(actionId);
       if (override) return override;
       if (options.dispatch) return options.dispatch(actionId, args);
-      const localId = actionId.startsWith(`${pluginId}.`)
-        ? actionId.slice(pluginId.length + 1)
-        : actionId;
-      const reg = registeredActions.find((r) => r.descriptor.id === localId);
+      // Match the real host's contract: dispatch ids are always fully
+      // namespaced as `{pluginId}.{descriptor.id}`. Looking up by the full
+      // form means a plugin calling `host.dispatch("greet")` against a
+      // registered action also id'd `"greet"` returns NOT_FOUND in the mock
+      // exactly as it would in production where ActionService never sees an
+      // unprefixed id.
+      const reg = registeredActions.find((r) => actionId === `${pluginId}.${r.descriptor.id}`);
       if (!reg) {
         return {
           ok: false,

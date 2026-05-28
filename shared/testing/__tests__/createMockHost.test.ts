@@ -40,6 +40,19 @@ describe("createMockHost", () => {
     expect(host.registeredActions[0]?.handler).toBe(handler);
   });
 
+  it("registerAction replaces a prior registration with the same id", async () => {
+    const host = createMockHost({ pluginId: "daintree.hello" });
+    const h1 = vi.fn(async () => "v1");
+    const h2 = vi.fn(async () => "v2");
+    host.registerAction(sampleAction, h1);
+    host.registerAction(sampleAction, h2);
+    expect(host.registeredActions).toHaveLength(1);
+    expect(host.registeredActions[0]?.handler).toBe(h2);
+    const result = await host.dispatch("daintree.hello.greet");
+    expect(result).toEqual({ ok: true, result: "v2" });
+    expect(h1).not.toHaveBeenCalled();
+  });
+
   it("records registerHandler calls", () => {
     const host = createMockHost();
     const handler = vi.fn();
@@ -190,12 +203,21 @@ describe("createMockHost", () => {
       });
     });
 
+    it("requires the plugin-id prefix when the host has one bound", async () => {
+      const host = createMockHost({ pluginId: "daintree.hello" });
+      host.registerAction(sampleAction, async () => "ok");
+      // Real host receives the fully-namespaced id; an unprefixed local id is
+      // not a valid built-in action and must not silently resolve.
+      const result = await host.dispatch("greet");
+      expect(result.ok).toBe(false);
+    });
+
     it("returns EXECUTION_ERROR when the handler throws", async () => {
       const host = createMockHost();
       host.registerAction(sampleAction, async () => {
         throw new Error("boom");
       });
-      const result = await host.dispatch("greet");
+      const result = await host.dispatch("test.mock.greet");
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe("EXECUTION_ERROR");

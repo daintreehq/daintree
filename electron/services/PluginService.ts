@@ -305,6 +305,15 @@ export class PluginService {
    * on `app.isPackaged` / `process.resourcesPath`.
    */
   private builtinPluginsRoot: string | undefined;
+
+  /**
+   * E2E-only backdoor: an additional directory scanned after the regular
+   * built-in + user scans, with `isBuiltin: true` so plugins claiming the
+   * reserved `daintree.*` namespace (e.g. the `hello-daintree` sample) can
+   * load. Never set in production — the env-var read in the singleton is
+   * constant-folded to `""` via `scripts/build-main.mjs` defines.
+   */
+  private sideloadPluginsRoot: string | undefined;
   private appVersion: string;
   /**
    * Coalesces multiple registry events fired in the same tick (e.g., when a
@@ -346,11 +355,12 @@ export class PluginService {
   constructor(
     pluginsRoot?: string,
     appVersion?: string,
-    options?: { builtinPluginsRoot?: string }
+    options?: { builtinPluginsRoot?: string; sideloadPluginsRoot?: string }
   ) {
     this.pluginsRoot = pluginsRoot ?? path.join(os.homedir(), ".daintree", "plugins");
     this.appVersion = appVersion ?? app.getVersion();
     this.builtinPluginsRoot = options?.builtinPluginsRoot;
+    this.sideloadPluginsRoot = options?.sideloadPluginsRoot;
 
     const offRegister = onPanelKindRegistered(() => this.schedulePanelKindsBroadcast());
     const offUnregister = onPanelKindUnregistered(() => this.schedulePanelKindsBroadcast());
@@ -415,8 +425,16 @@ export class PluginService {
         ? await this.loadFromDir(builtinDir, { isBuiltin: true })
         : 0;
       const userLoaded = await this.loadFromDir(this.pluginsRoot, { isBuiltin: false });
+      // E2E sideload — loaded with isBuiltin:true so manifest.name values in
+      // the reserved `daintree.*` namespace pass the schema's namespace guard.
+      // Runs after the regular scans so sideloaded plugins lose to a real
+      // builtin with the same name (the duplicate guard in loadPlugin keeps
+      // the already-registered builtin).
+      const sideloadLoaded = this.sideloadPluginsRoot
+        ? await this.loadFromDir(this.sideloadPluginsRoot, { isBuiltin: true })
+        : 0;
       console.log(
-        `[PluginService] Loaded ${builtinLoaded} built-in plugin(s) from ${builtinDir ?? "<unresolved>"} and ${userLoaded} user plugin(s) from ${this.pluginsRoot}`
+        `[PluginService] Loaded ${builtinLoaded} built-in plugin(s) from ${builtinDir ?? "<unresolved>"}, ${userLoaded} user plugin(s) from ${this.pluginsRoot}, and ${sideloadLoaded} sideloaded plugin(s) from ${this.sideloadPluginsRoot ?? "<none>"}`
       );
     } finally {
       // Idempotency must hold even when a scan throws (e.g. EACCES on the
@@ -2310,10 +2328,13 @@ export class PluginService {
   }
 }
 
-// E2E backdoor: the host-contract harness (#9286) points the user-plugin root
-// at the compiled sample plugin under `dist-electron/plugins/sample`. The
-// constant-folded define in `scripts/build-main.mjs` rewrites this to `""` in
-// production builds, so the OR-fallback keeps the normal `~/.daintree/plugins`
-// path in any non-test shipped binary.
+// E2E backdoor: the host-contract harness (#9286) sideloads the compiled
+// sample plugin from `dist-electron/plugins/sample` via a dedicated scan that
+// loads with `isBuiltin: true`, which is the only way a plugin claiming the
+// reserved `daintree.*` namespace can pass the manifest schema. The
+// constant-folded define in `scripts/build-main.mjs` rewrites this read to
+// `""` in production builds, so no shipped binary ever sideloads anything.
 const e2eSideloadDir = process.env.DAINTREE_E2E_SIDELOAD_PLUGIN_DIR || undefined;
-export const pluginService = new PluginService(e2eSideloadDir);
+export const pluginService = new PluginService(undefined, undefined, {
+  sideloadPluginsRoot: e2eSideloadDir,
+});

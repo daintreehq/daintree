@@ -48,6 +48,11 @@ module.exports = async function () {
       "!node_modules/node-pty/bin",
       "!node_modules/node-pty/prebuilds",
       "!node_modules/ffmpeg-static/**/*",
+      // Sample plugins are an e2e harness fixture (#9286) — sideloaded only
+      // when `DAINTREE_E2E_SIDELOAD_PLUGIN_DIR` is set, which is constant-
+      // folded to "" in production builds. Excluding the dir keeps shipped
+      // binaries from carrying dead test fixtures.
+      "!dist-electron/plugins/sample/**",
     ],
     extraResources: [
       { from: "help", to: "help" },
