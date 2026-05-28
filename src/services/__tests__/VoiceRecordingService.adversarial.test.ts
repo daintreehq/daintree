@@ -343,7 +343,7 @@ vi.mock("@/lib/voiceInputSettingsEvents", () => ({
   VOICE_INPUT_SETTINGS_CHANGED_EVENT: "voice-input-settings-changed",
 }));
 
-vi.mock("@/services/keybindingService", () => ({
+vi.mock("@/services/KeybindingService", () => ({
   keybindingService: {
     getEffectiveCombo: vi.fn(() => undefined),
     matchesEvent: vi.fn(() => false),

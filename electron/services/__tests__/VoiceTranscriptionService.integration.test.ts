@@ -39,6 +39,7 @@ describe("VoiceTranscriptionService integration", () => {
         deviceId: "",
         organizationId: "",
         projectId: "",
+        recordingMode: "toggle",
       });
 
       expect(result).toEqual({ ok: true });

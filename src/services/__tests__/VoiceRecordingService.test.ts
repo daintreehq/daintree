@@ -115,6 +115,18 @@ vi.mock("@/lib/voiceInputSettingsEvents", () => ({
   VOICE_INPUT_SETTINGS_CHANGED_EVENT: "voice-input-settings-changed",
 }));
 
+vi.mock("@/services/KeybindingService", () => ({
+  keybindingService: {
+    getEffectiveCombo: vi.fn((actionId: string) => {
+      if (actionId === "voiceInput.toggle") return "Cmd+Shift+V";
+      if (actionId === "voiceInput.toggleAssistant") return "Cmd+Shift+Alt+V";
+      return undefined;
+    }),
+    matchesEvent: vi.fn(),
+  },
+}));
+
+
 function buildElectronStub() {
   return {
     voiceInput: {
@@ -1183,7 +1195,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     const electron = buildPttElectronStub();
     const { windowListeners } = setupGlobals(electron);
 
-    const { keybindingService } = (await import("@/services/keybindingService")) as unknown as {
+    const { keybindingService } = (await import("@/services/KeybindingService")) as unknown as {
       keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
     };
     keybindingService.matchesEvent.mockImplementation(
@@ -1229,7 +1241,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     const electron = buildPttElectronStub();
     const { windowListeners } = setupGlobals(electron);
 
-    const { keybindingService } = (await import("@/services/keybindingService")) as unknown as {
+    const { keybindingService } = (await import("@/services/KeybindingService")) as unknown as {
       keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
     };
     keybindingService.matchesEvent.mockImplementation(
@@ -1269,7 +1281,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     const electron = buildPttElectronStub();
     const { windowListeners } = setupGlobals(electron);
 
-    const { keybindingService } = (await import("@/services/keybindingService")) as unknown as {
+    const { keybindingService } = (await import("@/services/KeybindingService")) as unknown as {
       keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
     };
     keybindingService.matchesEvent.mockImplementation(
@@ -1310,7 +1322,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     const electron = buildPttElectronStub();
     const { windowListeners } = setupGlobals(electron);
 
-    const { keybindingService } = (await import("@/services/keybindingService")) as unknown as {
+    const { keybindingService } = (await import("@/services/KeybindingService")) as unknown as {
       keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
     };
     keybindingService.matchesEvent.mockImplementation(
@@ -1413,7 +1425,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     const electron = buildPttElectronStub();
     const { windowListeners } = setupGlobals(electron);
 
-    const { keybindingService } = (await import("@/services/keybindingService")) as unknown as {
+    const { keybindingService } = (await import("@/services/KeybindingService")) as unknown as {
       keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
     };
     keybindingService.matchesEvent.mockImplementation(
@@ -1495,7 +1507,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     const electron = buildPttElectronStub();
     const { windowListeners } = setupGlobals(electron);
 
-    const { keybindingService } = (await import("@/services/keybindingService")) as unknown as {
+    const { keybindingService } = (await import("@/services/KeybindingService")) as unknown as {
       keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
     };
     keybindingService.matchesEvent.mockImplementation(
