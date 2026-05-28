@@ -502,7 +502,7 @@ function extractChromiumVersion(userAgent: string): string {
 }
 
 async function reportNotificationOnGitHub(entry: NotificationHistoryEntry): Promise<void> {
-  let appVersion = "unknown";
+  let appVersion: string;
   try {
     appVersion = await appClient.getVersion();
   } catch {
