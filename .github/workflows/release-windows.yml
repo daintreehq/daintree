@@ -243,6 +243,7 @@ jobs:
 
       - name: Submit to Microsoft Store (Windows)
         if: inputs.dry_run != true && steps.store-secrets.outputs.configured == 'true'
+        continue-on-error: true
         shell: pwsh
         env:
           PARTNER_CENTER_TENANT_ID: ${{ secrets.PARTNER_CENTER_TENANT_ID }}
@@ -257,14 +258,17 @@ jobs:
             --clientId $env:PARTNER_CENTER_CLIENT_ID `
             --clientSecret $env:PARTNER_CENTER_CLIENT_SECRET
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::msstore reconfigure failed (exit $LASTEXITCODE)"
+            Write-Host "::warning::msstore reconfigure failed (exit $LASTEXITCODE)"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ":warning: Microsoft Store submission skipped — msstore reconfigure failed (exit $LASTEXITCODE)"
             exit $LASTEXITCODE
           }
           msstore publish . --appId $env:STORE_PRODUCT_ID --inputDirectory .\release
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::msstore publish failed (exit $LASTEXITCODE). If the failure is 'unknown command,' the CLI grammar may have shifted — run 'msstore --help' on the runner and update this step."
+            Write-Host "::warning::msstore publish failed (exit $LASTEXITCODE). If the failure is 'unknown command,' the CLI grammar may have shifted — run 'msstore --help' on the runner and update this step."
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ":warning: Microsoft Store submission skipped — msstore publish failed (exit $LASTEXITCODE)"
             exit $LASTEXITCODE
           }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ":rocket: Microsoft Store submission published (product $env:STORE_PRODUCT_ID)"
 
       - name: Validate update metadata (Windows NSIS)
         shell: bash
