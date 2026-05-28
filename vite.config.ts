@@ -222,12 +222,13 @@ function reactCompilerReportPlugin(command: "build" | "serve"): {
   };
 }
 
-// Shared state between hostImportMapPlugin and cspTransformPlugin. The import
-// map plugin runs first (transformIndexHtml order:"pre"), computes the SHA-256
-// of the serialized JSON payload, and stores it here; cspTransformPlugin then
-// reads the hash so the production `<meta http-equiv="Content-Security-Policy">`
-// admits the inline `<script type="importmap">` it just injected. Reset per
-// build via buildStart to keep `vite build --watch` from carrying stale state.
+// Shared state between hostImportMapPlugin and cspTransformPlugin. Both hooks
+// use default-order transformIndexHtml; Vite preserves plugin-array order for
+// same-order hooks, and the array places hostImportMapPlugin before
+// cspTransformPlugin so the hash is set before the CSP meta tag is rewritten.
+// (`order: "pre"` would run before bundling and yield `ctx.bundle === undefined`,
+// hiding the vendor-react chunk path.) `buildStart` resets the hash so a
+// watch-mode rebuild can't reuse stale state from the previous build.
 interface ImportMapBuildState {
   scriptSrcHash: string | null;
 }
