@@ -97,10 +97,18 @@ vi.mock("electron", () => ({
   },
 }));
 
-const chmodMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
-const readFileMock = vi.hoisted(() => vi.fn(() => Promise.resolve("log line")));
-const statMock = vi.hoisted(() => vi.fn(() => Promise.resolve({ mtimeMs: Date.now() })));
-const existsSyncMock = vi.hoisted(() => vi.fn(() => false));
+const chmodMock = vi.hoisted(() =>
+  vi.fn<(path: string, mode: number) => Promise<void>>(() => Promise.resolve())
+);
+const readFileMock = vi.hoisted(() =>
+  vi.fn<(path: string) => Promise<string>>(() => Promise.resolve("log line"))
+);
+const statMock = vi.hoisted(() =>
+  vi.fn<(path: string) => Promise<{ mtimeMs: number }>>(() =>
+    Promise.resolve({ mtimeMs: Date.now() })
+  )
+);
+const existsSyncMock = vi.hoisted(() => vi.fn<(path: string) => boolean>(() => false));
 
 vi.mock("node:fs", () => ({
   promises: {
@@ -296,12 +304,13 @@ describe("registerDiagnosticsHandlers", () => {
 
     it("skips rotated logs whose mtime predates the window, keeps recent ones", async () => {
       existsSyncMock.mockImplementation(
-        (p: string) =>
+        (p: string): boolean =>
           p === "/logs/daintree.log" || p === "/logs/daintree.log.1" || p === "/logs/daintree.log.2"
       );
       // Window cutoff = 5000ms. .1 is older (skip), .2 is newer (keep).
-      statMock.mockImplementation((p: string) =>
-        Promise.resolve({ mtimeMs: p === "/logs/daintree.log.1" ? 4000 : 6000 })
+      statMock.mockImplementation(
+        (p: string): Promise<{ mtimeMs: number }> =>
+          Promise.resolve({ mtimeMs: p === "/logs/daintree.log.1" ? 4000 : 6000 })
       );
       dialogMock.showSaveDialog.mockResolvedValueOnce({
         filePath: "/tmp/diagnostics.zip",
@@ -328,7 +337,7 @@ describe("registerDiagnosticsHandlers", () => {
 
     it("includes all rotated logs and never stats them when the window is full history", async () => {
       existsSyncMock.mockImplementation(
-        (p: string) =>
+        (p: string): boolean =>
           p === "/logs/daintree.log" || p === "/logs/daintree.log.1" || p === "/logs/daintree.log.2"
       );
       dialogMock.showSaveDialog.mockResolvedValueOnce({
@@ -356,7 +365,7 @@ describe("registerDiagnosticsHandlers", () => {
 
     it("includes a rotated log when its stat fails rather than dropping it", async () => {
       existsSyncMock.mockImplementation(
-        (p: string) => p === "/logs/daintree.log" || p === "/logs/daintree.log.1"
+        (p: string): boolean => p === "/logs/daintree.log" || p === "/logs/daintree.log.1"
       );
       statMock.mockRejectedValue(new Error("stat failed"));
       dialogMock.showSaveDialog.mockResolvedValueOnce({
