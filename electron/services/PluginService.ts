@@ -859,6 +859,7 @@ export class PluginService {
       void getPluginMcpSupervisor()
         .start({
           pluginId,
+          pluginDir,
           contributions,
           resolveSettings: (settingId) => this.resolveSettingTemplate(pluginId, settingId),
         })
@@ -2298,18 +2299,28 @@ export class PluginService {
   }
 
   /**
-   * Look up a single `contributes.experimental_mcpServers` entry by id. Used by
-   * the `plugin-mcp:restart` IPC handler to feed the supervisor a fresh
+   * Look up a single `contributes.experimental_mcpServers` entry by id along
+   * with the plugin's resolved on-disk directory. Used by the
+   * `plugin-mcp:restart` IPC handler to feed the supervisor a fresh
    * contribution (with re-resolved `${settings:*}` substitutions) on each
-   * restart.
+   * restart, plus the cwd the child process should anchor against.
    */
   findMcpServerContribution(
     pluginId: string,
     serverId: string
-  ): PluginManifest["contributes"]["experimental_mcpServers"][number] | undefined {
+  ):
+    | {
+        contribution: PluginManifest["contributes"]["experimental_mcpServers"][number];
+        pluginDir: string;
+      }
+    | undefined {
     const plugin = this.plugins.get(pluginId);
     if (!plugin) return undefined;
-    return plugin.manifest.contributes.experimental_mcpServers.find((c) => c.id === serverId);
+    const contribution = plugin.manifest.contributes.experimental_mcpServers.find(
+      (c) => c.id === serverId
+    );
+    if (!contribution) return undefined;
+    return { contribution, pluginDir: plugin.dir };
   }
 
   /**

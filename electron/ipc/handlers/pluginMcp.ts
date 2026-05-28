@@ -23,12 +23,19 @@ async function handleGetStderr(key: PluginMcpServerKey): Promise<PluginMcpStderr
  * decoupled from `PluginService`.
  */
 async function handleRestart(key: PluginMcpServerKey): Promise<void> {
-  const contribution = pluginService.findMcpServerContribution(key.pluginId, key.serverId);
-  if (!contribution) return;
+  const lookup = pluginService.findMcpServerContribution(key.pluginId, key.serverId);
+  if (!lookup) {
+    // A renderer race with plugin unload can land here. Throw so the caller
+    // sees the failure rather than treating it as a silent no-op restart.
+    throw new Error(
+      `Cannot restart "${key.pluginId}/${key.serverId}": plugin or server is not registered`
+    );
+  }
   await getPluginMcpSupervisor().restart({
     pluginId: key.pluginId,
+    pluginDir: lookup.pluginDir,
     serverId: key.serverId,
-    contribution,
+    contribution: lookup.contribution,
     resolveSettings: (settingId) => pluginService.resolveSettingTemplate(key.pluginId, settingId),
   });
 }

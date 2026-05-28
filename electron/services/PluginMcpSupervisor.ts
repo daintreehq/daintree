@@ -5,6 +5,7 @@ import {
   type PluginMcpServerStatus,
   type PluginMcpStderrResult,
 } from "../../shared/types/ipc/pluginMcp.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { McpServerContributionSchema } from "../schemas/plugin.js";
 
 type McpServerContribution = z.infer<typeof McpServerContributionSchema>;
@@ -48,6 +49,14 @@ export interface ResolvedMcpServerConfig {
   command: string;
   args: string[];
   env: Record<string, string>;
+  /**
+   * Working directory for the child process. The supervisor anchors this to
+   * the plugin's on-disk directory so a manifest like
+   * `command: "node", args: ["./dist/server.js"]` resolves against the plugin
+   * regardless of the Electron process's own cwd. Plugins cannot override
+   * this — it's set by the host, not the manifest.
+   */
+  cwd: string | undefined;
 }
 
 /**
@@ -148,14 +157,15 @@ export class PluginMcpSupervisor {
    */
   async start(input: {
     pluginId: string;
+    pluginDir?: string;
     contributions: McpServerContribution[];
     resolveSettings: (template: string) => Promise<string>;
   }): Promise<void> {
-    const { pluginId, contributions, resolveSettings } = input;
+    const { pluginId, pluginDir, contributions, resolveSettings } = input;
     if (contributions.length === 0) return;
     await Promise.all(
       contributions.map((contribution) =>
-        this.startOne(pluginId, contribution, resolveSettings).catch((err) => {
+        this.startOne(pluginId, pluginDir, contribution, resolveSettings).catch((err) => {
           // startOne records the failure into state.lastError; the catch here
           // exists so a thrown spawn (e.g. unresolved settings template) can't
           // reject the outer Promise.all and abort plugin activation.
@@ -170,6 +180,7 @@ export class PluginMcpSupervisor {
 
   private async startOne(
     pluginId: string,
+    pluginDir: string | undefined,
     contribution: McpServerContribution,
     resolveSettings: (template: string) => Promise<string>
   ): Promise<void> {
@@ -192,12 +203,23 @@ export class PluginMcpSupervisor {
       readyPromise: null,
       stdoutBuffer: "",
     };
-    // Reset transient fields for a restart of a previously-stopped/crashed entry.
+    // Reset transient fields for a restart of a previously-stopped/crashed
+    // entry. A "crashed" entry may still hold a live subprocess (e.g. the
+    // handshake timed out but the server is still running), so kill it
+    // before nulling the reference — otherwise the orphan process leaks.
     if (existing) {
+      if (existing.subprocess) {
+        try {
+          existing.subprocess.kill();
+        } catch {
+          // already-exited or detached — fall through
+        }
+      }
       state.contribution = contribution;
       state.status = "spawning";
       state.lastError = null;
       state.subprocess = null;
+      state.pid = null;
       state.nextRequestId = 1;
       state.pendingCalls.clear();
       state.stdoutBuffer = "";
@@ -209,19 +231,41 @@ export class PluginMcpSupervisor {
 
     let resolved: ResolvedMcpServerConfig;
     try {
-      resolved = await resolveContribution(contribution, resolveSettings);
+      resolved = await resolveContribution(contribution, pluginDir, resolveSettings);
     } catch (err) {
-      state.status = "crashed";
-      state.lastError = err instanceof Error ? err.message : String(err);
+      // A concurrent shutdown may have flipped state.status to "stopped"
+      // while we were resolving — don't claim crashed in that case.
+      if (state.status !== "stopped") {
+        state.status = "crashed";
+        state.lastError = formatErrorMessage(err, "MCP supervisor error");
+      }
       return;
     }
+
+    // If a shutdown landed during resolveContribution, abandon the spawn
+    // entirely so we don't strand a fresh subprocess outside the supervisor's
+    // teardown bookkeeping.
+    if (state.status === "stopped") return;
 
     let handle: SpawnHandle;
     try {
       handle = await this.spawner(resolved);
     } catch (err) {
-      state.status = "crashed";
-      state.lastError = err instanceof Error ? err.message : String(err);
+      if (state.status !== "stopped") {
+        state.status = "crashed";
+        state.lastError = formatErrorMessage(err, "MCP supervisor error");
+      }
+      return;
+    }
+    // Same guard after the spawn-await: if a shutdown raced in, kill the
+    // freshly-spawned child immediately rather than registering it as state.
+    if (state.status === "stopped") {
+      try {
+        handle.subprocess.kill();
+      } catch {
+        // best-effort
+      }
+      handle.exit.catch(() => {});
       return;
     }
     const subprocess = handle.subprocess;
@@ -233,6 +277,12 @@ export class PluginMcpSupervisor {
     // processes (and increasingly the main process under strict modes) treat
     // as fatal. See #4372.
     handle.exit.catch(() => {});
+
+    // Swallow async 'error' events on stdin (e.g. EPIPE after the child
+    // crashed). The pending-call rejection paths handle the logical error;
+    // letting the stream's own error event surface unhandled would crash
+    // the utility process under Electron 37+'s strict rejection mode.
+    subprocess.stdin?.on("error", () => {});
 
     this.attachStderrReader(state);
     this.attachStdoutReader(state);
@@ -297,8 +347,13 @@ export class PluginMcpSupervisor {
       state.status = "ready";
       state.lastError = null;
     } catch (err) {
-      state.status = "crashed";
-      state.lastError = err instanceof Error ? err.message : String(err);
+      // A shutdown that lands mid-handshake already set status to "stopped"
+      // and rejected the pending init call. Don't clobber that with "crashed"
+      // — the UI distinction between user-cancelled and crashed matters.
+      if (state.status !== "stopped") {
+        state.status = "crashed";
+        state.lastError = formatErrorMessage(err, "MCP supervisor error");
+      }
       throw err;
     }
   }
@@ -458,12 +513,23 @@ export class PluginMcpSupervisor {
         timer,
       });
     });
-    writeFrame(stdin, {
-      jsonrpc: "2.0" as const,
-      id: requestId,
-      method: "tools/call",
-      params: { name: input.tool, arguments: input.args ?? {} },
-    });
+    try {
+      writeFrame(stdin, {
+        jsonrpc: "2.0" as const,
+        id: requestId,
+        method: "tools/call",
+        params: { name: input.tool, arguments: input.args ?? {} },
+      });
+    } catch (err) {
+      // stdin may have ended between the status check and the write — e.g.
+      // the child crashed in the same tick. Reject the pending call now
+      // rather than waiting 30s for the tool-call timeout.
+      const pending = state.pendingCalls.get(requestId);
+      if (pending) {
+        state.pendingCalls.delete(requestId);
+        pending.reject(plainError("WRITE_FAILED", formatErrorMessage(err, "stdin write failed")));
+      }
+    }
     return promise;
   }
 
@@ -530,12 +596,13 @@ export class PluginMcpSupervisor {
    */
   async restart(input: {
     pluginId: string;
+    pluginDir?: string;
     serverId: string;
     contribution: McpServerContribution;
     resolveSettings: (template: string) => Promise<string>;
   }): Promise<void> {
     await this.shutdownOne(stateKey(input.pluginId, input.serverId));
-    await this.startOne(input.pluginId, input.contribution, input.resolveSettings);
+    await this.startOne(input.pluginId, input.pluginDir, input.contribution, input.resolveSettings);
   }
 
   /** Snapshot every supervised server for the `plugin-mcp:list` IPC. */
@@ -581,6 +648,7 @@ const SETTINGS_TEMPLATE_RE = /\$\{settings:([a-zA-Z0-9._-]+)\}/g;
  */
 async function resolveContribution(
   contribution: McpServerContribution,
+  cwd: string | undefined,
   resolve: (template: string) => Promise<string>
 ): Promise<ResolvedMcpServerConfig> {
   const command = await substitute(contribution.command, resolve);
@@ -589,7 +657,7 @@ async function resolveContribution(
   for (const [key, value] of Object.entries(contribution.env ?? {})) {
     env[key] = await substitute(value, resolve);
   }
-  return { contribution, command, args, env };
+  return { contribution, command, args, env, cwd };
 }
 
 async function substitute(
@@ -597,17 +665,37 @@ async function substitute(
   resolve: (template: string) => Promise<string>
 ): Promise<string> {
   if (!input.includes("${settings:")) return input;
+  // Resolve each unique placeholder once, then do a single global pass per
+  // key. `replace()` would only consume the first occurrence per call, and
+  // if an earlier resolved value happened to itself contain a `${settings:*}`
+  // literal the placeholder substitution would become order-dependent.
   const matches = [...input.matchAll(SETTINGS_TEMPLATE_RE)];
-  let out = input;
+  const unique = new Map<string, string>();
   for (const match of matches) {
-    const value = await resolve(match[1]!);
-    out = out.replace(match[0], value);
+    const key = match[1]!;
+    if (!unique.has(key)) unique.set(key, await resolve(key));
+  }
+  let out = input;
+  for (const [key, value] of unique) {
+    out = out.replaceAll(`\${settings:${key}}`, value);
   }
   return out;
 }
 
 function writeFrame(stdin: NodeJS.WritableStream, payload: unknown): void {
-  // MCP stdio framing is NDJSON — one JSON-RPC 2.0 message per `\n`.
+  // MCP stdio framing is NDJSON — one JSON-RPC 2.0 message per `\n`. Reject
+  // synchronously if the stream has ended so the caller can surface a
+  // structured error instead of waiting for the async 'error' emission.
+  // The `writable` / `writableEnded` properties are defined on every Node
+  // writable stream; the runtime cast keeps the helper signature minimal.
+  const writable = stdin as NodeJS.WritableStream & {
+    writable?: boolean;
+    writableEnded?: boolean;
+    destroyed?: boolean;
+  };
+  if (writable.writableEnded || writable.destroyed || writable.writable === false) {
+    throw new Error("subprocess stdin is closed");
+  }
   stdin.write(`${JSON.stringify(payload)}\n`);
 }
 
@@ -624,6 +712,7 @@ function plainError(code: string, message: string): Error & { code: string } {
 const defaultSpawner: SubprocessSpawner = async (config) => {
   const { execa } = await import("execa");
   const subprocess = execa(config.command, config.args, {
+    cwd: config.cwd,
     env: { ...process.env, ...config.env },
     stdio: ["pipe", "pipe", "pipe"],
     cleanup: true,

@@ -447,4 +447,153 @@ describe("PluginMcpSupervisor (issue #9233)", () => {
     expect(info?.status).toBe("crashed");
     expect(info?.lastError).toContain("vault unavailable");
   });
+
+  it("leaves status as 'stopped' when shutdown lands mid-handshake", async () => {
+    const fake = makeFakeSubprocess();
+    const supervisor = new PluginMcpSupervisor({
+      spawner: () => fake.handle,
+      killTree: () => {},
+    });
+    const startPromise = supervisor.start({
+      pluginId: "acme.demo",
+      contributions: [{ id: "linear", name: "Linear", command: "node" }],
+      resolveSettings: async () => "",
+    });
+    // Wait for the initialize frame to be on the wire, then shutdown before
+    // the server has a chance to answer.
+    await fake.waitForStdinCount(1);
+    await supervisor.shutdown({ pluginId: "acme.demo" });
+    await startPromise;
+
+    const [info] = supervisor.list();
+    expect(info?.status).toBe("stopped");
+    // No "crashed" leak on lastError either.
+    expect(info?.lastError).toBeNull();
+  });
+
+  it("kills the previous subprocess when start() is called against a crashed entry", async () => {
+    // Models the real leak: the handshake times out but the child process is
+    // still alive (its streams are open). The state transitions to "crashed"
+    // with state.subprocess still set. A subsequent start() must kill that
+    // lingering subprocess before adopting the new one.
+    vi.useFakeTimers();
+    try {
+      const fakes = [makeFakeSubprocess({ pid: 11 }), makeFakeSubprocess({ pid: 22 })];
+      let nth = 0;
+      const supervisor = new PluginMcpSupervisor({
+        spawner: () => fakes[nth++]!.handle,
+        killTree: () => {},
+      });
+      const contribution = { id: "linear", name: "Linear", command: "node" };
+      const start1 = supervisor.start({
+        pluginId: "acme.demo",
+        contributions: [contribution],
+        resolveSettings: async () => "",
+      });
+      // Let the spawn + handshake-write microtasks settle, then advance past
+      // the 15s handshake timeout so runHandshake's catch flips to "crashed"
+      // while the (fake) subprocess is still live.
+      await vi.advanceTimersByTimeAsync(20_000);
+      await start1;
+      expect(supervisor.list()[0]?.status).toBe("crashed");
+      expect(fakes[0]!.killed).toBe(false);
+
+      vi.useRealTimers();
+      const start2 = supervisor.start({
+        pluginId: "acme.demo",
+        contributions: [contribution],
+        resolveSettings: async () => "",
+      });
+      await fakes[1]!.waitForStdinCount(1);
+      fakes[1]!.answerInitialize();
+      await start2;
+
+      expect(fakes[0]!.killed).toBe(true);
+      expect(supervisor.list()[0]?.status).toBe("ready");
+      expect(supervisor.list()[0]?.pid).toBe(22);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("substitutes duplicate ${settings:*} occurrences across command/args/env", async () => {
+    const fake = makeFakeSubprocess();
+    const seen: Array<{ command: string; args: string[]; env: Record<string, string> }> = [];
+    const supervisor = new PluginMcpSupervisor({
+      spawner: (config) => {
+        seen.push({ command: config.command, args: config.args, env: config.env });
+        return fake.handle;
+      },
+      killTree: () => {},
+    });
+    const startPromise = supervisor.start({
+      pluginId: "acme.demo",
+      contributions: [
+        {
+          id: "dup",
+          name: "Dup",
+          command: "${settings:bin}",
+          args: ["${settings:bin}", "--token=${settings:tok}", "--also=${settings:tok}"],
+          env: { ONE: "${settings:tok}", TWO: "${settings:tok}" },
+        },
+      ],
+      resolveSettings: async (settingId) => (settingId === "tok" ? "abc" : "/bin/node"),
+    });
+    await fake.waitForStdinCount(1);
+    fake.answerInitialize();
+    await startPromise;
+
+    expect(seen[0]!.command).toBe("/bin/node");
+    expect(seen[0]!.args).toEqual(["/bin/node", "--token=abc", "--also=abc"]);
+    expect(seen[0]!.env).toEqual({ ONE: "abc", TWO: "abc" });
+  });
+
+  it("forwards pluginDir as the spawner cwd", async () => {
+    const fake = makeFakeSubprocess();
+    let seenCwd: string | undefined;
+    const supervisor = new PluginMcpSupervisor({
+      spawner: (config) => {
+        seenCwd = config.cwd;
+        return fake.handle;
+      },
+      killTree: () => {},
+    });
+    const startPromise = supervisor.start({
+      pluginId: "acme.demo",
+      pluginDir: "/plugins/acme.demo",
+      contributions: [{ id: "linear", name: "Linear", command: "./dist/server.js" }],
+      resolveSettings: async () => "",
+    });
+    await fake.waitForStdinCount(1);
+    fake.answerInitialize();
+    await startPromise;
+
+    expect(seenCwd).toBe("/plugins/acme.demo");
+  });
+
+  it("rejects an in-flight callTool with WRITE_FAILED when stdin is closed", async () => {
+    const fake = makeFakeSubprocess();
+    const supervisor = new PluginMcpSupervisor({
+      spawner: () => fake.handle,
+      killTree: () => {},
+    });
+    const startPromise = supervisor.start({
+      pluginId: "acme.demo",
+      contributions: [{ id: "linear", name: "Linear", command: "node" }],
+      resolveSettings: async () => "",
+    });
+    await fake.waitForStdinCount(1);
+    fake.answerInitialize();
+    await startPromise;
+
+    // Close stdin so the next write throws synchronously.
+    fake.subprocess.stdin.end();
+    const callPromise = supervisor.callTool({
+      pluginId: "acme.demo",
+      serverId: "linear",
+      tool: "linear.getIssue",
+    });
+    callPromise.catch(() => {});
+    await expect(callPromise).rejects.toMatchObject({ code: "WRITE_FAILED" });
+  });
 });
