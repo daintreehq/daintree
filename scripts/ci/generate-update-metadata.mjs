@@ -89,6 +89,12 @@ function selectArtifacts(platform, fileNames) {
     // through the Store and must be excluded here. electron-updater's
     // Provider.findFile() selects the .exe whose URL contains process.arch,
     // falling back to the first entry — so x64 must be first.
+    const archPattern = /-(x64|arm64)-setup\.exe$/;
+    const extractArch = (fileName) => {
+      const match = fileName.match(archPattern);
+      return match ? match[1] : null;
+    };
+
     const installers = fileNames
       .filter((fileName) => fileName.endsWith(".exe") && !fileName.endsWith(".exe.blockmap"))
       .sort();
@@ -96,7 +102,7 @@ function selectArtifacts(platform, fileNames) {
       throw new Error(`Expected at least 1 Windows NSIS .exe artifact, found 0`);
     }
     for (const installer of installers) {
-      if (!installer.includes("-x64-") && !installer.includes("-arm64-")) {
+      if (!extractArch(installer)) {
         throw new Error(
           `Windows NSIS .exe must include architecture token (-x64- or -arm64-): ${installer}`
         );
@@ -106,14 +112,12 @@ function selectArtifacts(platform, fileNames) {
     // picks x64 (the larger install base).
     const archOrder = { x64: 0, arm64: 1 };
     installers.sort((a, b) => {
-      const aArch = a.includes("-x64-") ? "x64" : "arm64";
-      const bArch = b.includes("-x64-") ? "x64" : "arm64";
-      return archOrder[aArch] - archOrder[bArch];
+      return archOrder[extractArch(a)] - archOrder[extractArch(b)];
     });
     // Fail on duplicate archs
     const seen = new Set();
     for (const installer of installers) {
-      const arch = installer.includes("-x64-") ? "x64" : "arm64";
+      const arch = extractArch(installer);
       if (seen.has(arch)) {
         throw new Error(`Duplicate ${arch} Windows NSIS .exe: ${installer}`);
       }

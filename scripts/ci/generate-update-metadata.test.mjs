@@ -260,7 +260,7 @@ describe("generate-update-metadata", () => {
     await mkdir(releaseDir);
     const packagePath = await writePackageJson(dir);
     await writeArtifact(releaseDir, "Daintree-1.2.3-x64-setup.exe", "x64-a");
-    await writeArtifact(releaseDir, "Daintree-1.2.3-x64-setup-v2.exe", "x64-b");
+    await writeArtifact(releaseDir, "Daintree-0.0.0-x64-setup.exe", "x64-b");
 
     await expect(
       generateUpdateMetadata({
