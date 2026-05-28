@@ -27,6 +27,7 @@ export interface InputBarColors {
   chipColor: string;
   errorColor: string;
   successColor: string;
+  voiceCursor: string;
   // App-theme-derived (chrome matches the app surface/shadow system)
   shellBg: string;
   shellBorder: string;
@@ -53,6 +54,7 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
     chipColor: theme.cyan ?? theme.brightCyan ?? theme.cursor ?? "#58a6ff",
     errorColor: theme.red ?? "#f44747",
     successColor: theme.green ?? "#89d185",
+    voiceCursor: theme.yellow ?? theme.brightYellow ?? "#e5c07b",
     shellBg: `color-mix(in oklab, ${background} ${isDark ? "98%" : "98.5%"}, ${isDark ? "black" : "black"})`,
     shellBorder: `color-mix(in oklab, ${foreground} ${isDark ? "7%" : "9%"}, transparent)`,
     shellBorderHover: `color-mix(in oklab, ${foreground} ${isDark ? "11%" : "14%"}, transparent)`,

@@ -278,6 +278,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     });
 
     const placeholder = (() => {
+      if (isVoiceActiveForPanel) {
+        return "Enter to send · Shift+Enter for newline";
+      }
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
       return agentName ? `Ask ${agentName}` : "Ask anything";
     })();
@@ -738,6 +741,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               ],
               disabled && "opacity-60"
             )}
+            data-voice-active={isVoiceActiveForPanel ? "true" : undefined}
             style={specialStyle}
             onDragEnter={handleDragEnter}
             onDragOver={handleDragOver}

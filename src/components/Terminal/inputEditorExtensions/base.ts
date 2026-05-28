@@ -178,6 +178,12 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         textUnderlineOffset: "3px",
         transition: "text-decoration-color 150ms ease-out",
       },
+      '[data-voice-active="true"] & .cm-content': {
+        caretColor: c.voiceCursor,
+      },
+      '[data-voice-active="true"] &.cm-focused .cm-cursor': {
+        borderLeft: `2px solid ${c.voiceCursor}`,
+      },
     },
     { dark: true }
   );

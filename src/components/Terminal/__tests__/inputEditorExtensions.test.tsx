@@ -1369,6 +1369,21 @@ describe("resolveInputBarColors", () => {
     expect(colors.errorColor).toBe("#f44747");
     expect(colors.successColor).toBe("#89d185");
   });
+
+  it("resolves voiceCursor from theme.yellow", () => {
+    const colors = resolveInputBarColors({ ...fullTheme, yellow: "#e5c07b" });
+    expect(colors.voiceCursor).toBe("#e5c07b");
+  });
+
+  it("falls back voiceCursor to brightYellow when yellow is missing", () => {
+    const colors = resolveInputBarColors({ ...fullTheme, brightYellow: "#f9e2af" });
+    expect(colors.voiceCursor).toBe("#f9e2af");
+  });
+
+  it("falls back voiceCursor to #e5c07b when both yellow and brightYellow are missing", () => {
+    const colors = resolveInputBarColors(fullTheme);
+    expect(colors.voiceCursor).toBe("#e5c07b");
+  });
 });
 
 describe("buildInputBarTheme", () => {
@@ -1419,6 +1434,21 @@ describe("buildInputBarTheme", () => {
     const colors = resolveInputBarColors(theme);
     const invalidRule = extractRuleBody(css, ".cm-slash-command-chip-invalid");
     expect(invalidRule).toContain(`color: ${colors.errorColor}`);
+  });
+
+  it("includes voice-active cursor CSS rules scoped to [data-voice-active]", () => {
+    const css = readGeneratedCss([buildInputBarTheme(theme)]);
+    const colors = resolveInputBarColors(theme);
+    expect(css).toMatch(
+      new RegExp(
+        `\\[data-voice-active="true"\\]\\s+\\.\\S+\\s+\\.cm-content\\s*\\{[^}]*caret-color:\\s*${colors.voiceCursor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`
+      )
+    );
+    expect(css).toMatch(
+      new RegExp(
+        `\\[data-voice-active="true"\\]\\s+\\.\\S+\\.cm-focused\\s+\\.cm-cursor\\s*\\{[^}]*border-left:\\s*2px solid ${colors.voiceCursor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`
+      )
+    );
   });
 });
 
