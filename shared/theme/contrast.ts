@@ -29,7 +29,7 @@ function isHexColor(value: string): boolean {
   return /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value.trim());
 }
 
-function hexToRgb(hex: string): [number, number, number] {
+export function hexToRgb(hex: string): [number, number, number] {
   const clean = hex.trim().replace("#", "");
   if (clean.length === 3 || clean.length === 4) {
     const expanded = clean
@@ -63,7 +63,7 @@ const FRESHNESS_OPACITY_TIERS: Array<{ opacity: number; tier: string }> = [
   { opacity: 0.75, tier: "aging" },
 ];
 
-function hexToLinear(channel: number): number {
+export function hexToLinear(channel: number): number {
   const normalized = channel / 255;
   return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
 }
