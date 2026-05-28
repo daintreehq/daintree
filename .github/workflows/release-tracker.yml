@@ -70,7 +70,7 @@ jobs:
             runs_json=$(gh run list \
               --commit "$COMMIT_SHA" \
               --limit 100 \
-              --json databaseId,workflowName,status,conclusion,url 2>&1)
+              --json databaseId,workflowName,status,conclusion,url,event 2>&1)
 
             # gh run list exits 0 even on empty results; check whether we got
             # parseable JSON (a connection/auth error would be plain text).
@@ -82,11 +82,14 @@ jobs:
             fi
 
             # Filter to the three release workflows, exclude tracker's own run,
-            # group by workflowName taking the latest run (max databaseId).
+            # restrict to tag-push runs (event=="push") so a manual dry-run
+            # dispatch on the same commit can't displace the real release run,
+            # then group by workflowName taking the latest run (max databaseId).
             filtered=$(echo "$runs_json" | jq --argjson names "$TARGET_WORKFLOWS" --arg ownId "$GITHUB_RUN_ID" '
               [.[]
                 | select(.databaseId != ($ownId | tonumber))
                 | select(.workflowName as $w | $names | index($w))
+                | select(.event == "push")
               ]
               | group_by(.workflowName)
               | map(max_by(.databaseId))
@@ -131,7 +134,7 @@ jobs:
               recheck_json=$(gh run list \
                 --commit "$COMMIT_SHA" \
                 --limit 100 \
-                --json databaseId,workflowName,status,conclusion,url 2>&1)
+                --json databaseId,workflowName,status,conclusion,url,event 2>&1)
               if ! echo "$recheck_json" | jq -e '. | type == "array"' > /dev/null 2>&1; then
                 echo "::warning::Re-check gh run list returned non-JSON — retrying next cycle"
                 sleep 60
@@ -141,6 +144,7 @@ jobs:
                 [.[]
                   | select(.databaseId != ($ownId | tonumber))
                   | select(.workflowName as $w | $names | index($w))
+                  | select(.event == "push")
                 ]
                 | group_by(.workflowName)
                 | map(max_by(.databaseId))
@@ -194,7 +198,9 @@ jobs:
               per_page: 10,
             });
 
-            const existingIssue = issueSearch.data.find(i => i.title.includes(tagName));
+            // Exact title match — a substring test would let v1.2.3 collide
+            // with an open "Release v1.2.30 incomplete" issue.
+            const existingIssue = issueSearch.data.find(i => i.title === title);
 
             const statusIcon = result === "green" ? "✅" : result === "red" ? "❌" : "🟡";
             const body = [
