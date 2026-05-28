@@ -98,6 +98,7 @@ import type {
   RecipeNameCollision,
   AttachIssuePayload,
   IssueAssociation,
+  VoiceInputError,
   VoiceInputStatus,
 } from "../shared/types/index.js";
 import type { ColorVisionMode, AppColorScheme } from "../shared/types/appTheme.js";
@@ -2347,7 +2348,8 @@ const api: ElectronAPI = {
     ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
     onParagraphBoundary: (callback: (payload: { rawText: string | null }) => void) =>
       _typedOn(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, callback),
-    onError: (callback: (error: string) => void) => _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
+    onError: (callback: (error: VoiceInputError) => void) =>
+      _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
     onStatus: (callback: (status: VoiceInputStatus) => void) =>
       _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),
     checkMicPermission: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION),

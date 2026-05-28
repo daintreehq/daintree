@@ -4,6 +4,29 @@ import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import type { VoiceInputError } from "@shared/types";
+
+/**
+ * Maps a `VoiceInputError` to a concise tooltip string. Transient errors
+ * (rate-limit, transport drop) surface a "reconnecting" nudge rather than an
+ * alarming message — the mic button's orbital animation already signals the
+ * in-progress retry. Fatal errors show the human-readable message fallback.
+ */
+function formatVoiceErrorTooltip(error: VoiceInputError | null): string {
+  if (!error) return "Voice input error";
+  const code = String(error.code);
+  if (error.severity === "transient") {
+    if (code === "rate_limit_exceeded") return "Rate limited — reconnecting";
+    if (code.startsWith("ws_close_")) return "Connection dropped — reconnecting";
+    return "Reconnecting…";
+  }
+  // Fatal — map known codes to actionable user-facing strings.
+  if (code === "rate_limit_exceeded") return "Rate limit exceeded — check your API key quota";
+  if (code === "reconnect_exhausted") return "Connection failed after several retries";
+  if (code === "connection_timeout") return "Connection timed out";
+  if (code.startsWith("ws_close_")) return `Connection closed — check network`;
+  return error.message;
+}
 
 // Flywheel — double-smoothed for S-curve easing
 const IDLE_SPEED = 72; // deg/sec — 1 revolution per 5s
@@ -38,7 +61,7 @@ export function VoiceInputButton({
 }: VoiceInputButtonProps) {
   const status = useVoiceRecordingStore((state) => state.status);
   const isConfigured = useVoiceRecordingStore((state) => state.isConfigured);
-  const errorMessage = useVoiceRecordingStore((state) => state.errorMessage);
+  const lastError = useVoiceRecordingStore((state) => state.lastError);
   const activePanelId = useVoiceRecordingStore((state) => state.activeTarget?.panelId ?? null);
   const audioLevel = useVoiceRecordingStore((state) => state.audioLevel);
 
@@ -295,7 +318,7 @@ export function VoiceInputButton({
           !isConfigured
             ? "Configure voice input"
             : status === "error"
-              ? (errorMessage ?? "Voice input error")
+              ? formatVoiceErrorTooltip(lastError)
               : isFinishing
                 ? "Finishing transcription..."
                 : isPaused

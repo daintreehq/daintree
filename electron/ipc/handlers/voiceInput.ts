@@ -399,7 +399,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           rawText: null,
         });
       } else if (voiceEvent.type === "error") {
-        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.message);
+        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.error);
       } else if (voiceEvent.type === "status") {
         getAppWebContents(win).send(CHANNELS.VOICE_INPUT_STATUS, voiceEvent.status);
       }

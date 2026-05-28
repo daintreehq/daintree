@@ -242,7 +242,7 @@ describe("DeepgramTranscriptionProvider", () => {
     const provider = new DeepgramTranscriptionProvider();
     const errors: string[] = [];
     provider.onEvent((e) => {
-      if (e.type === "error") errors.push(e.message);
+      if (e.type === "error") errors.push(e.error.message);
     });
 
     const startPromise = provider.start(BASE_SETTINGS);
@@ -540,7 +540,9 @@ describe("DeepgramTranscriptionProvider", () => {
     const { socket } = await bringSessionReady(provider);
     socket.simulateMessage({ type: "Error", description: "invalid api key" });
 
-    expect(events.some((e) => e.type === "error" && /invalid api key/.test(e.message))).toBe(true);
+    expect(events.some((e) => e.type === "error" && /invalid api key/.test(e.error.message))).toBe(
+      true
+    );
     expect(events.some((e) => e.type === "status" && e.status === "error")).toBe(true);
   });
 
@@ -554,7 +556,9 @@ describe("DeepgramTranscriptionProvider", () => {
     latestInstance().simulateError(new Error("dns failure"));
 
     await expect(startPromise).resolves.toEqual({ ok: false, error: "dns failure" });
-    expect(events.some((e) => e.type === "error" && /dns failure/.test(e.message))).toBe(true);
+    expect(events.some((e) => e.type === "error" && /dns failure/.test(e.error.message))).toBe(
+      true
+    );
     expect(events.some((e) => e.type === "status" && e.status === "error")).toBe(true);
   });
 

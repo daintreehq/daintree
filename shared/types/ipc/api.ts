@@ -16,8 +16,8 @@ import type { ChecklistState, HelpAssistantTier, IpcEventBusMap, IpcInvokeMap } 
 import type { GeneratedElectronAPI } from "./generated-api.js";
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
-import type { VoiceInputStatus } from "../voice.js";
-export type { VoiceInputStatus };
+import type { VoiceInputError, VoiceInputStatus } from "../voice.js";
+export type { VoiceInputError, VoiceInputStatus };
 import type {
   AuthValidation,
   ForgeProviderEntry,
@@ -1374,7 +1374,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: { text: string; willCorrect: boolean }) => void
     ): () => void;
     onParagraphBoundary(callback: (payload: { rawText: string | null }) => void): () => void;
-    onError(callback: (error: string) => void): () => void;
+    onError(callback: (error: VoiceInputError) => void): () => void;
     onStatus(callback: (status: VoiceInputStatus) => void): () => void;
     checkMicPermission(): Promise<MicPermissionStatus>;
     requestMicPermission(): Promise<boolean>;

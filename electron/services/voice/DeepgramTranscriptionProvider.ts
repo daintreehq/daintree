@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
+import type { VoiceInputError, VoiceInputSettings } from "../../../shared/types/ipc/api.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { logDebug, logInfo, logWarn, logError } from "../../utils/logger.js";
 import {
@@ -104,7 +104,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     if (event.type === "status") {
       logInfo(`${P} status → ${event.status}`);
     } else if (event.type === "error") {
-      logWarn(`${P} emitting error event`, { message: event.message });
+      logWarn(`${P} emitting error event`, {
+        severity: event.error.severity,
+        code: event.error.code,
+        message: event.error.message,
+      });
     }
     for (const listener of this.listeners) {
       listener(event);
@@ -160,7 +164,10 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     } catch (err) {
       const message = formatErrorMessage(err, "Failed to open WebSocket");
       logError(`${P} ${message}`);
-      this.emit({ type: "error", message });
+      this.emit({
+        type: "error",
+        error: { severity: "fatal", code: "ws_construct_failed", message },
+      });
       this.emit({ type: "status", status: "error" });
       this.settlePendingStart(mySessionId, { ok: false, error: message });
       return;
@@ -180,7 +187,10 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         // Ignore close errors
       }
       this.cleanupConnection();
-      this.emit({ type: "error", message: "Connection timed out" });
+      this.emit({
+        type: "error",
+        error: { severity: "fatal", code: "connection_timeout", message: "Connection timed out" },
+      });
       this.emit({ type: "status", status: "error" });
       this.settlePendingStart(mySessionId, { ok: false, error: "Connection timed out" });
     }, CONNECT_TIMEOUT_MS);
@@ -246,7 +256,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       // `ws` fires `close` right after `error`; a pre-ready transport error
       // (auth/DNS/refused) is fatal, otherwise let the close handler decide.
       if (!this.isReady) {
-        this.handleFatalError(mySessionId, message);
+        this.handleFatalError(mySessionId, {
+          severity: "fatal",
+          code: "ws_transport_error",
+          message,
+        });
       }
     });
 
@@ -274,7 +288,10 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       // ready session is surfaced as an error; a never-ready drop falls through
       // to idle (matches the OpenAI provider's terminal semantics).
       if (wasReady) {
-        this.emit({ type: "error", message: "Connection lost" });
+        this.emit({
+          type: "error",
+          error: { severity: "fatal", code: "ws_close_unexpected", message: "Connection lost" },
+        });
         this.emit({ type: "status", status: "error" });
       } else {
         this.emit({ type: "status", status: "idle" });
@@ -307,8 +324,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     }
   }
 
-  private handleFatalError(mySessionId: number, message: string): void {
-    logError(`${P} Fatal error — tearing down session`, { message });
+  private handleFatalError(mySessionId: number, error: VoiceInputError): void {
+    logError(`${P} Fatal error — tearing down session`, {
+      code: error.code,
+      message: error.message,
+    });
     this.isExpectedClose = true;
     const conn = this.connection;
     this.cleanupConnection();
@@ -319,9 +339,9 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         // Ignore terminate errors
       }
     }
-    this.emit({ type: "error", message });
+    this.emit({ type: "error", error });
     this.emit({ type: "status", status: "error" });
-    this.settlePendingStart(mySessionId, { ok: false, error: message });
+    this.settlePendingStart(mySessionId, { ok: false, error: error.message });
     this.settleDrain("fatal-error");
   }
 
@@ -366,7 +386,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
           (typeof payload.message === "string" && payload.message) ||
           "Deepgram error";
         logError(`${P} ← server error event`, { message });
-        this.handleFatalError(_mySessionId, message);
+        this.handleFatalError(_mySessionId, {
+          severity: "fatal",
+          code: "deepgram_server_error",
+          message,
+        });
         return;
       }
 

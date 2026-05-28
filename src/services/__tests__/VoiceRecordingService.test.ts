@@ -13,7 +13,7 @@ vi.mock("@/store/voiceRecordingStore", () => {
     isConfigured: false,
   };
   const fns = {
-    setError: vi.fn(),
+    setLastError: vi.fn(),
     announce: vi.fn(),
     setStatus: vi.fn(),
     setConfigured: vi.fn(),
@@ -548,12 +548,12 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
       useVoiceRecordingStore: {
         getState: () => {
-          setError: ReturnType<typeof vi.fn>;
+          setLastError: ReturnType<typeof vi.fn>;
           announce: ReturnType<typeof vi.fn>;
         };
       };
     };
-    voice.useVoiceRecordingStore.getState().setError.mockClear();
+    voice.useVoiceRecordingStore.getState().setLastError.mockClear();
     voice.useVoiceRecordingStore.getState().announce.mockClear();
     return { macro, help, panel };
   }
@@ -596,8 +596,8 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     await voiceRecordingService.toggleFocusedPanel();
 
     expect(toggleSpy).not.toHaveBeenCalled();
-    expect(useVoiceRecordingStore.getState().setError).toHaveBeenCalledWith(
-      expect.stringContaining("starting")
+    expect(useVoiceRecordingStore.getState().setLastError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("starting") })
     );
   });
 
@@ -635,8 +635,8 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     expect(help.__fns.setOpen).toHaveBeenCalledWith(true);
     expect(help.__fns.requestFocus).toHaveBeenCalled();
     expect(toggleSpy).not.toHaveBeenCalled();
-    expect(useVoiceRecordingStore.getState().setError).toHaveBeenCalledWith(
-      expect.stringContaining("Start the Daintree Assistant")
+    expect(useVoiceRecordingStore.getState().setLastError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("Start the Daintree Assistant") })
     );
   });
 
@@ -725,8 +725,8 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     await voiceRecordingService.toggleAssistant();
 
     expect(toggleSpy).not.toHaveBeenCalled();
-    expect(useVoiceRecordingStore.getState().setError).toHaveBeenCalledWith(
-      expect.stringContaining("Start the Daintree Assistant")
+    expect(useVoiceRecordingStore.getState().setLastError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("Start the Daintree Assistant") })
     );
   });
 });

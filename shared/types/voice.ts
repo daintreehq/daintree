@@ -53,3 +53,41 @@ export function isActiveVoiceSession(status: VoiceInputStatus): boolean {
     status === "finishing"
   );
 }
+
+/**
+ * Severity classification for a voice-input error. Drives the renderer's
+ * recovery behavior: transient errors keep the session alive while the main
+ * process reconnects; fatal errors tear down the session and surface a toast.
+ *
+ * - transient: a recoverable transport or rate-limit fault — the main process
+ *   is already reconnecting (or will, on the next close). The user sees the
+ *   "reconnecting" status but the session intent is preserved.
+ * - fatal: requires user action (auth/quota/permission/config) or is
+ *   unrecoverable. The session ends.
+ */
+export type VoiceInputErrorSeverity = "transient" | "fatal";
+
+/**
+ * Structured error payload emitted by the voice input pipeline. Plain
+ * serializable shape so it crosses Electron's contextBridge (no class
+ * instances, no Error subclasses).
+ *
+ * `code` is a stable identifier — UI mapping, telemetry, and tests should
+ * branch on `code`, not on `message`. `message` carries the user-facing
+ * fallback string for surfaces that lack a code mapping.
+ */
+export interface VoiceInputError {
+  severity: VoiceInputErrorSeverity;
+  /**
+   * Stable error code. For server-emitted errors this mirrors the OpenAI
+   * Realtime `error.code` (e.g. `"rate_limit_exceeded"`,
+   * `"session_expired"`); for transport errors it's a synthetic code like
+   * `"ws_close_1006"` or `"connection_timeout"`; for renderer-side
+   * pre-connect failures it's a descriptive slug like `"mic_permission_denied"`.
+   */
+  code: string;
+  /** Human-readable fallback message — shown when no `code` mapping exists. */
+  message: string;
+  /** OpenAI error payload `param` field, when present. */
+  param?: string | null;
+}
