@@ -96,6 +96,22 @@ export const repoPRListETagCache = new Cache<string, string>({
 });
 
 /**
+ * Repo-level ETag for `GET /repos/{owner}/{repo}/pulls?state=open&per_page=100`,
+ * keyed `${owner}/${repo}`. The steady-state PR revalidation probe
+ * (`probeOpenPRList` in `GitHubPRDiscovery.ts`) sends it as `If-None-Match`; an
+ * authenticated `304` means no open PR on page 1 changed, so the GraphQL
+ * revalidation fan-out is skipped at zero rate-limit cost. Distinct from
+ * {@link repoPRListETagCache} (which probes `per_page=1&state=all` for the
+ * detection path) — the URL, and therefore the ETag, differs, so sharing one
+ * cache would cross-contaminate the two probes' baselines. 1-hour TTL matches
+ * the other ETag caches.
+ */
+export const openPRListETagCache = new Cache<string, string>({
+  maxSize: ETAG_CACHE_MAX_SIZE,
+  defaultTTL: ETAG_CACHE_TTL,
+});
+
+/**
  * ETag for the repo's REST `/events` feed, keyed by `owner/repo`. The activity
  * probe sends it back as `If-None-Match`; an authenticated `304 Not Modified`
  * costs zero rate-limit quota, which is the whole point of polling here instead
@@ -214,6 +230,7 @@ export function clearGitHubCaches(): void {
   prETagCache.clear();
   branchListETagCache.clear();
   repoPRListETagCache.clear();
+  openPRListETagCache.clear();
   reviewThreadsCache.clear();
   prRequiredStatusCache.clear();
   forgeQueryCache.clear();
@@ -258,6 +275,7 @@ export function clearPRCaches(): void {
   prETagCache.clear();
   branchListETagCache.clear();
   repoPRListETagCache.clear();
+  openPRListETagCache.clear();
   reviewThreadsCache.clear();
   prRequiredStatusCache.clear();
   // PR queries (GET_PR, LIST_PRS, PR CI status, batch-branch) all flow through

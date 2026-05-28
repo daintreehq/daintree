@@ -366,6 +366,43 @@ export interface MilestoneCapability {
 }
 
 /**
+ * Lightweight snapshot of a PR's change-detection fields, exchanged with
+ * {@link BatchLookupCapability.probeOpenPRList}. The caller passes its current
+ * view of each tracked PR; the provider diffs it against a cheap probe and
+ * returns only the PRs that changed. `headSha`/`updatedAt` are the change
+ * markers a REST provider reads straight from its pulls-list response;
+ * `state` lets the provider interpret a PR's *absence* from the open-PR list
+ * correctly — a known-merged/closed PR is expected to be absent (not a change),
+ * whereas an open PR's absence means it left the open set. A `null` field means
+ * "unknown" (a not-yet-seeded caller snapshot, or — in a returned `changed`
+ * entry — that the probe had no fresh data and the caller must re-fetch through
+ * the authoritative path to learn the new value).
+ */
+export interface PRSnapshot {
+  number: number;
+  headSha: string | null;
+  updatedAt: string | null;
+  state: NormalizedPRState | null;
+  title: string | null;
+}
+
+/**
+ * Result of {@link BatchLookupCapability.probeOpenPRList}.
+ *   - `unchanged` — no tracked PR changed; the caller skips its expensive
+ *     per-PR revalidation entirely (the probe cost ~zero quota on a 304).
+ *   - `changed` — `changed` lists the tracked PRs that changed; the caller
+ *     re-fetches only those through the authoritative path. A snapshot with
+ *     all-`null` change fields means "changed, but the probe has no fresh data"
+ *     (e.g. the PR left the open set) — re-fetch to learn its new state.
+ *   - `fallback` — the probe was inconclusive (auth/network/rate-limit/cold
+ *     cache); the caller must run its full revalidation as if no probe existed.
+ */
+export type PRListProbeResult =
+  | { kind: "unchanged" }
+  | { kind: "changed"; changed: PRSnapshot[] }
+  | { kind: "fallback" };
+
+/**
  * Optional multi-key batch lookups. The host's host-side `BatchLoader`
  * coalesces same-tick `getCIStatus`/`getPR` fan-out into one of these calls
  * when the provider implements them, collapsing N round-trips into ceil(N/100)
@@ -380,6 +417,15 @@ export interface MilestoneCapability {
 export interface BatchLookupCapability {
   getCIStatuses?(repo: RepoRef, prNumbers: number[]): Promise<Map<number, CIStatus | null>>;
   findPRsByNumbers?(repo: RepoRef, prNumbers: number[]): Promise<Map<number, PR | null>>;
+  /**
+   * Optional cheap conditional probe of the repo's open-PR list. Given the
+   * caller's current {@link PRSnapshot}s of the PRs it tracks, return only
+   * those that changed (or `unchanged`/`fallback`). Lets a steady-state
+   * revalidation poll skip the expensive per-PR GraphQL fan-out when nothing
+   * changed — an authenticated conditional `304` costs zero quota. Providers
+   * that can't probe cheaply omit it; the caller then re-fetches every PR.
+   */
+  probeOpenPRList?(repo: RepoRef, tracked: PRSnapshot[]): Promise<PRListProbeResult>;
 }
 
 /**

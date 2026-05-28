@@ -14,6 +14,8 @@ import type {
   NormalizedReviewDecision,
   PR,
   Page,
+  PRListProbeResult,
+  PRSnapshot,
   PushErrorClassification,
   RateLimitInfo,
   RepoMetadata,
@@ -45,6 +47,7 @@ import {
   repoEventsETagCache,
 } from "./GitHubCaches.js";
 import { parseGitHubError } from "./GitHubErrors.js";
+import { probeOpenPRList } from "./GitHubPRDiscovery.js";
 import { deriveRequiredCIStatus } from "./prRequiredCIStatus.js";
 import { MAX_REVIEW_THREAD_PAGES } from "./GitHubCaches.js";
 import type { RollupContextNode } from "./prRequiredCIStatus.js";
@@ -905,6 +908,17 @@ async function getCIStatusImpl(repo: RepoRef, prNumber: number): Promise<CIStatu
   });
 }
 
+async function probeOpenPRListImpl(
+  repo: RepoRef,
+  tracked: PRSnapshot[]
+): Promise<PRListProbeResult> {
+  const token = GitHubAuth.getToken();
+  // No token → the conditional GET can't be made; let the caller revalidate
+  // through its normal (also token-gated) path rather than claim "unchanged".
+  if (!token) return { kind: "fallback" };
+  return probeOpenPRList(repo.owner, repo.repo, token, tracked);
+}
+
 async function getRepoMetadataImpl(repo: RepoRef): Promise<RepoMetadata> {
   const response = await runQuery(
     REPO_METADATA_QUERY,
@@ -1065,6 +1079,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
   batchLookups: {
     findPRsByNumbers: findPRsByNumbersImpl,
     getCIStatuses: getCIStatusesImpl,
+    probeOpenPRList: probeOpenPRListImpl,
   },
   getRepoMetadata: getRepoMetadataImpl,
 
