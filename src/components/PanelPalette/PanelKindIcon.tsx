@@ -5,6 +5,7 @@ import {
   Monitor,
   MonitorPlay,
   StickyNote,
+  Puzzle,
   LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,7 @@ const ICON_MAP: Record<string, LucideIcon | ComponentType<Record<string, unknown
   "monitor-play": MonitorPlay,
   "sticky-note": StickyNote,
   daintree: DaintreeIcon,
+  puzzle: Puzzle,
 };
 
 export interface PanelKindIconProps {

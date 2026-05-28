@@ -846,12 +846,6 @@ export class PluginService {
     }
 
     for (const view of manifest.contributes.experimental_views) {
-      if (view.location !== "panel") {
-        console.warn(
-          `[PluginService] Plugin "${manifest.name}": view "${view.id}" location "${view.location}" is not yet supported, skipping`
-        );
-        continue;
-      }
       const resolvedComponent = this.resolveEntryPath(pluginDir, view.componentPath);
       if (!resolvedComponent) {
         console.warn(
@@ -859,15 +853,19 @@ export class PluginService {
         );
         continue;
       }
+      // location: "panel" → spawnable from the panel palette.
+      // location: "sidebar" → registered silently (no palette entry) so a
+      // future sidebar host can consume the kind via the existing registry;
+      // not yet spawnable until that surface lands.
       registerPanelKind({
         id: `${manifest.name}.${view.id}`,
         name: view.name,
-        iconId: view.iconId ?? "layout",
+        iconId: view.iconId ?? "puzzle",
         color: PANEL_KIND_BRAND_COLORS.plugin,
         hasPty: false,
         canRestart: false,
         canConvert: false,
-        showInPalette: true,
+        showInPalette: view.location === "panel",
         extensionId: manifest.name,
       });
     }

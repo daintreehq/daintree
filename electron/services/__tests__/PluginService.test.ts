@@ -4505,7 +4505,7 @@ describe("reserved contribution point warnings", () => {
       expect.objectContaining({
         id: "acme.views.main",
         name: "Main",
-        iconId: "layout",
+        iconId: "puzzle",
         color: "var(--theme-category-orange)",
         hasPty: false,
         canRestart: false,
@@ -4518,7 +4518,7 @@ describe("reserved contribution point warnings", () => {
     expect(warnMessages.some((m: string) => m.includes("not yet implemented"))).toBe(false);
   });
 
-  it("skips a contributes.experimental_views sidebar-location entry with a warning (#9289)", async () => {
+  it("silently registers a sidebar-location view with showInPalette: false (#9289)", async () => {
     await writePlugin("views-sidebar", {
       name: "acme.views-sidebar",
       version: "1.0.0",
@@ -4539,12 +4539,16 @@ describe("reserved contribution point warnings", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
-    expect(registerPanelKind).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Plugin "acme.views-sidebar": view "side" location "sidebar" is not yet supported'
-      )
+    expect(registerPanelKind).toHaveBeenCalledTimes(1);
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "acme.views-sidebar.side",
+        showInPalette: false,
+        extensionId: "acme.views-sidebar",
+      })
     );
+    const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(warnMessages.some((m: string) => m.includes('view "side"'))).toBe(false);
   });
 
   it("skips a view whose componentPath escapes the plugin directory (#9289)", async () => {
@@ -4767,16 +4771,20 @@ describe("reserved contribution point warnings", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
-    // The panel contribution registers; the sidebar view is skipped with a warning.
-    expect(registerPanelKind).toHaveBeenCalledTimes(1);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('view "main" location "sidebar" is not yet supported')
+    // The panel contribution registers; the sidebar view also registers (silently,
+    // showInPalette: false) so future sidebar hosts can discover it.
+    expect(registerPanelKind).toHaveBeenCalledTimes(2);
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acme.mixed.viewer", showInPalette: true })
+    );
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acme.mixed.main", showInPalette: false })
     );
     // experimental_mcpServers now reaches the supervisor instead of warning (#9233).
     expect(mockPluginMcpSupervisor.start).toHaveBeenCalledTimes(1);
   });
 
-  it("registers each panel-location view and warns only for sidebar entries (#9289)", async () => {
+  it("registers each view with showInPalette derived from location (#9289)", async () => {
     await writePlugin("many", {
       name: "acme.many",
       version: "1.0.0",
@@ -4793,13 +4801,16 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    expect(registerPanelKind).toHaveBeenCalledTimes(2);
-    expect(registerPanelKind).toHaveBeenCalledWith(expect.objectContaining({ id: "acme.many.a" }));
-    expect(registerPanelKind).toHaveBeenCalledWith(expect.objectContaining({ id: "acme.many.c" }));
-    const sidebarWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
-      String(call[0]).includes('view "b" location "sidebar" is not yet supported')
+    expect(registerPanelKind).toHaveBeenCalledTimes(3);
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acme.many.a", showInPalette: true })
     );
-    expect(sidebarWarnings).toHaveLength(1);
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acme.many.b", showInPalette: false })
+    );
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acme.many.c", showInPalette: true })
+    );
   });
 
   it("rejects a views entry with an invalid location at schema level", () => {

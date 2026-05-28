@@ -77,12 +77,13 @@ export interface ContextMenuContribution {
 }
 
 /**
- * View contribution location. `panel` registers the view as a spawnable panel
- * kind at plugin load time. `sidebar` is schema-valid but skipped at runtime
- * with a console warning — the sidebar surface is not yet implemented.
+ * View contribution location. Both values register a panel kind at plugin
+ * load time; the difference is palette visibility. `panel` sets
+ * `showInPalette: true` so the view is spawnable from the panel palette.
+ * `sidebar` registers silently with `showInPalette: false`, reserving the
+ * kind for the future sidebar host without surfacing it as a spawn target.
  * The `experimental_` prefix on the contribution point signals that the
- * shape may change before the feature ships.
- * See `docs/plugins/architecture.md` for the renderer host design.
+ * shape may change before the renderer host (#9229) ships.
  */
 export type ViewLocation = "panel" | "sidebar";
 
