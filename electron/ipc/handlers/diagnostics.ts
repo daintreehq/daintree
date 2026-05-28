@@ -33,6 +33,7 @@ import { getLogFilePath, getLogDirectory } from "../../utils/logger.js";
 import { safeStringify } from "../../utils/safeStringify.js";
 import {
   filterSections,
+  filterLogEntriesByTime,
   applyReplacements,
   type ReplacementRule,
 } from "../../../shared/utils/diagnosticsTransform.js";
@@ -40,11 +41,19 @@ import { typedHandle, typedHandleWithContext } from "../utils.js";
 
 let eventLoopHistogram: IntervalHistogram | null = null;
 
+// Approximate epoch the app process started. Captured at module evaluation
+// (the diagnostics handler is eagerly imported during startup) rather than
+// from `Date.now() - process.uptime() * 1000` at call time, which drifts
+// because `process.uptime()` pauses during OS sleep while `Date.now()` does
+// not. Backs the "Since application launch" time-window option.
+const APP_LAUNCH_TIMESTAMP = Date.now();
+
 async function writeBundleZip(
   zipPath: string,
   jsonContent: string,
   includeLogs: boolean,
-  replacements: ReplacementRule[]
+  replacements: ReplacementRule[],
+  timeWindowStartMs: number | null
 ): Promise<void> {
   const logDir = getLogDirectory();
   const logFile = getLogFilePath();
@@ -52,6 +61,7 @@ async function writeBundleZip(
   const logEntries: Array<{ name: string; content: string }> = [];
 
   if (includeLogs) {
+    // The active log is always current, so it's never time-filtered here.
     if (existsSync(logFile)) {
       const raw = await fs.readFile(logFile, "utf-8");
       logEntries.push({ name: "daintree.log", content: applyReplacements(raw, replacements) });
@@ -59,13 +69,25 @@ async function writeBundleZip(
 
     for (let i = 1; i <= 5; i++) {
       const rotated = path.join(logDir, `daintree.log.${i}`);
-      if (existsSync(rotated)) {
-        const raw = await fs.readFile(rotated, "utf-8");
-        logEntries.push({
-          name: `daintree.log.${i}`,
-          content: applyReplacements(raw, replacements),
-        });
+      if (!existsSync(rotated)) continue;
+
+      if (timeWindowStartMs !== null) {
+        try {
+          const stat = await fs.stat(rotated);
+          // Skip rotated files last written before the window. `mtime`
+          // over-includes a freshly-rotated file holding mostly old lines —
+          // the accepted failure mode (over-include rather than drop).
+          if (stat.mtimeMs < timeWindowStartMs) continue;
+        } catch {
+          // stat failed — include rather than silently drop relevant lines.
+        }
       }
+
+      const raw = await fs.readFile(rotated, "utf-8");
+      logEntries.push({
+        name: `daintree.log.${i}`,
+        content: applyReplacements(raw, replacements),
+      });
     }
   }
 
@@ -252,7 +274,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     const { collectDiagnosticsWithKeys } = await getDiagnosticsCollector();
     const { payload, sectionKeys } = await collectDiagnosticsWithKeys(deps);
     const previewJson = safeStringify(payload, 2);
-    return { payload, sectionKeys, previewJson };
+    return { payload, sectionKeys, previewJson, appLaunchTimestamp: APP_LAUNCH_TIMESTAMP };
   };
   handlers.push(
     typedHandle(CHANNELS.SYSTEM_COLLECT_DIAGNOSTICS_FOR_REVIEW, handleCollectDiagnosticsForReview)
@@ -261,7 +283,11 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
   const handleSaveDiagnosticsBundle = async (
     savePayload: DiagnosticsBundleSavePayload
   ): Promise<boolean> => {
-    const filtered = filterSections(savePayload.payload, savePayload.enabledSections);
+    const timeWindowStartMs = savePayload.timeWindowStartMs ?? null;
+    const filtered = filterLogEntriesByTime(
+      filterSections(savePayload.payload, savePayload.enabledSections),
+      timeWindowStartMs
+    );
     let json = safeStringify(filtered, 2);
     json = applyReplacements(json, savePayload.replacements as ReplacementRule[]);
 
@@ -284,7 +310,8 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       filePath,
       json,
       includeLogs,
-      savePayload.replacements as ReplacementRule[]
+      savePayload.replacements as ReplacementRule[],
+      timeWindowStartMs
     );
     shell.showItemInFolder(filePath);
     return true;

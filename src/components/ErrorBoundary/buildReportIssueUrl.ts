@@ -1,27 +1,17 @@
+import {
+  URL_BODY_BUDGET,
+  capForBudget,
+  makeUrl,
+  truncateStackMiddle,
+} from "@shared/utils/githubIssueUrl";
 import { scrubReportText } from "@shared/utils/reportScrubbers";
 
-const REPO_ISSUE_URL = "https://github.com/daintreehq/daintree/issues/new";
-
-// GitHub's Nginx fronts the issue form at an 8 KiB URL hard cap. Reserve
-// ~1 KiB for base URL + title + percent-encoding fudge, leaving ~7 KB for
-// the encoded body. Measured against `encodeURIComponent` because newlines
-// and backticks inflate 1→3 bytes.
-export const URL_BODY_BUDGET = 7000;
-
-// Cap the encoded title separately so a multi-kilobyte error message can't
-// blow the URL hard cap from the title side, even when the body fits.
-const TITLE_ENCODED_BUDGET = 200;
-
-// When the stack must be middle-truncated we keep the top frames (where the
-// throw originates) and the tail (where it bubbled up through React). 15+5
-// fits a typical render-error stack while leaving the truncation visible.
-const STACK_HEAD_LINES = 15;
-const STACK_TAIL_LINES = 5;
+// Re-exported so existing importers (and tests) keep a stable surface; the
+// canonical definition now lives in the shared helper.
+export { URL_BODY_BUDGET };
 
 const COMPONENT_STACK_PLACEHOLDER =
   "<!-- component stack omitted — exceeded URL budget; full report copied to clipboard -->";
-const STACK_MIDDLE_PLACEHOLDER =
-  "  ... [middle frames truncated — see clipboard for full stack] ...";
 
 export interface ReportIssueInput {
   incidentId: string | null;
@@ -59,31 +49,9 @@ function formatBody(params: {
   );
 }
 
-function truncateStackMiddle(stack: string): string {
-  const lines = stack.split("\n");
-  if (lines.length <= STACK_HEAD_LINES + STACK_TAIL_LINES) return stack;
-  const head = lines.slice(0, STACK_HEAD_LINES);
-  const tail = lines.slice(-STACK_TAIL_LINES);
-  return [...head, STACK_MIDDLE_PLACEHOLDER, ...tail].join("\n");
-}
-
-function capMessageForStub(message: string): string {
-  // The stub body fits inside the URL, so we cap the message line just like
-  // the title — a multi-kilobyte message would otherwise blow the budget.
-  const STUB_MESSAGE_BUDGET = 1000;
-  if (encodeURIComponent(message).length <= STUB_MESSAGE_BUDGET) return message;
-  const ellipsis = "…";
-  const ellipsisLen = encodeURIComponent(ellipsis).length;
-  const chars = Array.from(message);
-  while (chars.length > 0) {
-    const trimmed = chars.join("");
-    if (encodeURIComponent(trimmed).length + ellipsisLen <= STUB_MESSAGE_BUDGET) {
-      return trimmed + ellipsis;
-    }
-    chars.pop();
-  }
-  return ellipsis;
-}
+// The stub body fits inside the URL, so the message line is capped just like
+// the title — a multi-kilobyte message would otherwise blow the budget.
+const STUB_MESSAGE_BUDGET = 1000;
 
 function buildStubBody(params: {
   componentName: string | undefined;
@@ -91,7 +59,7 @@ function buildStubBody(params: {
   message: string;
 }): string {
   const { componentName, incidentId, message } = params;
-  const cappedMessage = capMessageForStub(message || "Unknown error");
+  const cappedMessage = capForBudget(message || "Unknown error", STUB_MESSAGE_BUDGET);
   return (
     `## Error Report\n\n` +
     `The full error details were copied to your clipboard — please paste them below.\n\n` +
@@ -99,28 +67,6 @@ function buildStubBody(params: {
     `**Incident ID:** ${incidentId ?? "unknown"}\n` +
     `**Message:** ${cappedMessage}\n`
   );
-}
-
-function capTitle(title: string): string {
-  if (encodeURIComponent(title).length <= TITLE_ENCODED_BUDGET) return title;
-  // Trim character-by-character until the encoded form fits, leaving room
-  // for the ellipsis. Walking by character avoids slicing into a multi-byte
-  // surrogate pair.
-  const ellipsis = "…";
-  const ellipsisLen = encodeURIComponent(ellipsis).length;
-  const chars = Array.from(title);
-  while (chars.length > 0) {
-    const trimmed = chars.join("");
-    if (encodeURIComponent(trimmed).length + ellipsisLen <= TITLE_ENCODED_BUDGET) {
-      return trimmed + ellipsis;
-    }
-    chars.pop();
-  }
-  return ellipsis;
-}
-
-function makeUrl(title: string, body: string): string {
-  return `${REPO_ISSUE_URL}?title=${encodeURIComponent(capTitle(title))}&body=${encodeURIComponent(body)}`;
 }
 
 /**
