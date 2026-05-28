@@ -328,6 +328,12 @@ export function PortalDock() {
   const RESIZE_STEP_FINE = 10;
   const RESIZE_STEP_COARSE = 50;
 
+  // Holds the cleanup for an active drag so the unmount effect can drop the
+  // document listeners if the dock tears down mid-drag. Without this the
+  // listeners outlive the component (the closure keeps writing through
+  // setWidth, which still mutates the surviving Zustand store).
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+
   const handleResizeStart = useCallback(
     (e: React.MouseEvent) => {
       // Skip the second mousedown of a double-click. The browser fires
@@ -347,18 +353,19 @@ export function PortalDock() {
       };
 
       const handleMouseUp = () => {
+        cleanup();
+      };
+
+      const cleanup = () => {
         setIsResizing(false);
         document.removeEventListener("mousemove", handleMouseMove);
         document.removeEventListener("mouseup", handleMouseUp);
+        dragCleanupRef.current = null;
       };
 
       document.addEventListener("mousemove", handleMouseMove);
       document.addEventListener("mouseup", handleMouseUp);
-
-      return () => {
-        document.removeEventListener("mousemove", handleMouseMove);
-        document.removeEventListener("mouseup", handleMouseUp);
-      };
+      dragCleanupRef.current = cleanup;
     },
     [width, setWidth]
   );
@@ -406,9 +413,11 @@ export function PortalDock() {
   const didClampRestoredWidthRef = useRef(false);
   useEffect(() => {
     if (didClampRestoredWidthRef.current) return;
-    didClampRestoredWidthRef.current = true;
     const vw = window.innerWidth;
+    // vw can legitimately be 0 during early hydration — bail without
+    // tripping the ref so the next mount attempt can still clamp.
     if (vw <= 0) return;
+    didClampRestoredWidthRef.current = true;
     const safeMax = Math.max(
       PORTAL_MIN_WIDTH,
       Math.min(PORTAL_MAX_WIDTH, vw - PORTAL_MIN_EDITOR_WIDTH)
@@ -421,6 +430,7 @@ export function PortalDock() {
   useEffect(() => {
     return () => {
       setIsResizing(false);
+      dragCleanupRef.current?.();
     };
   }, []);
 

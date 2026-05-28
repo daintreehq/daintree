@@ -110,6 +110,26 @@ describe("PortalDock — resize separator", () => {
       expect(usePortalStore.getState().width).toBe(1100);
     });
 
+    it("still clamps on a second mount after an innerWidth=0 first mount", () => {
+      setViewportWidth(0);
+      act(() => {
+        usePortalStore.setState({ width: 1100 });
+      });
+
+      const view = render(<PortalDock />);
+      expect(usePortalStore.getState().width).toBe(1100);
+      view.unmount();
+
+      // Window is now visible — the next PortalDock mount should clamp.
+      setViewportWidth(1366);
+      act(() => {
+        usePortalStore.setState({ width: 1100 });
+      });
+      render(<PortalDock />);
+
+      expect(usePortalStore.getState().width).toBe(PORTAL_DEFAULT_WIDTH);
+    });
+
     it("falls back to safeMax when the viewport is too small to fit the default width", () => {
       setViewportWidth(700);
       act(() => {
@@ -168,6 +188,25 @@ describe("PortalDock — resize separator", () => {
 
       // Dock is right-anchored: dragging left widens (delta = startX - clientX).
       expect(usePortalStore.getState().width).toBe(900);
+    });
+
+    it("drops document listeners if the dock unmounts mid-drag", () => {
+      act(() => {
+        usePortalStore.setState({ width: 800 });
+      });
+
+      const view = render(<PortalDock />);
+      fireEvent.mouseDown(getSeparator(), { clientX: 1000, detail: 1 });
+      // Confirm the drag is wired before unmount.
+      fireEvent.mouseMove(document, { clientX: 950 });
+      expect(usePortalStore.getState().width).toBe(850);
+
+      view.unmount();
+
+      // After unmount the listeners must be gone — further mousemoves on
+      // the document must not mutate the surviving store.
+      fireEvent.mouseMove(document, { clientX: 700 });
+      expect(usePortalStore.getState().width).toBe(850);
     });
   });
 
