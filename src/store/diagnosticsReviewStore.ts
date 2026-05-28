@@ -67,7 +67,11 @@ export const useDiagnosticsReviewStore = create<DiagnosticsReviewState>((set, ge
   downloadError: null,
 
   openReview: async (scope) => {
-    if (get().isCollecting) return;
+    // Block while a prior open is in flight OR while a save is still resolving
+    // — otherwise a second open swaps `reviewPayload` underneath the in-flight
+    // save and the save's success callback would then close the freshly opened
+    // dialog.
+    if (get().isCollecting || get().isSaving) return;
     set({ isCollecting: true, downloadError: null });
     try {
       const payload = await systemClient.collectDiagnosticsForReview();
@@ -121,7 +125,7 @@ export const useDiagnosticsReviewStore = create<DiagnosticsReviewState>((set, ge
             },
           },
         });
-        set({ isSaving: false, isOpen: false, scope: null });
+        set({ isSaving: false, isOpen: false, scope: null, downloadError: null });
       } else {
         set({ isSaving: false });
       }

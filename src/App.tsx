@@ -684,6 +684,13 @@ function AppInner() {
             onUpdateConfig={updateCrashConfig}
           />
         </Suspense>
+        {/* Diagnostics host stays reachable while the crash dialog is blocking
+            the app — without this, the inline "Send diagnostics" action in
+            CrashRecoveryDialog (recovery-failed banner) has nothing to render
+            the dialog into. */}
+        <Suspense fallback={null}>
+          <LazyDiagnosticsReviewDialogHost />
+        </Suspense>
       </div>
     );
   }

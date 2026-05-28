@@ -171,6 +171,40 @@ describe("diagnosticsReviewStore", () => {
     expect(state.isSaving).toBe(false);
   });
 
+  it("saveReview clears stale downloadError on success", async () => {
+    collectMock.mockResolvedValueOnce(samplePayload);
+    saveMock.mockResolvedValueOnce(true);
+    await useDiagnosticsReviewStore.getState().openReview();
+    // Seed a stale error from a prior attempt.
+    useDiagnosticsReviewStore.setState({ downloadError: "previous attempt failed" });
+
+    await useDiagnosticsReviewStore.getState().saveReview({ app: true }, []);
+    expect(useDiagnosticsReviewStore.getState().downloadError).toBeNull();
+  });
+
+  it("openReview short-circuits while a save is in flight", async () => {
+    collectMock.mockResolvedValueOnce(samplePayload);
+    await useDiagnosticsReviewStore.getState().openReview();
+
+    // Park the save in-flight and try to open a second review.
+    type Resolver = (value: boolean) => void;
+    let resolveSave: Resolver = () => {};
+    saveMock.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveSave = resolve;
+        })
+    );
+
+    const savePromise = useDiagnosticsReviewStore.getState().saveReview({ app: true }, []);
+    await useDiagnosticsReviewStore.getState().openReview();
+    // collectMock would have been called twice if the guard missed.
+    expect(collectMock).toHaveBeenCalledTimes(1);
+
+    resolveSave(true);
+    await savePromise;
+  });
+
   it("saveReview keeps the dialog open when the user cancels the save dialog", async () => {
     collectMock.mockResolvedValueOnce(samplePayload);
     saveMock.mockResolvedValueOnce(false);

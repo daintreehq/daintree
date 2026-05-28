@@ -23,6 +23,7 @@ export function HostCrashBanner() {
   const backendStatus = usePanelStore((s) => s.backendStatus);
   const lastCrashType = usePanelStore((s) => s.lastCrashType);
   const isCollectingDiagnostics = useDiagnosticsReviewStore((s) => s.isCollecting);
+  const diagnosticsError = useDiagnosticsReviewStore((s) => s.downloadError);
   const [isRestarting, setIsRestarting] = useState(false);
   const recoveringShown = useDohertyGate(backendStatus === "recovering");
 
@@ -104,6 +105,17 @@ export function HostCrashBanner() {
       role="alert"
       animated={false}
       trailingSlot={sendDiagnosticsButton}
+      descriptionExtras={
+        diagnosticsError ? (
+          <p
+            className="text-xs mt-1.5 break-words"
+            style={{ color: "color-mix(in oklab, var(--color-status-error) 80%, transparent)" }}
+            data-testid="host-crash-banner-diagnostics-error"
+          >
+            Diagnostics collection failed: {diagnosticsError}
+          </p>
+        ) : null
+      }
       action={{
         id: "restart",
         label: isRestarting ? "Restarting…" : "Restart service",

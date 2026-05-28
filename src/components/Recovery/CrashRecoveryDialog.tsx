@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  Download,
   ExternalLink,
   FileText,
   SquareTerminal,
@@ -78,6 +79,7 @@ export function CrashRecoveryDialog({
     () => new Set(panels.filter((p) => !(shouldDeselectSuspects && p.isSuspect)).map((p) => p.id))
   );
   const [resolving, setResolving] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [showReportPreview, setShowReportPreview] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
@@ -114,33 +116,29 @@ export function CrashRecoveryDialog({
     async (action: CrashRecoveryAction) => {
       if (resolving) return;
       setResolving(true);
+      setRecoveryError(null);
       try {
         await onResolve(action);
       } catch (err) {
-        notify({
-          type: "error",
-          title: "Recovery failed",
-          message: formatErrorMessage(err, "Couldn't complete recovery action"),
-          duration: 6000,
-          action: {
-            label: "Send diagnostics",
-            actionId: "diagnostics.openReview",
-            actionArgs: { scope: { source: "recovery.crashRecoveryFailed" } },
-            onClick: () => {
-              void actionService.dispatch(
-                "diagnostics.openReview",
-                { scope: { source: "recovery.crashRecoveryFailed" } },
-                { source: "user" }
-              );
-            },
-          },
-        });
+        // notify() is dead in the crash-pending branch (Toaster isn't mounted
+        // yet — the main app tree only renders after the user resolves the
+        // dialog). Surface the failure inline alongside the recovery buttons
+        // so the diagnostics action is reachable in the failure path.
+        setRecoveryError(formatErrorMessage(err, "Couldn't complete recovery action"));
       } finally {
         setResolving(false);
       }
     },
     [resolving, onResolve]
   );
+
+  const handleSendDiagnostics = useCallback(() => {
+    void actionService.dispatch(
+      "diagnostics.openReview",
+      { scope: { source: "recovery.crashRecoveryFailed" } },
+      { source: "user" }
+    );
+  }, []);
 
   const handleRestoreSelected = useCallback(() => {
     handleResolve({ kind: "restore", panelIds: [...selectedIds] });
@@ -374,6 +372,26 @@ export function CrashRecoveryDialog({
                   </div>
                 </div>
               </button>
+            </div>
+          )}
+
+          {recoveryError && (
+            <div className="rounded-md overflow-hidden" data-testid="recovery-error">
+              <InlineStatusBanner
+                severity="error"
+                icon={AlertTriangle}
+                title="Recovery failed"
+                description={recoveryError}
+                animated={false}
+                action={{
+                  id: "send-diagnostics",
+                  label: "Send diagnostics",
+                  icon: Download,
+                  onClick: handleSendDiagnostics,
+                }}
+                onClose={() => setRecoveryError(null)}
+                closeAriaLabel="Dismiss recovery error"
+              />
             </div>
           )}
 

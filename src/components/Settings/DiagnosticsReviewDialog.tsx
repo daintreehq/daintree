@@ -97,7 +97,11 @@ export function DiagnosticsReviewDialog({
       setOpenedAt(Date.now());
       const scopedSections = initialScope?.sections;
       const initial: Record<string, boolean> = {};
-      if (scopedSections && scopedSections.length > 0) {
+      // Distinguish "no scope" (sectionKeys undefined → all enabled) from
+      // "explicit empty scope" (sectionKeys === [] → none enabled). The
+      // latter would otherwise fall back to all-enabled, ignoring an
+      // intentional clear from the caller.
+      if (scopedSections !== undefined) {
         const allow = new Set(scopedSections);
         for (const key of reviewPayload.sectionKeys) {
           initial[key] = allow.has(key);
