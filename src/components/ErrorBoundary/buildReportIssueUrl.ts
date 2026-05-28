@@ -6,12 +6,24 @@ import {
 } from "@shared/utils/githubIssueUrl";
 import { scrubReportText } from "@shared/utils/reportScrubbers";
 
+import type { ActionBreadcrumb } from "../../../shared/types/ipc/crashRecovery";
+
 // Re-exported so existing importers (and tests) keep a stable surface; the
 // canonical definition now lives in the shared helper.
 export { URL_BODY_BUDGET };
 
 const COMPONENT_STACK_PLACEHOLDER =
   "<!-- component stack omitted — exceeded URL budget; full report copied to clipboard -->";
+
+// Single-character source markers keep each breadcrumb line short so 10
+// entries fit comfortably in the URL budget.
+const SOURCE_GLYPH: Record<string, string> = {
+  user: "u",
+  keybinding: "k",
+  menu: "m",
+  agent: "a",
+  "context-menu": "c",
+};
 
 export interface ReportIssueInput {
   incidentId: string | null;
@@ -20,6 +32,12 @@ export interface ReportIssueInput {
   stack: string;
   componentStack: string;
   context: Record<string, unknown> | undefined;
+  /** Pre-formatted compact system snapshot (one fact per line). */
+  systemInfo?: string;
+  /** Recent action breadcrumbs (oldest first). */
+  recentActions?: ActionBreadcrumb[];
+  /** Override the "now" reference for relative timestamps (test-only). */
+  now?: number;
 }
 
 export interface ReportIssueResult {
@@ -39,6 +57,50 @@ export interface NotificationReportInput {
   os: string;
 }
 
+function formatRelativeAge(timestamp: number, now: number): string {
+  const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
+  if (seconds < 60) return `-${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `-${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return `-${hours}h`;
+}
+
+function formatBreadcrumbLine(entry: ActionBreadcrumb, now: number): string {
+  const age = formatRelativeAge(entry.timestamp, now);
+  const glyph = SOURCE_GLYPH[entry.source] ?? "?";
+  // Escape pipe to keep the format unambiguous if action IDs ever pick one up.
+  const actionId = entry.actionId.replace(/\|/g, "\\|");
+  const parts = [age, actionId, `[${glyph}]`];
+  if (entry.danger === "confirm" || entry.danger === "restricted") {
+    parts.push(`!${entry.danger}`);
+  }
+  if (entry.count > 1) {
+    parts.push(`x${entry.count}`);
+  }
+  return parts.join(" ");
+}
+
+function formatSystemInfoSection(systemInfo: string | undefined): string {
+  if (!systemInfo) return "";
+  // GFM requires a blank line after </summary> before inner Markdown renders.
+  return (
+    `\n\n<details>\n<summary>System info</summary>\n\n` +
+    `\`\`\`\n${systemInfo}\n\`\`\`\n\n` +
+    `</details>`
+  );
+}
+
+function formatRecentActionsSection(actions: ActionBreadcrumb[] | undefined, now: number): string {
+  if (!actions || actions.length === 0) return "";
+  const lines = actions.map((entry) => formatBreadcrumbLine(entry, now));
+  return (
+    `\n\n<details>\n<summary>Recent actions (${actions.length})</summary>\n\n` +
+    `\`\`\`\n${lines.join("\n")}\n\`\`\`\n\n` +
+    `</details>`
+  );
+}
+
 function formatBody(params: {
   componentName: string | undefined;
   incidentId: string | null;
@@ -46,8 +108,21 @@ function formatBody(params: {
   context: Record<string, unknown> | undefined;
   stack: string;
   componentStack: string;
+  systemInfo?: string;
+  recentActions?: ActionBreadcrumb[];
+  now: number;
 }): string {
-  const { componentName, incidentId, message, context, stack, componentStack } = params;
+  const {
+    componentName,
+    incidentId,
+    message,
+    context,
+    stack,
+    componentStack,
+    systemInfo,
+    recentActions,
+    now,
+  } = params;
   return (
     `## Error Report\n\n` +
     `**Component:** ${componentName || "Unknown"}\n` +
@@ -56,7 +131,9 @@ function formatBody(params: {
     `**Context:**\n` +
     `${context ? JSON.stringify(context, null, 2) : "None"}\n\n` +
     `**Stack Trace:**\n\`\`\`\n${stack || "No stack trace"}\n\`\`\`\n\n` +
-    `**Component Stack:**\n\`\`\`\n${componentStack || "No component stack"}\n\`\`\``
+    `**Component Stack:**\n\`\`\`\n${componentStack || "No component stack"}\n\`\`\`` +
+    formatSystemInfoSection(systemInfo) +
+    formatRecentActionsSection(recentActions, now)
   );
 }
 
@@ -85,6 +162,14 @@ function buildStubBody(params: {
  * staged truncation strategy so the encoded body always fits within the
  * URL budget. When even truncation isn't enough, the caller is told to
  * write `fullBody` to the clipboard and use the short stub URL.
+ *
+ * Truncation ladder (highest fidelity first):
+ *   1. Full body + enrichment sections fit → use it
+ *   2. Drop componentStack, keep enrichment
+ *   3. Middle-truncate stack, keep enrichment
+ *   4. Drop recentActions section, keep systemInfo
+ *   5. Drop systemInfo too
+ *   6. Stub body + clipboard fallback
  */
 export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult {
   // Redact user paths/secrets before the stack enters either the URL body or
@@ -93,13 +178,21 @@ export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult 
   const componentStack = scrubReportText(input.componentStack);
 
   const title = `Component Error: ${input.message || "Unknown"}`;
-  const fullBody = formatBody({
+  const now = input.now ?? Date.now();
+  const base = {
     componentName: input.componentName,
     incidentId: input.incidentId,
     message: input.message,
     context: input.context,
+    now,
+  };
+
+  const fullBody = formatBody({
+    ...base,
     stack,
     componentStack,
+    systemInfo: input.systemInfo,
+    recentActions: input.recentActions,
   });
 
   if (encodeURIComponent(fullBody).length <= URL_BODY_BUDGET) {
@@ -107,12 +200,11 @@ export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult 
   }
 
   const withoutComponentStack = formatBody({
-    componentName: input.componentName,
-    incidentId: input.incidentId,
-    message: input.message,
-    context: input.context,
+    ...base,
     stack,
     componentStack: COMPONENT_STACK_PLACEHOLDER,
+    systemInfo: input.systemInfo,
+    recentActions: input.recentActions,
   });
 
   if (encodeURIComponent(withoutComponentStack).length <= URL_BODY_BUDGET) {
@@ -125,17 +217,50 @@ export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult 
 
   const truncatedStack = truncateStackMiddle(stack);
   const withTruncatedStack = formatBody({
-    componentName: input.componentName,
-    incidentId: input.incidentId,
-    message: input.message,
-    context: input.context,
+    ...base,
     stack: truncatedStack,
     componentStack: COMPONENT_STACK_PLACEHOLDER,
+    systemInfo: input.systemInfo,
+    recentActions: input.recentActions,
   });
 
   if (encodeURIComponent(withTruncatedStack).length <= URL_BODY_BUDGET) {
     return {
       url: makeUrl(title, withTruncatedStack),
+      fullBody,
+      usedClipboardFallback: false,
+    };
+  }
+
+  // Drop recent actions first — the system info is more compact and more
+  // useful for triage than a long action log when budget is tight.
+  const withoutActions = formatBody({
+    ...base,
+    stack: truncatedStack,
+    componentStack: COMPONENT_STACK_PLACEHOLDER,
+    systemInfo: input.systemInfo,
+    recentActions: undefined,
+  });
+
+  if (encodeURIComponent(withoutActions).length <= URL_BODY_BUDGET) {
+    return {
+      url: makeUrl(title, withoutActions),
+      fullBody,
+      usedClipboardFallback: false,
+    };
+  }
+
+  const withoutEnrichment = formatBody({
+    ...base,
+    stack: truncatedStack,
+    componentStack: COMPONENT_STACK_PLACEHOLDER,
+    systemInfo: undefined,
+    recentActions: undefined,
+  });
+
+  if (encodeURIComponent(withoutEnrichment).length <= URL_BODY_BUDGET) {
+    return {
+      url: makeUrl(title, withoutEnrichment),
       fullBody,
       usedClipboardFallback: false,
     };

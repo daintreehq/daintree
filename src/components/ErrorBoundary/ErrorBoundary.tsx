@@ -3,10 +3,28 @@ import { ErrorFallback, type ErrorFallbackProps } from "./ErrorFallback";
 import { useErrorStore } from "@/store/errorStore";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
-import { captureRendererException } from "@/utils/rendererSentry";
+import { captureRendererException, getRendererSentryConsent } from "@/utils/rendererSentry";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { buildReportIssueUrl } from "./buildReportIssueUrl";
 import { notify } from "@/lib/notify";
+import type { ReportIssueEnrichment } from "../../../shared/types/ipc/system";
+
+const ENRICHMENT_TIMEOUT_MS = 2000;
+
+async function fetchReportEnrichment(): Promise<ReportIssueEnrichment | null> {
+  const consent = getRendererSentryConsent();
+  if (!consent.hasSeenPrompt || consent.level === "off") return null;
+  const getter = window.electron?.system?.getReportEnrichment;
+  if (!getter) return null;
+  try {
+    return await Promise.race<ReportIssueEnrichment | null>([
+      getter(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), ENRICHMENT_TIMEOUT_MS)),
+    ]);
+  } catch {
+    return null;
+  }
+}
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -163,6 +181,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
       if (!error) return;
 
+      const enrichment = await fetchReportEnrichment();
+
       const { url, fullBody, usedClipboardFallback } = buildReportIssueUrl({
         incidentId,
         componentName,
@@ -170,6 +190,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         stack: error.stack ?? "",
         componentStack: errorInfo?.componentStack ?? "",
         context,
+        systemInfo: enrichment?.systemInfo,
+        recentActions: enrichment?.recentActions,
       });
 
       if (usedClipboardFallback) {
