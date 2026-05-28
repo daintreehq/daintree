@@ -37,13 +37,12 @@ const jsonOutputFile =
   process.env.PLAYWRIGHT_JSON_OUTPUT_FILE ||
   (process.env.PLAYWRIGHT_JSON_REPORT === "1" ? "playwright-results.json" : "");
 const useJsonReporter = jsonOutputFile.length > 0;
+const useBlobReporter = process.env.PLAYWRIGHT_BLOB_REPORT === "1";
 const reporter: ReporterDescription[] | undefined =
   useBlobReporter || useJsonReporter
     ? [
         ["github"] as ReporterDescription,
-        ...(useBlobReporter
-          ? [["blob", { outputDir: "blob-report" }] as ReporterDescription]
-          : []),
+        ...(useBlobReporter ? [["blob", { outputDir: "blob-report" }] as ReporterDescription] : []),
         ...(useJsonReporter
           ? [["json", { outputFile: jsonOutputFile }] as ReporterDescription]
           : []),
