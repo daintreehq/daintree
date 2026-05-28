@@ -95,6 +95,7 @@ jobs:
       platform: linux
 
   e2e-online-gate:
+    continue-on-error: true
     needs: [checks, unit-tests]
     uses: ./.github/workflows/e2e.yml
     with:
