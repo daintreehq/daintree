@@ -3,7 +3,7 @@ const { execSync } = require("child_process");
 const { rebuild } = require("@electron/rebuild");
 const { version: electronVersion } = require("electron/package.json");
 
-const NATIVE_MODULES = ["node-pty", "better-sqlite3", "win-job-object", "posix-pty-reaper"];
+const NATIVE_MODULES = ["node-pty", "win-job-object", "posix-pty-reaper"];
 
 const buildPath = path.resolve(__dirname, "..");
 

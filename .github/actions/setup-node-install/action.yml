@@ -26,4 +26,7 @@ runs:
       shell: bash
       env:
         npm_config_msvs_version: ${{ inputs.msvs_version }}
-      run: node scripts/ci/npm-ci-retry.mjs ${{ inputs.install_args }}
+      run: |
+        export npm_config_runtime=electron
+        export npm_config_target=$(node scripts/ci/resolve-electron-version.mjs)
+        node scripts/ci/npm-ci-retry.mjs ${{ inputs.install_args }}

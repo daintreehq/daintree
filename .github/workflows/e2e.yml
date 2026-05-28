@@ -311,7 +311,10 @@ jobs:
         run: fc-cache -fv
 
       - name: Install dependencies
-        run: node scripts/ci/npm-ci-retry.mjs
+        run: |
+          export npm_config_runtime=electron
+          export npm_config_target=$(node scripts/ci/resolve-electron-version.mjs)
+          node scripts/ci/npm-ci-retry.mjs
 
       - name: Build app
         run: npm run build

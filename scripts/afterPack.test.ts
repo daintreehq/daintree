@@ -356,7 +356,7 @@ describe("afterPack", () => {
       await afterPack(createContext("linux", "/build/linux"));
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        "[afterPack] better-sqlite3 ABI check passed (compiled for Electron, not Node)"
+        "[afterPack] better-sqlite3 ABI check passed (Electron-ABI binary confirmed)"
       );
     });
 
@@ -369,7 +369,7 @@ describe("afterPack", () => {
       await afterPack(createContext("linux", "/build/linux"));
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        "[afterPack] better-sqlite3 ABI check passed (compiled for Electron, not Node)"
+        "[afterPack] better-sqlite3 ABI check passed (Electron-ABI binary confirmed)"
       );
     });
 
@@ -382,7 +382,7 @@ describe("afterPack", () => {
       await afterPack(createContext("win32", "/build/win"));
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        "[afterPack] better-sqlite3 ABI check passed (compiled for Electron, not Node)"
+        "[afterPack] better-sqlite3 ABI check passed (Electron-ABI binary confirmed)"
       );
     });
 
