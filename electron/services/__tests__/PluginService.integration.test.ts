@@ -876,6 +876,70 @@ describe("PluginService integration — activate() lifecycle", () => {
     expect(result.args).toEqual(["hello"]);
   });
 
+  it("registers a main-side action via host.registerAction and dispatches it end-to-end", async () => {
+    const pluginDir = await writePlugin("acme.action-plugin", {
+      name: "acme.action-plugin",
+      version: "1.0.0",
+    });
+    const mainFile = `action-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) {
+  host.registerAction(
+    {
+      id: "do-thing",
+      title: "Do thing",
+      description: "Does the thing",
+      category: "Actions",
+      kind: "command",
+      danger: "safe",
+    },
+    async (args) => ({ echoed: args })
+  );
+}
+`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.action-plugin",
+        version: "1.0.0",
+        main: mainFile,
+      })
+    );
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    // Activation is deferred: startup plugins activate via this fan-out (the
+    // production trigger is globalServicesInit). registerAction runs inside
+    // activate(), so the action only surfaces once activation has run.
+    await service.activateStartupFinishedPlugins();
+
+    // The action surfaces in the renderer-facing list with the namespaced id.
+    expect(service.listPluginActions().map((a) => a.id)).toContain("acme.action-plugin.do-thing");
+
+    // Dispatch lands on the main-side handler with the args payload only.
+    const result = await service.dispatchHandler(
+      "acme.action-plugin",
+      "acme.action-plugin.do-thing",
+      makeCtx("acme.action-plugin"),
+      [{ issue: 7 }]
+    );
+    expect(result).toEqual({ echoed: { issue: 7 } });
+
+    // Unload tears the handler down — a later dispatch finds nothing.
+    service.unloadPlugin("acme.action-plugin");
+    expect(service.listPluginActions()).toEqual([]);
+    await expect(
+      service.dispatchHandler(
+        "acme.action-plugin",
+        "acme.action-plugin.do-thing",
+        makeCtx("acme.action-plugin"),
+        [{}]
+      )
+    ).rejects.toThrow(/No plugin handler registered/);
+  });
+
   it("invokes activate's returned cleanup before handlers are removed on unload", async () => {
     const markerKey = makeMarkerKey();
     const pluginDir = await writePlugin("acme.cleanup-plugin", {

@@ -2914,6 +2914,298 @@ describe("Plugin action registry", () => {
   });
 });
 
+type ActionDescriptorInput = {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  kind: "command" | "query";
+  danger: "safe" | "confirm";
+  keywords?: string[];
+  inputSchema?: Record<string, unknown>;
+};
+type ActionHostShape = (pluginId: string) => {
+  host: {
+    registerAction: (
+      descriptor: ActionDescriptorInput,
+      handler: (args: unknown) => unknown
+    ) => void;
+  };
+  revoke: () => void;
+};
+
+describe("createHost — registerAction", () => {
+  let service: PluginService;
+
+  const descriptor = (overrides: Partial<ActionDescriptorInput> = {}): ActionDescriptorInput => ({
+    id: "plan-from-issue",
+    title: "Plan from issue",
+    description: "Turn an issue into a session",
+    category: "Planner",
+    kind: "command",
+    danger: "safe",
+    ...overrides,
+  });
+
+  const getHost = (pluginId: string) =>
+    (service as unknown as { createHost: ActionHostShape }).createHost(pluginId);
+
+  beforeEach(async () => {
+    await writePlugin("act-test", { name: "acme.act-test", version: "1.0.0" });
+    service = new PluginService(tmpDir);
+    await service.initialize();
+    broadcastToRendererMock.mockClear();
+  });
+
+  it("namespaces the un-prefixed id to {pluginId}.{id} and stores the descriptor", () => {
+    const { host } = getHost("acme.act-test");
+    host.registerAction(descriptor(), () => "ok");
+
+    const actions = service.listPluginActions();
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      pluginId: "acme.act-test",
+      id: "acme.act-test.plan-from-issue",
+      title: "Plan from issue",
+    });
+    // Registering a new action broadcasts the refreshed list to renderers.
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.EVENTS_PUSH, {
+      name: "plugin:actions-changed",
+      payload: { actions },
+    });
+  });
+
+  it("invokes the handler with the args payload only — no IPC ctx", async () => {
+    const handler = vi.fn().mockResolvedValue({ done: true });
+    const { host } = getHost("acme.act-test");
+    host.registerAction(descriptor(), handler);
+
+    const result = await service.dispatchHandler(
+      "acme.act-test",
+      "acme.act-test.plan-from-issue",
+      makeCtx("acme.act-test"),
+      [{ issue: 42 }]
+    );
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith({ issue: 42 });
+    expect(result).toEqual({ done: true });
+  });
+
+  it("invokes the handler with undefined when dispatched with no args", async () => {
+    const handler = vi.fn().mockReturnValue("ran");
+    const { host } = getHost("acme.act-test");
+    host.registerAction(descriptor(), handler);
+
+    const result = await service.dispatchHandler(
+      "acme.act-test",
+      "acme.act-test.plan-from-issue",
+      makeCtx("acme.act-test"),
+      []
+    );
+    expect(handler).toHaveBeenCalledWith(undefined);
+    expect(result).toBe("ran");
+  });
+
+  it("rejects calls after the host is revoked", () => {
+    const { host, revoke } = getHost("acme.act-test");
+    revoke();
+    expect(() => host.registerAction(descriptor(), () => undefined)).toThrow(
+      /host revoked: registerAction/
+    );
+  });
+
+  it("rejects a non-object descriptor", () => {
+    const { host } = getHost("acme.act-test");
+    expect(() =>
+      host.registerAction(null as unknown as ActionDescriptorInput, () => undefined)
+    ).toThrow(/descriptor must be an object/);
+  });
+
+  it("rejects a non-function handler", () => {
+    const { host } = getHost("acme.act-test");
+    expect(() =>
+      host.registerAction(descriptor(), "not-a-function" as unknown as () => unknown)
+    ).toThrow(/handler must be a function/);
+  });
+
+  it("rejects an empty descriptor.id", () => {
+    const { host } = getHost("acme.act-test");
+    expect(() => host.registerAction(descriptor({ id: "" }), () => undefined)).toThrow(
+      /descriptor.id must be a non-empty string/
+    );
+  });
+
+  it("rejects restricted danger", () => {
+    const { host } = getHost("acme.act-test");
+    expect(() =>
+      host.registerAction(
+        descriptor({ danger: "restricted" as unknown as "safe" }),
+        () => undefined
+      )
+    ).toThrow(/invalid danger/i);
+  });
+
+  it("raises effectiveDanger to confirm when the manifest grants a high-risk capability", async () => {
+    await writePlugin("act-risky", {
+      name: "acme.act-risky",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+    const { host } = (svc as unknown as { createHost: ActionHostShape }).createHost(
+      "acme.act-risky"
+    );
+
+    host.registerAction(descriptor({ danger: "safe" }), () => undefined);
+
+    const action = svc.listPluginActions().find((a) => a.id === "acme.act-risky.plan-from-issue");
+    expect(action?.danger).toBe("safe");
+    expect(action?.effectiveDanger).toBe("confirm");
+  });
+
+  it("replaces the prior descriptor and handler on re-registration with the same id", async () => {
+    const first = vi.fn().mockReturnValue("first");
+    const second = vi.fn().mockReturnValue("second");
+    const { host } = getHost("acme.act-test");
+
+    host.registerAction(descriptor({ title: "Old title" }), first);
+    host.registerAction(descriptor({ title: "New title" }), second);
+
+    // Exactly one descriptor — replace, not append.
+    const actions = service.listPluginActions();
+    expect(actions).toHaveLength(1);
+    expect(actions[0].title).toBe("New title");
+
+    const result = await service.dispatchHandler(
+      "acme.act-test",
+      "acme.act-test.plan-from-issue",
+      makeCtx("acme.act-test"),
+      [{}]
+    );
+    expect(result).toBe("second");
+    expect(first).not.toHaveBeenCalled();
+  });
+
+  it("lets a host re-registration replace a renderer IPC registration", async () => {
+    // IPC path registers metadata only (no main-side handler).
+    service.registerPluginAction("acme.act-test", {
+      id: "acme.act-test.plan-from-issue",
+      title: "Via IPC",
+      description: "registered through the renderer path",
+      category: "Planner",
+      kind: "command",
+      danger: "safe",
+    });
+
+    const handler = vi.fn().mockReturnValue("from-host");
+    const { host } = getHost("acme.act-test");
+    // Replace semantics: re-registering the same id from the host does not throw.
+    expect(() => host.registerAction(descriptor(), handler)).not.toThrow();
+
+    const result = await service.dispatchHandler(
+      "acme.act-test",
+      "acme.act-test.plan-from-issue",
+      makeCtx("acme.act-test"),
+      [{}]
+    );
+    expect(result).toBe("from-host");
+  });
+
+  it("keeps the renderer IPC path throwing on a duplicate id (asymmetric semantics)", () => {
+    const { host } = getHost("acme.act-test");
+    host.registerAction(descriptor(), () => undefined);
+
+    // The IPC path stays loud on duplicates even after a host registration.
+    expect(() =>
+      service.registerPluginAction("acme.act-test", {
+        id: "acme.act-test.plan-from-issue",
+        title: "Dup",
+        description: "duplicate",
+        category: "Planner",
+        kind: "command",
+        danger: "safe",
+      })
+    ).toThrow(/already registered/);
+  });
+
+  it("validates args against the action's inputSchema", async () => {
+    const handler = vi.fn().mockReturnValue("ok");
+    const { host } = getHost("acme.act-test");
+    host.registerAction(
+      descriptor({
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        },
+      }),
+      handler
+    );
+
+    await expect(
+      service.dispatchHandler(
+        "acme.act-test",
+        "acme.act-test.plan-from-issue",
+        makeCtx("acme.act-test"),
+        [{}]
+      )
+    ).rejects.toThrow(/Invalid arguments/);
+    expect(handler).not.toHaveBeenCalled();
+
+    const result = await service.dispatchHandler(
+      "acme.act-test",
+      "acme.act-test.plan-from-issue",
+      makeCtx("acme.act-test"),
+      [{ name: "issue" }]
+    );
+    expect(result).toBe("ok");
+  });
+
+  it("propagates an async handler rejection through dispatch", async () => {
+    const { host } = getHost("acme.act-test");
+    host.registerAction(descriptor(), async () => {
+      throw new Error("handler boom");
+    });
+
+    await expect(
+      service.dispatchHandler(
+        "acme.act-test",
+        "acme.act-test.plan-from-issue",
+        makeCtx("acme.act-test"),
+        [{}]
+      )
+    ).rejects.toThrow("handler boom");
+  });
+
+  it("removes the handler on unload so dispatch throws afterwards", async () => {
+    const { host } = getHost("acme.act-test");
+    host.registerAction(descriptor(), () => "ok");
+    expect(
+      await service.dispatchHandler(
+        "acme.act-test",
+        "acme.act-test.plan-from-issue",
+        makeCtx("acme.act-test"),
+        [{}]
+      )
+    ).toBe("ok");
+
+    service.unloadPlugin("acme.act-test");
+
+    expect(service.listPluginActions()).toEqual([]);
+    await expect(
+      service.dispatchHandler(
+        "acme.act-test",
+        "acme.act-test.plan-from-issue",
+        makeCtx("acme.act-test"),
+        [{}]
+      )
+    ).rejects.toThrow(
+      "No plugin handler registered for acme.act-test:acme.act-test.plan-from-issue"
+    );
+  });
+});
+
 describe("Plugin panel kind registry broadcast", () => {
   it("dispose() drops a microtask scheduled before disposal", async () => {
     // Capture the listener PluginService passes into onPanelKindRegistered so
