@@ -41,7 +41,7 @@ export type { PluginManifest } from "./plugin.js";
 
 // ── Activation contract ─────────────────────────────────────────────
 
-export type { PluginActivate, PluginHostApi } from "./plugin.js";
+export type { PluginActivate, PluginHostApi, ActionHandler } from "./plugin.js";
 
 // ── IPC (registerHandler, broadcastToRenderer) — ships in v1 ────────
 

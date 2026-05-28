@@ -2,7 +2,7 @@ import type { BuiltInKeyAction } from "./keymap.js";
 import type { BuiltInRuntimeActionId } from "../config/actionIds.js";
 import type { z } from "zod";
 
-export type ActionSource = "user" | "keybinding" | "menu" | "agent" | "context-menu";
+export type ActionSource = "user" | "keybinding" | "menu" | "agent" | "context-menu" | "plugin";
 
 export type ActionKind = "command" | "query";
 
