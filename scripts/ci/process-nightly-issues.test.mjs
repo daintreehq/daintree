@@ -1,5 +1,4 @@
-import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { describe, it, expect } from "vitest";
 import {
   buildMetadataBlock,
   buildIssueBody,
@@ -16,7 +15,7 @@ import {
   shouldStaleClose,
 } from "./process-nightly-issues.mjs";
 
-test("parseMetadata extracts valid metadata", () => {
+it("parseMetadata extracts valid metadata", () => {
   const body = `
 Some content
 <!-- METADATA:
@@ -32,32 +31,32 @@ Some content
 More content
 `;
   const meta = parseMetadata(body);
-  assert.ok(meta);
-  assert.equal(meta.signature, "abcdef123456");
-  assert.equal(meta.consecutive_failures, 2);
-  assert.equal(meta.first_seen, "2026-05-20");
-  assert.equal(meta.last_seen, "2026-05-28");
-  assert.equal(meta.last_seen_run_id, 12345);
+  expect(meta).toBeTruthy();
+  expect(meta.signature).toBe("abcdef123456");
+  expect(meta.consecutive_failures).toBe(2);
+  expect(meta.first_seen).toBe("2026-05-20");
+  expect(meta.last_seen).toBe("2026-05-28");
+  expect(meta.last_seen_run_id).toBe(12345);
 });
 
-test("parseMetadata returns null for missing marker", () => {
-  assert.equal(parseMetadata("no metadata here"), null);
-  assert.equal(parseMetadata(null), null);
+it("parseMetadata returns null for missing marker", () => {
+  expect(parseMetadata("no metadata here")).toBe(null);
+  expect(parseMetadata(null)).toBe(null);
 });
 
-test("parseMetadata returns null for invalid JSON in marker", () => {
-  assert.equal(parseMetadata("<!-- METADATA:\n{invalid}\n-->"), null);
+it("parseMetadata returns null for invalid JSON in marker", () => {
+  expect(parseMetadata("<!-- METADATA:\n{invalid}\n-->")).toBe(null);
 });
 
-test("parseMetadata returns null for missing signature", () => {
-  assert.equal(parseMetadata('<!-- METADATA:\n{"consecutive_failures": 1}\n-->'), null);
+it("parseMetadata returns null for missing signature", () => {
+  expect(parseMetadata('<!-- METADATA:\n{"consecutive_failures": 1}\n-->')).toBe(null);
 });
 
-test("parseMetadata returns null for wrong signature length", () => {
-  assert.equal(parseMetadata('<!-- METADATA:\n{"signature": "abc"}\n-->'), null);
+it("parseMetadata returns null for wrong signature length", () => {
+  expect(parseMetadata('<!-- METADATA:\n{"signature": "abc"}\n-->')).toBe(null);
 });
 
-test("buildMetadataBlock round-trips through parseMetadata", () => {
+it("buildMetadataBlock round-trips through parseMetadata", () => {
   const original = {
     signature: "deadbeef1234",
     consecutive_failures: 3,
@@ -68,10 +67,10 @@ test("buildMetadataBlock round-trips through parseMetadata", () => {
   };
   const block = buildMetadataBlock(original);
   const parsed = parseMetadata(block);
-  assert.deepEqual(parsed, original);
+  expect(parsed).toEqual(original);
 });
 
-test("buildMetadataBlock produces valid marker", () => {
+it("buildMetadataBlock produces valid marker", () => {
   const block = buildMetadataBlock({
     signature: "abcdef123456",
     consecutive_failures: 1,
@@ -80,23 +79,23 @@ test("buildMetadataBlock produces valid marker", () => {
     last_seen_run_id: 1,
     last_green_run_url: null,
   });
-  assert.ok(block.startsWith("<!-- METADATA:"));
-  assert.ok(block.endsWith("-->"));
-  assert.ok(block.includes('"abcdef123456"'));
+  expect(block.startsWith("<!-- METADATA:")).toBeTruthy();
+  expect(block.endsWith("-->")).toBeTruthy();
+  expect(block).toContain('"abcdef123456"');
 });
 
-test("buildIssueTitle", () => {
+it("buildIssueTitle", () => {
   const report = {
     projectName: "full-terminal",
     titlePath: ["root", "Search", "should find text"],
   };
   const title = buildIssueTitle(report);
-  assert.ok(title.includes("[Nightly]"));
-  assert.ok(title.includes("full-terminal"));
-  assert.ok(title.includes("should find text"));
+  expect(title).toContain("[Nightly]");
+  expect(title).toContain("full-terminal");
+  expect(title).toContain("should find text");
 });
 
-test("buildIssueTitle truncates long titles", () => {
+it("buildIssueTitle truncates long titles", () => {
   const report = {
     projectName: "core",
     titlePath: [
@@ -105,11 +104,11 @@ test("buildIssueTitle truncates long titles", () => {
     ],
   };
   const title = buildIssueTitle(report);
-  assert.ok(title.length <= 80);
-  assert.ok(title.endsWith("..."));
+  expect(title.length).toBeLessThanOrEqual(80);
+  expect(title.endsWith("...")).toBeTruthy();
 });
 
-test("buildIssueBody contains key info", () => {
+it("buildIssueBody contains key info", () => {
   const report = {
     projectName: "core",
     file: "e2e/core/test.spec.ts",
@@ -128,24 +127,24 @@ test("buildIssueBody contains key info", () => {
     last_green_run_url: null,
   };
   const body = buildIssueBody(report, metadata, "https://github.com/org/repo/actions/runs/1");
-  assert.ok(body.includes("e2e/core/test.spec.ts"));
-  assert.ok(body.includes("should work"));
-  assert.ok(body.includes("Expected 1 got 2"));
-  assert.ok(body.includes("Linux"));
-  assert.ok(body.includes("METADATA:"));
+  expect(body).toContain("e2e/core/test.spec.ts");
+  expect(body).toContain("should work");
+  expect(body).toContain("Expected 1 got 2");
+  expect(body).toContain("Linux");
+  expect(body).toContain("METADATA:");
 });
 
-test("nextMetadata creates new metadata", () => {
+it("nextMetadata creates new metadata", () => {
   const report = { signature: "abcdef123456" };
   const meta = nextMetadata(null, report, 1, "https://run", "2026-05-28");
-  assert.equal(meta.signature, "abcdef123456");
-  assert.equal(meta.consecutive_failures, 1);
-  assert.equal(meta.first_seen, "2026-05-28");
-  assert.equal(meta.last_seen, "2026-05-28");
-  assert.equal(meta.last_seen_run_id, 1);
+  expect(meta.signature).toBe("abcdef123456");
+  expect(meta.consecutive_failures).toBe(1);
+  expect(meta.first_seen).toBe("2026-05-28");
+  expect(meta.last_seen).toBe("2026-05-28");
+  expect(meta.last_seen_run_id).toBe(1);
 });
 
-test("nextMetadata skips increment on same run_id", () => {
+it("nextMetadata skips increment on same run_id", () => {
   const existing = {
     signature: "abcdef123456",
     consecutive_failures: 2,
@@ -156,10 +155,10 @@ test("nextMetadata skips increment on same run_id", () => {
   };
   const report = { signature: "abcdef123456" };
   const meta = nextMetadata(existing, report, 1, "https://run", "2026-05-28");
-  assert.equal(meta.consecutive_failures, 2);
+  expect(meta.consecutive_failures).toBe(2);
 });
 
-test("nextMetadata increments on consecutive day", () => {
+it("nextMetadata increments on consecutive day", () => {
   const existing = {
     signature: "abcdef123456",
     consecutive_failures: 2,
@@ -170,10 +169,10 @@ test("nextMetadata increments on consecutive day", () => {
   };
   const report = { signature: "abcdef123456" };
   const meta = nextMetadata(existing, report, 1, "https://run", "2026-05-28");
-  assert.equal(meta.consecutive_failures, 3);
+  expect(meta.consecutive_failures).toBe(3);
 });
 
-test("nextMetadata resets on non-consecutive day", () => {
+it("nextMetadata resets on non-consecutive day", () => {
   const existing = {
     signature: "abcdef123456",
     consecutive_failures: 2,
@@ -184,10 +183,10 @@ test("nextMetadata resets on non-consecutive day", () => {
   };
   const report = { signature: "abcdef123456" };
   const meta = nextMetadata(existing, report, 1, "https://run", "2026-05-28");
-  assert.equal(meta.consecutive_failures, 1);
+  expect(meta.consecutive_failures).toBe(1);
 });
 
-test("nextMetadata preserves first_seen", () => {
+it("nextMetadata preserves first_seen", () => {
   const existing = {
     signature: "abcdef123456",
     consecutive_failures: 1,
@@ -198,66 +197,66 @@ test("nextMetadata preserves first_seen", () => {
   };
   const report = { signature: "abcdef123456" };
   const meta = nextMetadata(existing, report, 2, "https://run", "2026-05-28");
-  assert.equal(meta.first_seen, "2026-05-20");
+  expect(meta.first_seen).toBe("2026-05-20");
 });
 
-test("shouldEscalateToHumanReview at threshold", () => {
-  assert.equal(shouldEscalateToHumanReview({ consecutive_failures: 2 }), false);
-  assert.equal(shouldEscalateToHumanReview({ consecutive_failures: 3 }), true);
-  assert.equal(shouldEscalateToHumanReview({ consecutive_failures: 5 }), true);
+it("shouldEscalateToHumanReview at threshold", () => {
+  expect(shouldEscalateToHumanReview({ consecutive_failures: 2 })).toBe(false);
+  expect(shouldEscalateToHumanReview({ consecutive_failures: 3 })).toBe(true);
+  expect(shouldEscalateToHumanReview({ consecutive_failures: 5 })).toBe(true);
 });
 
-test("shouldCloseOnGreen", () => {
-  assert.equal(shouldCloseOnGreen({ last_seen: "2026-05-27" }, "2026-05-28"), true);
-  assert.equal(shouldCloseOnGreen({ last_seen: "2026-05-28" }, "2026-05-28"), false);
-  assert.equal(shouldCloseOnGreen(null, "2026-05-28"), false);
+it("shouldCloseOnGreen", () => {
+  expect(shouldCloseOnGreen({ last_seen: "2026-05-27" }, "2026-05-28")).toBe(true);
+  expect(shouldCloseOnGreen({ last_seen: "2026-05-28" }, "2026-05-28")).toBe(false);
+  expect(shouldCloseOnGreen(null, "2026-05-28")).toBe(false);
 });
 
-test("shouldStaleClose after 14 days", () => {
-  assert.equal(shouldStaleClose({ last_seen: "2026-05-13" }, "2026-05-28"), true);
-  assert.equal(shouldStaleClose({ last_seen: "2026-05-14" }, "2026-05-28"), false);
-  assert.equal(shouldStaleClose(null, "2026-05-28"), false);
+it("shouldStaleClose after 14 days", () => {
+  expect(shouldStaleClose({ last_seen: "2026-05-13" }, "2026-05-28")).toBe(true);
+  expect(shouldStaleClose({ last_seen: "2026-05-14" }, "2026-05-28")).toBe(false);
+  expect(shouldStaleClose(null, "2026-05-28")).toBe(false);
 });
 
-test("findIssueBySignature", () => {
+it("findIssueBySignature", () => {
   const issues = [
     { number: 1, metadata: { signature: "aaaa11112222" } },
     { number: 2, metadata: { signature: "bbbb33334444" } },
     { number: 3, metadata: null },
   ];
   const found = findIssueBySignature(issues, "bbbb33334444");
-  assert.equal(found.number, 2);
-  assert.equal(findIssueBySignature(issues, "nope"), undefined);
+  expect(found.number).toBe(2);
+  expect(findIssueBySignature(issues, "nope")).toBeUndefined();
 });
 
-test("deduplicateReports merges same signature with oses array", () => {
+it("deduplicateReports merges same signature with oses array", () => {
   const reports = [
     { signature: "abc123", projectName: "core", os: "Linux" },
     { signature: "abc123", projectName: "core", os: "macOS" },
     { signature: "def456", projectName: "full-terminal", os: "Linux" },
   ];
   const deduped = deduplicateReports(reports);
-  assert.equal(deduped.length, 2);
+  expect(deduped.length).toBe(2);
   const merged = deduped.find((d) => d.signature === "abc123");
-  assert.ok(merged);
-  assert.deepEqual(merged.oses, ["Linux", "macOS"]);
+  expect(merged).toBeTruthy();
+  expect(merged.oses).toEqual(["Linux", "macOS"]);
   // input reports not mutated
-  assert.ok(!("oses" in reports[0]));
+  expect("oses" in reports[0]).toBeFalsy();
 });
 
-test("labelsForIssue", () => {
+it("labelsForIssue", () => {
   const labels = labelsForIssue({ projectName: "full-terminal" });
-  assert.ok(labels.includes("nightly-failure"));
-  assert.ok(labels.includes("full-terminal"));
+  expect(labels).toContain("nightly-failure");
+  expect(labels).toContain("full-terminal");
 });
 
-test("labelsForEscalation", () => {
-  assert.deepEqual(labelsForEscalation({ consecutive_failures: 2 }), []);
-  assert.ok(labelsForEscalation({ consecutive_failures: 3 }).includes("human-review"));
+it("labelsForEscalation", () => {
+  expect(labelsForEscalation({ consecutive_failures: 2 })).toEqual([]);
+  expect(labelsForEscalation({ consecutive_failures: 3 })).toContain("human-review");
 });
 
-test("buildRecoveredComment", () => {
+it("buildRecoveredComment", () => {
   const comment = buildRecoveredComment("https://github.com/org/repo/actions/runs/5");
-  assert.ok(comment.includes("did not recur"));
-  assert.ok(comment.includes("/actions/runs/5"));
+  expect(comment).toContain("did not recur");
+  expect(comment).toContain("/actions/runs/5");
 });

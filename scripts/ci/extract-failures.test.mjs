@@ -1,82 +1,81 @@
-import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { describe, it, expect } from "vitest";
 import { computeSignature, extractFailures, normalizeError } from "./extract-failures.mjs";
 
-test("normalizeError strips paths", () => {
+it("normalizeError strips paths", () => {
   const input = "Error at /Users/test/project/src/file.ts:42:10";
   const result = normalizeError(input);
-  assert.ok(!result.includes("/Users/test/project"));
-  assert.ok(result.includes("<path>"));
+  expect(result).not.toContain("/Users/test/project");
+  expect(result).toContain("<path>");
 });
 
-test("normalizeError strips timestamps", () => {
+it("normalizeError strips timestamps", () => {
   const input = "Failed at 2025-06-15T03:00:00.123Z";
   const result = normalizeError(input);
-  assert.ok(!result.includes("2025-06-15"));
-  assert.ok(result.includes("<timestamp>"));
+  expect(result).not.toContain("2025-06-15");
+  expect(result).toContain("<timestamp>");
 });
 
-test("normalizeError strips line:col", () => {
+it("normalizeError strips line:col", () => {
   const input = "Error at file.ts:42:10 and also file.ts:100:5";
   const result = normalizeError(input);
-  assert.ok(!result.includes(":42:10"));
-  assert.ok(!result.includes(":100:5"));
-  assert.ok(result.includes(":<line>:<col>"));
+  expect(result).not.toContain(":42:10");
+  expect(result).not.toContain(":100:5");
+  expect(result).toContain(":<line>:<col>");
 });
 
-test("normalizeError strips memory addresses", () => {
+it("normalizeError strips memory addresses", () => {
   const input = "Segfault at 0x7fff5fbff000 and 0xDEADBEEF1234";
   const result = normalizeError(input);
-  assert.ok(!result.includes("0x7fff5fbff000"));
-  assert.ok(!result.includes("0xDEADBEEF1234"));
-  assert.ok(result.includes("0x<addr>"));
+  expect(result).not.toContain("0x7fff5fbff000");
+  expect(result).not.toContain("0xDEADBEEF1234");
+  expect(result).toContain("0x<addr>");
 });
 
-test("normalizeError strips UUIDs", () => {
+it("normalizeError strips UUIDs", () => {
   const input = "Session abc123de-4567-8901-abcd-ef1234567890 not found";
   const result = normalizeError(input);
-  assert.ok(!result.includes("abc123de-4567-8901-abcd-ef1234567890"));
-  assert.ok(result.includes("<uuid>"));
+  expect(result).not.toContain("abc123de-4567-8901-abcd-ef1234567890");
+  expect(result).toContain("<uuid>");
 });
 
-test("normalizeError strips ports", () => {
+it("normalizeError strips ports", () => {
   const input = "Connection refused on localhost:9222";
   const result = normalizeError(input);
-  assert.ok(!result.includes(":9222"));
+  expect(result).not.toContain(":9222");
 });
 
-test("computeSignature is deterministic", () => {
+it("computeSignature is deterministic", () => {
   const sig1 = computeSignature("spec.ts", ["suite", "test name"], "Error: things broke");
   const sig2 = computeSignature("spec.ts", ["suite", "test name"], "Error: things broke");
-  assert.equal(sig1, sig2);
-  assert.equal(sig1.length, 12);
+  expect(sig1).toBe(sig2);
+  expect(sig1.length).toBe(12);
 });
 
-test("computeSignature varies by file", () => {
+it("computeSignature varies by file", () => {
   const sig1 = computeSignature("a.spec.ts", ["test"], "error");
   const sig2 = computeSignature("b.spec.ts", ["test"], "error");
-  assert.notEqual(sig1, sig2);
+  expect(sig1).not.toBe(sig2);
 });
 
-test("computeSignature varies by title path", () => {
+it("computeSignature varies by title path", () => {
   const sig1 = computeSignature("x.spec.ts", ["A", "B"], "error");
   const sig2 = computeSignature("x.spec.ts", ["A", "C"], "error");
-  assert.notEqual(sig1, sig2);
+  expect(sig1).not.toBe(sig2);
 });
 
-test("computeSignature normalizes error before hashing", () => {
+it("computeSignature normalizes error before hashing", () => {
   const sig1 = computeSignature("spec.ts", ["test"], "Error at /Users/alice/code.ts:10:5");
   const sig2 = computeSignature("spec.ts", ["test"], "Error at /home/bob/code.ts:20:15");
-  assert.equal(sig1, sig2);
+  expect(sig1).toBe(sig2);
 });
 
-test("extractFailures returns empty for null/undefined", () => {
-  assert.deepEqual(extractFailures(null), []);
-  assert.deepEqual(extractFailures({}), []);
-  assert.deepEqual(extractFailures({ suites: [] }), []);
+it("extractFailures returns empty for null/undefined", () => {
+  expect(extractFailures(null)).toEqual([]);
+  expect(extractFailures({})).toEqual([]);
+  expect(extractFailures({ suites: [] })).toEqual([]);
 });
 
-test("extractFailures extracts failing tests", () => {
+it("extractFailures extracts failing tests", () => {
   const report = {
     suites: [
       {
@@ -102,15 +101,15 @@ test("extractFailures extracts failing tests", () => {
     ],
   };
   const failures = extractFailures(report);
-  assert.equal(failures.length, 1);
-  assert.equal(failures[0].file, "e2e/core/test.spec.ts");
-  assert.deepEqual(failures[0].titlePath, ["root", "should work"]);
-  assert.equal(failures[0].projectName, "core");
-  assert.equal(failures[0].status, "failed");
-  assert.ok(failures[0].signature);
+  expect(failures.length).toBe(1);
+  expect(failures[0].file).toBe("e2e/core/test.spec.ts");
+  expect(failures[0].titlePath).toEqual(["root", "should work"]);
+  expect(failures[0].projectName).toBe("core");
+  expect(failures[0].status).toBe("failed");
+  expect(failures[0].signature).toBeTruthy();
 });
 
-test("extractFailures skips passed and skipped tests", () => {
+it("extractFailures skips passed and skipped tests", () => {
   const report = {
     suites: [
       {
@@ -139,11 +138,11 @@ test("extractFailures skips passed and skipped tests", () => {
     ],
   };
   const failures = extractFailures(report);
-  assert.equal(failures.length, 1);
-  assert.equal(failures[0].titlePath[1], "fails");
+  expect(failures.length).toBe(1);
+  expect(failures[0].titlePath[1]).toBe("fails");
 });
 
-test("extractFailures walks nested suites", () => {
+it("extractFailures walks nested suites", () => {
   const report = {
     suites: [
       {
@@ -169,11 +168,11 @@ test("extractFailures walks nested suites", () => {
     ],
   };
   const failures = extractFailures(report);
-  assert.equal(failures.length, 1);
-  assert.deepEqual(failures[0].titlePath, ["root", "Feature X", "scenario A"]);
+  expect(failures.length).toBe(1);
+  expect(failures[0].titlePath).toEqual(["root", "Feature X", "scenario A"]);
 });
 
-test("extractFailures handles missing errors gracefully", () => {
+it("extractFailures handles missing errors gracefully", () => {
   const report = {
     suites: [
       {
@@ -194,11 +193,11 @@ test("extractFailures handles missing errors gracefully", () => {
     ],
   };
   const failures = extractFailures(report);
-  assert.equal(failures.length, 1);
-  assert.equal(failures[0].errorMessage, "Unknown error");
+  expect(failures.length).toBe(1);
+  expect(failures[0].errorMessage).toBe("Unknown error");
 });
 
-test("extractFailures handles retries (multiple results per test)", () => {
+it("extractFailures handles retries (multiple results per test)", () => {
   const report = {
     suites: [
       {
@@ -222,10 +221,10 @@ test("extractFailures handles retries (multiple results per test)", () => {
     ],
   };
   const failures = extractFailures(report);
-  assert.equal(failures.length, 2);
+  expect(failures.length).toBe(2);
 });
 
-test("extractFailures handles multi-project reports", () => {
+it("extractFailures handles multi-project reports", () => {
   const report = {
     suites: [
       {
@@ -250,12 +249,12 @@ test("extractFailures handles multi-project reports", () => {
     ],
   };
   const failures = extractFailures(report);
-  assert.equal(failures.length, 2);
-  assert.equal(failures[0].projectName, "core");
-  assert.equal(failures[1].projectName, "full-terminal");
+  expect(failures.length).toBe(2);
+  expect(failures[0].projectName).toBe("core");
+  expect(failures[1].projectName).toBe("full-terminal");
 });
 
-test("extractFailures propagates file to nested describe suites", () => {
+it("extractFailures propagates file to nested describe suites", () => {
   const report = {
     suites: [
       {
@@ -281,25 +280,25 @@ test("extractFailures propagates file to nested describe suites", () => {
     ],
   };
   const failures = extractFailures(report);
-  assert.equal(failures.length, 1);
-  assert.equal(failures[0].file, "e2e/core/login.spec.ts");
-  assert.deepEqual(failures[0].titlePath, ["root", "Login page", "should reject invalid password"]);
+  expect(failures.length).toBe(1);
+  expect(failures[0].file).toBe("e2e/core/login.spec.ts");
+  expect(failures[0].titlePath).toEqual(["root", "Login page", "should reject invalid password"]);
 
   // Same nested structure, different file → different signature
   const report2 = { suites: [{ ...report.suites[0], file: "e2e/core/signup.spec.ts" }] };
   const failures2 = extractFailures(report2);
-  assert.equal(failures2.length, 1);
-  assert.equal(failures2[0].file, "e2e/core/signup.spec.ts");
-  assert.notEqual(failures[0].signature, failures2[0].signature);
+  expect(failures2.length).toBe(1);
+  expect(failures2[0].file).toBe("e2e/core/signup.spec.ts");
+  expect(failures[0].signature).not.toBe(failures2[0].signature);
 });
 
-test("normalizeError normalizes Windows paths", () => {
+it("normalizeError normalizes Windows paths", () => {
   const posixErr = "Error at /Users/runner/work/repo/e2e/test.spec.ts:42";
   const winErr = "Error at C:\\Users\\runneradmin\\work\\repo\\e2e\\test.spec.ts:42";
-  assert.equal(normalizeError(winErr), normalizeError(posixErr));
+  expect(normalizeError(winErr)).toBe(normalizeError(posixErr));
 });
 
-test("computeSignature matches across OS path flavors", () => {
+it("computeSignature matches across OS path flavors", () => {
   const sig1 = computeSignature(
     "e2e/test.spec.ts",
     ["suite", "test"],
@@ -310,5 +309,5 @@ test("computeSignature matches across OS path flavors", () => {
     ["suite", "test"],
     "Error at C:\\Users\\runneradmin\\work\\repo\\e2e\\test.spec.ts:42:10"
   );
-  assert.equal(sig1, sig2);
+  expect(sig1).toBe(sig2);
 });
