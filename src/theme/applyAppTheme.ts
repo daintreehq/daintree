@@ -2,11 +2,13 @@ import {
   getAppThemeById,
   getAppThemeCssVariables,
   resolveAppTheme,
+  type AppColorScheme,
+} from "@shared/theme";
+import {
   RED_GREEN_OVERRIDES,
   BLUE_YELLOW_OVERRIDES,
   ALL_CVD_TOKENS,
-  type AppColorScheme,
-} from "@shared/theme";
+} from "@shared/theme/colorVisionOverrides.js";
 import type { ColorVisionMode } from "@shared/types";
 
 // Re-export for consumers that haven't migrated to @shared/theme
