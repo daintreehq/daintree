@@ -118,3 +118,7 @@ export const DEFAULT_PORTAL_TABS: PortalTab[] = [];
 export const PORTAL_MIN_WIDTH = 320;
 export const PORTAL_MAX_WIDTH = 1200;
 export const PORTAL_DEFAULT_WIDTH = 480;
+// Minimum editor canvas width preserved when restoring a persisted portal
+// width on launch. If the saved width would shrink the editor below this on
+// the current viewport, the portal falls back to a viewport-safe size.
+export const PORTAL_MIN_EDITOR_WIDTH = 400;

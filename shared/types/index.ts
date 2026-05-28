@@ -427,6 +427,7 @@ export {
   PORTAL_MIN_WIDTH,
   PORTAL_MAX_WIDTH,
   PORTAL_DEFAULT_WIDTH,
+  PORTAL_MIN_EDITOR_WIDTH,
 } from "./portal.js";
 
 // Voice types - canonical phase model for voice session and transcript lifecycle
