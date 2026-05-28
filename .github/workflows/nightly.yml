@@ -424,6 +424,7 @@ jobs:
     with:
       suite: core
       platform: ${{ inputs.platform || 'all' }}
+      json_report: true
 
   # Six domain buckets, each a reusable-workflow call expanded across the OS
   # matrix inside e2e.yml. e2e.yml auto-shards every full-* suite 4 ways
@@ -448,6 +449,7 @@ jobs:
     with:
       suite: ${{ matrix.suite }}
       platform: ${{ inputs.platform || 'non-windows' }}
+      json_report: true
 
   e2e-online:
     needs: [check, test]
@@ -455,6 +457,7 @@ jobs:
     with:
       suite: online
       platform: ${{ inputs.platform || 'all' }}
+      json_report: true
     secrets: inherit
 
   # Memory-leak detection — runs the `nightly` E2E suite. e2e.yml forces
@@ -467,6 +470,7 @@ jobs:
     with:
       suite: nightly
       platform: ${{ inputs.platform || 'non-windows' }}
+      json_report: true
 
   publish:
     if: inputs.platform == '' || inputs.platform == 'all'
@@ -606,42 +610,270 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       issues: write
+      actions: read
 
     steps:
-      - name: Create or update failure issue
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Download failure reports
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p failure-reports
+          ARTIFACTS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            --jq '[.artifacts[] | select(.name | startswith("failure-report-"))] | length')
+          echo "Found ${ARTIFACTS} failure-report artifact(s)"
+
+          if [ "$ARTIFACTS" -eq 0 ]; then
+            echo "No failure reports to process"
+            echo '[]' > failure-reports/all-failures.json
+            exit 0
+          fi
+
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.name | startswith("failure-report-")) | "\(.id)\t\(.name)"' \
+            | while IFS=$'\t' read -r id name; do
+              echo "Downloading artifact ${id} (${name})..."
+              mkdir -p "failure-reports/${name}"
+              gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/${id}/zip" > "failure-reports/${name}.zip"
+              unzip -o "failure-reports/${name}.zip" -d "failure-reports/${name}/"
+            done
+
+      - name: Process failures and manage issues
         uses: actions/github-script@v8
         with:
           script: |
-            const title = `[Nightly] Tests failed on ${new Date().toISOString().split('T')[0]}`;
-            const label = 'nightly-failure';
-            const body = [
-              `The nightly test suite failed.`,
-              ``,
-              `**Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-              `**Date:** ${new Date().toISOString()}`,
-            ].join('\n');
+            const fs = require('node:fs');
+            const path = require('node:path');
 
-            const { data: issues } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: label,
-              state: 'open',
-              per_page: 1,
-            });
+            const workspace = process.env.GITHUB_WORKSPACE;
+            const mod = await import(path.join(workspace, 'scripts/ci/process-nightly-issues.mjs'));
 
-            if (issues.length > 0) {
+            // Collect all failure reports from downloaded artifacts
+            const reportsDir = path.join(workspace, 'failure-reports');
+            const allFailures = [];
+
+            if (fs.existsSync(reportsDir)) {
+              const entries = fs.readdirSync(reportsDir, { withFileTypes: true });
+              for (const entry of entries) {
+                if (!entry.isDirectory()) continue;
+                const reportPath = path.join(reportsDir, entry.name, 'failure-report.json');
+                if (!fs.existsSync(reportPath)) continue;
+
+                // Parse OS from artifact name: failure-report-{suite}-{osName}-s{shard}of{total}
+                const parts = entry.name.split('-');
+                const osName = parts.slice(3).join('-').replace(/-s\d+of\d+$/, '');
+
+                try {
+                  const content = fs.readFileSync(reportPath, 'utf8');
+                  const reports = JSON.parse(content);
+                  for (const r of reports) {
+                    allFailures.push({ ...r, os: osName });
+                  }
+                } catch (err) {
+                  console.error(`Failed to read ${reportPath}: ${err.message}`);
+                }
+              }
+            }
+
+            console.log(`Collected ${allFailures.length} failure(s) from artifacts`);
+
+            if (allFailures.length === 0) {
+              console.log('No test failures to process');
+              return;
+            }
+
+            const deduped = mod.deduplicateReports(allFailures);
+            const today = new Date().toISOString().split('T')[0];
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const runId = context.runId;
+
+            // Fetch all open nightly-failure issues
+            const openIssues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: 'nightly-failure',
+                state: 'open',
+                per_page: 100,
+              }
+            );
+
+            console.log(`Fetched ${openIssues.length} open nightly-failure issues`);
+
+            // Parse metadata from each issue
+            const parsedIssues = openIssues.map((issue) => ({
+              number: issue.number,
+              title: issue.title,
+              body: issue.body,
+              labels: issue.labels.map((l) => l.name),
+              metadata: mod.parseMetadata(issue.body),
+            }));
+
+            // Process each unique failure signature
+            let created = 0;
+            let updated = 0;
+
+            for (const report of deduped) {
+              const existing = mod.findIssueBySignature(parsedIssues, report.signature);
+              const metadata = mod.nextMetadata(existing?.metadata ?? null, report, runId, runUrl, today);
+              const title = mod.buildIssueTitle(report);
+              const body = mod.buildIssueBody(report, metadata, runUrl);
+              const labels = mod.labelsForIssue(report);
+              const escalateLabels = mod.labelsForEscalation(metadata);
+
+              if (existing) {
+                const updateLabels = [...new Set([...existing.labels, ...labels, ...escalateLabels])];
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existing.number,
+                  title,
+                  body,
+                  labels: updateLabels,
+                });
+
+                if (escalateLabels.length > 0 && !existing.labels.includes('human-review')) {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: existing.number,
+                    body: mod.buildEscalationComment(),
+                  });
+                }
+
+                updated++;
+              } else {
+                await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title,
+                  body,
+                  labels: [...labels, ...escalateLabels],
+                });
+                created++;
+              }
+            }
+
+            console.log(`Created ${created} new issue(s), updated ${updated} existing issue(s)`);
+
+            // Stale sweep: close issues whose last_seen is >14 days ago
+            let staleClosed = 0;
+            for (const issue of parsedIssues) {
+              if (!issue.metadata) continue;
+              if (issue.labels.includes('human-review')) continue;
+              if (!mod.shouldStaleClose(issue.metadata, today)) continue;
+
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'not_planned',
+              });
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: issues[0].number,
-                body: body,
+                issue_number: issue.number,
+                body: 'Auto-closed: this failure has not been seen in over 14 days. If it recurs, a new issue will be created.',
               });
-            } else {
-              await github.rest.issues.create({
+              staleClosed++;
+            }
+
+            if (staleClosed > 0) {
+              console.log(`Stale-closed ${staleClosed} issue(s)`);
+            }
+
+  notify-success:
+    if: success() && github.event_name == 'schedule'
+    needs:
+      [
+        check,
+        test,
+        build,
+        integration-test,
+        knip,
+        e2e-core,
+        e2e-full,
+        e2e-online,
+        e2e-nightly,
+        publish,
+      ]
+    runs-on: ubuntu-22.04
+    permissions:
+      issues: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Close resolved failure issues
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const path = require('node:path');
+            const mod = await import(path.join(process.env.GITHUB_WORKSPACE, 'scripts/ci/process-nightly-issues.mjs'));
+
+            const today = new Date().toISOString().split('T')[0];
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const openIssues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                title,
-                body,
-                labels: [label],
-              });
+                labels: 'nightly-failure',
+                state: 'open',
+                per_page: 100,
+              }
+            );
+
+            console.log(`Found ${openIssues.length} open nightly-failure issues`);
+
+            let recovered = 0;
+            let staleClosed = 0;
+
+            for (const issue of openIssues) {
+              const meta = mod.parseMetadata(issue.body);
+              if (!meta) continue;
+
+              const hasHumanReview = issue.labels.some((l) => l.name === 'human-review');
+              if (hasHumanReview) continue;
+
+              if (mod.shouldCloseOnGreen(meta, today)) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: mod.buildRecoveredComment(runUrl),
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'closed',
+                  state_reason: 'completed',
+                });
+                recovered++;
+              } else if (mod.shouldStaleClose(meta, today)) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: 'Auto-closed: this failure has not been seen in over 14 days. If it recurs, a new issue will be created.',
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'closed',
+                  state_reason: 'not_planned',
+                });
+                staleClosed++;
+              }
             }
+
+            console.log(`Recovered (green close): ${recovered}, Stale-closed: ${staleClosed}`);
