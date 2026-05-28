@@ -134,7 +134,7 @@ import type {
 type SpawnResultPayload = SpawnResult;
 import type { PortalNewTabMenuAction } from "../shared/types/portal.js";
 import type { ResourceProfilePayload } from "../shared/types/resourceProfile.js";
-import type { PluginActionDescriptor } from "../shared/types/plugin.js";
+import type { PluginActionDescriptor, MenuItemContribution } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
 import type { ToolbarButtonConfig } from "../shared/config/toolbarButtonRegistry.js";
 
@@ -2475,6 +2475,12 @@ const api: ElectronAPI = {
     onToolbarButtonsChanged: (
       callback: (payload: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void
     ) => _eventBusOn("plugin:toolbar-buttons-changed", callback),
+    onMenuItemsChanged: (
+      callback: (payload: {
+        items: Array<{ pluginId: string; item: MenuItemContribution }>;
+        complete: boolean;
+      }) => void
+    ) => _eventBusOn("plugin:menu-items-changed", callback),
     onDecorationsChanged: (callback: (payload: { scope: string; paths?: string[] }) => void) =>
       _eventBusOn("plugin:decorations-changed", callback),
   },

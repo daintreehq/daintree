@@ -86,6 +86,29 @@ export async function initPerWindowServices(
     },
   });
 
+  // Native View/Help menus include plugin-contributed menu items via
+  // `getPluginMenuItems()` at build time, but `createApplicationMenu` ran above
+  // before any plugin's `activate()` had finished — so its first menu would
+  // show none of them. Lazy-import `pluginService` to avoid the cyclic edge
+  // (`PluginService` depends on services that may eventually reach window
+  // code), then await init and rebuild once. Dynamic plugin load/unload does
+  // not refresh the native menu — accepted limitation; the in-app renderer
+  // hook is the dynamic surface.
+  registerDeferredTask({
+    name: `plugin-menu-rebuild:${win.id}`,
+    run: async () => {
+      try {
+        const { pluginService } = await import("../services/PluginService.js");
+        await pluginService.waitForInit();
+        if (!win.isDestroyed()) {
+          createApplicationMenu(win, cliService);
+        }
+      } catch (err) {
+        console.error("[MAIN] Plugin menu rebuild failed:", err);
+      }
+    },
+  });
+
   // Arm the drain trigger immediately. All tasks for this window are now
   // registered; any subsequent `await` in setupWindowServices could hang
   // (PTY host, workspace loadProject, plugin init) and must not block the

@@ -65,6 +65,10 @@ async function handleToolbarButtons(): Promise<ToolbarButtonConfig[]> {
 }
 
 async function handleMenuItems() {
+  // Same init-race guard as `handleToolbarButtons` — block until startup
+  // activation settles so the renderer's mount-time pull can't observe an
+  // empty registry before plugins finish registering (#9285).
+  await pluginService.waitForInit();
   return getPluginMenuItems();
 }
 

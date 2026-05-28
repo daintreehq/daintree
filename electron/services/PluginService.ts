@@ -62,7 +62,11 @@ import {
   unregisterPluginToolbarButtons,
   getAllPluginToolbarButtonConfigs,
 } from "../../shared/config/toolbarButtonRegistry.js";
-import { registerPluginMenuItem, unregisterPluginMenuItems } from "./pluginMenuRegistry.js";
+import {
+  registerPluginMenuItem,
+  unregisterPluginMenuItems,
+  getPluginMenuItems,
+} from "./pluginMenuRegistry.js";
 import {
   registerPluginKeybinding,
   unregisterPluginKeybindings,
@@ -460,6 +464,14 @@ export class PluginService {
    * partial/growing snapshot (concurrent load + deferred init) and must not.
    */
   private toolbarButtonsBroadcastComplete = false;
+  /**
+   * Same coalescing rationale as {@link toolbarButtonsBroadcastPending}. Menu
+   * items are mutated only from `loadPlugin()` / `unloadPlugin()`, so the two
+   * call sites invoke {@link scheduleMenuItemsBroadcast} directly.
+   */
+  private menuItemsBroadcastPending = false;
+  /** Mirrors {@link toolbarButtonsBroadcastComplete} for menu items. */
+  private menuItemsBroadcastComplete = false;
   private disposed = false;
   private readonly disposeRegistrySubscriptions: () => void;
   /**
@@ -901,6 +913,9 @@ export class PluginService {
     for (const menuItem of manifest.contributes.menuItems) {
       trackPluginExpression(manifest.name, menuItem.when);
       registerPluginMenuItem(manifest.name, menuItem);
+    }
+    if (manifest.contributes.menuItems.length > 0) {
+      this.scheduleMenuItemsBroadcast(false);
     }
 
     for (const keybinding of manifest.contributes.keybindings) {
@@ -2305,6 +2320,9 @@ export class PluginService {
       this.unregisterPluginActions(pluginId)
     );
     runUnloadStep(pluginId, "unregisterPluginMenuItems", () => unregisterPluginMenuItems(pluginId));
+    runUnloadStep(pluginId, "scheduleMenuItemsBroadcast", () =>
+      this.scheduleMenuItemsBroadcast(true)
+    );
     runUnloadStep(pluginId, "unregisterPluginKeybindings", () =>
       unregisterPluginKeybindings(pluginId)
     );
@@ -2769,6 +2787,31 @@ export class PluginService {
   }
 
   /**
+   * Same shape as {@link scheduleToolbarButtonsBroadcast}; see that method for
+   * the coalescing and `complete`-OR-accumulation rationale.
+   */
+  private scheduleMenuItemsBroadcast(complete: boolean): void {
+    if (this.disposed) return;
+    if (complete) this.menuItemsBroadcastComplete = true;
+    if (this.menuItemsBroadcastPending) return;
+    this.menuItemsBroadcastPending = true;
+    queueMicrotask(() => {
+      this.menuItemsBroadcastPending = false;
+      const drained = this.menuItemsBroadcastComplete;
+      this.menuItemsBroadcastComplete = false;
+      if (this.disposed) return;
+      this.broadcastPluginMenuItems(drained);
+    });
+  }
+
+  private broadcastPluginMenuItems(complete: boolean): void {
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+      name: "plugin:menu-items-changed",
+      payload: { items: getPluginMenuItems(), complete },
+    });
+  }
+
+  /**
    * Replay the current actions / panel-kinds / toolbar-button snapshots to a
    * single target webContents. Used by the cold-start view-ready hook so a
    * freshly-restored WebContentsView (post-LRU eviction or first cold load on
@@ -2798,6 +2841,10 @@ export class PluginService {
       {
         name: "plugin:toolbar-buttons-changed",
         payload: { buttons: getAllPluginToolbarButtonConfigs(), complete: false },
+      },
+      {
+        name: "plugin:menu-items-changed",
+        payload: { items: getPluginMenuItems(), complete: false },
       },
     ];
     for (const event of events) {
