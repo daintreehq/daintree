@@ -33,11 +33,11 @@ function makeSession(
 
 describe("useWorktreeDevServerStateSync", () => {
   let listeners: Listener[];
-  let unsubscribe: ReturnType<typeof vi.fn>;
+  let unsubscribe: () => void;
 
   beforeEach(() => {
     listeners = [];
-    unsubscribe = vi.fn();
+    unsubscribe = vi.fn() as () => void;
     useWorktreeDevServerStore.getState().reset();
     vi.stubGlobal("window", {
       ...window,
@@ -65,7 +65,7 @@ describe("useWorktreeDevServerStateSync", () => {
   it("writes broadcasts with a worktreeId into the store", () => {
     renderHook(() => useWorktreeDevServerStateSync());
     emit({ state: makeSession("w1", "running") });
-    expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1.status).toBe("running");
+    expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1?.status).toBe("running");
   });
 
   it("skips broadcasts that have no worktreeId", () => {

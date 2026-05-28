@@ -37,17 +37,17 @@ describe("worktreeDevServerStore", () => {
     const store = useWorktreeDevServerStore.getState();
     store.setSession("w1", makeSession({ worktreeId: "w1", status: "starting", updatedAt: 100 }));
     store.setSession("w1", makeSession({ worktreeId: "w1", status: "running", updatedAt: 200 }));
-    expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1.status).toBe("running");
+    expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1?.status).toBe("running");
   });
 
   it("rejects a stale write whose updatedAt is older than the stored entry", () => {
     const store = useWorktreeDevServerStore.getState();
     // Live broadcast lands first…
     store.setSession("w1", makeSession({ worktreeId: "w1", status: "running", updatedAt: 200 }));
-    const before = useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1;
+    const before = useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1!;
     // …then a slow getByWorktree hydration resolves with an older snapshot.
     store.setSession("w1", makeSession({ worktreeId: "w1", status: "starting", updatedAt: 100 }));
-    const after = useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1;
+    const after = useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1!;
     expect(after.status).toBe("running");
     // Same object reference — no needless re-render from the dropped write.
     expect(after).toBe(before);
@@ -59,7 +59,7 @@ describe("worktreeDevServerStore", () => {
     // A synchronous spawn failure can flip starting→error within the same ms;
     // the latter transition must not be dropped.
     store.setSession("w1", makeSession({ worktreeId: "w1", status: "error", updatedAt: 100 }));
-    expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1.status).toBe("error");
+    expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1?.status).toBe("error");
   });
 
   it("removeSession deletes the entry", () => {
