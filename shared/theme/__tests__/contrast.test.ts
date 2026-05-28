@@ -284,7 +284,7 @@ describe("getThemeContrastWarnings", () => {
     }
   });
 
-  it("emits no warnings when status-* tokens meet 3.0:1 against surface-panel", () => {
+  it("emits no warnings when status-* tokens meet 3.0:1 against all surfaces", () => {
     // Pure black on white is 21:1 — well above any threshold.
     const scheme = makeScheme({
       "status-success": "#000000" as AppColorSchemeTokens["status-success"],
@@ -292,6 +292,13 @@ describe("getThemeContrastWarnings", () => {
       "status-danger": "#000000" as AppColorSchemeTokens["status-danger"],
       "status-info": "#000000" as AppColorSchemeTokens["status-info"],
       "surface-panel": "#ffffff" as AppColorSchemeTokens["surface-panel"],
+      "surface-grid": "#ffffff" as AppColorSchemeTokens["surface-grid"],
+      "surface-sidebar": "#ffffff" as AppColorSchemeTokens["surface-sidebar"],
+      "surface-canvas": "#ffffff" as AppColorSchemeTokens["surface-canvas"],
+      "surface-panel-elevated": "#ffffff" as AppColorSchemeTokens["surface-panel-elevated"],
+      "search-highlight-background":
+        "#fffde0" as AppColorSchemeTokens["search-highlight-background"],
+      "search-highlight-text": "#333333" as AppColorSchemeTokens["search-highlight-text"],
     });
     const warnings = getThemeContrastWarnings(scheme);
     // Catch both ratio failures (start with "status-") and unevaluable warnings
@@ -367,6 +374,69 @@ describe("getThemeContrastWarnings", () => {
       expect(
         outlineFailures,
         `${scheme.id}: accent-primary must hit 3:1 against all surfaces`
+      ).toHaveLength(0);
+    }
+  });
+
+  it("emits contrast warning when search-highlight-background rgba is composited over a surface", () => {
+    const scheme = makeScheme({
+      "search-highlight-text": "#cccccc" as AppColorSchemeTokens["search-highlight-text"],
+      "search-highlight-background":
+        "rgba(0,0,0,0.1)" as AppColorSchemeTokens["search-highlight-background"],
+      "surface-grid": "#ffffff" as AppColorSchemeTokens["surface-grid"],
+      "surface-sidebar": "#ffffff" as AppColorSchemeTokens["surface-sidebar"],
+      "surface-canvas": "#ffffff" as AppColorSchemeTokens["surface-canvas"],
+      "surface-panel": "#ffffff" as AppColorSchemeTokens["surface-panel"],
+      "surface-panel-elevated": "#ffffff" as AppColorSchemeTokens["surface-panel-elevated"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const compositedWarnings = warnings.filter(
+      (w) =>
+        w.message.includes("search-highlight-text on search-highlight-background (over") &&
+        w.message.includes("target is 3.0:1")
+    );
+    expect(compositedWarnings.length).toBeGreaterThan(0);
+  });
+
+  it("treats opaque rgba as direct hex check", () => {
+    const scheme = makeScheme({
+      "search-highlight-text": "#999999" as AppColorSchemeTokens["search-highlight-text"],
+      "search-highlight-background":
+        "rgba(136,136,136,1)" as AppColorSchemeTokens["search-highlight-background"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const opaqueWarnings = warnings.filter(
+      (w) =>
+        w.message.includes("search-highlight-text on search-highlight-background") &&
+        !w.message.includes("(over")
+    );
+    expect(opaqueWarnings.length).toBeGreaterThan(0);
+  });
+
+  it("emits unevaluable warning for malformed rgba in a pair", () => {
+    const scheme = makeScheme({
+      "search-highlight-background":
+        "rgba(0,0,0,)" as AppColorSchemeTokens["search-highlight-background"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const unevaluable = warnings.filter(
+      (w) =>
+        w.message.includes("Cannot evaluate contrast") &&
+        w.message.includes("search-highlight-background")
+    );
+    expect(unevaluable.length).toBe(1);
+    expect(unevaluable[0]!.message).toContain("rgba(0,0,0,)");
+  });
+
+  it("produces zero accent-secondary outline warnings across all built-in themes", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      const warnings = getThemeContrastWarnings(scheme);
+      const outlineFailures = warnings.filter((w) =>
+        w.message.includes("accent-secondary outline on")
+      );
+      expect(
+        outlineFailures,
+        `${scheme.id}: accent-secondary must hit 3:1 against all surfaces`
       ).toHaveLength(0);
     }
   });

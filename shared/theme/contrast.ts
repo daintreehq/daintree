@@ -1,5 +1,13 @@
 import type { AppColorScheme, AppThemeValidationWarning, AppThemeTokenKey } from "./types.js";
 
+const DISPLAY_SURFACES: AppThemeTokenKey[] = [
+  "surface-grid",
+  "surface-sidebar",
+  "surface-canvas",
+  "surface-panel",
+  "surface-panel-elevated",
+];
+
 const CONTRAST_PAIRS: Array<{
   foreground: AppThemeTokenKey;
   background: AppThemeTokenKey;
@@ -16,10 +24,27 @@ const CONTRAST_PAIRS: Array<{
   { foreground: "text-secondary", background: "surface-panel", minimum: 3.0 },
   { foreground: "text-secondary", background: "surface-panel-elevated", minimum: 3.0 },
   { foreground: "status-success", background: "surface-panel", minimum: 3.0 },
+  { foreground: "status-success", background: "surface-grid", minimum: 3.0 },
+  { foreground: "status-success", background: "surface-sidebar", minimum: 3.0 },
+  { foreground: "status-success", background: "surface-canvas", minimum: 3.0 },
+  { foreground: "status-success", background: "surface-panel-elevated", minimum: 3.0 },
   { foreground: "status-warning", background: "surface-panel", minimum: 3.0 },
+  { foreground: "status-warning", background: "surface-grid", minimum: 3.0 },
+  { foreground: "status-warning", background: "surface-sidebar", minimum: 3.0 },
+  { foreground: "status-warning", background: "surface-canvas", minimum: 3.0 },
+  { foreground: "status-warning", background: "surface-panel-elevated", minimum: 3.0 },
   { foreground: "status-danger", background: "surface-panel", minimum: 3.0 },
+  { foreground: "status-danger", background: "surface-grid", minimum: 3.0 },
+  { foreground: "status-danger", background: "surface-sidebar", minimum: 3.0 },
+  { foreground: "status-danger", background: "surface-canvas", minimum: 3.0 },
+  { foreground: "status-danger", background: "surface-panel-elevated", minimum: 3.0 },
   { foreground: "status-info", background: "surface-panel", minimum: 3.0 },
+  { foreground: "status-info", background: "surface-grid", minimum: 3.0 },
+  { foreground: "status-info", background: "surface-sidebar", minimum: 3.0 },
+  { foreground: "status-info", background: "surface-canvas", minimum: 3.0 },
+  { foreground: "status-info", background: "surface-panel-elevated", minimum: 3.0 },
   { foreground: "accent-foreground", background: "accent-primary", minimum: 4.5 },
+  { foreground: "search-highlight-text", background: "search-highlight-background", minimum: 3.0 },
   { foreground: "terminal-foreground", background: "terminal-background", minimum: 4.5 },
   { foreground: "terminal-red", background: "terminal-background", minimum: 3.0 },
   { foreground: "terminal-green", background: "terminal-background", minimum: 3.0 },
@@ -48,6 +73,16 @@ export function hexToRgb(hex: string): [number, number, number] {
     parseInt(clean.slice(2, 4), 16),
     parseInt(clean.slice(4, 6), 16),
   ];
+}
+
+function parseRgba(value: string): { hex: string; opacity: number } | null {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)$/);
+  if (!match) return null;
+  return {
+    hex: `#${parseInt(match[1]!, 10).toString(16).padStart(2, "0")}${parseInt(match[2]!, 10).toString(16).padStart(2, "0")}${parseInt(match[3]!, 10).toString(16).padStart(2, "0")}`,
+    opacity: parseFloat(match[4]!),
+  };
 }
 
 function blendOverBackground(fgHex: string, bgHex: string, opacity: number): string {
@@ -98,69 +133,60 @@ export function contrastRatio(foreground: string, background: string): number {
 
 export { isHexColor };
 
-// Surfaces the accent renders against as text/icon tint (`text-accent-primary`).
-// Mirrors the `text-primary` surface set in CONTRAST_PAIRS.
-const ACCENT_SURFACE_BACKGROUNDS: AppThemeTokenKey[] = [
-  "surface-grid",
-  "surface-sidebar",
-  "surface-canvas",
-  "surface-panel",
-  "surface-panel-elevated",
-];
-
-const ACCENT_MIN_CONTRAST = 4.5;
-
-// WCAG 1.4.11 Non-text Contrast: UI components (≥2px outlines, focus indicators)
-// must hit 3:1 against the adjacent surface they're drawn over.
-const ACCENT_OUTLINE_MIN_CONTRAST = 3.0;
-
-/**
- * Returns true when the scheme's accent fails WCAG AA 4.5:1 either as button-label
- * text (`accent-foreground` over `accent-primary`) or as accent-tinted text on any
- * of the main theme surfaces (`accent-primary` over `surface-*`). Pass the scheme
- * already patched with the override via `applyAccentOverrideToScheme`. Non-hex token
- * values are skipped rather than flagged — they cannot be evaluated numerically.
- */
-export function accentOverrideHasLowContrast(scheme: AppColorScheme): boolean {
-  const accent = scheme.tokens["accent-primary"];
-  if (!isHexColor(accent)) return false;
-
-  const accentForeground = scheme.tokens["accent-foreground"];
-  if (
-    isHexColor(accentForeground) &&
-    contrastRatio(accentForeground, accent) < ACCENT_MIN_CONTRAST
-  ) {
-    return true;
-  }
-
-  return ACCENT_SURFACE_BACKGROUNDS.some((key) => {
-    const background = scheme.tokens[key];
-    return isHexColor(background) && contrastRatio(accent, background) < ACCENT_MIN_CONTRAST;
-  });
-}
-
 export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
   const warnings: AppThemeValidationWarning[] = [];
 
   for (const pair of CONTRAST_PAIRS) {
     const fg = scheme.tokens[pair.foreground];
     const bg = scheme.tokens[pair.background];
-    const fgHex = isHexColor(fg);
-    const bgHex = isHexColor(bg);
-    if (!fgHex || !bgHex) {
-      const unevaluable: string[] = [];
-      if (!fgHex) unevaluable.push(`${pair.foreground}="${fg}"`);
-      if (!bgHex) unevaluable.push(`${pair.background}="${bg}"`);
+    if (!isHexColor(fg)) {
       warnings.push({
-        message: `Cannot evaluate contrast for ${pair.foreground} on ${pair.background}: non-hex token value(s) ${unevaluable.join(", ")}`,
+        message: `Cannot evaluate contrast for ${pair.foreground} on ${pair.background}: non-hex foreground "${fg}"`,
       });
       continue;
     }
-    const ratio = contrastRatio(fg, bg);
-    if (ratio < pair.minimum) {
-      warnings.push({
-        message: `${pair.foreground} on ${pair.background} is ${ratio.toFixed(2)}:1; target is ${pair.minimum.toFixed(1)}:1`,
-      });
+    if (isHexColor(bg)) {
+      const ratio = contrastRatio(fg, bg);
+      if (ratio < pair.minimum) {
+        warnings.push({
+          message: `${pair.foreground} on ${pair.background} is ${ratio.toFixed(2)}:1; target is ${pair.minimum.toFixed(1)}:1`,
+        });
+      }
+    } else {
+      const rgba = parseRgba(bg);
+      if (rgba) {
+        if (rgba.opacity >= 1) {
+          const ratio = contrastRatio(fg, rgba.hex);
+          if (ratio < pair.minimum) {
+            warnings.push({
+              message: `${pair.foreground} on ${pair.background} is ${ratio.toFixed(2)}:1; target is ${pair.minimum.toFixed(1)}:1`,
+            });
+          }
+        } else {
+          let anySurfaceEvaluable = false;
+          for (const surfaceKey of DISPLAY_SURFACES) {
+            const surface = scheme.tokens[surfaceKey];
+            if (!isHexColor(surface)) continue;
+            anySurfaceEvaluable = true;
+            const compositedBg = blendOverBackground(rgba.hex, surface, rgba.opacity);
+            const ratio = contrastRatio(fg, compositedBg);
+            if (ratio < pair.minimum) {
+              warnings.push({
+                message: `${pair.foreground} on ${pair.background} (over ${surfaceKey}) is ${ratio.toFixed(2)}:1; target is ${pair.minimum.toFixed(1)}:1`,
+              });
+            }
+          }
+          if (!anySurfaceEvaluable) {
+            warnings.push({
+              message: `Cannot evaluate contrast for ${pair.foreground} on ${pair.background}: ${pair.background}="${bg}" requires compositing over a surface but no evaluable surface found`,
+            });
+          }
+        }
+      } else {
+        warnings.push({
+          message: `Cannot evaluate contrast for ${pair.foreground} on ${pair.background}: non-hex background "${bg}"`,
+        });
+      }
     }
   }
 
@@ -180,18 +206,9 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
     }
   }
 
-  // Focus-ring visibility: `accent-primary` is the canonical focus-ring color, so it
-  // must hit WCAG 1.4.11 (3:1) against every surface it can land on. A separate loop
-  // (rather than rows in CONTRAST_PAIRS) keeps the message text distinguishable from
-  // the 4.5:1 text-on-accent check and the `accentOverrideHasLowContrast` semantics.
-  //
-  // Note: this checks the opaque accent. Many focus rings in the codebase use
-  // partial opacity (`ring-daintree-accent/40` etc.), where the rendered contrast
-  // is meaningfully lower than the value reported here. Opacity composition is
-  // out of scope for this token-level check.
   const accent = scheme.tokens["accent-primary"];
   const accentHex = isHexColor(accent);
-  for (const surfaceKey of ACCENT_SURFACE_BACKGROUNDS) {
+  for (const surfaceKey of DISPLAY_SURFACES) {
     const surface = scheme.tokens[surfaceKey];
     const surfaceHex = isHexColor(surface);
     if (!accentHex || !surfaceHex) {
@@ -211,5 +228,48 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
     }
   }
 
+  const accentSecondary = scheme.tokens["accent-secondary"];
+  const accentSecondaryHex = isHexColor(accentSecondary);
+  for (const surfaceKey of DISPLAY_SURFACES) {
+    const surface = scheme.tokens[surfaceKey];
+    const surfaceHex = isHexColor(surface);
+    if (!accentSecondaryHex || !surfaceHex) {
+      const unevaluable: string[] = [];
+      if (!accentSecondaryHex) unevaluable.push(`accent-secondary="${accentSecondary}"`);
+      if (!surfaceHex) unevaluable.push(`${surfaceKey}="${surface}"`);
+      warnings.push({
+        message: `Cannot evaluate accent-secondary outline contrast on ${surfaceKey}: non-hex token value(s) ${unevaluable.join(", ")}`,
+      });
+      continue;
+    }
+    const ratio = contrastRatio(accentSecondary, surface);
+    if (ratio < ACCENT_OUTLINE_MIN_CONTRAST) {
+      warnings.push({
+        message: `accent-secondary outline on ${surfaceKey} is ${ratio.toFixed(2)}:1; target is ${ACCENT_OUTLINE_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
+      });
+    }
+  }
+
   return warnings;
+}
+
+const ACCENT_MIN_CONTRAST = 4.5;
+const ACCENT_OUTLINE_MIN_CONTRAST = 3.0;
+
+export function accentOverrideHasLowContrast(scheme: AppColorScheme): boolean {
+  const accent = scheme.tokens["accent-primary"];
+  if (!isHexColor(accent)) return false;
+
+  const accentForeground = scheme.tokens["accent-foreground"];
+  if (
+    isHexColor(accentForeground) &&
+    contrastRatio(accentForeground, accent) < ACCENT_MIN_CONTRAST
+  ) {
+    return true;
+  }
+
+  return DISPLAY_SURFACES.some((key) => {
+    const background = scheme.tokens[key];
+    return isHexColor(background) && contrastRatio(accent, background) < ACCENT_MIN_CONTRAST;
+  });
 }
