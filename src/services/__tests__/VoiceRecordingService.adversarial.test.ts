@@ -681,6 +681,54 @@ describe("VoiceRecordingService adversarial", () => {
     }
   });
 
+  it("PAUSE_IGNORES_BACKEND_RECORDING_STATUS", async () => {
+    runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+    runtime.voiceState.status = "recording";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+    runtime.voiceFns.setStatus.mockClear();
+
+    voiceRecordingService.pause();
+    expect(runtime.voiceFns.setStatus).toHaveBeenCalledWith("paused");
+    runtime.voiceFns.setStatus.mockClear();
+
+    // Backend re-emits "recording" or "reconnecting" while the renderer is
+    // locally paused — these must NOT overwrite the local pause state, or the
+    // worklet stays gated, the timer stays frozen, and togglePause routes to
+    // pause() again instead of resume().
+    emitStatus("recording");
+    expect(runtime.voiceFns.setStatus).not.toHaveBeenCalled();
+    emitStatus("reconnecting");
+    expect(runtime.voiceFns.setStatus).not.toHaveBeenCalled();
+
+    // Genuine teardown signals still flow through.
+    emitStatus("error");
+    expect(runtime.voiceFns.setStatus).toHaveBeenCalledWith("error");
+  });
+
+  it("DESTROY_WHILE_PAUSED_CLEARS_AUTO_STOP", async () => {
+    vi.useFakeTimers();
+    try {
+      runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+      runtime.voiceState.status = "recording";
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      voiceRecordingService.initialize();
+      const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+      voiceRecordingService.pause();
+      voiceRecordingService.destroy();
+
+      // The HMR-style destroy path must clear the 60s timer; if it doesn't, the
+      // orphaned callback can fire against the next singleton's session state.
+      vi.advanceTimersByTime(120_000);
+      expect(stopSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("STOP_DURING_PAUSE_CLEARS_AUTO_STOP_TIMER", async () => {
     vi.useFakeTimers();
     try {

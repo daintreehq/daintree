@@ -54,6 +54,7 @@ export function VoiceRecordingToolbarButton({
   const elapsedSeconds = useVoiceRecordingStore((state) => state.elapsedSeconds);
   const audioLevel = useVoiceRecordingStore((state) => state.audioLevel);
   const shortcut = useKeybindingDisplay("voiceInput.toggle");
+  const pauseShortcut = useKeybindingDisplay("voiceInput.togglePause");
   const ariaShortcut = useAriaKeyshortcuts("voiceInput.toggle");
   const hover = useShortcutHintHover("voiceInput.toggle");
   const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
@@ -213,12 +214,19 @@ export function VoiceRecordingToolbarButton({
           : contextLabel
             ? `Recording: ${contextLabel}`
             : "Recording in another panel";
-  const tooltipExtra = [
-    isRecording || isPaused ? formatDuration(elapsedSeconds) : null,
-    shortcut ? `Press ${shortcut} to stop` : "Click to jump to panel",
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const tooltipExtra = (() => {
+    const parts: Array<string | null> = [];
+    if (isRecording || isPaused) parts.push(formatDuration(elapsedSeconds));
+    if (isPaused) {
+      // The toggle shortcut would start a new session when focused elsewhere;
+      // the pause shortcut is the resume affordance the user actually wants.
+      if (pauseShortcut) parts.push(`Press ${pauseShortcut} to resume`);
+      else parts.push("Click to jump to panel");
+    } else {
+      parts.push(shortcut ? `Press ${shortcut} to stop` : "Click to jump to panel");
+    }
+    return parts.filter(Boolean).join(" · ");
+  })();
 
   return (
     <ContextMenu>

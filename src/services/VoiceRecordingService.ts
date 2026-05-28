@@ -207,6 +207,17 @@ class VoiceRecordingService {
         });
         if (status !== "idle") {
           const prevStatus = useVoiceRecordingStore.getState().status;
+          // Local "paused" is a renderer-only override that gates worklet PCM
+          // emission. The backend doesn't know about it and will continue to
+          // emit "recording" / "reconnecting" on its own schedule. Letting those
+          // overwrite the store would silently exit pause: the worklet stays
+          // gated, the elapsed timer stays frozen, and togglePause() routes to
+          // pause() again instead of resume(). Genuine teardown signals
+          // ("error") still flow through; "idle" is handled below.
+          const isBenignBackendTick = status === "recording" || status === "reconnecting";
+          if (prevStatus === "paused" && isBenignBackendTick) {
+            return;
+          }
           useVoiceRecordingStore.getState().setStatus(status);
           // Announce the reconnect once on entry — the backend re-emits
           // "reconnecting" on every retry, so guard against repeat announcements.
@@ -1137,6 +1148,10 @@ class VoiceRecordingService {
 
   destroy(): void {
     this.startRequestId++;
+    // Vite HMR disposes and re-evaluates this module; the old singleton's
+    // timers must be cleared or they fire against the new singleton's state.
+    this.clearPauseTimeout();
+    this.clearElapsedTimer();
     for (const unsub of this.unsubscribers) {
       unsub();
     }

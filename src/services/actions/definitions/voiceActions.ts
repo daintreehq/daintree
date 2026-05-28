@@ -32,7 +32,7 @@ export function registerVoiceActions(actions: ActionRegistry): void {
 
   actions.set("voiceInput.togglePause", () => ({
     id: "voiceInput.togglePause",
-    title: "Pause or Resume Voice Dictation",
+    title: "Pause or resume voice dictation",
     description: "Suspend dictation without ending the session, or resume after pausing",
     category: "voice",
     kind: "command",
