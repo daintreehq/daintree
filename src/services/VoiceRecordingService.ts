@@ -55,6 +55,13 @@ class VoiceRecordingService {
   private sessionPeakRms = 0;
   private sessionRmsSum = 0;
   private sessionChunkCount = 0;
+  // Pause-state tracking. The worklet suppresses PCM emission while paused, the
+  // elapsed counter freezes, and a 60s auto-stop terminates the session if the
+  // user never resumes — prevents idle Realtime keep-alive charges.
+  private pauseStartedAt = 0;
+  private totalPausedMs = 0;
+  private pauseTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private static readonly PAUSE_AUTO_STOP_MS = 60_000;
 
   initialize(): void {
     if (this.initialized) return;
@@ -273,6 +280,7 @@ class VoiceRecordingService {
       if (
         state.status !== "connecting" &&
         state.status !== "recording" &&
+        state.status !== "paused" &&
         state.status !== "reconnecting"
       )
         return;
@@ -476,6 +484,9 @@ class VoiceRecordingService {
 
     const generation = ++this.generation;
     logDebug(`${LOG_PREFIX} Beginning session`, { generation });
+    this.pauseStartedAt = 0;
+    this.totalPausedMs = 0;
+    this.clearPauseTimeout();
     useVoiceRecordingStore.getState().beginSession(target);
 
     this.stream = stream;
@@ -1020,12 +1031,15 @@ class VoiceRecordingService {
 
   private startElapsedTimer(): void {
     this.clearElapsedTimer();
-    useVoiceRecordingStore.getState().setElapsedSeconds(0);
+    useVoiceRecordingStore.getState().setElapsedSeconds(this.computeElapsedSeconds());
     this.elapsedTimer = setInterval(() => {
-      useVoiceRecordingStore
-        .getState()
-        .setElapsedSeconds(Math.floor((Date.now() - this.sessionStartedAt) / 1000));
+      useVoiceRecordingStore.getState().setElapsedSeconds(this.computeElapsedSeconds());
     }, 1000);
+  }
+
+  private computeElapsedSeconds(): number {
+    const wallMs = Date.now() - this.sessionStartedAt;
+    return Math.max(0, Math.floor((wallMs - this.totalPausedMs) / 1000));
   }
 
   private clearElapsedTimer(): void {
@@ -1034,9 +1048,91 @@ class VoiceRecordingService {
     this.elapsedTimer = null;
   }
 
+  private clearPauseTimeout(): void {
+    if (this.pauseTimeoutId === null) return;
+    clearTimeout(this.pauseTimeoutId);
+    this.pauseTimeoutId = null;
+  }
+
   private clearTimers(): void {
     this.clearElapsedTimer();
+    this.clearPauseTimeout();
     useVoiceRecordingStore.getState().setElapsedSeconds(0);
+  }
+
+  /**
+   * Suspend audio capture without tearing down the OpenAI Realtime session.
+   * The PCM worklet stops forwarding chunks, the elapsed counter freezes, and
+   * a 60-second auto-stop timer prevents the session from idling forever.
+   * No-op unless the current status is "recording" — paused-on-paused, resume
+   * on idle, and pause during connect/reconnect/finish are all ignored.
+   */
+  pause(): void {
+    this.initialize();
+    const state = useVoiceRecordingStore.getState();
+    if (state.status !== "recording") {
+      logDebug(`${LOG_PREFIX} pause() ignored`, { status: state.status });
+      return;
+    }
+    logDebug(`${LOG_PREFIX} Pausing dictation`);
+    this.workletNode?.port.postMessage({ type: "setPaused", value: true });
+    this.pauseStartedAt = Date.now();
+    this.clearElapsedTimer();
+    state.setStatus("paused");
+    state.announce("Dictation paused.");
+    this.clearPauseTimeout();
+    this.pauseTimeoutId = setTimeout(() => {
+      this.pauseTimeoutId = null;
+      // Re-read status inside the callback — the session may have ended,
+      // been resumed, or even restarted on another panel between pause and
+      // timeout (#5087 pattern: never close over store state in timers).
+      const current = useVoiceRecordingStore.getState();
+      if (current.status !== "paused") return;
+      logInfo(`${LOG_PREFIX} Auto-stopping after 60s pause`);
+      void this.stop("Dictation stopped after 60-second pause.", {
+        preserveLiveText: true,
+      });
+    }, VoiceRecordingService.PAUSE_AUTO_STOP_MS);
+  }
+
+  /**
+   * Resume audio capture after a pause. Re-enables the worklet PCM pipeline,
+   * accumulates the paused duration into the elapsed-time offset so the
+   * displayed counter reflects only speaking time, and clears the auto-stop
+   * timer. No-op unless the current status is "paused".
+   */
+  resume(): void {
+    this.initialize();
+    const state = useVoiceRecordingStore.getState();
+    if (state.status !== "paused") {
+      logDebug(`${LOG_PREFIX} resume() ignored`, { status: state.status });
+      return;
+    }
+    logDebug(`${LOG_PREFIX} Resuming dictation`);
+    this.clearPauseTimeout();
+    if (this.pauseStartedAt > 0) {
+      this.totalPausedMs += Date.now() - this.pauseStartedAt;
+      this.pauseStartedAt = 0;
+    }
+    this.workletNode?.port.postMessage({ type: "setPaused", value: false });
+    state.setStatus("recording");
+    state.announce("Dictation resumed.");
+    this.startElapsedTimer();
+  }
+
+  /**
+   * Toggle between recording and paused. No-op when no session is active or
+   * the session is in a transitional phase (connecting, reconnecting, finishing).
+   */
+  togglePause(): void {
+    const status = useVoiceRecordingStore.getState().status;
+    if (status === "recording") {
+      this.pause();
+    } else if (status === "paused") {
+      this.resume();
+    } else {
+      logDebug(`${LOG_PREFIX} togglePause() ignored`, { status });
+    }
   }
 
   destroy(): void {

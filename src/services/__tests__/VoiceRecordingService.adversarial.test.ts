@@ -131,7 +131,10 @@ const runtime = vi.hoisted(() => ({
     audioWorklet: { addModule: ReturnType<typeof vi.fn> };
   }>,
   createdWorkletNodes: [] as Array<{
-    port: { onmessage: ((event: MessageEvent<ArrayBuffer>) => void) | null };
+    port: {
+      onmessage: ((event: MessageEvent<ArrayBuffer>) => void) | null;
+      postMessage: ReturnType<typeof vi.fn>;
+    };
     disconnect: ReturnType<typeof vi.fn>;
   }>,
   voiceInput: {
@@ -431,7 +434,10 @@ function setupGlobals(): void {
 
   vi.stubGlobal("AudioWorkletNode", function () {
     const node = {
-      port: { onmessage: null as ((event: MessageEvent<ArrayBuffer>) => void) | null },
+      port: {
+        onmessage: null as ((event: MessageEvent<ArrayBuffer>) => void) | null,
+        postMessage: vi.fn(),
+      },
       connect: vi.fn(),
       disconnect: vi.fn(),
     };
@@ -598,5 +604,108 @@ describe("VoiceRecordingService adversarial", () => {
     expect(runtime.voiceFns.finishSession).toHaveBeenCalledTimes(1);
     expect(runtime.voiceFns.announce).toHaveBeenCalledTimes(1);
     expect(runtime.voiceFns.setError).not.toHaveBeenCalled();
+  });
+
+  it("PAUSE_AUTO_STOPS_AFTER_60S_WHEN_NOT_RESUMED", async () => {
+    vi.useFakeTimers();
+    try {
+      runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+      runtime.voiceState.status = "recording";
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      voiceRecordingService.initialize();
+      const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+      voiceRecordingService.pause();
+      expect(runtime.voiceFns.setStatus).toHaveBeenCalledWith("paused");
+
+      // Just before 60s: nothing happens.
+      vi.advanceTimersByTime(59_999);
+      expect(stopSpy).not.toHaveBeenCalled();
+
+      // At 60s the auto-stop fires and full teardown is requested.
+      vi.advanceTimersByTime(1);
+      expect(stopSpy).toHaveBeenCalledWith(
+        expect.stringContaining("60-second"),
+        expect.objectContaining({ preserveLiveText: true })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("RESUME_BEFORE_60S_CANCELS_AUTO_STOP", async () => {
+    vi.useFakeTimers();
+    try {
+      runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+      runtime.voiceState.status = "recording";
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      voiceRecordingService.initialize();
+      const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+      voiceRecordingService.pause();
+      vi.advanceTimersByTime(30_000);
+      voiceRecordingService.resume();
+
+      // Long past the original 60s mark: no auto-stop because resume cancelled it.
+      vi.advanceTimersByTime(60_000);
+      expect(stopSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("AUTO_STOP_CALLBACK_REREADS_STATE_NOT_STALE_CLOSURE", async () => {
+    vi.useFakeTimers();
+    try {
+      runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+      runtime.voiceState.status = "recording";
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      voiceRecordingService.initialize();
+      const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+      voiceRecordingService.pause();
+      expect(runtime.voiceState.status).toBe("paused");
+
+      // External transition before the timeout fires — e.g. session torn down by
+      // an error or a manual stop on a different code path. The callback must
+      // re-read state and bail out rather than calling stop() on a dead session.
+      runtime.voiceState.status = "idle";
+
+      vi.advanceTimersByTime(60_000);
+      expect(stopSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("STOP_DURING_PAUSE_CLEARS_AUTO_STOP_TIMER", async () => {
+    vi.useFakeTimers();
+    try {
+      runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+      runtime.voiceState.status = "recording";
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      voiceRecordingService.initialize();
+
+      voiceRecordingService.pause();
+      // Manual stop fires before the auto-stop deadline; let the user-driven
+      // teardown complete on the microtask queue under fake timers.
+      const stopPromise = voiceRecordingService.stop("Dictation stopped.", {
+        skipRemoteStop: true,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await stopPromise;
+      runtime.voiceFns.finishSession.mockClear();
+
+      // Advance well past the 60s mark — the timer must have been cleared, so
+      // no spurious second teardown happens.
+      vi.advanceTimersByTime(120_000);
+      expect(runtime.voiceFns.finishSession).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

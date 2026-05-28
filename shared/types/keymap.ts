@@ -189,6 +189,7 @@ export type BuiltInKeyAction =
   // Voice input
   | "voiceInput.toggle"
   | "voiceInput.toggleAssistant"
+  | "voiceInput.togglePause"
 
   // Layout undo/redo
   | "layout.undo"
@@ -358,6 +359,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "app.theme.pick",
   "voiceInput.toggle",
   "voiceInput.toggleAssistant",
+  "voiceInput.togglePause",
   "layout.undo",
   "layout.redo",
   "app.newWindow",

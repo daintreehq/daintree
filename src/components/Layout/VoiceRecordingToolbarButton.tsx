@@ -62,8 +62,10 @@ export function VoiceRecordingToolbarButton({
   const isRecording = status === "recording";
   const isReconnecting = status === "reconnecting";
   const isFinishing = status === "finishing";
+  const isPaused = status === "paused";
   const isActive =
-    Boolean(activeTarget) && (isConnecting || isRecording || isReconnecting || isFinishing);
+    Boolean(activeTarget) &&
+    (isConnecting || isRecording || isReconnecting || isFinishing || isPaused);
 
   // Doherty gate — under 400ms of "connecting" should never paint the orbit;
   // it would flash before the recording state arrives.
@@ -72,7 +74,8 @@ export function VoiceRecordingToolbarButton({
   // race where status briefly stays "recording"/"finishing" while
   // activeTarget has already been cleared, which would otherwise leave the
   // RAF loop spinning on null refs.
-  const showOrbit = isActive && (isRecording || isReconnecting || isFinishing || showConnecting);
+  const showOrbit =
+    isActive && (isRecording || isReconnecting || isFinishing || isPaused || showConnecting);
 
   // Mutable bridge: audioLevel updates ~60Hz; we read it inside the RAF tick
   // rather than re-rendering on every change. Pattern lifted from
@@ -91,6 +94,34 @@ export function VoiceRecordingToolbarButton({
 
   useEffect(() => {
     if (!showOrbit) return;
+
+    // Paused: freeze the ring at a dim static state. Skip the RAF loop so the
+    // toolbar isn't redrawing 60 times a second while the user is thinking.
+    if (isPaused) {
+      const wrapper = wrapperRef.current;
+      if (wrapper) wrapper.style.transform = `rotate(0deg) translateZ(0)`;
+      const ring = ringRef.current;
+      if (ring) {
+        ring.style.background = [
+          `conic-gradient(from 0deg,`,
+          `transparent 200deg,`,
+          `rgb(from var(--theme-accent-primary) r g b / 0.04) 280deg,`,
+          `rgb(from var(--theme-accent-primary) r g b / 0.12) 340deg,`,
+          `rgb(from var(--theme-accent-primary) r g b / 0.2) 360deg,`,
+          `transparent 360deg)`,
+        ].join(" ");
+      }
+      const core = dotCoreRef.current;
+      if (core) core.style.opacity = "0.35";
+      const halo = dotHaloRef.current;
+      if (halo) {
+        halo.style.boxShadow = "none";
+        halo.style.opacity = "0.2";
+      }
+      const track = trackRef.current;
+      if (track) track.style.opacity = "0.06";
+      return;
+    }
 
     let lastTime = performance.now();
     let angle = 0;
@@ -160,7 +191,7 @@ export function VoiceRecordingToolbarButton({
 
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [showOrbit, isFinishing]);
+  }, [showOrbit, isFinishing, isPaused]);
 
   if (!isActive || !showOrbit) {
     return <VoiceRecordingPlaceholder />;
@@ -175,11 +206,15 @@ export function VoiceRecordingToolbarButton({
       ? "Reconnecting..."
       : isFinishing
         ? "Finishing transcription..."
-        : contextLabel
-          ? `Recording: ${contextLabel}`
-          : "Recording in another panel";
+        : isPaused
+          ? contextLabel
+            ? `Paused: ${contextLabel}`
+            : "Dictation paused"
+          : contextLabel
+            ? `Recording: ${contextLabel}`
+            : "Recording in another panel";
   const tooltipExtra = [
-    isRecording ? formatDuration(elapsedSeconds) : null,
+    isRecording || isPaused ? formatDuration(elapsedSeconds) : null,
     shortcut ? `Press ${shortcut} to stop` : "Click to jump to panel",
   ]
     .filter(Boolean)

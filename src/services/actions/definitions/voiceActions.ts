@@ -29,4 +29,18 @@ export function registerVoiceActions(actions: ActionRegistry): void {
       await voiceRecordingService.toggleAssistant();
     },
   }));
+
+  actions.set("voiceInput.togglePause", () => ({
+    id: "voiceInput.togglePause",
+    title: "Pause or Resume Voice Dictation",
+    description: "Suspend dictation without ending the session, or resume after pausing",
+    category: "voice",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["pause", "resume", "dictate", "mic", "speech"],
+    run: async () => {
+      voiceRecordingService.togglePause();
+    },
+  }));
 }

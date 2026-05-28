@@ -46,10 +46,11 @@ export function VoiceInputButton({
   const isConnecting = activePanelId === panelId && status === "connecting";
   const isReconnecting = activePanelId === panelId && status === "reconnecting";
   const isFinishing = activePanelId === panelId && status === "finishing";
+  const isPaused = activePanelId === panelId && status === "paused";
   const isListening = isRecording || isConnecting || isReconnecting;
-  // Keep orbit visible through finishing for graceful exit
-  const showOrbit = isListening || isFinishing;
-  const isActive = isListening || isFinishing;
+  // Keep orbit visible through finishing and paused for continuity
+  const showOrbit = isListening || isFinishing || isPaused;
+  const isActive = isListening || isFinishing || isPaused;
 
   // Animation refs
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -67,6 +68,39 @@ export function VoiceInputButton({
 
   useEffect(() => {
     if (!showOrbit) return;
+
+    // Paused: freeze the orbit at a dim static state and skip the RAF loop
+    // entirely. Burning CPU on an interpolating loop adds nothing while the
+    // user is composing their next thought.
+    if (isPaused) {
+      const wrapper = wrapperRef.current;
+      if (wrapper) {
+        wrapper.style.transform = `rotate(0deg) scale(${SCALE_MIN}) translateZ(0)`;
+      }
+      const ring = ringRef.current;
+      if (ring) {
+        ring.style.background = [
+          `conic-gradient(from 0deg,`,
+          `transparent 200deg,`,
+          `rgb(from var(--theme-accent-primary) r g b / 0.04) 280deg,`,
+          `rgb(from var(--theme-accent-primary) r g b / 0.12) 340deg,`,
+          `rgb(from var(--theme-accent-primary) r g b / 0.2) 360deg,`,
+          `transparent 360deg)`,
+        ].join(" ");
+      }
+      const core = dotCoreRef.current;
+      if (core) core.style.opacity = "0.35";
+      const halo = dotHaloRef.current;
+      if (halo) {
+        halo.style.boxShadow = "none";
+        halo.style.opacity = "0.2";
+      }
+      const track = trackRef.current;
+      if (track) track.style.opacity = "0.06";
+      const icon = iconRef.current;
+      if (icon) icon.style.transform = "scale(1)";
+      return;
+    }
 
     let lastTime = performance.now();
     let angle = 0;
@@ -153,10 +187,17 @@ export function VoiceInputButton({
 
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [showOrbit, isFinishing]);
+  }, [showOrbit, isFinishing, isPaused]);
 
   const handleClick = useCallback(() => {
     if (disabled && !isActive) return;
+
+    // Paused → resume on click; the affordance reads as a pause/resume toggle
+    // rather than a stop. Escape (handled by the service) is the cancel path.
+    if (isPaused) {
+      voiceRecordingService.togglePause();
+      return;
+    }
 
     void voiceRecordingService.toggle({
       panelId,
@@ -166,7 +207,17 @@ export function VoiceInputButton({
       worktreeId,
       worktreeLabel,
     });
-  }, [disabled, isActive, panelId, panelTitle, projectId, projectName, worktreeId, worktreeLabel]);
+  }, [
+    disabled,
+    isActive,
+    isPaused,
+    panelId,
+    panelTitle,
+    projectId,
+    projectName,
+    worktreeId,
+    worktreeLabel,
+  ]);
 
   if (!isConfigured && !isActive) return null;
 
@@ -247,11 +298,13 @@ export function VoiceInputButton({
               ? (errorMessage ?? "Voice input error")
               : isFinishing
                 ? "Finishing transcription..."
-                : isReconnecting
-                  ? "Reconnecting... Click to stop"
-                  : isListening
-                    ? "Stop recording"
-                    : "Start voice input"
+                : isPaused
+                  ? "Paused — click to resume"
+                  : isReconnecting
+                    ? "Reconnecting... Click to stop"
+                    : isListening
+                      ? "Stop recording"
+                      : "Start voice input"
         }
         className={cn(
           "relative flex items-center justify-center rounded-full transition duration-150",
@@ -269,14 +322,25 @@ export function VoiceInputButton({
         aria-label={
           !isConfigured
             ? "Set up voice input"
-            : isListening
-              ? "Stop voice recording"
-              : "Start voice recording"
+            : isPaused
+              ? "Resume voice recording"
+              : isListening
+                ? "Stop voice recording"
+                : "Start voice recording"
         }
-        aria-pressed={isConfigured ? isListening : undefined}
+        aria-pressed={isConfigured ? isListening || isPaused : undefined}
       >
         {isFinishing && !showOrbit ? (
           <Spinner size="sm" />
+        ) : isPaused ? (
+          <span
+            ref={iconRef}
+            className="flex h-2.5 w-2.5 items-stretch justify-between"
+            aria-hidden="true"
+          >
+            <span className="block w-[2px] rounded-[1px] bg-current opacity-70" />
+            <span className="block w-[2px] rounded-[1px] bg-current opacity-70" />
+          </span>
         ) : showOrbit ? (
           <span
             ref={iconRef}

@@ -264,6 +264,7 @@ export function Toolbar({
       state.activeTarget !== null &&
       (state.status === "connecting" ||
         state.status === "recording" ||
+        state.status === "paused" ||
         state.status === "finishing")
   );
 
