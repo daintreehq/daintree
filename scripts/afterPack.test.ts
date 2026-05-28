@@ -6,6 +6,7 @@ const mockExistsSync = vi.fn();
 const mockReaddirSync = vi.fn();
 const mockMkdirSync = vi.fn();
 const mockCopyFileSync = vi.fn();
+const mockAccessSync = vi.fn();
 const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -32,13 +33,26 @@ describe("afterPack", () => {
     vi.clearAllMocks();
     consoleSpy.mockImplementation(() => {});
     warnSpy.mockImplementation(() => {});
+    // Default: both native modules load cleanly.
+    //   - better-sqlite3: dlopen throws NODE_MODULE_VERSION mismatch (correct Electron ABI)
+    //   - win-job-object: dlopen succeeds and populates assignProcessToHelpJob export
+    //   - posix-pty-reaper: accessSync(X_OK) passes
+    // Individual tests override these for specific scenarios.
+    mockAccessSync.mockImplementation(() => {});
 
-    // Default: simulate Electron-ABI binary (correct) — dlopen throws ABI mismatch
-    process.dlopen = (() => {
+    let dlopenCallCount = 0;
+    process.dlopen = ((moduleObj: { exports: Record<string, unknown> }, filename: string) => {
+      dlopenCallCount += 1;
+      if (filename.includes("win_job_object")) {
+        moduleObj.exports.assignProcessToHelpJob = () => true;
+        return;
+      }
       throw new Error(
         "was compiled against a different Node.js version using NODE_MODULE_VERSION 131"
       );
     }) as typeof process.dlopen;
+    // Silence the unused-variable warning while preserving the counter for future debugging.
+    void dlopenCallCount;
 
     const originalRequire = Module.prototype.require;
 
@@ -49,6 +63,8 @@ describe("afterPack", () => {
           readdirSync: mockReaddirSync,
           mkdirSync: mockMkdirSync,
           copyFileSync: mockCopyFileSync,
+          accessSync: mockAccessSync,
+          constants: { X_OK: 1 },
         };
       }
       return originalRequire.apply(this, [id]);
@@ -375,7 +391,11 @@ describe("afterPack", () => {
 
     it("should pass when dlopen throws not a valid Win32 application", async () => {
       mockExistsSync.mockReturnValue(true);
-      process.dlopen = (() => {
+      process.dlopen = ((mod: { exports: Record<string, unknown> }, filename: string) => {
+        if (filename.includes("win_job_object")) {
+          mod.exports.assignProcessToHelpJob = () => true;
+          return;
+        }
         throw new Error("not a valid Win32 application");
       }) as typeof process.dlopen;
 
@@ -399,7 +419,11 @@ describe("afterPack", () => {
 
     it("should warn but continue on inconclusive probe (e.g. missing DLL)", async () => {
       mockExistsSync.mockReturnValue(true);
-      process.dlopen = (() => {
+      process.dlopen = ((mod: { exports: Record<string, unknown> }, filename: string) => {
+        if (filename.includes("win_job_object")) {
+          mod.exports.assignProcessToHelpJob = () => true;
+          return;
+        }
         throw new Error("The specified module could not be found");
       }) as typeof process.dlopen;
 
@@ -411,8 +435,12 @@ describe("afterPack", () => {
     it("should run ABI validation on all platforms", async () => {
       mockExistsSync.mockReturnValue(true);
       const dlopenCalls: string[] = [];
-      process.dlopen = ((_mod: any, path: string) => {
-        dlopenCalls.push(path);
+      process.dlopen = ((mod: { exports: Record<string, unknown> }, filename: string) => {
+        dlopenCalls.push(filename);
+        if (filename.includes("win_job_object")) {
+          mod.exports.assignProcessToHelpJob = () => true;
+          return;
+        }
         throw new Error("NODE_MODULE_VERSION mismatch");
       }) as typeof process.dlopen;
 
@@ -426,9 +454,133 @@ describe("afterPack", () => {
               : `/build/${platform === "win32" ? "win" : "linux"}`
           )
         );
-        expect(dlopenCalls.length).toBe(1);
-        expect(dlopenCalls[0]).toContain("better_sqlite3.node");
+        // better-sqlite3 ABI probe runs on every platform; win-job-object runs on win32 only.
+        const sqliteCalls = dlopenCalls.filter((p) => p.includes("better_sqlite3.node"));
+        expect(sqliteCalls.length).toBe(1);
       }
+    });
+  });
+
+  describe("win-job-object ABI validation", () => {
+    it("should pass when dlopen succeeds and assignProcessToHelpJob is exported", async () => {
+      mockExistsSync.mockReturnValue(true);
+      // beforeEach default already simulates a healthy win-job-object load.
+
+      await afterPack(createContext("win32", "/build/win"));
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "[afterPack] win-job-object ABI check passed (N-API forward load OK)"
+      );
+    });
+
+    it("should throw CRITICAL when dlopen fails (missing VCRUNTIME140.dll)", async () => {
+      mockExistsSync.mockReturnValue(true);
+      process.dlopen = ((_mod: unknown, filename: string) => {
+        if (filename.includes("win_job_object")) {
+          throw new Error(
+            "The specified module could not be found. \\?\\C:\\app\\win_job_object.node"
+          );
+        }
+        throw new Error("NODE_MODULE_VERSION mismatch");
+      }) as typeof process.dlopen;
+
+      await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
+        /win-job-object failed to load/
+      );
+    });
+
+    it("should throw CRITICAL with arch-mismatch hint", async () => {
+      mockExistsSync.mockReturnValue(true);
+      process.dlopen = ((_mod: unknown, filename: string) => {
+        if (filename.includes("win_job_object")) {
+          throw new Error("%1 is not a valid Win32 application.");
+        }
+        throw new Error("NODE_MODULE_VERSION mismatch");
+      }) as typeof process.dlopen;
+
+      await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
+        /architecture matches the target/
+      );
+    });
+
+    it("should throw CRITICAL when dlopen succeeds but export is missing", async () => {
+      mockExistsSync.mockReturnValue(true);
+      process.dlopen = ((mod: { exports: Record<string, unknown> }, filename: string) => {
+        if (filename.includes("win_job_object")) {
+          // Loaded but no assignProcessToHelpJob export wired up
+          return;
+        }
+        throw new Error("NODE_MODULE_VERSION mismatch");
+      }) as typeof process.dlopen;
+
+      await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
+        /assignProcessToHelpJob export is missing/
+      );
+    });
+
+    it("should only run on Windows", async () => {
+      mockExistsSync.mockReturnValue(true);
+      const dlopenCalls: string[] = [];
+      process.dlopen = ((mod: { exports: Record<string, unknown> }, filename: string) => {
+        dlopenCalls.push(filename);
+        if (filename.includes("win_job_object")) {
+          mod.exports.assignProcessToHelpJob = () => true;
+          return;
+        }
+        throw new Error("NODE_MODULE_VERSION mismatch");
+      }) as typeof process.dlopen;
+
+      await afterPack(createContext("linux", "/build/linux"));
+      expect(dlopenCalls.some((p) => p.includes("win_job_object"))).toBe(false);
+
+      dlopenCalls.length = 0;
+      await afterPack(createContext("darwin", "/build/mac"));
+      expect(dlopenCalls.some((p) => p.includes("win_job_object"))).toBe(false);
+    });
+  });
+
+  describe("posix-pty-reaper executable check", () => {
+    it("should pass when accessSync(X_OK) succeeds", async () => {
+      mockExistsSync.mockReturnValue(true);
+      // beforeEach default already returns success from accessSync.
+
+      await afterPack(createContext("linux", "/build/linux"));
+
+      expect(mockAccessSync).toHaveBeenCalledWith(
+        expect.stringContaining("daintree_pty_supervisor"),
+        1 // X_OK from mocked fs.constants
+      );
+    });
+
+    it("should throw CRITICAL when accessSync throws (binary not executable)", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockAccessSync.mockImplementation(() => {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      });
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /posix-pty-reaper supervisor exists but is not executable/
+      );
+    });
+
+    it("should throw CRITICAL on macOS when accessSync fails", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockAccessSync.mockImplementation(() => {
+        throw new Error("EACCES");
+      });
+
+      await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
+        /posix-pty-reaper supervisor exists but is not executable/
+      );
+    });
+
+    it("should not run on Windows", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("win32", "/build/win"));
+
+      // accessSync is only called from the POSIX branch
+      expect(mockAccessSync).not.toHaveBeenCalled();
     });
   });
 
