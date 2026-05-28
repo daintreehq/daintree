@@ -112,6 +112,7 @@ module.exports = async function () {
     },
     win: {
       icon: "build/icon.ico",
+      artifactName: "${productName}-${version}-${arch}-setup.${ext}",
       target: [
         { target: "appx", arch: ["x64"] },
         { target: "nsis", arch: ["x64", "arm64"] },
@@ -129,9 +130,9 @@ module.exports = async function () {
       languages: ["en-US"],
       setBuildNumber: true,
     },
-    // NSIS (non-Store) Windows installer. Produces a single combined x64+arm64
-    // `.exe`; the installer selects the right payload at runtime. Auto-update
-    // is delivered via the generic provider URL above — gated in the renderer
+    // NSIS (non-Store) Windows installer. Separate x64 and arm64 installers
+    // built on their respective native runners (#9244). Auto-update is
+    // delivered via the generic provider URL above — gated in the renderer
     // by `process.windowsStore` so MSIX/AppX builds keep using the Store path.
     nsis: {
       oneClick: false,
@@ -143,6 +144,7 @@ module.exports = async function () {
       shortcutName: "Daintree",
       uninstallDisplayName: "Daintree",
       differentialPackage: true,
+      buildUniversalInstaller: false,
     },
     linux: {
       icon: "build/icon.png",
