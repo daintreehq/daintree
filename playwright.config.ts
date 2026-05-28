@@ -18,18 +18,27 @@ const onlineTimeout = isWindowsCI ? 480_000 : 300_000;
 // outputs can be merged into a single unified HTML report. PR CI and local
 // runs keep the default reporters.
 const useBlobReporter = process.env.PLAYWRIGHT_BLOB_REPORT === "1";
-const useJsonReporter = process.env.PLAYWRIGHT_JSON_REPORT === "1";
-const reporter: ReporterDescription[] | undefined =
-  useBlobReporter || useJsonReporter
-    ? [
-        ["github"],
-        ...(useBlobReporter
-          ? [["blob", { outputDir: "blob-report" }] as ReporterDescription[]]
-          : []),
-        ...(useJsonReporter
-          ? [["json", { outputFile: "playwright-results.json" }] as ReporterDescription[]]
-          : []),
-      ]
+// JSON reporter is opted into by two consumers:
+//   1. E2E workflow retry path — sets PLAYWRIGHT_JSON_OUTPUT_FILE to the
+//      target path; attempt 1 writes the JSON, the next step extracts failed
+//      spec paths into a --test-list artifact, and any retry attempt
+//      downloads that artifact and reruns only the failed specs.
+//   2. Nightly dedup — sets PLAYWRIGHT_JSON_REPORT=1; extract-failures.mjs
+//      reads the JSON to build signature-keyed failure reports.
+// When both are set the explicit output file wins; otherwise the dedup path
+// falls back to the historical default `playwright-results.json`.
+// Note: blob reporter takes precedence over JSON reporter in the ternary below.
+// If both env vars are set (e.g. PLAYWRIGHT_BLOB_REPORT alongside one of the
+// JSON opt-ins), only the blob reporter is active and no JSON report is
+// produced. No current workflow sets both simultaneously.
+const jsonOutputFile =
+  process.env.PLAYWRIGHT_JSON_OUTPUT_FILE ||
+  (process.env.PLAYWRIGHT_JSON_REPORT === "1" ? "playwright-results.json" : "");
+const useJsonReporter = jsonOutputFile.length > 0;
+const reporter: ReporterDescription[] | undefined = useBlobReporter
+  ? [["github"], ["blob", { outputDir: "blob-report" }]]
+  : useJsonReporter
+    ? [["github"], ["json", { outputFile: jsonOutputFile }]]
     : undefined;
 
 export default defineConfig({

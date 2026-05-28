@@ -375,29 +375,33 @@ jobs:
             echo "args=$PROJECT_ARGS $EXTRA" >> "$GITHUB_OUTPUT"
           fi
 
-      # Restore .last-run.json from the previous attempt so a job-level retry
-      # (via "Re-run failed jobs") can scope to --last-failed and rerun only
-      # the specs that failed before. Cache keys are immutable, so the save
-      # key includes run_attempt; restore-keys strips that suffix to find the
-      # prior attempt's entry. Missing on attempt 1 — that's expected. Note:
-      # "Re-run all jobs" forces a fresh runner but doesn't preserve failure
-      # context — that path bypasses --last-failed and reruns the full suite,
-      # which is correct (the user asked for a clean rerun).
-      - name: Restore Playwright last-run results
+      # Download the failed-specs artifact from attempt 1 so a job-level retry
+      # (via "Re-run failed jobs") can scope to --test-list and rerun only the
+      # specs that failed before. Artifacts are scoped by run_id, so a retry
+      # attempt can download artifacts from prior attempts of the same run.
+      # Missing on attempt 1 (gated by if:) or if attempt 1 had zero failures
+      # (continue-on-error skips the hard-fail). "Re-run all jobs" creates a
+      # new run_id — the download fails harmlessly since the artifact doesn't
+      # exist, and the arg resolution step falls back to a full-suite rerun.
+      #
+      # Always downloads the attempt-1 artifact (not attempt N-1). This is
+      # intentionally conservative: a shrinking failure set across attempts
+      # risks missing regressions introduced by the retry fix itself. Re-running
+      # the full original failure list on every retry is safer and simpler.
+      # (Playwright #33094: merging retry blobs with primary blobs can duplicate
+      # entries, so per-attempt artifacts are deliberately kept separate.)
+      - name: Download failed-specs from prior attempt
         if: github.run_attempt > 1
-        uses: actions/cache/restore@v5
+        continue-on-error: true
+        uses: actions/download-artifact@v7
         with:
-          path: test-results/.last-run.json
-          # Scoped per-shard: each shard writes its own .last-run.json, so the
-          # restore must not bleed one shard's failures into another. (#8053)
-          key: e2e-last-run-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite || 'core' }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            e2e-last-run-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite || 'core' }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}-${{ github.run_id }}-
+          name: failed-specs-${{ inputs.suite || 'core' }}-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}-attempt-1
+          path: .
 
       # Single source of truth for the shard slice and the retry gate.
       # Exporting via $GITHUB_ENV keeps the three OS run steps below identical
       # and prevents drift.
-      - name: Resolve shard and --last-failed args
+      - name: Resolve shard and retry args
         shell: bash
         run: |
           set -euo pipefail
@@ -405,36 +409,42 @@ jobs:
           SHARD_INDEX="${{ matrix.shard }}"
           SHARD_TOTAL="${{ matrix.shardTotal }}"
 
-          LAST_FAILED_ARGS=""
-          # Append --last-failed only on retries that (a) restored the prior
-          # attempt's results, (b) target a suite with meaningful retry
-          # semantics, and (c) aren't already scoped to a single test file.
+          RETRY_ARGS=""
+          # On retry, pass --test-list with the prior attempt's failed specs.
+          # Gate: (a) retry attempt, (b) failed-specs file was downloaded and is
+          # non-empty, (c) suite has meaningful retry semantics, (d) not already
+          # scoped to a single test file.
           if [ "${{ github.run_attempt }}" -gt 1 ] \
-             && [ -f test-results/.last-run.json ] \
+             && [ -f failed-specs.txt ] \
+             && [ -s failed-specs.txt ] \
              && [ "$SUITE" != "nightly" ] \
              && [ "$SUITE" != "online" ] \
              && [ -z "${{ inputs.test_file }}" ]; then
-            LAST_FAILED_ARGS="--last-failed"
-            echo "[e2e] Retry attempt ${{ github.run_attempt }} — running with --last-failed"
+            RETRY_ARGS="--test-list failed-specs.txt"
+            echo "[e2e] Retry attempt ${{ github.run_attempt }} — running with --test-list ($(wc -l < failed-specs.txt) specs)"
+          elif [ "${{ github.run_attempt }}" -gt 1 ] \
+             && [ "$SUITE" != "nightly" ] \
+             && [ "$SUITE" != "online" ] \
+             && [ -z "${{ inputs.test_file }}" ]; then
+            echo "::warning::Retry attempt but no failed-specs artifact found — falling back to full suite rerun"
           fi
 
           SHARD_ARGS=""
           if [ "$SHARD_TOTAL" -gt 1 ]; then
-            if [ -n "$LAST_FAILED_ARGS" ]; then
-              # This shard's restored .last-run.json already contains only the
-              # specs THIS shard executed. Re-applying --shard would re-slice
-              # that tiny failed-only list by round-robin index — a 1-test list
-              # lands entirely on shard 1, starving every other shard's retry.
-              # Drop --shard and let --last-failed rerun exactly this shard's
-              # failures. (#8053)
-              echo "[e2e] Retry with --last-failed — dropping --shard for this attempt"
+            if [ -n "$RETRY_ARGS" ]; then
+              # The failed-specs artifact already contains only this shard's
+              # failures. Re-applying --shard would re-slice that tiny list by
+              # round-robin index — a 1-spec list lands entirely on shard 1,
+              # starving every other shard's retry. Drop --shard and let
+              # --test-list rerun exactly this shard's failures. (#8053)
+              echo "[e2e] Retry with --test-list — dropping --shard for this attempt"
             else
               SHARD_ARGS="--shard=$SHARD_INDEX/$SHARD_TOTAL"
               echo "[e2e] Sharded run — slice $SHARD_INDEX of $SHARD_TOTAL"
             fi
           fi
 
-          echo "LAST_FAILED_ARGS=$LAST_FAILED_ARGS" >> "$GITHUB_ENV"
+          echo "RETRY_ARGS=$RETRY_ARGS" >> "$GITHUB_ENV"
           echo "SHARD_ARGS=$SHARD_ARGS" >> "$GITHUB_ENV"
 
       - name: Run ${{ inputs.suite || 'core' }} e2e tests (macOS)
@@ -446,11 +456,15 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
           FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
+          # Always emit the JSON report so the failed-specs extractor below has
+          # something to read on retry. Nightly dedup (`inputs.json_report`)
+          # piggybacks on the same file via `PLAYWRIGHT_JSON_REPORT`.
+          PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/report.json
           PLAYWRIGHT_JSON_REPORT: ${{ inputs.json_report && '1' || '' }}
           PLAYWRIGHT_BLOB_REPORT: ${{ inputs.enable_blob_report && '1' || '' }}
         run: |
           set -euo pipefail
-          npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${LAST_FAILED_ARGS:-}
+          npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${RETRY_ARGS:-}
 
       - name: Run ${{ inputs.suite || 'core' }} e2e tests (Linux)
         if: runner.os == 'Linux'
@@ -459,11 +473,12 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
           FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
+          PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/report.json
           PLAYWRIGHT_JSON_REPORT: ${{ inputs.json_report && '1' || '' }}
           PLAYWRIGHT_BLOB_REPORT: ${{ inputs.enable_blob_report && '1' || '' }}
         run: |
           set -euo pipefail
-          xvfb-run --auto-servernum npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${LAST_FAILED_ARGS:-}
+          xvfb-run --auto-servernum npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${RETRY_ARGS:-}
 
       - name: Verify native modules (Windows)
         if: runner.os == 'Windows'
@@ -483,6 +498,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
           FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
+          PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/report.json
           PLAYWRIGHT_JSON_REPORT: ${{ inputs.json_report && '1' || '' }}
           PLAYWRIGHT_BLOB_REPORT: ${{ inputs.enable_blob_report && '1' || '' }}
         run: |
@@ -498,18 +514,50 @@ jobs:
           heartbeat_pid=$!
           trap 'kill "$heartbeat_pid" 2>/dev/null || true' EXIT
 
-          npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${LAST_FAILED_ARGS:-}
+          npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${RETRY_ARGS:-}
 
-      # Extract structured failure data for nightly dedup. Only runs when
-      # the Playwright JSON reporter was enabled AND the test run failed.
+      # Extract failed spec paths from the JSON report so they can be uploaded
+      # as a --test-list artifact for any retry attempt. Runs even on Playwright
+      # failure (if: always()) — that's precisely when the retry needs the list.
+      # Attempt artifacts are intentionally kept separate: merging retry blobs
+      # with primary blobs can duplicate entries (Playwright #33094).
+      - name: Extract failed specs from JSON report
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f failed-specs.txt
+          if [ -f test-results/report.json ] && [ -s test-results/report.json ]; then
+            jq -r '.suites[] | .. | objects | select(.file != null and .ok == false) | .file' test-results/report.json | sort -u > failed-specs.txt
+            echo "[e2e] Extracted $(wc -l < failed-specs.txt) failed spec(s) from JSON report"
+          else
+            echo "[e2e] JSON report missing or empty — no failures to extract"
+          fi
+
+      - name: Upload failed-specs artifact
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-specs-${{ inputs.suite || 'core' }}-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}-attempt-${{ github.run_attempt }}
+          path: failed-specs.txt
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # Extract structured failure data for nightly dedup. Only runs when the
+      # caller opted into the dedup pipeline (`inputs.json_report`) AND the
+      # test run failed. The JSON report lives at `test-results/report.json`
+      # — the same file the failed-specs extractor reads above — so both
+      # consumers share a single artifact.
       - name: Extract failure signatures
         if: failure() && inputs.json_report
         shell: bash
         run: |
-          if [ -f playwright-results.json ]; then
-            node scripts/ci/extract-failures.mjs playwright-results.json /tmp/failure-report.json
+          if [ -f test-results/report.json ]; then
+            node scripts/ci/extract-failures.mjs test-results/report.json /tmp/failure-report.json
           else
-            echo "[extract] No playwright-results.json found — skipping"
+            echo "[extract] No test-results/report.json found — skipping"
             echo '[]' > /tmp/failure-report.json
           fi
 
@@ -521,30 +569,6 @@ jobs:
           path: /tmp/failure-report.json
           retention-days: 7
           if-no-files-found: ignore
-
-      # Persist .last-run.json for a potential job-level retry. Runs even on
-      # Playwright failure (if: always()) — that's precisely when the retry
-      # needs the prior attempt's results to scope to --last-failed.
-      - name: Check for Playwright last-run results
-        id: playwright-last-run
-        if: always()
-        continue-on-error: true
-        shell: bash
-        run: |
-          if [ -f test-results/.last-run.json ]; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "[e2e] No Playwright last-run file found; skipping retry cache save"
-          fi
-
-      - name: Save Playwright last-run results
-        if: always() && steps.playwright-last-run.outputs.exists == 'true'
-        continue-on-error: true
-        uses: actions/cache/save@v5
-        with:
-          path: test-results/.last-run.json
-          key: e2e-last-run-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite || 'core' }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Collect crash dumps (fallback from platform default paths)
         if: always()
@@ -579,6 +603,7 @@ jobs:
           # Count what we collected
           COLLECTED=$(find "$FALLBACK_DIR" -type f 2>/dev/null | wc -l)
           echo "[e2e] Fallback crash dump collection: $COLLECTED files"
+
 
       - name: Upload test results
         if: always()
