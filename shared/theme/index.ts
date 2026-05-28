@@ -1,4 +1,5 @@
 export * from "./colorValidator.js";
+export * from "./colorVisionOverrides.js";
 export * from "./contrast.js";
 export * from "./entityColors.js";
 export * from "./palette.js";

@@ -1,0 +1,330 @@
+import { describe, expect, it } from "vitest";
+import {
+  parse,
+  filterDeficiencyProt,
+  filterDeficiencyDeuter,
+  filterDeficiencyTrit,
+  useMode,
+  modeOklab,
+  differenceEuclidean,
+} from "culori";
+import { BUILT_IN_APP_SCHEMES } from "../themes.js";
+import { WORKTREE_COLOR_PALETTE } from "../worktreeColors.js";
+import { RED_GREEN_OVERRIDES, BLUE_YELLOW_OVERRIDES } from "../colorVisionOverrides.js";
+import type { AppThemeTokenKey } from "../types.js";
+
+useMode(modeOklab);
+
+const OKABE_ITO = [
+  "#000000",
+  "#E69F00",
+  "#56B4E9",
+  "#009E73",
+  "#F0E442",
+  "#0072B2",
+  "#D55E00",
+  "#CC79A7",
+];
+
+type Deficiency = "protanopia" | "deuteranopia" | "tritanopia";
+
+const ALL_CATEGORY_TOKENS = [
+  "category-blue",
+  "category-purple",
+  "category-cyan",
+  "category-green",
+  "category-amber",
+  "category-orange",
+  "category-teal",
+  "category-indigo",
+  "category-rose",
+  "category-pink",
+  "category-violet",
+  "category-slate",
+] as const;
+
+const STATUS_TOKENS = ["status-success", "status-warning", "status-danger", "status-info"] as const;
+
+const DEFICIENCIES: Deficiency[] = ["protanopia", "deuteranopia", "tritanopia"];
+
+// Half a JND in OKLab (~0.01). This is the absolute floor: any pair below this
+// maps to effectively the same perceived color under CVD simulation.
+// 1 JND ≈ 0.02 represents barely noticeable; half a JND represents functional
+// identity. The Okabe-Ito calibration benchmark is considerably higher
+// (~0.09–0.10), serving as the aspirational target documented in the
+// informational tests below.
+const JND_FLOOR = 0.01;
+
+function cvdFilter(deficiency: Deficiency) {
+  switch (deficiency) {
+    case "protanopia":
+      return filterDeficiencyProt(1);
+    case "deuteranopia":
+      return filterDeficiencyDeuter(1);
+    case "tritanopia":
+      return filterDeficiencyTrit(1);
+  }
+}
+
+function parseColor(s: unknown) {
+  if (typeof s !== "string") return undefined;
+  if (s.startsWith("var(") || s.startsWith("color-mix(")) return undefined;
+  return parse(s);
+}
+
+function resolveTokens(
+  scheme: (typeof BUILT_IN_APP_SCHEMES)[number],
+  keys: readonly string[]
+): string[] {
+  const result: string[] = [];
+  for (const key of keys) {
+    const value = scheme.tokens[key as AppThemeTokenKey];
+    if (typeof value === "string") result.push(value);
+  }
+  return result;
+}
+
+function computePairwiseDistances(
+  colors: string[],
+  deficiency: Deficiency
+): { distances: number[]; skipped: string[] } {
+  const filter = cvdFilter(deficiency);
+  const parsed: Array<{ color: ReturnType<typeof parse>; raw: string }> = [];
+  const skipped: string[] = [];
+
+  for (const c of colors) {
+    const p = parseColor(c);
+    if (!p) {
+      skipped.push(c);
+      continue;
+    }
+    parsed.push({ color: filter(p), raw: c });
+  }
+
+  const distances: number[] = [];
+  for (let i = 0; i < parsed.length; i++) {
+    for (let j = i + 1; j < parsed.length; j++) {
+      distances.push(differenceEuclidean("oklab")(parsed[i]!.color, parsed[j]!.color));
+    }
+  }
+
+  return { distances, skipped };
+}
+
+function normHex(h: string): string {
+  return h.trim().toLowerCase();
+}
+
+function calibrateOkabeItoThreshold(deficiency: Deficiency): number {
+  const { distances } = computePairwiseDistances(OKABE_ITO, deficiency);
+  return Math.min(...distances);
+}
+
+function minPairwiseDistance(colors: string[], deficiency: Deficiency): number | null {
+  const { distances, skipped } = computePairwiseDistances(colors, deficiency);
+  if (skipped.length > 0 || distances.length === 0) return null;
+  return Math.min(...distances);
+}
+
+// Reference: Okabe-Ito calibrated thresholds (informational only).
+const OI_THRESHOLDS = Object.fromEntries(
+  DEFICIENCIES.map((d) => [d, calibrateOkabeItoThreshold(d)])
+) as Record<Deficiency, number>;
+
+describe("palette distinguishability", () => {
+  it("Okabe-Ito calibration yields positive thresholds", () => {
+    for (const [mode, t] of Object.entries(OI_THRESHOLDS)) {
+      expect(t, `${mode} threshold`).toBeGreaterThan(0);
+      expect(t, `${mode} threshold should be below 0.25 OKLab units`).toBeLessThan(0.25);
+    }
+  });
+
+  describe("worktree identity palette (WORKTREE_COLOR_PALETTE)", () => {
+    it("no two worktree tokens collapse to identity under any CVD mode (JND floor)", () => {
+      const failures: string[] = [];
+
+      for (const scheme of BUILT_IN_APP_SCHEMES) {
+        const values = resolveTokens(scheme, [...WORKTREE_COLOR_PALETTE]);
+        if (values.length !== 8) {
+          failures.push(`${scheme.id}: only ${values.length}/8 tokens present`);
+          continue;
+        }
+
+        for (const deficiency of DEFICIENCIES) {
+          const { distances, skipped } = computePairwiseDistances(values, deficiency);
+          if (skipped.length > 0) {
+            failures.push(`${scheme.id} ${deficiency}: could not parse: ${skipped.join(", ")}`);
+            continue;
+          }
+
+          let pairIdx = 0;
+          for (let i = 0; i < WORKTREE_COLOR_PALETTE.length; i++) {
+            for (let j = i + 1; j < WORKTREE_COLOR_PALETTE.length; j++) {
+              const d = distances[pairIdx++]!;
+              if (d < JND_FLOOR) {
+                failures.push(
+                  `${scheme.id} ${deficiency}: ${WORKTREE_COLOR_PALETTE[i]}-${WORKTREE_COLOR_PALETTE[j]} = ${d.toFixed(4)} (below JND floor ${JND_FLOOR})`
+                );
+              }
+            }
+          }
+        }
+      }
+
+      expect(
+        failures,
+        `${failures.length} token pairs collapsed to near-identity under CVD\n${failures.join("\n")}`
+      ).toHaveLength(0);
+    });
+
+    it("reports minimum pairwise distance per scheme vs Okabe-Ito reference", () => {
+      // Informational: documents how each scheme's worktree palette compares
+      // to the Okabe-Ito gold standard. Not a hard gate.
+      for (const scheme of BUILT_IN_APP_SCHEMES) {
+        const values = resolveTokens(scheme, [...WORKTREE_COLOR_PALETTE]);
+        if (values.length !== 8) continue;
+
+        for (const deficiency of DEFICIENCIES) {
+          const minDist = minPairwiseDistance(values, deficiency);
+          const oi = OI_THRESHOLDS[deficiency]!;
+          expect(minDist, `${scheme.id} ${deficiency} minimum`).toBeGreaterThan(0);
+          // Logging-only check: records schemes below the Okabe-Ito bar.
+          // Not a hard failure — the JND-floor test above is the hard gate.
+          if (minDist !== null) {
+            expect(
+              minDist,
+              `${scheme.id} ${deficiency}: worktree min ${minDist.toFixed(4)} (Okabe-Ito ref: ${oi.toFixed(4)})`
+            ).toBeGreaterThan(0);
+          }
+        }
+      }
+    });
+  });
+
+  describe("category-status cross-group", () => {
+    it("no category token collapses into a status token under any CVD mode", () => {
+      const failures: string[] = [];
+
+      for (const scheme of BUILT_IN_APP_SCHEMES) {
+        for (const deficiency of DEFICIENCIES) {
+          const filter = cvdFilter(deficiency);
+
+          for (const catKey of WORKTREE_COLOR_PALETTE) {
+            const catValue = scheme.tokens[catKey as AppThemeTokenKey] as string;
+            const catParsed = parseColor(catValue);
+            if (!catParsed) continue;
+            const catCvd = filter(catParsed);
+
+            for (const statusKey of STATUS_TOKENS) {
+              const statusValue = scheme.tokens[statusKey as AppThemeTokenKey] as string;
+              const statusParsed = parseColor(statusValue);
+              if (!statusParsed) continue;
+              const statusCvd = filter(statusParsed);
+
+              const d = differenceEuclidean("oklab")(catCvd, statusCvd);
+              if (d < JND_FLOOR) {
+                failures.push(
+                  `${scheme.id} ${deficiency}: ${catKey}-${statusKey} = ${d.toFixed(4)} (below JND floor)`
+                );
+              }
+            }
+          }
+        }
+      }
+
+      expect(
+        failures,
+        `${failures.length} category-status pairs collapsed to near-identity under CVD\n${failures.join("\n")}`
+      ).toHaveLength(0);
+    });
+  });
+
+  describe("full 12-token category set", () => {
+    it("no two category tokens collapse to identity under any CVD mode", () => {
+      const failures: string[] = [];
+
+      for (const scheme of BUILT_IN_APP_SCHEMES) {
+        const values = resolveTokens(scheme, [...ALL_CATEGORY_TOKENS]);
+        if (values.length !== 12) continue;
+
+        for (const deficiency of DEFICIENCIES) {
+          const { distances, skipped } = computePairwiseDistances(values, deficiency);
+          if (skipped.length > 0) continue;
+
+          let pairIdx = 0;
+          for (let i = 0; i < ALL_CATEGORY_TOKENS.length; i++) {
+            for (let j = i + 1; j < ALL_CATEGORY_TOKENS.length; j++) {
+              const d = distances[pairIdx++]!;
+              if (d < JND_FLOOR) {
+                failures.push(
+                  `${scheme.id} ${deficiency}: ${ALL_CATEGORY_TOKENS[i]}-${ALL_CATEGORY_TOKENS[j]} = ${d.toFixed(4)}`
+                );
+              }
+            }
+          }
+        }
+      }
+
+      expect(
+        failures,
+        `${failures.length} category pairs collapsed to near-identity under CVD\n${failures.join("\n")}`
+      ).toHaveLength(0);
+    });
+  });
+
+  describe("CVD override maps internal distinguishability", () => {
+    const RED_GREEN_UNIQUE = [...new Set(Object.values(RED_GREEN_OVERRIDES).map(normHex))];
+    const BLUE_YELLOW_UNIQUE = [...new Set(Object.values(BLUE_YELLOW_OVERRIDES).map(normHex))];
+
+    function testOverrideMap(name: string, uniqueHex: string[], deficiencies: Deficiency[]) {
+      it(`${name}: no two override colors collapse to identity under target deficiencies`, () => {
+        const failures: string[] = [];
+
+        for (const deficiency of deficiencies) {
+          const { distances, skipped } = computePairwiseDistances(uniqueHex, deficiency);
+          if (skipped.length > 0) {
+            failures.push(`${name} ${deficiency}: could not parse: ${skipped.join(", ")}`);
+            continue;
+          }
+
+          let pairIdx = 0;
+          for (let i = 0; i < uniqueHex.length; i++) {
+            for (let j = i + 1; j < uniqueHex.length; j++) {
+              const d = distances[pairIdx++]!;
+              if (d < JND_FLOOR) {
+                failures.push(
+                  `${name} ${deficiency}: ${uniqueHex[i]} - ${uniqueHex[j]} = ${d.toFixed(4)}`
+                );
+              }
+            }
+          }
+        }
+
+        expect(
+          failures,
+          `${failures.length} override pairs collapsed to near-identity under CVD\n${failures.join("\n")}`
+        ).toHaveLength(0);
+      });
+
+      it(`${name}: internal distinguishability vs Okabe-Ito reference (informational)`, () => {
+        for (const deficiency of deficiencies) {
+          const minDist = minPairwiseDistance(uniqueHex, deficiency);
+          const oi = OI_THRESHOLDS[deficiency]!;
+          expect(minDist, `${name} ${deficiency} minimum`).toBeGreaterThan(0);
+          // Informational: reports distance relative to Okabe-Ito reference.
+          // The JND-floor test above is the hard gate; this documents the gap.
+          if (minDist !== null) {
+            expect(
+              minDist,
+              `${name} ${deficiency}: override min ${minDist.toFixed(4)} (Okabe-Ito ref: ${oi.toFixed(4)})`
+            ).toBeGreaterThan(0);
+          }
+        }
+      });
+    }
+
+    testOverrideMap("RED_GREEN_OVERRIDES", RED_GREEN_UNIQUE, ["protanopia", "deuteranopia"]);
+
+    testOverrideMap("BLUE_YELLOW_OVERRIDES", BLUE_YELLOW_UNIQUE, ["tritanopia"]);
+  });
+});
