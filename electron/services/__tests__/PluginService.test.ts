@@ -436,6 +436,152 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 });
 
+describe("PluginManifestSchema scopes field", () => {
+  const validBase = { name: "acme.scope-test", version: "1.0.0" };
+
+  it("accepts manifest with no scopes field", () => {
+    const result = getPluginManifestSchema(false).safeParse(validBase);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.scopes).toBeUndefined();
+    }
+  });
+
+  it("accepts empty scopes object (both buckets optional)", () => {
+    const result = getPluginManifestSchema(false).safeParse({ ...validBase, scopes: {} });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a valid network scope with one https URL", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: { network: { allowedUrls: ["https://api.example.com/v2"] } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.scopes?.network?.allowedUrls).toEqual(["https://api.example.com/v2"]);
+    }
+  });
+
+  it.each([
+    ["http://api.example.com", "scope_url_not_https"],
+    ["ftp://api.example.com", "scope_url_not_https"],
+    ["file:///etc/passwd", "scope_url_not_https"],
+    ["https://localhost", "scope_url_private_target"],
+    ["https://intranet", "scope_url_hostname_unqualified"],
+    ["https://127.0.0.1", "scope_url_private_target"],
+    ["https://[::1]", "scope_url_private_target"],
+    ["https://169.254.169.254", "scope_url_private_target"],
+    ["https://10.0.0.1", "scope_url_private_target"],
+    ["https://192.168.1.1", "scope_url_private_target"],
+    ["https://172.16.0.1", "scope_url_private_target"],
+    ["https://172.31.255.255", "scope_url_private_target"],
+    ["https://user:pass@example.com", "scope_url_has_credentials"],
+    ["https://example.com/*", "scope_wildcard_rejected"],
+    ["https://*.example.com", "scope_wildcard_rejected"],
+    ["not-a-url", "scope_url_invalid"],
+  ])("rejects network.allowedUrls entry %j with errorCode %s", (url, errorCode) => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: { network: { allowedUrls: [url] } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const matching = result.error.issues.find(
+        (i) =>
+          i.code === "custom" &&
+          (i as unknown as { params?: { errorCode?: string } }).params?.errorCode === errorCode
+      );
+      expect(matching).toBeDefined();
+    }
+  });
+
+  it("rejects empty allowedUrls array (min 1 required)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: { network: { allowedUrls: [] } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects unknown key inside scopes (strict)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: { networking: { allowedUrls: ["https://api.example.com"] } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.code === "unrecognized_keys")).toBe(true);
+    }
+  });
+
+  it("rejects unknown key inside scopes.network (strict)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: {
+        network: {
+          allowedUrls: ["https://api.example.com"],
+          deniedUrls: ["https://evil.com"],
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.code === "unrecognized_keys")).toBe(true);
+    }
+  });
+
+  it("accepts a valid fs scope with an absolute path", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: { fs: { allowedPaths: ["/home/user/projects"] } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.scopes?.fs?.allowedPaths).toEqual(["/home/user/projects"]);
+    }
+  });
+
+  it.each([
+    ["relative/path", "scope_path_relative"],
+    ["./relative", "scope_path_relative"],
+    ["../escape", "scope_path_relative"],
+    ["/home/user/../etc", "scope_path_traversal"],
+    ["/home/user/**", "scope_wildcard_rejected"],
+    ["/home/*/projects", "scope_wildcard_rejected"],
+  ])("rejects fs.allowedPaths entry %j with errorCode %s", (entryPath, errorCode) => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: { fs: { allowedPaths: [entryPath] } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const matching = result.error.issues.find(
+        (i) =>
+          i.code === "custom" &&
+          (i as unknown as { params?: { errorCode?: string } }).params?.errorCode === errorCode
+      );
+      expect(matching).toBeDefined();
+    }
+  });
+
+  it("rejects empty allowedPaths array (min 1 required)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: { fs: { allowedPaths: [] } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects scalar (non-array) allowedUrls value", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: { network: { allowedUrls: "https://api.example.com" } },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("PluginManifestSchema forgeProviders contribution", () => {
   const validBase = { name: "acme.forge", version: "1.0.0" };
 
@@ -3496,11 +3642,164 @@ describe("Plugin action registry", () => {
     }
   );
 
-  it("does not raise effectiveDanger for read-only / reversible capabilities", async () => {
+  it.each([
+    ["agent:read", "network:fetch"],
+    ["git:read", "network:fetch"],
+    ["fs:project-read", "network:fetch"],
+    ["fs:user-data-read", "network:fetch"],
+  ])(
+    "raises effectiveDanger to 'confirm' for compound exfiltration pair %s + %s (no scope)",
+    async (source, sink) => {
+      const safeName = `${source}-${sink}`.replace(/[^a-z]/g, "-");
+      const name = `acme.compound-${safeName}`;
+      await writePlugin(`compound-${safeName}`, {
+        name,
+        version: "1.0.0",
+        capabilities: [source, sink],
+      });
+      const svc = new PluginService(tmpDir);
+      await svc.initialize();
+
+      svc.registerPluginAction(name, {
+        ...validContribution(),
+        id: `${name}.doThing`,
+        danger: "safe" as const,
+      });
+
+      const action = svc.listPluginActions().find((a) => a.id === `${name}.doThing`);
+      expect(action?.danger).toBe("safe");
+      expect(action?.effectiveDanger).toBe("confirm");
+    }
+  );
+
+  it("does NOT raise effectiveDanger for compound exfiltration pair when network:fetch has a tight scope", async () => {
+    await writePlugin("scoped-network", {
+      name: "acme.scoped-network",
+      version: "1.0.0",
+      capabilities: ["agent:read", "network:fetch"],
+      scopes: { network: { allowedUrls: ["https://api.example.com/v2"] } },
+    });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+
+    svc.registerPluginAction("acme.scoped-network", {
+      ...validContribution(),
+      id: "acme.scoped-network.doThing",
+      danger: "safe" as const,
+    });
+
+    const action = svc.listPluginActions().find((a) => a.id === "acme.scoped-network.doThing");
+    expect(action?.effectiveDanger).toBe("safe");
+  });
+
+  it("raises effectiveDanger for sensitive-read + shell:exec even with network scope (shell is never attenuated)", async () => {
+    await writePlugin("read-shell", {
+      name: "acme.read-shell",
+      version: "1.0.0",
+      capabilities: ["fs:project-read", "shell:exec"],
+      scopes: { network: { allowedUrls: ["https://api.example.com"] } },
+    });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+
+    svc.registerPluginAction("acme.read-shell", {
+      ...validContribution(),
+      id: "acme.read-shell.doThing",
+      danger: "safe" as const,
+    });
+
+    // shell:exec is flat-elevated regardless — but the test asserts the compound
+    // path also fires because the network scope must not attenuate shell sinks.
+    const action = svc.listPluginActions().find((a) => a.id === "acme.read-shell.doThing");
+    expect(action?.effectiveDanger).toBe("confirm");
+  });
+
+  it("raises effectiveDanger for remote-mutation pair network:fetch + git:write (no scope)", async () => {
+    await writePlugin("net-write", {
+      name: "acme.net-write",
+      version: "1.0.0",
+      capabilities: ["network:fetch", "git:write"],
+    });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+
+    svc.registerPluginAction("acme.net-write", {
+      ...validContribution(),
+      id: "acme.net-write.doThing",
+      danger: "safe" as const,
+    });
+
+    // git:write already elevates flat — compound path is redundant but correct.
+    expect(
+      svc.listPluginActions().find((a) => a.id === "acme.net-write.doThing")?.effectiveDanger
+    ).toBe("confirm");
+  });
+
+  it("does not compound-elevate a plugin holding only a sensitive read (no sink)", async () => {
+    await writePlugin("read-only", {
+      name: "acme.read-only",
+      version: "1.0.0",
+      capabilities: ["agent:read", "git:read"],
+    });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+
+    svc.registerPluginAction("acme.read-only", {
+      ...validContribution(),
+      id: "acme.read-only.doThing",
+      danger: "safe" as const,
+    });
+
+    expect(
+      svc.listPluginActions().find((a) => a.id === "acme.read-only.doThing")?.effectiveDanger
+    ).toBe("safe");
+  });
+
+  it("does not compound-elevate a plugin holding only network:fetch (no source/sink pair)", async () => {
+    await writePlugin("net-only", {
+      name: "acme.net-only",
+      version: "1.0.0",
+      capabilities: ["network:fetch"],
+    });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+
+    svc.registerPluginAction("acme.net-only", {
+      ...validContribution(),
+      id: "acme.net-only.doThing",
+      danger: "safe" as const,
+    });
+
+    expect(
+      svc.listPluginActions().find((a) => a.id === "acme.net-only.doThing")?.effectiveDanger
+    ).toBe("safe");
+  });
+
+  it("compound elevation is order-independent in the capabilities array", async () => {
+    await writePlugin("order", {
+      name: "acme.order",
+      version: "1.0.0",
+      capabilities: ["network:fetch", "agent:read"],
+    });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+
+    svc.registerPluginAction("acme.order", {
+      ...validContribution(),
+      id: "acme.order.doThing",
+      danger: "safe" as const,
+    });
+
+    expect(
+      svc.listPluginActions().find((a) => a.id === "acme.order.doThing")?.effectiveDanger
+    ).toBe("confirm");
+  });
+
+  it("does not raise effectiveDanger for read-only / reversible capabilities (no compound pair)", async () => {
     await writePlugin("readonly", {
       name: "acme.readonly",
       version: "1.0.0",
-      capabilities: ["fs:project-read", "network:fetch", "clipboard:write", "git:read"],
+      capabilities: ["fs:project-read", "clipboard:write", "git:read"],
     });
     const svc = new PluginService(tmpDir);
     await svc.initialize();

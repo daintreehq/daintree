@@ -1,3 +1,4 @@
+import path from "node:path";
 import * as semver from "semver";
 import { z } from "zod";
 import { BUILT_IN_PLUGIN_CAPABILITIES } from "../../shared/types/plugin.js";
@@ -158,6 +159,162 @@ export const FileDecorationContributionSchema = z
 export const PluginCapabilitySchema = z.enum(BUILT_IN_PLUGIN_CAPABILITIES);
 
 /**
+ * Hostnames that resolve to private/loopback/link-local space and must not
+ * appear in a plugin's `scopes.network.allowedUrls`. Literal-string matches
+ * only — DNS rebinding (a public hostname that resolves to RFC1918 at
+ * request time) is out of scope for manifest-level validation. See #9247.
+ */
+const PRIVATE_LOOPBACK_HOSTNAME_LITERALS = new Set(["localhost", "ip6-localhost", "ip6-loopback"]);
+/** IPv4 loopback (127.0.0.0/8). */
+const IPV4_LOOPBACK_REGEX = /^127\./;
+/** IPv4 link-local (169.254.0.0/16). Catches the AWS metadata endpoint. */
+const IPV4_LINK_LOCAL_REGEX = /^169\.254\./;
+/** IPv4 RFC1918 10.0.0.0/8. */
+const IPV4_RFC1918_TEN_REGEX = /^10\./;
+/** IPv4 RFC1918 192.168.0.0/16. */
+const IPV4_RFC1918_192_REGEX = /^192\.168\./;
+/** IPv4 RFC1918 172.16.0.0/12 (172.16.* through 172.31.*). */
+const IPV4_RFC1918_172_REGEX = /^172\.(1[6-9]|2\d|3[0-1])\./;
+/** IPv6 literal loopback (::1) — `new URL()` returns hostname stripped of brackets. */
+const IPV6_LOOPBACK_REGEX = /^\[?::1\]?$/;
+
+function isPrivateOrLoopbackHostname(hostname: string): boolean {
+  const lower = hostname.toLowerCase();
+  if (PRIVATE_LOOPBACK_HOSTNAME_LITERALS.has(lower)) return true;
+  if (IPV4_LOOPBACK_REGEX.test(lower)) return true;
+  if (IPV4_LINK_LOCAL_REGEX.test(lower)) return true;
+  if (IPV4_RFC1918_TEN_REGEX.test(lower)) return true;
+  if (IPV4_RFC1918_192_REGEX.test(lower)) return true;
+  if (IPV4_RFC1918_172_REGEX.test(lower)) return true;
+  if (IPV6_LOOPBACK_REGEX.test(lower)) return true;
+  return false;
+}
+
+/**
+ * Per-entry validator for `scopes.network.allowedUrls`. Each entry must:
+ *
+ * - Parse as a `https:` URL (no `http:`, `file:`, custom schemes).
+ * - Contain no `*` substring (wildcards are rejected so a tightly-bound
+ *   declaration cannot smuggle a permissive value past the manifest gate).
+ * - Carry no embedded credentials (no `https://user:pass@host`).
+ * - Target a multi-label hostname (at least one `.` after parse). Single-label
+ *   intranet hosts are rejected to keep allowlists auditable from the manifest.
+ * - Not target a private/loopback/link-local address (SSRF mitigation).
+ */
+const PluginAllowedUrlSchema = z.string().superRefine((value, ctx) => {
+  if (value.includes("*")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Wildcard characters are not allowed in scopes.network.allowedUrls: "${value}"`,
+      params: { errorCode: "scope_wildcard_rejected" },
+    });
+    return;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `scopes.network.allowedUrls entry is not a valid URL: "${value}"`,
+      params: { errorCode: "scope_url_invalid" },
+    });
+    return;
+  }
+  if (parsed.protocol !== "https:") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `scopes.network.allowedUrls entries must use https:// — got "${parsed.protocol}" in "${value}"`,
+      params: { errorCode: "scope_url_not_https" },
+    });
+    return;
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `scopes.network.allowedUrls entries must not embed credentials: "${value}"`,
+      params: { errorCode: "scope_url_has_credentials" },
+    });
+    return;
+  }
+  const hostname = parsed.hostname;
+  if (isPrivateOrLoopbackHostname(hostname)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `scopes.network.allowedUrls entry targets a private or loopback address: "${value}"`,
+      params: { errorCode: "scope_url_private_target" },
+    });
+    return;
+  }
+  if (hostname === "" || !hostname.includes(".")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `scopes.network.allowedUrls hostnames must be multi-label (got "${hostname}" in "${value}")`,
+      params: { errorCode: "scope_url_hostname_unqualified" },
+    });
+    return;
+  }
+});
+
+/**
+ * Per-entry validator for `scopes.fs.allowedPaths`. Each entry must be a
+ * literal absolute path with no `..` segment and no `*` glob — the schema
+ * boundary is the load-bearing gate (#4593, #4702), so substring `..` checks
+ * are insufficient (segment-by-segment rejection).
+ */
+const PluginAllowedPathSchema = z.string().superRefine((value, ctx) => {
+  if (value.includes("*")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Wildcard characters are not allowed in scopes.fs.allowedPaths: "${value}"`,
+      params: { errorCode: "scope_wildcard_rejected" },
+    });
+    return;
+  }
+  if (!path.isAbsolute(value)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `scopes.fs.allowedPaths entries must be absolute paths: "${value}"`,
+      params: { errorCode: "scope_path_relative" },
+    });
+    return;
+  }
+  const segments = value.split(/[\\/]/);
+  if (segments.some((seg) => seg === "..")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `scopes.fs.allowedPaths entries must not contain ".." segments: "${value}"`,
+      params: { errorCode: "scope_path_traversal" },
+    });
+    return;
+  }
+});
+
+export const PluginNetworkScopeSchema = z
+  .object({
+    allowedUrls: z.array(PluginAllowedUrlSchema).min(1),
+  })
+  .strict();
+
+export const PluginFsScopeSchema = z
+  .object({
+    allowedPaths: z.array(PluginAllowedPathSchema).min(1),
+  })
+  .strict();
+
+/**
+ * Top-level `scopes` field on `PluginManifest`. Strict so a misspelled scope
+ * bucket (e.g. `networking` instead of `network`) surfaces as a manifest error
+ * rather than silently failing to attenuate the compound-capability lattice.
+ */
+export const PluginManifestScopesSchema = z
+  .object({
+    network: PluginNetworkScopeSchema.optional(),
+    fs: PluginFsScopeSchema.optional(),
+  })
+  .strict();
+
+/**
  * Validates the options passed to `host.showToast`. Both the main-process path
  * (plugin `activate` code) and any future renderer path (SDK React hooks over
  * IPC) converge on this schema. `priority` and `action` are intentionally
@@ -196,6 +353,7 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
         })
         .optional(),
       capabilities: z.array(PluginCapabilitySchema).default([]),
+      scopes: PluginManifestScopesSchema.optional(),
       activationEvents: z.array(z.literal("onStartupFinished")).default([]),
       contributes: z
         .strictObject({
