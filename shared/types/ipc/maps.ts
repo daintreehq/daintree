@@ -1,6 +1,6 @@
 import type { StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
-import type { VoiceInputStatus } from "../voice.js";
+import type { VoiceInputError, VoiceInputStatus } from "../voice.js";
 import type { WorktreeState } from "../worktree.js";
 import type {
   Project,
@@ -1817,7 +1817,7 @@ export interface IpcEventMap {
     replacement: string;
     resolved: boolean;
   };
-  "voice-input:error": string;
+  "voice-input:error": VoiceInputError;
   "voice-input:status": VoiceInputStatus;
 
   // Demo mode events (main → renderer command forwarding)
