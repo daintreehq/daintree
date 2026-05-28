@@ -18,7 +18,7 @@ import {
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
 import { getDevServerUrl } from "../../shared/config/devServer.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
-import { isLocalhostUrl } from "../../shared/utils/urlUtils.js";
+import { isLocalhostUrl, isDevPreviewProxyUrl } from "../../shared/utils/urlUtils.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { forgetBlinkSample, forgetEluSample } from "../services/ProcessMemoryMonitor.js";
@@ -1116,7 +1116,9 @@ export class ProjectViewManager {
       params: Record<string, string>
     ) => {
       const allowedPartitions = ["persist:browser", "persist:dev-preview"];
-      const isAllowedLocalhostUrl = isLocalhostUrl(params.src);
+      // Dev-preview webviews load the stable proxy origin (dp-*.localhost), which
+      // isLocalhostUrl rejects — accept it explicitly (#9100).
+      const isAllowedLocalhostUrl = isLocalhostUrl(params.src) || isDevPreviewProxyUrl(params.src);
       const isValidPartition =
         allowedPartitions.includes(params.partition || "") ||
         (params.partition?.startsWith("persist:dev-preview-") ?? false);

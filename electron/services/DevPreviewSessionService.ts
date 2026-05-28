@@ -26,6 +26,7 @@ import {
 } from "./DevPreviewRequestValidators.js";
 
 export { normalizeNextjsDevCommand } from "./DevPreviewCommandNormalizer.js";
+import { buildDevPreviewSubdomain } from "../../shared/utils/devPreviewProxy.js";
 import type { DevPreviewManifestEntry } from "./DevPreviewManifestService.js";
 import type { PtyClient } from "./PtyClient.js";
 import { UrlDetector } from "./UrlDetector.js";
@@ -129,6 +130,17 @@ const CRASH_LOOP_INITIAL_DELAY_MS = 500;
 const CRASH_LOOP_BACKOFF_MULTIPLIER = 1.5;
 const CRASH_LOOP_MAX_DELAY_MS = 3000;
 const CRASH_LOOP_MAX_ATTEMPTS = 5;
+
+/** Parse the numeric port out of a detected dev-server URL, or null if absent/unparseable. */
+function parseUrlPort(url: string | null): number | null {
+  if (!url) return null;
+  try {
+    const port = new URL(url).port;
+    return port ? Number(port) : null;
+  } catch {
+    return null;
+  }
+}
 
 export class DevPreviewSessionService {
   private readonly detector = new UrlDetector();
@@ -280,6 +292,31 @@ export class DevPreviewSessionService {
       });
     }
     return result;
+  }
+
+  /**
+   * Resolve a dev-preview proxy subdomain (`dp-<projectToken>-<panelToken>`) to the upstream
+   * dev-server port for that panel, or null when none is live (#9100). Used by
+   * DevPreviewProxyService to forward each request without coupling to session internals.
+   * We rebuild the expected subdomain per session and match on equality — avoiding any
+   * ambiguous split of a label whose sanitized tokens may themselves contain hyphens.
+   */
+  getUpstreamPortForSubdomain(subdomain: string): number | null {
+    for (const session of this.sessions.values()) {
+      if (buildDevPreviewSubdomain(session.projectId, session.panelId) !== subdomain) continue;
+      // Only forward to a live server. After an explicit stop the registry entry lingers
+      // (the success path doesn't release it), so a stale port could otherwise be handed to
+      // whatever process later binds it.
+      if (!RUNNING_STATES.has(session.status)) return null;
+      // Prefer the port the dev server actually bound — UrlDetector overwrites session.url
+      // when the server lands on a different port than the one allocated (a command that
+      // ignores the injected PORT). Fall back to the allocated port while still starting,
+      // before any URL has been detected.
+      const detectedPort = parseUrlPort(session.url);
+      if (detectedPort !== null) return detectedPort;
+      return this.portRegistry.get(createSessionKey(session.projectId, session.panelId)) ?? null;
+    }
+    return null;
   }
 
   dispose(): void {

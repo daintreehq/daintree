@@ -96,6 +96,9 @@ export interface GeneratedElectronAPI {
     getDestructivePreviewSizes(
       ...args: IpcInvokeMap["dev-preview:get-destructive-preview-sizes"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:get-destructive-preview-sizes"]["result"]>;
+    getProxyPort(
+      ...args: IpcInvokeMap["dev-preview:get-proxy-port"]["args"]
+    ): Promise<IpcInvokeMap["dev-preview:get-proxy-port"]["result"]>;
     getState(
       ...args: IpcInvokeMap["dev-preview:get-state"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:get-state"]["result"]>;

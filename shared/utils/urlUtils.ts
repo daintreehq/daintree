@@ -129,6 +129,25 @@ export function isLocalhostUrl(url: string): boolean {
   }
 }
 
+/**
+ * True for the stable dev-preview proxy origin: an `http://*.localhost` subdomain (#9100).
+ * Chromium maps every `*.localhost` host to loopback as a Secure Context, so these never reach
+ * the public network — but `isLocalhostUrl` (exact loopback only) rejects them, so the
+ * dev-preview webview guards must accept this shape separately. Kept HTTP-only on purpose:
+ * the proxy serves plain HTTP, and widening to HTTPS would admit a subdomain we never bind.
+ * Bare `localhost` is intentionally excluded here (that is `isLocalhostUrl`'s job).
+ */
+export function isDevPreviewProxyUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:") return false;
+    const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    return hostname.endsWith(".localhost") && hostname.length > ".localhost".length;
+  } catch {
+    return false;
+  }
+}
+
 export function isSafeNavigationUrl(url: string): boolean {
   try {
     const protocol = new URL(url.trim()).protocol;

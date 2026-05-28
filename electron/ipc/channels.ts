@@ -471,6 +471,7 @@ export const CHANNELS = {
   DEV_PREVIEW_STOP_BY_WORKTREE: "dev-preview:stop-by-worktree",
   DEV_PREVIEW_RESTART_BY_WORKTREE: "dev-preview:restart-by-worktree",
   DEV_PREVIEW_STOP_DEV_SERVER_BY_WORKTREE: "dev-preview:stop-dev-server-by-worktree",
+  DEV_PREVIEW_GET_PROXY_PORT: "dev-preview:get-proxy-port",
   DEV_PREVIEW_STATE_CHANGED: "dev-preview:state-changed",
   DEV_PREVIEW_ALL_SESSIONS_CHANGED: "dev-preview:all-sessions-changed",
 

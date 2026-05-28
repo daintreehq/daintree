@@ -19,7 +19,7 @@ import {
 
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
-import { isLocalhostUrl } from "../../shared/utils/urlUtils.js";
+import { isLocalhostUrl, isDevPreviewProxyUrl } from "../../shared/utils/urlUtils.js";
 import { getDevServerUrl } from "../../shared/config/devServer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/handlers.js";
@@ -414,7 +414,9 @@ export function setupBrowserWindow(
   // Harden webview security — on the app view's webContents
   appWebContents.on("will-attach-webview", (event, webPreferences, params) => {
     const allowedPartitions = ["persist:browser", "persist:dev-preview"];
-    const isAllowedLocalhostUrl = isLocalhostUrl(params.src);
+    // Dev-preview webviews now load the stable proxy origin (dp-*.localhost), which
+    // isLocalhostUrl rejects — accept it explicitly (#9100).
+    const isAllowedLocalhostUrl = isLocalhostUrl(params.src) || isDevPreviewProxyUrl(params.src);
     const isValidPartition =
       allowedPartitions.includes(params.partition || "") ||
       (params.partition?.startsWith("persist:dev-preview-") ?? false);

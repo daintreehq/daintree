@@ -17,7 +17,11 @@ import {
   isDevPreviewPartition,
 } from "../utils/webviewCsp.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
-import { isLocalhostUrl, isSafeNavigationUrl } from "../../shared/utils/urlUtils.js";
+import {
+  isLocalhostUrl,
+  isDevPreviewProxyUrl,
+  isSafeNavigationUrl,
+} from "../../shared/utils/urlUtils.js";
 import { getWebviewDialogService } from "../services/WebviewDialogService.js";
 import { looksLikeOAuthUrl } from "../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -418,7 +422,7 @@ export function setupWebviewCSP(): void {
 
         const blocked = isBrowserPanel
           ? !isSafeNavigationUrl(navigationUrl)
-          : !isLocalhostUrl(navigationUrl);
+          : !isLocalhostUrl(navigationUrl) && !isDevPreviewProxyUrl(navigationUrl);
 
         if (blocked) {
           const label = isBrowserPanel ? "unsafe" : "non-localhost";
@@ -433,7 +437,7 @@ export function setupWebviewCSP(): void {
 
         const blocked = isBrowserPanel
           ? !isSafeNavigationUrl(redirectUrl)
-          : !isLocalhostUrl(redirectUrl);
+          : !isLocalhostUrl(redirectUrl) && !isDevPreviewProxyUrl(redirectUrl);
 
         if (blocked) {
           const label = isBrowserPanel ? "unsafe" : "non-localhost";
