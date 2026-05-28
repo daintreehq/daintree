@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { APP_THEME_TOKEN_KEYS, PANEL_KIND_BRAND_COLORS } from "@shared/theme";
+import {
+  APP_THEME_TOKEN_KEYS,
+  PANEL_KIND_BRAND_COLORS,
+  THEME_EXTENSION_KEYS,
+  THEME_EXTENSION_REGISTRY,
+} from "@shared/theme";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
@@ -29,6 +34,49 @@ const NON_COLOR_THEME_TOKENS = new Set([
   "panel-state-edge-radius",
   "focus-ring-offset",
   "chrome-noise-texture",
+]);
+
+const THEME_COMPONENT_CSS_FILES = [
+  "src/styles/components/toolbar.css",
+  "src/styles/components/sidebar.css",
+  "src/styles/components/settings.css",
+  "src/styles/components/pulse.css",
+  "src/styles/components/panels.css",
+].map((rel) => path.join(REPO_ROOT, rel));
+
+// Vars consumed via var(--x, …) in the theme component stylesheets that are NOT
+// theme-extension hooks: derived surface/shadow aliases, semantic-token aliases,
+// pip/badge colors set on the element by component logic, and design tokens
+// (radius/timing). They are excluded from extension-drift detection so a derived
+// alias doesn't masquerade as an unregistered extension key. Keep this list in
+// sync only when a genuinely new non-extension var is consumed in these files.
+const NON_EXTENSION_COMPONENT_VARS = new Set([
+  // Chrome / dialog / floating-surface aliases derived from semantic tokens
+  "chrome-bg",
+  "chrome-noise",
+  "chrome-noise-texture",
+  "chrome-shadow",
+  "dialog-bg",
+  "dialog-shadow",
+  "floating-surface-bg",
+  "floating-surface-shadow",
+  "sidebar-ring",
+  "toolbar-bg",
+  "toolbar-noise",
+  "toolbar-control-active-bg",
+  "toolbar-control-armed-bg",
+  "settings-meta-fg",
+  "settings-meta-size",
+  "settings-section-header-bg",
+  "settings-section-header-bg-solid",
+  "toolbar-project-chip-size",
+  // Pip / badge colors set on the element by component logic, not theme overrides
+  "overflow-badge-color",
+  "problems-dot-color",
+  // Design tokens (radius / timing), not color overrides
+  "radius-lg",
+  "duration-150",
+  "ease-out-expo",
 ]);
 
 function collectSourceFiles(dir: string): string[] {
@@ -195,5 +243,50 @@ describe("color system contract", () => {
 
   it("sets color-scheme: normal on webview elements to prevent dark-mode inheritance", () => {
     expect(indexCss).toMatch(/webview\s*\{[^}]*color-scheme:\s*normal/s);
+  });
+});
+
+describe("theme extension contract", () => {
+  const consumedInComponentCss = new Set<string>();
+  for (const file of THEME_COMPONENT_CSS_FILES) {
+    const css = fs.readFileSync(file, "utf8");
+    for (const match of css.matchAll(/var\(\s*--([a-z0-9-]+)/g)) {
+      consumedInComponentCss.add(match[1]!);
+    }
+  }
+
+  const consumedAnywhere = new Set<string>();
+  for (const filePath of collectSourceFiles(SRC_ROOT)) {
+    const source = fs.readFileSync(filePath, "utf8");
+    for (const match of source.matchAll(/var\(\s*--([a-z0-9-]+)/g)) {
+      consumedAnywhere.add(match[1]!);
+    }
+  }
+
+  it("registers every extension hook consumed in theme component stylesheets", () => {
+    // Reverse drift: a new var(--foo, …) hook added to a theme stylesheet must be
+    // registered (or explicitly classified as a non-extension alias above), so the
+    // canonical key set stays exhaustive.
+    const unregistered = Array.from(consumedInComponentCss).filter(
+      (name) =>
+        !name.startsWith("theme-") &&
+        !name.startsWith("color-") &&
+        !NON_EXTENSION_COMPONENT_VARS.has(name) &&
+        !(name in THEME_EXTENSION_REGISTRY)
+    );
+    expect(
+      unregistered,
+      `extension hooks consumed in component CSS but missing from THEME_EXTENSION_REGISTRY: ${unregistered.join(", ")}`
+    ).toEqual([]);
+  });
+
+  it("consumes every registered extension key somewhere in renderer source", () => {
+    // Forward drift: a registry key that nothing consumes is dead governance — drop it
+    // from the registry (and any theme that defines it) instead of carrying it.
+    const unused = THEME_EXTENSION_KEYS.filter((key) => !consumedAnywhere.has(key));
+    expect(
+      unused,
+      `registered extension keys that are no longer consumed in source: ${unused.join(", ")}`
+    ).toEqual([]);
   });
 });

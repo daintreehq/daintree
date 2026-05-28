@@ -307,7 +307,9 @@ export interface AppColorScheme {
   builtin: boolean;
   tokens: AppColorSchemeTokens;
   palette?: ThemePalette;
-  extensions?: Partial<Record<ExtensionKey, string>>;
+  // Open union: registry keys get autocomplete, but user-imported themes may carry
+  // arbitrary extension keys, so unknown string keys stay assignable.
+  extensions?: Partial<Record<ExtensionKey | (string & {}), string>>;
   location?: string;
   heroImage?: string;
 }

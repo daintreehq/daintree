@@ -8,6 +8,8 @@ export interface BuiltInThemeSource {
   builtin: true;
   palette: ThemePalette;
   tokens?: Partial<AppColorSchemeTokens>;
+  // Built-in themes are closed to the registry: a misspelled or unregistered
+  // extension key fails at compile time.
   extensions?: Partial<Record<ExtensionKey, string>>;
   location?: string;
   heroImage?: string;

@@ -315,6 +315,26 @@ describe("built-in themes", () => {
       `var(--key) consumers not registered in EXTENSION_KEYS: ${directionB.join(", ")}`
     ).toHaveLength(0);
   });
+
+  it("never ships a dock-shadow extension that overrides the fix with a weak alpha (#8156)", () => {
+    // applyAppThemeToRoot sets extensions["dock-shadow"] as an inline style,
+    // which beats the corrected src/index.css base value. Any theme that opts
+    // back in must use the alpha-pinned relative-color form so it stays visible
+    // on light themes — never a raw low-alpha rgba() like the original bug.
+    for (const source of BUILT_IN_THEME_SOURCES) {
+      const dockShadow = source.extensions?.["dock-shadow"];
+      if (dockShadow === undefined) continue;
+      const pinned = dockShadow.match(/rgb\(from var\(--theme-shadow-color\) r g b \/ ([0-9.]+)\)/);
+      expect(
+        pinned,
+        `${source.id} dock-shadow "${dockShadow}" must use the alpha-pinned relative-color form`
+      ).toBeTruthy();
+      expect(
+        Number(pinned![1]),
+        `${source.id} dock-shadow alpha ${pinned![1]} below 0.25 visibility threshold`
+      ).toBeGreaterThanOrEqual(0.25);
+    }
+  });
 });
 
 const SEMANTIC_TOKEN_NAMES = new Set<string>(APP_THEME_TOKEN_KEYS);
