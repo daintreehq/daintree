@@ -83,8 +83,10 @@ export interface ContextMenuContribution {
  * `showInPalette: true` so the view is spawnable from the panel palette.
  * `sidebar` registers silently with `showInPalette: false`, reserving the
  * kind for the future sidebar host without surfacing it as a spawn target.
- * The `experimental_` prefix on the contribution point signals that the
- * shape may change before the renderer host (#9229) ships.
+ * `location: "panel"` is wired today by the inline renderer host (#9229); see
+ * `docs/plugins/architecture.md` for the renderer host design. The
+ * `experimental_` prefix on the contribution point signals that the shape may
+ * still change before the feature exits experiment status.
  */
 export type ViewLocation = "panel" | "sidebar";
 
@@ -95,6 +97,28 @@ export interface ViewContribution {
   location: ViewLocation;
   iconId?: string;
   description?: string;
+}
+
+/**
+ * Props every plugin-contributed panel view receives from the renderer host.
+ * Intentionally narrower than the host-internal `PanelComponentProps` so the
+ * SDK surface stays stable across a future `plugin://` → trusted-iframe
+ * cutover (#9229).
+ *
+ * - `panelId` is the runtime panel instance id (the same value the host uses
+ *   in `addPanelOptions` / IPC). Plugins should treat it as opaque.
+ * - `pluginId` is the plugin's manifest `name` — useful for namespacing
+ *   plugin-local storage keys and for logging.
+ * - `disposeSignal` aborts on unmount AND when the host receives a
+ *   `plugin:panel-kinds-changed` push that no longer contains this kind. The
+ *   broadcast fires before the main process tears down plugin IPC handlers,
+ *   so signal-driven cleanup (fetch aborts, subscription teardown) runs
+ *   while the plugin host APIs are still live.
+ */
+export interface PanelViewProps {
+  readonly panelId: string;
+  readonly pluginId: string;
+  readonly disposeSignal: AbortSignal;
 }
 
 /**

@@ -5152,12 +5152,13 @@ describe("reserved contribution point warnings", () => {
     errorSpy.mockRestore();
   });
 
-  it("registers a contributes.experimental_views panel-location entry as a panel kind (#9289)", async () => {
+  it("attaches componentPath to the matching panel kind when a view targets location 'panel' (#9229)", async () => {
     await writePlugin("views", {
       name: "acme.views",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
         experimental_views: [
           {
             id: "main",
@@ -5176,31 +5177,64 @@ describe("reserved contribution point warnings", () => {
     expect(registerPanelKind).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "acme.views.main",
-        name: "Main",
-        iconId: "puzzle",
-        color: "var(--theme-category-orange)",
-        hasPty: false,
-        canRestart: false,
-        canConvert: false,
-        showInPalette: true,
         extensionId: "acme.views",
+        componentPath: "plugin://acme.views/dist/view.js",
       })
     );
-    const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(warnMessages.some((m: string) => m.includes("not yet implemented"))).toBe(false);
+    const viewWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
+      String(call[0]).includes("experimental_views")
+    );
+    expect(viewWarnings).toHaveLength(0);
   });
 
-  it("silently registers a sidebar-location view with showInPalette: false (#9289)", async () => {
-    await writePlugin("views-sidebar", {
-      name: "acme.views-sidebar",
+  it("warns and skips an experimental_views entry with no matching panel id", async () => {
+    await writePlugin("orphan", {
+      name: "acme.orphan",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
         experimental_views: [
           {
-            id: "side",
-            name: "Side",
-            componentPath: "./dist/side.js",
+            id: "ghost",
+            name: "Ghost",
+            componentPath: "./dist/view.js",
+            location: "panel",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(registerPanelKind).toHaveBeenCalledTimes(1);
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acme.orphan.main" })
+    );
+    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      componentPath?: string;
+    };
+    expect(panelCall.componentPath).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Plugin "acme.orphan": experimental_views entry "ghost" has no matching contributes.panels entry'
+      )
+    );
+  });
+
+  it("warns and skips a sidebar-location view entry until the sidebar host ships", async () => {
+    await writePlugin("sidebar", {
+      name: "acme.sidebar",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
+        experimental_views: [
+          {
+            id: "main",
+            name: "Main",
+            componentPath: "./dist/view.js",
             location: "sidebar",
           },
         ],
@@ -5210,70 +5244,30 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    expect(service.listPlugins()).toHaveLength(1);
-    expect(registerPanelKind).toHaveBeenCalledTimes(1);
-    expect(registerPanelKind).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "acme.views-sidebar.side",
-        showInPalette: false,
-        extensionId: "acme.views-sidebar",
-      })
-    );
-    const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(warnMessages.some((m: string) => m.includes('view "side"'))).toBe(false);
-  });
-
-  it("skips a view whose componentPath escapes the plugin directory (#9289)", async () => {
-    await writePlugin("views-escape", {
-      name: "acme.views-escape",
-      version: "1.0.0",
-      engines: { daintree: "^0.7.0" },
-      contributes: {
-        experimental_views: [
-          {
-            id: "evil",
-            name: "Evil",
-            componentPath: "../outside.js",
-            location: "panel",
-          },
-          {
-            id: "ok",
-            name: "OK",
-            componentPath: "./inside.js",
-            location: "panel",
-          },
-        ],
-      },
-    });
-
-    const service = new PluginService(tmpDir, "0.7.5");
-    await service.initialize();
-
-    expect(service.listPlugins()).toHaveLength(1);
+    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      componentPath?: string;
+    };
+    expect(panelCall.componentPath).toBeUndefined();
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining(
-        'Plugin "acme.views-escape": view "evil" componentPath escapes plugin directory'
+        'Plugin "acme.sidebar": experimental_views entry "main" has location "sidebar" which is not yet implemented'
       )
-    );
-    expect(registerPanelKind).toHaveBeenCalledTimes(1);
-    expect(registerPanelKind).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "acme.views-escape.ok" })
     );
   });
 
-  it("forwards an explicit iconId on the view to registerPanelKind (#9289)", async () => {
-    await writePlugin("views-icon", {
-      name: "acme.views-icon",
+  it("warns when an experimental_views entry targets a PTY-backed panel", async () => {
+    await writePlugin("pty-view", {
+      name: "acme.pty-view",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc", hasPty: true }],
         experimental_views: [
           {
-            id: "g",
-            name: "Gauge",
-            componentPath: "./g.js",
+            id: "main",
+            name: "Main",
+            componentPath: "./dist/view.js",
             location: "panel",
-            iconId: "gauge",
           },
         ],
       },
@@ -5282,8 +5276,100 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    expect(registerPanelKind).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "acme.views-icon.g", iconId: "gauge" })
+    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      componentPath?: string;
+      hasPty?: boolean;
+    };
+    expect(panelCall.hasPty).toBe(true);
+    expect(panelCall.componentPath).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('experimental_views entry "main" matches a panel with hasPty=true')
+    );
+  });
+
+  it("rejects an unsafe experimental_views componentPath", async () => {
+    await writePlugin("unsafe", {
+      name: "acme.unsafe",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
+        experimental_views: [
+          {
+            id: "main",
+            name: "Main",
+            componentPath: "../escape.js",
+            location: "panel",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      componentPath?: string;
+    };
+    expect(panelCall.componentPath).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('experimental_views entry "main" has an unsafe componentPath')
+    );
+  });
+
+  it("rejects an absolute https componentPath as unsafe", async () => {
+    await writePlugin("https", {
+      name: "acme.https",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
+        experimental_views: [
+          {
+            id: "main",
+            name: "Main",
+            componentPath: "https://evil.example/view.js",
+            location: "panel",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      componentPath?: string;
+    };
+    expect(panelCall.componentPath).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('experimental_views entry "main" has an unsafe componentPath')
+    );
+  });
+
+  it("warns and keeps the first occurrence on duplicate experimental_views ids", async () => {
+    await writePlugin("dup", {
+      name: "acme.dup",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
+        experimental_views: [
+          { id: "main", name: "First", componentPath: "./first.js", location: "panel" },
+          { id: "main", name: "Second", componentPath: "./second.js", location: "panel" },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      componentPath?: string;
+    };
+    expect(panelCall.componentPath).toBe("plugin://acme.dup/first.js");
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('experimental_views has duplicate entries for id "main"')
     );
   });
 
@@ -5443,25 +5529,26 @@ describe("reserved contribution point warnings", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
-    // The panel contribution registers; the sidebar view also registers (silently,
-    // showInPalette: false) so future sidebar hosts can discover it.
-    expect(registerPanelKind).toHaveBeenCalledTimes(2);
-    expect(registerPanelKind).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "acme.mixed.viewer", showInPalette: true })
-    );
-    expect(registerPanelKind).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "acme.mixed.main", showInPalette: false })
+    expect(registerPanelKind).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'experimental_views entry "main" has location "sidebar" which is not yet implemented'
+      )
     );
     // experimental_mcpServers now reaches the supervisor instead of warning (#9233).
     expect(mockPluginMcpSupervisor.start).toHaveBeenCalledTimes(1);
   });
 
-  it("registers each view with showInPalette derived from location (#9289)", async () => {
+  it("logs one warning per orphan or unsupported view entry", async () => {
     await writePlugin("many", {
       name: "acme.many",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
+        // `a` matches a panel and binds; `b` is a sidebar view; `c` is an
+        // orphan with no matching panel id. Each non-binding entry should log
+        // exactly one warning naming the entry id.
+        panels: [{ id: "a", name: "A", iconId: "eye", color: "#000" }],
         experimental_views: [
           { id: "a", name: "A", componentPath: "./a.js", location: "panel" },
           { id: "b", name: "B", componentPath: "./b.js", location: "sidebar" },
@@ -5473,16 +5560,14 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    expect(registerPanelKind).toHaveBeenCalledTimes(3);
-    expect(registerPanelKind).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "acme.many.a", showInPalette: true })
+    const sidebarWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
+      String(call[0]).includes('"b" has location "sidebar"')
     );
-    expect(registerPanelKind).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "acme.many.b", showInPalette: false })
+    const orphanWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
+      String(call[0]).includes('"c" has no matching contributes.panels')
     );
-    expect(registerPanelKind).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "acme.many.c", showInPalette: true })
-    );
+    expect(sidebarWarnings).toHaveLength(1);
+    expect(orphanWarnings).toHaveLength(1);
   });
 
   it("rejects a views entry with an invalid location at schema level", () => {

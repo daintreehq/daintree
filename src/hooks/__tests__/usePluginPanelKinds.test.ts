@@ -11,6 +11,20 @@ vi.mock("@/components/Terminal/TerminalPane", () => ({
   },
 }));
 
+// `makePluginViewHost` pulls in ErrorBoundary, Suspense, and Vite ignored
+// dynamic imports — none of which the registration hook actually exercises.
+// Return a sentinel component identified by the kind id so assertions can
+// confirm the right factory was invoked per kind.
+vi.mock("@/components/Plugin/PluginViewHost", () => ({
+  makePluginViewHost: vi.fn((config: { id: string }) => {
+    function PluginViewHostMock() {
+      return null;
+    }
+    PluginViewHostMock.displayName = `PluginViewHostMock(${config.id})`;
+    return PluginViewHostMock;
+  }),
+}));
+
 const { getPanelKindsMock, onPanelKindsChangedMock } = vi.hoisted(() => ({
   getPanelKindsMock: vi.fn(),
   onPanelKindsChangedMock: vi.fn(),
@@ -103,7 +117,7 @@ describe("usePluginPanelKinds", () => {
     clearPanelKindRegistry();
   });
 
-  it("does not register a definition for non-PTY plugin kinds", async () => {
+  it("does not register a definition for non-PTY plugin kinds without componentPath", async () => {
     const nonPty = pluginKind({ id: "acme.note", hasPty: false });
     getPanelKindsMock.mockResolvedValue([nonPty]);
 
@@ -118,6 +132,119 @@ describe("usePluginPanelKinds", () => {
       expect(getPanelKindConfig(nonPty.id)).toBeDefined();
     });
     expect(getPanelKindDefinition(nonPty.id)).toBeUndefined();
+
+    clearPanelKindRegistry();
+  });
+
+  it("registers a PluginViewHost definition when a non-PTY kind carries componentPath (#9229)", async () => {
+    const viewKind = pluginKind({
+      id: "acme.dashboard",
+      hasPty: false,
+      componentPath: "plugin://acme/dashboard.js",
+    });
+    getPanelKindsMock.mockResolvedValue([viewKind]);
+
+    const { getPanelKindConfig, clearPanelKindRegistry } =
+      await import("@shared/config/panelKindRegistry");
+    const { getPanelKindDefinition } = await import("@/registry");
+    const { makePluginViewHost } = await import("@/components/Plugin/PluginViewHost");
+    const { usePluginPanelKinds } = await import("../usePluginPanelKinds");
+
+    renderHook(() => usePluginPanelKinds());
+
+    await waitFor(() => {
+      expect(getPanelKindConfig(viewKind.id)).toBeDefined();
+    });
+    expect(getPanelKindDefinition(viewKind.id)).toBeDefined();
+    expect(makePluginViewHost).toHaveBeenCalledWith(
+      expect.objectContaining({ id: viewKind.id, componentPath: viewKind.componentPath })
+    );
+
+    clearPanelKindRegistry();
+  });
+
+  it("does not re-create the PluginViewHost on identity-equal replay pushes", async () => {
+    // Regression guard: each makePluginViewHost call returns a new component
+    // ref, which would unmount+remount the plugin view subtree on every
+    // broadcast if the hook re-invoked it unconditionally. The hook memoizes
+    // hosts per (id + componentPath) so repeated identical snapshots reuse
+    // the same component ref.
+    let emit: ((payload: { kinds: PanelKindConfig[] }) => void) | null = null;
+    onPanelKindsChangedMock.mockImplementation(
+      (cb: (payload: { kinds: PanelKindConfig[] }) => void) => {
+        emit = cb;
+        return () => {};
+      }
+    );
+
+    const { clearPanelKindRegistry } = await import("@shared/config/panelKindRegistry");
+    const { makePluginViewHost } = await import("@/components/Plugin/PluginViewHost");
+    const { usePluginPanelKinds } = await import("../usePluginPanelKinds");
+
+    renderHook(() => usePluginPanelKinds());
+    await waitFor(() => expect(onPanelKindsChangedMock).toHaveBeenCalled());
+
+    const viewKind = pluginKind({
+      id: "acme.steady",
+      hasPty: false,
+      componentPath: "plugin://acme/v.js",
+    });
+
+    act(() => emit!({ kinds: [viewKind] }));
+    const callsAfterFirst = (makePluginViewHost as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    // Two more identical pushes — neither should produce a new component.
+    act(() => emit!({ kinds: [viewKind] }));
+    act(() => emit!({ kinds: [viewKind] }));
+    const callsAfterReplay = (makePluginViewHost as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    expect(callsAfterReplay).toBe(callsAfterFirst);
+
+    // A genuine componentPath change invalidates the cache and produces a
+    // fresh host.
+    const updatedKind = pluginKind({
+      id: "acme.steady",
+      hasPty: false,
+      componentPath: "plugin://acme/v.js?v=2",
+    });
+    act(() => emit!({ kinds: [updatedKind] }));
+    const callsAfterUpdate = (makePluginViewHost as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(callsAfterUpdate).toBe(callsAfterReplay + 1);
+
+    clearPanelKindRegistry();
+  });
+
+  it("clears the view-host definition when a kind loses its componentPath via a push", async () => {
+    let emit: ((payload: { kinds: PanelKindConfig[] }) => void) | null = null;
+    onPanelKindsChangedMock.mockImplementation(
+      (cb: (payload: { kinds: PanelKindConfig[] }) => void) => {
+        emit = cb;
+        return () => {};
+      }
+    );
+
+    const { clearPanelKindRegistry } = await import("@shared/config/panelKindRegistry");
+    const { getPanelKindDefinition } = await import("@/registry");
+    const { usePluginPanelKinds } = await import("../usePluginPanelKinds");
+
+    renderHook(() => usePluginPanelKinds());
+    await waitFor(() => expect(onPanelKindsChangedMock).toHaveBeenCalled());
+
+    const withView = pluginKind({
+      id: "acme.toggle",
+      hasPty: false,
+      componentPath: "plugin://acme/v.js",
+    });
+    act(() => emit!({ kinds: [withView] }));
+    expect(getPanelKindDefinition(withView.id)).toBeDefined();
+
+    // Plugin re-emits the same kind with no view contribution attached
+    // (e.g. the `experimental_views` entry was removed). Renderer must drop
+    // the prior PluginViewHost definition so the panel falls back to
+    // PluginMissingPanel rather than rendering a stale lazy import.
+    const noView = pluginKind({ id: "acme.toggle", hasPty: false });
+    act(() => emit!({ kinds: [noView] }));
+    expect(getPanelKindDefinition(noView.id)).toBeUndefined();
 
     clearPanelKindRegistry();
   });

@@ -119,6 +119,16 @@ export interface PanelKindConfig {
   showInPalette?: boolean;
   /** Extension ID if this is an extension-provided panel kind */
   extensionId?: string;
+  /**
+   * Fully-resolved `plugin://{pluginId}/{path}` URL of the React module that
+   * renders this kind. Set during `loadPlugin` when an `experimental_views`
+   * entry matches a panel by bare id. Travels through the existing
+   * `plugin:panel-kinds-changed` broadcast so the renderer can lazy-import the
+   * module without a separate IPC call. Absent for PTY-backed plugin panels
+   * (rendered through `TerminalPane`) and for plugin panels without a matching
+   * view contribution (rendered through `PluginMissingPanel`).
+   */
+  componentPath?: string;
   /** Keyboard shortcut (optional) */
   shortcut?: string;
   /** Search aliases for fuzzy matching in the panel palette */
