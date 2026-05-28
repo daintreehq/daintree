@@ -150,6 +150,7 @@ const BASE_SETTINGS: VoiceInputSettings = {
   deviceId: "",
   organizationId: "",
   projectId: "",
+  recordingMode: "toggle",
 };
 
 function latestInstance(): MockWebSocket {
