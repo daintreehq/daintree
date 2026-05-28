@@ -19,8 +19,8 @@ vi.mock("@/utils/logger", () => ({ logError: logErrorMock }));
 
 import { registerDevPreviewActions } from "../devPreviewActions";
 
-const createMock = vi.fn(async () => ({}));
-const showMock = vi.fn(async () => ({}));
+const createMock: any = vi.fn(async () => ({}));
+const showMock: any = vi.fn(async () => ({}));
 const markTabCreatedMock = vi.fn();
 const closeTabMock = vi.fn();
 const setOpenMock = vi.fn();
@@ -90,6 +90,7 @@ beforeEach(() => {
   });
   createMock.mockImplementation(async () => {
     order.push("create");
+    return {};
   });
   Object.defineProperty(globalThis.window, "electron", {
     value: { portal: { create: createMock, show: showMock } },
@@ -115,11 +116,13 @@ describe("devPreview.promoteToPortal", () => {
     // partition-less create.
     expect(order.indexOf("create")).toBeLessThan(order.indexOf("setState"));
 
-    const createArgs = createMock.mock.calls[0]![0] as {
+    expect(createMock).toHaveBeenCalledOnce();
+    const createArgs = createMock.mock.calls[0]?.[0] as unknown as {
       tabId: string;
       url: string;
       partition: string;
     };
+    expect(createArgs).toBeDefined();
     expect(createArgs.url).toBe("http://localhost:3000/");
     expect(createArgs.partition).toBe("persist:dev-preview-proj-wt-1-panel-1");
 
@@ -152,7 +155,9 @@ describe("devPreview.promoteToPortal", () => {
     });
     const { run } = setupActions();
     await run("devPreview.promoteToPortal", undefined, { projectId: "proj" });
-    const createArgs = createMock.mock.calls[0]![0] as { url: string };
+    expect(createMock).toHaveBeenCalledOnce();
+    const createArgs = createMock.mock.calls[0]?.[0] as unknown as { url: string };
+    expect(createArgs).toBeDefined();
     expect(createArgs.url).toBe("http://localhost:4000/");
   });
 
