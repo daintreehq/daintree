@@ -120,13 +120,16 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 
 **Component registration** is covered by the **views** contribution point below — panels declare the slot, views provide the component.
 
-## Views — _Shipped (panel registration; sidebar surface pending)_
+## Views — _Shipped (panel surface; sidebar surface pending)_
 
-Views are the React components that render inside a panel. At plugin load, every `experimental_views` entry is registered as a panel kind (`{pluginId}.{view.id}`) via `registerPanelKind`. `location: "panel"` entries set `showInPalette: true` and appear in the "New Panel…" palette; `location: "sidebar"` entries register silently with `showInPalette: false`, reserving the kind for the future sidebar host without surfacing it as a spawn target today. The renderer plugin host that mounts the actual React component is still in active development, so the `experimental_` prefix stays in place: the manifest shape may shift before the renderer half ships.
+Views are the React components that render inside a panel. A view binds to a panel slot declared in `contributes.panels` by matching its bare `id`; at plugin load the matching panel kind gains a `componentPath` resolved to a `plugin://` URL. The renderer host (`PluginViewHost`) lazy-imports the module over Daintree's `plugin://` protocol and mounts it under an `ErrorBoundary` + `Suspense`. `location: "panel"` is wired today; `location: "sidebar"` logs a warning and is skipped until the future sidebar host ships. The contribution key keeps the `experimental_` prefix until the props contract has lived through a release; the shape below is the contract today.
 
 ```json
 {
   "contributes": {
+    "panels": [
+      { "id": "dashboard", "name": "Cost Dashboard", "iconId": "gauge", "color": "#5b8def" }
+    ],
     "experimental_views": [
       {
         "id": "dashboard",
@@ -140,14 +143,16 @@ Views are the React components that render inside a panel. At plugin load, every
 }
 ```
 
+**Pairing with `contributes.panels`** — a view binds to a panel by matching its bare `id` (pre-namespace) to a panel `id`. A view with no matching panel logs a warning and is skipped. A view targeting a panel with `hasPty: true` is also skipped — PTY panels render through `TerminalPane` and cannot host a plugin module.
+
 **Fields:**
 
 | Field | Required | Notes |
 | --- | --- | --- |
 | `id` | yes | Matches the panel `id` it provides a component for. Namespaced at runtime as `{pluginId}.{id}`. |
-| `name` | yes | Display label. |
-| `componentPath` | yes | Relative path to an ESM module inside the plugin. The module's default export is a React component. |
-| `location` | yes | `"panel"` (docked in the grid) or `"sidebar"` (sidebar contribution — future). |
+| `name` | yes | Display label, also used in the loading skeleton's accessible label. |
+| `componentPath` | yes | POSIX-relative path to an ESM module inside the plugin. The module's default export is a React component. Absolute paths and `..` segments are rejected at load time. |
+| `location` | yes | `"panel"` (docked in the grid — wired today) or `"sidebar"` (reserved for a future sidebar host; currently logs a warning and is skipped). |
 | `iconId` | no | Override the panel's icon for this view. |
 | `description` | no | Surface text for palette/preferences. |
 
@@ -157,16 +162,38 @@ Views are the React components that render inside a panel. At plugin load, every
 
 ```tsx
 // src/dashboard.tsx
+import { useEffect } from "react";
 import type { PanelViewProps } from "@daintreehq/plugin-sdk";
 import { useWorktree } from "@daintreehq/plugin-sdk/react";
 
-export default function Dashboard({ panelId, disposeSignal }: PanelViewProps) {
+export default function Dashboard({ panelId, pluginId, disposeSignal }: PanelViewProps) {
   const worktree = useWorktree();
-  return <div>Dashboard for {worktree?.name ?? "no worktree"}</div>;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    // Chain the host signal so the fetch aborts on unmount AND when the
+    // host receives a `plugin:panel-kinds-changed` push that no longer
+    // contains this kind — before main tears down plugin IPC handlers.
+    const onAbort = (): void => controller.abort();
+    disposeSignal.addEventListener("abort", onAbort);
+    void fetch(`plugin://${pluginId}/api/cost-summary`, { signal: controller.signal });
+    return () => {
+      disposeSignal.removeEventListener("abort", onAbort);
+      controller.abort();
+    };
+  }, [pluginId, disposeSignal]);
+
+  return <div data-panel-id={panelId}>Dashboard for {worktree?.name ?? "no worktree"}</div>;
 }
 ```
 
-The view is wrapped in an error boundary by the host. An unhandled render error shows an inline fallback with the plugin name and a "Reload" button — it does not crash the rest of Daintree.
+| Prop | Type | Notes |
+| --- | --- | --- |
+| `panelId` | `string` | Opaque runtime id of the panel instance. Useful as a key for plugin-local panel-scoped state. |
+| `pluginId` | `string` | The plugin's manifest `name`. Stable for the lifetime of the host — useful for namespacing storage keys and log lines. |
+| `disposeSignal` | `AbortSignal` | Aborts on unmount and when the host receives a `plugin:panel-kinds-changed` push that omits this kind. The broadcast fires before main tears down plugin IPC handlers, so signal-driven cleanup runs while host APIs are still live. |
+
+The view is wrapped in an error boundary by the host. An unhandled render error shows an inline "Try again" affordance; clicking it produces a fresh `lazy()` reference so the dynamic import is re-evaluated rather than returning the cached failed promise.
 
 ## Toolbar buttons — _Shipped_
 

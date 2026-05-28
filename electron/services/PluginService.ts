@@ -46,6 +46,7 @@ import type {
   PluginLoadError,
   PluginInstallSource,
   PluginSettingsScope,
+  ViewContribution,
 } from "../../shared/types/plugin.js";
 import { PluginSettingsStore } from "./PluginSettingsStore.js";
 import { projectStore } from "./ProjectStore.js";
@@ -59,7 +60,6 @@ import {
   onPanelKindUnregistered,
   getPluginPanelKinds,
 } from "../../shared/config/panelKindRegistry.js";
-import { PANEL_KIND_BRAND_COLORS } from "../../shared/theme/entityColors.js";
 import {
   registerToolbarButton,
   unregisterPluginToolbarButtons,
@@ -331,6 +331,38 @@ function isChannelSchema(value: unknown): value is PluginChannelSchema<unknown, 
     result !== null &&
     typeof (result as { safeParse?: unknown }).safeParse === "function"
   );
+}
+
+/**
+ * Validate a manifest-declared `experimental_views[].componentPath` before we
+ * resolve it to a `plugin://` URL (#9229). The protocol handler at
+ * `electron/setup/protocols.ts` rejects traversal at request time, but
+ * pre-validating here surfaces a noisy authoring mistake (`/abs/path` or
+ * `../escape`) as a `[PluginService]` warn during load, instead of a silent
+ * 404 from `import('plugin://...')` later. Accepts relative POSIX paths only —
+ * a leading `./` is preserved (the URL builder normalizes it).
+ */
+function isSafePluginViewComponentPath(componentPath: string): boolean {
+  if (typeof componentPath !== "string" || componentPath.length === 0) return false;
+  if (componentPath.startsWith("/")) return false;
+  if (componentPath.includes("\\")) return false;
+  if (componentPath.includes("\0")) return false;
+  const segments = componentPath.split("/");
+  for (const seg of segments) {
+    if (seg === "..") return false;
+  }
+  return true;
+}
+
+/**
+ * Build the `plugin://{pluginId}/{path}` URL that `PluginViewHost` passes to
+ * `import()`. Strips a single leading `./` so the host segment doesn't end up
+ * with an awkward `./dist/view.js` path component — the URL handler accepts
+ * either form, but the canonical shape matches the protocol docs.
+ */
+function buildPluginViewUrl(pluginId: string, componentPath: string): string {
+  const normalized = componentPath.startsWith("./") ? componentPath.slice(2) : componentPath;
+  return `plugin://${pluginId}/${normalized}`;
 }
 
 type WorkspaceWorktreeEvent = "worktree-update" | "worktree-activated" | "worktree-removed";
@@ -920,8 +952,32 @@ export class PluginService {
       }
     }
 
+    // Index views by bare id so the panels loop can attach `componentPath` in
+    // a single registerPanelKind pass (#9229). View ids are pre-namespace; the
+    // runtime panel id is `${manifest.name}.${panel.id}`.
+    const viewsByBareId = new Map<string, ViewContribution>();
+    const unmatchedViewIds = new Set<string>();
+    for (const view of manifest.contributes.experimental_views) {
+      if (view.location === "sidebar") {
+        console.warn(
+          `[PluginService] Plugin "${manifest.name}": experimental_views entry "${view.id}" has location "sidebar" which is not yet implemented and will be ignored`
+        );
+        continue;
+      }
+      if (!isSafePluginViewComponentPath(view.componentPath)) {
+        console.warn(
+          `[PluginService] Plugin "${manifest.name}": experimental_views entry "${view.id}" has an unsafe componentPath ${JSON.stringify(view.componentPath)} and will be ignored`
+        );
+        continue;
+      }
+      viewsByBareId.set(view.id, view);
+      unmatchedViewIds.add(view.id);
+    }
+
     for (const panel of manifest.contributes.panels) {
       const panelId = `${manifest.name}.${panel.id}`;
+      const view = viewsByBareId.get(panel.id);
+      if (view) unmatchedViewIds.delete(panel.id);
       registerPanelKind({
         id: panelId,
         name: panel.name,
@@ -932,7 +988,24 @@ export class PluginService {
         canConvert: panel.canConvert,
         showInPalette: panel.showInPalette,
         extensionId: manifest.name,
+        ...(view && !panel.hasPty
+          ? { componentPath: buildPluginViewUrl(manifest.name, view.componentPath) }
+          : {}),
       });
+      if (view && panel.hasPty) {
+        // A PTY panel with a matching view is contradictory — the view module
+        // would never render because TerminalPane owns the surface. Surface the
+        // collision rather than silently dropping the view.
+        console.warn(
+          `[PluginService] Plugin "${manifest.name}": experimental_views entry "${view.id}" matches a panel with hasPty=true; the view will be ignored because PTY panels are rendered by TerminalPane`
+        );
+      }
+    }
+
+    for (const orphanId of unmatchedViewIds) {
+      console.warn(
+        `[PluginService] Plugin "${manifest.name}": experimental_views entry "${orphanId}" has no matching contributes.panels entry and will be ignored`
+      );
     }
 
     for (const btn of manifest.contributes.toolbarButtons) {
@@ -970,31 +1043,6 @@ export class PluginService {
     for (const ctxMenu of manifest.contributes.contextMenus) {
       trackPluginExpression(manifest.name, ctxMenu.when);
       registerPluginContextMenuItem(manifest.name, ctxMenu);
-    }
-
-    for (const view of manifest.contributes.experimental_views) {
-      const resolvedComponent = this.resolveEntryPath(pluginDir, view.componentPath);
-      if (!resolvedComponent) {
-        console.warn(
-          `[PluginService] Plugin "${manifest.name}": view "${view.id}" componentPath escapes plugin directory, skipping`
-        );
-        continue;
-      }
-      // location: "panel" → spawnable from the panel palette.
-      // location: "sidebar" → registered silently (no palette entry) so a
-      // future sidebar host can consume the kind via the existing registry;
-      // not yet spawnable until that surface lands.
-      registerPanelKind({
-        id: `${manifest.name}.${view.id}`,
-        name: view.name,
-        iconId: view.iconId ?? "puzzle",
-        color: PANEL_KIND_BRAND_COLORS.plugin,
-        hasPty: false,
-        canRestart: false,
-        canConvert: false,
-        showInPalette: view.location === "panel",
-        extensionId: manifest.name,
-      });
     }
 
     if (manifest.contributes.experimental_mcpServers.length > 0) {

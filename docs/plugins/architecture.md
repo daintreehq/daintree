@@ -108,9 +108,27 @@ Chromium (Electron 41) supports import maps natively — no polyfill required.
 
 Plugins declare a `react` peer dependency in their own `package.json`. The host version is canonical. If Daintree bumps React's major version, the plugin template's published peer range is updated and installed plugins are revalidated against the new range as part of the `engines.daintree` compatibility gate.
 
+### Import URL flow
+
+Plugin view modules are loaded via Daintree's `plugin://` privileged protocol. When `PluginService.loadPlugin` matches a `contributes.experimental_views` entry to a panel by bare id, it stores the resolved URL — `plugin://{pluginId}/{componentPath}` — on the `PanelKindConfig` and broadcasts it through `plugin:panel-kinds-changed`. The renderer's `PluginViewHost` calls `React.lazy(() => import(componentPath))` against that URL; Chromium 146 resolves the protocol, the response carries the `plugin://` security headers, and the bare `react` / `react/jsx-runtime` specifiers in the bundle resolve through the host import map to Daintree's single React instance.
+
+The resolved URL travels through the renderer over the existing panel-kinds IPC broadcast — no separate channel is required. A view that targets a panel id with no matching `contributes.panels` entry, or `location: "sidebar"` (reserved), or an unsafe `componentPath` (absolute paths, `..` segments) logs a `[PluginService]` warning at load time and is skipped.
+
+### Hot reload — dev only
+
+In dev, the host can re-evaluate a plugin view's module after the source changes. There is no production hot-reload path. V8 caches ESM module records by URL string and Chromium offers no eviction API (Vite #14438 / Chromium #350426234, unresolved as of 2026). Every cache-busting query string permanently expands the renderer's module map; iterating against a long-lived production renderer would leak memory indefinitely. Treat hot reload as a dev affordance and assume production users reach a clean state by closing and reopening the panel.
+
+### Renderer-first teardown
+
+The renderer is the first surface to know that a plugin's panel kind has been removed: `PluginService.unloadPlugin` fires `plugin:panel-kinds-changed` before it deletes the in-memory plugin entry, so the broadcast crosses the IPC boundary while host APIs are still live. `PluginViewHost` subscribes to that push and aborts its `disposeSignal` synchronously when its kind disappears from the payload — _before_ React unmounts the subtree. Plugin `useEffect` cleanups that listen on `disposeSignal` (fetch aborts, subscription teardown, MessagePort closes) therefore run while the plugin's IPC handlers and host APIs are still answering, instead of racing against the main-side teardown.
+
 ### Error boundaries
 
-Every plugin view is wrapped in an error boundary by the host. A crash renders a fallback with the plugin name, error message, and a Reload button. The rest of Daintree is unaffected — the panel grid keeps working, other plugins keep running, the user can close the failing panel normally.
+Every plugin view is wrapped in an error boundary by the host. A crash renders the component-variant fallback with a "Try again" button; the host wires `onReset` to bump a retry counter that produces a fresh `lazy()` reference, so `import()` is re-evaluated rather than returning the cached failed promise. The rest of Daintree is unaffected — the panel grid keeps working, other plugins keep running, the user can close the failing panel normally.
+
+### Trusted-inline → iframe contract
+
+Today's inline host is the right trade for curated trust. The `PluginViewHost` API surface — the `PanelViewProps` shape (`panelId`, `pluginId`, `disposeSignal`) and the broadcast-driven teardown ordering — is intentionally chosen to survive a future cutover to a trusted iframe model. `componentPath` would resolve to a sandboxed frame URL instead of a direct ESM import; the props would marshal over `postMessage`; `disposeSignal` would still abort on the same `panel-kinds-changed` removal event. No manifest change would be required on the plugin author's side.
 
 ### Inline, not iframe
 

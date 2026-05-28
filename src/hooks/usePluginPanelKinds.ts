@@ -7,15 +7,18 @@ import {
 } from "@shared/config/panelKindRegistry";
 import { registerPanelKindDefinition, unregisterPanelKindDefinition } from "@/registry";
 import { TerminalPane } from "@/components/Terminal/TerminalPane";
+import { makePluginViewHost } from "@/components/Plugin/PluginViewHost";
 import { logWarn } from "@/utils/logger";
 
 /**
  * Pull plugin-contributed panel kinds on mount and keep the renderer
  * registries in sync with main's authoritative set. Panels using PTY are
  * rendered through `TerminalPane` (the only generic component that can host
- * an extension PTY); non-PTY plugin panels do not yet have a generic host
- * component and remain `PluginMissingPanel` placeholders until per-kind
- * components are registered separately.
+ * an extension PTY); non-PTY plugin panels with a `componentPath` set by an
+ * `experimental_views` contribution render through `makePluginViewHost`
+ * (#9229), which lazy-imports the plugin's React module over the `plugin://`
+ * protocol. Non-PTY plugin panels without a matching view remain
+ * `PluginMissingPanel` placeholders.
  *
  * Pull-on-mount is a safety net for cached `WebContentsView`s that may have
  * missed a broadcast. Push-on-change is authoritative — once a push has
@@ -82,11 +85,15 @@ export function usePluginPanelKinds(): void {
           registerPanelKind(config);
           if (config.hasPty) {
             registerPanelKindDefinition(config.id, TerminalPane);
+          } else if (config.componentPath) {
+            // Non-PTY plugin panel with a matching `experimental_views`
+            // contribution — render through PluginViewHost (#9229).
+            registerPanelKindDefinition(config.id, makePluginViewHost(config));
           } else {
-            // A plugin can re-register an existing kind with hasPty flipped
-            // from true to false; clear any prior TerminalPane definition so
-            // the renderer falls back to the missing-kind placeholder for
-            // non-PTY kinds we have no generic component for.
+            // Non-PTY plugin panel with no view contribution falls back to
+            // `PluginMissingPanel`. Also handles re-registration of a kind
+            // that flipped from `hasPty: true` to `hasPty: false` without a
+            // matching view: clear any prior TerminalPane definition.
             unregisterPanelKindDefinition(config.id);
           }
         }
