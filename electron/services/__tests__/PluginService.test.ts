@@ -2756,6 +2756,71 @@ describe("createHost — dispatch", () => {
       error: { code: "EXECUTION_ERROR", message: expect.stringContaining("destroyed") },
     });
   });
+
+  it("after dispose() returns EXECUTION_ERROR without re-registering a listener", async () => {
+    const wc = makeFakeWebContents(11);
+    setActiveWebContents(wc);
+    await writePlugin("dispatch-after-dispose", {
+      name: "acme.dispatch-after-dispose",
+      version: "1.0.0",
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: DispatchHostShape }).createHost(
+      "acme.dispatch-after-dispose"
+    );
+
+    // The plugin stays in the map (dispose doesn't unload), so the host's own
+    // PLUGIN_UNLOADED guard wouldn't catch this — the disposed guard must.
+    service.dispose();
+    const result = await host.dispatch("acme.dispatch-after-dispose.go");
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: expect.stringContaining("disposed") },
+    });
+    expect(ipcMainMock._listenerCount(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE)).toBe(0);
+    expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("times out a dispatch that never receives a response and ignores a late reply", async () => {
+    const wc = makeFakeWebContents(11);
+    setActiveWebContents(wc);
+    await writePlugin("dispatch-timeout", { name: "acme.dispatch-timeout", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: DispatchHostShape }).createHost(
+      "acme.dispatch-timeout"
+    );
+
+    // Switch to fake timers only after plugin load/init (which uses real I/O).
+    vi.useFakeTimers();
+    try {
+      const pending = host.dispatch("acme.dispatch-timeout.go");
+      const req = lastDispatchRequest(wc);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await expect(pending).resolves.toEqual({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: expect.stringContaining("timed out") },
+      });
+
+      // A late response for a timed-out request is silently dropped (no throw,
+      // no double-resolve) because the pending entry was already deleted.
+      expect(() =>
+        ipcMainMock._emit(
+          CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE,
+          { sender: { id: 11 } },
+          { requestId: req.requestId, result: { ok: true, result: "late" } }
+        )
+      ).not.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("createHost — registerForgeProvider", () => {

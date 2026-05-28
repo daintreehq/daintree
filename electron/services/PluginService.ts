@@ -1291,6 +1291,16 @@ export class PluginService {
    */
   private sendDispatchToRenderer(actionId: string, args: unknown): Promise<ActionDispatchResult> {
     return new Promise((resolve) => {
+      if (this.disposed) {
+        resolve({
+          ok: false,
+          error: {
+            code: "EXECUTION_ERROR",
+            message: "PluginService is disposed",
+          },
+        });
+        return;
+      }
       const webContents = this.resolveActiveWebContents();
       if (!webContents) {
         resolve({

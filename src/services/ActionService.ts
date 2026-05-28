@@ -350,13 +350,13 @@ export class ActionService {
     }
 
     // Enforce confirmation for destructive actions from agent and plugin
-    // sources. Agents must explicitly confirm via { confirmed: true }; plugins
-    // have no confirm bypass at all (host.dispatch carries no `confirmed`), so
-    // danger:"confirm" actions always return CONFIRMATION_REQUIRED for them.
+    // sources. Agents may explicitly confirm via { confirmed: true }; plugins
+    // have NO confirm bypass — the `confirmed` flag is ignored for plugin
+    // sources, so danger:"confirm" actions always return CONFIRMATION_REQUIRED
+    // for them even if a caller spoofs `confirmed: true` on a "plugin" dispatch.
     if (
       definition.danger === "confirm" &&
-      (source === "agent" || source === "plugin") &&
-      !options?.confirmed
+      (source === "plugin" || (source === "agent" && !options?.confirmed))
     ) {
       const error: ActionError = {
         code: "CONFIRMATION_REQUIRED",

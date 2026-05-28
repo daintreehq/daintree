@@ -304,11 +304,19 @@ describe("ActionService", () => {
         run: mockRun,
       });
 
-      // Even passing confirmed:true must not let a plugin bypass the gate; the
-      // host API never sets it, but assert defense-in-depth here anyway.
       const result = await service.dispatch("actions.list", undefined, { source: "plugin" });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe("CONFIRMATION_REQUIRED");
+      expect(mockRun).not.toHaveBeenCalled();
+
+      // Defense-in-depth: the host API never sets `confirmed`, but even a caller
+      // spoofing confirmed:true on a "plugin" dispatch must NOT bypass the gate.
+      const spoofed = await service.dispatch("actions.list", undefined, {
+        source: "plugin",
+        confirmed: true,
+      });
+      expect(spoofed.ok).toBe(false);
+      if (!spoofed.ok) expect(spoofed.error.code).toBe("CONFIRMATION_REQUIRED");
       expect(mockRun).not.toHaveBeenCalled();
     });
 
