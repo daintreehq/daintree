@@ -70,4 +70,19 @@ describe("closeAndAnnounce", () => {
     closeAndAnnounce(() => {}, "Trashed all sessions");
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Trashed all sessions");
   });
+
+  it("closes before mutating the store on the DOM fallback path too", () => {
+    delete (document as DocumentWithAriaNotify).ariaNotify;
+    let storeWasEmptyAtCloseTime = false;
+    const closeFn = vi.fn(() => {
+      storeWasEmptyAtCloseTime = useAnnouncerStore.getState().polite === null;
+    });
+
+    closeAndAnnounce(closeFn, "Terminal killed");
+
+    // The store must still be empty at the moment closeFn ran — the
+    // announcement is only written after the modal closes.
+    expect(storeWasEmptyAtCloseTime).toBe(true);
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Terminal killed");
+  });
 });
