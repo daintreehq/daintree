@@ -110,15 +110,11 @@ export class PluginMcpAuditService {
     const config = this.readConfig();
     const persisted = Array.isArray(config.auditLog) ? config.auditLog : [];
     const cap = this.normalizeMaxRecords(config.auditMaxRecords);
-    const safe = persisted.filter((r: unknown): r is PluginMcpAuditRecord => {
-      if (r === null || typeof r !== "object") return false;
-      const rec = r as { id?: unknown; pluginId?: unknown; toolName?: unknown };
-      return (
-        typeof rec.id === "string" &&
-        typeof rec.pluginId === "string" &&
-        typeof rec.toolName === "string"
-      );
-    });
+    const safe: PluginMcpAuditRecord[] = [];
+    for (const raw of persisted) {
+      const record = pickKnownAuditFields(raw);
+      if (record) safe.push(record);
+    }
     this.records = safe.length > cap ? safe.slice(safe.length - cap) : safe;
     this.hydrated = true;
   }
@@ -211,4 +207,56 @@ export class PluginMcpAuditService {
     this.records = [];
     this.hydrated = false;
   }
+}
+
+/**
+ * Allowlist-narrow a persisted record to the known `PluginMcpAuditRecord`
+ * shape. Returns `null` for malformed entries, and silently drops any extra
+ * fields that may have been written by a future schema version or injected by
+ * local-filesystem tampering. The privacy invariant — "no raw values at rest"
+ * — depends on this being an allowlist, not a passthrough: a future field
+ * called `rawArgs` (or anything else not listed here) must NOT survive a
+ * round-trip through the service.
+ */
+function pickKnownAuditFields(raw: unknown): PluginMcpAuditRecord | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (
+    typeof r.id !== "string" ||
+    typeof r.ts !== "number" ||
+    typeof r.pluginId !== "string" ||
+    typeof r.serverId !== "string" ||
+    typeof r.toolName !== "string" ||
+    typeof r.dangerTier !== "string" ||
+    typeof r.tool_description_sha !== "string" ||
+    typeof r.input_schema_sha !== "string" ||
+    typeof r.arg_sha !== "string" ||
+    typeof r.durationMs !== "number" ||
+    typeof r.result !== "string" ||
+    typeof r.schemaVersion !== "number"
+  ) {
+    return null;
+  }
+  const out: PluginMcpAuditRecord = {
+    id: r.id,
+    ts: r.ts,
+    pluginId: r.pluginId,
+    serverId: r.serverId,
+    toolName: r.toolName,
+    dangerTier: r.dangerTier as PluginMcpAuditRecord["dangerTier"],
+    tool_description_sha: r.tool_description_sha,
+    input_schema_sha: r.input_schema_sha,
+    arg_sha: r.arg_sha,
+    durationMs: r.durationMs,
+    result: r.result as PluginMcpAuditResult,
+    schemaVersion: r.schemaVersion,
+  };
+  if (typeof r.consentReason === "string") {
+    out.consentReason = r.consentReason as PluginMcpAuditRecord["consentReason"];
+  }
+  if (typeof r.consentDecision === "string") {
+    out.consentDecision = r.consentDecision as PluginMcpAuditRecord["consentDecision"];
+  }
+  if (typeof r.errorCode === "string") out.errorCode = r.errorCode;
+  return out;
 }

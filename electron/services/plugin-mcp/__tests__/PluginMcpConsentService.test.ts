@@ -179,6 +179,18 @@ describe("PluginMcpConsentService", () => {
     expect(request.argsSummary).toContain("redacted");
   });
 
+  it("fingerprints a null inputSchema with the same sentinel the audit service uses", async () => {
+    // The audit service stores `input_schema_sha = sha256Hex("")` for null
+    // schemas; the consent fingerprint must match so cross-referencing a
+    // pinned tool against its audit row works.
+    const fp = fingerprintTool("desc", null);
+    const fpUndef = fingerprintTool("desc", undefined);
+    expect(fp.schemaHash).toEqual(fpUndef.schemaHash);
+    // The non-empty sentinel makes the consistency check observable —
+    // an accidental return-to-"" would fail this assertion.
+    expect(fp.schemaHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
   it("strips ANSI/OSC escapes from the descriptionDisplay handed to the bridge", async () => {
     const bridge: PluginMcpConsentBridge = vi.fn().mockResolvedValue("approved-once");
     service.setConsentBridge(bridge);

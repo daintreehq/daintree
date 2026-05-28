@@ -151,6 +151,45 @@ describe("PluginMcpAuditService", () => {
     expect(a?.tool_description_sha).not.toEqual(b?.tool_description_sha);
   });
 
+  it("hydration strips unknown fields — tampered records cannot smuggle a rawArgs payload", () => {
+    const tampered = {
+      id: "fake-id",
+      ts: 0,
+      pluginId: "p",
+      serverId: "s",
+      toolName: "t",
+      dangerTier: "D1",
+      tool_description_sha: "x".repeat(64),
+      input_schema_sha: "y".repeat(64),
+      arg_sha: "z".repeat(64),
+      durationMs: 1,
+      result: "success",
+      schemaVersion: 1,
+      // Forbidden plaintext fields a future schema or attacker might add:
+      rawArgs: { token: "SHOULD_BE_DROPPED" },
+      descriptionRaw: "SHOULD_BE_DROPPED",
+    };
+    const cfgTampered = makeConfig({ auditLog: [tampered] });
+    const rebuilt = new PluginMcpAuditService(cfgTampered.save, cfgTampered.read);
+    rebuilt.hydrate();
+    // Append a record to trigger a flush, then check the persisted JSON.
+    rebuilt.append({
+      pluginId: "p",
+      serverId: "s",
+      toolName: "t",
+      dangerTier: "D0",
+      descriptionRaw: "",
+      inputSchema: null,
+      rawArgs: undefined,
+      durationMs: 0,
+      result: "success",
+    });
+    rebuilt.flushNow();
+    const persisted = JSON.stringify(cfgTampered.raw().auditLog ?? []);
+    expect(persisted).not.toContain("SHOULD_BE_DROPPED");
+    rebuilt._resetForTest();
+  });
+
   it("records consentReason/consentDecision/errorCode when supplied", () => {
     service.append({
       pluginId: "p",

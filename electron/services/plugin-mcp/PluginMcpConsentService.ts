@@ -209,8 +209,13 @@ export function fingerprintTool(
   inputSchema: unknown
 ): PluginMcpToolFingerprint {
   const displayHash = sha256Hex(stripAnsiAndOscCodes(descriptionRaw));
+  // Match the audit service's null-schema sentinel (sha256Hex("")) so an
+  // operator correlating a consent pin's schemaHash against an audit row's
+  // input_schema_sha for a no-schema tool sees the same value.
   const schemaHash =
-    inputSchema === null || inputSchema === undefined ? "" : stableArgsSha256(inputSchema);
+    inputSchema === null || inputSchema === undefined
+      ? sha256Hex("")
+      : stableArgsSha256(inputSchema);
   return {
     rawHash: sha256Hex(descriptionRaw),
     displayHash,

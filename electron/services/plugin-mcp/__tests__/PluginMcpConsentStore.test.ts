@@ -105,6 +105,13 @@ describe("PluginMcpConsentStore", () => {
     expect(rebuilt.list()).toEqual([]);
   });
 
+  it("makeKey encodes components so a '::' in any field cannot collide across identities", () => {
+    // pluginId="a::b", serverId="c" must NOT collide with pluginId="a", serverId="b::c"
+    store.pin({ pluginId: "a::b", serverId: "c", toolName: "t" }, fpA);
+    const lookup = store.lookup({ pluginId: "a", serverId: "b::c", toolName: "t" }, fpA);
+    expect(lookup.kind).toBe("first-use");
+  });
+
   it("list() returns newest pins first", () => {
     store.pin({ pluginId: "p1", serverId: "s", toolName: "t1" }, fpA);
     // Tick so approvedAt differs.

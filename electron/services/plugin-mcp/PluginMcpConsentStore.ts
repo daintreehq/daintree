@@ -149,8 +149,16 @@ export class PluginMcpConsentStore {
   }
 }
 
+/**
+ * Build the pin-store lookup key for an identity. JSON-encoded so a component
+ * containing the `"::"` separator cannot collide with a differently-split
+ * triple (e.g. `pluginId="a::b", serverId="c"` vs `pluginId="a", serverId="b::c"`).
+ * Plugin ids are author-controlled in the manifest, so the encoded form is
+ * the only invariant that prevents a crafted manifest from inheriting another
+ * plugin's consent pin.
+ */
 function makeKey(identity: PluginMcpToolIdentity): string {
-  return `${identity.pluginId}::${identity.serverId}::${identity.toolName}`;
+  return JSON.stringify([identity.pluginId, identity.serverId, identity.toolName]);
 }
 
 function normalizeRecord(raw: unknown): PluginMcpConsentRecord | null {
