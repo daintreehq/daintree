@@ -156,7 +156,6 @@ export type BuiltInKeyAction =
   | "panel.palette"
   | "panel.toggleDiagnostics"
   | "panel.togglePortal"
-  | "notifications.toggle"
   | "panel.diagnosticsLogs"
   | "panel.diagnosticsEvents"
   | "panel.diagnosticsMessages"
