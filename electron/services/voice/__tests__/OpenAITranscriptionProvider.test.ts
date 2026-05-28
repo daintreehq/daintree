@@ -148,6 +148,8 @@ const BASE_SETTINGS: VoiceInputSettings = {
   paragraphingStrategy: "spoken-command",
   resolveFileLinks: true,
   deviceId: "",
+  organizationId: "",
+  projectId: "",
 };
 
 function latestInstance(): MockWebSocket {

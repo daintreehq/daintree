@@ -59,6 +59,19 @@ vi.mock("@/components/Notifications/NotificationCenter", () => ({
   NotificationCenter: () => null,
 }));
 
+vi.mock("@/services/ActionService", async () => {
+  const { useUIStore } = await import("@/store/uiStore");
+  return {
+    actionService: {
+      dispatch: (actionId: string) => {
+        if (actionId === "notifications.toggle") {
+          useUIStore.getState().toggleNotificationCenter();
+        }
+      },
+    },
+  };
+});
+
 vi.mock("@/components/ui/context-menu", () => ({
   ContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
