@@ -22,13 +22,16 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Bootstrap test-quarantine label
-        run: gh label create test-quarantine --color "FF0000" --description "Test quarantine tracking for stale annotations" --force
+        run: |
+          if ! gh label list --search test-quarantine --limit 1 | grep -q test-quarantine; then
+            gh label create test-quarantine --color "FF0000" --description "Test quarantine tracking for stale annotations"
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
 
       - name: Extract quarantine annotations
         run: |
-          rg --no-heading --json --type ts 'type:\s*"quarantine"' e2e/ > "$RUNNER_TEMP/quarantine-matches.json"
+          rg --no-heading --json --type ts 'type:\s*"quarantine"' e2e/ > "$RUNNER_TEMP/quarantine-matches.json" || true
 
       - name: Report stale quarantines
         uses: actions/github-script@v8
@@ -36,10 +39,15 @@ jobs:
           script: |
             const fs = require('fs');
             const path = require('path');
-            const os = require('os');
 
-            const matchesPath = path.join(os.tmpdir(), 'quarantine-matches.json');
-            const raw = fs.readFileSync(matchesPath, 'utf8').trim();
+            const matchesPath = path.join(process.env.RUNNER_TEMP, 'quarantine-matches.json');
+            let raw;
+            try {
+              raw = fs.readFileSync(matchesPath, 'utf8').trim();
+            } catch {
+              console.log('No quarantine annotations found.');
+              return;
+            }
             if (!raw) {
               console.log('No quarantine annotations found.');
               return;
@@ -80,17 +88,17 @@ jobs:
             const thresholdStr = threshold.toISOString().split('T')[0];
 
             // Extract annotation dates from source files
-            const dateRegex = /"(\d{4}-\d{2}-\d{2})\s/;
+            const dateRegex = /"(\d{4}-\d{2}-\d{2})\s?/;
             const staleBySpec = new Map(); // relativePath -> [{line, date, reason}]
 
             for (const match of unique) {
               const content = fs.readFileSync(match.filePath, 'utf8');
               const fileLines = content.split('\n');
 
-              // Search lines [matchLine, matchLine+5] for a description with YYYY-MM-DD
+              // Search from the match line (rg is 1-based, array is 0-based)
               let annotationDate = null;
               let reason = '';
-              for (let i = match.lineNum; i < Math.min(match.lineNum + 5, fileLines.length); i++) {
+              for (let i = match.lineNum - 1; i < Math.min(match.lineNum + 4, fileLines.length); i++) {
                 const m = fileLines[i].match(dateRegex);
                 if (m) {
                   annotationDate = m[1];
@@ -144,43 +152,69 @@ jobs:
               per_page: 100,
             });
 
+            const errors = [];
+
             for (const [relPath, annotations] of staleBySpec) {
-              const title = `[Quarantine] Stale annotations in ${relPath}`;
+              try {
+                const title = `[Quarantine] Stale annotations in ${relPath}`;
 
-              const rows = annotations
-                .map(a => `| \`${a.date}\` | ${a.line} | ${a.reason} |`)
-                .join('\n');
+                const rows = annotations
+                  .map(a => `| \`${a.date}\` | ${a.line} | ${a.reason.replace(/\|/g, '\\|').replace(/\n/g, ' ')} |`)
+                  .join('\n');
 
-              const body = [
-                `The following quarantine annotations in \`${relPath}\` are older than 30 days (threshold: \`${thresholdStr}\`):`,
-                '',
-                '| Date | Line | Reason |',
-                '| --- | --- | --- |',
-                rows,
-                '',
-                'These annotations should be reviewed and either:',
-                '- **Fix** the underlying test issue and remove the quarantine annotation, or',
-                '- **Update** the annotation date if the issue is still valid.',
-              ].join('\n');
+                const body = [
+                  `The following quarantine annotations in \`${relPath}\` are older than 30 days (threshold: \`${thresholdStr}\`):`,
+                  '',
+                  '| Date | Line | Reason |',
+                  '| --- | --- | --- |',
+                  rows,
+                  '',
+                  'These annotations should be reviewed and either:',
+                  '- **Fix** the underlying test issue and remove the quarantine annotation, or',
+                  '- **Update** the annotation date if the issue is still valid.',
+                ].join('\n');
 
-              const existing = existingIssues.find(i => i.title === title);
+                const existing = existingIssues.find(i => i.title === title);
 
-              if (existing) {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: existing.number,
-                  body,
-                });
-                console.log(`Commented on existing issue #${existing.number}: ${title}`);
-              } else {
-                const issue = await github.rest.issues.create({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  title,
-                  body,
-                  labels: ['test-quarantine'],
-                });
-                console.log(`Created issue #${issue.data.number}: ${title}`);
+                if (existing) {
+                  // Check if the most recent comment already matches this body
+                  const { data: comments } = await github.rest.issues.listComments({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: existing.number,
+                    per_page: 1,
+                    sort: 'created',
+                    direction: 'desc',
+                  });
+
+                  if (comments.length > 0 && comments[0].body === body) {
+                    console.log(`Skipped commenting on #${existing.number}: most recent comment already matches.`);
+                    continue;
+                  }
+
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: existing.number,
+                    body,
+                  });
+                  console.log(`Commented on existing issue #${existing.number}: ${title}`);
+                } else {
+                  const issue = await github.rest.issues.create({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    title,
+                    body,
+                    labels: ['test-quarantine'],
+                  });
+                  console.log(`Created issue #${issue.data.number}: ${title}`);
+                }
+              } catch (err) {
+                console.error(`Error processing ${relPath}:`, err.message);
+                errors.push({ spec: relPath, error: err.message });
               }
+            }
+
+            if (errors.length > 0) {
+              core.setFailed(`Failed to process ${errors.length} spec(s): ${errors.map(e => e.spec).join(', ')}`);
             }
