@@ -252,6 +252,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             collisions.length > 1
               ? `${collisions.length} recipes share a filename with another recipe and couldn't be saved to the repo. Rename them to keep each one.`
               : `"${first.droppedName}" shares the filename "${first.filename}" with another recipe and couldn't be saved to the repo. Rename one to keep both.`,
+          context: { eventKind: "settings" },
         });
       }
     } catch (error) {
