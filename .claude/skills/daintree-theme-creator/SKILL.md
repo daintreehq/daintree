@@ -26,6 +26,7 @@ Daintree themes flow through three layers. Each layer has a specific role:
 | Semantic token compiler  | `shared/theme/semantic.ts`            |
 | Token key contract       | `shared/theme/types.ts`               |
 | Contrast validation      | `shared/theme/contrast.ts`            |
+| OKLCH audit gates        | `shared/theme/oklch.ts`               |
 | Theme compilation        | `shared/theme/themes.ts`              |
 | Built-in theme interface | `shared/theme/builtInThemeSources.ts` |
 | Built-in theme index     | `shared/theme/builtInThemes/index.ts` |
@@ -142,7 +143,8 @@ Built-in themes are named after natural locations worldwide. Each theme evokes t
 3. Override any semantic tokens that don't look right via `tokens`
 4. Add component extensions only where needed for polish
 5. Validate contrast with `getThemeContrastWarnings()`
-6. Add the theme file to `shared/theme/builtInThemes/` and register in `index.ts`
+6. Run the OKLCH audit gates: `npx vitest run shared/theme/__tests__/builtInThemes.test.ts` — checks surface ramp evenness (adjacent dL ≥ 0.02, no runaway steps > 3:1 ratio), accent prominence (dL ≥ 0.20 against canvas, chroma C ≥ 0.05), and cross-theme accent distinctness (ΔE ≥ 15 within polarity, no duplicate accentSecondary hexes). See `docs/themes/theme-tokens.md` for the full threshold reference.
+7. Add the theme file to `shared/theme/builtInThemes/` and register in `index.ts`
 
 ## Workflow for Modifying an Existing Theme
 
@@ -151,6 +153,6 @@ Built-in themes are named after natural locations worldwide. Each theme evokes t
 3. Make palette changes first; they cascade through semantic token derivation
 4. Adjust `tokens` overrides only if the derived values aren't right
 5. Adjust `extensions` for component-specific refinements
-6. Check contrast after changes — lightening surfaces can break text contrast
+6. Check contrast after changes — lightening surfaces can break text contrast. Also run the OKLCH audit gates (`npx vitest run shared/theme/__tests__/builtInThemes.test.ts`) to verify surface ramp evenness, accent prominence, and cross-theme distinctness.
 
 $ARGUMENTS

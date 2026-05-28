@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BUILT_IN_THEME_SOURCES } from "../builtInThemes/index.js";
 import { getThemeContrastWarnings } from "../contrast.js";
+import { auditSurfaceRamp, auditAccentProminence, auditCrossThemeAccents } from "../oklch.js";
 import { BUILT_IN_APP_SCHEMES } from "../themes.js";
 import { APP_THEME_TOKEN_KEYS } from "../types.js";
 
@@ -204,6 +205,40 @@ describe("built-in themes", () => {
         `${source.id} dock-shadow alpha ${pinned![1]} below 0.25 visibility threshold`
       ).toBeGreaterThanOrEqual(0.25);
     }
+  });
+
+  it("surface elevation ramp passes OKLCH audit", () => {
+    for (const source of BUILT_IN_THEME_SOURCES) {
+      const result = auditSurfaceRamp(source.palette.surfaces, source.id);
+      for (const warning of result.warnings) {
+        console.warn(`[OKLCH ramp] ${warning}`);
+      }
+      expect(
+        result.failures,
+        `${source.id} ramp failures:\n${result.failures.join("\n")}`
+      ).toHaveLength(0);
+    }
+  });
+
+  it("accent prominence passes OKLCH audit", () => {
+    for (const source of BUILT_IN_THEME_SOURCES) {
+      const result = auditAccentProminence(source.palette, source.id);
+      for (const warning of result.warnings) {
+        console.warn(`[OKLCH accent] ${warning}`);
+      }
+      expect(
+        result.failures,
+        `${source.id} accent failures:\n${result.failures.join("\n")}`
+      ).toHaveLength(0);
+    }
+  });
+
+  it("cross-theme accent distance passes OKLCH audit", () => {
+    const result = auditCrossThemeAccents(BUILT_IN_THEME_SOURCES);
+    for (const warning of result.warnings) {
+      console.warn(`[OKLCH cross-theme] ${warning}`);
+    }
+    expect(result.failures, `cross-theme failures:\n${result.failures.join("\n")}`).toHaveLength(0);
   });
 
   it("dark themes override toolbar-control-armed-shadow with a white-tinted hairline; light themes inherit the black-tinted CSS fallback", () => {

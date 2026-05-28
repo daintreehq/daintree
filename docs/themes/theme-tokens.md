@@ -47,6 +47,27 @@ Five-level depth hierarchy plus semantic interactive surfaces.
 
 **Design rule:** Adjacent surface pairs must have clear perceptual separation. Grid -> sidebar -> canvas -> panel -> elevated should read as a smooth depth ramp.
 
+### OKLCH Audit Gates
+
+The built-in theme test suite (`shared/theme/__tests__/builtInThemes.test.ts`) validates every theme against OKLCH-based perceptual thresholds. These gates run in CI and emit warnings for themes that fall below the target. Warnings are non-blocking; per-theme palette fixes are tracked in follow-up issues.
+
+**Surface elevation ramp** (`auditSurfaceRamp`):
+
+- Adjacent step ΔL ≥ **0.02** in OKLab. Below this Just-Noticeable Difference (JND) threshold, surfaces perceptually merge.
+- Runaway ratio: the largest adjacent step must not exceed **3×** the smallest adjacent step. A ratio > 3:1 means one jump dominates the ramp and the elevation progression reads as uneven.
+
+**Accent prominence** (`auditAccentProminence`):
+
+- Lightness separation against `canvas`: ΔL ≥ **0.20**. Ensures the accent remains visible under grayscale / achromatopsia.
+- Chroma floor: C ≥ **0.05** in OKLCH. Below this, the accent reads as a tinted neutral rather than unambiguously colored.
+
+**Cross-theme distinctness** (`auditCrossThemeAccents`):
+
+- Primary accent pairwise distance within the same polarity: ΔE ≥ **15** in OKLCH. Ensures themes have perceptibly different accent colors.
+- No two themes may share the exact same `accentSecondary` hex value.
+
+All thresholds are derived from CSS Color 4, APCA research, and Material 3 guidelines. The OKLCH conversion chain (sRGB → linear → LMS → OKLab → OKLCh) is implemented in `shared/theme/oklch.ts`.
+
 ## Text Tokens
 
 | Token | Purpose | Derived? |
