@@ -877,6 +877,21 @@ export function notify(payload: NotifyPayload): string {
   const isQuiet = !payload.urgent && (Date.now() < _quietUntil || isScheduledQuietHours());
 
   if (placement === "grid-bar") {
+    // Auto-resurface: grid-bar bypasses the toast gate but still mutates
+    // history. Mirror the post-gate `clearSnooze` from the main path so an
+    // escalating/un-snoozing grid-bar entry on a snoozed thread doesn't
+    // land hidden behind a stale snooze. Same predicate as the main path so
+    // routine same-severity grid-bar updates keep the snooze intact.
+    if (correlationId && !payload.transient) {
+      const wouldRePromote = shouldReToast(
+        type,
+        getEntriesByCorrelationId(correlationId),
+        payload.urgent
+      );
+      if (wouldRePromote) {
+        useNotificationHistoryStore.getState().clearSnooze(correlationId);
+      }
+    }
     const entryId =
       historyMessage && !payload.transient
         ? useNotificationHistoryStore.getState().addEntry({
@@ -920,6 +935,17 @@ export function notify(payload: NotifyPayload): string {
       ? shouldReToast(type, getEntriesByCorrelationId(correlationId), payload.urgent)
       : false;
   const effectiveShouldToast = shouldToast || shouldToastThread;
+
+  // Auto-resurface: a snoozed thread that re-toasts (escalated severity,
+  // urgent, or full un-snooze) must clear its snooze before `addEntry`
+  // lands the new history row. Running this before the write keeps the
+  // store atomically consistent — observers never see an unread badge that
+  // counts the new entry while still hiding its thread behind the snooze
+  // filter. Routine same-severity updates do not pass `shouldReToast` and
+  // therefore stay snoozed, preserving the user's defer choice.
+  if (effectiveShouldToast && correlationId) {
+    useNotificationHistoryStore.getState().clearSnooze(correlationId);
+  }
 
   // Per-source rate-limit gate. Only consumes a token (and routes to the
   // overflow summary inbox row) when the notification would actually toast
