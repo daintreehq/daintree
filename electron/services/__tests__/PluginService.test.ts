@@ -579,10 +579,12 @@ describe("PluginManifestSchema contributes strict validation", () => {
   const validBase = { name: "acme.test", version: "1.0.0" };
 
   it("rejects unknown keys inside contributes (typo'd contribution-point names)", () => {
+    // `commandz` is a deliberate typo of `commands` (#9281) — strict-mode
+    // rejection of unknown keys catches plugin-author typos.
     const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
-        commands: [{ name: "foo", title: "Foo", description: "bar", category: "test" }],
+        commandz: [{ id: "foo", title: "Foo", description: "bar", category: "test" }],
       },
     });
     expect(result.success).toBe(false);
@@ -938,7 +940,7 @@ describe("PluginService", () => {
 
     expect(registerToolbarButton).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "plugin.acme.toolbar-test.my-btn",
+        id: "acme.toolbar-test.my-btn",
         label: "My Button",
         iconId: "puzzle",
         actionId: "acme.toolbar-test.doThing",
@@ -969,7 +971,7 @@ describe("PluginService", () => {
 
     expect(registerToolbarButton).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "plugin.acme.default-priority.btn",
+        id: "acme.default-priority.btn",
         priority: 3,
       })
     );
@@ -1011,6 +1013,348 @@ describe("PluginService", () => {
 
     expect(registerToolbarButton).not.toHaveBeenCalled();
     expect(registerPluginMenuItem).not.toHaveBeenCalled();
+  });
+});
+
+describe("PluginService manifest command contributions (#9281)", () => {
+  async function writePluginWithSrc(
+    name: string,
+    manifest: Record<string, unknown>,
+    files: Record<string, string> = {}
+  ): Promise<void> {
+    const dir = path.join(tmpDir, name);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "plugin.json"), JSON.stringify(manifest));
+    if (Object.keys(files).length > 0) {
+      await fs.mkdir(path.join(dir, "src"), { recursive: true });
+      for (const [filename, content] of Object.entries(files)) {
+        await fs.writeFile(path.join(dir, "src", filename), content);
+      }
+    }
+  }
+
+  function ctx(pluginId: string): PluginIpcContext {
+    return makeCtx(pluginId);
+  }
+
+  it("registers a manifest command descriptor at load time without importing the handler", async () => {
+    await writePluginWithSrc(
+      "cmd-lazy",
+      {
+        name: "acme.cmd-lazy",
+        version: "1.0.0",
+        contributes: {
+          commands: [
+            {
+              id: "do-thing",
+              title: "Do Thing",
+              description: "Run the thing",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+        },
+      },
+      {
+        "do-thing.ts": `export default () => "loaded"`,
+      }
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const actions = service.listPluginActions();
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      pluginId: "acme.cmd-lazy",
+      id: "acme.cmd-lazy.do-thing",
+      title: "Do Thing",
+      category: "Test",
+      kind: "command",
+      danger: "safe",
+      effectiveDanger: "safe",
+    });
+  });
+
+  it("lazily imports and invokes the handler on first dispatch", async () => {
+    await writePluginWithSrc(
+      "cmd-dispatch",
+      {
+        name: "acme.cmd-dispatch",
+        version: "1.0.0",
+        contributes: {
+          commands: [
+            {
+              id: "plan",
+              title: "Plan",
+              description: "",
+              category: "Planning",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+        },
+      },
+      {
+        "plan.ts": `export default async (args) => ({ ok: true, args })`,
+      }
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const result = await service.dispatchHandler(
+      "acme.cmd-dispatch",
+      "acme.cmd-dispatch.plan",
+      ctx("acme.cmd-dispatch"),
+      [{ issue: 42 }]
+    );
+    expect(result).toEqual({ ok: true, args: { issue: 42 } });
+  });
+
+  it("throws the documented toast error when the handler file is missing", async () => {
+    await writePluginWithSrc("cmd-missing", {
+      name: "acme.cmd-missing",
+      version: "1.0.0",
+      contributes: {
+        commands: [
+          {
+            id: "ghost",
+            title: "Ghost",
+            description: "",
+            category: "Test",
+            kind: "command",
+            danger: "safe",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    // Descriptor is still registered (palette visibility) even with no file.
+    expect(service.listPluginActions()).toHaveLength(1);
+
+    await expect(
+      service.dispatchHandler(
+        "acme.cmd-missing",
+        "acme.cmd-missing.ghost",
+        ctx("acme.cmd-missing"),
+        []
+      )
+    ).rejects.toThrow('Command "acme.cmd-missing.ghost" has no handler');
+  });
+
+  it("throws when the handler module has no callable default export", async () => {
+    await writePluginWithSrc(
+      "cmd-nodef",
+      {
+        name: "acme.cmd-nodef",
+        version: "1.0.0",
+        contributes: {
+          commands: [
+            {
+              id: "broken",
+              title: "Broken",
+              description: "",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+        },
+      },
+      {
+        "broken.ts": `export const named = 1`,
+      }
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    await expect(
+      service.dispatchHandler("acme.cmd-nodef", "acme.cmd-nodef.broken", ctx("acme.cmd-nodef"), [])
+    ).rejects.toThrow(/no callable default export/);
+  });
+
+  it("probes extensions in order .ts → .tsx → .js → .mjs", async () => {
+    // When both .ts and .js exist, .ts wins.
+    await writePluginWithSrc(
+      "cmd-order",
+      {
+        name: "acme.cmd-order",
+        version: "1.0.0",
+        contributes: {
+          commands: [
+            {
+              id: "pick",
+              title: "Pick",
+              description: "",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+        },
+      },
+      {
+        "pick.ts": `export default () => "ts-wins"`,
+        "pick.js": `export default () => "js-loses"`,
+      }
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const result = await service.dispatchHandler(
+      "acme.cmd-order",
+      "acme.cmd-order.pick",
+      ctx("acme.cmd-order"),
+      []
+    );
+    expect(result).toBe("ts-wins");
+  });
+
+  it("surfaces a loadError when a manifest command collides with a built-in id", async () => {
+    // Construct a plugin whose namespaced command id WILL collide. The
+    // manifest schema requires `publisher.name` form (`/^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/`),
+    // so we filter built-ins to ones whose first two dotted segments would
+    // satisfy that pattern — three-segment, all-lowercase, no camelCase or
+    // special chars.
+    const { BUILT_IN_ACTION_IDS } = await import("../../../shared/config/actionIds.js");
+    const pluginNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
+    const threeSegment = BUILT_IN_ACTION_IDS.find((id) => {
+      const parts = id.split(".");
+      if (parts.length < 3) return false;
+      return pluginNamePattern.test(`${parts[0]}.${parts[1]}`);
+    });
+    if (!threeSegment) {
+      // No suitable target — the collision path is structurally unreachable
+      // from a well-formed plugin manifest, so the load-time guard is
+      // defence-in-depth against a future built-in id whose shape would
+      // overlap. The test still validates the descriptor-registration path
+      // doesn't accidentally allow such an id.
+      return;
+    }
+    const parts = threeSegment.split(".");
+    const pluginName = `${parts[0]}.${parts[1]}`;
+    const cmdId = parts.slice(2).join(".");
+
+    await writePluginWithSrc(pluginName, {
+      name: pluginName,
+      version: "1.0.0",
+      contributes: {
+        commands: [
+          {
+            id: cmdId,
+            title: "Collides",
+            description: "",
+            category: "X",
+            kind: "command",
+            danger: "safe",
+          },
+        ],
+      },
+    });
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      const namespacedId = `${pluginName}.${cmdId}`;
+      // No descriptor for the colliding id.
+      expect(service.listPluginActions().some((a) => a.id === namespacedId)).toBe(false);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`command id "${namespacedId}" collides with a built-in action id`)
+      );
+      // Provenance loadError set on the installed record.
+      const installed = (storeMock._state.get("plugins") as { installed?: Record<string, unknown> })
+        ?.installed as Record<string, { loadError?: { message: string } }> | undefined;
+      expect(installed?.[pluginName]?.loadError?.message).toContain("collides with a built-in");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("registers the toolbar button under the canonical {pluginId}.{btnId} namespace", async () => {
+    await writePlugin("ns-check", {
+      name: "acme.ns-check",
+      version: "1.0.0",
+      contributes: {
+        toolbarButtons: [{ id: "btn", label: "Btn", iconId: "i", actionId: "acme.ns-check.act" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(registerToolbarButton).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "acme.ns-check.btn",
+        pluginId: "acme.ns-check",
+      })
+    );
+  });
+
+  it("preserves a collision loadError across a successful main activation", async () => {
+    // A plugin with both `main` AND a colliding manifest command writes a
+    // loadError at load time; `_doActivate()` success previously cleared it
+    // unconditionally, erasing the diagnostic. The collision is a manifest-
+    // level fact that doesn't go away when `main` activates cleanly.
+    const { BUILT_IN_ACTION_IDS } = await import("../../../shared/config/actionIds.js");
+    const pluginNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
+    const threeSegment = BUILT_IN_ACTION_IDS.find((id) => {
+      const parts = id.split(".");
+      if (parts.length < 3) return false;
+      return pluginNamePattern.test(`${parts[0]}.${parts[1]}`);
+    });
+    if (!threeSegment) return;
+    const parts = threeSegment.split(".");
+    const pluginName = `${parts[0]}.${parts[1]}`;
+    const cmdId = parts.slice(2).join(".");
+
+    const pluginDir = path.join(tmpDir, pluginName);
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: pluginName,
+        version: "1.0.0",
+        main: "main.js",
+        contributes: {
+          commands: [
+            {
+              id: cmdId,
+              title: "Bad",
+              description: "",
+              category: "X",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+        },
+      })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.js"),
+      `export async function activate() { /* no-op */ }`
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      await service.activatePlugin(pluginName);
+
+      const installed = (storeMock._state.get("plugins") as { installed?: Record<string, unknown> })
+        ?.installed as Record<string, { loadError?: { message: string } | null }> | undefined;
+      expect(installed?.[pluginName]?.loadError?.message).toContain("collides with a built-in");
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
 

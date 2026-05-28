@@ -85,13 +85,16 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
   ) => void;
   toggleButtonVisibility: (buttonId: AnyToolbarButtonId, side: "left" | "right") => void;
   /**
-   * Prune `pinnedButtons` entries for plugin buttons (`plugin.` prefix) that
-   * are no longer in the loaded plugin set. `pinnedButtons` is renderer-local
-   * persisted state with no main-process access, so an uninstalled plugin's
-   * stale hide entry can only be swept here, driven by the plugin lifecycle
-   * snapshot in `usePluginToolbarButtons`. Built-in (non-`plugin.`) keys are
-   * never touched. No-ops (returns state unchanged) when nothing is stale so
-   * the per-snapshot call doesn't churn the persist layer.
+   * Prune `pinnedButtons` entries for plugin buttons that are no longer in
+   * the loaded plugin set. `pinnedButtons` is renderer-local persisted state
+   * with no main-process access, so an uninstalled plugin's stale hide entry
+   * can only be swept here, driven by the plugin lifecycle snapshot in
+   * `usePluginToolbarButtons`. Plugin buttons use the `{pluginId}.{btnId}`
+   * canonical namespace (#9281) — built-in button IDs (`sidebar-toggle`,
+   * `notification-center`, agent IDs like `claude`, etc.) contain only
+   * hyphens or single tokens, never dots, so `key.includes(".")` cleanly
+   * separates the two. No-ops (returns state unchanged) when nothing is
+   * stale so the per-snapshot call doesn't churn the persist layer.
    */
   sweepStalePluginPinnedButtons: (validIds: string[]) => void;
   setAlwaysShowDevServer: (value: boolean) => void;
@@ -155,7 +158,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
         set((state) => {
           const validSet = new Set(validIds);
           const staleKeys = Object.keys(state.layout.pinnedButtons).filter(
-            (key) => key.startsWith("plugin.") && !validSet.has(key)
+            (key) => key.includes(".") && !validSet.has(key)
           );
           if (staleKeys.length === 0) return state;
           const pinned: ToolbarPinnedState = { ...state.layout.pinnedButtons };
@@ -182,7 +185,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     }),
     {
       name: "daintree-toolbar-preferences",
-      version: 8,
+      version: 9,
       storage: createSafeJSONStorage(),
       migrate: (persisted, version) => {
         const state = persisted as Record<string, unknown>;
@@ -293,6 +296,39 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             // valid v8 shape so `merge()` doesn't fall back to overwriting the
             // freshly-built `pinnedButtons` with the default empty map.
             state.layout = { pinnedButtons: {} } as unknown as Record<string, unknown>;
+          }
+        }
+        if (version < 9) {
+          // Plugin toolbar buttons migrated from `plugin.{pluginId}.{btn}` to
+          // canonical `{pluginId}.{btn}` (#9281). Rename persisted pin keys
+          // AND the position arrays (`leftButtons`/`rightButtons`, populated
+          // by `moveButton` when a user drags a plugin button into a fixed
+          // slot) so user state survives the rename. Without the array
+          // rename, those entries would become dangling references that
+          // match no registered button config — producing phantom slots.
+          // Built-in ids never start with `plugin.`, so non-prefixed keys
+          // pass through unchanged.
+          const stripPluginPrefix = (id: string): string =>
+            id.startsWith("plugin.") ? id.slice("plugin.".length) : id;
+          const layout = state.layout as
+            | {
+                pinnedButtons?: Record<string, boolean>;
+                leftButtons?: string[];
+                rightButtons?: string[];
+              }
+            | undefined;
+          if (layout?.pinnedButtons) {
+            const renamed: Record<string, boolean> = {};
+            for (const [key, value] of Object.entries(layout.pinnedButtons)) {
+              renamed[stripPluginPrefix(key)] = value;
+            }
+            layout.pinnedButtons = renamed;
+          }
+          if (Array.isArray(layout?.leftButtons)) {
+            layout.leftButtons = layout.leftButtons.map(stripPluginPrefix);
+          }
+          if (Array.isArray(layout?.rightButtons)) {
+            layout.rightButtons = layout.rightButtons.map(stripPluginPrefix);
           }
         }
         return state as unknown as ToolbarPreferencesState;

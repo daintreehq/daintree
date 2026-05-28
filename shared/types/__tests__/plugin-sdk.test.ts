@@ -125,6 +125,7 @@ describe("plugin-sdk boundary", () => {
           panels: [],
           toolbarButtons: [],
           menuItems: [],
+          commands: [],
           experimental_views: [],
           experimental_mcpServers: [],
           keybindings: [],

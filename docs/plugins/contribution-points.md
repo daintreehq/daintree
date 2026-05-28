@@ -10,23 +10,48 @@ Each section below documents a contribution point, its schema, an example, and c
 - **Planned** — design locked, implementation in progress
 - **Future** — not yet committed
 
-## Commands — _Runtime only_
+## Commands — _Shipped_
 
-Commands are callable actions that appear in the command palette and can be bound to keybindings, toolbar buttons, or menu items. They are registered at runtime via `host.registerAction()` during `activate()`, not declared in `plugin.json`. See [Host API → registerAction](./host-api.md#registeraction) for the full signature.
+Commands are callable actions that appear in the command palette and can be bound to keybindings, toolbar buttons, or menu items. Declare them in `plugin.json` so the command shows up in the palette before your plugin activates, or register them at runtime via `host.registerAction()` for dynamic cases. See [Host API → registerAction](./host-api.md#registeraction) for the full signature.
 
-**Handler binding** — two ways:
+```json
+{
+  "contributes": {
+    "commands": [
+      {
+        "id": "plan-from-issue",
+        "title": "Plan From Issue",
+        "description": "Turn a Linear issue into a branch and agent session.",
+        "category": "Linear Planner",
+        "kind": "command",
+        "danger": "confirm"
+      }
+    ]
+  }
+}
+```
 
-_Filesystem convention (simple case):_ a command named `plan-from-issue` looks for `src/plan-from-issue.ts` (or `.tsx`). Its default export is the handler.
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Bare command id. Daintree namespaces it as `{pluginId}.{id}` at runtime — matching every other contribution surface. |
+| `title` | yes | Palette entry label. |
+| `description` | yes | One-line summary surfaced in the palette description. |
+| `category` | yes | Grouping label in the palette. Free-form; mirror your plugin's display name. |
+| `kind` | yes | `"command"` or `"query"`. |
+| `danger` | yes | `"safe"` or `"confirm"`. `"restricted"` is rejected — plugins cannot self-register restricted actions. The host raises `"safe"` to `"confirm"` automatically when the plugin holds a high-risk capability. |
+| `keywords` | no | Extra search terms for the palette. |
+| `inputSchema` | no | JSON schema validated against the dispatched `args` payload. |
+
+**Handler binding — two ways:**
+
+_Filesystem convention (manifest-declared, lazy import):_ a command with id `plan-from-issue` looks for `src/plan-from-issue.{ts,tsx,js,mjs}` (probed in that order) under your plugin directory. Its default export is the handler. The module is **not** imported until the command is first dispatched — twenty manifest commands cost zero activation time.
 
 ```ts
 // src/plan-from-issue.ts
-import type { CommandContext } from "@daintreehq/plugin-sdk";
-
-export default async function planFromIssue(ctx: CommandContext) {
-  // ctx.args — validated args if the command declares argsSchema
-  // ctx.dispatch — call other actions
-  // ctx.host — full host API
-  await ctx.showToast({ title: "Planning…" });
+export default async function planFromIssue(args: { issue: number }) {
+  // handler body
 }
 ```
 
@@ -53,7 +78,9 @@ export async function activate(host: PluginHostApi) {
 }
 ```
 
-If a command is registered imperatively but no handler is bound, running it produces a user-visible toast: `Command "{pluginId}.{name}" has no handler`.
+If a manifest-declared command has no matching `src/{id}.{ext}` file and no imperative `registerAction` override, running it produces a user-visible toast: `Command "{pluginId}.{id}" has no handler`. The manifest entry alone is enough to make the command appear in the palette so authors can wire it up incrementally.
+
+**Collision rule:** a command whose resolved `{pluginId}.{id}` matches a built-in Daintree action id is rejected at load with a provenance `loadError` — the command does not register. Pick a different id.
 
 ## Panels — _Shipped_
 
@@ -165,7 +192,7 @@ Toolbar buttons dispatch an existing action from the main toolbar.
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | Namespaced at runtime as `plugin.{pluginId}.{id}`. |
+| `id` | yes | Namespaced at runtime as `{pluginId}.{id}` — matches the convention used by every other contribution surface. |
 | `label` | yes | Hover tooltip. |
 | `iconId` | yes | Registered icon ID. |
 | `actionId` | yes | Fully-qualified action ID, including plugin namespace. Built-in actions (e.g. `terminal.new`) also work. |
