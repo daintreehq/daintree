@@ -187,7 +187,6 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   // tags the spawning session so a message arriving after teardown (or after a
   // new session started) is ignored — the stale-callback guard from #4850/#4851.
   private vadWorker: Worker | null = null;
-  private vadWorkerSessionId = 0;
   private isSpeaking = false;
   // True once the VAD has reported at least one speech-end this connection. The
   // barge-in clear on speech-start is gated on it: audio buffered after a
@@ -1064,7 +1063,6 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       return;
     }
     this.vadWorker = worker;
-    this.vadWorkerSessionId = mySessionId;
     logDebug(`${P} VAD worker spawned`, { sessionId: mySessionId });
 
     worker.on("message", (message: VadWorkerOutbound) => {
