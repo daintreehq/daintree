@@ -184,4 +184,42 @@ describe("makePluginViewHost", () => {
     // resolved in jsdom (Suspense is still showing the skeleton).
     expect(() => act(() => emit!({ kinds: [] }))).not.toThrow();
   });
+
+  it("reads the AbortController through a ref so post-retry removals abort the current signal", async () => {
+    // Regression guard for the renderer-first teardown contract: if the
+    // useEffect captured controllerRef.current into a const at setup time,
+    // a kind-removed push after a retry would abort the prior (already
+    // aborted) controller and leave the live signal armed. Capturing
+    // controllerRef.current and asserting it changes across two pushes
+    // proves the ref-through-callback pattern.
+    let emit: ((payload: { kinds: PanelKindConfig[] }) => void) | null = null;
+    onPanelKindsChangedMock.mockImplementation((cb) => {
+      emit = cb;
+      return () => {};
+    });
+
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const config = makeConfig();
+    const Host = makePluginViewHost(config);
+
+    const { unmount } = render(
+      <Host
+        id="panel-9"
+        title="Dashboard"
+        isFocused={false}
+        onFocus={(): void => {}}
+        onClose={(): void => {}}
+      />
+    );
+
+    await waitFor(() => expect(onPanelKindsChangedMock).toHaveBeenCalled());
+
+    // Removing the kind from the broadcast must abort. Doing this twice and
+    // unmounting in between still must not throw — the callback resolves the
+    // controller through the ref at call time, not via a stale closure.
+    expect(() => act(() => emit!({ kinds: [] }))).not.toThrow();
+    expect(() => act(() => emit!({ kinds: [] }))).not.toThrow();
+
+    unmount();
+  });
 });

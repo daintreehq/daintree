@@ -65,7 +65,15 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
       () =>
         lazy<ComponentType<PanelViewProps>>(async () => {
           const mod = (await import(/* @vite-ignore */ componentPath!)) as PluginViewModule;
-          if (!mod || typeof mod.default !== "function") {
+          // Accept any React element type — function components, `memo(...)`,
+          // `forwardRef(...)`, and lazy/class wrappers are all valid defaults.
+          // `memo` and `forwardRef` return objects (typeof === "object"), not
+          // functions, so a `typeof === "function"`-only check would reject
+          // common optimization patterns.
+          const def = mod?.default as unknown;
+          const isComponentLike =
+            typeof def === "function" || (typeof def === "object" && def !== null);
+          if (!isComponentLike) {
             throw new Error(
               `Plugin "${pluginId}" view module at ${componentPath} did not export a default React component`
             );
@@ -85,7 +93,6 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
 
     useEffect(() => {
       let disposed = false;
-      const controller = controllerRef.current;
       const electron = typeof window !== "undefined" ? window.electron : undefined;
       const onChanged = electron?.plugin?.onPanelKindsChanged;
       let cleanup: (() => void) | undefined;
@@ -94,17 +101,18 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
           if (disposed) return;
           const stillRegistered = payload.kinds.some((k) => k.id === kindId);
           if (!stillRegistered) {
-            // Abort BEFORE React unmounts the subtree: the renderer-first
-            // teardown contract relies on plugin host APIs still being live
-            // when the signal fires.
-            controller?.abort();
+            // Read the controller through the ref so a retry that swapped in a
+            // fresh AbortController is the one that gets aborted. Capturing
+            // `controllerRef.current` into a const at effect setup would leave
+            // post-retry signals permanently un-aborted on plugin removal.
+            controllerRef.current?.abort();
           }
         });
       }
       return () => {
         disposed = true;
         cleanup?.();
-        controller?.abort();
+        controllerRef.current?.abort();
       };
     }, []);
 

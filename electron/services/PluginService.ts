@@ -347,6 +347,14 @@ function isSafePluginViewComponentPath(componentPath: string): boolean {
   if (componentPath.startsWith("/")) return false;
   if (componentPath.includes("\\")) return false;
   if (componentPath.includes("\0")) return false;
+  // Reject embedded URL structure markers — `https://...` (`:`), `?query`, or
+  // `#fragment`. The `plugin://` protocol handler defends against traversal at
+  // request time via realpath containment, so these are authoring-mistake
+  // guards (catch typos early, don't pollute the V8 module cache with
+  // duplicate query-string variants), not the security boundary.
+  if (componentPath.includes(":")) return false;
+  if (componentPath.includes("?")) return false;
+  if (componentPath.includes("#")) return false;
   const segments = componentPath.split("/");
   for (const seg of segments) {
     if (seg === "..") return false;
@@ -967,6 +975,15 @@ export class PluginService {
       if (!isSafePluginViewComponentPath(view.componentPath)) {
         console.warn(
           `[PluginService] Plugin "${manifest.name}": experimental_views entry "${view.id}" has an unsafe componentPath ${JSON.stringify(view.componentPath)} and will be ignored`
+        );
+        continue;
+      }
+      if (viewsByBareId.has(view.id)) {
+        // Two entries with the same bare id — last would silently overwrite
+        // earlier. Surface the authoring mistake; keep the first to make the
+        // outcome deterministic.
+        console.warn(
+          `[PluginService] Plugin "${manifest.name}": experimental_views has duplicate entries for id "${view.id}"; keeping the first occurrence`
         );
         continue;
       }

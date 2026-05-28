@@ -5317,6 +5317,62 @@ describe("reserved contribution point warnings", () => {
     );
   });
 
+  it("rejects an absolute https componentPath as unsafe", async () => {
+    await writePlugin("https", {
+      name: "acme.https",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
+        experimental_views: [
+          {
+            id: "main",
+            name: "Main",
+            componentPath: "https://evil.example/view.js",
+            location: "panel",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      componentPath?: string;
+    };
+    expect(panelCall.componentPath).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('experimental_views entry "main" has an unsafe componentPath')
+    );
+  });
+
+  it("warns and keeps the first occurrence on duplicate experimental_views ids", async () => {
+    await writePlugin("dup", {
+      name: "acme.dup",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
+        experimental_views: [
+          { id: "main", name: "First", componentPath: "./first.js", location: "panel" },
+          { id: "main", name: "Second", componentPath: "./second.js", location: "panel" },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      componentPath?: string;
+    };
+    expect(panelCall.componentPath).toBe("plugin://acme.dup/first.js");
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('experimental_views has duplicate entries for id "main"')
+    );
+  });
+
   it("forwards a contributes.experimental_mcpServers entry to the PluginMcpSupervisor (#9233)", async () => {
     mockPluginMcpSupervisor.start.mockClear();
     await writePlugin("mcp", {

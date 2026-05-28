@@ -163,6 +163,57 @@ describe("usePluginPanelKinds", () => {
     clearPanelKindRegistry();
   });
 
+  it("does not re-create the PluginViewHost on identity-equal replay pushes", async () => {
+    // Regression guard: each makePluginViewHost call returns a new component
+    // ref, which would unmount+remount the plugin view subtree on every
+    // broadcast if the hook re-invoked it unconditionally. The hook memoizes
+    // hosts per (id + componentPath) so repeated identical snapshots reuse
+    // the same component ref.
+    let emit: ((payload: { kinds: PanelKindConfig[] }) => void) | null = null;
+    onPanelKindsChangedMock.mockImplementation(
+      (cb: (payload: { kinds: PanelKindConfig[] }) => void) => {
+        emit = cb;
+        return () => {};
+      }
+    );
+
+    const { clearPanelKindRegistry } = await import("@shared/config/panelKindRegistry");
+    const { makePluginViewHost } = await import("@/components/Plugin/PluginViewHost");
+    const { usePluginPanelKinds } = await import("../usePluginPanelKinds");
+
+    renderHook(() => usePluginPanelKinds());
+    await waitFor(() => expect(onPanelKindsChangedMock).toHaveBeenCalled());
+
+    const viewKind = pluginKind({
+      id: "acme.steady",
+      hasPty: false,
+      componentPath: "plugin://acme/v.js",
+    });
+
+    act(() => emit!({ kinds: [viewKind] }));
+    const callsAfterFirst = (makePluginViewHost as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    // Two more identical pushes — neither should produce a new component.
+    act(() => emit!({ kinds: [viewKind] }));
+    act(() => emit!({ kinds: [viewKind] }));
+    const callsAfterReplay = (makePluginViewHost as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    expect(callsAfterReplay).toBe(callsAfterFirst);
+
+    // A genuine componentPath change invalidates the cache and produces a
+    // fresh host.
+    const updatedKind = pluginKind({
+      id: "acme.steady",
+      hasPty: false,
+      componentPath: "plugin://acme/v.js?v=2",
+    });
+    act(() => emit!({ kinds: [updatedKind] }));
+    const callsAfterUpdate = (makePluginViewHost as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(callsAfterUpdate).toBe(callsAfterReplay + 1);
+
+    clearPanelKindRegistry();
+  });
+
   it("clears the view-host definition when a kind loses its componentPath via a push", async () => {
     let emit: ((payload: { kinds: PanelKindConfig[] }) => void) | null = null;
     onPanelKindsChangedMock.mockImplementation(
