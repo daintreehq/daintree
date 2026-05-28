@@ -128,7 +128,74 @@ export interface PluginManifest {
     experimental_mcpServers: McpServerContribution[];
     forgeProviders: ForgeProviderContribution[];
     fileDecorationProviders: FileDecorationContribution[];
+    /**
+     * Declared plugin settings. Reserved for F29 — absent from parsed manifests
+     * until that schema lands, so `host.settings.set()` accepts any key for now.
+     * When present, `set()` rejects keys not declared here.
+     */
+    settings?: SettingDefinition[];
   };
+}
+
+/**
+ * Declaration for a single plugin setting. Reserved for `contributes.settings`
+ * (F29), which owns the canonical schema (types, defaults, UI metadata). The
+ * shape here is intentionally permissive — only `id` is load-bearing today, used
+ * by {@link SettingsApi.set} key validation.
+ */
+export interface SettingDefinition {
+  id: string;
+  type?: "string" | "number" | "boolean" | "object";
+  label?: string;
+  description?: string;
+  default?: unknown;
+  /**
+   * UI-only hint (F19): the Settings tab renders a "stored in plaintext"
+   * warning for the field. Does NOT change storage mechanics — values are
+   * always plaintext JSON regardless of this flag (#9167).
+   */
+  secret?: boolean;
+}
+
+export type PluginSettingsScope = "user" | "project";
+
+/**
+ * Persistent, plugin-scoped key/value settings exposed on
+ * {@link PluginHostApi.settings}. Values are stored as plaintext JSON at
+ * `~/.daintree/plugin-settings/{pluginId}.json` (user scope) or
+ * `<projectRoot>/.daintree/plugin-settings/{pluginId}.json` (project scope),
+ * with `chmod 0o600` applied on POSIX. There is deliberately no OS-keychain
+ * integration (#9167) — do not store secrets that must survive disk compromise.
+ *
+ * `scope` defaults to `"user"`. Project scope resolves the active project at
+ * call time, so it tracks project switches: `get` returns `undefined` and `set`
+ * throws when no project is active.
+ */
+export interface SettingsApi {
+  /**
+   * Read a setting. Resolves to `undefined` when the key is unset, or (for
+   * `"project"` scope) when no project is active.
+   */
+  get<T = unknown>(key: string, scope?: PluginSettingsScope): Promise<T | undefined>;
+  /**
+   * Persist a setting. Rejects `undefined` and non-JSON-serializable values.
+   * For `"project"` scope with no active project, throws. When the manifest
+   * declares `contributes.settings`, an undeclared key is rejected.
+   */
+  set<T = unknown>(key: string, value: T, scope?: PluginSettingsScope): Promise<void>;
+  /**
+   * Subscribe to in-process writes of `key` in `scope` (default `"user"`). The
+   * callback fires with the new value after each `set` that changes it. Edits
+   * made to the JSON file by other processes do NOT fire until the plugin
+   * reloads. Must be called during `activate()`. Returns a disposer; calling it
+   * more than once is a no-op. All subscriptions are automatically disposed when
+   * the plugin is unloaded.
+   */
+  onDidChange<T = unknown>(
+    key: string,
+    callback: (value: T | undefined) => void,
+    scope?: PluginSettingsScope
+  ): () => void;
 }
 
 export type PluginInstallSource = "builtin" | "sideload" | "url" | "catalog";
@@ -408,6 +475,11 @@ export interface PluginHostApi {
    * dispatch.
    */
   dispatch(actionId: string, args?: unknown): Promise<ActionDispatchResult>;
+  /**
+   * Persistent, plugin-scoped key/value settings. Plaintext JSON storage with
+   * `chmod 0o600` on POSIX — no OS keychain (#9167). See {@link SettingsApi}.
+   */
+  readonly settings: SettingsApi;
 }
 
 export type PluginActivate = (
