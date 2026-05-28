@@ -4528,9 +4528,9 @@ describe("Deferred activation — activatePlugin", () => {
       // `activatedPlugins` fast path and not re-import either.
       await service.activatePlugin("acme.dedup-activate");
 
-      expect((globalThis as Record<string, number>).__dedupCount).toBe(1);
+      expect((globalThis as unknown as Record<string, number>).__dedupCount).toBe(1);
     } finally {
-      delete (globalThis as Record<string, number>).__dedupCount;
+      delete (globalThis as unknown as Record<string, number>).__dedupCount;
     }
   });
 
@@ -4591,7 +4591,7 @@ describe("Deferred activation — activatePlugin", () => {
       expect(service.getPluginLoadError("acme.retry-activate")?.message).toBe("retry-boom");
     } finally {
       errorSpy.mockRestore();
-      delete (globalThis as Record<string, number>).__retryCount;
+      delete (globalThis as unknown as Record<string, number>).__retryCount;
     }
   });
 
