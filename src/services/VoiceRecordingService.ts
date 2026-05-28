@@ -92,7 +92,9 @@ class VoiceRecordingService {
             // Snapshot where dictated text will begin once the final commit runs,
             // including any leading separator inserted between existing draft and
             // the first dictated token. Stable for the lifetime of the utterance.
-            useVoiceRecordingStore.getState().setInsertPoint(target.panelId, insertStart);
+            useVoiceRecordingStore
+              .getState()
+              .setDraftLengthAtSegmentStart(target.panelId, insertStart);
             // Track paragraph start for the first utterance in a new paragraph.
             useVoiceRecordingStore.getState().setActiveParagraphStart(target.panelId, insertStart);
           }
@@ -112,7 +114,7 @@ class VoiceRecordingService {
         const projectId = voiceState.activeTarget?.projectId;
         if (panelId) {
           const buffer = voiceState.panelBuffers[panelId];
-          const segmentStart = buffer?.insertPoint ?? -1;
+          const segmentStart = buffer?.draftLengthAtSegmentStart ?? -1;
           const finalText = text.trim();
           if (finalText) {
             const inputStore = useTerminalInputStore.getState();
@@ -373,6 +375,11 @@ class VoiceRecordingService {
       await this.stop("Dictation stopped.", { preserveLiveText: true });
       return;
     }
+
+    // Refresh recent-targets MRU on confirmed routing (before any await so the
+    // entry reflects the user's intent even if start() bails later — recent
+    // targets are a navigation aid, not a session log).
+    useVoiceRecordingStore.getState().recordRecentTarget(target);
 
     await this.start(target);
   }
@@ -796,7 +803,7 @@ class VoiceRecordingService {
             const { panelId, projectId } = currentTarget;
             const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
             const remaining = buffer?.liveText?.trim();
-            const segmentStart = buffer?.insertPoint ?? -1;
+            const segmentStart = buffer?.draftLengthAtSegmentStart ?? -1;
             if (remaining) {
               const inputStore = useTerminalInputStore.getState();
               const draft = inputStore.getDraftInput(panelId, projectId);
@@ -918,6 +925,21 @@ class VoiceRecordingService {
 
   async toggleFocusedPanel(): Promise<void> {
     this.initialize();
+
+    // Locked target overrides focus routing entirely — synchronous read before
+    // any await so the value reflects the user's pin at the moment the hotkey
+    // fired (mirrors the assistant-focus pattern below for #6959). When the
+    // locked panel has been trashed or removed, clear the stale lock and fall
+    // through to normal focus-based resolution rather than failing silently.
+    const lockedTarget = useVoiceRecordingStore.getState().lockedTarget;
+    if (lockedTarget) {
+      const lockedPanel = usePanelStore.getState().panelsById[lockedTarget.panelId];
+      if (lockedPanel && lockedPanel.location !== "trash") {
+        await this.toggle(lockedTarget);
+        return;
+      }
+      useVoiceRecordingStore.getState().clearLockedTarget(lockedTarget.panelId);
+    }
 
     // Assistant focus is tracked by macroFocusStore, not panelStore.focusedId,
     // so check it synchronously (before any await — #6959) and route dictation

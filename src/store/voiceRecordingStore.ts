@@ -1,5 +1,8 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import type { VoiceInputError, VoiceInputStatus, VoiceTranscriptPhase } from "@shared/types";
+import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 export interface VoiceRecordingTarget {
   panelId: string;
@@ -10,14 +13,35 @@ export interface VoiceRecordingTarget {
   worktreeLabel?: string;
 }
 
+/**
+ * Display-only metadata for a previously used dictation target. Panel IDs are
+ * ephemeral and don't survive restarts, so persisted entries deliberately omit
+ * `panelId` — the list is a memory aid, not a routing key. A live `panelId` is
+ * attached at runtime when the entry is freshly recorded (same session) so the
+ * context menu can offer a one-click recall while the panel still exists.
+ */
+export interface RecentDictationTarget {
+  /** Live panel reference; absent for entries restored from persistence. */
+  panelId?: string;
+  panelTitle?: string;
+  projectId?: string;
+  projectName?: string;
+  worktreeId?: string;
+  worktreeLabel?: string;
+  /** Wall-clock timestamp of the last use; drives MRU ordering. */
+  lastUsedAt: number;
+}
+
+const MAX_RECENT_TARGETS = 3;
+
 interface VoiceTranscriptBuffer {
   liveText: string;
   completedSegments: string[];
   projectId?: string;
   /** Draft length snapshot taken before the first delta of the session. */
   sessionDraftStart: number;
-  /** CodeMirror position where the next utterance's final text will be inserted. */
-  insertPoint: number;
+  /** Draft length snapshot taken before the first delta of a segment. */
+  draftLengthAtSegmentStart: number;
   /** Draft length at the start of the current paragraph (-1 = not set). */
   activeParagraphStart: number;
   /** Explicit transcript lifecycle phase — derived from and updated alongside buffer state. */
@@ -46,6 +70,18 @@ interface VoiceRecordingState {
   status: VoiceInputStatus;
   lastError: VoiceInputError | null;
   activeTarget: VoiceRecordingTarget | null;
+  /**
+   * Pinned dictation target. When set, `toggleFocusedPanel` routes here
+   * regardless of which panel owns focus. Runtime-only: panelId is ephemeral,
+   * so this is stripped from the persisted blob.
+   */
+  lockedTarget: VoiceRecordingTarget | null;
+  /**
+   * Most-recently used dictation targets (max 3, MRU-ordered). Persisted as
+   * display-only metadata; the panelId field is dropped on rehydrate so a
+   * stale id can't silently route dictation to a non-existent panel.
+   */
+  recentTargets: RecentDictationTarget[];
   elapsedSeconds: number;
   audioLevel: number;
   panelBuffers: Record<string, VoiceTranscriptBuffer>;
@@ -59,7 +95,7 @@ interface VoiceRecordingState {
   setElapsedSeconds: (seconds: number) => void;
   appendDelta: (delta: string) => void;
   setSessionDraftStart: (panelId: string, length: number) => void;
-  setInsertPoint: (panelId: string, length: number) => void;
+  setDraftLengthAtSegmentStart: (panelId: string, length: number) => void;
   completeSegment: (text: string) => void;
   setCorrectionRange: (panelId: string, range: { from: number; to: number } | null) => void;
   setActiveParagraphStart: (panelId: string, length: number) => void;
@@ -69,6 +105,12 @@ interface VoiceRecordingState {
   clearPanelBuffer: (panelId: string) => void;
   announce: (text: string) => void;
   clearAnnouncement: () => void;
+  lockTarget: (target: VoiceRecordingTarget) => void;
+  unlockTarget: () => void;
+  /** Clears the lock only if it matches `panelId`; safe to call for any removed panel. */
+  clearLockedTarget: (panelId: string) => void;
+  /** Records or refreshes a recent-targets entry (MRU-ordered, capped at 3). */
+  recordRecentTarget: (target: VoiceRecordingTarget) => void;
 }
 
 function getBuffer(
@@ -80,7 +122,7 @@ function getBuffer(
       liveText: "",
       completedSegments: [],
       sessionDraftStart: -1,
-      insertPoint: -1,
+      draftLengthAtSegmentStart: -1,
       activeParagraphStart: -1,
       transcriptPhase: "idle" as VoiceTranscriptPhase,
       correctionRange: null,
@@ -88,239 +130,312 @@ function getBuffer(
   );
 }
 
-export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) => ({
-  isConfigured: false,
-  correctionEnabled: false,
-  status: "idle",
-  lastError: null,
-  activeTarget: null,
-  elapsedSeconds: 0,
-  audioLevel: 0,
-  panelBuffers: {},
-  announcement: null,
-
-  setConfigured: (isConfigured) => set({ isConfigured }),
-
-  setCorrectionEnabled: (correctionEnabled) => set({ correctionEnabled }),
-
-  setAudioLevel: (audioLevel) => set({ audioLevel }),
-
-  beginSession: (target) =>
-    set((state) => ({
-      activeTarget: target,
-      status: "connecting",
+export const useVoiceRecordingStore = create<VoiceRecordingState>()(
+  persist(
+    (set, get) => ({
+      isConfigured: false,
+      correctionEnabled: false,
+      status: "idle",
       lastError: null,
+      activeTarget: null,
+      lockedTarget: null,
+      recentTargets: [],
       elapsedSeconds: 0,
-      panelBuffers: {
-        ...state.panelBuffers,
-        [target.panelId]: {
-          ...getBuffer(state.panelBuffers, target.panelId),
-          liveText: "",
-          completedSegments: [],
-          projectId: target.projectId,
-          sessionDraftStart: -1,
-          insertPoint: -1,
-          activeParagraphStart: -1,
-          transcriptPhase: "idle" as VoiceTranscriptPhase,
-          correctionRange: null,
-        },
-      },
-    })),
+      audioLevel: 0,
+      panelBuffers: {},
+      announcement: null,
 
-  setStatus: (status) => set({ status }),
+      setConfigured: (isConfigured) => set({ isConfigured }),
 
-  setLastError: (error) => set({ lastError: error }),
+      setCorrectionEnabled: (correctionEnabled) => set({ correctionEnabled }),
 
-  setElapsedSeconds: (elapsedSeconds) => set({ elapsedSeconds }),
+      setLastError: (error) => set({ lastError: error }),
 
-  appendDelta: (delta) =>
-    set((state) => {
-      const panelId = state.activeTarget?.panelId;
-      if (!panelId || !delta) return state;
-      const buffer = getBuffer(state.panelBuffers, panelId);
-      return {
-        panelBuffers: {
-          ...state.panelBuffers,
-          [panelId]: {
-            ...buffer,
-            liveText: buffer.liveText + delta,
-            transcriptPhase: "interim" as VoiceTranscriptPhase,
+      setAudioLevel: (audioLevel) => set({ audioLevel }),
+
+      beginSession: (target) =>
+        set((state) => ({
+          activeTarget: target,
+          status: "connecting",
+          lastError: null,
+          elapsedSeconds: 0,
+          panelBuffers: {
+            ...state.panelBuffers,
+            [target.panelId]: {
+              ...getBuffer(state.panelBuffers, target.panelId),
+              liveText: "",
+              completedSegments: [],
+              projectId: target.projectId,
+              sessionDraftStart: -1,
+              draftLengthAtSegmentStart: -1,
+              activeParagraphStart: -1,
+              transcriptPhase: "idle" as VoiceTranscriptPhase,
+              correctionRange: null,
+            },
           },
-        },
-      };
-    }),
+        })),
 
-  setSessionDraftStart: (panelId, length) =>
-    set((state) => {
-      const buffer = getBuffer(state.panelBuffers, panelId);
-      if (buffer.sessionDraftStart >= 0) return state;
-      return {
-        panelBuffers: {
-          ...state.panelBuffers,
-          [panelId]: { ...buffer, sessionDraftStart: length },
-        },
-      };
-    }),
+      setStatus: (status) => set({ status }),
 
-  setInsertPoint: (panelId, length) =>
-    set((state) => {
-      const buffer = getBuffer(state.panelBuffers, panelId);
-      if (buffer.insertPoint >= 0) return state;
-      return {
-        panelBuffers: {
-          ...state.panelBuffers,
-          [panelId]: { ...buffer, insertPoint: length },
-        },
-      };
-    }),
+      setElapsedSeconds: (elapsedSeconds) => set({ elapsedSeconds }),
 
-  completeSegment: (text) =>
-    set((state) => {
-      const panelId = state.activeTarget?.panelId;
-      if (!panelId) return state;
+      appendDelta: (delta) =>
+        set((state) => {
+          const panelId = state.activeTarget?.panelId;
+          if (!panelId || !delta) return state;
+          const buffer = getBuffer(state.panelBuffers, panelId);
+          return {
+            panelBuffers: {
+              ...state.panelBuffers,
+              [panelId]: {
+                ...buffer,
+                liveText: buffer.liveText + delta,
+                transcriptPhase: "interim" as VoiceTranscriptPhase,
+              },
+            },
+          };
+        }),
 
-      const buffer = getBuffer(state.panelBuffers, panelId);
-      const normalized = text.trim() || buffer.liveText.trim();
-      if (!normalized) {
-        return {
+      setSessionDraftStart: (panelId, length) =>
+        set((state) => {
+          const buffer = getBuffer(state.panelBuffers, panelId);
+          if (buffer.sessionDraftStart >= 0) return state;
+          return {
+            panelBuffers: {
+              ...state.panelBuffers,
+              [panelId]: { ...buffer, sessionDraftStart: length },
+            },
+          };
+        }),
+
+      setDraftLengthAtSegmentStart: (panelId, length) =>
+        set((state) => {
+          const buffer = getBuffer(state.panelBuffers, panelId);
+          if (buffer.draftLengthAtSegmentStart >= 0) return state;
+          return {
+            panelBuffers: {
+              ...state.panelBuffers,
+              [panelId]: { ...buffer, draftLengthAtSegmentStart: length },
+            },
+          };
+        }),
+
+      completeSegment: (text) =>
+        set((state) => {
+          const panelId = state.activeTarget?.panelId;
+          if (!panelId) return state;
+
+          const buffer = getBuffer(state.panelBuffers, panelId);
+          const normalized = text.trim() || buffer.liveText.trim();
+          if (!normalized) {
+            return {
+              panelBuffers: {
+                ...state.panelBuffers,
+                [panelId]: {
+                  ...buffer,
+                  liveText: "",
+                  draftLengthAtSegmentStart: -1,
+                  transcriptPhase: "idle" as VoiceTranscriptPhase,
+                },
+              },
+            };
+          }
+
+          return {
+            panelBuffers: {
+              ...state.panelBuffers,
+              [panelId]: {
+                ...buffer,
+                liveText: "",
+                draftLengthAtSegmentStart: -1,
+                completedSegments: [...buffer.completedSegments, normalized],
+                transcriptPhase: "utterance_final" as VoiceTranscriptPhase,
+              },
+            },
+          };
+        }),
+
+      setCorrectionRange: (panelId, range) =>
+        set((state) => {
+          const buffer = getBuffer(state.panelBuffers, panelId);
+          if (buffer.correctionRange === range) return state;
+          return {
+            panelBuffers: {
+              ...state.panelBuffers,
+              [panelId]: { ...buffer, correctionRange: range },
+            },
+          };
+        }),
+
+      setActiveParagraphStart: (panelId, length) =>
+        set((state) => {
+          const buffer = getBuffer(state.panelBuffers, panelId);
+          if (buffer.activeParagraphStart >= 0) return state;
+          return {
+            panelBuffers: {
+              ...state.panelBuffers,
+              [panelId]: { ...buffer, activeParagraphStart: length },
+            },
+          };
+        }),
+
+      resetParagraphState: (panelId) =>
+        set((state) => {
+          const buffer = getBuffer(state.panelBuffers, panelId);
+          return {
+            panelBuffers: {
+              ...state.panelBuffers,
+              [panelId]: {
+                ...buffer,
+                liveText: "",
+                completedSegments: [],
+                draftLengthAtSegmentStart: -1,
+                activeParagraphStart: -1,
+                transcriptPhase: "idle" as VoiceTranscriptPhase,
+              },
+            },
+          };
+        }),
+
+      finishSession: ({ nextStatus = "idle", preserveLiveText = false } = {}) =>
+        set((state) => {
+          const panelId = state.activeTarget?.panelId;
+          if (!panelId) {
+            return {
+              activeTarget: null,
+              status: nextStatus,
+              elapsedSeconds: 0,
+              audioLevel: 0,
+            };
+          }
+
+          const buffer = getBuffer(state.panelBuffers, panelId);
+          const normalizedLiveText = buffer.liveText.trim();
+          const completedSegments =
+            preserveLiveText && normalizedLiveText
+              ? [...buffer.completedSegments, normalizedLiveText]
+              : buffer.completedSegments;
+
+          return {
+            activeTarget: null,
+            status: nextStatus,
+            elapsedSeconds: 0,
+            audioLevel: 0,
+            panelBuffers: {
+              ...state.panelBuffers,
+              [panelId]: {
+                ...buffer,
+                liveText: "",
+                completedSegments,
+                transcriptPhase: "idle" as VoiceTranscriptPhase,
+              },
+            },
+          };
+        }),
+
+      consumeCompletedSegments: (panelId) => {
+        const buffer = getBuffer(get().panelBuffers, panelId);
+        if (buffer.completedSegments.length === 0) {
+          return [];
+        }
+
+        const completedSegments = [...buffer.completedSegments];
+        set((state) => ({
           panelBuffers: {
             ...state.panelBuffers,
             [panelId]: {
-              ...buffer,
-              liveText: "",
-              insertPoint: -1,
-              transcriptPhase: "idle" as VoiceTranscriptPhase,
+              ...getBuffer(state.panelBuffers, panelId),
+              completedSegments: [],
             },
           },
-        };
-      }
+        }));
+        return completedSegments;
+      },
 
-      return {
-        panelBuffers: {
-          ...state.panelBuffers,
-          [panelId]: {
-            ...buffer,
-            liveText: "",
-            insertPoint: -1,
-            completedSegments: [...buffer.completedSegments, normalized],
-            transcriptPhase: "utterance_final" as VoiceTranscriptPhase,
+      clearPanelBuffer: (panelId) =>
+        set((state) => {
+          if (!(panelId in state.panelBuffers)) return state;
+          const next = { ...state.panelBuffers };
+          delete next[panelId];
+          return { panelBuffers: next };
+        }),
+
+      announce: (text) =>
+        set({
+          announcement: {
+            id: Date.now(),
+            text,
           },
-        },
-      };
+        }),
+
+      clearAnnouncement: () => set({ announcement: null }),
+
+      lockTarget: (target) => set({ lockedTarget: target }),
+
+      unlockTarget: () => set({ lockedTarget: null }),
+
+      clearLockedTarget: (panelId) =>
+        set((state) => {
+          if (state.lockedTarget?.panelId !== panelId) return state;
+          return { lockedTarget: null };
+        }),
+
+      recordRecentTarget: (target) =>
+        set((state) => {
+          const entry: RecentDictationTarget = {
+            panelId: target.panelId,
+            panelTitle: target.panelTitle,
+            projectId: target.projectId,
+            projectName: target.projectName,
+            worktreeId: target.worktreeId,
+            worktreeLabel: target.worktreeLabel,
+            lastUsedAt: Date.now(),
+          };
+          // Dedup by logical identity. Live entries (with panelId) collide on
+          // panelId match; rehydrated entries (no panelId) collide on the
+          // (worktreeId + panelTitle) tuple — which is how `liveRecentVoiceTargets`
+          // resolves them back to a live panel after restart.
+          const filtered = state.recentTargets.filter((t) => {
+            if (t.panelId && t.panelId === target.panelId) return false;
+            if (
+              !t.panelId &&
+              t.panelTitle &&
+              t.panelTitle === target.panelTitle &&
+              t.worktreeId === target.worktreeId
+            ) {
+              return false;
+            }
+            return true;
+          });
+          return {
+            recentTargets: [entry, ...filtered].slice(0, MAX_RECENT_TARGETS),
+          };
+        }),
     }),
-
-  setCorrectionRange: (panelId, range) =>
-    set((state) => {
-      const buffer = getBuffer(state.panelBuffers, panelId);
-      if (buffer.correctionRange === range) return state;
-      return {
-        panelBuffers: {
-          ...state.panelBuffers,
-          [panelId]: { ...buffer, correctionRange: range },
-        },
-      };
-    }),
-
-  setActiveParagraphStart: (panelId, length) =>
-    set((state) => {
-      const buffer = getBuffer(state.panelBuffers, panelId);
-      if (buffer.activeParagraphStart >= 0) return state;
-      return {
-        panelBuffers: {
-          ...state.panelBuffers,
-          [panelId]: { ...buffer, activeParagraphStart: length },
-        },
-      };
-    }),
-
-  resetParagraphState: (panelId) =>
-    set((state) => {
-      const buffer = getBuffer(state.panelBuffers, panelId);
-      return {
-        panelBuffers: {
-          ...state.panelBuffers,
-          [panelId]: {
-            ...buffer,
-            liveText: "",
-            completedSegments: [],
-            insertPoint: -1,
-            activeParagraphStart: -1,
-            transcriptPhase: "idle" as VoiceTranscriptPhase,
-          },
-        },
-      };
-    }),
-
-  finishSession: ({ nextStatus = "idle", preserveLiveText = false } = {}) =>
-    set((state) => {
-      const panelId = state.activeTarget?.panelId;
-      if (!panelId) {
-        return {
-          activeTarget: null,
-          status: nextStatus,
-          elapsedSeconds: 0,
-          audioLevel: 0,
-        };
-      }
-
-      const buffer = getBuffer(state.panelBuffers, panelId);
-      const normalizedLiveText = buffer.liveText.trim();
-      const completedSegments =
-        preserveLiveText && normalizedLiveText
-          ? [...buffer.completedSegments, normalizedLiveText]
-          : buffer.completedSegments;
-
-      return {
-        activeTarget: null,
-        status: nextStatus,
-        elapsedSeconds: 0,
-        audioLevel: 0,
-        panelBuffers: {
-          ...state.panelBuffers,
-          [panelId]: {
-            ...buffer,
-            liveText: "",
-            completedSegments,
-            transcriptPhase: "idle" as VoiceTranscriptPhase,
-          },
-        },
-      };
-    }),
-
-  consumeCompletedSegments: (panelId) => {
-    const buffer = getBuffer(get().panelBuffers, panelId);
-    if (buffer.completedSegments.length === 0) {
-      return [];
+    {
+      name: "daintree-voice-recording",
+      // Debounced storage: high-frequency setters (`setAudioLevel` at RAF rate,
+      // `setElapsedSeconds` per second) trigger persist writes regardless of
+      // whether the partialized output changed. Coalescing to a trailing-edge
+      // 300ms write avoids burning the localStorage write queue mid-session.
+      storage: createDebouncedSafeJSONStorage(300),
+      version: 0,
+      // No structural migration yet — at v0 the persisted blob is a
+      // forward-compatible subset of the current shape (only `recentTargets`),
+      // so we pass it through unchanged.
+      migrate: (persistedState) => persistedState,
+      // Persist only the recent-targets list. Strip the live `panelId` on each
+      // entry so a stale id cannot silently re-route dictation after restart —
+      // panelIds are ephemeral. Lock state and session state are runtime-only.
+      partialize: (state) => ({
+        recentTargets: state.recentTargets.map(({ panelId: _panelId, ...rest }) => rest),
+      }),
     }
+  )
+);
 
-    const completedSegments = [...buffer.completedSegments];
-    set((state) => ({
-      panelBuffers: {
-        ...state.panelBuffers,
-        [panelId]: {
-          ...getBuffer(state.panelBuffers, panelId),
-          completedSegments: [],
-        },
-      },
-    }));
-    return completedSegments;
-  },
-
-  clearPanelBuffer: (panelId) =>
-    set((state) => {
-      if (!(panelId in state.panelBuffers)) return state;
-      const next = { ...state.panelBuffers };
-      delete next[panelId];
-      return { panelBuffers: next };
-    }),
-
-  announce: (text) =>
-    set({
-      announcement: {
-        id: Date.now(),
-        text,
-      },
-    }),
-
-  clearAnnouncement: () => set({ announcement: null }),
-}));
+registerPersistedStore({
+  storeId: "voiceRecordingStore",
+  store: useVoiceRecordingStore,
+  persistedStateType: "{ recentTargets: RecentDictationTarget[] (panelId stripped) }",
+});

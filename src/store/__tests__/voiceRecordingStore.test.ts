@@ -11,6 +11,8 @@ function reset() {
     status: "idle",
     lastError: null,
     activeTarget: null,
+    lockedTarget: null,
+    recentTargets: [],
     elapsedSeconds: 0,
     audioLevel: 0,
     panelBuffers: {},
@@ -104,14 +106,18 @@ describe("voiceRecordingStore — transcript phase transitions", () => {
     expect(buffer?.transcriptPhase).toBe("idle");
   });
 
-  it("resetParagraphState resets insertPoint to -1", () => {
+  it("resetParagraphState resets draftLengthAtSegmentStart to -1", () => {
     useVoiceRecordingStore.getState().beginSession(TARGET);
-    useVoiceRecordingStore.getState().setInsertPoint(PANEL_ID, 42);
-    expect(useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.insertPoint).toBe(42);
+    useVoiceRecordingStore.getState().setDraftLengthAtSegmentStart(PANEL_ID, 42);
+    expect(
+      useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.draftLengthAtSegmentStart
+    ).toBe(42);
 
     useVoiceRecordingStore.getState().resetParagraphState(PANEL_ID);
 
-    expect(useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.insertPoint).toBe(-1);
+    expect(
+      useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.draftLengthAtSegmentStart
+    ).toBe(-1);
   });
 
   it("resetParagraphState resets liveText to empty string", () => {
@@ -124,13 +130,15 @@ describe("voiceRecordingStore — transcript phase transitions", () => {
     expect(useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.liveText).toBe("");
   });
 
-  it("after resetParagraphState, setInsertPoint can set a new anchor", () => {
+  it("after resetParagraphState, setDraftLengthAtSegmentStart can set a new anchor", () => {
     useVoiceRecordingStore.getState().beginSession(TARGET);
-    useVoiceRecordingStore.getState().setInsertPoint(PANEL_ID, 20);
+    useVoiceRecordingStore.getState().setDraftLengthAtSegmentStart(PANEL_ID, 20);
     useVoiceRecordingStore.getState().resetParagraphState(PANEL_ID);
-    useVoiceRecordingStore.getState().setInsertPoint(PANEL_ID, 21);
+    useVoiceRecordingStore.getState().setDraftLengthAtSegmentStart(PANEL_ID, 21);
 
-    expect(useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.insertPoint).toBe(21);
+    expect(
+      useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.draftLengthAtSegmentStart
+    ).toBe(21);
   });
 
   it("finishSession resets transcriptPhase to idle regardless of prior phase", () => {
@@ -162,5 +170,76 @@ describe("voiceRecordingStore — transcript phase transitions", () => {
 
     useVoiceRecordingStore.getState().resetParagraphState(PANEL_ID);
     expect(useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.transcriptPhase).toBe("idle");
+  });
+});
+
+describe("voiceRecordingStore — lockedTarget", () => {
+  beforeEach(reset);
+
+  it("lockTarget sets lockedTarget to the provided value", () => {
+    useVoiceRecordingStore.getState().lockTarget({ panelId: PANEL_ID, panelTitle: "Editor" });
+    expect(useVoiceRecordingStore.getState().lockedTarget).toEqual({
+      panelId: PANEL_ID,
+      panelTitle: "Editor",
+    });
+  });
+
+  it("unlockTarget clears lockedTarget to null", () => {
+    useVoiceRecordingStore.getState().lockTarget({ panelId: PANEL_ID });
+    useVoiceRecordingStore.getState().unlockTarget();
+    expect(useVoiceRecordingStore.getState().lockedTarget).toBeNull();
+  });
+
+  it("clearLockedTarget(matchingId) clears the lock", () => {
+    useVoiceRecordingStore.getState().lockTarget({ panelId: PANEL_ID });
+    useVoiceRecordingStore.getState().clearLockedTarget(PANEL_ID);
+    expect(useVoiceRecordingStore.getState().lockedTarget).toBeNull();
+  });
+
+  it("clearLockedTarget(nonMatchingId) is a no-op when lock points elsewhere", () => {
+    useVoiceRecordingStore.getState().lockTarget({ panelId: PANEL_ID });
+    const before = useVoiceRecordingStore.getState().lockedTarget;
+    useVoiceRecordingStore.getState().clearLockedTarget("other-panel");
+    expect(useVoiceRecordingStore.getState().lockedTarget).toBe(before);
+  });
+
+  it("clearLockedTarget is safe when no lock is set", () => {
+    expect(useVoiceRecordingStore.getState().lockedTarget).toBeNull();
+    useVoiceRecordingStore.getState().clearLockedTarget("any-id");
+    expect(useVoiceRecordingStore.getState().lockedTarget).toBeNull();
+  });
+});
+
+describe("voiceRecordingStore — recentTargets", () => {
+  beforeEach(reset);
+
+  it("recordRecentTarget appends new entries with metadata and timestamp", () => {
+    useVoiceRecordingStore
+      .getState()
+      .recordRecentTarget({ panelId: PANEL_ID, panelTitle: "Editor", projectName: "demo" });
+    const recents = useVoiceRecordingStore.getState().recentTargets;
+    expect(recents).toHaveLength(1);
+    expect(recents[0]?.panelId).toBe(PANEL_ID);
+    expect(recents[0]?.panelTitle).toBe("Editor");
+    expect(recents[0]?.projectName).toBe("demo");
+    expect(typeof recents[0]?.lastUsedAt).toBe("number");
+  });
+
+  it("recordRecentTarget deduplicates by panelId, hoisting the existing entry to the front", () => {
+    useVoiceRecordingStore.getState().recordRecentTarget({ panelId: "a", panelTitle: "A" });
+    useVoiceRecordingStore.getState().recordRecentTarget({ panelId: "b", panelTitle: "B" });
+    useVoiceRecordingStore.getState().recordRecentTarget({ panelId: "a", panelTitle: "A renamed" });
+    const recents = useVoiceRecordingStore.getState().recentTargets;
+    expect(recents.map((t) => t.panelId)).toEqual(["a", "b"]);
+    expect(recents[0]?.panelTitle).toBe("A renamed");
+  });
+
+  it("recordRecentTarget caps the list at 3 entries (MRU)", () => {
+    useVoiceRecordingStore.getState().recordRecentTarget({ panelId: "a" });
+    useVoiceRecordingStore.getState().recordRecentTarget({ panelId: "b" });
+    useVoiceRecordingStore.getState().recordRecentTarget({ panelId: "c" });
+    useVoiceRecordingStore.getState().recordRecentTarget({ panelId: "d" });
+    const recents = useVoiceRecordingStore.getState().recentTargets;
+    expect(recents.map((t) => t.panelId)).toEqual(["d", "c", "b"]);
   });
 });

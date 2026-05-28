@@ -3,6 +3,7 @@ import { isMac } from "@/lib/platform";
 import type React from "react";
 import { type PanelLocation } from "@/types";
 import { usePanelStore } from "@/store";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
@@ -28,6 +29,8 @@ import {
   Link,
   Lock,
   Maximize2,
+  Mic,
+  MicOff,
   Minimize2,
   Moon,
   OctagonX,
@@ -94,6 +97,11 @@ export function TerminalContextMenu({
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(terminalId));
   const fleetSize = useFleetArmingStore((s) => s.armedIds.size);
   const isHibernated = useIsHibernated(terminalId);
+  const isVoiceLockedHere = useVoiceRecordingStore(
+    (s) => s.lockedTarget?.panelId === terminalId
+  );
+  const recentVoiceTargets = useVoiceRecordingStore((s) => s.recentTargets);
+  const panelsById = usePanelStore((s) => s.panelsById);
   // Pull the panel directly here (rather than indexing through the shallow
   // selector above) so the eligibility check sees the live record. The
   // dropdown only renders fleet items when the panel is fleet-arm-eligible
@@ -132,6 +140,20 @@ export function TerminalContextMenu({
     [terminalId]
   );
 
+  // Recent dictation targets surfaced in the context menu must still resolve to
+  // a live, non-trashed panel that isn't the current one. Persisted entries
+  // come back without a panelId (stripped on rehydrate) and are filtered out
+  // here — they have no live routing destination this session.
+  const liveRecentVoiceTargets = useMemo(
+    () =>
+      recentVoiceTargets.filter((t) => {
+        if (!t.panelId || t.panelId === terminalId) return false;
+        const panel = panelsById[t.panelId];
+        return panel && panel.location !== "trash";
+      }),
+    [recentVoiceTargets, panelsById, terminalId]
+  );
+
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
   const terminalBrowser = terminal && isBrowserPanel(terminal) ? terminal : undefined;
   const isPaused =
@@ -163,6 +185,16 @@ export function TerminalContextMenu({
         void actionService.dispatch(
           "terminal.moveToWorktree",
           { terminalId, worktreeId },
+          { source: sourceRef.current }
+        );
+        return;
+      }
+
+      if (actionId.startsWith("recall-voice-target:")) {
+        const targetPanelId = actionId.slice("recall-voice-target:".length);
+        void actionService.dispatch(
+          "voiceInput.recallRecentTarget",
+          { panelId: targetPanelId },
           { source: sourceRef.current }
         );
         return;
@@ -267,6 +299,20 @@ export function TerminalContextMenu({
           void actionService.dispatch(
             "terminal.toggleInputLock",
             { terminalId },
+            { source: sourceRef.current }
+          );
+          break;
+        case "voice-lock-target":
+          void actionService.dispatch(
+            "voiceInput.lockTarget",
+            { panelId: terminalId },
+            { source: sourceRef.current }
+          );
+          break;
+        case "voice-unlock-target":
+          void actionService.dispatch(
+            "voiceInput.unlockTarget",
+            undefined,
             { source: sourceRef.current }
           );
           break;
@@ -746,6 +792,46 @@ export function TerminalContextMenu({
             )}
             {terminal.isInputLocked ? "Unlock Input" : "Lock Input"}
           </ContextMenuItem>
+          {hasPty && (
+            <ContextMenuItem
+              onSelect={() =>
+                handleAction(isVoiceLockedHere ? "voice-unlock-target" : "voice-lock-target")
+              }
+            >
+              {isVoiceLockedHere ? (
+                <MicOff className={ICON_CLASS} aria-hidden="true" />
+              ) : (
+                <Mic className={ICON_CLASS} aria-hidden="true" />
+              )}
+              {isVoiceLockedHere ? "Unlock dictation" : "Lock dictation to this panel"}
+            </ContextMenuItem>
+          )}
+          {hasPty && liveRecentVoiceTargets.length > 0 && (
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>
+                <Mic className={ICON_CLASS} aria-hidden="true" />
+                Recent dictation targets
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent>
+                {liveRecentVoiceTargets.map((target) => {
+                  const label =
+                    target.panelTitle?.trim() ||
+                    target.worktreeLabel?.trim() ||
+                    target.projectName?.trim() ||
+                    "Untitled panel";
+                  return (
+                    <ContextMenuItem
+                      key={target.panelId}
+                      onSelect={() => handleAction(`recall-voice-target:${target.panelId ?? ""}`)}
+                    >
+                      <Mic className={ICON_CLASS} aria-hidden="true" />
+                      {label}
+                    </ContextMenuItem>
+                  );
+                })}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          )}
           {terminal.detectedAgentId && (
             <ContextMenuItem onSelect={() => handleAction("toggle-watch")}>
               {isWatched ? (

@@ -180,6 +180,9 @@ export function initStoreOrchestrator(): () => void {
             useTerminalInputStore.getState().clearTerminalState(removedId);
             useConsoleCaptureStore.getState().removePane(removedId);
             useVoiceRecordingStore.getState().clearPanelBuffer(removedId);
+            // Drop the dictation lock if it was pinned to this panel — panelIds
+            // are ephemeral and a stale lock would silently break routing.
+            useVoiceRecordingStore.getState().clearLockedTarget(removedId);
             unregisterInputController(removedId);
             semanticAnalysisService.unregisterTerminal(removedId);
 
