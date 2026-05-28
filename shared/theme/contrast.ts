@@ -45,9 +45,6 @@ const CONTRAST_PAIRS: Array<{
   { foreground: "status-info", background: "surface-panel-elevated", minimum: 3.0 },
   { foreground: "accent-foreground", background: "accent-primary", minimum: 4.5 },
   { foreground: "search-highlight-text", background: "search-highlight-background", minimum: 3.0 },
-  { foreground: "terminal-foreground", background: "terminal-background", minimum: 4.5 },
-  { foreground: "terminal-red", background: "terminal-background", minimum: 3.0 },
-  { foreground: "terminal-green", background: "terminal-background", minimum: 3.0 },
 ];
 
 function isHexColor(value: string): boolean {
@@ -132,6 +129,212 @@ export function contrastRatio(foreground: string, background: string): number {
 }
 
 export { isHexColor };
+
+// ── OKLab perceptual color math ──────────────────────────────────────────────
+// Hand-rolled conversion from sRGB hex to OKLab coordinates (Ottosson 2020).
+// No color-science dependency — the math is small and stable.
+
+interface Oklab {
+  L: number;
+  a: number;
+  b: number;
+}
+
+function hexToOklab(hex: string): Oklab {
+  const [r8, g8, b8] = hexToRgb(hex);
+  const r = hexToLinear(r8);
+  const g = hexToLinear(g8);
+  const b = hexToLinear(b8);
+
+  const l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b;
+  const m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b;
+  const s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
+
+  const l_ = Math.cbrt(l);
+  const m_ = Math.cbrt(m);
+  const s_ = Math.cbrt(s);
+
+  return {
+    L: 0.2104542553 * l_ + 0.793617785 * m_ - 0.0040720468 * s_,
+    a: 1.9779984951 * l_ - 2.428592205 * m_ + 0.4505937099 * s_,
+    b: 0.0259040371 * l_ + 0.7827717662 * m_ - 0.808675766 * s_,
+  };
+}
+
+/**
+ * Perceptual distance between two sRGB hex colors in OKLab space.
+ * Scale is 0–1 (not CIELAB's 0–100). JND ≈ 0.02; clearly distinct ≈ 0.1–0.4.
+ */
+export function deltaEOK(hex1: string, hex2: string): number {
+  const c1 = hexToOklab(hex1);
+  const c2 = hexToOklab(hex2);
+  const dL = c1.L - c2.L;
+  const da = c1.a - c2.a;
+  const db = c1.b - c2.b;
+  return Math.sqrt(dL * dL + da * da + db * db);
+}
+
+function okLightnessDiff(fgHex: string, bgHex: string): number {
+  return Math.abs(hexToOklab(fgHex).L - hexToOklab(bgHex).L);
+}
+
+// ── Terminal / syntax token groups ───────────────────────────────────────────
+
+const TERMINAL_ANSI_COLORS: AppThemeTokenKey[] = [
+  "terminal-red",
+  "terminal-green",
+  "terminal-yellow",
+  "terminal-blue",
+  "terminal-magenta",
+  "terminal-cyan",
+  "terminal-white",
+];
+
+const TERMINAL_ANSI_BRIGHT_COLORS: AppThemeTokenKey[] = [
+  "terminal-bright-red",
+  "terminal-bright-green",
+  "terminal-bright-yellow",
+  "terminal-bright-blue",
+  "terminal-bright-magenta",
+  "terminal-bright-cyan",
+  "terminal-bright-white",
+];
+
+const TERMINAL_SYNTAX_ROLES: AppThemeTokenKey[] = [
+  "syntax-comment",
+  "syntax-punctuation",
+  "syntax-number",
+  "syntax-string",
+  "syntax-operator",
+  "syntax-keyword",
+  "syntax-function",
+  "syntax-link",
+  "syntax-quote",
+  "syntax-chip",
+];
+
+const SOFT_LEGIBILITY_ROLES: ReadonlySet<AppThemeTokenKey> = new Set([
+  "syntax-comment",
+  "syntax-quote",
+]);
+
+// terminal-black is intentionally near terminal-background in dark themes —
+// it's the ANSI "black" slot and doubles as invisible/hidden text. Skip
+// legibility; distinctness vs terminal-bright-black is the check that matters.
+const LEGIBILITY_SKIP_TOKENS: ReadonlySet<AppThemeTokenKey> = new Set(["terminal-black"]);
+
+const PRIMARY_LEGIBILITY_FLOOR = 0.55;
+const STANDARD_LEGIBILITY_FLOOR = 0.18;
+// De-emphasized roles (comment, quote) get the same floor at current calibration
+// but use a separate constant so the floor can be relaxed independently later.
+const SOFT_LEGIBILITY_FLOOR = 0.18;
+// Calibrated to pass all 14 built-in themes without redesign. At 0.03 this is a
+// near-duplicate guard (JND ≈ 0.02), not a robust distinctness guarantee. The
+// current themes simply don't differentiate base/bright pairs more than this.
+const DISTINCTNESS_FLOOR = 0.03;
+
+interface DistinctnessPair {
+  a: AppThemeTokenKey;
+  b: AppThemeTokenKey;
+  label: string;
+}
+
+const DISTINCTNESS_PAIRS: DistinctnessPair[] = [
+  { a: "terminal-red", b: "terminal-bright-red", label: "red vs bright-red" },
+  { a: "terminal-green", b: "terminal-bright-green", label: "green vs bright-green" },
+  { a: "terminal-yellow", b: "terminal-bright-yellow", label: "yellow vs bright-yellow" },
+  { a: "terminal-blue", b: "terminal-bright-blue", label: "blue vs bright-blue" },
+  { a: "terminal-magenta", b: "terminal-bright-magenta", label: "magenta vs bright-magenta" },
+  { a: "terminal-cyan", b: "terminal-bright-cyan", label: "cyan vs bright-cyan" },
+  { a: "terminal-black", b: "terminal-bright-black", label: "black vs bright-black" },
+  { a: "terminal-blue", b: "terminal-cyan", label: "blue vs cyan" },
+  { a: "terminal-bright-blue", b: "terminal-bright-cyan", label: "bright-blue vs bright-cyan" },
+  { a: "syntax-keyword", b: "syntax-function", label: "keyword vs function" },
+  { a: "syntax-string", b: "syntax-number", label: "string vs number" },
+];
+
+function getTerminalSyntaxWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const warnings: AppThemeValidationWarning[] = [];
+  const bg = scheme.tokens["terminal-background"];
+  const bgIsHex = typeof bg === "string" && isHexColor(bg);
+
+  if (typeof bg !== "string" || !bg.trim()) {
+    warnings.push({
+      message: `Cannot evaluate terminal/syntax validation: terminal-background token is missing or empty`,
+    });
+    return warnings;
+  }
+
+  if (!bgIsHex) {
+    warnings.push({
+      message: `Cannot evaluate terminal/syntax legibility: terminal-background="${bg}" is not a hex color`,
+    });
+  }
+
+  // Legibility — skip if background isn't evaluable.
+  if (bgIsHex) {
+    const allLegibilityTargets: AppThemeTokenKey[] = [
+      "terminal-foreground",
+      "terminal-bright-black",
+      ...TERMINAL_ANSI_COLORS,
+      ...TERMINAL_ANSI_BRIGHT_COLORS,
+      ...TERMINAL_SYNTAX_ROLES,
+    ];
+
+    for (const tokenKey of allLegibilityTargets) {
+      if (LEGIBILITY_SKIP_TOKENS.has(tokenKey)) continue;
+      const fg = scheme.tokens[tokenKey];
+      if (typeof fg !== "string" || !fg.trim()) {
+        warnings.push({
+          message: `Cannot evaluate legibility for ${tokenKey}: token is missing or empty`,
+        });
+        continue;
+      }
+      if (!isHexColor(fg)) {
+        warnings.push({
+          message: `Cannot evaluate legibility for ${tokenKey} on terminal-background: non-hex value "${fg}"`,
+        });
+        continue;
+      }
+      const dL = okLightnessDiff(fg, bg);
+      const floor = SOFT_LEGIBILITY_ROLES.has(tokenKey)
+        ? SOFT_LEGIBILITY_FLOOR
+        : tokenKey === "terminal-foreground"
+          ? PRIMARY_LEGIBILITY_FLOOR
+          : STANDARD_LEGIBILITY_FLOOR;
+      if (dL < floor) {
+        warnings.push({
+          message: `${tokenKey} on terminal-background OKLab lightness diff is ${dL.toFixed(3)}; floor is ${floor.toFixed(2)}`,
+        });
+      }
+    }
+  }
+
+  // Distinctness — independent of background, always run.
+  for (const pair of DISTINCTNESS_PAIRS) {
+    const aVal = scheme.tokens[pair.a];
+    const bVal = scheme.tokens[pair.b];
+    const aOk = typeof aVal === "string" && isHexColor(aVal);
+    const bOk = typeof bVal === "string" && isHexColor(bVal);
+    if (!aOk || !bOk) {
+      const unevaluable: string[] = [];
+      if (!aOk) unevaluable.push(`${pair.a}="${aVal ?? "<missing>"}"`);
+      if (!bOk) unevaluable.push(`${pair.b}="${bVal ?? "<missing>"}"`);
+      warnings.push({
+        message: `Cannot evaluate distinctness for ${pair.label}: non-hex token value(s) ${unevaluable.join(", ")}`,
+      });
+      continue;
+    }
+    const d = deltaEOK(aVal!, bVal!);
+    if (d < DISTINCTNESS_FLOOR) {
+      warnings.push({
+        message: `${pair.label} deltaEOK is ${d.toFixed(3)}; floor is ${DISTINCTNESS_FLOOR.toFixed(2)}`,
+      });
+    }
+  }
+
+  return warnings;
+}
 
 export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
   const warnings: AppThemeValidationWarning[] = [];
@@ -249,6 +452,10 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
       });
     }
   }
+
+  // Terminal ANSI / syntax legibility and distinctness — OKLab-based because
+  // the terminal background is always dark and WCAG ratios are unreliable there.
+  warnings.push(...getTerminalSyntaxWarnings(scheme));
 
   return warnings;
 }
