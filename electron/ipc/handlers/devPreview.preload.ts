@@ -16,6 +16,7 @@ export const DEV_PREVIEW_METHOD_CHANNELS = {
   restartByWorktree: "dev-preview:restart-by-worktree",
   stopDevServerByWorktree: "dev-preview:stop-dev-server-by-worktree",
   getProxyPort: "dev-preview:get-proxy-port",
+  mintBrowserToken: "dev-preview:mint-browser-token",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof DEV_PREVIEW_METHOD_CHANNELS;

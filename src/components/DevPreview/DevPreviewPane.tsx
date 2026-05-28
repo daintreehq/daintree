@@ -811,12 +811,38 @@ export function DevPreviewPane({
   }, [performReload]);
 
   const handleOpenExternal = useCallback(() => {
-    if (currentUrl) {
-      safeFireAndForget(window.electron.system.openExternal(currentUrl), {
-        context: "Opening dev preview URL externally",
-      });
+    if (!currentUrl) return;
+
+    // In proxy mode (#9101), hand the system browser a short-lived signed
+    // bootstrap URL on the stable origin instead of the raw dev-server URL: it
+    // lands with a session cookie and survives dev-server restarts that reshuffle
+    // the upstream port. Fall back to the raw URL in legacy mode or if minting
+    // fails, so the button always opens *something*.
+    if (typeof proxyOrigin === "string" && currentProjectId && currentUrl.startsWith(proxyOrigin)) {
+      const { pathname, search } = new URL(currentUrl);
+      safeFireAndForget(
+        (async () => {
+          try {
+            const { bootstrapUrl } = await window.electron.devPreview.mintBrowserToken({
+              panelId: id,
+              projectId: currentProjectId,
+              redirectPath: `${pathname}${search}`,
+            });
+            await window.electron.system.openExternal(bootstrapUrl);
+          } catch (err) {
+            logError("[DevPreviewPane] Browser handoff token failed; opening raw URL", err);
+            await window.electron.system.openExternal(currentUrl);
+          }
+        })(),
+        { context: "Opening dev preview URL externally" }
+      );
+      return;
     }
-  }, [currentUrl]);
+
+    safeFireAndForget(window.electron.system.openExternal(currentUrl), {
+      context: "Opening dev preview URL externally",
+    });
+  }, [currentUrl, proxyOrigin, currentProjectId, id]);
 
   const handleZoomChange = useCallback((newZoom: number) => {
     const clamped = Math.max(0.25, Math.min(2.0, newZoom));

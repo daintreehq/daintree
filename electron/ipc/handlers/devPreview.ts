@@ -1,7 +1,8 @@
 import { app } from "electron";
+import { z } from "zod";
 import { CHANNELS } from "../channels.js";
 import { broadcastToRenderer } from "../utils.js";
-import { defineIpcNamespace, op } from "../define.js";
+import { defineIpcNamespace, op, opValidated } from "../define.js";
 import { DEV_PREVIEW_METHOD_CHANNELS } from "./devPreview.preload.js";
 import type { HandlerDependencies } from "../types.js";
 // Type-only import: the manifest service does sync fs work, so its runtime
@@ -21,6 +22,7 @@ import type {
   DevPreviewStopDevServerByWorktreeRequest,
   DevPreviewSessionState,
   DevPreviewProxyInfo,
+  DevPreviewMintBrowserTokenResult,
 } from "../../../shared/types/ipc/devPreview.js";
 import type { DevPreviewSessionService as DevPreviewSessionServiceType } from "../../services/DevPreviewSessionService.js";
 import type { DevPreviewProxyService as DevPreviewProxyServiceType } from "../../services/DevPreviewProxyService.js";
@@ -217,6 +219,19 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
         async (): Promise<DevPreviewProxyInfo> => {
           const proxy = await getProxyService();
           return { port: proxy.port };
+        }
+      ),
+      mintBrowserToken: opValidated(
+        DEV_PREVIEW_METHOD_CHANNELS.mintBrowserToken,
+        z.object({
+          panelId: z.string().min(1),
+          projectId: z.string().min(1),
+          redirectPath: z.string(),
+        }),
+        async ({ panelId, projectId, redirectPath }): Promise<DevPreviewMintBrowserTokenResult> => {
+          const proxy = await getProxyService();
+          const bootstrapUrl = proxy.mintBrowserToken(panelId, projectId, redirectPath);
+          return { bootstrapUrl };
         }
       ),
     },

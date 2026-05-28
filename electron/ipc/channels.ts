@@ -474,6 +474,7 @@ export const CHANNELS = {
   DEV_PREVIEW_RESTART_BY_WORKTREE: "dev-preview:restart-by-worktree",
   DEV_PREVIEW_STOP_DEV_SERVER_BY_WORKTREE: "dev-preview:stop-dev-server-by-worktree",
   DEV_PREVIEW_GET_PROXY_PORT: "dev-preview:get-proxy-port",
+  DEV_PREVIEW_MINT_BROWSER_TOKEN: "dev-preview:mint-browser-token",
   DEV_PREVIEW_STATE_CHANGED: "dev-preview:state-changed",
   DEV_PREVIEW_ALL_SESSIONS_CHANGED: "dev-preview:all-sessions-changed",
 

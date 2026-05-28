@@ -216,6 +216,10 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./devPreview.js").DevPreviewSessionRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
   };
+  "dev-preview:mint-browser-token": {
+    args: [__0: { panelId: string; projectId: string; redirectPath: string }];
+    result: import("./devPreview.js").DevPreviewMintBrowserTokenResult;
+  };
   "dev-preview:reinstall-and-restart": {
     args: [request: import("./devPreview.js").DevPreviewSessionRequest];
     result: import("./devPreview.js").DevPreviewSessionState;

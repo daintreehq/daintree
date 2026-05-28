@@ -1,10 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
   DEV_PREVIEW_PROXY_PORT,
+  DEV_PREVIEW_BOOTSTRAP_PATH,
   sanitizeSubdomainToken,
   buildDevPreviewSubdomain,
   buildDevPreviewProxyOrigin,
   parseDevPreviewProxyHost,
+  normalizeBootstrapRedirectPath,
+  buildBootstrapUrl,
 } from "../devPreviewProxy.js";
 
 describe("devPreviewProxy", () => {
@@ -96,6 +99,50 @@ describe("devPreviewProxy", () => {
 
     it("is case-insensitive", () => {
       expect(parseDevPreviewProxyHost("DP-PROJ-PANEL.LOCALHOST:43000")).toBe("dp-proj-panel");
+    });
+  });
+
+  describe("normalizeBootstrapRedirectPath", () => {
+    it("passes through a valid same-origin absolute path", () => {
+      expect(normalizeBootstrapRedirectPath("/dashboard")).toBe("/dashboard");
+    });
+
+    it("preserves the query string and fragment", () => {
+      expect(normalizeBootstrapRedirectPath("/a/b?x=1&y=2#frag")).toBe("/a/b?x=1&y=2#frag");
+    });
+
+    it("defaults to / for empty or nullish input", () => {
+      expect(normalizeBootstrapRedirectPath("")).toBe("/");
+      expect(normalizeBootstrapRedirectPath(undefined)).toBe("/");
+      expect(normalizeBootstrapRedirectPath(null)).toBe("/");
+    });
+
+    it("rejects paths without a leading slash", () => {
+      expect(normalizeBootstrapRedirectPath("dashboard")).toBe("/");
+      expect(normalizeBootstrapRedirectPath("http://evil.com")).toBe("/");
+    });
+
+    it("rejects scheme-relative open-redirect bypasses", () => {
+      expect(normalizeBootstrapRedirectPath("//evil.com")).toBe("/");
+      expect(normalizeBootstrapRedirectPath("//evil.com/path")).toBe("/");
+      expect(normalizeBootstrapRedirectPath("/\\evil.com")).toBe("/");
+    });
+
+    it("collapses encoded dot-segments while staying on-origin", () => {
+      // The URL constructor decodes `%2e%2e` to `..` and resolves it; the result
+      // never escapes the origin, so the worst case is a harmless same-origin path.
+      expect(normalizeBootstrapRedirectPath("/%2e%2e/admin")).toBe("/admin");
+    });
+  });
+
+  describe("buildBootstrapUrl", () => {
+    it("builds a bootstrap URL with percent-encoded token and rd params", () => {
+      const url = buildBootstrapUrl("http://dp-a-b.localhost:43000", "tok.en", "/path?x=1");
+      const parsed = new URL(url);
+      expect(parsed.origin).toBe("http://dp-a-b.localhost:43000");
+      expect(parsed.pathname).toBe(DEV_PREVIEW_BOOTSTRAP_PATH);
+      expect(parsed.searchParams.get("token")).toBe("tok.en");
+      expect(parsed.searchParams.get("rd")).toBe("/path?x=1");
     });
   });
 });
