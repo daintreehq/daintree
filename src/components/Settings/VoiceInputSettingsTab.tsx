@@ -228,9 +228,11 @@ export function VoiceInputSettingsTab() {
               label="Transcription provider"
               description="The backend that turns your speech into text"
               value={settings.transcriptionProvider}
-              onValueChange={(v) =>
-                update({ transcriptionProvider: v as VoiceTranscriptionProvider })
-              }
+              onValueChange={(v) => {
+                // Narrow the select's string value to the union via a guard
+                // rather than an unsafe assertion.
+                if (v === "openai" || v === "deepgram") update({ transcriptionProvider: v });
+              }}
               options={TRANSCRIPTION_PROVIDERS.map(({ value, label, description }) => ({
                 value,
                 label,
