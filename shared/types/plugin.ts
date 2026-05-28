@@ -129,6 +129,35 @@ export interface PluginManifest {
   };
 }
 
+export type PluginInstallSource = "builtin" | "sideload" | "url" | "catalog";
+
+export interface PluginLoadError {
+  message: string;
+  stack?: string;
+  at: number;
+}
+
+export interface PluginUpdateAvailable {
+  version: string;
+  channel: "manual";
+}
+
+/**
+ * Persisted provenance record for a non-builtin plugin. Keyed by
+ * `manifest.name` in `plugins.installed`. Runtime fields (`manifest`, `dir`,
+ * `loadedAt`, `isBuiltin`) are reconstructed at load time and not stored here.
+ */
+export interface InstalledPluginRecord {
+  source: PluginInstallSource;
+  installedAt: number;
+  archiveHash: string | null;
+  originalUrl: string | null;
+  disabled: boolean;
+  updateAvailable: PluginUpdateAvailable | null;
+  devMode: boolean;
+  loadError: PluginLoadError | null;
+}
+
 export interface LoadedPluginInfo {
   manifest: PluginManifest;
   dir: string;
@@ -140,22 +169,22 @@ export interface LoadedPluginInfo {
    * Determined by load path, never declared in the manifest.
    */
   isBuiltin: boolean;
-  /**
-   * SHA-256 hex digest of the `.dntr` archive bytes, computed at install time
-   * by {@link PluginArchive.computeArchiveHash}. Undefined for sideloaded
-   * plugins (loaded from a directory, not an archive). Populated by the
-   * installer flow (F21) — TODO(#9271): migrate to the provenance record when
-   * that lands.
-   */
-  archiveHash?: string;
-  /**
-   * The user's current desired state: true when the plugin id is present in the
-   * persisted `plugins.disabled` list. This drives the Preferences toggle and
-   * is read live, so it reflects edits made this session (not just the startup
-   * snapshot). Disabled plugins still appear in the list so the user can
-   * re-enable them. Absent/false means the user wants the plugin enabled.
-   */
-  disabled?: boolean;
+  /** How the plugin was installed. Built-ins always return `"builtin"`. */
+  source: PluginInstallSource;
+  /** When the plugin was first installed (record created). `0` for builtins. */
+  installedAt: number;
+  /** SHA-256 of the `.dntr` archive at install time. `null` for builtins and dev-mode dir loads. */
+  archiveHash: string | null;
+  /** Original install URL. `null` for builtins and sideloads. Never logged to console. */
+  originalUrl: string | null;
+  /** Most recent activation error, or `null` if the last load succeeded. */
+  loadError: PluginLoadError | null;
+  /** Per-plugin disable state for non-builtins. Builtins use `disabledBuiltins` instead. */
+  disabled: boolean;
+  /** Set by the update-check job (F25). Reserved slot — `null` until F25 lands. */
+  updateAvailable: PluginUpdateAvailable | null;
+  /** Loaded from a directory outside the managed plugins dir (e.g. via `daintree-plugin` CLI dev command). */
+  devMode: boolean;
   /**
    * True when the desired state (`disabled`) diverges from what's actually
    * running this session — i.e. the user toggled the plugin but the change

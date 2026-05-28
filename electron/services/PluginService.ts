@@ -33,6 +33,9 @@ import type {
   PluginActionContribution,
   PluginActionDescriptor,
   BuiltInPluginCapability,
+  InstalledPluginRecord,
+  PluginLoadError,
+  PluginInstallSource,
 } from "../../shared/types/plugin.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
@@ -119,28 +122,15 @@ interface LoadedPlugin {
   archiveHash?: string;
 }
 
-/**
- * Diagnostic record of the most recent activation failure for a plugin id.
- * Held internally (not on {@link LoadedPluginInfo}) until #9271 lands the
- * provenance store with a public `loadError` field — at that point this Map
- * is migrated into the provenance record. Until then the Settings diagnostic
- * tab and IPC consumers may read it via {@link PluginService.getPluginLoadError}.
- */
-interface PluginLoadErrorRecord {
-  message: string;
-  stack?: string;
-  at: number;
-}
-
 const ACTIVATE_TIMEOUT_MS = 5000;
 
 /**
  * Normalise the value thrown out of `activate()` into a serialisable record.
  * `unknown` becomes a stable `{ message, stack?, at }` shape so the Settings
- * diagnostic tab (and #9271's provenance store) don't have to re-handle raw
+ * diagnostic tab (and the provenance store) don't have to re-handle raw
  * error objects.
  */
-function toPluginLoadErrorRecord(err: unknown): PluginLoadErrorRecord {
+function toPluginLoadError(err: unknown): PluginLoadError {
   if (err instanceof Error) {
     return { message: err.message, stack: err.stack, at: Date.now() };
   }
@@ -186,13 +176,6 @@ export class PluginService {
   private actionValidators = new Map<string, ValidateFn>();
   private ajv: AjvInstance | null = null;
   private pluginEventCleanups = new Map<string, Array<() => void>>();
-  /**
-   * Most recent activation error per plugin id. Populated by the catch in
-   * `loadPlugin()` so a thrown `activate()` no longer escapes containment.
-   * Cleared on unload and on a subsequent successful activation. Exposed via
-   * {@link getPluginLoadError} for Settings diagnostics and IPC introspection.
-   */
-  private pluginLoadErrors = new Map<string, PluginLoadErrorRecord>();
   private workspaceClient: WorkspaceClient | null = null;
   /**
    * Event subscriptions registered during plugin `activate()` when the
@@ -376,6 +359,56 @@ export class PluginService {
     }
   }
 
+  private getInstalledRecords(): Record<string, InstalledPluginRecord> {
+    try {
+      const plugins = store.get("plugins") as { installed?: unknown } | undefined;
+      const raw = plugins?.installed;
+      if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+        return raw as Record<string, InstalledPluginRecord>;
+      }
+      return {};
+    } catch {
+      return {};
+    }
+  }
+
+  private getInstalledRecord(name: string): InstalledPluginRecord | undefined {
+    return this.getInstalledRecords()[name];
+  }
+
+  private writeInstalledRecords(records: Record<string, InstalledPluginRecord>): void {
+    try {
+      const current = store.get("plugins");
+      store.set("plugins", { ...current, installed: records });
+    } catch (err) {
+      console.warn("[PluginService] Failed to write installed plugin records:", err);
+    }
+  }
+
+  private upsertInstalledRecord(
+    name: string,
+    patch: Partial<InstalledPluginRecord>
+  ): InstalledPluginRecord {
+    const records = this.getInstalledRecords();
+    const existing = records[name];
+    const updated: InstalledPluginRecord = existing
+      ? { ...existing, ...patch }
+      : {
+          source: "sideload" as PluginInstallSource,
+          installedAt: Date.now(),
+          archiveHash: null,
+          originalUrl: null,
+          disabled: false,
+          updateAvailable: null,
+          devMode: false,
+          loadError: null,
+          ...patch,
+        };
+    records[name] = updated;
+    this.writeInstalledRecords(records);
+    return updated;
+  }
+
   private async loadFromDir(root: string, opts: { isBuiltin: boolean }): Promise<number> {
     let entries: import("fs").Dirent[];
     try {
@@ -507,6 +540,19 @@ export class PluginService {
       );
     }
 
+    // Per-plugin provenance record. Built-ins don't get records — they're
+    // identified by load path. Non-builtins get one created on first encounter.
+    // Disabled-state filtering already happened upstream via `opts.disabled`
+    // (the unified `plugins.disabled` list, #9284), so we only run here when
+    // the plugin is going to load. Must run after the engine gate above so
+    // incompatible plugins don't leave zombie records in the store.
+    if (!opts.isBuiltin) {
+      const existing = this.getInstalledRecord(manifest.name);
+      if (!existing) {
+        this.upsertInstalledRecord(manifest.name, {});
+      }
+    }
+
     if (manifest.capabilities.length > 0) {
       console.log(
         `[PluginService] Plugin "${manifest.name}" declares capabilities: ${manifest.capabilities.join(", ")}`
@@ -622,17 +668,22 @@ export class PluginService {
           }
         }
         // Successful activation (or a main with no activate fn) clears any
-        // diagnostic record left over from a prior failed attempt at the same
-        // plugin id — relevant when initialize() is run twice against the
-        // same service in tests, or in future hot-reload paths.
-        this.pluginLoadErrors.delete(manifest.name);
+        // diagnostic record left over from a prior failed attempt — persisted
+        // to the provenance record so it survives a host restart.
+        if (!opts.isBuiltin) {
+          this.upsertInstalledRecord(manifest.name, { loadError: null });
+        }
       } catch (err) {
-        const record = toPluginLoadErrorRecord(err);
-        this.pluginLoadErrors.set(manifest.name, record);
+        const loadError = toPluginLoadError(err);
+        if (!opts.isBuiltin) {
+          this.upsertInstalledRecord(manifest.name, { loadError });
+        }
         console.error(`[PluginService] Failed to load main entry for ${manifest.name}:`, err);
       }
     } else {
-      this.pluginLoadErrors.delete(manifest.name);
+      if (!opts.isBuiltin) {
+        this.upsertInstalledRecord(manifest.name, { loadError: null });
+      }
     }
 
     return plugin;
@@ -1177,7 +1228,6 @@ export class PluginService {
     );
 
     this.plugins.delete(pluginId);
-    this.pluginLoadErrors.delete(pluginId);
 
     if (decorationScopes && decorationScopes.length > 0) {
       runUnloadStep(pluginId, "broadcastDecorationsChanged", () => {
@@ -1216,36 +1266,58 @@ export class PluginService {
     // lets the renderer show the correct switch position and a "restart
     // required" cue that survives a tab remount (#9284).
     const desiredDisabled = this.getDisabledIds();
+    const installed = this.getInstalledRecords();
 
-    // Plugins that loaded and are running this session.
-    const running: LoadedPluginInfo[] = Array.from(this.plugins.values()).map((p) => {
+    const toInfo = (
+      p: { manifest: PluginManifest; dir: string; isBuiltin: boolean },
+      loadedAt: number,
+      isRunning: boolean
+    ): LoadedPluginInfo => {
       const disabled = desiredDisabled.has(p.manifest.name);
+      // pendingRestart: desired state diverges from running state.
+      // Running + now-disabled → unload pending; skipped + now-enabled → load pending.
+      const pendingRestart = isRunning ? disabled : !disabled;
+      if (p.isBuiltin) {
+        return {
+          manifest: p.manifest,
+          dir: p.dir,
+          loadedAt,
+          isBuiltin: true,
+          source: "builtin",
+          installedAt: 0,
+          archiveHash: null,
+          originalUrl: null,
+          loadError: null,
+          disabled,
+          updateAvailable: null,
+          devMode: false,
+          pendingRestart,
+        };
+      }
+      const record = installed[p.manifest.name];
       return {
         manifest: p.manifest,
         dir: p.dir,
-        loadedAt: p.loadedAt,
-        isBuiltin: p.isBuiltin,
-        archiveHash: p.archiveHash,
+        loadedAt,
+        isBuiltin: false,
+        source: record?.source ?? "sideload",
+        installedAt: record?.installedAt ?? 0,
+        archiveHash: record?.archiveHash ?? null,
+        originalUrl: record?.originalUrl ?? null,
+        loadError: record?.loadError ?? null,
         disabled,
-        // Running but the user now wants it off → unload pending on restart.
-        pendingRestart: disabled,
+        updateAvailable: record?.updateAvailable ?? null,
+        devMode: record?.devMode ?? false,
+        pendingRestart,
       };
-    });
+    };
+
+    // Plugins that loaded and are running this session.
+    const running = Array.from(this.plugins.values()).map((p) => toInfo(p, p.loadedAt, true));
 
     // Plugins skipped at launch because they were disabled. They carry no
     // `loadedAt` — the main module never ran — so it's reported as 0.
-    const skipped: LoadedPluginInfo[] = Array.from(this.disabledPlugins.values()).map((p) => {
-      const disabled = desiredDisabled.has(p.manifest.name);
-      return {
-        manifest: p.manifest,
-        dir: p.dir,
-        loadedAt: 0,
-        isBuiltin: p.isBuiltin,
-        disabled,
-        // Not running but the user now wants it on → load pending on restart.
-        pendingRestart: !disabled,
-      };
-    });
+    const skipped = Array.from(this.disabledPlugins.values()).map((p) => toInfo(p, 0, false));
 
     return [...running, ...skipped];
   }
@@ -1294,13 +1366,11 @@ export class PluginService {
 
   /**
    * Most recent activation error for a plugin id, or `undefined` if the last
-   * load succeeded (or the plugin has never been loaded). Cleared on unload
-   * and on a subsequent successful activation. Intended for the Settings
-   * diagnostic surface (F19) and #9271's provenance store — until that lands
-   * the record stays in-memory and does not survive a host restart.
+   * load succeeded (or the plugin has never been loaded). Reads from the
+   * persisted provenance record so the error survives a host restart.
    */
-  getPluginLoadError(pluginId: string): PluginLoadErrorRecord | undefined {
-    return this.pluginLoadErrors.get(pluginId);
+  getPluginLoadError(pluginId: string): PluginLoadError | undefined {
+    return this.getInstalledRecord(pluginId)?.loadError ?? undefined;
   }
 
   /**

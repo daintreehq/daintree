@@ -1853,6 +1853,10 @@ export interface IpcEventMap {
     paths?: string[];
   };
 
+  // Plugin provenance record changed (main → renderer). Signal-only — the
+  // renderer re-pulls via `plugin:list` for the full data.
+  "plugin:provenance-changed": Record<string, never>;
+
   // Resource profile change (main → renderer)
   "resource:profile-changed": import("../resourceProfile.js").ResourceProfilePayload;
 
@@ -1930,6 +1934,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:toolbar-buttons-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
+  // Plugin provenance record changed (global broadcast)
+  | "plugin:provenance-changed"
   // Terminal lifecycle (non-data) — exit, spawn-result, backend crash/ready
   | "terminal:exit"
   | "terminal:backend-crashed"
