@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { NotificationCenterEntry } from "../NotificationCenterEntry";
@@ -10,10 +10,26 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock, get: getMock },
 }));
 
-const getVersionMock = vi.hoisted(() => vi.fn().mockResolvedValue("0.42.0"));
+const getVersionInfoMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({
+    appVersion: "1.2.3",
+    electron: "41.0.0",
+    chrome: "146.0.0.0",
+    os: "darwin 24.0.0 (arm64)",
+  })
+);
 vi.mock("@/clients/appClient", () => ({
-  appClient: { getVersion: getVersionMock },
+  appClient: { getVersionInfo: getVersionInfoMock },
 }));
+
+const notifyMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/notify", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/notify")>();
+  return {
+    ...actual,
+    notify: notifyMock,
+  };
+});
 
 function makeEntry(overrides: Partial<NotificationHistoryEntry> = {}): NotificationHistoryEntry {
   return {
@@ -76,105 +92,6 @@ describe("NotificationCenterEntry overflow menu", () => {
 
     expect(screen.getByLabelText("Dismiss notification")).toBeTruthy();
     expect(screen.getByLabelText("Notification options")).toBeTruthy();
-  });
-});
-
-describe("NotificationCenterEntry diagnostic menu items", () => {
-  async function openMenu() {
-    const trigger = screen.getByLabelText("Notification options");
-    await act(async () => {
-      fireEvent.pointerDown(trigger, { button: 0 });
-      fireEvent.pointerUp(trigger, { button: 0 });
-      fireEvent.click(trigger);
-    });
-  }
-
-  it("renders the menu when only a correlationId is present (no projectId)", async () => {
-    render(<NotificationCenterEntry entry={makeEntry({ correlationId: "corr-1" })} />);
-    expect(screen.getByLabelText("Notification options")).toBeTruthy();
-    await openMenu();
-    expect(screen.getByText("Copy correlation ID")).toBeTruthy();
-    expect(screen.getByText("Report on GitHub")).toBeTruthy();
-  });
-
-  it("renders the menu when only a source panelId is present", async () => {
-    render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "p-1" } })} />);
-    expect(screen.getByLabelText("Notification options")).toBeTruthy();
-    await openMenu();
-    expect(screen.getByText("Go to source pane")).toBeTruthy();
-  });
-
-  it("omits diagnostic items when their data is missing", async () => {
-    render(<NotificationCenterEntry entry={makeEntry({ context: { projectId: "p1" } })} />);
-    await openMenu();
-    expect(screen.queryByText("Copy correlation ID")).toBeNull();
-    expect(screen.queryByText("Report on GitHub")).toBeNull();
-    expect(screen.queryByText("Go to source pane")).toBeNull();
-  });
-
-  it("copies the correlation id to the clipboard", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText } });
-    render(
-      <NotificationCenterEntry
-        entry={makeEntry({ correlationId: "corr-9", context: { panelId: "p-1" } })}
-      />
-    );
-    await openMenu();
-    await act(async () => {
-      fireEvent.click(screen.getByText("Copy correlation ID"));
-    });
-    expect(writeText).toHaveBeenCalledWith("corr-9");
-  });
-
-  it("dispatches panel.focus with the source panelId when Go to source pane is selected", async () => {
-    render(
-      <NotificationCenterEntry
-        entry={makeEntry({ correlationId: "corr-1", context: { panelId: "p-42" } })}
-      />
-    );
-    await openMenu();
-    await act(async () => {
-      fireEvent.click(screen.getByText("Go to source pane"));
-    });
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "panel.focus",
-      { panelId: "p-42" },
-      { source: "user" }
-    );
-  });
-
-  it("dispatches system.openExternal with a GitHub issue URL when Report on GitHub is selected", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText } });
-    render(
-      <NotificationCenterEntry
-        entry={makeEntry({
-          title: "Build failed",
-          message: "webpack error",
-          correlationId: "corr-77",
-          context: { projectId: "proj-1" },
-        })}
-      />
-    );
-    await openMenu();
-    await act(async () => {
-      fireEvent.click(screen.getByText("Report on GitHub"));
-    });
-
-    await waitFor(() => {
-      expect(dispatchMock).toHaveBeenCalledWith(
-        "system.openExternal",
-        expect.objectContaining({ url: expect.stringContaining("github.com/daintreehq/daintree") }),
-        { source: "user" }
-      );
-    });
-    expect(getVersionMock).toHaveBeenCalled();
-    const call = dispatchMock.mock.calls.find((c) => c[0] === "system.openExternal");
-    expect(call).toBeTruthy();
-    const url = (call?.[1] as { url: string }).url;
-    expect(decodeURIComponent(url)).toContain("Notification: Build failed");
-    expect(decodeURIComponent(url)).toContain("corr-77");
   });
 });
 
@@ -663,5 +580,209 @@ describe("NotificationCenterEntry roving focus props", () => {
     });
 
     expect(onDropdownOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("NotificationCenterEntry diagnostics affordances", () => {
+  const originalElectron = globalThis as { electron?: unknown } & {
+    window?: unknown;
+  } as unknown as { electron?: unknown };
+  const clipboardWriteText = vi.fn().mockResolvedValue(undefined);
+  const openExternal = vi.fn().mockResolvedValue(undefined);
+
+  beforeEach(() => {
+    dispatchMock.mockClear();
+    dispatchMock.mockResolvedValue({ ok: true });
+    getMock.mockReturnValue(null);
+    getVersionInfoMock.mockClear();
+    notifyMock.mockClear();
+    clipboardWriteText.mockClear();
+    openExternal.mockClear();
+    (window as unknown as { electron: unknown }).electron = {
+      clipboard: { writeText: clipboardWriteText },
+      system: { openExternal },
+    };
+  });
+
+  afterEach(() => {
+    delete (window as unknown as { electron?: unknown }).electron;
+    if (originalElectron.electron !== undefined) {
+      (window as unknown as { electron: unknown }).electron = originalElectron.electron;
+    }
+  });
+
+  async function openMenu() {
+    const trigger = screen.getByLabelText("Notification options");
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+  }
+
+  it("shows none of the diagnostics items when correlationId and panelId are absent", () => {
+    render(<NotificationCenterEntry entry={makeEntry({ context: { projectId: "p1" } })} />);
+    // Menu opens because projectId enables the existing mute item.
+    // No diagnostics items should be rendered.
+    expect(screen.queryByText("Copy correlation ID")).toBeNull();
+    expect(screen.queryByText("Report on GitHub")).toBeNull();
+    expect(screen.queryByText("Go to source")).toBeNull();
+  });
+
+  it("renders Copy correlation ID when correlationId is set", async () => {
+    render(
+      <NotificationCenterEntry entry={makeEntry({ type: "info", correlationId: "corr-1" })} />
+    );
+    await openMenu();
+    expect(screen.getByText("Copy correlation ID")).toBeTruthy();
+    // Info-typed entries should NOT show "Report on GitHub" even with a correlationId.
+    expect(screen.queryByText("Report on GitHub")).toBeNull();
+  });
+
+  it("shows Report on GitHub for error entries with a correlationId", async () => {
+    render(
+      <NotificationCenterEntry entry={makeEntry({ type: "error", correlationId: "corr-err" })} />
+    );
+    await openMenu();
+    expect(screen.getByText("Report on GitHub")).toBeTruthy();
+  });
+
+  it("shows Report on GitHub for warning entries with a correlationId", async () => {
+    render(
+      <NotificationCenterEntry entry={makeEntry({ type: "warning", correlationId: "corr-warn" })} />
+    );
+    await openMenu();
+    expect(screen.getByText("Report on GitHub")).toBeTruthy();
+  });
+
+  it("hides Report on GitHub for success-typed entries even with a correlationId", async () => {
+    render(
+      <NotificationCenterEntry entry={makeEntry({ type: "success", correlationId: "corr-ok" })} />
+    );
+    await openMenu();
+    expect(screen.queryByText("Report on GitHub")).toBeNull();
+    // Copy correlation ID should still be present.
+    expect(screen.getByText("Copy correlation ID")).toBeTruthy();
+  });
+
+  it("renders Go to source only when context.panelId is set", async () => {
+    render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-1" } })} />);
+    await openMenu();
+    expect(screen.getByText("Go to source")).toBeTruthy();
+  });
+
+  it("dispatches panel.focus when Go to source is selected", async () => {
+    render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-42" } })} />);
+    await openMenu();
+    const item = screen.getByText("Go to source");
+    await act(async () => {
+      fireEvent.click(item);
+    });
+    expect(dispatchMock).toHaveBeenCalledWith("panel.focus", { panelId: "pane-42" });
+  });
+
+  it("swallows the panel.focus rejection when the source panel is gone", async () => {
+    dispatchMock.mockRejectedValueOnce(new Error("Terminal panel no longer exists"));
+    render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "stale-pane" } })} />);
+    await openMenu();
+    const item = screen.getByText("Go to source");
+    await expect(
+      act(async () => {
+        fireEvent.click(item);
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("writes the correlation ID to the clipboard when Copy is selected", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    render(
+      <NotificationCenterEntry entry={makeEntry({ type: "error", correlationId: "corr-copy-1" })} />
+    );
+    await openMenu();
+    const item = screen.getByText("Copy correlation ID");
+    await act(async () => {
+      fireEvent.click(item);
+    });
+    expect(writeText).toHaveBeenCalledWith("corr-copy-1");
+  });
+
+  it("opens the prefilled GitHub URL when Report on GitHub is selected", async () => {
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({
+          type: "error",
+          title: "Build failed",
+          message: "Compilation error in foo.ts",
+          correlationId: "corr-rep-1",
+          context: { projectId: "p1", panelId: "pane-1" },
+        })}
+      />
+    );
+    await openMenu();
+    const item = screen.getByText("Report on GitHub");
+    await act(async () => {
+      fireEvent.click(item);
+    });
+
+    expect(getVersionInfoMock).toHaveBeenCalled();
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "system.openExternal",
+      expect.objectContaining({
+        url: expect.stringContaining("github.com/daintreehq/daintree/issues/new"),
+      }),
+      { source: "user" }
+    );
+  });
+
+  it("swallows a serialization error from buildNotificationReportUrl (e.g., lone surrogate)", async () => {
+    // A lone surrogate in the message causes encodeURIComponent (inside
+    // buildNotificationReportUrl) to throw URIError. The handler must catch
+    // it — otherwise the rejection escapes `void handleReportOnGitHub()` as
+    // an unhandled promise. Asserts the click resolves and no dispatch fires.
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({
+          type: "error",
+          message: "\uD800", // lone high surrogate — encodeURIComponent throws
+          correlationId: "corr-bad-1",
+        })}
+      />
+    );
+    await openMenu();
+    const item = screen.getByText("Report on GitHub");
+    await expect(
+      act(async () => {
+        fireEvent.click(item);
+      })
+    ).resolves.toBeUndefined();
+    expect(dispatchMock).not.toHaveBeenCalledWith(
+      "system.openExternal",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it("falls back to the bridge openExternal when the action dispatch reports !ok", async () => {
+    dispatchMock.mockResolvedValueOnce({ ok: false, error: "blocked" });
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({
+          type: "error",
+          message: "Bug",
+          correlationId: "corr-fb-1",
+        })}
+      />
+    );
+    await openMenu();
+    const item = screen.getByText("Report on GitHub");
+    await act(async () => {
+      fireEvent.click(item);
+    });
+    expect(openExternal).toHaveBeenCalledTimes(1);
   });
 });

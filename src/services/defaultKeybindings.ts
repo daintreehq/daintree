@@ -629,19 +629,19 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Panels",
   },
   {
-    actionId: "panel.togglePortal",
-    combo: "Cmd+\\",
-    scope: "global",
-    priority: 0,
-    description: "Toggle portal panel",
-    category: "Panels",
-  },
-  {
     actionId: "notifications.toggle",
     combo: "Cmd+Shift+N",
     scope: "global",
     priority: 0,
     description: "Toggle notification inbox",
+    category: "Panels",
+  },
+  {
+    actionId: "panel.togglePortal",
+    combo: "Cmd+\\",
+    scope: "global",
+    priority: 0,
+    description: "Toggle portal panel",
     category: "Panels",
   },
   {

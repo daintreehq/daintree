@@ -50,6 +50,7 @@ import type {
   TerminalActivityPayload,
   SemanticSearchMatch,
 } from "./terminal.js";
+import type { AppVersionInfo } from "./app.js";
 import type {
   SaveArtifactOptions,
   SaveArtifactResult,
@@ -390,6 +391,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getState(): Promise<AppState>;
     setState(partialState: Partial<AppState>): Promise<void>;
     getVersion(): Promise<string>;
+    getVersionInfo(): Promise<AppVersionInfo>;
     hydrate(): Promise<HydrateResult>;
     boot(): Promise<BootResult>;
     quit(): Promise<void>;

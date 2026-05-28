@@ -8,19 +8,17 @@ import {
   MoreHorizontal,
   X,
   Copy,
-  ExternalLink,
-  CornerUpRight,
+  Bug,
+  ArrowRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { actionService } from "@/services/ActionService";
-import { EVENT_KIND_LABEL, isNotificationEventKind } from "@/lib/notify";
+import { EVENT_KIND_LABEL, isNotificationEventKind, notify } from "@/lib/notify";
 import type { ActionId } from "@shared/types/actions";
 import type { NotificationType } from "@/store/notificationStore";
 import { DURATION_250 } from "@/lib/animationUtils";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
-import { appClient } from "@/clients/appClient";
-import { buildReportIssueUrlForNotification } from "@/components/ErrorBoundary/buildReportIssueUrl";
 import {
   formatNotificationCountAriaLabel,
   formatNotificationCountGlyph,
@@ -348,16 +346,22 @@ function RowOptionsMenu({
   const eventKind = entry.context?.eventKind;
   const hasContextActions = isNotificationEventKind(eventKind) || !!entry.context?.projectId;
   const supportsSnooze = !!entry.correlationId && !!onSnooze;
-  const sourcePanelId = entry.context?.panelId;
-  const canCopyCorrelation = !!entry.correlationId;
-  const canReport = !!entry.correlationId;
-  const canGoToSource = !!sourcePanelId;
-  const hasDiagnosticItems = canCopyCorrelation || canReport || canGoToSource;
-  const hasActions = hasContextActions || supportsSnooze || hasDiagnosticItems;
+  const messageString = typeof entry.message === "string" ? entry.message : "";
+  // Diagnostics affordances. "Report on GitHub" is restricted to error/warning
+  // entries so the inbox isn't a vector for filing noise issues on success
+  // toasts; correlation ID is still required so reviewers have a join key.
+  const supportsCopyCorrelationId = !!entry.correlationId;
+  const supportsReportOnGitHub =
+    !!entry.correlationId && (entry.type === "error" || entry.type === "warning");
+  const supportsGoToSource = !!entry.context?.panelId;
+  const hasDiagnosticsActions =
+    supportsCopyCorrelationId || supportsReportOnGitHub || supportsGoToSource;
+  const hasActions = hasContextActions || supportsSnooze || hasDiagnosticsActions;
   const [open, setOpen] = useState(false);
   const { copy: copyCorrelationId } = useCopyWithFeedback({
     announcement: "Correlation ID copied",
   });
+  const [reportInFlight, setReportInFlight] = useState(false);
 
   // Programmatic open from the parent's `h` keybinding. Open exactly once
   // per pending request and consume the flag in the same effect so the menu
@@ -377,6 +381,112 @@ function RowOptionsMenu({
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
     onDropdownOpenChange?.(next);
+  };
+
+  const handleCopyCorrelationId = () => {
+    if (!entry.correlationId) return;
+    void copyCorrelationId(entry.correlationId);
+  };
+
+  const handleGoToSource = () => {
+    const panelId = entry.context?.panelId;
+    if (!panelId) return;
+    // panel.focus throws "Terminal panel no longer exists" for evicted panels.
+    // Swallow silently — the inbox keeps stale rows after the source goes
+    // away and forcing a toast on every dead-link click would be noise.
+    void actionService.dispatch("panel.focus", { panelId }).catch(() => undefined);
+  };
+
+  const handleReportOnGitHub = async () => {
+    if (reportInFlight) return;
+    if (!entry.correlationId) return;
+    if (entry.type !== "error" && entry.type !== "warning") return;
+    setReportInFlight(true);
+    try {
+      // Lazy-load the report-flow dependencies so they stay off the boot
+      // path — appClient + buildNotificationReportUrl + logger together push
+      // the renderer eager-import count past budget when imported statically.
+      const [{ appClient }, { buildNotificationReportUrl }, { logError }] = await Promise.all([
+        import("@/clients/appClient"),
+        import("@/components/ErrorBoundary/buildReportIssueUrl"),
+        import("@/utils/logger"),
+      ]);
+      let envInfo: Awaited<ReturnType<typeof appClient.getVersionInfo>>;
+      try {
+        envInfo = await appClient.getVersionInfo();
+      } catch (envError) {
+        logError("Failed to load version info for inbox report", envError);
+        envInfo = { appVersion: "unknown", electron: "unknown", chrome: "unknown", os: "unknown" };
+      }
+
+      const reportMessage =
+        entry.title && messageString
+          ? `${entry.title} — ${messageString}`
+          : entry.title || messageString || "Notification";
+
+      const { url, fullBody, usedClipboardFallback } = buildNotificationReportUrl({
+        correlationId: entry.correlationId,
+        message: reportMessage,
+        notificationType: entry.type,
+        context: entry.context,
+        envInfo,
+      });
+
+      if (usedClipboardFallback) {
+        const writeText = window.electron?.clipboard?.writeText;
+        let clipboardOk = false;
+        if (writeText) {
+          try {
+            await writeText(fullBody);
+            clipboardOk = true;
+          } catch (clipboardError) {
+            logError("Failed to copy notification report to clipboard", clipboardError);
+          }
+        }
+        if (clipboardOk) {
+          notify({
+            type: "info",
+            title: "Report details copied",
+            message:
+              "The full notification report was copied to your clipboard — paste it into the issue body.",
+            transient: true,
+            context: { eventKind: "uiFeedback" },
+          });
+        } else {
+          notify({
+            type: "info",
+            title: "Report too long to send",
+            message:
+              "Couldn't copy the full report. Quote the correlation ID when filing the issue.",
+            inboxMessage: "Couldn't copy notification report to clipboard.",
+            context: { eventKind: "uiFeedback" },
+          });
+        }
+      }
+
+      if (!window.electron?.system?.openExternal) return;
+      try {
+        const result = await actionService.dispatch(
+          "system.openExternal",
+          { url },
+          { source: "user" }
+        );
+        if (!result.ok) {
+          await window.electron.system.openExternal(url);
+        }
+      } catch (dispatchError) {
+        logError("Failed to open notification report URL", dispatchError);
+      }
+    } catch (reportError) {
+      // buildNotificationReportUrl can surface URIError (lone surrogates in
+      // title/message) and JSON.stringify can surface TypeError (circular
+      // refs / BigInt in context). Without this catch the rejection escapes
+      // the `void handleReportOnGitHub()` site as an unhandled promise.
+      // eslint-disable-next-line no-console -- logger was loaded lazily; falls back to console
+      console.warn("Failed to build notification report", reportError);
+    } finally {
+      setReportInFlight(false);
+    }
   };
 
   return (
@@ -424,7 +534,32 @@ function RowOptionsMenu({
               </DropdownMenuSubContent>
             </DropdownMenuSub>
           ))}
-        {supportsSnooze && hasContextActions && <DropdownMenuSeparator />}
+        {supportsSnooze && hasDiagnosticsActions && <DropdownMenuSeparator />}
+        {supportsCopyCorrelationId && (
+          <DropdownMenuItem onSelect={handleCopyCorrelationId}>
+            <Copy className="mr-2 h-3 w-3" aria-hidden="true" />
+            Copy correlation ID
+          </DropdownMenuItem>
+        )}
+        {supportsGoToSource && (
+          <DropdownMenuItem onSelect={handleGoToSource}>
+            <ArrowRight className="mr-2 h-3 w-3" aria-hidden="true" />
+            Go to source
+          </DropdownMenuItem>
+        )}
+        {supportsReportOnGitHub && (
+          <DropdownMenuItem
+            disabled={reportInFlight}
+            onSelect={() => {
+              void handleReportOnGitHub();
+            }}
+          >
+            <Bug className="mr-2 h-3 w-3" aria-hidden="true" />
+            Report on GitHub
+          </DropdownMenuItem>
+        )}
+        {hasDiagnosticsActions && hasContextActions && <DropdownMenuSeparator />}
+        {!hasDiagnosticsActions && supportsSnooze && hasContextActions && <DropdownMenuSeparator />}
         {isNotificationEventKind(eventKind) && (
           <DropdownMenuItem
             onSelect={() => {
@@ -451,85 +586,7 @@ function RowOptionsMenu({
             Mute project notifications
           </DropdownMenuItem>
         )}
-        {hasDiagnosticItems && (hasContextActions || supportsSnooze) && <DropdownMenuSeparator />}
-        {canCopyCorrelation && (
-          <DropdownMenuItem
-            onSelect={() => {
-              const correlationId = entry.correlationId;
-              if (!correlationId) return;
-              void copyCorrelationId(correlationId);
-            }}
-          >
-            <Copy className="mr-2 h-3 w-3" aria-hidden="true" />
-            Copy correlation ID
-          </DropdownMenuItem>
-        )}
-        {canReport && (
-          <DropdownMenuItem
-            onSelect={() => {
-              void reportNotificationOnGitHub(entry);
-            }}
-          >
-            <ExternalLink className="mr-2 h-3 w-3" aria-hidden="true" />
-            Report on GitHub
-          </DropdownMenuItem>
-        )}
-        {canGoToSource && (
-          <DropdownMenuItem
-            onSelect={() => {
-              const panelId = entry.context?.panelId;
-              if (!panelId) return;
-              void actionService.dispatch("panel.focus", { panelId }, { source: "user" });
-            }}
-          >
-            <CornerUpRight className="mr-2 h-3 w-3" aria-hidden="true" />
-            Go to source pane
-          </DropdownMenuItem>
-        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
-}
-
-function extractElectronVersion(userAgent: string): string {
-  const match = userAgent.match(/Electron\/([\d.]+)/);
-  return match?.[1] ?? "";
-}
-
-function extractChromiumVersion(userAgent: string): string {
-  const match = userAgent.match(/Chrome\/([\d.]+)/);
-  return match?.[1] ?? "";
-}
-
-async function reportNotificationOnGitHub(entry: NotificationHistoryEntry): Promise<void> {
-  let appVersion: string;
-  try {
-    appVersion = await appClient.getVersion();
-  } catch {
-    appVersion = "unknown";
-  }
-  const userAgent = typeof navigator !== "undefined" ? navigator.userAgent : "";
-  const platform = typeof navigator !== "undefined" ? navigator.platform : "";
-
-  const { url, fullBody, usedClipboardFallback } = buildReportIssueUrlForNotification({
-    title: entry.title,
-    message: entry.message,
-    correlationId: entry.correlationId,
-    context: entry.context as Record<string, unknown> | undefined,
-    appVersion,
-    electronVersion: extractElectronVersion(userAgent),
-    chromiumVersion: extractChromiumVersion(userAgent),
-    os: platform,
-  });
-
-  if (usedClipboardFallback) {
-    try {
-      await navigator.clipboard.writeText(fullBody);
-    } catch {
-      // Fall through to opening the URL — the stub still names the
-      // correlation ID and environment, so the report is filable.
-    }
-  }
-
-  await actionService.dispatch("system.openExternal", { url }, { source: "user" });
 }

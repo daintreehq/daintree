@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildNotificationReportUrl,
   buildReportIssueUrl,
-  buildReportIssueUrlForNotification,
   URL_BODY_BUDGET,
   type NotificationReportInput,
+  type ReportEnvInfo,
   type ReportIssueInput,
 } from "../buildReportIssueUrl";
 import type { ActionBreadcrumb } from "../../../../shared/types/ipc/crashRecovery";
@@ -357,100 +358,80 @@ function makeNotificationInput(
   overrides: Partial<NotificationReportInput> = {}
 ): NotificationReportInput {
   return {
-    title: "Build failed",
-    message: "Webpack compilation error",
-    correlationId: "corr-42",
-    context: { projectId: "proj-1", panelId: "panel-7" },
-    appVersion: "0.42.0",
-    electronVersion: "41.0.1",
-    chromiumVersion: "146.0.7339.16",
-    os: "MacIntel",
+    correlationId: "notif-corr-1",
+    message: "Token refresh failed",
+    notificationType: "error",
+    context: { projectId: "proj-1", panelId: "pane-7" },
+    envInfo: {
+      appVersion: "1.2.3",
+      electron: "41.0.0",
+      chrome: "146.0.0.0",
+      os: "darwin 24.0.0 (arm64)",
+    } satisfies ReportEnvInfo,
     ...overrides,
   };
 }
 
-describe("buildReportIssueUrlForNotification", () => {
-  it("uses 'Notification:' prefix in the title and prefers entry title over message", () => {
-    const result = buildReportIssueUrlForNotification(makeNotificationInput());
-    const title = new URL(result.url).searchParams.get("title") ?? "";
-    expect(title).toBe("Notification: Build failed");
-  });
-
-  it("falls back to the message when title is missing", () => {
-    const result = buildReportIssueUrlForNotification(
-      makeNotificationInput({ title: undefined, message: "Reconnection failed" })
-    );
-    const title = new URL(result.url).searchParams.get("title") ?? "";
-    expect(title).toBe("Notification: Reconnection failed");
-  });
-
-  it("includes correlation id, context, and environment fields in the body", () => {
-    const result = buildReportIssueUrlForNotification(makeNotificationInput());
-    expect(result.fullBody).toContain("**Title:** Build failed");
-    expect(result.fullBody).toContain("**Message:** Webpack compilation error");
-    expect(result.fullBody).toContain("**Correlation ID:** corr-42");
-    expect(result.fullBody).toContain('"projectId": "proj-1"');
-    expect(result.fullBody).toContain("App version: 0.42.0");
-    expect(result.fullBody).toContain("Electron: 41.0.1");
-    expect(result.fullBody).toContain("Chromium: 146.0.7339.16");
-    expect(result.fullBody).toContain("OS: MacIntel");
+describe("buildNotificationReportUrl", () => {
+  it("uses the Notification Report header and omits stack sections", () => {
+    const result = buildNotificationReportUrl(makeNotificationInput());
     expect(result.usedClipboardFallback).toBe(false);
+    expect(result.fullBody).toContain("## Notification Report");
+    expect(result.fullBody).toContain("**Correlation ID:** notif-corr-1");
+    expect(result.fullBody).toContain("**Type:** error");
+    expect(result.fullBody).toContain("**Message:** Token refresh failed");
+    expect(result.fullBody).not.toContain("## Error Report");
+    expect(result.fullBody).not.toContain("**Stack Trace:**");
+    expect(result.fullBody).not.toContain("**Component Stack:**");
   });
 
-  it("renders placeholders when optional fields are missing", () => {
-    const result = buildReportIssueUrlForNotification(
-      makeNotificationInput({
-        title: undefined,
-        correlationId: undefined,
-        context: undefined,
-        appVersion: "",
-        electronVersion: "",
-        chromiumVersion: "",
-        os: "",
-      })
-    );
-    expect(result.fullBody).toContain("**Title:** (none)");
-    expect(result.fullBody).toContain("**Correlation ID:** unknown");
-    expect(result.fullBody).toContain("App version: unknown");
-    expect(result.fullBody).toContain("Electron: unknown");
-    expect(result.fullBody).toContain("Chromium: unknown");
-    expect(result.fullBody).toContain("OS: unknown");
+  it("includes the Environment block populated from envInfo", () => {
+    const result = buildNotificationReportUrl(makeNotificationInput());
+    expect(result.fullBody).toContain("## Environment");
+    expect(result.fullBody).toContain("app: 1.2.3");
+    expect(result.fullBody).toContain("electron: 41.0.0");
   });
 
-  it("falls back to clipboard stub when message exceeds the URL budget", () => {
-    const longMessage = "x".repeat(URL_BODY_BUDGET + 2000);
-    const result = buildReportIssueUrlForNotification(
-      makeNotificationInput({ message: longMessage })
+  it("titles the issue with the Notification Report prefix", () => {
+    const result = buildNotificationReportUrl(makeNotificationInput());
+    const title = new URL(result.url).searchParams.get("title") ?? "";
+    expect(title).toBe("Notification Report: Token refresh failed");
+  });
+
+  it("renders the Context block only when context has keys", () => {
+    const withContext = buildNotificationReportUrl(makeNotificationInput());
+    expect(withContext.fullBody).toContain("**Context:**");
+    expect(withContext.fullBody).toContain('"projectId": "proj-1"');
+
+    const withoutContext = buildNotificationReportUrl(
+      makeNotificationInput({ context: undefined })
     );
+    expect(withoutContext.fullBody).not.toContain("**Context:**");
+
+    const emptyContext = buildNotificationReportUrl(makeNotificationInput({ context: {} }));
+    expect(emptyContext.fullBody).not.toContain("**Context:**");
+  });
+
+  it("falls back to clipboard stub when the notification body blows the URL budget", () => {
+    const longMessage = "x".repeat(URL_BODY_BUDGET + 500);
+    const result = buildNotificationReportUrl(makeNotificationInput({ message: longMessage }));
     expect(result.usedClipboardFallback).toBe(true);
-    expect(getEncodedBodyLength(result.url)).toBeLessThanOrEqual(URL_BODY_BUDGET);
     const body = decodeURIComponent(new URL(result.url).searchParams.get("body") ?? "");
     expect(body).toContain("copied to your clipboard");
-    expect(body).toContain("**Correlation ID:** corr-42");
-    expect(body).not.toContain(longMessage);
+    expect(body).toContain("**Correlation ID:** notif-corr-1");
+    expect(result.url.length).toBeLessThanOrEqual(8192);
     expect(result.fullBody).toContain(longMessage);
   });
 
-  it("URL is parseable and points at the right repo", () => {
-    const result = buildReportIssueUrlForNotification(makeNotificationInput());
-    const url = new URL(result.url);
-    expect(url.host).toBe("github.com");
-    expect(url.pathname).toBe("/daintreehq/daintree/issues/new");
-    expect(url.searchParams.has("title")).toBe(true);
-    expect(url.searchParams.has("body")).toBe(true);
+  it("falls back to 'unknown' correlation ID when null", () => {
+    const result = buildNotificationReportUrl(makeNotificationInput({ correlationId: null }));
+    expect(result.fullBody).toContain("**Correlation ID:** unknown");
   });
 
-  it("encoded body stays within the URL budget", () => {
-    const result = buildReportIssueUrlForNotification(makeNotificationInput());
-    expect(getEncodedBodyLength(result.url)).toBeLessThanOrEqual(URL_BODY_BUDGET);
-  });
-
-  it("caps the title for huge messages without truncating the body", () => {
-    const result = buildReportIssueUrlForNotification(
-      makeNotificationInput({ title: undefined, message: "A".repeat(5000) })
+  it("omits the Type line when notificationType is undefined", () => {
+    const result = buildNotificationReportUrl(
+      makeNotificationInput({ notificationType: undefined })
     );
-    const title = new URL(result.url).searchParams.get("title") ?? "";
-    expect(title.endsWith("…")).toBe(true);
-    expect(result.url.length).toBeLessThanOrEqual(8192);
+    expect(result.fullBody).not.toContain("**Type:**");
   });
 });

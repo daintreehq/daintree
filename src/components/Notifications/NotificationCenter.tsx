@@ -415,6 +415,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     if (options.resetLastClosed) {
       resetLastClosedAt();
     }
+    // eslint-disable-next-line no-restricted-syntax -- transient confirmations omit context
     notify({
       type: "success",
       message: `Marked ${ids.length} as read`,

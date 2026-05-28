@@ -25,6 +25,13 @@ const SOURCE_GLYPH: Record<string, string> = {
   "context-menu": "c",
 };
 
+export interface ReportEnvInfo {
+  appVersion: string;
+  electron: string;
+  chrome: string;
+  os: string;
+}
+
 export interface ReportIssueInput {
   incidentId: string | null;
   componentName: string | undefined;
@@ -47,14 +54,16 @@ export interface ReportIssueResult {
 }
 
 export interface NotificationReportInput {
-  title: string | undefined;
+  /** The notification's correlation ID — used in the issue body as the report identifier. */
+  correlationId: string | null;
+  /** The notification title/message text. Becomes the issue title suffix and body line. */
   message: string;
-  correlationId: string | undefined;
+  /** Notification type (error / warning / info / success) for triage. */
+  notificationType?: string;
+  /** Extra metadata (project/worktree/panel/eventKind) attached to the entry. */
   context: Record<string, unknown> | undefined;
-  appVersion: string;
-  electronVersion: string;
-  chromiumVersion: string;
-  os: string;
+  /** Build/runtime environment info — required for inbox reports. */
+  envInfo: ReportEnvInfo;
 }
 
 function formatRelativeAge(timestamp: number, now: number): string {
@@ -137,6 +146,48 @@ function formatBody(params: {
   );
 }
 
+function formatEnvBlock(envInfo: ReportEnvInfo | undefined): string {
+  if (!envInfo) return "";
+  return (
+    `## Environment\n\n` +
+    "```yaml\n" +
+    `app: ${envInfo.appVersion || "unknown"}\n` +
+    `electron: ${envInfo.electron || "unknown"}\n` +
+    `chrome: ${envInfo.chrome || "unknown"}\n` +
+    `os: ${envInfo.os || "unknown"}\n` +
+    "```\n\n"
+  );
+}
+
+/**
+ * Notification-report body: omits stack/component-stack sections (notifications
+ * are not thrown exceptions), keeps the environment block, and gates the
+ * `**Context:**` section behind a non-empty payload so single-line reports
+ * don't carry an "**Context:** None" footer that adds no signal.
+ */
+function formatNotificationBody(params: {
+  incidentId: string | null;
+  message: string;
+  context: Record<string, unknown> | undefined;
+  envInfo: ReportEnvInfo | undefined;
+  notificationType?: string;
+}): string {
+  const { incidentId, message, context, envInfo, notificationType } = params;
+  const contextBlock =
+    context && Object.keys(context).length > 0
+      ? `**Context:**\n${JSON.stringify(context, null, 2)}\n\n`
+      : "";
+  const typeLine = notificationType ? `**Type:** ${notificationType}\n` : "";
+  return (
+    `## Notification Report\n\n` +
+    `**Correlation ID:** ${incidentId ?? "unknown"}\n` +
+    typeLine +
+    `**Message:** ${message || "Unknown notification"}\n\n` +
+    formatEnvBlock(envInfo) +
+    contextBlock
+  ).trimEnd();
+}
+
 // The stub body fits inside the URL, so the message line is capped just like
 // the title — a multi-kilobyte message would otherwise blow the budget.
 const STUB_MESSAGE_BUDGET = 1000;
@@ -153,6 +204,17 @@ function buildStubBody(params: {
     `The full error details were copied to your clipboard — please paste them below.\n\n` +
     `**Component:** ${componentName || "Unknown"}\n` +
     `**Incident ID:** ${incidentId ?? "unknown"}\n` +
+    `**Message:** ${cappedMessage}\n`
+  );
+}
+
+function buildNotificationStubBody(params: { incidentId: string | null; message: string }): string {
+  const { incidentId, message } = params;
+  const cappedMessage = capForBudget(message || "Unknown notification", STUB_MESSAGE_BUDGET);
+  return (
+    `## Notification Report\n\n` +
+    `The full notification details were copied to your clipboard — please paste them below.\n\n` +
+    `**Correlation ID:** ${incidentId ?? "unknown"}\n` +
     `**Message:** ${cappedMessage}\n`
   );
 }
@@ -275,87 +337,21 @@ export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult 
   return { url: makeUrl(title, stubBody), fullBody, usedClipboardFallback: true };
 }
 
-function formatNotificationBody(params: {
-  title: string | undefined;
-  message: string;
-  correlationId: string | undefined;
-  context: Record<string, unknown> | undefined;
-  appVersion: string;
-  electronVersion: string;
-  chromiumVersion: string;
-  os: string;
-}): string {
-  const {
-    title,
-    message,
-    correlationId,
-    context,
-    appVersion,
-    electronVersion,
-    chromiumVersion,
-    os,
-  } = params;
-  return (
-    `## Notification Report\n\n` +
-    `**Title:** ${title || "(none)"}\n` +
-    `**Message:** ${message || "(none)"}\n` +
-    `**Correlation ID:** ${correlationId ?? "unknown"}\n\n` +
-    `**Context:**\n` +
-    `${context ? JSON.stringify(context, null, 2) : "None"}\n\n` +
-    `**Environment:**\n` +
-    `- App version: ${appVersion || "unknown"}\n` +
-    `- Electron: ${electronVersion || "unknown"}\n` +
-    `- Chromium: ${chromiumVersion || "unknown"}\n` +
-    `- OS: ${os || "unknown"}\n`
-  );
-}
-
-function buildNotificationStubBody(params: {
-  title: string | undefined;
-  message: string;
-  correlationId: string | undefined;
-  appVersion: string;
-  electronVersion: string;
-  chromiumVersion: string;
-  os: string;
-}): string {
-  const { title, message, correlationId, appVersion, electronVersion, chromiumVersion, os } =
-    params;
-  const cappedMessage = capForBudget(message || "(none)", STUB_MESSAGE_BUDGET);
-  return (
-    `## Notification Report\n\n` +
-    `The full notification details were copied to your clipboard — please paste them below.\n\n` +
-    `**Title:** ${title || "(none)"}\n` +
-    `**Message:** ${cappedMessage}\n` +
-    `**Correlation ID:** ${correlationId ?? "unknown"}\n\n` +
-    `**Environment:**\n` +
-    `- App version: ${appVersion || "unknown"}\n` +
-    `- Electron: ${electronVersion || "unknown"}\n` +
-    `- Chromium: ${chromiumVersion || "unknown"}\n` +
-    `- OS: ${os || "unknown"}\n`
-  );
-}
-
 /**
- * Build the GitHub issue URL for a notification-inbox entry. Reuses the
- * same encoded-budget guard as `buildReportIssueUrl` and falls back to a
- * clipboard stub when the body can't fit. Notifications have no stack
- * trace, so the truncation pipeline is one-stage rather than three-stage.
+ * Build the GitHub issue URL for a notification-inbox report. Reuses the
+ * staged URL-budget / clipboard-fallback pipeline from the crash path but
+ * formats a notification-shaped body (no stack/component stack, environment
+ * block populated, context block gated on a non-empty payload). The title
+ * prefix is `"Notification Report"`.
  */
-export function buildReportIssueUrlForNotification(
-  input: NotificationReportInput
-): ReportIssueResult {
-  const titleSource = input.title || input.message || "Notification";
-  const title = `Notification: ${titleSource}`;
+export function buildNotificationReportUrl(input: NotificationReportInput): ReportIssueResult {
+  const title = `Notification Report: ${input.message || "Unknown"}`;
   const fullBody = formatNotificationBody({
-    title: input.title,
+    incidentId: input.correlationId,
     message: input.message,
-    correlationId: input.correlationId,
     context: input.context,
-    appVersion: input.appVersion,
-    electronVersion: input.electronVersion,
-    chromiumVersion: input.chromiumVersion,
-    os: input.os,
+    envInfo: input.envInfo,
+    notificationType: input.notificationType,
   });
 
   if (encodeURIComponent(fullBody).length <= URL_BODY_BUDGET) {
@@ -363,13 +359,8 @@ export function buildReportIssueUrlForNotification(
   }
 
   const stubBody = buildNotificationStubBody({
-    title: input.title,
+    incidentId: input.correlationId,
     message: input.message,
-    correlationId: input.correlationId,
-    appVersion: input.appVersion,
-    electronVersion: input.electronVersion,
-    chromiumVersion: input.chromiumVersion,
-    os: input.os,
   });
 
   return { url: makeUrl(title, stubBody), fullBody, usedClipboardFallback: true };

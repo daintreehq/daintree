@@ -19,6 +19,7 @@ import { registerPortalHandlers } from "./handlers/portal.js";
 import { registerHibernationHandlers } from "./handlers/hibernation.js";
 import { registerIdleTerminalHandlers } from "./handlers/idleTerminals.js";
 import { registerSystemSleepHandlers } from "./handlers/systemSleep.js";
+import { registerAppVersionInfoHandlers } from "./handlers/appVersionInfo.js";
 import { registerOsDndHandlers } from "./handlers/osDnd.js";
 import { registerKeybindingHandlers } from "./handlers/keybinding.js";
 import { registerWorktreeConfigHandlers } from "./handlers/worktreeConfig.js";
@@ -128,6 +129,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerHibernationHandlers(deps));
     register(() => registerIdleTerminalHandlers(deps));
     register(() => registerSystemSleepHandlers(deps));
+    register(() => registerAppVersionInfoHandlers());
     register(() => registerOsDndHandlers(deps));
     register(() => registerKeybindingHandlers(deps));
     register(() => registerWorktreeConfigHandlers(deps));

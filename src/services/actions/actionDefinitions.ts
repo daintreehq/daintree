@@ -13,6 +13,7 @@ import { registerGitActions } from "./definitions/gitActions";
 import { registerIntrospectionActions } from "./definitions/introspectionActions";
 import { registerLogActions } from "./definitions/logActions";
 import { registerNavigationActions } from "./definitions/navigationActions";
+import { registerNotificationsActions } from "./definitions/notificationsActions";
 import { registerPanelActions } from "./definitions/panelActions";
 import { registerPreferencesActions } from "./definitions/preferencesActions";
 import { registerProjectActions } from "./definitions/projectActions";
@@ -63,6 +64,7 @@ export function createActionDefinitions(
   registerWatchdogActions(actions);
   registerLogActions(actions, callbacks);
   registerNavigationActions(actions, callbacks);
+  registerNotificationsActions(actions);
   registerAppActions(actions, callbacks);
   registerPreferencesActions(actions, callbacks);
   registerBrowserActions(actions, callbacks);
