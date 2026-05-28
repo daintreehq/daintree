@@ -16,6 +16,8 @@ import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/pan
 import { stableInRepoId, isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
+import { isClientAppError } from "@/utils/clientAppError";
+import { useRecipeConflictStore } from "@/store/recipeConflictStore";
 
 export interface RecipeSpawnResult {
   index: number;
@@ -378,13 +380,56 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         await projectClient.updateRecipe(recipe.projectId!, id, sanitizedUpdates);
       }
     } catch (error) {
-      logError("Failed to persist recipe update", error);
+      // Always roll back the optimistic state first so the in-memory recipes
+      // match the rejected write. The conflict path then surfaces a dialog;
+      // all other errors propagate so callers can show a toast.
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
         inRepoRecipes: prevInRepo,
         recipes: mergeRecipes(prevGlobal, prevProject, prevInRepo),
       });
+      if (isInRepo && isClientAppError(error) && error.code === "RECIPE_STALE_CONFLICT") {
+        const projectId = get().currentProjectId;
+        const previousName = updates.name && updates.name !== recipe.name ? recipe.name : undefined;
+        const resolution = await useRecipeConflictStore.getState().requestConflict({
+          recipeId: id,
+          recipeName: updatedRecipe.name,
+          updates: sanitizedUpdates,
+          previousName,
+        });
+        if (resolution === "reload" && projectId) {
+          void get().loadRecipes(projectId);
+          return;
+        }
+        if (resolution === "overwrite" && projectId) {
+          try {
+            await projectClient.updateInRepoRecipe(projectId, updatedRecipe, previousName, {
+              force: true,
+            });
+            // Re-apply the optimistic state since the rollback above wiped it
+            // and the forced write succeeded.
+            const refreshedInRepo = applyUpdate(get().inRepoRecipes);
+            const refreshedProject = isInRepo
+              ? applyUpdate(get().projectRecipes)
+              : get().projectRecipes;
+            set({
+              inRepoRecipes: refreshedInRepo,
+              projectRecipes: refreshedProject,
+              recipes: mergeRecipes(get().globalRecipes, refreshedProject, refreshedInRepo),
+            });
+            return;
+          } catch (retryError) {
+            logError("Failed to overwrite recipe after conflict", retryError);
+            throw retryError;
+          }
+        }
+        // Cancel / dismissed: leave the rolled-back state in place. The user
+        // can re-attempt the edit; the focus-reload hook (or a manual reload)
+        // brings the in-memory state back in sync with disk.
+        return;
+      }
+      logError("Failed to persist recipe update", error);
       throw error;
     }
   },

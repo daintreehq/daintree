@@ -1215,6 +1215,115 @@ describe("recipeStore", () => {
       expect(state.recipes).toHaveLength(1);
     });
 
+    describe("RECIPE_STALE_CONFLICT handling (#9186)", () => {
+      function makeConflictError(name: string) {
+        // Mirror the `[AppError|<code>|<urlencoded userMessage>] <message>`
+        // shape the preload injects on AppError throws so `isClientAppError`
+        // recognizes the encoded prefix.
+        const userMsg = encodeURIComponent(name);
+        const err = new Error(
+          `[AppError|RECIPE_STALE_CONFLICT|${userMsg}] Recipe '${name}' changed on disk`
+        );
+        err.name = "Error";
+        return err;
+      }
+
+      async function importConflictStore() {
+        // Loaded lazily to avoid initialization order coupling with the
+        // hoisted client mocks above.
+        const mod = await import("../recipeConflictStore");
+        mod.useRecipeConflictStore.setState({ pendingConflict: null });
+        return mod.useRecipeConflictStore;
+      }
+
+      const inRepoRecipe = {
+        id: "inrepo-test",
+        name: "Conflict Recipe",
+        terminals: [{ type: "terminal" as const, title: "Shell", env: {} }],
+        createdAt: 500,
+      };
+
+      function seedStore() {
+        useRecipeStore.setState({
+          inRepoRecipes: [inRepoRecipe],
+          globalRecipes: [],
+          projectRecipes: [],
+          recipes: [inRepoRecipe],
+          currentProjectId: "project-1",
+        });
+      }
+
+      it("surfaces a pending conflict on the conflict store, rolls back, and does not throw", async () => {
+        seedStore();
+        const store = await importConflictStore();
+        updateInRepoRecipeMock.mockRejectedValueOnce(makeConflictError("Conflict Recipe"));
+
+        const promise = useRecipeStore
+          .getState()
+          .updateRecipe("inrepo-test", { name: "Conflict Recipe", lastUsedAt: 1 });
+
+        // Yield so the catch enqueues the conflict before we read it.
+        await Promise.resolve();
+        await Promise.resolve();
+        const pending = store.getState().pendingConflict;
+        expect(pending).not.toBeNull();
+        expect(pending?.recipeId).toBe("inrepo-test");
+        expect(pending?.recipeName).toBe("Conflict Recipe");
+
+        // Resolve as cancel — the updateRecipe call should settle without throwing.
+        store.getState().resolveConflict("cancel");
+        await expect(promise).resolves.toBeUndefined();
+
+        // State rolled back to pre-edit snapshot.
+        const state = useRecipeStore.getState();
+        expect(state.inRepoRecipes[0]?.name).toBe("Conflict Recipe");
+      });
+
+      it("'reload' resolution triggers loadRecipes and does not rethrow", async () => {
+        seedStore();
+        const store = await importConflictStore();
+        updateInRepoRecipeMock.mockRejectedValueOnce(makeConflictError("Conflict Recipe"));
+        globalGetRecipesMock.mockResolvedValueOnce([]);
+        getRecipesMock.mockResolvedValueOnce([]);
+        getInRepoRecipesMock.mockResolvedValueOnce([{ ...inRepoRecipe, name: "Disk Version" }]);
+
+        const promise = useRecipeStore.getState().updateRecipe("inrepo-test", { name: "Mine" });
+        await Promise.resolve();
+        await Promise.resolve();
+        store.getState().resolveConflict("reload");
+        await expect(promise).resolves.toBeUndefined();
+        // Wait one more tick for the fire-and-forget loadRecipes to settle.
+        await new Promise((r) => setTimeout(r, 0));
+        expect(getInRepoRecipesMock).toHaveBeenCalled();
+      });
+
+      it("'overwrite' resolution retries the IPC call with force:true and re-applies the edit", async () => {
+        seedStore();
+        const store = await importConflictStore();
+        updateInRepoRecipeMock.mockRejectedValueOnce(makeConflictError("Conflict Recipe"));
+        updateInRepoRecipeMock.mockResolvedValueOnce(undefined);
+
+        const promise = useRecipeStore
+          .getState()
+          .updateRecipe("inrepo-test", { name: "Forced Name" });
+        await Promise.resolve();
+        await Promise.resolve();
+        store.getState().resolveConflict("overwrite");
+        await expect(promise).resolves.toBeUndefined();
+
+        expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(2);
+        // Second call carries force:true and the previous-name (for rename support).
+        const secondCall = updateInRepoRecipeMock.mock.calls[1];
+        expect(secondCall?.[3]).toEqual({ force: true });
+        expect(secondCall?.[2]).toBe("Conflict Recipe");
+
+        // Optimistic edit landed back in state after the forced write.
+        const state = useRecipeStore.getState();
+        // After rename the recipe id is regenerated from the new name.
+        expect(state.inRepoRecipes[0]?.name).toBe("Forced Name");
+      });
+    });
+
     it("updateRecipe rolls back inRepoRecipes on failure", async () => {
       const inRepoRecipe = {
         id: "inrepo-test",

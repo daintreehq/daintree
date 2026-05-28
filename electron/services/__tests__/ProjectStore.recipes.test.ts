@@ -274,3 +274,161 @@ describe("ProjectStore recipe reconciliation", () => {
     expect(fs2[0]!.id).toBe(recipe.id);
   });
 });
+
+describe("ProjectStore.writeInRepoRecipeChecked (in-repo recipe staleness guard, #9186)", () => {
+  let tmpDir: string;
+  let projectPath: string;
+  let store: ProjectStore;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-recipe-check-"));
+    projectPath = path.join(tmpDir, "repo");
+    store = new ProjectStore();
+    (store as unknown as { projectsConfigDir: string }).projectsConfigDir = tmpDir;
+    await store.initialize();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("allows the write when the file does not exist (create path)", async () => {
+    const recipe = makeRecipe({ id: stableInRepoId("New"), name: "New" });
+    await expect(store.writeInRepoRecipeChecked(projectPath, recipe)).resolves.toBeUndefined();
+    const onDisk = await fs.readFile(
+      path.join(projectPath, ".daintree", "recipes", "new.json"),
+      "utf-8"
+    );
+    expect(JSON.parse(onDisk).name).toBe("New");
+  });
+
+  it("allows the write when the cached hash matches on-disk bytes", async () => {
+    const recipe = makeRecipe({ id: stableInRepoId("Stable"), name: "Stable" });
+    await store.writeInRepoRecipe(projectPath, recipe);
+
+    // Editing through the checked path should succeed because the cached
+    // hash matches what's on disk.
+    const updated = { ...recipe, terminals: [{ type: "terminal" as const, command: "echo new" }] };
+    await expect(store.writeInRepoRecipeChecked(projectPath, updated)).resolves.toBeUndefined();
+    const onDisk = await fs.readFile(
+      path.join(projectPath, ".daintree", "recipes", "stable.json"),
+      "utf-8"
+    );
+    expect(JSON.parse(onDisk).terminals[0].command).toBe("echo new");
+  });
+
+  it("throws RECIPE_STALE_CONFLICT when the file was changed externally", async () => {
+    const recipe = makeRecipe({ id: stableInRepoId("Drift"), name: "Drift" });
+    await store.writeInRepoRecipe(projectPath, recipe);
+
+    // Simulate an external change (git pull, branch switch, etc.).
+    const filePath = path.join(projectPath, ".daintree", "recipes", "drift.json");
+    const current = await fs.readFile(filePath, "utf-8");
+    await fs.writeFile(filePath, current.replace("Drift", "Drift!!"));
+
+    const updated = { ...recipe, terminals: [{ type: "terminal" as const, command: "mine" }] };
+    await expect(store.writeInRepoRecipeChecked(projectPath, updated)).rejects.toMatchObject({
+      code: "RECIPE_STALE_CONFLICT",
+    });
+    // On-disk content must be untouched after a rejected write.
+    expect(await fs.readFile(filePath, "utf-8")).toBe(current.replace("Drift", "Drift!!"));
+  });
+
+  it("force=true bypasses the staleness check and updates the cached hash", async () => {
+    const recipe = makeRecipe({ id: stableInRepoId("Forced"), name: "Forced" });
+    await store.writeInRepoRecipe(projectPath, recipe);
+
+    // External edit invalidates the cache.
+    const filePath = path.join(projectPath, ".daintree", "recipes", "forced.json");
+    const current = await fs.readFile(filePath, "utf-8");
+    await fs.writeFile(filePath, current.replace("Forced", "External Edit"));
+
+    const updated = {
+      ...recipe,
+      terminals: [{ type: "terminal" as const, command: "my own" }],
+    };
+    await expect(
+      store.writeInRepoRecipeChecked(projectPath, updated, { force: true })
+    ).resolves.toBeUndefined();
+    expect(JSON.parse(await fs.readFile(filePath, "utf-8")).terminals[0].command).toBe("my own");
+
+    // A follow-up checked write should now succeed because force-write
+    // refreshed the cache to match the new on-disk bytes.
+    const secondUpdate = {
+      ...recipe,
+      terminals: [{ type: "terminal" as const, command: "follow up" }],
+    };
+    await expect(
+      store.writeInRepoRecipeChecked(projectPath, secondUpdate)
+    ).resolves.toBeUndefined();
+  });
+
+  it("refuses a rename when the old-name file was externally modified", async () => {
+    const recipe = makeRecipe({ id: stableInRepoId("Old Name"), name: "Old Name" });
+    await store.writeInRepoRecipe(projectPath, recipe);
+
+    // External edit to the old file between load and rename.
+    const oldPath = path.join(projectPath, ".daintree", "recipes", "old-name.json");
+    const original = await fs.readFile(oldPath, "utf-8");
+    await fs.writeFile(oldPath, original.replace("Old Name", "External Old Name"));
+
+    const renamed = {
+      ...recipe,
+      id: stableInRepoId("New Name"),
+      name: "New Name",
+    };
+    await expect(
+      store.writeInRepoRecipeChecked(projectPath, renamed, { previousName: "Old Name" })
+    ).rejects.toMatchObject({ code: "RECIPE_STALE_CONFLICT" });
+
+    // New-name file must not be written, old-name file must be untouched.
+    const newPath = path.join(projectPath, ".daintree", "recipes", "new-name.json");
+    await expect(fs.access(newPath)).rejects.toThrow();
+    expect(await fs.readFile(oldPath, "utf-8")).toBe(
+      original.replace("Old Name", "External Old Name")
+    );
+  });
+
+  it("force=true allows a rename even when the old-name file was externally modified", async () => {
+    const recipe = makeRecipe({ id: stableInRepoId("Old Forced"), name: "Old Forced" });
+    await store.writeInRepoRecipe(projectPath, recipe);
+    const oldPath = path.join(projectPath, ".daintree", "recipes", "old-forced.json");
+    const original = await fs.readFile(oldPath, "utf-8");
+    await fs.writeFile(oldPath, original.replace("Old Forced", "External Edit"));
+
+    const renamed = {
+      ...recipe,
+      id: stableInRepoId("New Forced"),
+      name: "New Forced",
+    };
+    await expect(
+      store.writeInRepoRecipeChecked(projectPath, renamed, {
+        previousName: "Old Forced",
+        force: true,
+      })
+    ).resolves.toBeUndefined();
+    const newPath = path.join(projectPath, ".daintree", "recipes", "new-forced.json");
+    expect(JSON.parse(await fs.readFile(newPath, "utf-8")).name).toBe("New Forced");
+  });
+
+  it("readInRepoRecipes populates the hash cache so a follow-up edit can proceed", async () => {
+    // Simulate an existing in-repo recipe written by a previous session.
+    const recipe = makeRecipe({ id: stableInRepoId("Loaded"), name: "Loaded" });
+    await store.writeInRepoRecipe(projectPath, recipe);
+
+    // A fresh store doesn't know about the file yet.
+    const fresh = new ProjectStore();
+    (fresh as unknown as { projectsConfigDir: string }).projectsConfigDir = tmpDir;
+    await fresh.initialize();
+
+    // Without loading first, a write would see the file exists but no cached
+    // hash → conflict.
+    await expect(fresh.writeInRepoRecipeChecked(projectPath, recipe)).rejects.toMatchObject({
+      code: "RECIPE_STALE_CONFLICT",
+    });
+
+    // After loading, the cache is populated and the same write succeeds.
+    await fresh.readInRepoRecipes(projectPath);
+    await expect(fresh.writeInRepoRecipeChecked(projectPath, recipe)).resolves.toBeUndefined();
+  });
+});

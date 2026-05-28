@@ -7,11 +7,40 @@ import {
 import type { AgentPreset } from "../../shared/config/agentRegistry.js";
 import path from "path";
 import fs from "fs/promises";
+import { createHash } from "crypto";
 import { z } from "zod";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { UTF8_BOM } from "./projectStorePaths.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
 import { TerminalRecipeSchema } from "../schemas/ipc.js";
+
+/**
+ * Builds the exact UTF-8 byte string that `writeInRepoRecipe` lands on disk
+ * for `recipe`. Used both at read time (to hash file bytes) and at write time
+ * (to hash the candidate payload), so the staleness comparison in
+ * {@link ProjectStore.writeInRepoRecipeChecked} is comparing like to like:
+ * the sanitized, env-redacted, BOM-free JSON-with-trailing-newline that
+ * actually persists. Hashing the raw in-memory recipe would produce
+ * spurious conflicts on every write because `projectId`/`worktreeId`/env
+ * values would never match the redacted on-disk bytes.
+ */
+export function buildInRepoRecipePayloadString(recipe: TerminalRecipe): string {
+  const { projectId: _p, worktreeId: _w, ...shareable } = recipe;
+  const sanitizedTerminals = shareable.terminals.map((t) => {
+    if (!t.env || Object.keys(t.env).length === 0) return t;
+    const redactedEnv: Record<string, string> = {};
+    for (const key of Object.keys(t.env)) {
+      redactedEnv[key] = "";
+    }
+    return { ...t, env: redactedEnv };
+  });
+  const payload = { ...shareable, terminals: sanitizedTerminals };
+  return JSON.stringify(payload, null, 2) + "\n";
+}
+
+export function hashRecipePayload(content: string): string {
+  return createHash("sha256").update(content, "utf-8").digest("hex");
+}
 
 const MAX_PROJECT_NAME_LENGTH = 100;
 const DAINTREE_DIR = ".daintree";
@@ -213,7 +242,14 @@ export class ProjectIdentityFiles {
     }
   }
 
-  async writeInRepoRecipe(projectPath: string, recipe: TerminalRecipe): Promise<void> {
+  /**
+   * Writes `recipe` to disk and returns the SHA-256 of the bytes that landed
+   * on disk. Callers cache the returned hash so a subsequent
+   * {@link ProjectStore.writeInRepoRecipeChecked} can detect external edits
+   * (git pull, branch switch, stash pop) that changed the file out from under
+   * them.
+   */
+  async writeInRepoRecipe(projectPath: string, recipe: TerminalRecipe): Promise<string> {
     await this.assertDaintreeDirNotSymlink(projectPath);
     const recipesDir = path.join(projectPath, DAINTREE_RECIPES_DIR);
 
@@ -230,23 +266,13 @@ export class ProjectIdentityFiles {
 
     const filename = safeRecipeFilename(recipe.name);
     const filePath = path.join(recipesDir, filename);
-
-    const { projectId: _, worktreeId: _w, ...shareable } = recipe;
-    const sanitizedTerminals = shareable.terminals.map((t) => {
-      if (!t.env || Object.keys(t.env).length === 0) return t;
-      const redactedEnv: Record<string, string> = {};
-      for (const key of Object.keys(t.env)) {
-        redactedEnv[key] = "";
-      }
-      return { ...t, env: redactedEnv };
-    });
-    const payload = { ...shareable, terminals: sanitizedTerminals };
+    const payloadString = buildInRepoRecipePayloadString(recipe);
 
     const attemptWrite = async (ensureDir: boolean): Promise<void> => {
       if (ensureDir) {
         await fs.mkdir(recipesDir, { recursive: true });
       }
-      await resilientAtomicWriteFile(filePath, JSON.stringify(payload, null, 2) + "\n", "utf-8");
+      await resilientAtomicWriteFile(filePath, payloadString, "utf-8");
     };
 
     try {
@@ -256,19 +282,53 @@ export class ProjectIdentityFiles {
       if (!isEnoent) throw error;
       await attemptWrite(true);
     }
+    return hashRecipePayload(payloadString);
+  }
+
+  /**
+   * Reads the raw on-disk bytes for `recipe`'s filename and returns the
+   * SHA-256 hash, or `null` if the file does not exist. The hash compares
+   * directly against the value returned by {@link writeInRepoRecipe} and the
+   * `hashes` map populated by {@link readInRepoRecipes}.
+   */
+  async getInRepoRecipeFileHash(projectPath: string, recipeName: string): Promise<string | null> {
+    const filePath = path.join(projectPath, DAINTREE_RECIPES_DIR, safeRecipeFilename(recipeName));
+    try {
+      const content = await fs.readFile(filePath, "utf-8");
+      return hashRecipePayload(content);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+      throw error;
+    }
   }
 
   async readInRepoRecipes(projectPath: string): Promise<TerminalRecipe[]> {
+    const { recipes } = await this.readInRepoRecipesWithHashes(projectPath);
+    return recipes;
+  }
+
+  /**
+   * Same as {@link readInRepoRecipes} but also returns a `Map<recipeId, hash>`
+   * of the raw on-disk bytes that were read. The hash is computed against the
+   * exact bytes (`fs.readFile` UTF-8 result), so it matches what
+   * {@link writeInRepoRecipe} and {@link getInRepoRecipeFileHash} produce when
+   * the file is untouched.
+   */
+  async readInRepoRecipesWithHashes(
+    projectPath: string
+  ): Promise<{ recipes: TerminalRecipe[]; hashes: Map<string, string> }> {
     const recipesDir = path.join(projectPath, DAINTREE_RECIPES_DIR);
     let entries;
     try {
       entries = await fs.readdir(recipesDir, { withFileTypes: true });
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return { recipes: [], hashes: new Map() };
       throw error;
     }
 
     const recipes: TerminalRecipe[] = [];
+    const hashes = new Map<string, string>();
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
       try {
@@ -293,11 +353,12 @@ export class ProjectIdentityFiles {
           continue;
         }
         recipes.push(result.data);
+        hashes.set(result.data.id, hashRecipePayload(content));
       } catch (error) {
         console.warn(`[ProjectIdentityFiles] Skipping malformed recipe file: ${entry.name}`, error);
       }
     }
-    return recipes;
+    return { recipes, hashes };
   }
 
   /**

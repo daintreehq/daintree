@@ -296,9 +296,10 @@ export const projectClient = {
   updateInRepoRecipe: (
     projectId: string,
     recipe: TerminalRecipe,
-    previousName?: string
+    previousName?: string,
+    options?: { force?: boolean }
   ): Promise<void> => {
-    return window.electron.project.updateInRepoRecipe(projectId, recipe, previousName);
+    return window.electron.project.updateInRepoRecipe(projectId, recipe, previousName, options);
   },
 
   deleteInRepoRecipe: (projectId: string, recipeName: string): Promise<void> => {

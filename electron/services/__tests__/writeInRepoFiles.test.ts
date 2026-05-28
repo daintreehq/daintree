@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
+import { createHash } from "crypto";
 import type {
   ProjectSettings,
   ProjectTerminalSettings,
@@ -11,7 +12,11 @@ import {
   PROJECT_SETTINGS_SHAREABILITY,
   PROJECT_TERMINAL_SETTINGS_SHAREABILITY,
 } from "../../../shared/types/project.js";
-import { ProjectIdentityFiles } from "../ProjectIdentityFiles.js";
+import {
+  ProjectIdentityFiles,
+  buildInRepoRecipePayloadString,
+  hashRecipePayload,
+} from "../ProjectIdentityFiles.js";
 
 const DAINTREE_PROJECT_JSON = ".daintree/project.json";
 const DAINTREE_SETTINGS_JSON = ".daintree/settings.json";
@@ -471,6 +476,121 @@ describe("writeInRepoRecipe", () => {
     const filePath = path.join(tmpDir, DAINTREE_RECIPES_DIR, "same-name.json");
     const content = JSON.parse(await fs.readFile(filePath, "utf-8"));
     expect(content.id).toBe("recipe-2");
+  });
+
+  it("writeInRepoRecipe returns the SHA-256 hash of the bytes written", async () => {
+    const recipe = makeRecipe({ name: "Hashed" });
+    const returned = await identityFiles.writeInRepoRecipe(tmpDir, recipe);
+    const onDisk = await fs.readFile(
+      path.join(tmpDir, DAINTREE_RECIPES_DIR, "hashed.json"),
+      "utf-8"
+    );
+    expect(returned).toBe(createHash("sha256").update(onDisk, "utf-8").digest("hex"));
+  });
+
+  it("buildInRepoRecipePayloadString matches the bytes writeInRepoRecipe persists", async () => {
+    const recipe = makeRecipe({
+      name: "Payload Match",
+      terminals: [{ type: "terminal", env: { SECRET: "shh", OTHER: "x" } }],
+    });
+    await identityFiles.writeInRepoRecipe(tmpDir, recipe);
+    const onDisk = await fs.readFile(
+      path.join(tmpDir, DAINTREE_RECIPES_DIR, "payload-match.json"),
+      "utf-8"
+    );
+    expect(buildInRepoRecipePayloadString(recipe)).toBe(onDisk);
+    // Env values redacted in the payload string the writer uses internally.
+    expect(buildInRepoRecipePayloadString(recipe)).toContain('"SECRET": ""');
+  });
+
+  it("buildInRepoRecipePayloadString strips projectId and worktreeId", () => {
+    const recipe = makeRecipe({ projectId: "proj-1", worktreeId: "wt-1" });
+    const payload = buildInRepoRecipePayloadString(recipe);
+    expect(payload).not.toContain("proj-1");
+    expect(payload).not.toContain("wt-1");
+  });
+
+  it("hashRecipePayload is deterministic and produces a 64-char hex digest", () => {
+    const a = hashRecipePayload("hello");
+    const b = hashRecipePayload("hello");
+    const c = hashRecipePayload("hello!");
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
+    expect(a).toMatch(/^[a-f0-9]{64}$/);
+  });
+});
+
+describe("getInRepoRecipeFileHash", () => {
+  let tmpDir: string;
+  let identityFiles: ProjectIdentityFiles;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-recipe-hash-test-"));
+    identityFiles = new ProjectIdentityFiles();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns null when the recipe file does not exist", async () => {
+    expect(await identityFiles.getInRepoRecipeFileHash(tmpDir, "Missing Recipe")).toBeNull();
+  });
+
+  it("returns the SHA-256 hash of the exact on-disk bytes", async () => {
+    await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ name: "Hashed Recipe" }));
+    const onDisk = await fs.readFile(
+      path.join(tmpDir, DAINTREE_RECIPES_DIR, "hashed-recipe.json"),
+      "utf-8"
+    );
+    expect(await identityFiles.getInRepoRecipeFileHash(tmpDir, "Hashed Recipe")).toBe(
+      createHash("sha256").update(onDisk, "utf-8").digest("hex")
+    );
+  });
+
+  it("hash changes when the file is externally edited", async () => {
+    await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ name: "Drift Recipe" }));
+    const before = await identityFiles.getInRepoRecipeFileHash(tmpDir, "Drift Recipe");
+    const filePath = path.join(tmpDir, DAINTREE_RECIPES_DIR, "drift-recipe.json");
+    const current = await fs.readFile(filePath, "utf-8");
+    await fs.writeFile(filePath, current.replace("Drift Recipe", "Drift Recipe Externally Edited"));
+    const after = await identityFiles.getInRepoRecipeFileHash(tmpDir, "Drift Recipe");
+    expect(after).not.toBe(before);
+  });
+});
+
+describe("readInRepoRecipesWithHashes", () => {
+  let tmpDir: string;
+  let identityFiles: ProjectIdentityFiles;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-recipe-readhash-test-"));
+    identityFiles = new ProjectIdentityFiles();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns hash matching the file bytes for each loaded recipe", async () => {
+    await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ id: "r1", name: "First" }));
+    await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ id: "r2", name: "Second" }));
+
+    const { recipes, hashes } = await identityFiles.readInRepoRecipesWithHashes(tmpDir);
+    expect(recipes).toHaveLength(2);
+    expect(hashes.size).toBe(2);
+    for (const recipe of recipes) {
+      const filename = recipe.name === "First" ? "first.json" : "second.json";
+      const onDisk = await fs.readFile(path.join(tmpDir, DAINTREE_RECIPES_DIR, filename), "utf-8");
+      const expected = createHash("sha256").update(onDisk, "utf-8").digest("hex");
+      expect(hashes.get(recipe.id)).toBe(expected);
+    }
+  });
+
+  it("returns empty recipes and empty hashes when the directory is missing", async () => {
+    const { recipes, hashes } = await identityFiles.readInRepoRecipesWithHashes(tmpDir);
+    expect(recipes).toEqual([]);
+    expect(hashes.size).toBe(0);
   });
 });
 

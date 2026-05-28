@@ -536,7 +536,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     updateInRepoRecipe(
       projectId: string,
       recipe: TerminalRecipe,
-      previousName?: string
+      previousName?: string,
+      options?: { force?: boolean }
     ): Promise<void>;
     deleteInRepoRecipe(projectId: string, recipeName: string): Promise<void>;
     getInRepoPresets(projectId: string): Promise<Record<string, AgentPreset[]>>;
