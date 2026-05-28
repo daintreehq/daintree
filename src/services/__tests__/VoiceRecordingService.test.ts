@@ -519,19 +519,19 @@ describe("VoiceRecordingService — arming state", () => {
       useVoiceRecordingStore: {
         getState: () => {
           finishSession: ReturnType<typeof vi.fn>;
-          setError: ReturnType<typeof vi.fn>;
+          setLastError: ReturnType<typeof vi.fn>;
         };
       };
     };
     const fns = storeModule.useVoiceRecordingStore.getState();
     const finishSessionMock = fns.finishSession;
-    const setErrorMock = fns.setError;
+    const setLastErrorMock = fns.setLastError;
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
 
     await voiceRecordingService.start({ panelId: "panel-1" });
 
-    expect(setErrorMock).toHaveBeenCalled();
+    expect(setLastErrorMock).toHaveBeenCalled();
     // failArming() routes through finishSession with nextStatus:"error"
     expect(finishSessionMock).toHaveBeenCalledWith({ nextStatus: "error" });
   });
