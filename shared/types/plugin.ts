@@ -282,8 +282,31 @@ export interface PluginToastOptions {
   durationMs?: number;
 }
 
+/**
+ * Runtime handler bound to a plugin-registered action via
+ * {@link PluginHostApi.registerAction}. Receives the dispatch args payload
+ * (the renderer-side synthetic action forwards a single args object) and
+ * returns the action's result. Unlike {@link PluginIpcHandler} it does NOT
+ * receive an IPC context — action handlers are addressed by action id, not by
+ * a per-invocation channel context. The closure lives only in main and never
+ * crosses the IPC boundary.
+ */
+export type ActionHandler = (args: unknown) => unknown | Promise<unknown>;
+
 export interface PluginHostApi {
   readonly pluginId: string;
+  /**
+   * Imperatively register an action with a main-side handler. The
+   * `descriptor.id` must NOT include the plugin prefix — the host namespaces
+   * it as `{pluginId}.{descriptor.id}` at runtime. `descriptor.danger` accepts
+   * `"safe"` or `"confirm"`; `"restricted"` is rejected. The host raises the
+   * effective danger to `"confirm"` when the plugin holds a high-risk
+   * capability, mirroring {@link PluginActionDescriptor.effectiveDanger}.
+   * Calling with a previously-registered id replaces the prior descriptor and
+   * handler. Must be called during `activate()` — the host is revoked once
+   * activation resolves or times out. Unregistered automatically on unload.
+   */
+  registerAction(descriptor: PluginActionContribution, handler: ActionHandler): void;
   registerHandler(channel: string, handler: PluginIpcHandler): void;
   broadcastToRenderer(channel: string, payload: unknown): void;
   /**
