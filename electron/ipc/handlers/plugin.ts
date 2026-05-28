@@ -14,10 +14,8 @@ import {
 } from "../../../shared/types/ipc/pluginAudit.js";
 import { PLUGIN_METHOD_CHANNELS } from "./plugin.preload.js";
 import { pluginService } from "../../services/PluginService.js";
-import { summarizeMcpArgs } from "../../../shared/utils/mcpArgsSummary.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
-import { sanitizePath } from "../../utils/pathScrubber.js";
-import { sha256Hex } from "../../utils/pluginMcpHash.js";
+import { stableArgsSha256 } from "../../utils/pluginMcpHash.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   getPluginToolbarButtonIds,
@@ -170,8 +168,13 @@ function safeAppend(input: Parameters<PluginActionAuditService["append"]>[0]): v
   }
 }
 
-/** Pipeline applied to serialized arg summaries before they become the hash input. */
-const scrubArgSummary = (s: string): string => scrubSecrets(sanitizePath(s));
+/**
+ * Cap on attacker-controlled URL strings before they're embedded into an
+ * audit `errorMessage`. The origin and path prefix are forensically useful;
+ * the rest is log pollution and a vector for stuffing secret-like values
+ * into the persistent ring buffer.
+ */
+const UNTRUSTED_URL_MAX_CHARS = 200;
 
 /**
  * A non-empty string is "present" for merge purposes. Empty string counts as
@@ -213,10 +216,13 @@ async function handleFileDecorationsGet(
   if (impls.length === 0) return {};
 
   const merged: Record<string, FileDecoration> = {};
-  // Per-provider start timestamps so audit records carry true elapsed time on
-  // rejection/timeout, not a synthetic constant. Captured at the moment the
-  // race is constructed — matches the lifetime of the provider's promise.
+  // Per-provider start/end timestamps so audit records carry the true elapsed
+  // time of *each* provider, not the wall-clock of the slowest one. `ends[i]`
+  // is captured inside the race chain at the moment that provider settles,
+  // before `Promise.allSettled` returns — measuring `Date.now()` in the
+  // post-allSettled loop would assign every provider the same wall-clock.
   const starts: number[] = new Array(impls.length);
+  const ends: number[] = new Array(impls.length);
   const results = await Promise.allSettled(
     impls.map(({ impl }, i) => {
       starts[i] = Date.now();
@@ -225,14 +231,23 @@ async function handleFileDecorationsGet(
         new Promise<typeof DECORATION_TIMEOUT>((resolve) =>
           setTimeout(() => resolve(DECORATION_TIMEOUT), DECORATION_PROVIDER_TIMEOUT_MS)
         ),
-      ]);
+      ]).then(
+        (v) => {
+          ends[i] = Date.now();
+          return v;
+        },
+        (err: unknown) => {
+          ends[i] = Date.now();
+          throw err;
+        }
+      );
     })
   );
 
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
     const { pluginId, contributionId } = impls[i];
-    const durationMs = Date.now() - starts[i];
+    const durationMs = ends[i] - starts[i];
     if (r.status === "rejected") {
       console.warn(
         `[Plugin] fileDecorationProvider "${pluginId}.${contributionId}" failed for scope "${scope}":`,
@@ -395,14 +410,19 @@ export function registerPluginHandlers(): () => void {
         // Trust check rejected — args are attacker-controlled and unvalidated,
         // so we record the rejection without hashing the payload (#8442:
         // audit-even-when-silenced; the security-relevant signal is "an
-        // untrusted frame attempted to invoke this plugin").
+        // untrusted frame attempted to invoke this plugin"). Cap the URL
+        // before it lands in the persistent log so a hostile frame can't
+        // stuff arbitrary content into the audit by sending a giant URL.
+        const safeUrl = senderUrl
+          ? scrubSecrets(senderUrl.slice(0, UNTRUSTED_URL_MAX_CHARS))
+          : "unknown";
         safeAppend({
           pluginId,
           actionId: channel,
           recordType: "ipc-invoke",
           channel: CHANNELS.PLUGIN_INVOKE,
           result: "restricted",
-          errorMessage: `untrusted sender (url=${senderUrl ?? "unknown"})`,
+          errorMessage: `untrusted sender (url=${safeUrl})`,
           argsHash: "",
           durationMs: Date.now() - start,
         });
@@ -417,11 +437,14 @@ export function registerPluginHandlers(): () => void {
       try {
         return await pluginService.dispatchHandler(pluginId, channel, ctx, args);
       } catch (err) {
-        // Hash the redacted summary so two structurally identical failed
-        // invokes group together in the viewer without persisting raw args.
+        // `stableArgsSha256` content-discriminates without persisting any
+        // arg bytes — two structurally identical failed invokes hash the
+        // same, but distinct args produce distinct hashes. (A summary-based
+        // hash via `summarizeMcpArgs` collapses arrays to a constant, which
+        // would defeat forensic grouping.)
         let argsHash = "";
         try {
-          argsHash = sha256Hex(summarizeMcpArgs(args, scrubArgSummary));
+          argsHash = stableArgsSha256(args);
         } catch {
           // Hashing is best-effort — a serialization throw here must not
           // mask the original handler error.

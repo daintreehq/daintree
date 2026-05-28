@@ -371,6 +371,31 @@ describe("PluginActionAuditService", () => {
       expect(r.errorMessage).toBe("provider rejected: boom");
     });
 
+    it("auditEnabled:false suppresses ipc-invoke and decoration-failure records too", () => {
+      store.saveConfig({ auditEnabled: false });
+      service.append({
+        pluginId: "p",
+        actionId: "ch",
+        recordType: "ipc-invoke",
+        channel: "plugin:invoke",
+        argsHash: "",
+        durationMs: 1,
+        result: "error",
+      });
+      service.append({
+        pluginId: "p",
+        actionId: "c",
+        recordType: "decoration-failure",
+        failureMode: "timeout",
+        scope: "s",
+        contributionId: "c",
+        argsHash: "",
+        durationMs: 3000,
+        result: "error",
+      });
+      expect(service.getRecords()).toEqual([]);
+    });
+
     it("preserves chronological order across mixed record types", () => {
       service.append({
         pluginId: "p",
