@@ -4,7 +4,6 @@ import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useErrorStore } from "@/store/errorStore";
 import { usePortalStore } from "@/store/portalStore";
 import { usePanelStore } from "@/store/panelStore";
-import { useUIStore } from "@/store/uiStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 
 export function registerPanelCoreActions(
@@ -203,18 +202,4 @@ export function registerPanelCoreActions(
     },
   }));
 
-  actions.set("notifications.toggle", () => ({
-    id: "notifications.toggle",
-    title: "Toggle Notification Center",
-    description: "Show or hide the notification inbox",
-    category: "panel",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    keywords: ["inbox", "bell", "alerts", "history"],
-    nonRepeatable: true,
-    run: async () => {
-      useUIStore.getState().toggleNotificationCenter();
-    },
-  }));
 }

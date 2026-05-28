@@ -161,6 +161,9 @@ export type BuiltInKeyAction =
   | "panel.diagnosticsEvents"
   | "panel.diagnosticsMessages"
 
+  // Notification inbox
+  | "notifications.toggle"
+
   // Portal actions
   | "portal.newTab"
   | "portal.closeTab"
@@ -340,6 +343,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "panel.diagnosticsLogs",
   "panel.diagnosticsEvents",
   "panel.diagnosticsMessages",
+  "notifications.toggle",
   "portal.newTab",
   "portal.closeTab",
   "portal.nextTab",
