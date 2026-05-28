@@ -3,6 +3,18 @@ import { getDevServerOrigins, getDevServerWebSocketOrigins } from "./devServer.j
 // Custom protocol scheme the renderer fetches/loads from.
 const FILE_SCHEMES = "daintree-file:";
 
+// Plugin-served renderer modules. `plugin:` is a hardened first-party scheme
+// (`standard: true, secure: true`, no `bypassCSP`) — see
+// `electron/main.ts:120-130` — that resolves to the plugin's installed-on-disk
+// root via the handler in `electron/setup/protocols.ts`. Non-PTY plugin panel
+// views are lazy-loaded via `React.lazy(() => import("plugin://..."))` (see
+// `src/components/Panel/PluginViewHost.tsx`), so `plugin:` must appear in
+// `script-src` for the dynamic module load to clear CSP in production. Per
+// past lesson #3757, the alternative — `bypassCSP: true` — is the nuclear
+// option and is explicitly rejected; this narrow directive expansion is the
+// minimum surface to make the feature work without weakening defense-in-depth.
+const PLUGIN_SCHEME = "plugin:";
+
 // Localhost origins allowed for embedded <webview> guests in BrowserPane and
 // DevPreviewPane. Without these in frame-src the host page cannot mount its
 // webview elements at all.
@@ -71,9 +83,12 @@ function buildScriptSrc(base: string, scriptSrcHashes?: readonly string[]): stri
 export function getDaintreeAppProdCSP(options?: DaintreeCspOptions): string {
   return [
     "default-src 'self'",
-    buildScriptSrc("script-src 'self' 'wasm-unsafe-eval'", options?.scriptSrcHashes),
+    buildScriptSrc(
+      `script-src 'self' 'wasm-unsafe-eval' ${PLUGIN_SCHEME}`,
+      options?.scriptSrcHashes
+    ),
     "style-src 'self' 'unsafe-inline'",
-    `connect-src 'self' ${FILE_SCHEMES}`,
+    `connect-src 'self' ${FILE_SCHEMES} ${PLUGIN_SCHEME}`,
     `img-src 'self' ${GITHUB_AVATARS} ${GRAVATAR} ${FILE_SCHEMES} data: blob:`,
     "font-src 'self' data:",
     "media-src 'self'",
@@ -105,9 +120,9 @@ export function getDaintreeAppDevCSP(): string {
 
   return [
     `default-src 'self' ${origins} ${wsOrigins}`,
-    `script-src 'self' ${origins} 'unsafe-inline' 'unsafe-eval'`,
+    `script-src 'self' ${origins} 'unsafe-inline' 'unsafe-eval' ${PLUGIN_SCHEME}`,
     `style-src 'self' ${origins} 'unsafe-inline'`,
-    `connect-src 'self' ${origins} ${wsOrigins} ${FILE_SCHEMES}`,
+    `connect-src 'self' ${origins} ${wsOrigins} ${FILE_SCHEMES} ${PLUGIN_SCHEME}`,
     `img-src 'self' ${origins} ${GITHUB_AVATARS} ${GRAVATAR} ${FILE_SCHEMES} data: blob:`,
     `font-src 'self' ${origins} data:`,
     "media-src 'self'",
