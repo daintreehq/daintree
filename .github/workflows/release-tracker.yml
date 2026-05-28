@@ -36,6 +36,8 @@ jobs:
       - name: Poll sibling release workflows
         id: poll
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
