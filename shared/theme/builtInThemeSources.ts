@@ -1,5 +1,5 @@
 import type { ThemePalette } from "./palette.js";
-import type { AppColorSchemeTokens } from "./types.js";
+import type { AppColorSchemeTokens, ExtensionKey } from "./types.js";
 
 export interface BuiltInThemeSource {
   id: string;
@@ -8,7 +8,7 @@ export interface BuiltInThemeSource {
   builtin: true;
   palette: ThemePalette;
   tokens?: Partial<AppColorSchemeTokens>;
-  extensions?: Record<string, string>;
+  extensions?: Partial<Record<ExtensionKey, string>>;
   location?: string;
   heroImage?: string;
 }
