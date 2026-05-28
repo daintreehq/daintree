@@ -198,6 +198,108 @@ export type AppThemeTokenKey = (typeof APP_THEME_TOKEN_KEYS)[number];
 
 export type AppColorSchemeTokens = Record<AppThemeTokenKey, string>;
 
+// Extension tier: optional per-theme overrides for component-scoped CSS custom
+// properties that are not part of the semantic-token contract. Each key is
+// applied as a bare CSS variable (e.g. "sidebar-hover-bg" -> --sidebar-hover-bg)
+// and must have a fallback at the consumer site. Governance is in
+// shared/theme/extensionRegistry.ts; the parity + drift tests are in
+// shared/theme/__tests__/builtInThemes.test.ts.
+export const EXTENSION_KEYS = [
+  // Chrome material (translucent inner-panel surface)
+  "chrome-bg",
+  "chrome-noise",
+  "chrome-shadow",
+
+  // Dialog + floating surface
+  "dialog-bg",
+  "dialog-header-bg",
+  "dialog-shadow",
+  "floating-surface-bg",
+  "floating-surface-shadow",
+
+  // Dock (docked terminal/agent dock pill)
+  "dock-bg",
+  "dock-border",
+  "dock-shadow",
+
+  // Panel grid background
+  "panel-grid-bg",
+  "terminal-grid-bg",
+
+  // Pulse (work-pulse heatmap)
+  "pulse-before-bg",
+  "pulse-card-bg",
+  "pulse-card-header-bg",
+  "pulse-card-shadow",
+  "pulse-control-hover-bg",
+  "pulse-empty-bg",
+  "pulse-heat-color",
+  "pulse-heat-high-opacity",
+  "pulse-heat-low-opacity",
+  "pulse-heat-medium-opacity",
+  "pulse-missed-bg",
+  "pulse-range-bg",
+  "pulse-ring-offset",
+  "pulse-skeleton-gradient",
+
+  // Settings tab
+  "settings-card-bg",
+  "settings-dialog-bg",
+  "settings-kbd-bg",
+  "settings-kbd-border",
+  "settings-list-item-bg",
+  "settings-meta-fg",
+  "settings-meta-size",
+  "settings-nav-active-bg",
+  "settings-nav-active-shadow",
+  "settings-nav-hover-bg",
+  "settings-search-bg",
+  "settings-search-muted",
+  "settings-section-header-bg",
+  "settings-section-header-bg-solid",
+  "settings-sidebar-bg",
+
+  // Sidebar interaction
+  "sidebar-action-hover-bg",
+  "sidebar-active-bg",
+  "sidebar-hover-bg",
+
+  // Toolbar
+  "toolbar-agent-hover-bg",
+  "toolbar-bg",
+  "toolbar-control-active-bg",
+  "toolbar-control-armed-bg",
+  "toolbar-control-armed-shadow",
+  "toolbar-control-hover-bg",
+  "toolbar-control-hover-fg",
+  "toolbar-control-hover-shadow",
+  "toolbar-divider",
+  "toolbar-noise",
+  "toolbar-pill-radius",
+  "toolbar-shadow",
+
+  // Toolbar project pill
+  "toolbar-project-bg",
+  "toolbar-project-border",
+  "toolbar-project-chip-bg",
+  "toolbar-project-chip-border",
+  "toolbar-project-chip-size",
+  "toolbar-project-meta-fg",
+  "toolbar-project-shadow",
+
+  // Toolbar stats pill
+  "toolbar-stats-bg",
+  "toolbar-stats-border",
+  "toolbar-stats-divider",
+  "toolbar-stats-hover-bg",
+  "toolbar-stats-shadow",
+
+  // Worktree section
+  "worktree-section-hover-bg",
+] as const;
+
+export type ExtensionKey = (typeof EXTENSION_KEYS)[number];
+
 export interface AppColorScheme {
   id: string;
   name: string;
@@ -205,7 +307,7 @@ export interface AppColorScheme {
   builtin: boolean;
   tokens: AppColorSchemeTokens;
   palette?: ThemePalette;
-  extensions?: Record<string, string>;
+  extensions?: Partial<Record<ExtensionKey, string>>;
   location?: string;
   heroImage?: string;
 }
