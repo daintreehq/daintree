@@ -2991,7 +2991,7 @@ describe("createHost — registerAction", () => {
     expect(result).toEqual({ done: true });
   });
 
-  it("invokes the handler with undefined when dispatched with no args", async () => {
+  it("invokes the handler with {} when dispatched with no args", async () => {
     const handler = vi.fn().mockReturnValue("ran");
     const { host } = getHost("acme.act-test");
     host.registerAction(descriptor(), handler);
@@ -3002,7 +3002,9 @@ describe("createHost — registerAction", () => {
       makeCtx("acme.act-test"),
       []
     );
-    expect(handler).toHaveBeenCalledWith(undefined);
+    // Defaults to {} (matching the input-schema validation default) rather than
+    // undefined, so a handler can safely destructure the args object.
+    expect(handler).toHaveBeenCalledWith({});
     expect(result).toBe("ran");
   });
 
@@ -3033,6 +3035,35 @@ describe("createHost — registerAction", () => {
     expect(() => host.registerAction(descriptor({ id: "" }), () => undefined)).toThrow(
       /descriptor.id must be a non-empty string/
     );
+  });
+
+  it("rejects an id that already includes the plugin prefix (no double-prefix)", () => {
+    const { host } = getHost("acme.act-test");
+    expect(() =>
+      host.registerAction(descriptor({ id: "acme.act-test.plan-from-issue" }), () => undefined)
+    ).toThrow(/must not include the plugin prefix/);
+    // Nothing was registered under the doubled id.
+    expect(service.listPluginActions()).toHaveLength(0);
+  });
+
+  it("passes {} to the handler when dispatched with no args (matches schema validation)", async () => {
+    const handler = vi.fn().mockReturnValue("ok");
+    const { host } = getHost("acme.act-test");
+    // Schema with only optional fields accepts an empty object.
+    host.registerAction(
+      descriptor({ inputSchema: { type: "object", properties: { flag: { type: "boolean" } } } }),
+      handler
+    );
+
+    const result = await service.dispatchHandler(
+      "acme.act-test",
+      "acme.act-test.plan-from-issue",
+      makeCtx("acme.act-test"),
+      []
+    );
+    // Handler receives the same {} the validator accepted — not undefined.
+    expect(handler).toHaveBeenCalledWith({});
+    expect(result).toBe("ok");
   });
 
   it("rejects restricted danger", () => {

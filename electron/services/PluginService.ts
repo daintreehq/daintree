@@ -908,6 +908,16 @@ export class PluginService {
             `Plugin "${pluginId}" registerAction: descriptor.id must be a non-empty string`
           );
         }
+        // The host adds the prefix, so a pre-prefixed id would silently produce
+        // a doubled "{pluginId}.{pluginId}.{id}" that still passes validation.
+        // Reject it up front to enforce the "id must NOT include the plugin
+        // prefix" contract (see host-api.md) instead of registering a malformed
+        // action id.
+        if (descriptor.id.startsWith(`${pluginId}.`)) {
+          throw new Error(
+            `Plugin "${pluginId}" registerAction: descriptor.id "${descriptor.id}" must not include the plugin prefix — Daintree adds it`
+          );
+        }
         // The host receives an un-prefixed id ("plan-from-issue") and
         // namespaces it to "{pluginId}.{id}" — the inverse of the renderer IPC
         // path, which already sends the namespaced id. validateAndBuild* then
@@ -1388,10 +1398,12 @@ export class PluginService {
 
     // A main-side action handler receives the args payload only — no IPC ctx,
     // per the ActionHandler contract. The renderer's synthetic action forwards
-    // a single args object, so pass args[0] (undefined when called with none).
+    // a single args object; default to `{}` when called with none so the
+    // handler sees the same value the input-schema validation accepted above
+    // (which also defaults the empty case to `{}`).
     if (actionHandler) {
       try {
-        return await actionHandler(args.length > 0 ? args[0] : undefined);
+        return await actionHandler(args.length > 0 ? args[0] : {});
       } catch (err) {
         // Contain at the boundary so a throwing handler can't propagate up
         // through `ipcMain.handle` as an unhandled rejection. The error still
