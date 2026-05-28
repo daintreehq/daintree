@@ -5,12 +5,15 @@ import os from "os";
 import { pathToFileURL } from "url";
 import { app } from "electron";
 import * as semver from "semver";
-import { createRequire } from "node:module";
+// Aliased to avoid colliding with Vite's auto-injected ESM shim
+// (`import { createRequire } from 'module'; const require = createRequire(import.meta.url);`),
+// which it adds to every bundled chunk for CJS interop.
+import { createRequire as nodeCreateRequire } from "node:module";
 
 // ajv and ajv-formats are CJS-only with deep `module.exports = Class` exports.
 // NodeNext module resolution can't resolve these from ESM, so use createRequire
 // which is the canonical Node.js interop for CJS-in-ESM.
-const req = createRequire(import.meta.url);
+const req = nodeCreateRequire(import.meta.url);
 const Ajv: new (opts?: Record<string, unknown>) => AjvInstance = req("ajv");
 const addFormats: (ajv: AjvInstance) => void = req("ajv-formats");
 
