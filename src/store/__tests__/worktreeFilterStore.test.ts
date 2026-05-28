@@ -12,6 +12,7 @@ function resetWorktreeFilterStore() {
     prIssueFilters: new Set(),
     sessionFilters: new Set(),
     activityFilters: new Set(),
+    devServerFilters: new Set(),
     alwaysShowActive: true,
     alwaysShowWaiting: true,
     hideMainWorktree: false,
@@ -200,6 +201,12 @@ describe("worktreeFilterStore", () => {
       expect(useWorktreeFilterStore.getState().hasFacetFilters()).toBe(true);
     });
 
+    it("returns true when a devServerFilter is active", () => {
+      useWorktreeFilterStore.getState().clearAll();
+      useWorktreeFilterStore.getState().toggleDevServerFilter("running");
+      expect(useWorktreeFilterStore.getState().hasFacetFilters()).toBe(true);
+    });
+
     it("returns false when only query is active", () => {
       useWorktreeFilterStore.getState().clearAll();
       useWorktreeFilterStore.getState().setQuery("search term");
@@ -233,6 +240,40 @@ describe("worktreeFilterStore", () => {
     useWorktreeFilterStore.getState().clearAll();
 
     expect(useWorktreeFilterStore.getState().quickStateFilter).toBe("all");
+  });
+
+  describe("devServerFilters", () => {
+    it("toggleDevServerFilter adds and removes a value", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.toggleDevServerFilter("running");
+      expect(useWorktreeFilterStore.getState().devServerFilters.has("running")).toBe(true);
+      store.toggleDevServerFilter("running");
+      expect(useWorktreeFilterStore.getState().devServerFilters.has("running")).toBe(false);
+    });
+
+    it("counts devServerFilters in getActiveFilterCount and hasActiveFilters", () => {
+      useWorktreeFilterStore.getState().toggleDevServerFilter("running");
+      useWorktreeFilterStore.getState().toggleDevServerFilter("error");
+      expect(useWorktreeFilterStore.getState().getActiveFilterCount()).toBe(2);
+      expect(useWorktreeFilterStore.getState().hasActiveFilters()).toBe(true);
+    });
+
+    it("resets devServerFilters on clearAll", () => {
+      useWorktreeFilterStore.getState().toggleDevServerFilter("running");
+      useWorktreeFilterStore.getState().clearAll();
+      expect(useWorktreeFilterStore.getState().devServerFilters.size).toBe(0);
+    });
+
+    it("does not persist devServerFilters to localStorage (session-only)", () => {
+      useWorktreeFilterStore.getState().toggleDevServerFilter("running");
+      // The per-project persist key holds only the persisted shape; the
+      // session-only devServerFilters must never appear in it.
+      const persisted = Object.keys(localStorage)
+        .filter((k) => k.startsWith("daintree-worktree-filters"))
+        .map((k) => localStorage.getItem(k) ?? "")
+        .join("\n");
+      expect(persisted).not.toContain("devServerFilters");
+    });
   });
 
   it('clearQuickStateFilter resets only quickStateFilter to "all"', () => {

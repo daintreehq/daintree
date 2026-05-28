@@ -52,6 +52,7 @@ import { useFleetArmingStore, collectFilterArmEligibleIds } from "@/store/fleetA
 import { useShallow } from "zustand/react/shallow";
 import { systemClient } from "@/clients";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
+import { useWorktreeDevServerStore } from "@/store/worktreeDevServerStore";
 import {
   matchesFilters,
   matchesQuickStateFilter,
@@ -506,6 +507,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     prIssueFilters,
     sessionFilters,
     activityFilters,
+    devServerFilters,
     alwaysShowActive,
     alwaysShowWaiting,
     pinnedWorktrees,
@@ -521,6 +523,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       prIssueFilters: state.prIssueFilters,
       sessionFilters: state.sessionFilters,
       activityFilters: state.activityFilters,
+      devServerFilters: state.devServerFilters,
       alwaysShowActive: state.alwaysShowActive,
       alwaysShowWaiting: state.alwaysShowWaiting,
       pinnedWorktrees: state.pinnedWorktrees,
@@ -528,6 +531,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       quickStateFilter: state.quickStateFilter,
     }))
   );
+
+  const devServerSessions = useWorktreeDevServerStore((s) => s.sessionsByWorktreeId);
 
   const isSortDisabledPrevRef = useRef(isGroupedByType || query.trim().length > 0);
   useEffect(() => {
@@ -560,7 +565,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     typeFilters.size +
     prIssueFilters.size +
     sessionFilters.size +
-    activityFilters.size;
+    activityFilters.size +
+    devServerFilters.size;
   const collapsedWorktrees = useWorktreeFilterStore((state) => state.collapsedWorktrees);
   const pruneStaleWorktreeIds = useWorktreeFilterStore((state) => state.pruneStaleWorktreeIds);
   const setQuickStateFilter = useWorktreeFilterStore((state) => state.setQuickStateFilter);
@@ -768,14 +774,21 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     const nonMain = deferredWorktrees.filter(
       (w) => w.id !== mainWorktree?.id && w.id !== integrationWorktree?.id
     );
-    return computeChipCounts(nonMain, derivedMetaMap, activeWorktreeId, {
-      query,
-      statusFilters,
-      typeFilters,
-      prIssueFilters,
-      sessionFilters,
-      activityFilters,
-    });
+    return computeChipCounts(
+      nonMain,
+      derivedMetaMap,
+      activeWorktreeId,
+      {
+        query,
+        statusFilters,
+        typeFilters,
+        prIssueFilters,
+        sessionFilters,
+        activityFilters,
+        devServerFilters,
+      },
+      devServerSessions
+    );
   }, [
     deferredWorktrees,
     derivedMetaMap,
@@ -788,6 +801,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     prIssueFilters,
     sessionFilters,
     activityFilters,
+    devServerFilters,
+    devServerSessions,
   ]);
 
   const mainWorktreeAggregateCounts = useMemo(() => {
@@ -817,6 +832,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         prIssueFilters,
         sessionFilters,
         activityFilters,
+        devServerFilters,
       };
 
       // Filter non-main worktrees only (exclude main and integration by ID)
@@ -852,7 +868,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             !hasFacetFiltersActive
           ) {
             withoutQuickStateMatch = true;
-          } else if (matchesFilters(worktree, filters, derived, isActive)) {
+          } else if (matchesFilters(worktree, filters, derived, isActive, devServerSessions)) {
             withoutQuickStateMatch = true;
           }
         }
@@ -881,7 +897,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           return false;
         }
 
-        return matchesFilters(worktree, filters, derived, isActive);
+        return matchesFilters(worktree, filters, derived, isActive, devServerSessions);
       });
 
       const existingWorktreeIds = new Set(deferredWorktrees.map((w) => w.id));
@@ -917,6 +933,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       prIssueFilters,
       sessionFilters,
       activityFilters,
+      devServerFilters,
+      devServerSessions,
       alwaysShowActive,
       alwaysShowWaiting,
       pinnedWorktrees,
@@ -1013,6 +1031,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     prIssueFilters,
     sessionFilters,
     activityFilters,
+    devServerFilters,
   };
 
   const mainMatchesQueryPre = mainWorktree && worktreeMatchesQueryPre(mainWorktree);
@@ -1031,7 +1050,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           hasMergeConflict: false,
           chipState: null,
         },
-        mainWorktree.id === activeWorktreeId
+        mainWorktree.id === activeWorktreeId,
+        devServerSessions
       ));
   const mainVisible = mainMatchesQueryPre && mainMatchesFacetsPre;
 
@@ -1052,7 +1072,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           hasMergeConflict: false,
           chipState: null,
         },
-        integrationWorktree.id === activeWorktreeId
+        integrationWorktree.id === activeWorktreeId,
+        devServerSessions
       ));
   const integrationVisible = integrationMatchesQueryPre && integrationMatchesFacetsPre;
 

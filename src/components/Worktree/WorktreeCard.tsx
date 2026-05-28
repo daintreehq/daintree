@@ -52,6 +52,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/component
 import { CONTEXT_COMPONENTS, WorktreeMenuItems } from "./WorktreeMenuItems";
 import { isAgentFleetActionEligible, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
+import { useWorktreeDevServerSession } from "@/hooks/app/useWorktreeDevServerSession";
 import { computeChipState } from "./utils/computeChipState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
@@ -210,6 +211,8 @@ export function WorktreeCard({
     terminals: worktreeTerminals,
     dominantAgentState,
   } = useWorktreeTerminals(worktree.id);
+
+  const devServerSession = useWorktreeDevServerSession(worktree.id);
 
   // Border accent flash — fires once when the dominant *execution* state for
   // this card meaningfully changes. `directing` is excluded because it's
@@ -877,6 +880,7 @@ export function WorktreeCard({
                 resourceLastOutput={worktree.resourceStatus?.lastOutput}
                 resourceEndpoint={worktree.resourceStatus?.endpoint}
                 resourceLastCheckedAt={worktree.resourceStatus?.lastCheckedAt}
+                devServerSession={devServerSession}
                 lastGitStatusCheckedAt={worktree.lastGitStatusCheckedAt}
                 onRevalidateGitStatus={handleRevalidate}
                 onCheckResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}

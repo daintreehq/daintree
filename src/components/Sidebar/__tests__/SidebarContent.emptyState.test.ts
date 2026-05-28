@@ -59,7 +59,7 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
         /alwaysShowWaiting[\s\S]*?derived\.hasWaitingAgent[\s\S]*?!hasActiveQuery/
       );
       expect(source).toMatch(
-        /else if \(matchesFilters\(worktree, filters, derived, isActive\)\) \{\s*withoutQuickStateMatch = true;/
+        /else if \(matchesFilters\(worktree, filters, derived, isActive, devServerSessions\)\) \{\s*withoutQuickStateMatch = true;/
       );
     });
   });
@@ -127,13 +127,13 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       expect(branch).toContain('variant="filtered-empty"');
     });
 
-    it("derives the active facet filter count from the five facet Set sizes — issue #7971", () => {
+    it("derives the active facet filter count from the six facet Set sizes — issues #7971, #9087", () => {
       // The combined-axis title needs the actual number of facet filters
-      // selected. Sum the five facet axes (status, type, github, session,
-      // activity) — the same axes hasFacetFilters() reads. Do not include
-      // query or quickStateFilter, which are named separately in the title.
+      // selected. Sum the six facet axes (status, type, github, session,
+      // activity, dev server) — the same axes hasFacetFilters() reads. Do not
+      // include query or quickStateFilter, which are named separately in the title.
       expect(source).toMatch(
-        /const activeFacetFilterCount =\s*statusFilters\.size \+\s*typeFilters\.size \+\s*prIssueFilters\.size \+\s*sessionFilters\.size \+\s*activityFilters\.size;/
+        /const activeFacetFilterCount =\s*statusFilters\.size \+\s*typeFilters\.size \+\s*prIssueFilters\.size \+\s*sessionFilters\.size \+\s*activityFilters\.size \+\s*devServerFilters\.size;/
       );
     });
 

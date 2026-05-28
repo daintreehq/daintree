@@ -67,6 +67,7 @@ import {
   useThemeBrowserSettingsBridge,
   useErrorRetry,
   useActiveWorktreeSync,
+  useWorktreeDevServerStateSync,
 } from "./hooks/app";
 import { useResourceProfile } from "./hooks/useResourceProfile";
 import { AppLayout } from "./components/Layout";
@@ -335,6 +336,7 @@ function AppInner() {
   useUnloadCleanup();
   useResourceProfile();
   useRecipeFocusReload();
+  useWorktreeDevServerStateSync();
 
   useEffect(() => {
     window.__DAINTREE_E2E_ERROR_STORE__ = () =>
