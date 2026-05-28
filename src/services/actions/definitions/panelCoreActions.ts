@@ -201,5 +201,4 @@ export function registerPanelCoreActions(
       window.dispatchEvent(new CustomEvent("daintree:toggle-portal"));
     },
   }));
-
 }

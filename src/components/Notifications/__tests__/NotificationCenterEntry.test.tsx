@@ -31,7 +31,6 @@ vi.mock("@/lib/notify", async (importOriginal) => {
   };
 });
 
-
 function makeEntry(overrides: Partial<NotificationHistoryEntry> = {}): NotificationHistoryEntry {
   return {
     id: "entry-1",

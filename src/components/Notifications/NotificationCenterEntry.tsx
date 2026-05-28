@@ -580,3 +580,7 @@ function RowOptionsMenu({
             Mute project notifications
           </DropdownMenuItem>
         )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
