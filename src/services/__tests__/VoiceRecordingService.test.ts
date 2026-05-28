@@ -813,4 +813,46 @@ describe("VoiceRecordingService — interim delta handling (#9172)", () => {
     voiceModule.__state.activeTarget = null;
     voiceModule.__state.panelBuffers = {};
   });
+
+  it("does not write a separator-only draft on a silent (empty) onTranscriptionComplete", async () => {
+    const { electronStub } = setupGlobals();
+    let completeCallback: ((payload: { text: string }) => void) | null = null;
+    (
+      electronStub.voiceInput.onTranscriptionComplete as unknown as {
+        mockImplementation: (impl: (cb: (payload: { text: string }) => void) => () => void) => void;
+      }
+    ).mockImplementation((cb) => {
+      completeCallback = cb;
+      return () => {};
+    });
+
+    const voiceModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: {
+        activeTarget: { panelId: string } | null;
+        panelBuffers: Record<string, { insertPoint: number }>;
+      };
+    };
+    voiceModule.__state.activeTarget = { panelId: "panel-1" };
+    voiceModule.__state.panelBuffers["panel-1"] = { insertPoint: 5 };
+
+    const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+    const inputStore = useTerminalInputStore.getState();
+    (inputStore.getDraftInput as ReturnType<typeof vi.fn>).mockReturnValue("hello");
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+
+    // Defeat any cross-test fn-instance reuse (Vitest may keep top-level
+    // mock factory closures across re-imports).
+    (inputStore.setDraftInput as ReturnType<typeof vi.fn>).mockClear();
+    (inputStore.bumpVoiceDraftRevision as ReturnType<typeof vi.fn>).mockClear();
+
+    completeCallback!({ text: "   " });
+
+    expect(inputStore.setDraftInput).not.toHaveBeenCalled();
+    expect(inputStore.bumpVoiceDraftRevision).not.toHaveBeenCalled();
+
+    voiceModule.__state.activeTarget = null;
+    voiceModule.__state.panelBuffers = {};
+  });
 });

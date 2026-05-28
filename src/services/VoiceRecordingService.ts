@@ -105,7 +105,8 @@ class VoiceRecordingService {
         if (panelId) {
           const buffer = voiceState.panelBuffers[panelId];
           const segmentStart = buffer?.insertPoint ?? -1;
-          if (segmentStart >= 0 || text.trim()) {
+          const finalText = text.trim();
+          if (finalText) {
             const inputStore = useTerminalInputStore.getState();
             const draft = inputStore.getDraftInput(panelId, projectId);
             // Slice back to where this segment started and replace with final transcript.
@@ -113,10 +114,9 @@ class VoiceRecordingService {
             // when nothing has been written — the separator still re-fixes spacing.
             const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
             const { separator, insertStart } = getVoiceInsertMetadata(base);
-            if ((buffer?.activeParagraphStart ?? -1) < 0 && text.trim()) {
+            if ((buffer?.activeParagraphStart ?? -1) < 0) {
               useVoiceRecordingStore.getState().setActiveParagraphStart(panelId, insertStart);
             }
-            const finalText = text.trim();
             inputStore.setDraftInput(panelId, base + separator + finalText, projectId);
             inputStore.bumpVoiceDraftRevision();
           }
