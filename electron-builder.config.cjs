@@ -75,12 +75,13 @@ module.exports = async function () {
       grantFileProtocolExtraPrivileges: false,
     },
     afterPack: "./scripts/afterPack.cjs",
+    afterSign: "./scripts/notarize-macos.cjs",
     mac: {
       extraResources: [{ from: "scripts/daintree-cli.sh", to: "daintree-cli.sh" }],
       x64ArchFiles:
         "Contents/Resources/app.asar.unpacked/node_modules/{node-pty/build/Release/**,better-sqlite3/build/Release/**,win-job-object/bin/**,posix-pty-reaper/build/Release/**,@parcel/watcher-darwin-*/watcher.node,@parcel/watcher/bin/darwin-*/watcher.node}",
       forceCodeSigning: true,
-      notarize: true,
+      notarize: false,
       binaries: [
         "Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper",
         "Contents/Resources/app.asar.unpacked/node_modules/posix-pty-reaper/build/Release/daintree_pty_supervisor",
