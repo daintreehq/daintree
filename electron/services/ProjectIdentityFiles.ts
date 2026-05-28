@@ -411,6 +411,7 @@ export class ProjectIdentityFiles {
           lastUsedAt: data.lastUsedAt,
           usageHistory: data.usageHistory,
           autoAssign: data.autoAssign,
+          scope: data.scope,
         };
         recipes.push(recipe);
         hashes.set(recipe.id, hashRecipePayload(content));
