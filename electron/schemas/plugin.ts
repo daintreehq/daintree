@@ -99,17 +99,23 @@ export const ViewContributionSchema = z.object({
 });
 
 /**
- * Reserved contribution point. Shape mirrors the Claude Desktop / Cursor
- * MCP server config (stdio transport only). `url` is intentionally absent —
- * remote MCP servers are a separate future concern.
+ * Stdio-only MCP server contribution. Shape mirrors the Claude Desktop /
+ * Cursor MCP server config. `url` is absent by design — HTTP/SSE transport
+ * is rejected at the schema boundary. The MCP Authorization spec carves
+ * stdio out of OAuth, and the official SDKs' HTTP transports have a
+ * documented history of DNS-rebinding flaws (CVE-2025-66414,
+ * CVE-2025-66416, CVE-2026-34742). Strict so unknown fields from plugin
+ * authors are rejected loudly rather than silently dropped.
  */
-export const McpServerContributionSchema = z.object({
-  id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
-  name: z.string().min(1),
-  command: z.string().min(1),
-  args: z.array(z.string()).optional(),
-  env: z.record(z.string(), z.string()).optional(),
-});
+export const McpServerContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    name: z.string().min(1),
+    command: z.string().min(1),
+    args: z.array(z.string()).optional(),
+    env: z.record(z.string(), z.string()).optional(),
+  })
+  .strict();
 
 /**
  * Reserved contribution point. Shape is validated but the runtime does not

@@ -228,6 +228,12 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           import("../services/HelpSessionService.js")
             .then(({ helpSessionService }) => helpSessionService.revokeAll())
             .catch(() => {}),
+          // Tear down every supervised plugin MCP subprocess (#9233). Same
+          // lazy-import guard — if no plugin ever activated an MCP server, the
+          // supervisor module never loaded and there is nothing to stop.
+          import("../services/PluginMcpSupervisor.js")
+            .then(({ getPluginMcpSupervisor }) => getPluginMcpSupervisor().shutdownAll())
+            .catch(() => {}),
           new Promise<void>((resolve) => {
             // Global singletons that previously tore down on last-window-close
             // (electron/window/windowServices.ts) live here now so they cover

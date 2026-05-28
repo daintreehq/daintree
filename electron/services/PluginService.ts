@@ -28,6 +28,7 @@ interface AjvInstance {
   compile(schema: Record<string, unknown>): ValidateFn;
 }
 import { getPluginManifestSchema, PluginToastOptionsSchema } from "../schemas/plugin.js";
+import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
 import type {
   PluginManifest,
   PluginIpcHandler,
@@ -850,9 +851,21 @@ export class PluginService {
     }
 
     if (manifest.contributes.experimental_mcpServers.length > 0) {
-      console.warn(
-        `[PluginService] Plugin "${manifest.name}": contributes.experimental_mcpServers is not yet implemented and will be ignored`
-      );
+      const contributions = manifest.contributes.experimental_mcpServers;
+      const pluginId = manifest.name;
+      // Eager spawn at activation time so readiness is observable before any
+      // tools/call dispatch. Errors are absorbed inside start() — a single
+      // failing MCP server can't strand plugin activation.
+      void getPluginMcpSupervisor()
+        .start({
+          pluginId,
+          pluginDir,
+          contributions,
+          resolveSettings: (settingId) => this.resolveSettingTemplate(pluginId, settingId),
+        })
+        .catch((err) => {
+          console.warn(`[PluginService] Plugin "${pluginId}": MCP supervisor start failed:`, err);
+        });
     }
 
     if (manifest.contributes.forgeProviders.length > 0) {
@@ -2239,6 +2252,16 @@ export class PluginService {
       this.clearPluginSettingsState(pluginId)
     );
 
+    // Tear down any MCP servers contributed by this plugin (#9233). Best-effort
+    // — a failing teardown is logged but cannot block the unload chain.
+    runUnloadStep(pluginId, "shutdownMcpServers", () => {
+      void getPluginMcpSupervisor()
+        .shutdown({ pluginId })
+        .catch((err) => {
+          console.warn(`[PluginService] MCP supervisor shutdown for "${pluginId}" threw:`, err);
+        });
+    });
+
     // Drop the load-time-error marker (#9281) so a reload with a fixed
     // manifest can successfully clear `loadError` on next activation.
     this.pluginsWithLoadTimeErrors.delete(pluginId);
@@ -2272,6 +2295,55 @@ export class PluginService {
       } catch (err) {
         console.error(`[PluginService] Event cleanup for "${pluginId}" threw during unload:`, err);
       }
+    }
+  }
+
+  /**
+   * Look up a single `contributes.experimental_mcpServers` entry by id along
+   * with the plugin's resolved on-disk directory. Used by the
+   * `plugin-mcp:restart` IPC handler to feed the supervisor a fresh
+   * contribution (with re-resolved `${settings:*}` substitutions) on each
+   * restart, plus the cwd the child process should anchor against.
+   */
+  findMcpServerContribution(
+    pluginId: string,
+    serverId: string
+  ):
+    | {
+        contribution: PluginManifest["contributes"]["experimental_mcpServers"][number];
+        pluginDir: string;
+      }
+    | undefined {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) return undefined;
+    const contribution = plugin.manifest.contributes.experimental_mcpServers.find(
+      (c) => c.id === serverId
+    );
+    if (!contribution) return undefined;
+    return { contribution, pluginDir: plugin.dir };
+  }
+
+  /**
+   * Resolve a `${settings:<id>}` template by reading the named user-scope
+   * setting and stringifying the value. Booleans and numbers become their
+   * JSON representation; objects/arrays become JSON-encoded strings. An
+   * undefined or missing setting resolves to the empty string so the
+   * substituted command remains a valid argv entry rather than a literal
+   * `"undefined"`.
+   */
+  async resolveSettingTemplate(pluginId: string, settingId: string): Promise<string> {
+    const filePath = this.resolveSettingsFilePath(pluginId, "user");
+    if (!filePath) return "";
+    const value = await this.getOrCreateSettingsStore(pluginId, "user", filePath).get<unknown>(
+      settingId
+    );
+    if (value === undefined || value === null) return "";
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "";
     }
   }
 
