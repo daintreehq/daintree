@@ -24,7 +24,7 @@ describe("built-in themes", () => {
   });
 
   it.each(BUILT_IN_APP_SCHEMES.map((s) => [s.id, s] as const))(
-    "scheme %s passes WCAG contrast checks",
+    "scheme %s passes theme contrast checks",
     (_id, scheme) => {
       const warnings = getThemeContrastWarnings(scheme);
       expect(warnings, warnings.map((w) => w.message).join("; ")).toHaveLength(0);
