@@ -33,7 +33,7 @@ afterEach(() => {
 
 describe("usePluginKeybindings", () => {
   it("registers plugin keybindings pulled on mount", async () => {
-    keybindingsMock.mockResolvedValue([makeEntry("p1", "p1.act", "CmdOrCtrl+k")]);
+    keybindingsMock.mockResolvedValue([makeEntry("p1", "p1.act", "Cmd+Shift+8")]);
 
     const { keybindingService } = await import("@/services/KeybindingService");
     const registerSpy = vi.spyOn(keybindingService, "registerBinding");
@@ -80,7 +80,7 @@ describe("usePluginKeybindings", () => {
     await waitFor(() => expect(emit).not.toBeNull());
     act(() => {
       emit!({
-        keybindings: [makeEntry("p2", "p2.act", "CmdOrCtrl+j")],
+        keybindings: [makeEntry("p2", "p2.act", "Cmd+Shift+9")],
         complete: false,
       });
     });
@@ -128,13 +128,13 @@ describe("usePluginKeybindings", () => {
     await waitFor(() => expect(emit).not.toBeNull());
     act(() => {
       emit!({
-        keybindings: [makeEntry("p2", "p2.act", "CmdOrCtrl+j")],
+        keybindings: [makeEntry("p2", "p2.act", "Cmd+Shift+9")],
         complete: true,
       });
     });
 
     await act(async () => {
-      resolvePull!([makeEntry("p1", "p1.act", "CmdOrCtrl+k")]);
+      resolvePull!([makeEntry("p1", "p1.act", "Cmd+Shift+8")]);
       await Promise.resolve();
     });
 
@@ -143,7 +143,7 @@ describe("usePluginKeybindings", () => {
   });
 
   it("removes plugin bindings on unmount", async () => {
-    keybindingsMock.mockResolvedValue([makeEntry("p1", "p1.act", "CmdOrCtrl+k")]);
+    keybindingsMock.mockResolvedValue([makeEntry("p1", "p1.act", "Cmd+Shift+8")]);
 
     const { keybindingService } = await import("@/services/KeybindingService");
     const registerSpy = vi.spyOn(keybindingService, "registerBinding");
@@ -166,7 +166,7 @@ describe("usePluginKeybindings", () => {
         pluginId: "p1",
         item: {
           actionId: "p1.act",
-          combo: "CmdOrCtrl+k",
+          combo: "Cmd+Shift+8",
           scope: "terminal",
           when: "terminalFocused",
           description: "Do the thing",
@@ -193,7 +193,7 @@ describe("usePluginKeybindings", () => {
   });
 
   it("defaults scope to global when the contribution omits it", async () => {
-    keybindingsMock.mockResolvedValue([makeEntry("p1", "p1.act", "CmdOrCtrl+k")]);
+    keybindingsMock.mockResolvedValue([makeEntry("p1", "p1.act", "Cmd+Shift+8")]);
 
     const { keybindingService } = await import("@/services/KeybindingService");
     const registerSpy = vi.spyOn(keybindingService, "registerBinding");
@@ -235,13 +235,65 @@ describe("usePluginKeybindings", () => {
 
     await waitFor(() => expect(emit).not.toBeNull());
     act(() => {
-      emit!({ keybindings: [makeEntry("p1", "p1.act", "CmdOrCtrl+k")], complete: true });
+      emit!({ keybindings: [makeEntry("p1", "p1.act", "Cmd+Shift+8")], complete: true });
     });
     act(() => {
       emit!({ keybindings: [], complete: true });
     });
 
     expect(removeSpy).toHaveBeenCalledWith("p1");
+  });
+
+  it("registers a binding that resolves a matching keyboard event, removed on empty push", async () => {
+    let emit:
+      | ((payload: {
+          keybindings: Array<{ pluginId: string; item: { actionId: string; combo: string } }>;
+          complete: boolean;
+        }) => void)
+      | null = null;
+    onKeybindingsChangedMock.mockImplementation(
+      (
+        cb: (payload: {
+          keybindings: Array<{ pluginId: string; item: { actionId: string; combo: string } }>;
+          complete: boolean;
+        }) => void
+      ) => {
+        emit = cb;
+        return () => {};
+      }
+    );
+
+    // Pin the platform so metaKey maps to the Cmd modifier deterministically.
+    Object.defineProperty(globalThis.navigator, "platform", {
+      value: "MacIntel",
+      configurable: true,
+    });
+
+    const { keybindingService } = await import("@/services/KeybindingService");
+
+    const { usePluginKeybindings } = await import("../usePluginKeybindings");
+    renderHook(() => usePluginKeybindings());
+
+    await waitFor(() => expect(emit).not.toBeNull());
+    act(() => {
+      emit!({ keybindings: [makeEntry("p1", "p1.act", "Cmd+Shift+8")], complete: true });
+    });
+
+    const event = {
+      key: "8",
+      code: "Digit8",
+      metaKey: true,
+      ctrlKey: false,
+      shiftKey: true,
+      altKey: false,
+      getModifierState: () => false,
+    } as unknown as KeyboardEvent;
+    expect(keybindingService.findMatchingAction(event)?.actionId).toBe("p1.act");
+
+    act(() => {
+      emit!({ keybindings: [], complete: true });
+    });
+    expect(keybindingService.findMatchingAction(event)).toBeUndefined();
   });
 
   it("unsubscribes from the push channel on unmount", async () => {

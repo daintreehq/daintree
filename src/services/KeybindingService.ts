@@ -487,8 +487,14 @@ class KeybindingService {
       for (const arr of this.bindings.values()) {
         for (const existing of arr) {
           if (existing.actionId === config.actionId) continue;
-          if (!existing.combo) continue;
-          if (!combosFieldsEqual(existing.combo, config.combo)) continue;
+          // Compare against the EFFECTIVE combo — a user override remaps where a
+          // built-in actually fires, so a plugin binding at the overridden combo
+          // would otherwise slip past this guard and then win at resolution
+          // (PLUGIN priority > DEFAULT). Fall back to the stored combo when no
+          // override exists.
+          const effectiveCombo = this.getEffectiveCombo(existing.actionId) ?? existing.combo;
+          if (!effectiveCombo) continue;
+          if (!combosFieldsEqual(effectiveCombo, config.combo)) continue;
           if (!scopesConflict(existing.scope, config.scope)) continue;
           console.warn(
             `[KeybindingService] Skipping binding for "${config.actionId}" (${config.combo}, scope=${config.scope}) — combo already registered to "${existing.actionId}" (scope=${existing.scope}). Use setOverride() to rebind.`
@@ -499,11 +505,16 @@ class KeybindingService {
     }
     const arr = this.bindings.get(config.actionId);
     if (arr) {
-      // Replace a same-actionId entry with the same combo (self-update), otherwise push.
+      // Replace only on a true self-update: the existing same-combo entry must
+      // share this config's owner (both built-in/user with no pluginId, or the
+      // same pluginId). Replacing a differently-owned entry would let a plugin
+      // clobber a built-in binding for the same action+combo — and destroy it on
+      // unload, since removePluginBindings() filters by pluginId. Push instead so
+      // both coexist; resolution picks by priority and unload only drops the plugin's.
       const existingIdx = arr.findIndex(
         (b) => b.combo?.trim().toLowerCase() === config.combo?.trim().toLowerCase()
       );
-      if (existingIdx !== -1) {
+      if (existingIdx !== -1 && arr[existingIdx]!.pluginId === config.pluginId) {
         arr[existingIdx] = config;
       } else {
         arr.push(config);
