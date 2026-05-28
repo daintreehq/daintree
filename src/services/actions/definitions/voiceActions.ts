@@ -104,9 +104,7 @@ export function registerVoiceActions(actions: ActionRegistry): void {
           code: "lock_target_no_focus",
           message: "Focus a panel before locking dictation to it.",
         });
-        useVoiceRecordingStore
-          .getState()
-          .announce("Focus a panel before locking dictation to it.");
+        useVoiceRecordingStore.getState().announce("Focus a panel before locking dictation to it.");
         return;
       }
       const target = resolveTargetForPanel(requestedId);

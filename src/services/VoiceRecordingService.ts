@@ -4,11 +4,7 @@ import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
-import {
-  isActiveVoiceSession,
-  type VoiceInputError,
-  type VoiceRecordingMode,
-} from "@shared/types";
+import { isActiveVoiceSession, type VoiceInputError, type VoiceRecordingMode } from "@shared/types";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
