@@ -364,13 +364,17 @@ describe("ErrorBoundary", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(actionService.dispatch).toHaveBeenCalledWith(
-      "system.openExternal",
-      expect.objectContaining({
-        url: expect.stringContaining("github.com/daintreehq/daintree/issues/new"),
-      }),
-      { source: "user" }
-    );
+    const dispatchCall = vi
+      .mocked(actionService.dispatch)
+      .mock.calls.find(([id]) => id === "system.openExternal");
+    expect(dispatchCall).toBeDefined();
+    const url = (dispatchCall![1] as { url: string }).url;
+    const body = decodeURIComponent(new URL(url).searchParams.get("body") ?? "");
+    // Base error data is preserved on the fallback.
+    expect(body).toContain("Test render error");
+    // But the enrichment sections must be absent when the IPC failed.
+    expect(body).not.toContain("<summary>System info</summary>");
+    expect(body).not.toContain("Recent actions");
   });
 
   it("copies full report to clipboard and notifies when payload exceeds URL budget", async () => {
@@ -400,6 +404,9 @@ describe("ErrorBoundary", () => {
     const clipboardArg = electron.clipboard!.writeText.mock.calls[0]![0] as string;
     expect(clipboardArg).toContain("**Component:**");
     expect(clipboardArg).toContain("Component blew up");
+    // The clipboard payload must contain the full untruncated stack — assert
+    // a deep frame that only appears in `fullBody`, never the URL stub.
+    expect(clipboardArg).toContain("at frame29");
 
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({

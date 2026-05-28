@@ -200,6 +200,7 @@ describe("registerDiagnosticsHandlers", () => {
     expect(channels).toContain("system:download-diagnostics");
     expect(channels).toContain("system:report-blink-memory");
     expect(channels).toContain("system:report-renderer-elu");
+    expect(channels).toContain("system:get-report-enrichment");
     cleanup();
   });
 
