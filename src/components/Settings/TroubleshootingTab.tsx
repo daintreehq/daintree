@@ -18,7 +18,12 @@ import { appClient, systemClient, logsClient } from "@/clients";
 import type { AppState, SystemHealthCheckResult } from "@shared/types";
 import type { DiagnosticsReviewPayload } from "@shared/types/ipc/system";
 import type { ReplacementRule } from "@shared/utils/diagnosticsTransform";
+import {
+  buildDiagnosticsIssueUrl,
+  type DiagnosticsIssueMetadata,
+} from "@shared/utils/githubIssueUrl";
 import { actionService } from "@/services/ActionService";
+import { notify } from "@/lib/notify";
 import { logError, logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SettingsSection } from "./SettingsSection";
@@ -92,6 +97,27 @@ function SystemHealthSection() {
   );
 }
 
+/** Pull the GitHub-issue env summary fields out of the untyped review payload. */
+function extractIssueMetadata(payload: Record<string, unknown>): DiagnosticsIssueMetadata {
+  const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+  const isRecord = (v: unknown): v is Record<string, unknown> =>
+    typeof v === "object" && v !== null;
+  const section = (key: string): Record<string, unknown> | undefined => {
+    const value = payload[key];
+    return isRecord(value) ? value : undefined;
+  };
+  const metadata = section("metadata");
+  const runtime = section("runtime");
+  const os = section("os");
+  return {
+    appVersion: str(metadata?.appVersion),
+    electronVersion: str(metadata?.electronVersion),
+    nodeVersion: str(metadata?.nodeVersion),
+    platform: str(runtime?.platform) ?? str(os?.platform),
+    osVersion: str(os?.version) ?? str(os?.release),
+  };
+}
+
 function DownloadDiagnosticsSection() {
   const [isCollecting, setIsCollecting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -115,7 +141,8 @@ function DownloadDiagnosticsSection() {
 
   const handleSave = async (
     enabledSections: Record<string, boolean>,
-    replacements: ReplacementRule[]
+    replacements: ReplacementRule[],
+    timeWindowStartMs: number | null
   ) => {
     setIsSaving(true);
     try {
@@ -124,8 +151,28 @@ function DownloadDiagnosticsSection() {
         payload,
         enabledSections,
         replacements,
+        timeWindowStartMs,
       });
       if (saved) {
+        const issueUrl = buildDiagnosticsIssueUrl(extractIssueMetadata(payload));
+        notify({
+          type: "success",
+          title: "Diagnostics saved",
+          message: "Open a GitHub issue and drag the saved ZIP into it.",
+          // The saved ZIP is already revealed in the OS file manager, so this
+          // is a one-shot action prompt — no durable inbox row needed.
+          transient: true,
+          context: { eventKind: "settings" },
+          action: {
+            label: "Continue to GitHub issue",
+            variant: "primary",
+            onClick: () => {
+              safeFireAndForget(systemClient.openExternal(issueUrl), {
+                context: "Opening GitHub issue from diagnostics save",
+              });
+            },
+          },
+        });
         setReviewOpen(false);
       }
     } catch (err) {
