@@ -6,6 +6,15 @@ import { execSync } from "child_process";
 import path from "path";
 import { getDescendantPids } from "./stress";
 import { removePathSync } from "./fixtures";
+import {
+  install as installTelemetry,
+  beginAttempt,
+  observeStderrLine,
+  observeMainProcessExit,
+  observeRendererCrash,
+  writeSummary,
+  dispose as disposeTelemetry,
+} from "./launchTelemetry";
 
 const require = createRequire(import.meta.url);
 const electronPath = require("electron") as unknown as string;
@@ -113,7 +122,10 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
   const attemptTimeout = (_attempt: number) => (isMacOSLocal ? 50_000 : launchTimeout);
   let lastError: unknown = null;
 
+  installTelemetry();
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    beginAttempt(attempt, maxAttempts);
     const userDataDir = options.userDataDir ?? mkdtempSync(path.join(tmpdir(), "daintree-e2e-"));
     const args = [`--user-data-dir=${userDataDir}`, ROOT];
 
@@ -210,9 +222,11 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
           process.stderr.write(`[E2E_STDOUT] ${chunk.toString()}`);
         });
         proc.stderr?.on("data", (chunk: Buffer) => {
+          observeStderrLine(chunk.toString());
           process.stderr.write(`[E2E_STDERR] ${chunk.toString()}`);
         });
         proc.on("exit", (code: number | null, signal: string | null) => {
+          observeMainProcessExit(code, signal);
           process.stderr.write(`[E2E_EXIT] code=${code} signal=${signal}\n`);
         });
       } catch {
@@ -222,7 +236,10 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       // After WebContentsView migration, firstWindow() returns the BW sentinel page.
       // Poll for the real app page loaded in the WebContentsView.
       const window = await pollForAppWindow(app, launchTimeout);
-      window.on("crash", () => console.error("[e2e] Renderer crashed"));
+      window.on("crash", () => {
+        observeRendererCrash();
+        console.error("[e2e] Renderer crashed");
+      });
       window.on("console", (msg) => {
         if (msg.type() === "error") console.error("[e2e:console]", msg.text());
       });
@@ -271,6 +288,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         }
       }
       if (attempt < maxAttempts) {
+        writeSummary();
         console.warn(`[e2e] Launch attempt ${attempt}/${maxAttempts} failed, retrying...`);
         if (isWindowsCI) cleanupWindowsElectronProcesses();
         if (isMacOSLocal) cleanupMacElectronE2eProcesses();
@@ -281,6 +299,8 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
     }
   }
 
+  writeSummary();
+  disposeTelemetry();
   throw lastError instanceof Error ? lastError : new Error("Failed to launch Electron app");
 }
 

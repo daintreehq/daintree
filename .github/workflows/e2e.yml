@@ -460,6 +460,10 @@ jobs:
         shell: bash
         env:
           ELECTRON_ENABLE_LOGGING: "1"
+          DEBUG: "pw:protocol,pw:browser"
+          DEBUG_COLORS: "0"
+          E2E_LAUNCH_TELEMETRY: "1"
+          E2E_LAUNCH_TELEMETRY_FILE: ${{ runner.temp }}/e2e-launch-telemetry-${{ matrix.shard }}.jsonl
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
           FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
@@ -469,6 +473,9 @@ jobs:
           while true; do
             sleep 60
             echo "[e2e] heartbeat $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            if [ -f "$E2E_LAUNCH_TELEMETRY_FILE" ]; then
+              tail -n 3 "$E2E_LAUNCH_TELEMETRY_FILE" 2>/dev/null | sed 's/^/[e2e] launch-telemetry /'
+            fi
           done &
           heartbeat_pid=$!
           trap 'kill "$heartbeat_pid" 2>/dev/null || true' EXIT
