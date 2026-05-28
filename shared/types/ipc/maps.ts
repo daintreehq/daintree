@@ -1880,6 +1880,14 @@ export interface IpcEventMap {
     complete: boolean;
   };
 
+  // Plugin menu item registry events (main → renderer). Same `complete` flag
+  // semantics as toolbar buttons: true for an authoritative post-unload
+  // snapshot, false for partial/growing load-time broadcasts.
+  "plugin:menu-items-changed": {
+    items: Array<{ pluginId: string; item: import("../plugin.js").MenuItemContribution }>;
+    complete: boolean;
+  };
+
   // Plugin file-decoration invalidation (main → renderer). Carries only the
   // changed scope (optionally narrowed to `paths`) — never decoration data.
   // The renderer re-pulls fresh decorations via `plugin:file-decorations-get`.
@@ -1967,6 +1975,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-kinds-changed"
   // Plugin toolbar button registry (global broadcast)
   | "plugin:toolbar-buttons-changed"
+  // Plugin menu item registry (global broadcast)
+  | "plugin:menu-items-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
   // Plugin provenance record changed (global broadcast)

@@ -83,6 +83,7 @@ vi.mock("../../../shared/config/toolbarButtonRegistry.js", () => ({
 vi.mock("../pluginMenuRegistry.js", () => ({
   registerPluginMenuItem: vi.fn(),
   unregisterPluginMenuItems: vi.fn(),
+  getPluginMenuItems: vi.fn(() => []),
 }));
 vi.mock("../forgeProviderRegistry.js", () => ({
   registerForgeProviders: vi.fn(),
@@ -5956,7 +5957,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     await expect(waiter).resolves.toBeUndefined();
   });
 
-  it("pushSnapshotTo() sends actions, panel kinds, and toolbar buttons to the target webContents", async () => {
+  it("pushSnapshotTo() sends actions, panel kinds, toolbar buttons, and menu items to the target webContents", async () => {
     const service = new PluginService(tmpDir);
     await service.activateStartupFinishedPlugins();
     const send = vi.fn();
@@ -5964,7 +5965,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.pushSnapshotTo(wc);
 
-    expect(send).toHaveBeenCalledTimes(3);
+    expect(send).toHaveBeenCalledTimes(4);
     // Every replay goes through the EVENTS_PUSH channel — the same channel the
     // renderer hooks' persistent push listeners consume, so no renderer-side
     // changes are needed for the cold-restore path.
@@ -5975,19 +5976,24 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     expect(names).toContain("plugin:actions-changed");
     expect(names).toContain("plugin:panel-kinds-changed");
     expect(names).toContain("plugin:toolbar-buttons-changed");
-    // Toolbar replay must use `complete: false` so the renderer does not
-    // run a stale-prune sweep — replay is a load-style snapshot, not an
-    // unload-driven authoritative sweep.
+    expect(names).toContain("plugin:menu-items-changed");
+    // Toolbar and menu-item replays must use `complete: false` so the renderer
+    // does not run a stale-prune sweep — replay is a load-style snapshot, not
+    // an unload-driven authoritative sweep.
     const toolbarCall = send.mock.calls.find(
       (c) => (c[1] as { name?: string })?.name === "plugin:toolbar-buttons-changed"
     );
     expect((toolbarCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(false);
+    const menuItemsCall = send.mock.calls.find(
+      (c) => (c[1] as { name?: string })?.name === "plugin:menu-items-changed"
+    );
+    expect((menuItemsCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(false);
   });
 
   it("pushSnapshotTo() keeps sending remaining channels when one send() throws (TOCTOU)", async () => {
     // Simulates the wc being destroyed between the isDestroyed() guard and an
     // individual send — Electron raises "Object has been destroyed". Without
-    // per-send try/catch one bad call would silently drop the remaining two
+    // per-send try/catch one bad call would silently drop the remaining
     // channels and the cold-restored renderer would miss state.
     const service = new PluginService(tmpDir);
     await service.activateStartupFinishedPlugins();
@@ -6000,10 +6006,11 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.pushSnapshotTo(wc);
 
-    expect(send).toHaveBeenCalledTimes(3);
+    expect(send).toHaveBeenCalledTimes(4);
     const names = send.mock.calls.map((c) => (c[1] as { name?: string })?.name);
     expect(names).toContain("plugin:panel-kinds-changed");
     expect(names).toContain("plugin:toolbar-buttons-changed");
+    expect(names).toContain("plugin:menu-items-changed");
   });
 
   it("pushSnapshotTo() skips a destroyed webContents", async () => {
@@ -6031,7 +6038,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.activateStartupFinishedPlugins();
     await inFlight;
-    expect(send).toHaveBeenCalledTimes(3);
+    expect(send).toHaveBeenCalledTimes(4);
   });
 
   it("pushSnapshotTo() does not send after dispose()", async () => {
