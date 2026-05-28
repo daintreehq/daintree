@@ -48,10 +48,12 @@ describe("voiceRecordingStore — setArming", () => {
     expect(final.activeTarget).toEqual(TARGET);
   });
 
-  it("clears any prior errorMessage so a fresh arming flow doesn't show stale text", () => {
-    useVoiceRecordingStore.setState({ errorMessage: "Previous failure" });
+  it("clears any prior error so a fresh arming flow doesn't show stale text", () => {
+    useVoiceRecordingStore.setState({
+      lastError: { severity: "fatal", code: "server_error", message: "Previous failure" },
+    });
     useVoiceRecordingStore.getState().setArming(TARGET);
-    expect(useVoiceRecordingStore.getState().errorMessage).toBeNull();
+    expect(useVoiceRecordingStore.getState().lastError).toBeNull();
   });
 
   it("transitions cleanly to connecting when beginSession runs after arming", () => {
