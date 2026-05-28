@@ -126,6 +126,15 @@ interface LoadedPlugin {
 }
 
 const ACTIVATE_TIMEOUT_MS = 5000;
+/**
+ * Time budget for the dynamic `import()` step in {@link PluginService._doActivate}.
+ * Separate from {@link ACTIVATE_TIMEOUT_MS} (which guards the plugin's exported
+ * `activate()` function) so a plugin with a hanging top-level await cannot pin
+ * an activation promise forever — which would in turn block any
+ * `Promise.allSettled` fan-out (file-decoration scope activation, startup
+ * activation), since `allSettled` waits for every promise to settle.
+ */
+const IMPORT_TIMEOUT_MS = 5000;
 
 /**
  * Normalise the value thrown out of `activate()` into a serialisable record.
@@ -706,7 +715,10 @@ export class PluginService {
     const plugin = this.plugins.get(pluginId);
     if (!plugin || !plugin.resolvedMain) return;
     try {
-      const mod = (await import(pathToFileURL(plugin.resolvedMain).href)) as {
+      // Bound the dynamic import — a plugin with a hanging top-level await
+      // would otherwise pin this promise forever and stall `Promise.allSettled`
+      // fan-outs (file-decoration scope, startup activation).
+      const mod = (await this.runImport(pluginId, plugin.resolvedMain)) as {
         activate?: unknown;
       };
       if (typeof mod.activate === "function") {
@@ -714,7 +726,12 @@ export class PluginService {
         const { host, revoke } = this.createHost(pluginId);
         try {
           const cleanup = await this.runActivate(pluginId, activate, host);
-          if (typeof cleanup === "function") {
+          // Guard against an unload that ran concurrently with this activation:
+          // by the time `runActivate` resolves, `unloadPlugin` may have already
+          // cleared `cleanupMap` — writing a cleanup back after that fires
+          // would leak (e.g. a setInterval the plugin set up in activate()
+          // would never be cleared). Drop it on the floor instead.
+          if (typeof cleanup === "function" && this.plugins.has(pluginId)) {
             this.cleanupMap.set(pluginId, cleanup);
           }
         } finally {
@@ -738,6 +755,30 @@ export class PluginService {
   }
 
   /**
+   * Wrap `import()` in a timeout race so a plugin with a hanging top-level
+   * await (e.g. `await new Promise(() => {})`) can't stall the host. ESM's
+   * URL-keyed module cache means a successful import resolves instantly on
+   * retry; a hang only affects the first attempt.
+   */
+  private async runImport(pluginId: string, resolvedMain: string): Promise<unknown> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        import(pathToFileURL(resolvedMain).href),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            reject(
+              new Error(`Plugin "${pluginId}" import() timed out after ${IMPORT_TIMEOUT_MS}ms`)
+            );
+          }, IMPORT_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
    * Idempotent activation entry point. Concurrent callers share the same
    * in-flight promise; once activation settles successfully the result is
    * cached for the plugin's lifetime so subsequent callers return synchronously
@@ -756,7 +797,12 @@ export class PluginService {
 
     const promise = this._doActivate(pluginId).then(
       () => {
-        this.activatedPlugins.add(pluginId);
+        // Guard against an unload that ran while activation was in flight:
+        // unload clears `activatedPlugins` and `plugins` synchronously, but a
+        // late-resolving activation would otherwise re-insert a tombstoned id.
+        if (this.plugins.has(pluginId)) {
+          this.activatedPlugins.add(pluginId);
+        }
       },
       () => {
         // Error is already persisted to the provenance record inside

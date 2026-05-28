@@ -4624,6 +4624,74 @@ describe("Deferred activation — activatePlugin", () => {
     }
   });
 
+  it("import() with a hanging top-level await times out instead of stalling forever", async () => {
+    const pluginDir = path.join(tmpDir, "hanging-import");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.hanging-import", version: "1.0.0", main: "main.mjs" })
+    );
+    // Top-level `await new Promise(() => {})` hangs forever. Without the
+    // import-timeout guard this would pin `_doActivate` and any
+    // `Promise.allSettled` fan-out behind it.
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "await new Promise(() => {}); export function activate() {}"
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      // The promise resolves (it doesn't reject — `activatePlugin` swallows)
+      // and the timeout error is persisted as the loadError so diagnostics
+      // surface why the plugin never came up.
+      await service.activatePlugin("acme.hanging-import");
+      const record = service.getPluginLoadError("acme.hanging-import");
+      expect(record?.message).toContain("timed out");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  }, 10_000);
+
+  it("unloadPlugin during a racing activation does not leak activatedPlugins state", async () => {
+    const pluginDir = path.join(tmpDir, "race-unload");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.race-unload", version: "1.0.0", main: "main.mjs" })
+    );
+    // Activate resolves successfully but the test will unload mid-flight so
+    // the .then handler sees a tombstoned plugins map.
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "export function activate() { return () => {}; }"
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const activation = service.activatePlugin("acme.race-unload");
+    // Synchronously unload before the activation promise resolves. The
+    // plugin is still in `this.plugins` at this point (activation is
+    // mid-flight), so unload runs fully.
+    service.unloadPlugin("acme.race-unload");
+    await activation;
+
+    // The .then(success) handler now runs after unload; the guard must
+    // prevent re-adding the id to `activatedPlugins`.
+    expect(service.hasPlugin("acme.race-unload")).toBe(false);
+    expect(
+      (service as unknown as { activatedPlugins: Set<string> }).activatedPlugins.has(
+        "acme.race-unload"
+      )
+    ).toBe(false);
+    expect(
+      (service as unknown as { cleanupMap: Map<string, () => void> }).cleanupMap.has(
+        "acme.race-unload"
+      )
+    ).toBe(false);
+  });
+
   it("dispatchHandler implicitly activates the owning plugin before lookup", async () => {
     const pluginDir = path.join(tmpDir, "implicit-dispatch");
     await fs.mkdir(pluginDir);
