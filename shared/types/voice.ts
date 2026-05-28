@@ -11,6 +11,9 @@
  * - idle: No active session.
  * - connecting: WebSocket to OpenAI Realtime is being established.
  * - recording: Connected and receiving audio; live transcription in progress.
+ * - paused: Session alive (WebSocket open) but audio capture suspended;
+ *   the PCM worklet stops forwarding chunks until the user resumes. An
+ *   auto-stop timer terminates the session if pause exceeds 60s.
  * - reconnecting: Connection dropped mid-session; retrying with backoff while
  *   buffering captured audio. The session is still active from the user's view.
  * - finishing: Session stop requested; draining final transcription from OpenAI.
@@ -20,6 +23,7 @@ export type VoiceInputStatus =
   | "idle"
   | "connecting"
   | "recording"
+  | "paused"
   | "reconnecting"
   | "finishing"
   | "error";
@@ -44,6 +48,7 @@ export function isActiveVoiceSession(status: VoiceInputStatus): boolean {
   return (
     status === "connecting" ||
     status === "recording" ||
+    status === "paused" ||
     status === "reconnecting" ||
     status === "finishing"
   );

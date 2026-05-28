@@ -87,18 +87,20 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
     });
 
     it("RAF effect deps are primitive booleans only — adding object refs would restart on every render", () => {
-      // [showOrbit, isFinishing] both derive from `status` (string from store)
-      // — keeping the dep array primitive-only avoids the off-React perf win
-      // collapsing into per-render RAF teardown/setup.
-      expect(source).toMatch(/},\s*\[showOrbit,\s*isFinishing\]\);/);
+      // All deps must derive from `status` (string from store) so the RAF
+      // tear-down/restart only fires on real state transitions, not every
+      // render. #9191 added isPaused to gate a frozen orbit branch.
+      expect(source).toMatch(/},\s*\[showOrbit,\s*isFinishing,\s*isPaused\]\);/);
     });
 
     it("gates showOrbit on isActive so a status race with a cleared activeTarget cannot spin a ghost loop", () => {
       // Without this gate, a transient (status=recording, activeTarget=null)
       // state would let the RAF loop run while the placeholder is rendered,
-      // leaving the tick to no-op against null refs every frame.
+      // leaving the tick to no-op against null refs every frame. #9191 added
+      // isPaused as another isActive sub-state that should still render the
+      // (frozen) orbit chrome.
       expect(source).toMatch(
-        /const\s+showOrbit\s*=\s*isActive\s*&&\s*\(isRecording\s*\|\|\s*isReconnecting\s*\|\|\s*isFinishing\s*\|\|\s*showConnecting\)/
+        /const\s+showOrbit\s*=\s*[\s\S]*isActive\s*&&\s*\(isRecording\s*\|\|\s*isReconnecting\s*\|\|\s*isFinishing\s*\|\|\s*isPaused\s*\|\|\s*showConnecting\)/
       );
     });
 

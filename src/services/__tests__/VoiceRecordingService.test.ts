@@ -206,8 +206,21 @@ function setupGlobals(electronStub = buildElectronStub()) {
   vi.stubGlobal("AudioContext", function () {
     return ctx;
   });
+  // Capture the most-recently-constructed worklet node so tests can inspect its
+  // port. The service calls `port.postMessage` to signal pause/resume.
+  const workletNodes: Array<{
+    port: { onmessage: null | ((e: unknown) => void); postMessage: ReturnType<typeof vi.fn> };
+    connect: ReturnType<typeof vi.fn>;
+    disconnect: ReturnType<typeof vi.fn>;
+  }> = [];
   vi.stubGlobal("AudioWorkletNode", function () {
-    return { port: { onmessage: null }, connect: vi.fn(), disconnect: vi.fn() };
+    const node = {
+      port: { onmessage: null, postMessage: vi.fn() },
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    };
+    workletNodes.push(node);
+    return node;
   });
   vi.stubGlobal("navigator", {
     mediaDevices: {
@@ -218,7 +231,15 @@ function setupGlobals(electronStub = buildElectronStub()) {
     },
   });
 
-  return { windowListeners, documentListeners, electronStub, ctx, oscillatorMock, gainMock };
+  return {
+    windowListeners,
+    documentListeners,
+    electronStub,
+    ctx,
+    oscillatorMock,
+    gainMock,
+    workletNodes,
+  };
 }
 
 describe("VoiceRecordingService — background recording", () => {
@@ -379,6 +400,7 @@ describe("isActiveVoiceSession helper", () => {
   it("returns true for active phases", () => {
     expect(isActiveVoiceSession("connecting")).toBe(true);
     expect(isActiveVoiceSession("recording")).toBe(true);
+    expect(isActiveVoiceSession("paused")).toBe(true);
     expect(isActiveVoiceSession("reconnecting")).toBe(true);
     expect(isActiveVoiceSession("finishing")).toBe(true);
   });
@@ -706,6 +728,157 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     expect(useVoiceRecordingStore.getState().setError).toHaveBeenCalledWith(
       expect.stringContaining("Start the Daintree Assistant")
     );
+  });
+});
+
+describe("VoiceRecordingService — pause/resume (#9191)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function getVoiceMockState() {
+    const mod = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: { activeTarget: { panelId: string } | null; status: string };
+    };
+    return mod.__state;
+  }
+
+  // The voiceRecordingStore mock factory runs once per file, so vi.fn instances
+  // are shared across tests in this block — reset them so each test asserts
+  // against a clean call history.
+  async function resetVoiceStoreFns() {
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    const fns = useVoiceRecordingStore.getState();
+    (fns.setStatus as ReturnType<typeof vi.fn>).mockClear();
+    (fns.announce as ReturnType<typeof vi.fn>).mockClear();
+    (fns.beginSession as ReturnType<typeof vi.fn>).mockClear();
+    (fns.finishSession as ReturnType<typeof vi.fn>).mockClear();
+  }
+
+  it("pause() suspends the PCM worklet and sets status to paused", async () => {
+    const { workletNodes } = setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "recording";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+
+    voiceRecordingService.pause();
+
+    expect(workletNodes.length).toBeGreaterThan(0);
+    const node = workletNodes[workletNodes.length - 1]!;
+    expect(node.port.postMessage).toHaveBeenCalledWith({ type: "setPaused", value: true });
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    expect(useVoiceRecordingStore.getState().setStatus).toHaveBeenCalledWith("paused");
+    expect(useVoiceRecordingStore.getState().announce).toHaveBeenCalledWith("Dictation paused.");
+  });
+
+  it("pause() is a no-op when status is not recording", async () => {
+    const { workletNodes } = setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "connecting";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+
+    // Reset post-start calls so we only see post-pause behaviour.
+    const node = workletNodes[workletNodes.length - 1]!;
+    node.port.postMessage.mockClear();
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    (useVoiceRecordingStore.getState().setStatus as ReturnType<typeof vi.fn>).mockClear();
+
+    voiceRecordingService.pause();
+
+    expect(node.port.postMessage).not.toHaveBeenCalled();
+    expect(useVoiceRecordingStore.getState().setStatus).not.toHaveBeenCalled();
+  });
+
+  it("resume() ungates the PCM worklet and sets status back to recording", async () => {
+    const { workletNodes } = setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "paused";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+
+    const node = workletNodes[workletNodes.length - 1]!;
+    node.port.postMessage.mockClear();
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    (useVoiceRecordingStore.getState().setStatus as ReturnType<typeof vi.fn>).mockClear();
+
+    voiceRecordingService.resume();
+
+    expect(node.port.postMessage).toHaveBeenCalledWith({ type: "setPaused", value: false });
+    expect(useVoiceRecordingStore.getState().setStatus).toHaveBeenCalledWith("recording");
+    expect(useVoiceRecordingStore.getState().announce).toHaveBeenCalledWith("Dictation resumed.");
+  });
+
+  it("resume() is a no-op when status is not paused", async () => {
+    const { workletNodes } = setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "recording";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+
+    const node = workletNodes[workletNodes.length - 1]!;
+    node.port.postMessage.mockClear();
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    (useVoiceRecordingStore.getState().setStatus as ReturnType<typeof vi.fn>).mockClear();
+
+    voiceRecordingService.resume();
+
+    expect(node.port.postMessage).not.toHaveBeenCalled();
+    expect(useVoiceRecordingStore.getState().setStatus).not.toHaveBeenCalled();
+  });
+
+  it("togglePause() dispatches to pause when recording and resume when paused", async () => {
+    const { workletNodes } = setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "recording";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+
+    const node = workletNodes[workletNodes.length - 1]!;
+    node.port.postMessage.mockClear();
+
+    voiceRecordingService.togglePause();
+    expect(node.port.postMessage).toHaveBeenCalledWith({ type: "setPaused", value: true });
+
+    voiceState.status = "paused";
+    node.port.postMessage.mockClear();
+    voiceRecordingService.togglePause();
+    expect(node.port.postMessage).toHaveBeenCalledWith({ type: "setPaused", value: false });
+  });
+
+  it("togglePause() is a no-op when status is idle", async () => {
+    setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = null;
+    voiceState.status = "idle";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    voiceRecordingService.togglePause();
+    expect(useVoiceRecordingStore.getState().setStatus).not.toHaveBeenCalled();
   });
 });
 

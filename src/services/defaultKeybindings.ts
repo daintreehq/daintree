@@ -901,6 +901,14 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Voice",
   },
   {
+    actionId: "voiceInput.togglePause",
+    combo: "Ctrl+Shift+Space",
+    scope: "global",
+    priority: 0,
+    description: "Pause or resume voice dictation",
+    category: "Voice",
+  },
+  {
     actionId: "find.inFocusedPanel",
     combo: "Cmd+F",
     scope: "global",
