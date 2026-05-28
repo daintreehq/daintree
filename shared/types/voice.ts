@@ -6,9 +6,14 @@
  */
 
 /**
- * The phase of the voice recording session as reported over IPC.
+ * The phase of the voice recording session.
  *
  * - idle: No active session.
+ * - arming: Renderer-only pre-recording state. Fires synchronously on hotkey
+ *   press so the target panel and toolbar can show a visual cue (~<50ms)
+ *   before audio init begins (~200ms). The backend never emits this status
+ *   over IPC; it lives only in the renderer voice store and is overwritten
+ *   by `beginSession()` once `connecting` arrives.
  * - connecting: WebSocket to OpenAI Realtime is being established.
  * - recording: Connected and receiving audio; live transcription in progress.
  * - paused: Session alive (WebSocket open) but audio capture suspended;
@@ -21,6 +26,7 @@
  */
 export type VoiceInputStatus =
   | "idle"
+  | "arming"
   | "connecting"
   | "recording"
   | "paused"
@@ -41,8 +47,11 @@ export type VoiceInputStatus =
 export type VoiceTranscriptPhase = "idle" | "interim" | "utterance_final" | "stable";
 
 /**
- * Returns true when the voice session is in an active phase (i.e. not idle or error).
- * Use this instead of comparing against multiple status strings inline.
+ * Returns true when the voice session is in an active phase (i.e. not idle,
+ * arming, or error). `arming` is excluded deliberately: it is the pre-audio
+ * confirmation window, and including it would cause the toggle guard to treat
+ * a second hotkey press during arming as a stop instead of letting the
+ * in-flight start complete.
  */
 export function isActiveVoiceSession(status: VoiceInputStatus): boolean {
   return (

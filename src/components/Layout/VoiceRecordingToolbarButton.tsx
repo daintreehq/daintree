@@ -59,6 +59,7 @@ export function VoiceRecordingToolbarButton({
   const hover = useShortcutHintHover("voiceInput.toggle");
   const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
+  const isArming = status === "arming";
   const isConnecting = status === "connecting";
   const isRecording = status === "recording";
   const isReconnecting = status === "reconnecting";
@@ -66,7 +67,7 @@ export function VoiceRecordingToolbarButton({
   const isPaused = status === "paused";
   const isActive =
     Boolean(activeTarget) &&
-    (isConnecting || isRecording || isReconnecting || isFinishing || isPaused);
+    (isArming || isConnecting || isRecording || isReconnecting || isFinishing || isPaused);
 
   // Doherty gate — under 400ms of "connecting" should never paint the orbit;
   // it would flash before the recording state arrives.
@@ -77,6 +78,13 @@ export function VoiceRecordingToolbarButton({
   // RAF loop spinning on null refs.
   const showOrbit =
     isActive && (isRecording || isReconnecting || isFinishing || isPaused || showConnecting);
+  // Arming paints immediately with no Doherty gate — the visual confirmation
+  // IS the point of the state, and a gate would defeat it. The cue is a
+  // static accent ring instead of the orbit (which only spins once audio
+  // chunks land). Hold the static ring through the pre-Doherty connecting
+  // window so the indicator never blanks out between the arming flash and
+  // the orbit appearing.
+  const showArming = isActive && (isArming || (isConnecting && !showConnecting));
 
   // Mutable bridge: audioLevel updates ~60Hz; we read it inside the RAF tick
   // rather than re-rendering on every change. Pattern lifted from
@@ -194,26 +202,31 @@ export function VoiceRecordingToolbarButton({
     return () => cancelAnimationFrame(rafRef.current);
   }, [showOrbit, isFinishing, isPaused]);
 
-  if (!isActive || !showOrbit) {
+  if (!isActive || (!showOrbit && !showArming)) {
     return <VoiceRecordingPlaceholder />;
   }
 
   const contextLabel = [activeTarget?.projectName, activeTarget?.worktreeLabel]
     .filter(Boolean)
     .join(" / ");
-  const tooltipTitle = isConnecting
-    ? "Preparing dictation..."
-    : isReconnecting
-      ? "Reconnecting..."
-      : isFinishing
-        ? "Finishing transcription..."
-        : isPaused
-          ? contextLabel
-            ? `Paused: ${contextLabel}`
-            : "Dictation paused"
-          : contextLabel
-            ? `Recording: ${contextLabel}`
-            : "Recording in another panel";
+  const targetLabel = activeTarget?.panelTitle ?? contextLabel;
+  const tooltipTitle = isArming
+    ? targetLabel
+      ? `Arming dictation: ${targetLabel}`
+      : "Arming dictation..."
+    : isConnecting
+      ? "Preparing dictation..."
+      : isReconnecting
+        ? "Reconnecting..."
+        : isFinishing
+          ? "Finishing transcription..."
+          : isPaused
+            ? contextLabel
+              ? `Paused: ${contextLabel}`
+              : "Dictation paused"
+            : contextLabel
+              ? `Recording: ${contextLabel}`
+              : "Recording in another panel";
   const tooltipExtra = (() => {
     const parts: Array<string | null> = [];
     if (isRecording || isPaused) parts.push(formatDuration(elapsedSeconds));
@@ -249,64 +262,87 @@ export function VoiceRecordingToolbarButton({
               aria-keyshortcuts={ariaShortcut}
             >
               <Mic className="h-4 w-4" />
-              {/* Orbit overlay — absolute inset on the relative Button. No
-                  contain:strict at this scale: the toolbar button is a flex
-                  child and clipping the orbit would crop the ring. */}
-              <span
-                ref={trackRef}
-                aria-hidden="true"
-                className="absolute inset-1 rounded-full pointer-events-none"
-                style={{
-                  opacity: 0.08,
-                  background: `var(--theme-accent-primary)`,
-                  mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                  WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                  maskComposite: "exclude",
-                  WebkitMaskComposite: "xor",
-                  padding: `${BASE_THICKNESS}px`,
-                  transition: "opacity 80ms ease-out",
-                }}
-              />
-              <div
-                ref={wrapperRef}
-                aria-hidden="true"
-                className="absolute inset-1 pointer-events-none"
-                style={{ willChange: "transform" }}
-              >
+              {/* Arming ring — static accent border painted during the
+                  pre-audio confirmation window. Replaces the orbit until
+                  audio is hot, so the user sees an immediate confirmation
+                  that the hotkey was registered. */}
+              {showArming && (
                 <span
-                  ref={ringRef}
-                  className="absolute inset-0 rounded-full"
+                  aria-hidden="true"
+                  className="absolute inset-1 rounded-full pointer-events-none"
                   style={{
-                    padding: `${BASE_THICKNESS}px`,
+                    background: `var(--theme-accent-primary)`,
+                    opacity: 0.55,
                     mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
                     WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
                     maskComposite: "exclude",
                     WebkitMaskComposite: "xor",
+                    padding: `${BASE_THICKNESS}px`,
                   }}
                 />
-                <span
-                  ref={dotHaloRef}
-                  className="absolute rounded-full bg-daintree-accent/30"
-                  style={{
-                    width: "6px",
-                    height: "6px",
-                    top: 0,
-                    left: "50%",
-                    transform: "translate(-50%, -35%)",
-                  }}
-                />
-                <span
-                  ref={dotCoreRef}
-                  className="absolute rounded-full bg-daintree-accent"
-                  style={{
-                    width: "3.5px",
-                    height: "3.5px",
-                    top: 0,
-                    left: "50%",
-                    transform: "translate(-50%, -15%)",
-                  }}
-                />
-              </div>
+              )}
+              {/* Orbit overlay — absolute inset on the relative Button. No
+                  contain:strict at this scale: the toolbar button is a flex
+                  child and clipping the orbit would crop the ring. */}
+              {showOrbit && (
+                <>
+                  <span
+                    ref={trackRef}
+                    aria-hidden="true"
+                    className="absolute inset-1 rounded-full pointer-events-none"
+                    style={{
+                      opacity: 0.08,
+                      background: `var(--theme-accent-primary)`,
+                      mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                      WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                      maskComposite: "exclude",
+                      WebkitMaskComposite: "xor",
+                      padding: `${BASE_THICKNESS}px`,
+                      transition: "opacity 80ms ease-out",
+                    }}
+                  />
+                  <div
+                    ref={wrapperRef}
+                    aria-hidden="true"
+                    className="absolute inset-1 pointer-events-none"
+                    style={{ willChange: "transform" }}
+                  >
+                    <span
+                      ref={ringRef}
+                      className="absolute inset-0 rounded-full"
+                      style={{
+                        padding: `${BASE_THICKNESS}px`,
+                        mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                        WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                        maskComposite: "exclude",
+                        WebkitMaskComposite: "xor",
+                      }}
+                    />
+                    <span
+                      ref={dotHaloRef}
+                      className="absolute rounded-full bg-daintree-accent/30"
+                      style={{
+                        width: "6px",
+                        height: "6px",
+                        top: 0,
+                        left: "50%",
+                        transform: "translate(-50%, -35%)",
+                      }}
+                    />
+                    <span
+                      ref={dotCoreRef}
+                      className="absolute rounded-full bg-daintree-accent"
+                      style={{
+                        width: "3.5px",
+                        height: "3.5px",
+                        top: 0,
+                        left: "50%",
+                        transform: "translate(-50%, -15%)",
+                      }}
+                    />
+                  </div>
+                </>
+              )}
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom" className="text-center">

@@ -299,7 +299,8 @@ class VoiceRecordingService {
 
     this.unsubscribers.push(
       usePanelStore.subscribe((state) => {
-        const activeTarget = useVoiceRecordingStore.getState().activeTarget;
+        const voiceState = useVoiceRecordingStore.getState();
+        const activeTarget = voiceState.activeTarget;
         if (!activeTarget) return;
 
         // If the recording target belongs to a different project than the
@@ -311,6 +312,13 @@ class VoiceRecordingService {
         const panel = found && found.location !== "trash" ? found : undefined;
 
         if (!panel) {
+          // No microphone has opened yet during arming — fall back to
+          // cancelArming() so we don't drive stop() through a non-existent
+          // session.
+          if (voiceState.status === "arming") {
+            this.cancelArming();
+            return;
+          }
           const panelId = activeTarget.panelId;
           void this.stop("Dictation stopped because its panel was closed.", {
             preserveLiveText: true,
@@ -325,6 +333,7 @@ class VoiceRecordingService {
       if (e.key !== "Escape") return;
       const state = useVoiceRecordingStore.getState();
       if (
+        state.status !== "arming" &&
         state.status !== "connecting" &&
         state.status !== "recording" &&
         state.status !== "paused" &&
@@ -333,6 +342,14 @@ class VoiceRecordingService {
         return;
       e.preventDefault();
       e.stopPropagation();
+      // Arming is the pre-audio confirmation window. No session has begun
+      // yet, so route abort through cancelArming() instead of stop() —
+      // stop() would log "no active session" warnings and skip the cleanup
+      // path that resets activeTarget back to null.
+      if (state.status === "arming") {
+        this.cancelArming();
+        return;
+      }
       this.pttActiveKeyCode = null;
       void this.stop("Dictation cancelled.", { preserveLiveText: true });
     };
@@ -436,6 +453,15 @@ class VoiceRecordingService {
       status: state.status,
     });
 
+    // A second press during the pre-audio arming window aborts back to idle.
+    // No microphone has been opened yet, so there is nothing for stop() to
+    // unwind — incrementing startRequestId via cancelArming() is enough to
+    // make the in-flight start() bail at its next staleness check.
+    if (isActiveTarget && state.status === "arming") {
+      this.cancelArming();
+      return;
+    }
+
     if (isActiveTarget && isActive) {
       await this.stop("Dictation stopped.", { preserveLiveText: true });
       return;
@@ -446,7 +472,33 @@ class VoiceRecordingService {
     // targets are a navigation aid, not a session log).
     useVoiceRecordingStore.getState().recordRecentTarget(target);
 
+    // Synchronous pre-audio cue. setArming() resolves under 1ms (Zustand set);
+    // the first await inside start() then carries us to "connecting" within
+    // ~50–200ms, by which point beginSession() has overwritten this state.
+    useVoiceRecordingStore.getState().setArming(target);
     await this.start(target);
+  }
+
+  /**
+   * Abort an in-flight arming window before audio init begins. Bumping
+   * startRequestId invalidates any pending start() so it bails at its next
+   * staleness check; finishSession() returns the store to idle without
+   * touching panel buffers (no transcript exists yet).
+   */
+  private cancelArming(): void {
+    this.startRequestId++;
+    useVoiceRecordingStore.getState().finishSession({ nextStatus: "idle" });
+  }
+
+  /**
+   * Roll the store off the "arming" status when a `start()` call has set
+   * an error and is about to return. Without this, the store would stay
+   * `{ status: "arming", activeTarget: T }` indefinitely — the toolbar and
+   * panel border would keep showing the pre-recording cue with no mic to
+   * back it up.
+   */
+  private failArming(): void {
+    useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
   }
 
   async start(target: VoiceRecordingTarget): Promise<void> {
@@ -470,14 +522,31 @@ class VoiceRecordingService {
         useVoiceRecordingStore
           .getState()
           .announce("Voice dictation is not configured. Open Voice settings to continue.");
+        this.failArming();
       }
       return;
     }
 
     // Check and request OS-level microphone permission (macOS requires this
     // from the main process before getUserMedia will succeed in the renderer).
+    // The IPC call is wrapped so a rejection (main-process crash, channel
+    // teardown) doesn't leak past start() and leave the store armed forever.
     logDebug(`${LOG_PREFIX} Checking microphone permission`);
-    const micStatus = await window.electron.voiceInput.checkMicPermission();
+    let micStatus: Awaited<ReturnType<typeof window.electron.voiceInput.checkMicPermission>>;
+    try {
+      micStatus = await window.electron.voiceInput.checkMicPermission();
+    } catch (err) {
+      logError(`${LOG_PREFIX} checkMicPermission IPC rejected`, err);
+      if (!this.isStartRequestStale(startRequestId)) {
+        useVoiceRecordingStore.getState().setLastError({
+          severity: "fatal",
+          code: "mic_permission_check_failed",
+          message: "Could not check microphone permission. Try again.",
+        });
+        this.failArming();
+      }
+      return;
+    }
     if (this.isStartRequestStale(startRequestId)) {
       return;
     }
@@ -490,6 +559,7 @@ class VoiceRecordingService {
         .getState()
         .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
       useVoiceRecordingStore.getState().announce(message);
+      this.failArming();
       safeFireAndForget(window.electron.voiceInput.openMicSettings(), {
         context: "Opening OS microphone settings",
       });
@@ -498,7 +568,21 @@ class VoiceRecordingService {
 
     if (micStatus === "not-determined") {
       logDebug(`${LOG_PREFIX} Requesting OS microphone permission`);
-      const granted = await window.electron.voiceInput.requestMicPermission();
+      let granted: boolean;
+      try {
+        granted = await window.electron.voiceInput.requestMicPermission();
+      } catch (err) {
+        logError(`${LOG_PREFIX} requestMicPermission IPC rejected`, err);
+        if (!this.isStartRequestStale(startRequestId)) {
+          useVoiceRecordingStore.getState().setLastError({
+            severity: "fatal",
+            code: "mic_permission_request_failed",
+            message: "Could not request microphone permission. Try again.",
+          });
+          this.failArming();
+        }
+        return;
+      }
       if (this.isStartRequestStale(startRequestId)) {
         return;
       }
@@ -509,6 +593,7 @@ class VoiceRecordingService {
           .getState()
           .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
         useVoiceRecordingStore.getState().announce(message);
+        this.failArming();
         return;
       }
     }
@@ -530,12 +615,17 @@ class VoiceRecordingService {
         name: error instanceof DOMException ? error.name : "unknown",
         message,
       });
-      const micCode =
-        error instanceof DOMException && error.name === "NotAllowedError"
-          ? "mic_permission_denied"
-          : "mic_access_failed";
-      useVoiceRecordingStore.getState().setLastError({ severity: "fatal", code: micCode, message });
-      useVoiceRecordingStore.getState().announce(message);
+      if (!this.isStartRequestStale(startRequestId)) {
+        const micCode =
+          error instanceof DOMException && error.name === "NotAllowedError"
+            ? "mic_permission_denied"
+            : "mic_access_failed";
+        useVoiceRecordingStore
+          .getState()
+          .setLastError({ severity: "fatal", code: micCode, message });
+        useVoiceRecordingStore.getState().announce(message);
+        this.failArming();
+      }
       return;
     }
 
@@ -585,7 +675,13 @@ class VoiceRecordingService {
       return;
     }
 
-    if (useVoiceRecordingStore.getState().activeTarget) {
+    // Only an actually-started session (open mic stream) needs to be torn
+    // down here. `this.stream` is the canonical "audio is open" flag and is
+    // independent of store status — using store.activeTarget here would
+    // false-positive during the arming window (we seeded it ourselves) and
+    // status alone would miss a cross-panel switch where the new "arming"
+    // status has already overwritten the prior session's "recording".
+    if (this.stream) {
       logDebug(`${LOG_PREFIX} Stopping existing session before starting new one`);
       await this.stop(undefined, {
         preserveLiveText: true,
