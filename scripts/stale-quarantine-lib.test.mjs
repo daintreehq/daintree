@@ -71,9 +71,7 @@ describe("extractQuarantineAnnotations", () => {
       });
     `;
     const result = extractQuarantineAnnotations(source);
-    expect(result[0].description).toBe(
-      "2026-05-27 see https://example.com/issue for context"
-    );
+    expect(result[0].description).toBe("2026-05-27 see https://example.com/issue for context");
   });
 
   it("does not corrupt a description containing a bare //", () => {
@@ -227,9 +225,7 @@ describe("collectStaleQuarantines", () => {
 describe("buildIssueTitle", () => {
   it("is sentence case with no terminal period and carries the spec path", () => {
     const title = buildIssueTitle("e2e/full/panels/core-browser-panel.spec.ts");
-    expect(title).toBe(
-      "Stale quarantined test in e2e/full/panels/core-browser-panel.spec.ts"
-    );
+    expect(title).toBe("Stale quarantined test in e2e/full/panels/core-browser-panel.spec.ts");
     expect(title.endsWith(".")).toBe(false);
   });
 });

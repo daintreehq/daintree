@@ -22,8 +22,7 @@ function stripComments(source) {
 // `[\s\S]*?` between the two keys tolerates the newline that wraps a long
 // description onto its own line; the backreferences allow single or double
 // quotes. The leading date is parsed separately from the captured description.
-const ANNOTATION_RE =
-  /type:\s*(['"])quarantine\1\s*,\s*description:\s*(['"])([\s\S]*?)\2/g;
+const ANNOTATION_RE = /type:\s*(['"])quarantine\1\s*,\s*description:\s*(['"])([\s\S]*?)\2/g;
 
 const DATE_RE = /^(\d{4}-\d{2}-\d{2})\b/;
 
@@ -107,7 +106,7 @@ export function buildIssueBody(specPath, staleEntries, runUrl) {
   const lines = [
     `\`${specPath}\` has quarantined annotations older than ${STALE_THRESHOLD_DAYS} days.`,
     "",
-    "Fix the spec and remove its `type: \"quarantine\"` annotation, or formally retire the test.",
+    'Fix the spec and remove its `type: "quarantine"` annotation, or formally retire the test.',
     "",
   ];
 
