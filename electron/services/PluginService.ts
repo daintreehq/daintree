@@ -237,23 +237,28 @@ function assertSettingsKey(pluginId: string, method: string, key: unknown): asse
 
 /**
  * Discriminate between the typed `registerHandler(channel, schema, handler)`
- * overload and the legacy `registerHandler(channel, handler)` overload. Bare
- * non-function values aren't enough — the legacy test path passes a string as
- * the handler to assert the "must be a function" error. A typed schema object
- * has both `args` and `result` ZodTypes, so checking for `.args` on a
- * non-function object is sufficient and lets the legacy validation error path
- * surface as before.
+ * overload and the legacy `registerHandler(channel, handler)` overload. A
+ * typed schema must expose `args` and `result` Zod-compatible types — we
+ * probe for a `safeParse` method on both rather than trusting structural
+ * shape alone, so a JS plugin author bypassing TypeScript can't slip a
+ * malformed `{ args: {}, result: ... }` past registration only to crash at
+ * dispatch with a raw `safeParse is not a function` TypeError outside the
+ * documented `SCHEMA_ERROR:` envelope.
  */
 function isChannelSchema(
   value: unknown
 ): value is PluginChannelSchema<unknown, unknown> {
+  if (typeof value !== "object" || value === null) return false;
+  if (!("args" in value) || !("result" in value)) return false;
+  const args = (value as { args: unknown }).args;
+  const result = (value as { result: unknown }).result;
   return (
-    typeof value === "object" &&
-    value !== null &&
-    "args" in value &&
-    "result" in value &&
-    typeof (value as { args: unknown }).args === "object" &&
-    (value as { args: unknown }).args !== null
+    typeof args === "object" &&
+    args !== null &&
+    typeof (args as { safeParse?: unknown }).safeParse === "function" &&
+    typeof result === "object" &&
+    result !== null &&
+    typeof (result as { safeParse?: unknown }).safeParse === "function"
   );
 }
 
@@ -1362,12 +1367,17 @@ export class PluginService {
           );
         }
         if (typedHandler !== undefined) {
-          this.registerHandler(
-            pluginId,
-            channel,
-            schemaOrHandler as PluginChannelSchema<unknown, unknown>,
-            typedHandler
-          );
+          // A three-argument call is the typed overload by definition; if the
+          // second arg isn't a schema, reject loudly instead of silently
+          // dropping the typed handler and registering the second arg as a
+          // legacy handler — that mismatch would look like a phantom no-op
+          // at first dispatch.
+          if (!isChannelSchema(schemaOrHandler)) {
+            throw new Error(
+              `Plugin "${pluginId}" registerHandler: second argument must be a channel schema { args, result } when a typed handler is provided`
+            );
+          }
+          this.registerHandler(pluginId, channel, schemaOrHandler, typedHandler);
         } else {
           this.registerHandler(pluginId, channel, schemaOrHandler as PluginIpcHandler);
         }

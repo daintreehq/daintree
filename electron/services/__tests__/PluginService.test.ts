@@ -2392,6 +2392,44 @@ describe("Plugin IPC handler registration", () => {
       expect(result).toBe("anonymous");
     });
 
+    it("passes Zod-parsed output (defaults / coercions) to the handler, not the raw payload", async () => {
+      const schema = {
+        args: z.object({
+          n: z.coerce.number().int(),
+          tag: z.string().default("auto"),
+        }),
+        result: z.object({ n: z.number(), tag: z.string() }),
+      };
+      const handler = vi.fn(async (_ctx, args: { n: number; tag: string }) => args);
+      typedService.registerHandler("acme.typed", "coerce", schema, handler);
+
+      // Dispatch with a string "n" (coerced) and no `tag` (defaulted).
+      const result = await typedService.dispatchHandler(
+        "acme.typed",
+        "coerce",
+        makeCtx("acme.typed"),
+        [{ n: "42" }]
+      );
+      expect(result).toEqual({ n: 42, tag: "auto" });
+      expect(handler).toHaveBeenCalledWith(expect.anything(), { n: 42, tag: "auto" });
+    });
+
+    it("rejects malformed schema at registration when args/result lack safeParse", () => {
+      expect(() =>
+        typedService.registerHandler(
+          "acme.typed",
+          "bad-schema",
+          // Missing `result` ZodType — bare object has no safeParse method.
+          { args: z.object({}), result: {} as unknown as z.ZodType<unknown> },
+          vi.fn()
+        )
+      ).toThrow(/Plugin handler must be a function|^PERMISSION_REQUIRED:/);
+      // Specifically, isChannelSchema returns false for missing safeParse,
+      // so the legacy path runs and the bare object is rejected as a
+      // non-function handler. Either way: malformed schema is rejected at
+      // registration time, not at dispatch.
+    });
+
     it("legacy untyped handler still dispatches alongside typed handlers on the same plugin", async () => {
       typedService.registerHandler(
         "acme.typed",
@@ -2850,7 +2888,11 @@ describe("Plugin unload lifecycle", () => {
 type CreateHostShape = (pluginId: string) => {
   host: {
     pluginId: string;
-    registerHandler: (channel: string, handler: (...args: unknown[]) => unknown) => void;
+    registerHandler: (
+      channel: string,
+      schemaOrHandler: unknown,
+      typedHandler?: (...args: unknown[]) => unknown
+    ) => void;
     broadcastToRenderer: (channel: string, payload: unknown) => void;
     registerForgeProvider: (descriptor: { id: string }, impl: unknown) => () => void;
   };
@@ -2906,6 +2948,23 @@ describe("createHost (plugin activation API)", () => {
     expect(() => host.broadcastToRenderer("bad:channel", null)).toThrow(
       "Plugin broadcast channel must be a string without colons"
     );
+  });
+
+  it("host.registerHandler rejects a 3-arg call where the second arg isn't a channel schema", async () => {
+    await writePlugin("mismatch-test", { name: "acme.mismatch", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.mismatch"
+    );
+
+    expect(() =>
+      // A typed handler was provided but the second arg is a function, not
+      // a schema — silently dropping the typed handler would phantom-no-op
+      // at dispatch, so this must throw.
+      host.registerHandler("ch", () => "legacy", () => "typed")
+    ).toThrow(/second argument must be a channel schema/);
   });
 
   it("revoked host rejects registerHandler and broadcastToRenderer calls", async () => {

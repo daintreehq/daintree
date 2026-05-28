@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { UseHostChannelResult } from "@shared/types/plugin-sdk-react";
 
 /**
@@ -27,6 +27,15 @@ export function useHostChannel<TArgs = unknown, TResult = unknown>(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const callIdRef = useRef(0);
+
+  // Reset the call counter when the channel target changes, so an in-flight
+  // call from the prior (pluginId, channel) can't resolve later and overwrite
+  // the new target's loading/error state with stale data.
+  useEffect(() => {
+    callIdRef.current = 0;
+    setLoading(false);
+    setError(null);
+  }, [pluginId, channel]);
 
   const invoke = useCallback(
     async (args: TArgs): Promise<TResult | undefined> => {
