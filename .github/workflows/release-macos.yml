@@ -306,16 +306,18 @@ jobs:
           MOUNT="$RUNNER_TEMP/dmg-mount"
           mkdir -p "$MOUNT"
           hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT" "$DMG"
+          # Ensure the mount is detached even if cp -R fails partway through;
+          # without the trap a failed copy strands the device and the next
+          # release run on a reusable runner would collide on the mountpoint.
+          trap 'hdiutil detach "$MOUNT" 2>/dev/null || true' EXIT
           APP_SRC=$(find "$MOUNT" -maxdepth 2 -name '*.app' | head -n 1)
           if [ -z "$APP_SRC" ]; then
             echo "::error::No .app bundle found inside DMG"
             ls -la "$MOUNT" || true
-            hdiutil detach "$MOUNT" || true
             exit 1
           fi
           APP_DST="$RUNNER_TEMP/Daintree.app"
           cp -R "$APP_SRC" "$APP_DST"
-          hdiutil detach "$MOUNT"
           # Headless CI can't dismiss a Gatekeeper prompt; clearing quarantine
           # is required even when the app is notarized.
           xattr -rd com.apple.quarantine "$APP_DST" || true

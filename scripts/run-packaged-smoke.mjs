@@ -83,7 +83,20 @@ function runPackagedSmokeOnce({ binaryPath, runIndex, runCount, timeoutMs, extra
         const cleanup = async () => {
           clearTimeout(timeoutTimer);
           if (hardKillTimer) clearTimeout(hardKillTimer);
-          await rm(userDataDir, { recursive: true, force: true });
+          // Swallow rm failures (Windows file locks held by a slow-exit
+          // child are the common case). Letting cleanup() throw would
+          // leave the outer Promise unresolved and hang the job until the
+          // workflow-level timeout fires — the temp dir is in $TMPDIR
+          // and the runner is ephemeral, so a stale dir is harmless.
+          try {
+            await rm(userDataDir, { recursive: true, force: true });
+          } catch (rmErr) {
+            console.warn(
+              `[PACKAGED-SMOKE] Cleanup: failed to remove ${userDataDir}: ${
+                rmErr instanceof Error ? rmErr.message : String(rmErr)
+              }`
+            );
+          }
         };
 
         const timeoutTimer = setTimeout(() => {
