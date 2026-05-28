@@ -3968,11 +3968,10 @@ describe("Plugin menu items broadcast", () => {
     // renderer treats it as authoritative.
     const service = new PluginService();
 
-    type S = PluginService & {
-      scheduleMenuItemsBroadcast: (complete: boolean) => void;
-    };
-    (service as S).scheduleMenuItemsBroadcast(false);
-    (service as S).scheduleMenuItemsBroadcast(true);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).scheduleMenuItemsBroadcast(false);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).scheduleMenuItemsBroadcast(true);
 
     await Promise.resolve();
     await Promise.resolve();
@@ -3991,10 +3990,8 @@ describe("Plugin menu items broadcast", () => {
   it("dispose() drops a menu items broadcast scheduled before disposal", async () => {
     const service = new PluginService();
 
-    type S = PluginService & {
-      scheduleMenuItemsBroadcast: (complete: boolean) => void;
-    };
-    (service as S).scheduleMenuItemsBroadcast(true);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).scheduleMenuItemsBroadcast(true);
     service.dispose();
 
     await Promise.resolve();
