@@ -84,10 +84,12 @@ export const CommandContributionSchema = z
   .strict();
 
 /**
- * Reserved contribution point. Shape is validated but the runtime does not
- * yet act on these entries — `PluginService` logs a warning and skips them.
- * The `experimental_` prefix signals that the shape may change before the
- * feature ships. See `docs/plugins/architecture.md`.
+ * View contribution. `location: "panel"` entries are registered as spawnable
+ * panel kinds at plugin load (`PluginService.loadPlugin`). `location: "sidebar"`
+ * is schema-valid but skipped at runtime — the sidebar surface is not yet
+ * implemented. The `experimental_` prefix on the contribution point signals
+ * that the shape may change before the feature ships. See
+ * `docs/plugins/architecture.md`.
  */
 export const ViewContributionSchema = z.object({
   id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),

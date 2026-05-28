@@ -120,9 +120,9 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 
 **Component registration** is covered by the **views** contribution point below — panels declare the slot, views provide the component.
 
-## Views — _Planned_
+## Views — _Shipped (panel location only)_
 
-Views are the React components that render inside a panel. They depend on Daintree's renderer plugin host, which is in active development. The manifest shape is validated but the `experimental_` prefix signals that it may change before the feature ships — use with awareness that the contract is not yet locked.
+Views are the React components that render inside a panel. At plugin load, each `experimental_views` entry with `location: "panel"` is registered as a spawnable panel kind (`{pluginId}.{view.id}`), so the user can summon it from the "New Panel…" palette. `location: "sidebar"` is schema-valid but skipped at runtime — the sidebar surface is not yet implemented. The renderer plugin host that mounts the actual React component is still in active development, so the `experimental_` prefix stays in place: the manifest shape may shift before the renderer half ships.
 
 ```json
 {

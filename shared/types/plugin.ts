@@ -77,9 +77,11 @@ export interface ContextMenuContribution {
 }
 
 /**
- * Reserved contribution point — validated by the manifest schema but ignored
- * at load time with a "not yet implemented" warning. The `experimental_`
- * prefix signals that the shape may change before the feature ships.
+ * View contribution location. `panel` registers the view as a spawnable panel
+ * kind at plugin load time. `sidebar` is schema-valid but skipped at runtime
+ * with a console warning — the sidebar surface is not yet implemented.
+ * The `experimental_` prefix on the contribution point signals that the
+ * shape may change before the feature ships.
  * See `docs/plugins/architecture.md` for the renderer host design.
  */
 export type ViewLocation = "panel" | "sidebar";

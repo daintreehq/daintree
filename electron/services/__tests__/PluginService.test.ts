@@ -4480,7 +4480,7 @@ describe("reserved contribution point warnings", () => {
     errorSpy.mockRestore();
   });
 
-  it("accepts a contributes.experimental_views entry and logs a 'not yet implemented' warning", async () => {
+  it("registers a contributes.experimental_views panel-location entry as a panel kind (#9289)", async () => {
     await writePlugin("views", {
       name: "acme.views",
       version: "1.0.0",
@@ -4501,10 +4501,113 @@ describe("reserved contribution point warnings", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "acme.views.main",
+        name: "Main",
+        iconId: "layout",
+        color: "var(--theme-category-orange)",
+        hasPty: false,
+        canRestart: false,
+        canConvert: false,
+        showInPalette: true,
+        extensionId: "acme.views",
+      })
+    );
+    const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(warnMessages.some((m: string) => m.includes("not yet implemented"))).toBe(false);
+  });
+
+  it("skips a contributes.experimental_views sidebar-location entry with a warning (#9289)", async () => {
+    await writePlugin("views-sidebar", {
+      name: "acme.views-sidebar",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        experimental_views: [
+          {
+            id: "side",
+            name: "Side",
+            componentPath: "./dist/side.js",
+            location: "sidebar",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(registerPanelKind).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining(
-        'Plugin "acme.views": contributes.experimental_views is not yet implemented'
+        'Plugin "acme.views-sidebar": view "side" location "sidebar" is not yet supported'
       )
+    );
+  });
+
+  it("skips a view whose componentPath escapes the plugin directory (#9289)", async () => {
+    await writePlugin("views-escape", {
+      name: "acme.views-escape",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        experimental_views: [
+          {
+            id: "evil",
+            name: "Evil",
+            componentPath: "../outside.js",
+            location: "panel",
+          },
+          {
+            id: "ok",
+            name: "OK",
+            componentPath: "./inside.js",
+            location: "panel",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Plugin "acme.views-escape": view "evil" componentPath escapes plugin directory'
+      )
+    );
+    expect(registerPanelKind).toHaveBeenCalledTimes(1);
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acme.views-escape.ok" })
+    );
+  });
+
+  it("forwards an explicit iconId on the view to registerPanelKind (#9289)", async () => {
+    await writePlugin("views-icon", {
+      name: "acme.views-icon",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        experimental_views: [
+          {
+            id: "g",
+            name: "Gauge",
+            componentPath: "./g.js",
+            location: "panel",
+            iconId: "gauge",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acme.views-icon.g", iconId: "gauge" })
     );
   });
 
@@ -4664,15 +4767,16 @@ describe("reserved contribution point warnings", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
+    // The panel contribution registers; the sidebar view is skipped with a warning.
     expect(registerPanelKind).toHaveBeenCalledTimes(1);
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("contributes.experimental_views is not yet implemented")
+      expect.stringContaining('view "main" location "sidebar" is not yet supported')
     );
     // experimental_mcpServers now reaches the supervisor instead of warning (#9233).
     expect(mockPluginMcpSupervisor.start).toHaveBeenCalledTimes(1);
   });
 
-  it("warns once per category regardless of entry count", async () => {
+  it("registers each panel-location view and warns only for sidebar entries (#9289)", async () => {
     await writePlugin("many", {
       name: "acme.many",
       version: "1.0.0",
@@ -4689,10 +4793,13 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    const viewWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
-      String(call[0]).includes("contributes.experimental_views is not yet implemented")
+    expect(registerPanelKind).toHaveBeenCalledTimes(2);
+    expect(registerPanelKind).toHaveBeenCalledWith(expect.objectContaining({ id: "acme.many.a" }));
+    expect(registerPanelKind).toHaveBeenCalledWith(expect.objectContaining({ id: "acme.many.c" }));
+    const sidebarWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
+      String(call[0]).includes('view "b" location "sidebar" is not yet supported')
     );
-    expect(viewWarnings).toHaveLength(1);
+    expect(sidebarWarnings).toHaveLength(1);
   });
 
   it("rejects a views entry with an invalid location at schema level", () => {

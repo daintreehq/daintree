@@ -56,6 +56,7 @@ import {
   onPanelKindUnregistered,
   getPluginPanelKinds,
 } from "../../shared/config/panelKindRegistry.js";
+import { PANEL_KIND_BRAND_COLORS } from "../../shared/theme/entityColors.js";
 import {
   registerToolbarButton,
   unregisterPluginToolbarButtons,
@@ -844,10 +845,31 @@ export class PluginService {
       registerPluginContextMenuItem(manifest.name, ctxMenu);
     }
 
-    if (manifest.contributes.experimental_views.length > 0) {
-      console.warn(
-        `[PluginService] Plugin "${manifest.name}": contributes.experimental_views is not yet implemented and will be ignored`
-      );
+    for (const view of manifest.contributes.experimental_views) {
+      if (view.location !== "panel") {
+        console.warn(
+          `[PluginService] Plugin "${manifest.name}": view "${view.id}" location "${view.location}" is not yet supported, skipping`
+        );
+        continue;
+      }
+      const resolvedComponent = this.resolveEntryPath(pluginDir, view.componentPath);
+      if (!resolvedComponent) {
+        console.warn(
+          `[PluginService] Plugin "${manifest.name}": view "${view.id}" componentPath escapes plugin directory, skipping`
+        );
+        continue;
+      }
+      registerPanelKind({
+        id: `${manifest.name}.${view.id}`,
+        name: view.name,
+        iconId: view.iconId ?? "layout",
+        color: PANEL_KIND_BRAND_COLORS.plugin,
+        hasPty: false,
+        canRestart: false,
+        canConvert: false,
+        showInPalette: true,
+        extensionId: manifest.name,
+      });
     }
 
     if (manifest.contributes.experimental_mcpServers.length > 0) {
