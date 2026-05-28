@@ -36,9 +36,13 @@ describe("ProjectStore recipe reconciliation", () => {
     projectId = "a".repeat(64);
 
     // Override the userData path so ProjectFileStore writes into tmpDir
-    // rather than Electron's real userData.
+    // rather than Electron's real userData. The inner ProjectFileStore captures
+    // its dir at construction, so override it too — otherwise fileStore writes
+    // to the shared os.tmpdir()/projects path and leaks recipes across runs.
     store = new ProjectStore();
     (store as unknown as { projectsConfigDir: string }).projectsConfigDir = tmpDir;
+    (store as unknown as { fileStore: { projectsConfigDir: string } }).fileStore.projectsConfigDir =
+      tmpDir;
 
     await store.initialize();
   });
@@ -273,6 +277,102 @@ describe("ProjectStore recipe reconciliation", () => {
     expect(fs2).toHaveLength(1);
     expect(fs2[0]!.id).toBe(recipe.id);
   });
+
+  it("returns an empty collision list when nothing collides", async () => {
+    const recipe = makeRecipe({ id: "recipe-opaque-uuid", name: "Opaque", scope: "inrepo" });
+    await seedInRepo(recipe);
+
+    const collisions = await store.reconcileProjectRecipes(projectPath, projectId);
+    expect(collisions).toEqual([]);
+  });
+
+  it("tags loaded in-repo recipes with scope 'inrepo' (opaque-id recipe detected without prefix)", async () => {
+    const recipe = makeRecipe({ id: "recipe-opaque-uuid", name: "Opaque" });
+    await seedInRepo(recipe);
+
+    const inr = await readInRepo();
+    expect(inr).toHaveLength(1);
+    expect(inr[0]!.scope).toBe("inrepo");
+
+    // Reconcile must treat it as in-repo (case 1/2) via scope, not the id prefix.
+    await store.reconcileProjectRecipes(projectPath, projectId);
+    const fs2 = await readFileStore();
+    expect(fs2.map((r) => r.id)).toContain("recipe-opaque-uuid");
+  });
+
+  it("a legacy file with no id gets a deterministic inrepo- id and is not rewritten on read", async () => {
+    const recipesDir = path.join(projectPath, ".daintree", "recipes");
+    await fs.mkdir(recipesDir, { recursive: true });
+    const filePath = path.join(recipesDir, "legacy.json");
+    const raw =
+      JSON.stringify(
+        { name: "Legacy", terminals: [{ type: "terminal", command: "echo hi" }], createdAt: 1 },
+        null,
+        2
+      ) + "\n";
+    await fs.writeFile(filePath, raw, "utf-8");
+
+    const first = await store.readInRepoRecipes(projectPath);
+    expect(first).toHaveLength(1);
+    expect(first[0]!.id).toBe("inrepo-legacy");
+    expect(first[0]!.scope).toBe("inrepo");
+
+    // Deterministic across reads, and reading never rewrites the file (a random
+    // UUID per read would churn the id and dirty teammates' working trees).
+    const second = await store.readInRepoRecipes(projectPath);
+    expect(second[0]!.id).toBe("inrepo-legacy");
+    expect(await fs.readFile(filePath, "utf-8")).toBe(raw);
+  });
+
+  it("deduplicates two in-repo files that share the same opaque id (keeps one, no silent collapse)", async () => {
+    const recipesDir = path.join(projectPath, ".daintree", "recipes");
+    await fs.mkdir(recipesDir, { recursive: true });
+    const mk = (name: string, command: string) =>
+      JSON.stringify(
+        {
+          id: "recipe-dup",
+          name,
+          scope: "inrepo",
+          terminals: [{ type: "terminal", command }],
+          createdAt: 1,
+        },
+        null,
+        2
+      ) + "\n";
+    await fs.writeFile(path.join(recipesDir, "a.json"), mk("A", "echo a"), "utf-8");
+    await fs.writeFile(path.join(recipesDir, "b.json"), mk("B", "echo b"), "utf-8");
+
+    const inr = await store.readInRepoRecipes(projectPath);
+    // Only one entry survives — the shared id is not allowed to silently
+    // overwrite the hash map / collapse during reconciliation.
+    expect(inr).toHaveLength(1);
+    expect(inr[0]!.id).toBe("recipe-dup");
+  });
+
+  it("filename collision: the un-promotable recipe is kept (not dropped) and the collision is returned", async () => {
+    // Two distinct project-local recipes whose names slugify to the same
+    // filename — only one can own .daintree/recipes/my-recipe.json.
+    const a = makeRecipe({ id: "recipe-a", name: "My Recipe", projectId });
+    const b = makeRecipe({ id: "recipe-b", name: "my recipe", projectId });
+    await seedFileStore([a, b]);
+
+    const collisions = await store.reconcileProjectRecipes(projectPath, projectId);
+
+    expect(collisions).toHaveLength(1);
+    expect(collisions[0]!.filename).toBe("my-recipe.json");
+    expect([collisions[0]!.keptId, collisions[0]!.droppedId].sort()).toEqual([
+      "recipe-a",
+      "recipe-b",
+    ]);
+
+    // The loser is NOT silently dropped — both survive in ProjectFileStore.
+    const fs2 = await readFileStore();
+    expect(fs2.map((r) => r.id).sort()).toEqual(["recipe-a", "recipe-b"]);
+
+    // Exactly one was promoted to .daintree/.
+    const inr = await readInRepo();
+    expect(inr).toHaveLength(1);
+  });
 });
 
 describe("ProjectStore.writeInRepoRecipeChecked (in-repo recipe staleness guard, #9186)", () => {
@@ -285,6 +385,8 @@ describe("ProjectStore.writeInRepoRecipeChecked (in-repo recipe staleness guard,
     projectPath = path.join(tmpDir, "repo");
     store = new ProjectStore();
     (store as unknown as { projectsConfigDir: string }).projectsConfigDir = tmpDir;
+    (store as unknown as { fileStore: { projectsConfigDir: string } }).fileStore.projectsConfigDir =
+      tmpDir;
     await store.initialize();
   });
 
@@ -372,9 +474,10 @@ describe("ProjectStore.writeInRepoRecipeChecked (in-repo recipe staleness guard,
     const original = await fs.readFile(oldPath, "utf-8");
     await fs.writeFile(oldPath, original.replace("Old Name", "External Old Name"));
 
+    // Ids are stable across renames now — only the name (and thus filename)
+    // changes. The old-name file's hash was cached under this same id.
     const renamed = {
       ...recipe,
-      id: stableInRepoId("New Name"),
       name: "New Name",
     };
     await expect(
@@ -398,7 +501,6 @@ describe("ProjectStore.writeInRepoRecipeChecked (in-repo recipe staleness guard,
 
     const renamed = {
       ...recipe,
-      id: stableInRepoId("New Forced"),
       name: "New Forced",
     };
     await expect(
@@ -409,6 +511,24 @@ describe("ProjectStore.writeInRepoRecipeChecked (in-repo recipe staleness guard,
     ).resolves.toBeUndefined();
     const newPath = path.join(projectPath, ".daintree", "recipes", "new-forced.json");
     expect(JSON.parse(await fs.readFile(newPath, "utf-8")).name).toBe("New Forced");
+  });
+
+  it("rename moves the file but persists the original stable id on disk", async () => {
+    const recipe = makeRecipe({ id: "recipe-stable-uuid", name: "Before", scope: "inrepo" });
+    await store.writeInRepoRecipe(projectPath, recipe);
+
+    const renamed = { ...recipe, name: "After" };
+    await store.writeInRepoRecipeChecked(projectPath, renamed, { previousName: "Before" });
+    // The IPC handler deletes the old-name file after a rename; emulate that.
+    await store.deleteInRepoRecipe(projectPath, "Before");
+
+    const oldPath = path.join(projectPath, ".daintree", "recipes", "before.json");
+    const newPath = path.join(projectPath, ".daintree", "recipes", "after.json");
+    await expect(fs.access(oldPath)).rejects.toThrow();
+    const onDisk = JSON.parse(await fs.readFile(newPath, "utf-8"));
+    expect(onDisk.id).toBe("recipe-stable-uuid");
+    expect(onDisk.name).toBe("After");
+    expect(onDisk.scope).toBe("inrepo");
   });
 
   it("readInRepoRecipes populates the hash cache so a follow-up edit can proceed", async () => {

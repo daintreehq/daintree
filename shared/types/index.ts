@@ -89,6 +89,7 @@ export type {
   RecipeTerminalType,
   RecipeTerminal,
   TerminalRecipe,
+  RecipeNameCollision,
   RunCommand,
   ProjectSettings,
   ProjectTerminalSettings,

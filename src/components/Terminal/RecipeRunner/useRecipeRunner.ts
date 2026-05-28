@@ -371,10 +371,11 @@ export function useRecipeRunner({
     (recipeId: string) => {
       const recipe = getRecipeById(recipeId);
       if (!recipe) return;
-      // Pick a name whose stableInRepoId doesn't collide with any existing recipe —
-      // otherwise duplicating an in-repo recipe twice silently overwrites the first.
-      const existingIds = new Set(allRecipes.map((r) => r.id));
-      const copyName = nextDuplicateName(recipe.name, existingIds);
+      // Pick a name that doesn't collide with any existing recipe name —
+      // otherwise duplicating a recipe twice produces two same-named copies
+      // that slug to the same on-disk filename and overwrite each other.
+      const existingNames = new Set(allRecipes.map((r) => r.name));
+      const copyName = nextDuplicateName(recipe.name, existingNames);
       void createRecipe(
         recipe.projectId,
         copyName,

@@ -16,8 +16,9 @@ import { generateAgentCommand } from "@shared/types";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
-import { stableInRepoId, isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { isInRepoRecipeId, safeRecipeFilename } from "@shared/utils/recipeFilename";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { isClientAppError } from "@/utils/clientAppError";
 import { useRecipeConflictStore } from "@/store/recipeConflictStore";
@@ -214,16 +215,18 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         : {}),
     });
     try {
-      const [globalRecipesRaw, projectRecipesRaw, inRepoRecipesRaw] = await Promise.all([
+      const [globalRecipesRaw, projectRecipesResult, inRepoRecipesRaw] = await Promise.all([
         globalRecipesClient.getRecipes(),
-        projectClient.getRecipes(projectId),
+        projectClient
+          .getRecipes(projectId)
+          .catch(() => ({ recipes: [] as TerminalRecipe[], collisions: [] })),
         projectClient.getInRepoRecipes(projectId).catch(() => [] as TerminalRecipe[]),
       ]);
       if (requestId !== loadRecipesRequestId || get().currentProjectId !== projectId) {
         return;
       }
       const globalRecipes = globalRecipesRaw.map(stripSessionOverridesFromRecipe);
-      const projectRecipes = projectRecipesRaw.map(stripSessionOverridesFromRecipe);
+      const projectRecipes = projectRecipesResult.recipes.map(stripSessionOverridesFromRecipe);
       const inRepoRecipes = inRepoRecipesRaw.map(stripSessionOverridesFromRecipe);
       set({
         globalRecipes,
@@ -232,6 +235,26 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         recipes: mergeRecipes(globalRecipes, projectRecipes, inRepoRecipes),
         isLoading: false,
       });
+      // A recipe couldn't be promoted to the shared repo because a different
+      // recipe already owns its filename slug. Route to the inbox (low
+      // priority, project-scoped supersede) instead of a console-only log:
+      // it's a non-urgent, ignorable conflict whose fix (rename) lives in the
+      // recipe manager, so the least-restricted surface is correct.
+      const collisions = projectRecipesResult.collisions;
+      if (collisions.length > 0) {
+        const first = collisions[0]!;
+        notify({
+          type: "warning",
+          priority: "low",
+          supersedeKey: `recipe-name-collision:${projectId}`,
+          title: "Recipe name conflict",
+          message:
+            collisions.length > 1
+              ? `${collisions.length} recipes share a filename with another recipe and couldn't be saved to the repo. Rename them to keep each one.`
+              : `"${first.droppedName}" shares the filename "${first.filename}" with another recipe and couldn't be saved to the repo. Rename one to keep both.`,
+          context: { eventKind: "settings" },
+        });
+      }
     } catch (error) {
       if (requestId !== loadRecipesRequestId || get().currentProjectId !== projectId) {
         return;
@@ -264,7 +287,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const isGlobal = projectId === undefined;
     const newRecipe: TerminalRecipe = {
-      id: isGlobal ? `recipe-${crypto.randomUUID()}` : stableInRepoId(name),
+      id: `recipe-${crypto.randomUUID()}`,
       name,
       projectId: isGlobal ? undefined : projectId,
       worktreeId: isGlobal ? undefined : worktreeId,
@@ -272,6 +295,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       createdAt: Date.now(),
       showInEmptyState,
       autoAssign,
+      ...(isGlobal ? {} : { scope: "inrepo" as const }),
     };
 
     const prevGlobal = get().globalRecipes;
@@ -321,22 +345,20 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     }
 
     const recipe = recipes[index]!;
-    const isInRepo = isInRepoRecipeId(id);
+    const isInRepo = isInRepoRecipeId(recipe);
     const isGlobal = !isInRepo && recipe.projectId === undefined;
     const sanitizedTerminals = updates.terminals?.map(sanitizeRecipeTerminal);
     const sanitizedUpdates = sanitizedTerminals
       ? { ...updates, terminals: sanitizedTerminals }
       : updates;
 
-    // For in-repo recipes with a name change, compute the new stable ID
-    const nameChanged = isInRepo && updates.name && stableInRepoId(updates.name) !== id;
-    const newId = nameChanged ? stableInRepoId(updates.name!) : id;
-
+    // The id is opaque and stable — a rename no longer recomputes it, so usage
+    // history and the on-disk file association survive renames (#9195).
     const updatedRecipe: TerminalRecipe = {
       ...recipe,
       shadowedBy: undefined,
       ...sanitizedUpdates,
-      id: newId,
+      id,
       name: sanitizedUpdates.name ?? recipe.name,
       terminals: sanitizedTerminals ?? recipe.terminals,
     };
@@ -447,7 +469,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       throw new Error(`Recipe ${id} not found`);
     }
 
-    const isInRepo = isInRepoRecipeId(id);
+    const isInRepo = isInRepoRecipeId(recipe);
     const isGlobal = !isInRepo && recipe.projectId === undefined;
     const prevGlobal = get().globalRecipes;
     const prevProject = get().projectRecipes;
@@ -488,14 +510,27 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
   saveToRepo: async (recipeId, deleteOriginal = false) => {
     const recipe = get().recipes.find((r) => r.id === recipeId);
     if (!recipe) throw new Error(`Recipe ${recipeId} not found`);
-    if (isInRepoRecipeId(recipeId)) throw new Error("Recipe is already in-repo");
+    if (isInRepoRecipeId(recipe)) throw new Error("Recipe is already in-repo");
 
     const currentProjectId = get().currentProjectId;
     if (!currentProjectId) throw new Error("No current project");
 
     const isGlobal = recipe.projectId === undefined;
     const { projectId: _, worktreeId: _w, shadowedBy: _s, ...rest } = recipe;
-    const promoted: TerminalRecipe = { ...rest, id: stableInRepoId(recipe.name) };
+    // Reuse the id of an existing in-repo recipe that maps to the same on-disk
+    // filename so a repeat promotion is an idempotent update rather than a
+    // duplicate or an on-disk stale conflict. Compare by filename slug, not the
+    // raw name, since "My Recipe"/"my recipe" share my-recipe.json. Otherwise
+    // mint a fresh opaque id.
+    const targetFilename = safeRecipeFilename(recipe.name);
+    const existingInRepoId = get().inRepoRecipes.find(
+      (r) => safeRecipeFilename(r.name) === targetFilename
+    )?.id;
+    const promoted: TerminalRecipe = {
+      ...rest,
+      id: existingInRepoId ?? `recipe-${crypto.randomUUID()}`,
+      scope: "inrepo",
+    };
 
     const prevGlobal = get().globalRecipes;
     const prevProject = get().projectRecipes;
@@ -914,7 +949,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     const isGlobal = projectId === undefined;
     const recipeName = String(recipe.name);
     const importedRecipe: TerminalRecipe = {
-      id: isGlobal ? `recipe-${crypto.randomUUID()}` : stableInRepoId(recipeName),
+      id: `recipe-${crypto.randomUUID()}`,
       name: recipeName,
       projectId: isGlobal ? undefined : projectId,
       worktreeId: isGlobal
@@ -926,6 +961,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       createdAt: Date.now(),
       showInEmptyState:
         typeof recipe.showInEmptyState === "boolean" ? recipe.showInEmptyState : false,
+      ...(isGlobal ? {} : { scope: "inrepo" as const }),
     };
 
     const prevGlobal = get().globalRecipes;

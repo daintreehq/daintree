@@ -158,7 +158,7 @@ export function RecipeManager({
 
   const renderRecipeRow = (recipe: TerminalRecipe, readOnly = false, isShadowed = false) => {
     const exported = exportFeedback === recipe.id;
-    const isGlobal = !isInRepoRecipeId(recipe.id) && recipe.projectId === undefined;
+    const isGlobal = !isInRepoRecipeId(recipe) && recipe.projectId === undefined;
     return (
       <div
         key={recipe.id}
@@ -225,7 +225,7 @@ export function RecipeManager({
                 <TooltipContent side="bottom">Edit recipe</TooltipContent>
               </Tooltip>
             )}
-            {!isInRepoRecipeId(recipe.id) && currentProject && (
+            {!isInRepoRecipeId(recipe) && currentProject && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button

@@ -16,9 +16,10 @@ const {
   deleteInRepoRecipeMock,
   exportRecipeToFileMock,
   importRecipeFromFileMock,
+  notifyMock,
 } = vi.hoisted(() => ({
   addRecipeMock: vi.fn().mockResolvedValue(undefined),
-  getRecipesMock: vi.fn().mockResolvedValue([]),
+  getRecipesMock: vi.fn().mockResolvedValue({ recipes: [], collisions: [] }),
   updateRecipeMock: vi.fn().mockResolvedValue(undefined),
   deleteRecipeMock: vi.fn().mockResolvedValue(undefined),
   addTerminalMock: vi.fn().mockResolvedValue(undefined),
@@ -32,6 +33,11 @@ const {
   deleteInRepoRecipeMock: vi.fn().mockResolvedValue(undefined),
   exportRecipeToFileMock: vi.fn().mockResolvedValue(true),
   importRecipeFromFileMock: vi.fn().mockResolvedValue(null),
+  notifyMock: vi.fn(),
+}));
+
+vi.mock("@/lib/notify", () => ({
+  notify: notifyMock,
 }));
 
 vi.mock("@/clients", () => ({
@@ -297,7 +303,7 @@ describe("recipeStore", () => {
         createdAt: 1000,
       };
       globalGetRecipesMock.mockResolvedValueOnce([]);
-      getRecipesMock.mockResolvedValueOnce([]);
+      getRecipesMock.mockResolvedValueOnce({ recipes: [], collisions: [] });
       getInRepoRecipesMock.mockResolvedValueOnce([contaminatedRecipe]);
 
       await useRecipeStore.getState().loadRecipes("project-1");
@@ -322,7 +328,7 @@ describe("recipeStore", () => {
 
     const recipeId = useRecipeStore.getState().recipes[0]?.id;
     expect(recipeId).toBeTruthy();
-    expect(recipeId).toMatch(/^inrepo-/);
+    expect(recipeId).toMatch(/^recipe-/);
 
     updateInRepoRecipeMock.mockClear();
     await useRecipeStore.getState().updateRecipe(recipeId!, {
@@ -945,7 +951,7 @@ describe("recipeStore", () => {
       };
 
       globalGetRecipesMock.mockResolvedValueOnce([globalRecipe]);
-      getRecipesMock.mockResolvedValueOnce([projectRecipe]);
+      getRecipesMock.mockResolvedValueOnce({ recipes: [projectRecipe], collisions: [] });
 
       await useRecipeStore.getState().loadRecipes("project-1");
 
@@ -999,7 +1005,8 @@ describe("recipeStore", () => {
       const state = useRecipeStore.getState();
       expect(state.inRepoRecipes).toHaveLength(1);
       expect(state.recipes).toHaveLength(1);
-      expect(state.recipes[0]?.id).toMatch(/^inrepo-/);
+      expect(state.recipes[0]?.scope).toBe("inrepo");
+      expect(state.recipes[0]?.id).toMatch(/^recipe-/);
     });
 
     it("updateRecipe routes global recipes to globalRecipesClient", async () => {
@@ -1144,7 +1151,7 @@ describe("recipeStore", () => {
         createdAt: 500,
       };
       globalGetRecipesMock.mockResolvedValueOnce([]);
-      getRecipesMock.mockResolvedValueOnce([]);
+      getRecipesMock.mockResolvedValueOnce({ recipes: [], collisions: [] });
       getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
 
       await useRecipeStore.getState().loadRecipes("project-1");
@@ -1153,6 +1160,79 @@ describe("recipeStore", () => {
       expect(state.inRepoRecipes).toHaveLength(1);
       expect(state.recipes).toHaveLength(1);
       expect(state.recipes[0]?.id).toBe("inrepo-test");
+    });
+
+    it("createRecipe assigns an opaque UUID id (not name-derived) and inrepo scope", async () => {
+      await useRecipeStore
+        .getState()
+        .createRecipe("project-1", "Team Recipe", undefined, [
+          { type: "terminal", title: "Shell", env: {} },
+        ]);
+
+      expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
+      const persisted = updateInRepoRecipeMock.mock.calls[0]?.[1];
+      expect(persisted.scope).toBe("inrepo");
+      expect(persisted.id).toMatch(/^recipe-/);
+      expect(persisted.id.startsWith("inrepo-")).toBe(false);
+    });
+
+    it("updateRecipe preserves the opaque id across a rename", async () => {
+      const inRepoRecipe = {
+        id: "recipe-opaque-abc",
+        name: "Before",
+        scope: "inrepo" as const,
+        terminals: [{ type: "terminal" as const, title: "Shell", env: {} }],
+        createdAt: 500,
+      };
+      useRecipeStore.setState({
+        inRepoRecipes: [inRepoRecipe],
+        globalRecipes: [],
+        projectRecipes: [],
+        recipes: [inRepoRecipe],
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore.getState().updateRecipe("recipe-opaque-abc", { name: "After" });
+
+      const state = useRecipeStore.getState();
+      // Id is unchanged (detected as in-repo via scope, not the id prefix).
+      expect(state.inRepoRecipes[0]?.id).toBe("recipe-opaque-abc");
+      expect(state.inRepoRecipes[0]?.name).toBe("After");
+      expect(updateInRepoRecipeMock.mock.calls[0]?.[1].id).toBe("recipe-opaque-abc");
+    });
+
+    it("loadRecipes surfaces a filename collision via a low-priority notification", async () => {
+      globalGetRecipesMock.mockResolvedValueOnce([]);
+      getRecipesMock.mockResolvedValueOnce({
+        recipes: [],
+        collisions: [
+          {
+            filename: "shared.json",
+            keptId: "recipe-a",
+            droppedId: "recipe-b",
+            droppedName: "Shared",
+          },
+        ],
+      });
+      getInRepoRecipesMock.mockResolvedValueOnce([]);
+
+      await useRecipeStore.getState().loadRecipes("project-1");
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const payload = notifyMock.mock.calls[0]?.[0];
+      expect(payload.type).toBe("warning");
+      expect(payload.priority).toBe("low");
+      expect(payload.title).toBe("Recipe name conflict");
+    });
+
+    it("loadRecipes does not notify when there are no collisions", async () => {
+      globalGetRecipesMock.mockResolvedValueOnce([]);
+      getRecipesMock.mockResolvedValueOnce({ recipes: [], collisions: [] });
+      getInRepoRecipesMock.mockResolvedValueOnce([]);
+
+      await useRecipeStore.getState().loadRecipes("project-1");
+
+      expect(notifyMock).not.toHaveBeenCalled();
     });
 
     it("in-repo recipes shadow project-local recipes with same name", async () => {
@@ -1170,7 +1250,7 @@ describe("recipeStore", () => {
         createdAt: 200,
       };
       globalGetRecipesMock.mockResolvedValueOnce([]);
-      getRecipesMock.mockResolvedValueOnce([projectRecipe]);
+      getRecipesMock.mockResolvedValueOnce({ recipes: [projectRecipe], collisions: [] });
       getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
 
       await useRecipeStore.getState().loadRecipes("proj-1");
@@ -1206,7 +1286,7 @@ describe("recipeStore", () => {
         createdAt: 200,
       };
       globalGetRecipesMock.mockResolvedValueOnce([globalRecipe]);
-      getRecipesMock.mockResolvedValueOnce([projectRecipe]);
+      getRecipesMock.mockResolvedValueOnce({ recipes: [projectRecipe], collisions: [] });
       getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
 
       await useRecipeStore.getState().loadRecipes("proj-1");
@@ -1236,7 +1316,7 @@ describe("recipeStore", () => {
         createdAt: 200,
       };
       globalGetRecipesMock.mockResolvedValueOnce([]);
-      getRecipesMock.mockResolvedValueOnce([projectRecipe]);
+      getRecipesMock.mockResolvedValueOnce({ recipes: [projectRecipe], collisions: [] });
       getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
 
       await useRecipeStore.getState().loadRecipes("proj-1");
@@ -1264,7 +1344,7 @@ describe("recipeStore", () => {
         createdAt: 200,
       };
       globalGetRecipesMock.mockResolvedValueOnce([]);
-      getRecipesMock.mockResolvedValueOnce([projectRecipe]);
+      getRecipesMock.mockResolvedValueOnce({ recipes: [projectRecipe], collisions: [] });
       getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
 
       await useRecipeStore.getState().loadRecipes("proj-1");
@@ -1466,7 +1546,7 @@ describe("recipeStore", () => {
         const store = await importConflictStore();
         updateInRepoRecipeMock.mockRejectedValueOnce(makeConflictError("Conflict Recipe"));
         globalGetRecipesMock.mockResolvedValueOnce([]);
-        getRecipesMock.mockResolvedValueOnce([]);
+        getRecipesMock.mockResolvedValueOnce({ recipes: [], collisions: [] });
         getInRepoRecipesMock.mockResolvedValueOnce([{ ...inRepoRecipe, name: "Disk Version" }]);
 
         const promise = useRecipeStore.getState().updateRecipe("inrepo-test", { name: "Mine" });
@@ -1540,7 +1620,7 @@ describe("recipeStore", () => {
       expect(useRecipeStore.getState().inRepoRecipes).toEqual([]);
     });
 
-    it("createRecipe with projectId generates inrepo- prefixed ID", async () => {
+    it("createRecipe with projectId generates an opaque id (not name-derived) with inrepo scope", async () => {
       await useRecipeStore
         .getState()
         .createRecipe(
@@ -1553,12 +1633,16 @@ describe("recipeStore", () => {
 
       const state = useRecipeStore.getState();
       expect(state.inRepoRecipes).toHaveLength(1);
-      expect(state.inRepoRecipes[0]?.id).toBe("inrepo-my-dev-setup");
+      // Id is opaque — independent of the (mutable) name — so a rename can't
+      // orphan it (#9195).
+      expect(state.inRepoRecipes[0]?.id).toMatch(/^recipe-/);
+      expect(state.inRepoRecipes[0]?.id).not.toContain("my-dev-setup");
+      expect(state.inRepoRecipes[0]?.scope).toBe("inrepo");
       expect(updateInRepoRecipeMock).toHaveBeenCalledWith(
         "project-1",
         expect.objectContaining({
-          id: "inrepo-my-dev-setup",
           name: "My Dev Setup",
+          scope: "inrepo",
         })
       );
     });
@@ -1619,13 +1703,15 @@ describe("recipeStore", () => {
       await useRecipeStore.getState().updateRecipe("inrepo-old-name", { name: "New Name" });
 
       expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
+      // The id is stable across the rename; previousName tells the main process
+      // which old-name file to delete.
       expect(updateInRepoRecipeMock).toHaveBeenCalledWith(
         "project-1",
-        expect.objectContaining({ id: "inrepo-new-name", name: "New Name" }),
+        expect.objectContaining({ id: "inrepo-old-name", name: "New Name" }),
         "Old Name"
       );
       const state = useRecipeStore.getState();
-      expect(state.inRepoRecipes[0]?.id).toBe("inrepo-new-name");
+      expect(state.inRepoRecipes[0]?.id).toBe("inrepo-old-name");
     });
 
     it("deleteRecipe routes in-repo recipes to deleteInRepoRecipe", async () => {
@@ -1672,7 +1758,8 @@ describe("recipeStore", () => {
 
       const state = useRecipeStore.getState();
       expect(state.inRepoRecipes).toHaveLength(1);
-      expect(state.inRepoRecipes[0]?.id).toMatch(/^inrepo-/);
+      expect(state.inRepoRecipes[0]?.id).toMatch(/^recipe-/);
+      expect(state.inRepoRecipes[0]?.scope).toBe("inrepo");
     });
 
     it("rename to same normalized name does not delete the file", async () => {
@@ -1779,14 +1866,15 @@ describe("recipeStore", () => {
 
       const state = useRecipeStore.getState();
       expect(state.inRepoRecipes).toHaveLength(1);
-      expect(state.inRepoRecipes[0]?.id).toBe("inrepo-my-global-recipe");
+      expect(state.inRepoRecipes[0]?.id).toMatch(/^recipe-/);
+      expect(state.inRepoRecipes[0]?.scope).toBe("inrepo");
       expect(state.inRepoRecipes[0]?.name).toBe("My Global Recipe");
       expect(state.inRepoRecipes[0]).not.toHaveProperty("projectId");
       expect(state.inRepoRecipes[0]).not.toHaveProperty("worktreeId");
       expect(state.globalRecipes).toHaveLength(1);
       expect(updateInRepoRecipeMock).toHaveBeenCalledWith(
         "project-1",
-        expect.objectContaining({ id: "inrepo-my-global-recipe" })
+        expect.objectContaining({ name: "My Global Recipe", scope: "inrepo" })
       );
       expect(globalDeleteRecipeMock).not.toHaveBeenCalled();
     });
@@ -1812,7 +1900,7 @@ describe("recipeStore", () => {
       const matching = state.recipes.filter((r) => r.name === "My Project Recipe");
       expect(matching).toHaveLength(2);
       const project = matching.find((r) => r.id === "project-recipe-1");
-      const inRepo = matching.find((r) => r.id === "inrepo-my-project-recipe");
+      const inRepo = matching.find((r) => r.scope === "inrepo");
       expect(project?.shadowedBy).toBe("My Project Recipe");
       expect(inRepo?.shadowedBy).toBeUndefined();
     });
@@ -1919,6 +2007,40 @@ describe("recipeStore", () => {
 
       const state = useRecipeStore.getState();
       expect(state.inRepoRecipes).toHaveLength(1);
+    });
+
+    it("reuses an existing in-repo id when promoting a filename-slug variant of an existing name", async () => {
+      const existingInRepo = {
+        id: "recipe-existing-abc",
+        name: "My Recipe",
+        scope: "inrepo" as const,
+        terminals: [{ type: "terminal" as const, env: {} }],
+        createdAt: 100,
+      };
+      const localVariant = {
+        id: "project-variant",
+        name: "my recipe", // slugs to the same my-recipe.json as "My Recipe"
+        projectId: "project-1",
+        terminals: [{ type: "terminal" as const, env: {} }],
+        createdAt: 200,
+      };
+      useRecipeStore.setState({
+        globalRecipes: [],
+        projectRecipes: [localVariant],
+        inRepoRecipes: [existingInRepo],
+        recipes: [localVariant, existingInRepo],
+        currentProjectId: "project-1",
+      });
+
+      await expect(
+        useRecipeStore.getState().saveToRepo("project-variant", false)
+      ).resolves.toBeUndefined();
+
+      // Reuses the existing in-repo id (same on-disk filename) — an idempotent
+      // update, not a duplicate that would hit an on-disk stale conflict.
+      const promoted = updateInRepoRecipeMock.mock.calls[0]?.[1];
+      expect(promoted.id).toBe("recipe-existing-abc");
+      expect(useRecipeStore.getState().inRepoRecipes).toHaveLength(1);
     });
   });
 

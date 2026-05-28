@@ -3,28 +3,31 @@ import fs from "fs/promises";
 import { CHANNELS } from "../channels.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { safeRecipeFilename } from "../../utils/recipeFilename.js";
-import { stableInRepoId } from "../../../shared/utils/recipeFilename.js";
 import type { HandlerDependencies } from "../types.js";
-import type { TerminalRecipe } from "../../types/index.js";
+import type { TerminalRecipe, RecipeNameCollision } from "../../types/index.js";
 import { typedHandle, typedHandleWithContext } from "../utils.js";
 import { assertNoSecretEnvValues, assertRecipeUsageFields } from "./recipeValidation.js";
 
 export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleProjectGetRecipes = async (projectId: string): Promise<TerminalRecipe[]> => {
+  const handleProjectGetRecipes = async (
+    projectId: string
+  ): Promise<{ recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] }> => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
     const project = projectStore.getProjectById(projectId);
+    let collisions: RecipeNameCollision[] = [];
     if (project) {
       try {
-        await projectStore.reconcileProjectRecipes(project.path, projectId);
+        collisions = await projectStore.reconcileProjectRecipes(project.path, projectId);
       } catch (error) {
         console.error(`[projectRecipes] Reconciliation failed for ${projectId}:`, error);
       }
     }
-    return projectStore.getRecipes(projectId);
+    const recipes = await projectStore.getRecipes(projectId);
+    return { recipes, collisions };
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_GET_RECIPES, handleProjectGetRecipes));
 
@@ -301,14 +304,16 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
       const match = inRepoRecipes.find((r) => r.name === recipeName);
       if (match) recipeId = match.id;
     } catch {
-      // If we can't read in-repo, fall back to the computed ID
+      // If we can't read in-repo, the ProjectFileStore mirror is cleaned up by
+      // reconciliation on next load (case 4: in-repo scope, no backing file).
     }
     await projectStore.deleteInRepoRecipe(project.path, recipeName);
-    try {
-      const targetId = recipeId ?? stableInRepoId(recipeName);
-      await projectStore.deleteRecipe(projectId, targetId);
-    } catch {
-      // Best-effort: reconciliation on next load will catch any misses
+    if (recipeId !== null) {
+      try {
+        await projectStore.deleteRecipe(projectId, recipeId);
+      } catch {
+        // Best-effort: reconciliation on next load will catch any misses.
+      }
     }
   };
   handlers.push(

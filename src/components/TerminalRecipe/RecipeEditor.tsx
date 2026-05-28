@@ -109,9 +109,7 @@ export function RecipeEditor({
       setTerminals(nextTerminals);
       setShowInEmptyState(nextShowInEmptyState);
       setAutoAssign(nextAutoAssign);
-      setScope(
-        isInRepoRecipeId(recipe.id) || recipe.projectId !== undefined ? "project" : "global"
-      );
+      setScope(isInRepoRecipeId(recipe) || recipe.projectId !== undefined ? "project" : "global");
       initialStateRef.current = serializeEditorState(
         recipe.name,
         nextTerminals,
@@ -289,7 +287,7 @@ export function RecipeEditor({
           </label>
           {recipe ? (
             <div className="px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text text-sm opacity-75">
-              {isInRepoRecipeId(recipe.id) || recipe.projectId !== undefined
+              {isInRepoRecipeId(recipe) || recipe.projectId !== undefined
                 ? "Project"
                 : "Global (all projects)"}
             </div>

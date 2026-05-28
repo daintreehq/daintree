@@ -2,7 +2,13 @@ import type { StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
 import type { VoiceInputStatus } from "../voice.js";
 import type { WorktreeState } from "../worktree.js";
-import type { Project, ProjectSettings, RunCommand, TerminalRecipe } from "../project.js";
+import type {
+  Project,
+  ProjectSettings,
+  RecipeNameCollision,
+  RunCommand,
+  TerminalRecipe,
+} from "../project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type { PushProgressEvent } from "./gitPush.js";
 import type { AgentSettings } from "../agentSettings.js";
@@ -636,7 +642,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "project:get-recipes": {
     args: [projectId: string];
-    result: TerminalRecipe[];
+    result: { recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] };
   };
   "project:save-recipes": {
     args: [payload: { projectId: string; recipes: TerminalRecipe[] }];

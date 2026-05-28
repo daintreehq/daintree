@@ -7,6 +7,7 @@ import type { WorktreeState } from "../worktree.js";
 import type {
   Project,
   ProjectSettings,
+  RecipeNameCollision,
   RunCommand,
   TerminalRecipe,
   TerminalSnapshot,
@@ -520,7 +521,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onCloneProgress(callback: (event: CloneRepoProgressEvent) => void): () => void;
     /** Cancel an in-progress clone operation */
     cancelClone(): Promise<void>;
-    getRecipes(projectId: string): Promise<TerminalRecipe[]>;
+    getRecipes(
+      projectId: string
+    ): Promise<{ recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] }>;
     saveRecipes(projectId: string, recipes: TerminalRecipe[]): Promise<void>;
     addRecipe(projectId: string, recipe: TerminalRecipe): Promise<void>;
     updateRecipe(

@@ -49,12 +49,25 @@ describe("stableInRepoId", () => {
 });
 
 describe("isInRepoRecipeId", () => {
-  it("returns true for inrepo- prefixed IDs", () => {
+  it("returns true for legacy inrepo- prefixed IDs (string form)", () => {
     expect(isInRepoRecipeId("inrepo-my-recipe")).toBe(true);
   });
 
-  it("returns false for other IDs", () => {
+  it("returns false for other IDs (string form)", () => {
     expect(isInRepoRecipeId("recipe-12345-abc")).toBe(false);
     expect(isInRepoRecipeId("global-1")).toBe(false);
+  });
+
+  it("returns true for a recipe with scope 'inrepo' even when the id is opaque", () => {
+    expect(isInRepoRecipeId({ id: "recipe-12345-abc", scope: "inrepo" })).toBe(true);
+  });
+
+  it("returns true for a legacy recipe object (inrepo- id, no scope)", () => {
+    expect(isInRepoRecipeId({ id: "inrepo-my-recipe" })).toBe(true);
+  });
+
+  it("returns false for a recipe object with an opaque id and no in-repo scope", () => {
+    expect(isInRepoRecipeId({ id: "recipe-12345-abc" })).toBe(false);
+    expect(isInRepoRecipeId({ id: "recipe-12345-abc", scope: undefined })).toBe(false);
   });
 });

@@ -16,7 +16,7 @@ const projectStoreMock = vi.hoisted(() => ({
   readInRepoRecipes: vi.fn(() => []),
   writeInRepoRecipe: vi.fn(),
   deleteInRepoRecipe: vi.fn(),
-  reconcileProjectRecipes: vi.fn(),
+  reconcileProjectRecipes: vi.fn(() => []),
 }));
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock, dialog: {} }));
