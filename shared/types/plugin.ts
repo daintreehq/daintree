@@ -110,6 +110,46 @@ export interface McpServerContribution {
   env?: Record<string, string>;
 }
 
+/**
+ * Per-capability scope binding that attenuates the compound-capability lattice
+ * elevation in `PluginService.validateAndBuildActionDescriptor`. The lattice
+ * elevates `effectiveDanger` to `"confirm"` when a plugin pairs a sensitive
+ * source (sensitive reads, or `network:fetch` as a remote control channel)
+ * with a sink (`network:fetch`, local writes, `shell:exec`). Tightly-bound
+ * sinks skip elevation — a plugin that proves its `network:fetch` only talks
+ * to one explicit HTTPS API is not a generic exfiltration channel.
+ *
+ * Wildcards (`*`, `**`) are rejected at schema parse time so a tightly-bound
+ * declaration cannot smuggle a permissive value past the manifest gate.
+ * SSRF targets (loopback, link-local, RFC1918) and embedded credentials are
+ * also rejected at parse time. See `electron/schemas/plugin.ts` for the
+ * canonical validation rules.
+ */
+export interface PluginNetworkScope {
+  /**
+   * Allowlist of HTTPS URLs the plugin's `network:fetch` capability may talk
+   * to. Each entry must parse as a `https:` URL with a multi-segment hostname,
+   * no embedded credentials, no wildcards, and no private/loopback target.
+   */
+  allowedUrls: string[];
+}
+
+export interface PluginFsScope {
+  /**
+   * Allowlist of absolute filesystem paths the plugin's `fs:*` capabilities
+   * may touch. Each entry must be an absolute path containing no `..` segment
+   * and no `*`/`**` glob (literal-path allowlist only). Reserved for future
+   * compound rules that attenuate fs sinks; the current lattice only consults
+   * `scopes.network` for compound elevation.
+   */
+  allowedPaths: string[];
+}
+
+export interface PluginManifestScopes {
+  network?: PluginNetworkScope;
+  fs?: PluginFsScope;
+}
+
 export interface PluginManifest {
   name: string;
   version: string;
@@ -120,6 +160,13 @@ export interface PluginManifest {
     daintree?: string;
   };
   capabilities?: PluginCapability[];
+  /**
+   * Per-capability scope bindings that attenuate the compound-capability
+   * lattice. See {@link PluginManifestScopes}. Absent on most plugins —
+   * the lattice still elevates compound pairs without scopes, so this field
+   * is opt-in only for plugins that need to skip elevation.
+   */
+  scopes?: PluginManifestScopes;
   activationEvents?: "onStartupFinished"[];
   contributes: {
     panels: PanelContribution[];
