@@ -156,6 +156,7 @@ export type BuiltInKeyAction =
   | "panel.palette"
   | "panel.toggleDiagnostics"
   | "panel.togglePortal"
+  | "notifications.toggle"
   | "panel.diagnosticsLogs"
   | "panel.diagnosticsEvents"
   | "panel.diagnosticsMessages"
@@ -334,6 +335,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "panel.palette",
   "panel.toggleDiagnostics",
   "panel.togglePortal",
+  "notifications.toggle",
   "panel.diagnosticsLogs",
   "panel.diagnosticsEvents",
   "panel.diagnosticsMessages",

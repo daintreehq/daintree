@@ -966,7 +966,7 @@ export function Toolbar({
         void actionService.dispatch("devServer.start", undefined, { source: "user" });
       },
       "notification-center": () => {
-        useUIStore.getState().toggleNotificationCenter();
+        void actionService.dispatch("notifications.toggle", undefined, { source: "user" });
       },
       "copy-tree": () => {
         void handleCopyTreeClick();
