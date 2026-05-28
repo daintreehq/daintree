@@ -1,5 +1,6 @@
 // eager-import-allow: reads persisted app state via store.get synchronously in the IPC handler
 import { app } from "electron";
+import os from "node:os";
 import { CHANNELS } from "../../channels.js";
 import { store, type StoreSchema, consumePendingSettingsRecovery } from "../../../store.js";
 import { projectStore } from "../../../services/ProjectStore.js";
@@ -698,6 +699,16 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     return app.getVersion();
   };
   handlers.push(typedHandle(CHANNELS.APP_GET_VERSION, handleAppGetVersion));
+
+  const handleAppGetVersionInfo = async () => {
+    return {
+      appVersion: app.getVersion(),
+      electron: process.versions.electron ?? "",
+      chrome: process.versions.chrome ?? "",
+      os: `${os.platform()} ${os.release()} (${os.arch()})`,
+    };
+  };
+  handlers.push(typedHandle(CHANNELS.APP_GET_VERSION_INFO, handleAppGetVersionInfo));
 
   const handleAppQuit = async () => {
     app.quit();

@@ -390,6 +390,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getState(): Promise<AppState>;
     setState(partialState: Partial<AppState>): Promise<void>;
     getVersion(): Promise<string>;
+    getVersionInfo(): Promise<import("./app.js").AppVersionInfo>;
     hydrate(): Promise<HydrateResult>;
     boot(): Promise<BootResult>;
     quit(): Promise<void>;

@@ -91,6 +91,19 @@ export interface AppState {
   fleetScopeMode?: "legacy" | "scoped";
 }
 
+/**
+ * Build/runtime version info for the renderer — sourced from `app.getVersion()`
+ * plus `process.versions` + `os.*` in the main process. Used by the "Report on
+ * GitHub" affordance in the notification inbox so issue bodies carry the
+ * environment lines reviewers need to triage without a follow-up round trip.
+ */
+export interface AppVersionInfo {
+  appVersion: string;
+  electron: string;
+  chrome: string;
+  os: string;
+}
+
 /** Describes how the settings store recovered from corruption at startup */
 export type SettingsRecovery =
   | { kind: "restored-from-backup"; quarantinedPath?: string }

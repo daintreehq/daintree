@@ -1143,6 +1143,8 @@ const api: ElectronAPI = {
 
     getVersion: () => _unwrappingInvoke(CHANNELS.APP_GET_VERSION),
 
+    getVersionInfo: () => _unwrappingInvoke(CHANNELS.APP_GET_VERSION_INFO),
+
     hydrate: () => _unwrappingInvoke(CHANNELS.APP_HYDRATE),
 
     boot: () => _unwrappingInvoke(CHANNELS.APP_BOOT),

@@ -65,7 +65,7 @@ import type {
   AgentInstallResult,
   AgentInstallProgressEvent,
 } from "./system.js";
-import type { AppState, BootResult, HydrateResult } from "./app.js";
+import type { AppState, AppVersionInfo, BootResult, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
 import type { RetryAction, ErrorRecord, RetryProgressPayload } from "./errors.js";
 import type { EventRecord } from "./events.js";
@@ -432,6 +432,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "app:get-version": {
     args: [];
     result: string;
+  };
+  "app:get-version-info": {
+    args: [];
+    result: AppVersionInfo;
   };
   "app:hydrate": {
     args: [];
