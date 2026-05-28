@@ -1197,8 +1197,7 @@ describe("createPluginProtocolHandler", () => {
     overrides: { getPluginDir?: (id: string) => string | undefined } = {}
   ): ProtocolHandler {
     const getPluginDir =
-      overrides.getPluginDir ??
-      ((id: string) => (id === "my-plugin" ? PLUGIN_ROOT : undefined));
+      overrides.getPluginDir ?? ((id: string) => (id === "my-plugin" ? PLUGIN_ROOT : undefined));
     return createPluginProtocolHandler(getPluginDir);
   }
 
@@ -1295,9 +1294,7 @@ describe("createPluginProtocolHandler", () => {
     await handler(makeRequest("plugin://my-plugin/../../etc/passwd"));
 
     const openArgs = vi.mocked(fs.open).mock.calls[0];
-    expect(openArgs?.[0]).toBe(
-      path.normalize("/plugins/installed/my-plugin/etc/passwd")
-    );
+    expect(openArgs?.[0]).toBe(path.normalize("/plugins/installed/my-plugin/etc/passwd"));
   });
 
   it("normalizes URL-encoded ../ segments after decode without escaping root", async () => {
@@ -1417,14 +1414,10 @@ describe("createPluginProtocolHandler", () => {
     isImmutableAppAsset.mockReturnValue(true);
 
     const handler = buildHandler();
-    const response = await handler(
-      makeRequest("plugin://my-plugin/assets/index-Ab3Xy789.js")
-    );
+    const response = await handler(makeRequest("plugin://my-plugin/assets/index-Ab3Xy789.js"));
 
     expect(response.status).toBe(200);
-    expect(response.headers.get("Cache-Control")).toBe(
-      "public, max-age=31536000, immutable"
-    );
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
     expect(fs.open).toHaveBeenCalledTimes(1);
   });
 

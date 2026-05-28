@@ -353,7 +353,7 @@ export function createPluginProtocolHandler(getPluginDir: GetPluginDir) {
       });
     }
 
-    let pathname = url.pathname;
+    const pathname = url.pathname;
     if (pathname === "/" || pathname === "") {
       // No directory listings — a bare `plugin://id/` is not a valid asset URL.
       return new Response("Not Found", {
