@@ -182,27 +182,23 @@ describe("usePluginMenuItems", () => {
     await waitFor(() => expect(result.current).toHaveLength(1));
   });
 
-  it("excludes items whose when clause evaluates falsy", async () => {
+  it("filters when clauses around a positive control (truthy keeps, falsy/unset/malformed drop)", async () => {
+    // Positive control alongside the negative cases — without it the assertion
+    // would pass trivially against `useState`'s initial empty array even if
+    // the hook never applied the pull result. The visible item proves the
+    // pull resolved AND `useMemo` ran the filter.
     menuItemsMock.mockResolvedValue([
+      entry("acme", "Visible", "terminal", { when: "true" }),
       entry("acme", "Hidden", "terminal", { when: "false" }),
       entry("acme", "Unset", "terminal", { when: "missingContextKey" }),
+      entry("acme", "Malformed", "terminal", { when: "&& bad" }),
     ]);
     const { usePluginMenuItems } = await import("../usePluginMenuItems");
     const { result } = renderHook(() => usePluginMenuItems("terminal"));
 
-    // Pull resolves to [] of filtered items — wait for any state settling
-    // then assert the filtered set is empty.
-    await waitFor(() => expect(menuItemsMock).toHaveBeenCalled());
-    expect(result.current).toEqual([]);
-  });
-
-  it("excludes items whose when clause fails to parse (fail-closed)", async () => {
-    menuItemsMock.mockResolvedValue([entry("acme", "Malformed", "terminal", { when: "&& bad" })]);
-    const { usePluginMenuItems } = await import("../usePluginMenuItems");
-    const { result } = renderHook(() => usePluginMenuItems("terminal"));
-
-    await waitFor(() => expect(menuItemsMock).toHaveBeenCalled());
-    expect(result.current).toEqual([]);
+    await waitFor(() => {
+      expect(result.current.map((e) => e.item.label)).toEqual(["Visible"]);
+    });
   });
 
   it("cleans up the push subscription on unmount", async () => {

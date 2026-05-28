@@ -3960,6 +3960,53 @@ describe("Plugin panel kind registry broadcast", () => {
   });
 });
 
+describe("Plugin menu items broadcast", () => {
+  it("coalesces load + unload in the same tick into a single broadcast with complete=true", async () => {
+    // Schedule a non-complete (load) broadcast followed by a complete (unload)
+    // broadcast in the same synchronous tick. The OR-accumulation invariant
+    // means the single coalesced broadcast must carry complete=true so the
+    // renderer treats it as authoritative.
+    const service = new PluginService();
+
+    type S = PluginService & {
+      scheduleMenuItemsBroadcast: (complete: boolean) => void;
+    };
+    (service as S).scheduleMenuItemsBroadcast(false);
+    (service as S).scheduleMenuItemsBroadcast(true);
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const menuItemsBroadcasts = broadcastToRendererMock.mock.calls.filter(
+      (call) => (call[1] as { name?: unknown })?.name === "plugin:menu-items-changed"
+    );
+    expect(menuItemsBroadcasts).toHaveLength(1);
+    expect(
+      (menuItemsBroadcasts[0]?.[1] as { payload: { complete: boolean } }).payload.complete
+    ).toBe(true);
+
+    service.dispose();
+  });
+
+  it("dispose() drops a menu items broadcast scheduled before disposal", async () => {
+    const service = new PluginService();
+
+    type S = PluginService & {
+      scheduleMenuItemsBroadcast: (complete: boolean) => void;
+    };
+    (service as S).scheduleMenuItemsBroadcast(true);
+    service.dispose();
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const menuItemsBroadcasts = broadcastToRendererMock.mock.calls.filter(
+      (call) => (call[1] as { name?: unknown })?.name === "plugin:menu-items-changed"
+    );
+    expect(menuItemsBroadcasts).toHaveLength(0);
+  });
+});
+
 describe("capabilities declaration logging", () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
