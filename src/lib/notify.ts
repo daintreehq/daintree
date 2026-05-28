@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { setPermanentFallbackHandler } from "@/store/persistence/safeStorage";
 import {
   useNotificationStore,
   type NotificationPriority,
@@ -1125,3 +1126,18 @@ function scheduleSuppressionGrace(
 
   _pendingSuppressed.set(historyEntryId, { timerId, unsub });
 }
+
+// Wire the synchronous storage-fallback notifier. safeStorage cannot import
+// notify directly (would create a TDZ via notificationHistorySlice → safeStorage
+// on module init). Registering at module load gives safeStorage a sync handler
+// without the dynamic-import pattern that caused the persistenceBoundaryHardening
+// notify-count flake.
+setPermanentFallbackHandler(() => {
+  notify({
+    type: "warning",
+    title: "Settings won't be saved",
+    message:
+      "Couldn't write to local storage, so changes made this session won't persist after restart.",
+    context: { eventKind: "settings" },
+  });
+});

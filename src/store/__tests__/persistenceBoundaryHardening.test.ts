@@ -592,7 +592,6 @@ describe("persistence boundary hardening", () => {
 
   it("notifies exactly once when a permanent structural fallback occurs", async () => {
     const notifySpy = vi.fn();
-    vi.doMock("@/lib/notify", () => ({ notify: notifySpy }));
     installLocalStorage(
       createStorageMock({
         setItem: () => {
@@ -602,28 +601,20 @@ describe("persistence boundary hardening", () => {
       })
     );
 
+    const { createSafeJSONStorage, setPermanentFallbackHandler } =
+      await import("../persistence/safeStorage");
+    setPermanentFallbackHandler(notifySpy);
     try {
-      const { createSafeJSONStorage } = await import("../persistence/safeStorage");
       const storage = createSafeJSONStorage<{ value: number }>();
-
-      // Other tests in this suite also trigger permanent fallbacks, each firing
-      // notify via an *unawaited* dynamic `import("@/lib/notify")`. Those
-      // in-flight dispatches can resolve here — while our spy is the active
-      // mock — and inflate the count (seen as 2-6 under CI ordering). Drain the
-      // queue so any stragglers land, then clear the spy so we count only this
-      // instance's dispatch. The per-instance `hasNotifiedPermanentFallback`
-      // guard guarantees exactly one regardless.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      notifySpy.mockClear();
-
       storage.setItem("notify-key-1", { state: { value: 1 }, version: 1 });
       storage.setItem("notify-key-2", { state: { value: 2 }, version: 1 });
 
-      // notify is dispatched via a dynamic import to break a module cycle;
-      // wait for the microtask queue + import resolution to drain.
-      await vi.waitFor(() => expect(notifySpy).toHaveBeenCalledTimes(1));
+      // Dispatch is synchronous (handler-based, not dynamic import) so the
+      // per-instance `hasNotifiedPermanentFallback` guard pins the count to
+      // exactly 1 regardless of how many failing setItems we issue.
+      expect(notifySpy).toHaveBeenCalledTimes(1);
     } finally {
-      vi.doUnmock("@/lib/notify");
+      setPermanentFallbackHandler(null);
     }
   });
 

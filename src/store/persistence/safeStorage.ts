@@ -7,6 +7,18 @@ const fallbackStorageData = new Map<string, string>();
 const BACKUP_KEY_SUFFIX = ".__bak";
 
 /**
+ * Synchronous notifier for permanent storage fallback. Registered once at app
+ * boot from `notify.ts`; tests register a spy directly. See
+ * `notifyPermanentFallbackOnce` for the rationale (avoids dynamic-import
+ * cross-test pollution).
+ */
+let permanentFallbackHandler: (() => void) | null = null;
+
+export function setPermanentFallbackHandler(handler: (() => void) | null): void {
+  permanentFallbackHandler = handler;
+}
+
+/**
  * A `QuotaExceededError` (or its Firefox alias) is transient: the write was
  * too large, but storage is still healthy, so smaller subsequent writes can
  * succeed. We must NOT permanently route a store to in-memory storage on quota
@@ -112,24 +124,18 @@ function createResilientStorage(baseStorage: StateStorage | undefined): Resilien
   // permanent in-memory fallback. Until then writes never reach localStorage,
   // so changes this session are lost on restart — a degradation the user can't
   // otherwise observe. Quota errors are transient and never reach here.
+  //
+  // Dispatch is synchronous via a registered handler (see
+  // `setPermanentFallbackHandler` below). This avoids a dynamic
+  // `import("@/lib/notify").then(...)` whose late-resolving promise leaked
+  // across test boundaries and produced the well-documented
+  // persistenceBoundaryHardening notify-count flake. The handler is registered
+  // once at app boot from `notify.ts`; tests register a spy directly via
+  // `setPermanentFallbackHandler`, eliminating cross-test pollution entirely.
   const notifyPermanentFallbackOnce = (): void => {
     if (hasNotifiedPermanentFallback) return;
     hasNotifiedPermanentFallback = true;
-    // Dynamic import to break the safeStorage <- notify <- notificationHistorySlice <- safeStorage
-    // module cycle that triggers a TDZ on `memoryStorage` if `notify` is imported statically.
-    void import("@/lib/notify")
-      .then(({ notify }) => {
-        notify({
-          type: "warning",
-          title: "Settings won't be saved",
-          message:
-            "Couldn't write to local storage, so changes made this session won't persist after restart.",
-          context: { eventKind: "settings" },
-        });
-      })
-      .catch(() => {
-        // The notification surface is best-effort — never let it break persistence.
-      });
+    permanentFallbackHandler?.();
   };
 
   return {
