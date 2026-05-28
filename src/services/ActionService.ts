@@ -349,12 +349,18 @@ export class ActionService {
       return { ok: false, error };
     }
 
-    // Enforce confirmation for destructive actions from agent sources
-    // Agents must explicitly confirm before executing dangerous operations
-    if (definition.danger === "confirm" && source === "agent" && !options?.confirmed) {
+    // Enforce confirmation for destructive actions from agent and plugin
+    // sources. Agents must explicitly confirm via { confirmed: true }; plugins
+    // have no confirm bypass at all (host.dispatch carries no `confirmed`), so
+    // danger:"confirm" actions always return CONFIRMATION_REQUIRED for them.
+    if (
+      definition.danger === "confirm" &&
+      (source === "agent" || source === "plugin") &&
+      !options?.confirmed
+    ) {
       const error: ActionError = {
         code: "CONFIRMATION_REQUIRED",
-        message: `Action "${actionId}" requires explicit confirmation from agent sources. Set { confirmed: true } to proceed.`,
+        message: `Action "${actionId}" requires explicit confirmation from ${source} sources.`,
       };
       return { ok: false, error };
     }

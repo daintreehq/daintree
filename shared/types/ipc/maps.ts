@@ -1635,6 +1635,21 @@ export interface IpcEventMap {
   };
 
   /**
+   * Plugin-sourced action dispatch request. Main process emits this on the
+   * active project WebContents and awaits a renderer `ipcRenderer.send` reply
+   * on `CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE`, correlated by `requestId`.
+   * Unlike `mcp:dispatch-action-request` there is no `confirmed` or `context`:
+   * plugins cannot bypass confirm-gating and don't override the action context.
+   * The response channel is a renderer→main fire-and-forget send tracked in
+   * `DEAD_CHANNEL_ALLOWLIST` in channelDrift.test.ts.
+   */
+  "plugin:dispatch-action-request": {
+    requestId: string;
+    actionId: string;
+    args: unknown;
+  };
+
+  /**
    * Targeted push: a help-session tool call was denied because its tier
    * doesn't permit the tool. Sent to the pinned WebContents so the renderer
    * can surface an inline approval banner. Tier is `string` (not `McpTier`)

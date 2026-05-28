@@ -19,7 +19,7 @@ import type {
   McpGrantLifecyclePayload,
   McpBearerIdentity,
 } from "../shared/types/ipc/mcpServer.js";
-import type { ActionContext } from "../shared/types/actions.js";
+import type { ActionContext, ActionDispatchResult } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import { CHANNELS } from "./ipc/channels.js";
 import {
@@ -2421,6 +2421,23 @@ const api: ElectronAPI = {
       confirmationDecision?: "approved" | "rejected" | "timeout";
     }) => {
       ipcRenderer.send(CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE, payload);
+    },
+  },
+
+  pluginBridge: {
+    onDispatchActionRequest: (
+      callback: (payload: { requestId: string; actionId: string; args?: unknown }) => void
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        payload: { requestId: string; actionId: string; args?: unknown }
+      ) => callback(payload);
+      ipcRenderer.on(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST, handler);
+    },
+
+    sendDispatchActionResponse: (payload: { requestId: string; result: ActionDispatchResult }) => {
+      ipcRenderer.send(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE, payload);
     },
   },
 

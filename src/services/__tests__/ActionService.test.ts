@@ -271,6 +271,67 @@ describe("ActionService", () => {
       expect(mockRun).toHaveBeenCalled();
     });
 
+    it("executes a safe action dispatched from a plugin source", async () => {
+      const mockRun = vi.fn().mockResolvedValue("ok");
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: mockRun,
+      });
+
+      const result = await service.dispatch("actions.list", undefined, { source: "plugin" });
+      expect(result.ok).toBe(true);
+      expect(mockRun).toHaveBeenCalled();
+    });
+
+    it("returns CONFIRMATION_REQUIRED for a confirm action from a plugin source (no confirmed bypass)", async () => {
+      const mockRun = vi.fn().mockResolvedValue(undefined);
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "test",
+        kind: "command",
+        danger: "confirm",
+        scope: "renderer",
+        run: mockRun,
+      });
+
+      // Even passing confirmed:true must not let a plugin bypass the gate; the
+      // host API never sets it, but assert defense-in-depth here anyway.
+      const result = await service.dispatch("actions.list", undefined, { source: "plugin" });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("CONFIRMATION_REQUIRED");
+      expect(mockRun).not.toHaveBeenCalled();
+    });
+
+    it("returns RESTRICTED for a restricted action from a plugin source", async () => {
+      const mockRun = vi.fn().mockResolvedValue(undefined);
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "test",
+        kind: "command",
+        danger: "restricted",
+        scope: "renderer",
+        run: mockRun,
+      });
+
+      const result = await service.dispatch("actions.list", undefined, { source: "plugin" });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("RESTRICTED");
+      expect(mockRun).not.toHaveBeenCalled();
+    });
+
     it("should validate arguments with Zod schema", async () => {
       const nameSchema = z.object({ name: z.string() });
       const action: ActionDefinition<typeof nameSchema, void> = {
@@ -1289,6 +1350,17 @@ describe("ActionService", () => {
       expect(service.getLastAction()?.actionId).toBe("test.user");
 
       await service.dispatch("test.agent" as ActionId, undefined, { source: "agent" });
+      expect(service.getLastAction()?.actionId).toBe("test.user");
+    });
+
+    it("does not capture plugin-source dispatches", async () => {
+      service.register(makeAction("test.user"));
+      service.register(makeAction("test.plugin"));
+
+      await service.dispatch("test.user" as ActionId, undefined, { source: "user" });
+      expect(service.getLastAction()?.actionId).toBe("test.user");
+
+      await service.dispatch("test.plugin" as ActionId, undefined, { source: "plugin" });
       expect(service.getLastAction()?.actionId).toBe("test.user");
     });
 

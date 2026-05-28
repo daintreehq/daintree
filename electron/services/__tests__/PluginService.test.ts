@@ -9,6 +9,31 @@ import type { PanelKindConfig } from "../../../shared/config/panelKindRegistry.j
 const appMock = vi.hoisted(() => ({
   getVersion: vi.fn(() => "0.0.0"),
 }));
+const ipcMainMock = vi.hoisted(() => {
+  const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+  return {
+    on: vi.fn((channel: string, handler: (...args: unknown[]) => void) => {
+      let set = listeners.get(channel);
+      if (!set) {
+        set = new Set();
+        listeners.set(channel, set);
+      }
+      set.add(handler);
+    }),
+    removeListener: vi.fn((channel: string, handler: (...args: unknown[]) => void) => {
+      listeners.get(channel)?.delete(handler);
+    }),
+    _emit: (channel: string, event: unknown, payload: unknown) => {
+      for (const handler of [...(listeners.get(channel) ?? [])]) handler(event, payload);
+    },
+    _listenerCount: (channel: string) => listeners.get(channel)?.size ?? 0,
+    _reset: () => listeners.clear(),
+  };
+});
+const windowRefMock = vi.hoisted(() => ({
+  getWindowRegistry: vi.fn(() => null),
+  getProjectViewManager: vi.fn(() => null),
+}));
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
 const storeMock = vi.hoisted(() => {
   const state = new Map<string, unknown>();
@@ -21,6 +46,15 @@ const storeMock = vi.hoisted(() => {
 
 vi.mock("electron", () => ({
   app: appMock,
+  ipcMain: ipcMainMock,
+}));
+vi.mock("../../window/windowRef.js", () => ({
+  getWindowRegistry: windowRefMock.getWindowRegistry,
+  getProjectViewManager: windowRefMock.getProjectViewManager,
+  setWindowRegistry: vi.fn(),
+  setMainWindow: vi.fn(),
+  getMainWindow: vi.fn(() => null),
+  setProjectViewManager: vi.fn(),
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
@@ -2507,6 +2541,220 @@ describe("createHost — showToast", () => {
       (call: unknown[]) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
     );
     expect(toastBroadcasts).toHaveLength(0);
+  });
+});
+
+type DispatchHostShape = (pluginId: string) => {
+  host: {
+    dispatch: (
+      actionId: string,
+      args?: unknown
+    ) => Promise<import("../../../shared/types/actions.js").ActionDispatchResult>;
+  };
+  revoke: () => void;
+};
+
+interface FakeWebContents {
+  id: number;
+  isDestroyed: () => boolean;
+  once: ReturnType<typeof vi.fn>;
+  removeListener: ReturnType<typeof vi.fn>;
+  send: ReturnType<typeof vi.fn>;
+  _triggerDestroyed: () => void;
+}
+
+function makeFakeWebContents(id: number): FakeWebContents {
+  const destroyedHandlers = new Set<() => void>();
+  return {
+    id,
+    isDestroyed: () => false,
+    once: vi.fn((event: string, cb: () => void) => {
+      if (event === "destroyed") destroyedHandlers.add(cb);
+    }),
+    removeListener: vi.fn((event: string, cb: () => void) => {
+      if (event === "destroyed") destroyedHandlers.delete(cb);
+    }),
+    send: vi.fn(),
+    _triggerDestroyed: () => {
+      for (const cb of [...destroyedHandlers]) cb();
+    },
+  };
+}
+
+/** Set the active renderer the plugin dispatch bridge will target, or `null`. */
+function setActiveWebContents(wc: FakeWebContents | null): void {
+  windowRefMock.getWindowRegistry.mockReturnValue(null);
+  windowRefMock.getProjectViewManager.mockReturnValue(
+    wc ? ({ getActiveView: () => ({ webContents: wc }) } as never) : null
+  );
+}
+
+/** Read the request payload from the most recent dispatch `webContents.send`. */
+function lastDispatchRequest(wc: FakeWebContents): {
+  requestId: string;
+  actionId: string;
+  args?: unknown;
+} {
+  const call = [...wc.send.mock.calls]
+    .reverse()
+    .find((c) => c[0] === CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST);
+  if (!call) throw new Error("no PLUGIN_DISPATCH_ACTION_REQUEST send recorded");
+  return call[1] as { requestId: string; actionId: string; args?: unknown };
+}
+
+describe("createHost — dispatch", () => {
+  beforeEach(() => {
+    ipcMainMock._reset();
+    setActiveWebContents(null);
+  });
+
+  it("returns PLUGIN_UNLOADED without a round-trip once the plugin is unloaded", async () => {
+    const wc = makeFakeWebContents(7);
+    setActiveWebContents(wc);
+    await writePlugin("dispatch-unload", { name: "acme.dispatch-unload", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: DispatchHostShape }).createHost(
+      "acme.dispatch-unload"
+    );
+
+    service.unloadPlugin("acme.dispatch-unload");
+    const result = await host.dispatch("terminal.new", { x: 1 });
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "PLUGIN_UNLOADED", message: expect.stringContaining("no longer loaded") },
+    });
+    expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("returns EXECUTION_ERROR when no renderer is available", async () => {
+    setActiveWebContents(null);
+    await writePlugin("dispatch-norender", { name: "acme.dispatch-norender", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: DispatchHostShape }).createHost(
+      "acme.dispatch-norender"
+    );
+
+    const result = await host.dispatch("app.openSettings");
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: expect.stringContaining("No active renderer") },
+    });
+  });
+
+  it("sends the request and resolves with the renderer's matching response", async () => {
+    const wc = makeFakeWebContents(11);
+    setActiveWebContents(wc);
+    await writePlugin("dispatch-ok", { name: "acme.dispatch-ok", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: DispatchHostShape }).createHost(
+      "acme.dispatch-ok"
+    );
+
+    const pending = host.dispatch("acme.dispatch-ok.doThing", { count: 3 });
+
+    const req = lastDispatchRequest(wc);
+    expect(req.actionId).toBe("acme.dispatch-ok.doThing");
+    expect(req.args).toEqual({ count: 3 });
+    expect(typeof req.requestId).toBe("string");
+
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: 11 } },
+      { requestId: req.requestId, result: { ok: true, result: 42 } }
+    );
+
+    await expect(pending).resolves.toEqual({ ok: true, result: 42 });
+  });
+
+  it("ignores a response from an unexpected sender id (cross-window guard)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const wc = makeFakeWebContents(11);
+    setActiveWebContents(wc);
+    await writePlugin("dispatch-guard", { name: "acme.dispatch-guard", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: DispatchHostShape }).createHost(
+      "acme.dispatch-guard"
+    );
+
+    const pending = host.dispatch("acme.dispatch-guard.go");
+    const req = lastDispatchRequest(wc);
+
+    // Ignore any warnings emitted during plugin load/init; only count the guard.
+    warnSpy.mockClear();
+
+    // Wrong sender — must be ignored and warned about.
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: 999 } },
+      { requestId: req.requestId, result: { ok: true, result: "spoofed" } }
+    );
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("unexpected sender"));
+
+    // Correct sender — resolves with the real result.
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: 11 } },
+      { requestId: req.requestId, result: { ok: true, result: "real" } }
+    );
+
+    await expect(pending).resolves.toEqual({ ok: true, result: "real" });
+    warnSpy.mockRestore();
+  });
+
+  it("dispose() drains pending dispatches and removes the response listener", async () => {
+    const wc = makeFakeWebContents(11);
+    setActiveWebContents(wc);
+    await writePlugin("dispatch-dispose", { name: "acme.dispatch-dispose", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: DispatchHostShape }).createHost(
+      "acme.dispatch-dispose"
+    );
+
+    const pending = host.dispatch("acme.dispatch-dispose.go");
+    expect(ipcMainMock._listenerCount(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE)).toBe(1);
+
+    service.dispose();
+
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: expect.stringContaining("disposed") },
+    });
+    expect(ipcMainMock.removeListener).toHaveBeenCalledWith(
+      CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE,
+      expect.any(Function)
+    );
+  });
+
+  it("resolves with EXECUTION_ERROR when the target renderer is destroyed mid-dispatch", async () => {
+    const wc = makeFakeWebContents(11);
+    setActiveWebContents(wc);
+    await writePlugin("dispatch-destroyed", { name: "acme.dispatch-destroyed", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: DispatchHostShape }).createHost(
+      "acme.dispatch-destroyed"
+    );
+
+    const pending = host.dispatch("acme.dispatch-destroyed.go");
+    wc._triggerDestroyed();
+
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: expect.stringContaining("destroyed") },
+    });
   });
 });
 

@@ -12,6 +12,7 @@ import type {
   ResourceRef,
 } from "./forge.js";
 import type { NotificationType } from "./notification.js";
+import type { ActionDispatchResult } from "./actions.js";
 
 export interface PanelContribution {
   id: string;
@@ -365,6 +366,25 @@ export interface PluginHostApi {
    * unknown `type`) reject so authoring mistakes surface loudly.
    */
   showToast(options: PluginToastOptions): Promise<void>;
+  /**
+   * Dispatch an action by id through the app's `ActionService` with a `"plugin"`
+   * source. Plugins use this to invoke their own registered actions, actions
+   * contributed by other plugins, or any built-in action — always through the
+   * audited, validated dispatch path rather than bypassing it.
+   *
+   * Args are validated against the action's `argsSchema` by `ActionService`;
+   * the host does not re-validate. Actions classified `danger: "restricted"`
+   * are rejected with `RESTRICTED`, and `danger: "confirm"` actions return
+   * `CONFIRMATION_REQUIRED` (plugins cannot bypass confirm-gating — there is no
+   * `confirmed` flag).
+   *
+   * Like {@link invalidateFileDecorations} and {@link showToast} this is NOT
+   * revoke-guarded: plugins call it from post-activation subscription callbacks
+   * and timers. Once the plugin is unloaded it returns
+   * `{ ok: false, error: { code: "PLUGIN_UNLOADED" } }` without attempting a
+   * dispatch.
+   */
+  dispatch(actionId: string, args?: unknown): Promise<ActionDispatchResult>;
 }
 
 export type PluginActivate = (
