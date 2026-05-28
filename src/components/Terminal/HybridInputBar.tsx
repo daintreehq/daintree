@@ -451,7 +451,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       }
     }, [voiceDraftRevision, terminalId, currentProject?.id]);
 
-    useVoiceDecorations({ terminalId, editorViewRef, voiceDraftRevision });
+    useVoiceDecorations({ terminalId, editorViewRef });
 
     const resetEditorDoc = () => {
       applyEditorValue("", {

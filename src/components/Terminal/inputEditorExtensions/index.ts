@@ -1,8 +1,8 @@
 export {
   buildInputBarTheme,
   chipEntranceTheme,
-  setInterimRange,
-  interimMarkField,
+  setInterimText,
+  interimWidgetField,
   setPendingAIRanges,
   pendingAIField,
   computeAutoSize,
