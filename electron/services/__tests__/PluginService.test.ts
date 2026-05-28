@@ -5594,6 +5594,12 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     await service.pushSnapshotTo(wc);
 
     expect(send).toHaveBeenCalledTimes(3);
+    // Every replay goes through the EVENTS_PUSH channel — the same channel the
+    // renderer hooks' persistent push listeners consume, so no renderer-side
+    // changes are needed for the cold-restore path.
+    for (const call of send.mock.calls) {
+      expect(call[0]).toBe(CHANNELS.EVENTS_PUSH);
+    }
     const names = send.mock.calls.map((c) => (c[1] as { name?: string })?.name);
     expect(names).toContain("plugin:actions-changed");
     expect(names).toContain("plugin:panel-kinds-changed");
@@ -5605,6 +5611,28 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
       (c) => (c[1] as { name?: string })?.name === "plugin:toolbar-buttons-changed"
     );
     expect((toolbarCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(false);
+  });
+
+  it("pushSnapshotTo() keeps sending remaining channels when one send() throws (TOCTOU)", async () => {
+    // Simulates the wc being destroyed between the isDestroyed() guard and an
+    // individual send — Electron raises "Object has been destroyed". Without
+    // per-send try/catch one bad call would silently drop the remaining two
+    // channels and the cold-restored renderer would miss state.
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    const send = vi.fn((_channel: string, payload: { name: string }) => {
+      if (payload.name === "plugin:actions-changed") {
+        throw new Error("Object has been destroyed");
+      }
+    });
+    const wc = { send, isDestroyed: () => false } as unknown as Electron.WebContents;
+
+    await service.pushSnapshotTo(wc);
+
+    expect(send).toHaveBeenCalledTimes(3);
+    const names = send.mock.calls.map((c) => (c[1] as { name?: string })?.name);
+    expect(names).toContain("plugin:panel-kinds-changed");
+    expect(names).toContain("plugin:toolbar-buttons-changed");
   });
 
   it("pushSnapshotTo() skips a destroyed webContents", async () => {

@@ -2387,18 +2387,27 @@ export class PluginService {
     await this.initPromise;
     if (this.disposed) return;
     if (webContents.isDestroyed()) return;
-    webContents.send(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:actions-changed",
-      payload: { actions: this.listPluginActions() },
-    });
-    webContents.send(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:panel-kinds-changed",
-      payload: { kinds: getPluginPanelKinds() },
-    });
-    webContents.send(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:toolbar-buttons-changed",
-      payload: { buttons: getAllPluginToolbarButtonConfigs(), complete: false },
-    });
+    // Mirror `broadcastToRenderer`'s defensive send pattern (electron/ipc/utils.ts:337-352):
+    // the wc may be destroyed between the isDestroyed() check above and any
+    // individual send (TOCTOU), and a throw on the first send would otherwise
+    // leave the next two channels un-sent — silently degrading the
+    // cold-restored renderer to its pull-on-mount path for those two channels
+    // only. Each send is independently guarded.
+    const events: Array<{ name: string; payload: unknown }> = [
+      { name: "plugin:actions-changed", payload: { actions: this.listPluginActions() } },
+      { name: "plugin:panel-kinds-changed", payload: { kinds: getPluginPanelKinds() } },
+      {
+        name: "plugin:toolbar-buttons-changed",
+        payload: { buttons: getAllPluginToolbarButtonConfigs(), complete: false },
+      },
+    ];
+    for (const event of events) {
+      try {
+        webContents.send(CHANNELS.EVENTS_PUSH, event);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
   }
 }
 

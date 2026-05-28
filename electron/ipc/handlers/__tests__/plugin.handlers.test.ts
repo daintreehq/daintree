@@ -604,6 +604,33 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     await inFlight;
     expect(mockGetPluginToolbarButtonIds).toHaveBeenCalledTimes(1);
   });
+
+  it("PLUGIN_PANEL_KINDS_GET reads the registry only after waitForInit() resolves", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    const waitForInit = vi.mocked(pluginService.waitForInit);
+    let releaseGate: () => void = () => {};
+    waitForInit.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      })
+    );
+    const handler = getHandler("plugin:panel-kinds-get");
+    const inFlight = handler({}) as Promise<unknown>;
+    await Promise.resolve();
+    await Promise.resolve();
+    // `handlePanelKindsGet` reads from the panelKindRegistry, which is mocked
+    // separately at module load; the call we can observe through `pluginService`
+    // here is the gate itself. Assert the inFlight promise has not resolved yet.
+    let resolved = false;
+    void inFlight.then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    releaseGate();
+    await inFlight;
+    expect(resolved).toBe(true);
+  });
 });
 
 describe("PLUGIN_FORGE_PROVIDERS_GET handler", () => {
