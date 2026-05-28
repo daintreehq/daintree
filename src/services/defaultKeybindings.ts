@@ -645,14 +645,6 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Panels",
   },
   {
-    actionId: "notifications.toggle",
-    combo: "Cmd+Shift+N",
-    scope: "global",
-    priority: 0,
-    description: "Toggle notification inbox",
-    category: "Panels",
-  },
-  {
     actionId: "portal.closeTab",
     combo: "Cmd+W",
     scope: "portal",
