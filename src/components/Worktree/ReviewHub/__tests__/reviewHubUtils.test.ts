@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { readGitErrorFields } from "../reviewHubUtils";
+import type { StagingFileEntry } from "@shared/types";
+import { isSortKey, readGitErrorFields, sortFiles } from "../reviewHubUtils";
+
+function file(
+  path: string,
+  overrides: Partial<Omit<StagingFileEntry, "path">> = {}
+): StagingFileEntry {
+  return {
+    path,
+    status: "modified",
+    insertions: 0,
+    deletions: 0,
+    ...overrides,
+  };
+}
 
 describe("readGitErrorFields", () => {
   it("decodes the preload's prefix when no own properties survive (post-contextBridge)", () => {
@@ -60,5 +74,155 @@ describe("readGitErrorFields", () => {
       leaseSha: undefined,
       branchName: undefined,
     });
+  });
+});
+
+describe("isSortKey", () => {
+  it("accepts the three documented sort keys", () => {
+    expect(isSortKey("path")).toBe(true);
+    expect(isSortKey("status")).toBe(true);
+    expect(isSortKey("churn")).toBe(true);
+  });
+
+  it("rejects unknown values", () => {
+    expect(isSortKey("")).toBe(false);
+    expect(isSortKey("size")).toBe(false);
+    expect(isSortKey("PATH")).toBe(false);
+  });
+});
+
+describe("sortFiles", () => {
+  it("sorts by path ascending alphabetically", () => {
+    const files = [file("c.ts"), file("a.ts"), file("b.ts")];
+    expect(sortFiles(files, "path", "asc").map((f) => f.path)).toEqual(["a.ts", "b.ts", "c.ts"]);
+  });
+
+  it("sorts by path descending", () => {
+    const files = [file("a.ts"), file("c.ts"), file("b.ts")];
+    expect(sortFiles(files, "path", "desc").map((f) => f.path)).toEqual(["c.ts", "b.ts", "a.ts"]);
+  });
+
+  it("sorts by churn descending — highest total touches first", () => {
+    const files = [
+      file("small.ts", { insertions: 1, deletions: 1 }),
+      file("big.ts", { insertions: 80, deletions: 20 }),
+      file("medium.ts", { insertions: 10, deletions: 5 }),
+    ];
+    expect(sortFiles(files, "churn", "desc").map((f) => f.path)).toEqual([
+      "big.ts",
+      "medium.ts",
+      "small.ts",
+    ]);
+  });
+
+  it("sorts by churn ascending — lowest total first", () => {
+    const files = [
+      file("big.ts", { insertions: 80, deletions: 20 }),
+      file("small.ts", { insertions: 1, deletions: 1 }),
+      file("medium.ts", { insertions: 10, deletions: 5 }),
+    ];
+    expect(sortFiles(files, "churn", "asc").map((f) => f.path)).toEqual([
+      "small.ts",
+      "medium.ts",
+      "big.ts",
+    ]);
+  });
+
+  it("treats null insertions/deletions as zero churn", () => {
+    const files = [
+      file("real.ts", { insertions: 5, deletions: 5 }),
+      file("unknown.ts", { insertions: null, deletions: null }),
+      file("half.ts", { insertions: 3, deletions: null }),
+    ];
+    expect(sortFiles(files, "churn", "desc").map((f) => f.path)).toEqual([
+      "real.ts",
+      "half.ts",
+      "unknown.ts",
+    ]);
+  });
+
+  it("falls back to path when churn ties (ascending)", () => {
+    const files = [
+      file("zeta.ts", { insertions: 2, deletions: 2 }),
+      file("alpha.ts", { insertions: 2, deletions: 2 }),
+      file("mike.ts", { insertions: 2, deletions: 2 }),
+    ];
+    expect(sortFiles(files, "churn", "asc").map((f) => f.path)).toEqual([
+      "alpha.ts",
+      "mike.ts",
+      "zeta.ts",
+    ]);
+  });
+
+  it("groups by status order when sorting by status", () => {
+    const files = [
+      file("a.ts", { status: "deleted" }),
+      file("b.ts", { status: "modified" }),
+      file("c.ts", { status: "added" }),
+    ];
+    expect(sortFiles(files, "status", "asc").map((f) => f.path)).toEqual(["b.ts", "c.ts", "a.ts"]);
+  });
+
+  it("pins generated files last when sorting by path ascending", () => {
+    const files = [
+      file("src/index.ts"),
+      file("yarn.lock"),
+      file("README.md"),
+      file("src/foo.min.js"),
+    ];
+    expect(sortFiles(files, "path", "asc").map((f) => f.path)).toEqual([
+      "README.md",
+      "src/index.ts",
+      "src/foo.min.js",
+      "yarn.lock",
+    ]);
+  });
+
+  it("pins generated files last when sorting by path descending — direction-independent", () => {
+    const files = [
+      file("src/index.ts"),
+      file("yarn.lock"),
+      file("README.md"),
+      file("src/foo.min.js"),
+    ];
+    expect(sortFiles(files, "path", "desc").map((f) => f.path)).toEqual([
+      "src/index.ts",
+      "README.md",
+      "yarn.lock",
+      "src/foo.min.js",
+    ]);
+  });
+
+  it("pins generated files last when sorting by churn even if they have higher churn", () => {
+    const files = [
+      file("src/app.ts", { insertions: 10, deletions: 2 }),
+      file("yarn.lock", { insertions: 5000, deletions: 4000 }),
+      file("src/util.ts", { insertions: 3, deletions: 1 }),
+    ];
+    expect(sortFiles(files, "churn", "desc").map((f) => f.path)).toEqual([
+      "src/app.ts",
+      "src/util.ts",
+      "yarn.lock",
+    ]);
+  });
+
+  it("pins generated files last when sorting by status", () => {
+    const files = [
+      file("src/a.ts", { status: "modified" }),
+      file("dist/bundle.js", { status: "added" }),
+      file("src/b.ts", { status: "added" }),
+    ];
+    expect(sortFiles(files, "status", "asc").map((f) => f.path)).toEqual([
+      "src/a.ts",
+      "src/b.ts",
+      "dist/bundle.js",
+    ]);
+  });
+
+  it("does not mutate the input array", () => {
+    const files = [file("b.ts"), file("a.ts")];
+    const before = files.map((f) => f.path);
+    sortFiles(files, "path", "asc");
+    expect(files.map((f) => f.path)).toEqual(before);
   });
 });
