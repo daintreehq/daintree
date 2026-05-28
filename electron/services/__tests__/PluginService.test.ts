@@ -2286,7 +2286,12 @@ describe("Plugin IPC handler registration", () => {
         requires: ["fs:project-read" as const, "git:read" as const],
       };
       expect(() =>
-        typedService.registerHandler("acme.typed", "read-stuff", schema, vi.fn().mockResolvedValue({}))
+        typedService.registerHandler(
+          "acme.typed",
+          "read-stuff",
+          schema,
+          vi.fn().mockResolvedValue({})
+        )
       ).not.toThrow();
     });
 
@@ -2302,9 +2307,9 @@ describe("Plugin IPC handler registration", () => {
       // Tamper with the loaded manifest to simulate a future code path that
       // removes a capability after registration. The dispatch-time re-check
       // must reject before the handler runs.
-      const plugin = (typedService as unknown as { plugins: Map<string, { manifest: PluginManifest }> }).plugins.get(
-        "acme.typed"
-      );
+      const plugin = (
+        typedService as unknown as { plugins: Map<string, { manifest: PluginManifest }> }
+      ).plugins.get("acme.typed");
       if (plugin) {
         plugin.manifest = { ...plugin.manifest, capabilities: [] };
       }
@@ -2354,7 +2359,12 @@ describe("Plugin IPC handler registration", () => {
         args: z.object({ x: z.number() }),
         result: z.unknown(),
       };
-      typedService.registerHandler("acme.typed", "swap", schema, vi.fn().mockResolvedValue("typed"));
+      typedService.registerHandler(
+        "acme.typed",
+        "swap",
+        schema,
+        vi.fn().mockResolvedValue("typed")
+      );
 
       const legacyHandler = vi.fn().mockResolvedValue("legacy");
       typedService.registerHandler("acme.typed", "swap", legacyHandler);
@@ -2963,7 +2973,11 @@ describe("createHost (plugin activation API)", () => {
       // A typed handler was provided but the second arg is a function, not
       // a schema — silently dropping the typed handler would phantom-no-op
       // at dispatch, so this must throw.
-      host.registerHandler("ch", () => "legacy", () => "typed")
+      host.registerHandler(
+        "ch",
+        () => "legacy",
+        () => "typed"
+      )
     ).toThrow(/second argument must be a channel schema/);
   });
 

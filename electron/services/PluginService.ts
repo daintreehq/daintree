@@ -245,9 +245,7 @@ function assertSettingsKey(pluginId: string, method: string, key: unknown): asse
  * dispatch with a raw `safeParse is not a function` TypeError outside the
  * documented `SCHEMA_ERROR:` envelope.
  */
-function isChannelSchema(
-  value: unknown
-): value is PluginChannelSchema<unknown, unknown> {
+function isChannelSchema(value: unknown): value is PluginChannelSchema<unknown, unknown> {
   if (typeof value !== "object" || value === null) return false;
   if (!("args" in value) || !("result" in value)) return false;
   const args = (value as { args: unknown }).args;
