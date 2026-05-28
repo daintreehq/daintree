@@ -126,6 +126,7 @@ const OPENAI_SETTINGS: VoiceInputSettings = {
   deviceId: "",
   organizationId: "",
   projectId: "",
+  recordingMode: "toggle",
 };
 
 const DEEPGRAM_SETTINGS: VoiceInputSettings = {

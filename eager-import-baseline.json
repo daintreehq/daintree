@@ -1,6 +1,6 @@
 {
-  "count": 1279,
-  "moduleCount": 1279,
+  "count": 1275,
+  "moduleCount": 1275,
   "allowlist": [
     "electron/ipc/errorHandlers.ts",
     "electron/ipc/handlers/agentCapabilities.ts",
@@ -163,12 +163,12 @@
     },
     {
       "file": "electron/ipc/handlers/diagnostics.ts",
-      "line": 67,
+      "line": 65,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/ipc/handlers/diagnostics.ts",
-      "line": 74,
+      "line": 72,
       "pattern": "sync-fs"
     },
     {
@@ -318,7 +318,7 @@
     },
     {
       "file": "electron/ipc/handlers/voiceInput.ts",
-      "line": 55,
+      "line": 56,
       "pattern": "sync-store-get"
     },
     {
@@ -1068,22 +1068,22 @@
     },
     {
       "file": "electron/services/PluginService.ts",
-      "line": 466,
+      "line": 381,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/PluginService.ts",
-      "line": 477,
+      "line": 392,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/PluginService.ts",
-      "line": 494,
+      "line": 409,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/PluginService.ts",
-      "line": 2063,
+      "line": 1536,
       "pattern": "sync-store-get"
     },
     {
@@ -1123,32 +1123,32 @@
     },
     {
       "file": "electron/services/ProjectStore.ts",
-      "line": 98,
+      "line": 97,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/ProjectStore.ts",
-      "line": 357,
+      "line": 356,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/ProjectStore.ts",
-      "line": 540,
+      "line": 539,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/ProjectStore.ts",
-      "line": 547,
+      "line": 546,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/ProjectStore.ts",
-      "line": 601,
+      "line": 600,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/ProjectStore.ts",
-      "line": 607,
+      "line": 606,
       "pattern": "sync-fs"
     },
     {
@@ -1418,57 +1418,57 @@
     },
     {
       "file": "electron/store.ts",
-      "line": 555,
+      "line": 551,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 557,
+      "line": 553,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 572,
+      "line": 568,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 587,
+      "line": 583,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 588,
+      "line": 584,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 590,
+      "line": 586,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 605,
+      "line": 601,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 607,
+      "line": 603,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 624,
+      "line": 620,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 633,
+      "line": 629,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 634,
+      "line": 630,
       "pattern": "sync-fs"
     },
     {

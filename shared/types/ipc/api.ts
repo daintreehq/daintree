@@ -1599,6 +1599,19 @@ export type VoiceCorrectionModel = "gpt-5-nano" | "gpt-5-mini";
  */
 export type VoiceParagraphingStrategy = "spoken-command" | "manual";
 
+/**
+ * Recording mode for voice dictation.
+ *
+ * "toggle" (default): Pressing the voice shortcut starts recording; pressing it
+ *   again stops recording. Recording persists until the user explicitly ends it.
+ *
+ * "push-to-talk": Recording is bound to the keyboard shortcut press. Pressing and
+ *   holding the voice shortcut starts recording; releasing the trigger key stops
+ *   recording and drains the transcript into the editor without auto-submitting.
+ *   Escape still cancels. The toolbar button remains toggle-only regardless of mode.
+ */
+export type VoiceRecordingMode = "toggle" | "push-to-talk";
+
 export interface VoiceInputSettings {
   enabled: boolean;
   openaiApiKey: string;
@@ -1622,6 +1635,8 @@ export interface VoiceInputSettings {
   organizationId: string;
   /** OpenAI Project ID for legacy sk- keys. Sent as OpenAI-Project header. */
   projectId: string;
+  /** Controls whether recording is held (push-to-talk) or toggled. Defaults to "toggle". */
+  recordingMode: VoiceRecordingMode;
 }
 
 export type HelpAssistantAuditRetention = 7 | 30 | 0;

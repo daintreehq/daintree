@@ -586,6 +586,47 @@ describe("getVoiceSettings migration", () => {
     }
   });
 
+  it("returns recordingMode='toggle' when the field is missing from the store", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-present",
+      // recordingMode intentionally absent.
+    });
+
+    const settings = getVoiceSettings();
+
+    expect(settings.recordingMode).toBe("toggle");
+  });
+
+  it("preserves recordingMode='push-to-talk' when stored", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-present",
+      recordingMode: "push-to-talk",
+    });
+
+    const settings = getVoiceSettings();
+
+    expect(settings.recordingMode).toBe("push-to-talk");
+  });
+
+  it("normalizes malformed recordingMode values to 'toggle' without writing to disk", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-present",
+      recordingMode: "hold" as unknown,
+    });
+
+    const settings = getVoiceSettings();
+
+    expect(settings.recordingMode).toBe("toggle");
+    // Normalization must not persist back to the store.
+    expect(vi.mocked(store.set)).not.toHaveBeenCalled();
+  });
+
   it("skips env override when WHISPER_API_KEY is empty string", async () => {
     const { store } = await import("../../../store.js");
     vi.mocked(store.get).mockReturnValueOnce({
