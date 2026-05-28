@@ -1932,7 +1932,9 @@ export function ReviewHubContent({
                                           ? prev.sortDir === "asc"
                                             ? "desc"
                                             : "asc"
-                                          : prev.sortDir,
+                                          : v === "churn"
+                                            ? "desc"
+                                            : prev.sortDir,
                                     }))
                                   }
                                 >
@@ -1951,6 +1953,17 @@ export function ReviewHubContent({
                                     <span className="flex items-center gap-2 flex-1">
                                       Status
                                       {stagedView.sortKey === "status" &&
+                                        (stagedView.sortDir === "asc" ? (
+                                          <ChevronUp className="w-3 h-3 ml-auto text-daintree-text/40" />
+                                        ) : (
+                                          <ChevronDown className="w-3 h-3 ml-auto text-daintree-text/40" />
+                                        ))}
+                                    </span>
+                                  </DropdownMenuRadioItem>
+                                  <DropdownMenuRadioItem value="churn">
+                                    <span className="flex items-center gap-2 flex-1">
+                                      Churn
+                                      {stagedView.sortKey === "churn" &&
                                         (stagedView.sortDir === "asc" ? (
                                           <ChevronUp className="w-3 h-3 ml-auto text-daintree-text/40" />
                                         ) : (
@@ -2057,6 +2070,24 @@ export function ReviewHubContent({
                               </button>
                             }
                           />
+                        ) : !stagedView.showGenerated &&
+                          status.staged.some((f) => isGeneratedFile(f.path)) ? (
+                          <EmptyState
+                            variant="filtered-empty"
+                            scale="sidebar"
+                            title="Only generated files staged"
+                            action={
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setStagedView((prev) => ({ ...prev, showGenerated: true }))
+                                }
+                                className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors underline underline-offset-2"
+                              >
+                                Show generated files
+                              </button>
+                            }
+                          />
                         ) : (
                           <EmptyState
                             variant="user-cleared"
@@ -2139,7 +2170,9 @@ export function ReviewHubContent({
                                           ? prev.sortDir === "asc"
                                             ? "desc"
                                             : "asc"
-                                          : prev.sortDir,
+                                          : v === "churn"
+                                            ? "desc"
+                                            : prev.sortDir,
                                     }))
                                   }
                                 >
@@ -2158,6 +2191,17 @@ export function ReviewHubContent({
                                     <span className="flex items-center gap-2 flex-1">
                                       Status
                                       {changesView.sortKey === "status" &&
+                                        (changesView.sortDir === "asc" ? (
+                                          <ChevronUp className="w-3 h-3 ml-auto text-daintree-text/40" />
+                                        ) : (
+                                          <ChevronDown className="w-3 h-3 ml-auto text-daintree-text/40" />
+                                        ))}
+                                    </span>
+                                  </DropdownMenuRadioItem>
+                                  <DropdownMenuRadioItem value="churn">
+                                    <span className="flex items-center gap-2 flex-1">
+                                      Churn
+                                      {changesView.sortKey === "churn" &&
                                         (changesView.sortDir === "asc" ? (
                                           <ChevronUp className="w-3 h-3 ml-auto text-daintree-text/40" />
                                         ) : (
@@ -2265,6 +2309,24 @@ export function ReviewHubContent({
                                 className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors underline underline-offset-2"
                               >
                                 Clear filter
+                              </button>
+                            }
+                          />
+                        ) : !changesView.showGenerated &&
+                          status.unstaged.some((f) => isGeneratedFile(f.path)) ? (
+                          <EmptyState
+                            variant="filtered-empty"
+                            scale="sidebar"
+                            title="Only generated files changed"
+                            action={
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setChangesView((prev) => ({ ...prev, showGenerated: true }))
+                                }
+                                className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors underline underline-offset-2"
+                              >
+                                Show generated files
                               </button>
                             }
                           />
