@@ -117,4 +117,19 @@ describe("WebviewDialog accessibility", () => {
     const labelEl = container.querySelector(`[id="${describedBy}"]`);
     expect(labelEl?.textContent).toBe("Enter a value");
   });
+
+  // VoiceOver drops live-region updates from outside the focused aria-modal
+  // subtree (Chromium 354736464), so a co-located announcer is required here.
+  it("co-locates non-focusable live regions inside the aria-modal panel", () => {
+    const { container } = render(<WebviewDialog dialog={baseAlert} onRespond={vi.fn()} />);
+    const panel = container.querySelector('[aria-modal="true"]');
+    expect(panel).not.toBeNull();
+    expect(panel!.querySelector('[aria-live="polite"]')).not.toBeNull();
+    expect(panel!.querySelector('[aria-live="assertive"]')).not.toBeNull();
+
+    for (const region of panel!.querySelectorAll("[aria-live]")) {
+      const tabindex = region.getAttribute("tabindex");
+      expect(tabindex === null || Number(tabindex) < 0).toBe(true);
+    }
+  });
 });

@@ -65,6 +65,25 @@ describe("ThemeBrowser", () => {
     useUIStore.setState({ overlayStack: [] });
   });
 
+  // VoiceOver drops live-region updates from outside the focused aria-modal
+  // subtree (Chromium 354736464), so a co-located announcer is required here.
+  it("co-locates non-focusable announcer live regions inside the aria-modal subtree", () => {
+    const { container } = render(<Harness />);
+    const modal = container.querySelector('[aria-modal="true"]');
+    expect(modal).not.toBeNull();
+
+    // AccessibilityAnnouncer contributes the only assertive region; the
+    // existing preview region is polite-only.
+    expect(modal!.querySelectorAll('[aria-live="assertive"]').length).toBe(1);
+    // Preview region (polite) + AccessibilityAnnouncer's polite region.
+    expect(modal!.querySelectorAll('[aria-live="polite"]').length).toBe(2);
+
+    for (const region of modal!.querySelectorAll("[aria-live]")) {
+      const tabindex = region.getAttribute("tabindex");
+      expect(tabindex === null || Number(tabindex) < 0).toBe(true);
+    }
+  });
+
   it("clicking a theme row sets previewSchemeId instantly (no debounce)", () => {
     const target = otherDarkScheme();
     render(<Harness />);

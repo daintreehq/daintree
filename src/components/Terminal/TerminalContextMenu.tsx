@@ -13,7 +13,7 @@ import { isBrowserPanel, isDevPreviewPanel, isPtyPanel, isReviewPanel } from "@s
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { closeAndAnnounce } from "@/lib/accessibility";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import {
   ArrowDownFromLine,
@@ -383,11 +383,7 @@ export function TerminalContextMenu({
       { terminalId, confirmed: true },
       { source: sourceRef.current }
     );
-    // Close the dialog first so the announce fires after focus returns to the
-    // main tree — VoiceOver suppresses live-region updates from outside the
-    // current modal subtree while focus is trapped.
-    setDestructiveConfirm(null);
-    useAnnouncerStore.getState().announce(announcement);
+    closeAndAnnounce(() => setDestructiveConfirm(null), announcement);
   }, [destructiveConfirm, terminalId]);
 
   const closeDestructiveConfirm = useCallback(() => {
