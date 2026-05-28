@@ -445,6 +445,7 @@ function RowOptionsMenu({
             message:
               "The full notification report was copied to your clipboard — paste it into the issue body.",
             transient: true,
+            context: { eventKind: "uiFeedback" },
           });
         } else {
           notify({
@@ -453,6 +454,7 @@ function RowOptionsMenu({
             message:
               "Couldn't copy the full report. Quote the correlation ID when filing the issue.",
             inboxMessage: "Couldn't copy notification report to clipboard.",
+            context: { eventKind: "uiFeedback" },
           });
         }
       }

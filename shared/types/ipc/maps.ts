@@ -1069,11 +1069,9 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
   "sound:play-ui-event": {
-    args: [eventId: string];
+    args: [soundId: string];
     result: void;
   };
-
-  // Sound channels
   "sound:get-dir": {
     args: [];
     result: string;
