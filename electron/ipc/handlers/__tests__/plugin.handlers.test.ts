@@ -19,6 +19,9 @@ vi.mock("../../../services/PluginService.js", () => ({
     listPluginActions: (...args: unknown[]) => mockListPluginActions(...args),
     registerPluginAction: (...args: unknown[]) => mockRegisterPluginAction(...args),
     unregisterPluginAction: (...args: unknown[]) => mockUnregisterPluginAction(...args),
+    // No-op for tests that don't care about implicit activation; the IPC
+    // handler awaits it before resolving the impl set.
+    activatePluginsForFileDecorationScope: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
