@@ -9,12 +9,17 @@ import {
 
 describe("devPreviewProxy", () => {
   describe("sanitizeSubdomainToken", () => {
-    it("passes through DNS-safe tokens", () => {
+    it("passes through already DNS-safe lowercase tokens", () => {
       expect(sanitizeSubdomainToken("panel-1")).toBe("panel-1");
-      expect(sanitizeSubdomainToken("abc123_DEF")).toBe("abc123_DEF");
+      expect(sanitizeSubdomainToken("abc123")).toBe("abc123");
     });
 
-    it("replaces non-alphanumeric characters with hyphens", () => {
+    it("lowercases uppercase characters (DNS hosts are case-insensitive)", () => {
+      expect(sanitizeSubdomainToken("ProjABC")).toBe("projabc");
+    });
+
+    it("folds underscores and other non-[a-z0-9-] characters to hyphens", () => {
+      expect(sanitizeSubdomainToken("abc123_DEF")).toBe("abc123-def");
       expect(sanitizeSubdomainToken("a/b c.d")).toBe("a-b-c-d");
     });
 
@@ -39,6 +44,14 @@ describe("devPreviewProxy", () => {
     it("stays within the 63-char DNS label limit for long ids", () => {
       const label = buildDevPreviewSubdomain("P".repeat(50), "Q".repeat(50));
       expect(label.length).toBeLessThanOrEqual(63);
+    });
+
+    it("round-trips through parseDevPreviewProxyHost for uppercase ids (case-insensitive Host)", () => {
+      // The browser lowercases the Host header, so the built subdomain must equal the parsed
+      // one even when the ids contain uppercase — otherwise the proxy lookup misses.
+      const subdomain = buildDevPreviewSubdomain("ProjABC", "PanelXYZ");
+      const host = `${subdomain.toUpperCase()}.localhost:43000`;
+      expect(parseDevPreviewProxyHost(host)).toBe(subdomain);
     });
   });
 

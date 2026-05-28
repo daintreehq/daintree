@@ -426,6 +426,17 @@ export function DevPreviewPane({
   const isUnconfigured =
     Boolean(currentProjectId) && !isSettingsLoading && projectSettings !== null && !devCommand;
 
+  // Hold the webview (show the loading state) while the dev server is running but the pane
+  // hasn't settled onto the stable proxy origin yet (#9100). Covers two cases: the proxy port
+  // is still being fetched (proxyOrigin === undefined), and an upgraded session whose persisted
+  // history is a raw localhost URL that the navigation effect is about to migrate. Without this
+  // the webview would briefly load the unstable origin. Legacy mode (proxyOrigin === null) opts
+  // out entirely.
+  const isProxyUrlPending =
+    status === "running" &&
+    (proxyOrigin === undefined ||
+      (typeof proxyOrigin === "string" && !!currentUrl && !currentUrl.startsWith(proxyOrigin)));
+
   const { isEvicted, evictingRef } = useWebviewEviction(id, location);
 
   const [isRecoveringFromEviction, setIsRecoveringFromEviction] = useState(false);
@@ -1400,7 +1411,7 @@ export function DevPreviewPane({
               {viewportFit && fitScale < 1 && ` · ${Math.round(fitScale * 100)}%`}
             </div>
           )}
-          {isRestarting || status === "starting" || status === "installing" ? (
+          {isRestarting || status === "starting" || status === "installing" || isProxyUrlPending ? (
             <DevPreviewLoadingState
               variant="full"
               isLoading={true}

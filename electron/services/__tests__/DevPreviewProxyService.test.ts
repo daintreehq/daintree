@@ -86,6 +86,32 @@ describe("DevPreviewProxyService", () => {
     expect(setCookie.toLowerCase()).not.toContain("domain=");
   });
 
+  it("strips Domain from every Set-Cookie header (multiple cookies, incl. Domain=.localhost)", async () => {
+    upstream = http.createServer((_req, res) => {
+      res.writeHead(200, {
+        "Set-Cookie": [
+          "sid=abc; Domain=.localhost; Path=/",
+          "uid=xyz; Domain=localhost; SameSite=None",
+        ],
+      });
+      res.end("ok");
+    });
+    const upstreamPort = await listen(upstream);
+
+    proxy = new DevPreviewProxyService(() => upstreamPort);
+    const proxyPort = await proxy.start();
+
+    const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
+    const cookies = res.headers["set-cookie"] ?? [];
+
+    expect(cookies).toHaveLength(2);
+    expect(cookies.join(" ")).toContain("sid=abc");
+    expect(cookies.join(" ")).toContain("uid=xyz");
+    for (const cookie of cookies) {
+      expect(cookie.toLowerCase()).not.toContain("domain=");
+    }
+  });
+
   it("returns 502 when no upstream is registered for the subdomain", async () => {
     proxy = new DevPreviewProxyService(() => null);
     const proxyPort = await proxy.start();
@@ -144,6 +170,31 @@ describe("DevPreviewProxyService", () => {
     client.close();
 
     expect(reply).toBe("echo:ping");
+  });
+
+  it("preserves the request path and query string on a WS upgrade (HMR)", async () => {
+    let seenUrl: string | undefined;
+    wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise<void>((resolve) => wss!.on("listening", resolve));
+    const upstreamPort = (wss.address() as AddressInfo).port;
+    wss.on("connection", (socket, req) => {
+      seenUrl = req.url;
+      socket.send("ok");
+    });
+
+    proxy = new DevPreviewProxyService(() => upstreamPort);
+    const proxyPort = await proxy.start();
+
+    const client = new WebSocket(`ws://127.0.0.1:${proxyPort}/@vite/client?t=123`, {
+      headers: { host: `dp-test.localhost:${proxyPort}` },
+    });
+    await new Promise<void>((resolve, reject) => {
+      client.on("message", () => resolve());
+      client.on("error", reject);
+    });
+    client.close();
+
+    expect(seenUrl).toBe("/@vite/client?t=123");
   });
 
   it("destroys the upgrade socket when no upstream is registered", async () => {

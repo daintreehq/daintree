@@ -1618,5 +1618,22 @@ describe("DevPreviewSessionService", () => {
     it("returns null for an unknown subdomain", () => {
       expect(service.getUpstreamPortForSubdomain("dp-nope-nope")).toBeNull();
     });
+
+    it("returns null once the session is stopped even though the registry entry lingers", async () => {
+      vi.spyOn(portAllocator, "allocatePort").mockImplementation(
+        async (registry: Map<string, number>, key: string) => {
+          registry.set(key, 4321);
+          return 4321;
+        }
+      );
+
+      await service.ensure(baseRequest);
+      const subdomain = buildDevPreviewSubdomain(baseRequest.projectId, baseRequest.panelId);
+      expect(service.getUpstreamPortForSubdomain(subdomain)).toBe(4321);
+
+      await service.stop({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+
+      expect(service.getUpstreamPortForSubdomain(subdomain)).toBeNull();
+    });
   });
 });

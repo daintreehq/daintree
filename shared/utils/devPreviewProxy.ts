@@ -18,12 +18,20 @@ const SUBDOMAIN_PREFIX = "dp-";
 const LOCALHOST_SUFFIX = ".localhost";
 
 /**
- * Reduce an arbitrary id to a DNS-label-safe token. Mirrors the `sanitizeToken` used for
- * terminal ids: non-alphanumeric runs collapse to hyphens and the result is capped at 24
- * chars (well under the 63-char DNS label limit, even combined as `dp-<a>-<b>`).
+ * Reduce an arbitrary id to a DNS-label-safe token: lowercased, every character outside
+ * `[a-z0-9-]` collapsed to a hyphen, capped at 24 chars (well under the 63-char DNS label
+ * limit, even combined as `dp-<a>-<b>`). Lowercasing is essential, not cosmetic — hostnames
+ * are case-insensitive, so the browser sends the `Host` header lowercased; building the
+ * subdomain in any other case would make the proxy's subdomain→port lookup miss. Underscores
+ * are folded too since they aren't valid in RFC 1123 DNS labels.
  */
 export function sanitizeSubdomainToken(input: string): string {
-  return input.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 24) || "x";
+  return (
+    input
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "-")
+      .slice(0, 24) || "x"
+  );
 }
 
 /**
