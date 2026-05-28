@@ -349,6 +349,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
                   cwd: projectPath,
                   description,
                   apiKey,
+                  organizationId: liveSettings.organizationId,
+                  projectId: liveSettings.projectId,
                   signal,
                 });
                 // Guard the IPC send: voiceFileLinkResolver may return on a
