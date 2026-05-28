@@ -74,10 +74,6 @@ vi.mock("@/components/ui/context-menu", () => ({
   ),
 }));
 
-vi.mock("@/components/ui/ShortcutRevealChip", () => ({
-  ShortcutRevealChip: () => null,
-}));
-
 vi.mock("@/lib/tooltipShortcut", () => ({
   createTooltipContent: () => null,
 }));

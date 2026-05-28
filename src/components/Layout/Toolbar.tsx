@@ -29,7 +29,6 @@ import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AgentButton } from "./AgentButton";
 import { AgentTrayButton } from "./AgentTrayButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -513,7 +512,6 @@ export function Toolbar({
                 aria-keyshortcuts={sidebarAriaShortcut}
               >
                 {isFocusMode ? <PanelLeftOpen /> : <PanelLeftClose />}
-                <ShortcutRevealChip actionId="nav.toggleSidebar" />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
@@ -666,9 +664,6 @@ export function Toolbar({
                     aria-keyshortcuts={copyTreeAriaShortcut}
                   >
                     {showCopyingSpinner ? <Spinner /> : treeCopied ? <Check /> : <Folders />}
-                    {!treeCopied && !isCopyingTree && (
-                      <ShortcutRevealChip actionId="worktree.copyTree" />
-                    )}
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="font-medium">

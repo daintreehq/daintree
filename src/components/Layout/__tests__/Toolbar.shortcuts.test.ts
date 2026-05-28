@@ -9,7 +9,6 @@ const SETTINGS_BUTTON_PATH = path.resolve(__dirname, "../ToolbarSettingsButton.t
 const LAUNCHER_BUTTON_PATH = path.resolve(__dirname, "../ToolbarLauncherButton.tsx");
 const AGENT_BUTTON_PATH = path.resolve(__dirname, "../AgentButton.tsx");
 const VOICE_RECORDING_PATH = path.resolve(__dirname, "../VoiceRecordingToolbarButton.tsx");
-const SHORTCUT_REVEAL_CHIP_PATH = path.resolve(__dirname, "../../ui/ShortcutRevealChip.tsx");
 const TOOLBAR_CSS_PATH = path.resolve(__dirname, "../../../styles/components/toolbar.css");
 
 describe("Toolbar shortcut tooltips — issue #3443", () => {
@@ -20,7 +19,6 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
   let launcherSource: string;
   let agentSource: string;
   let voiceSource: string;
-  let chipSource: string;
 
   beforeEach(async () => {
     [
@@ -31,7 +29,6 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       launcherSource,
       agentSource,
       voiceSource,
-      chipSource,
     ] = await Promise.all([
       fs.readFile(TOOLBAR_PATH, "utf-8"),
       fs.readFile(PROBLEMS_BUTTON_PATH, "utf-8"),
@@ -40,7 +37,6 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       fs.readFile(LAUNCHER_BUTTON_PATH, "utf-8"),
       fs.readFile(AGENT_BUTTON_PATH, "utf-8"),
       fs.readFile(VOICE_RECORDING_PATH, "utf-8"),
-      fs.readFile(SHORTCUT_REVEAL_CHIP_PATH, "utf-8"),
     ]);
   });
 
@@ -141,12 +137,12 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
   });
 
   describe("aria-keyshortcuts exposure (issue #6874)", () => {
-    it("Toolbar.tsx calls useAriaKeyshortcuts for each chip-bearing button", () => {
+    it("Toolbar.tsx calls useAriaKeyshortcuts for each direct toolbar button", () => {
       expect(source).toContain('useAriaKeyshortcuts("nav.toggleSidebar")');
       expect(source).toContain('useAriaKeyshortcuts("worktree.copyTree")');
     });
 
-    it("Toolbar.tsx renders aria-keyshortcuts on its chip buttons", () => {
+    it("Toolbar.tsx renders aria-keyshortcuts on its direct buttons", () => {
       expect(source).toContain("aria-keyshortcuts={sidebarAriaShortcut}");
       expect(source).toContain("aria-keyshortcuts={copyTreeAriaShortcut}");
     });
@@ -171,7 +167,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(launcherSource).toContain("aria-keyshortcuts={ariaShortcut}");
     });
 
-    it("AgentButton renders aria-keyshortcuts on both visible-chip Buttons", () => {
+    it("AgentButton renders aria-keyshortcuts on both primary Buttons", () => {
       expect(agentSource).toContain("useAriaKeyshortcuts(`agent.${type}`)");
       const matches = agentSource.match(/aria-keyshortcuts=\{ariaShortcut\}/g) ?? [];
       expect(matches.length).toBeGreaterThanOrEqual(2);
@@ -263,16 +259,6 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
   });
 
-  describe("ShortcutRevealChip global gate removed — issue #8938", () => {
-    it("does not gate chip rendering behind a RENDER_CHIPS flag", () => {
-      expect(chipSource).not.toContain("RENDER_CHIPS");
-    });
-
-    it("returns null only when the keybinding display is empty", () => {
-      expect(chipSource).toContain("if (!display) return null;");
-    });
-  });
-
   describe("PluginToolbarButton aria-keyshortcuts — issue #8938", () => {
     it("calls useAriaKeyshortcuts with the plugin actionId", () => {
       expect(source).toContain("useAriaKeyshortcuts(config.actionId)");
@@ -330,8 +316,8 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
 
     it("leaves the chevron DropdownMenuTrigger Button without hover hint wiring", () => {
-      // Chevron has no ShortcutRevealChip, so it must keep the lone
-      // onPointerEnter={clearFocusRestoreSuppression} form (no hover spread).
+      // Chevron keeps the lone onPointerEnter={clearFocusRestoreSuppression}
+      // form — no hover spread, since the chevron has no shortcut hint surface.
       expect(agentSource).toContain("onPointerEnter={clearFocusRestoreSuppression}");
     });
   });

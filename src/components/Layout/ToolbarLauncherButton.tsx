@@ -2,7 +2,6 @@ import { useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { SquareTerminal, Globe, Unplug } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -79,7 +78,6 @@ export function ToolbarLauncherButton({
               aria-keyshortcuts={ariaShortcut}
             >
               <Icon />
-              <ShortcutRevealChip actionId={config.keybindingAction} />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">

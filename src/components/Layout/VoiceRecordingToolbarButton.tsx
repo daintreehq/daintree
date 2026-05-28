@@ -8,7 +8,6 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import { cn } from "@/lib/utils";
 import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
@@ -265,7 +264,6 @@ export function VoiceRecordingToolbarButton({
                   }}
                 />
               </div>
-              <ShortcutRevealChip actionId="voiceInput.toggle" />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom" className="text-center">

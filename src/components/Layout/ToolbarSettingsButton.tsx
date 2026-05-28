@@ -1,7 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { SlidersHorizontal, Unplug } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import {
   ContextMenu,
   ContextMenuActionItem,
@@ -64,7 +63,6 @@ export function ToolbarSettingsButton({
               aria-keyshortcuts={settingsAriaShortcut}
             >
               <SlidersHorizontal />
-              <ShortcutRevealChip actionId="app.settings" />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">

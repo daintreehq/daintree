@@ -41,7 +41,6 @@ import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
 import { useMcpBridge } from "./hooks/useMcpBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { useSoundPlaybackListener } from "./hooks/useSoundPlaybackListener";
-import { useHeldShortcutReveal } from "./hooks/useHeldShortcutReveal";
 import { notifyViewPainted, removeStartupSkeleton } from "./utils/removeStartupSkeleton";
 import { useAppBoot } from "./hooks/app/useAppBoot";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
@@ -507,7 +506,6 @@ function AppInner() {
   }, []);
   useProjectSwitchRehydration();
   useShortcutHints(isStateLoaded);
-  useHeldShortcutReveal();
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
   const onboardingOverlayActive = gettingStarted.visible || gettingStarted.showCelebration;
   useUpdateListener(onboardingOverlayActive);

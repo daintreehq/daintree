@@ -39,10 +39,6 @@ vi.mock("@/components/ui/button", () => ({
   ),
 }));
 
-vi.mock("@/components/ui/ShortcutRevealChip", () => ({
-  ShortcutRevealChip: () => null,
-}));
-
 vi.mock("lucide-react", () => ({
   AlertCircle: () => <span data-testid="icon-alert" />,
   Unplug: () => <span data-testid="icon-unplug" />,

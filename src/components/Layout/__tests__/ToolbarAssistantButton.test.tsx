@@ -32,10 +32,6 @@ vi.mock("@/components/ui/button", () => ({
   ),
 }));
 
-vi.mock("@/components/ui/ShortcutRevealChip", () => ({
-  ShortcutRevealChip: () => null,
-}));
-
 vi.mock("@/components/icons/DaintreeIcon", () => ({
   DaintreeIcon: () => <span data-testid="icon-daintree" />,
 }));

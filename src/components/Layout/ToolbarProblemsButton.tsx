@@ -2,7 +2,6 @@ import { Button } from "@/components/ui/button";
 import { AlertCircle, Unplug } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -74,7 +73,6 @@ export function ToolbarProblemsButton({
                 data-visible={watcherDegraded}
                 className="toolbar-badge absolute bottom-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-status-warning ring-1 ring-daintree-sidebar"
               />
-              <ShortcutRevealChip actionId="panel.toggleDiagnostics" />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
