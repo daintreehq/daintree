@@ -220,12 +220,20 @@ function SettingField({
   };
 
   const commitSecret = async () => {
-    // Re-mask on blur regardless; only persist when something was typed.
     const value = draft;
-    setRevealed(false);
-    setDraft("");
-    if (value === "") return;
-    if (await writeValue(value)) setHasStored(true);
+    if (value === "") {
+      setRevealed(false);
+      setDraft("");
+      return;
+    }
+    // Persist first; only re-mask (and drop the value from the DOM) once the
+    // write succeeds, so a failed save leaves the typed value recoverable next
+    // to the inline error instead of silently discarding it.
+    if (await writeValue(value)) {
+      setHasStored(true);
+      setRevealed(false);
+      setDraft("");
+    }
   };
 
   const renderControl = () => {

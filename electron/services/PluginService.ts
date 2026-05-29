@@ -78,6 +78,7 @@ import type {
   PluginSettingsScope,
   PluginSettingsUiValues,
   ViewContribution,
+  SettingDefinition,
 } from "../../shared/types/plugin.js";
 import { PluginSettingsStore } from "./PluginSettingsStore.js";
 import { projectStore } from "./ProjectStore.js";
@@ -3943,55 +3944,94 @@ export class PluginService {
     });
   }
 
+  // ============================================================
+  // Settings UI bridge (#9301)
+  //
+  // Renderer-facing read/write/reveal/clear for the generated settings form.
+  // These reuse the same per-(plugin, scope) store and subscriber path as the
+  // plugin-facing `host.settings` API, so a write from the form fires the
+  // owning plugin's `onDidChange` without it reactivating. Project scope is
+  // resolved from an explicit `projectId` (not the main-process "current
+  // project") so a settings form in one window can't read or write another
+  // window's active-project values.
+  // ============================================================
+
+  private uiSettingDefinitions(pluginId: string): SettingDefinition[] {
+    return this.plugins.get(pluginId)?.manifest.contributes.settings ?? [];
+  }
+
   /**
-   * Fetch all non-secret setting values and the list of secret keys for a
-   * plugin + scope. Used by the plugin settings UI to populate form fields.
-   * Secrets are not returned — only their key names (so the UI can render
-   * masked fields) and a "reveal" affordance.
+   * A setting is secret when it declares the canonical `type: "secret"` OR the
+   * legacy `secret: true` flag. Both must be checked — the manifest schema keeps
+   * the boolean when coercing `secret: true` to `type: "secret"`, but a manifest
+   * authored directly as `{ type: "secret" }` carries no boolean, so a
+   * `secret`-only check would leak its value into {@link getSettingValuesForUi}.
+   */
+  private isSecretSetting(def: SettingDefinition): boolean {
+    return def.type === "secret" || def.secret === true;
+  }
+
+  /**
+   * Resolve the settings file path for a UI call. User scope is fixed; project
+   * scope resolves the explicit `projectId` (returns `null` for an
+   * unknown/absent id, which callers treat as "no project active").
+   *
+   * Invariant: the renderer passes its own `currentProject.id`, the same id
+   * space `projectStore.getProjectById` is keyed on. This is what makes
+   * per-window project scoping correct — a form in one window resolves *its*
+   * project, not the main process's globally-"current" project, which may
+   * belong to a different window.
+   */
+  private resolveUiSettingsFilePath(
+    pluginId: string,
+    scope: PluginSettingsScope,
+    projectId: string | null
+  ): string | null {
+    if (scope === "project") {
+      if (!projectId) return null;
+      const root = projectStore.getProjectById(projectId)?.path;
+      if (!root) return null;
+      return path.join(root, ".daintree", "plugin-settings", `${pluginId}.json`);
+    }
+    return path.join(this.settingsRoot(), `${pluginId}.json`);
+  }
+
+  /**
+   * Read stored values for one plugin + scope, for the settings form. Secret
+   * settings are never returned by value — their ids appear in `secretsSet` when
+   * a value is stored. Only settings whose declared scope matches `scope` are
+   * included, so a stray key in the wrong file can't surface under the other
+   * scope.
    */
   async getSettingValuesForUi(
     pluginId: string,
     scope: PluginSettingsScope,
-    _projectId: string | null
+    projectId: string | null
   ): Promise<PluginSettingsUiValues> {
-    const filePath = this.resolveSettingsFilePath(pluginId, scope);
-    if (!filePath) {
-      return { values: {}, secretsSet: [] };
-    }
-
-    const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
-    const manifest = this.plugins.get(pluginId)?.manifest;
-    const settings = manifest?.contributes.settings ?? [];
-
     const values: Record<string, unknown> = {};
     const secretsSet: string[] = [];
-
-    for (const setting of settings) {
-      const value = await store.get<unknown>(setting.id);
-      if (value !== undefined) {
-        if (setting.secret) {
-          secretsSet.push(setting.id);
-        } else {
-          values[setting.id] = value;
-        }
-      }
-    }
-
+    const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
+    if (!filePath) return { values, secretsSet };
+    const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
+    const defs = this.uiSettingDefinitions(pluginId).filter((d) => (d.scope ?? "user") === scope);
+    await Promise.all(
+      defs.map(async (def) => {
+        const stored = await store.get<unknown>(def.id);
+        if (stored === undefined) return;
+        if (this.isSecretSetting(def)) secretsSet.push(def.id);
+        else values[def.id] = stored;
+      })
+    );
     return { values, secretsSet };
   }
 
-  /**
-   * Persist a single setting value. The UI calls this when the user changes
-   * a form field. Values are JSON-serialized; secret settings are handled
-   * identically to non-secret ones at storage time (the secret classification
-   * is metadata, not an encryption marker).
-   */
+  /** Persist a value from the settings form, firing the plugin's `onDidChange`. */
   async setSettingValueFromUi(
     pluginId: string,
     key: string,
     value: unknown,
     scope: PluginSettingsScope,
-    _projectId: string | null
+    projectId: string | null
   ): Promise<void> {
     assertSettingsKey(pluginId, "set", key);
     if (value === undefined) {
@@ -4000,7 +4040,7 @@ export class PluginService {
       );
     }
     this.assertSettingDeclared(pluginId, key);
-    const filePath = this.resolveSettingsFilePath(pluginId, scope);
+    const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
     if (!filePath) {
       throw new Error(
         `Plugin "${pluginId}" settings: no active project — "project" scope has no target`
@@ -4012,42 +4052,44 @@ export class PluginService {
   }
 
   /**
-   * Delete a setting value. The UI calls this when the user clears a form
-   * field (for optional settings).
+   * Clear a stored value (the form's "reset to default" — resetting removes the
+   * stored override rather than writing the declared default). Fires
+   * `onDidChange` with `undefined` so the plugin falls back to its default.
    */
   async deleteSettingValueFromUi(
     pluginId: string,
     key: string,
     scope: PluginSettingsScope,
-    _projectId: string | null
+    projectId: string | null
   ): Promise<void> {
     assertSettingsKey(pluginId, "delete", key);
-    const filePath = this.resolveSettingsFilePath(pluginId, scope);
-    if (!filePath) {
-      throw new Error(
-        `Plugin "${pluginId}" settings: no active project — "project" scope has no target`
-      );
-    }
+    this.assertSettingDeclared(pluginId, key);
+    const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
+    if (!filePath) return;
     const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
     const changed = await store.delete(key);
     if (changed) this.notifySettingsSubscribers(pluginId, scope, key, undefined);
   }
 
   /**
-   * Decrypt/reveal a secret setting value. Secrets are stored as plaintext
-   * (there's no encryption), so revealing just means returning the stored
-   * value. Returns `null` if the setting is not set. The UI uses this when
-   * the user clicks "reveal" on a masked field.
+   * Fetch a single secret value for in-place reveal. Returns `null` when unset.
+   * Non-string secrets are JSON-stringified so the form can display them.
+   *
+   * Only a declared `secret`-typed setting may be revealed — this is the secret
+   * counterpart to the masking in {@link getSettingValuesForUi}. The guard stops
+   * the channel being used as a generic read-any-key bypass that would let a
+   * caller pull non-secret (or undeclared) values one at a time.
    */
   async revealSecretSettingForUi(
     pluginId: string,
     key: string,
     scope: PluginSettingsScope,
-    _projectId: string | null
+    projectId: string | null
   ): Promise<string | null> {
     assertSettingsKey(pluginId, "get", key);
-    this.assertSettingDeclared(pluginId, key);
-    const filePath = this.resolveSettingsFilePath(pluginId, scope);
+    const def = this.uiSettingDefinitions(pluginId).find((s) => s.id === key);
+    if (!def || !this.isSecretSetting(def)) return null;
+    const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
     if (!filePath) return null;
     const value = await this.getOrCreateSettingsStore(pluginId, scope, filePath).get<unknown>(key);
     if (value === undefined || value === null) return null;
