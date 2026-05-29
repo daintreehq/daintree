@@ -83,6 +83,22 @@ describe("runInstall", () => {
     await expect(runInstall("./x.dntr")).rejects.toBeInstanceOf(DaintreeUnavailableError);
     await expect(runInstall("./x.dntr")).rejects.toThrow(socketPath);
   });
+
+  it("rejects promptly when the server accepts then closes without responding", async () => {
+    server = net.createServer((socket) => socket.destroy());
+    await new Promise<void>((resolve) => server!.listen(socketPath, () => resolve()));
+    await expect(runInstall("./x.dntr")).rejects.toBeInstanceOf(DaintreeUnavailableError);
+  });
+
+  it("trims surrounding whitespace before deciding path vs url", async () => {
+    let received: { params?: unknown } | null = null;
+    await serve((req) => {
+      received = req;
+      return { result: { status: "installed", pluginId: "acme.demo" } };
+    });
+    await runInstall("  https://example.com/p.dntr  ");
+    expect((received!.params as { url: string }).url).toBe("https://example.com/p.dntr");
+  });
 });
 
 describe("runUninstall", () => {

@@ -23,6 +23,17 @@ export interface ScaffoldContext {
 
 const DAINTREE_ENGINE_RANGE = ">=0.11.0";
 
+/** A safely-quoted JS/TS string literal for embedding author text in source. */
+function q(value: string): string {
+  return JSON.stringify(value);
+}
+
+/** Single-line, comment-safe rendering of author text: strips newlines and any
+ * block-comment terminator so it can't break the generated JSDoc. */
+function c(value: string): string {
+  return value.replace(/\*\//g, "* /").replace(/[\r\n]+/g, " ");
+}
+
 function manifest(ctx: ScaffoldContext, contributes: Record<string, unknown>): string {
   const obj = {
     name: ctx.scopedName,
@@ -107,24 +118,28 @@ dist/
 `;
 
 function commandEntry(ctx: ScaffoldContext): string {
+  const title = q(`${ctx.displayName}: Run`);
+  const description = q(`Run the ${ctx.displayName} command.`);
+  const category = q(ctx.displayName);
+  const message = q(`Hello from ${ctx.displayName}`);
   return `import type { PluginHostApi } from "@daintreehq/plugin-sdk";
 
 /**
- * ${ctx.displayName} — command plugin entry. Daintree calls \`activate\` once
+ * ${c(ctx.displayName)} — command plugin entry. Daintree calls \`activate\` once
  * when the plugin loads; return a disposer to clean up on unload.
  */
 export async function activate(host: PluginHostApi): Promise<() => void> {
   const dispose = host.registerAction(
     {
       id: "run",
-      title: "${ctx.displayName}: Run",
-      description: "Run the ${ctx.displayName} command.",
-      category: "${ctx.displayName}",
+      title: ${title},
+      description: ${description},
+      category: ${category},
       kind: "command",
       danger: "safe",
     },
     async () => {
-      await host.showToast({ message: "Hello from ${ctx.displayName}", type: "success" });
+      await host.showToast({ message: ${message}, type: "success" });
       return { ran: true };
     }
   );
@@ -140,7 +155,7 @@ function viewEntry(ctx: ScaffoldContext): string {
   return `import type { PluginHostApi } from "@daintreehq/plugin-sdk";
 
 /**
- * ${ctx.displayName} — view plugin entry. The panel UI lives in \`src/panel.tsx\`
+ * ${c(ctx.displayName)} — view plugin entry. The panel UI lives in \`src/panel.tsx\`
  * and is wired through \`contributes.experimental_views\` in plugin.json.
  */
 export async function activate(_host: PluginHostApi): Promise<() => void> {
@@ -153,11 +168,11 @@ function panelComponent(ctx: ScaffoldContext): string {
   return `import React from "react";
 
 /**
- * Panel view for ${ctx.displayName}. Rendered by Daintree when the user opens
+ * Panel view for ${c(ctx.displayName)}. Rendered by Daintree when the user opens
  * the contributed view.
  */
 export default function Panel(): React.ReactElement {
-  return <div style={{ padding: 16 }}>Hello from ${ctx.displayName}</div>;
+  return <div style={{ padding: 16 }}>{${q(`Hello from ${ctx.displayName}`)}}</div>;
 }
 `;
 }
@@ -166,7 +181,7 @@ function mcpEntry(ctx: ScaffoldContext): string {
   return `import type { PluginHostApi } from "@daintreehq/plugin-sdk";
 
 /**
- * ${ctx.displayName} — MCP plugin entry. The MCP server process is declared in
+ * ${c(ctx.displayName)} — MCP plugin entry. The MCP server process is declared in
  * \`contributes.experimental_mcpServers\` (see plugin.json) and spawned by
  * Daintree; \`src/server.ts\` is its skeleton implementation.
  */
@@ -179,7 +194,7 @@ export async function activate(_host: PluginHostApi): Promise<() => void> {
 function mcpServer(ctx: ScaffoldContext): string {
   return `#!/usr/bin/env node
 /**
- * Minimal stdio MCP server skeleton for ${ctx.displayName}. Replace this with a
+ * Minimal stdio MCP server skeleton for ${c(ctx.displayName)}. Replace this with a
  * real implementation using \`@modelcontextprotocol/sdk\`. Daintree spawns it
  * per the \`command\`/\`args\` in plugin.json and speaks MCP over stdio.
  */

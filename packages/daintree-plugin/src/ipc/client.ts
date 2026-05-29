@@ -74,6 +74,20 @@ export function sendCliRequest(method: string, params?: unknown): Promise<unknow
       finish(() => resolve(res.result));
     });
 
+    // The peer accepted the connection then closed it without a complete
+    // response frame — treat as an unusable/stale endpoint rather than hanging
+    // until the request timeout fires.
+    socket.on("close", () => {
+      finish(() =>
+        reject(
+          new DaintreeUnavailableError(
+            `Daintree closed the connection without responding (socket: ${socketPath}). Restart Daintree and try again.`,
+            socketPath
+          )
+        )
+      );
+    });
+
     socket.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "ENOENT") {
         finish(() =>
@@ -86,11 +100,15 @@ export function sendCliRequest(method: string, params?: unknown): Promise<unknow
         );
         return;
       }
-      if (err.code === "ECONNREFUSED") {
+      // ECONNREFUSED: stale socket file with no listener. ECONNRESET/EPIPE: the
+      // peer accepted then dropped the connection mid-request (e.g. a process
+      // holding the path that doesn't speak the protocol). All mean "can't
+      // complete the request against this endpoint".
+      if (err.code === "ECONNREFUSED" || err.code === "ECONNRESET" || err.code === "EPIPE") {
         finish(() =>
           reject(
             new DaintreeUnavailableError(
-              `Couldn't connect to Daintree (stale socket at ${socketPath}). Restart Daintree and try again.`,
+              `Couldn't connect to Daintree (stale or unresponsive socket at ${socketPath}). Restart Daintree and try again.`,
               socketPath
             )
           )

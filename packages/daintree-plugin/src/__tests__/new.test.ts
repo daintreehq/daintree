@@ -86,6 +86,25 @@ describe("scaffoldPlugin", () => {
     ).rejects.toThrow(/Plugin name/);
   });
 
+  it("escapes a hostile displayName so generated source stays well-formed", async () => {
+    const displayName = 'Bob "The" Tool';
+    const result = await scaffoldPlugin({
+      cwd: tmpDir,
+      targetDir: "inject",
+      publisher: "acme",
+      displayName,
+      template: "command",
+    });
+    const src = await fs.readFile(path.join(result.dir, "src", "index.ts"), "utf8");
+    // Values are embedded via JSON.stringify, so inner quotes are escaped rather
+    // than left raw to break the surrounding double-quoted literal.
+    expect(src).toContain(JSON.stringify(`${displayName}: Run`));
+    expect(src).toContain(JSON.stringify(`Hello from ${displayName}`));
+    // plugin.json remains valid JSON with the verbatim display name.
+    const manifest = await readJson(path.join(result.dir, "plugin.json"));
+    expect(manifest.displayName).toBe(displayName);
+  });
+
   it("view template contributes a panel view with a built componentPath", async () => {
     const result = await scaffoldPlugin({
       cwd: tmpDir,

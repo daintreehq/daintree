@@ -86,4 +86,27 @@ describe("runPackage", () => {
     await writeFile("dist/index.js", "export const x = 1;");
     await expect(runPackage({ dir: tmpDir, skipBuild: true })).rejects.toThrow(/validation failed/);
   });
+
+  it("keeps the output filename inside the plugin dir for a malicious version", async () => {
+    await writeFile(
+      "plugin.json",
+      JSON.stringify({
+        name: "acme.packtest",
+        version: "../../escape",
+        main: "dist/index.js",
+        engines: { daintree: "^0.11.0" },
+      })
+    );
+    await writeFile("dist/index.js", "export const x = 1;");
+    const result = await runPackage({ dir: tmpDir, skipBuild: true });
+    expect(path.dirname(result.outputPath!)).toBe(tmpDir);
+    expect(result.outputPath!).not.toContain("/..");
+  });
+
+  it("dry run never invokes the Vite build (no vite in fixture)", async () => {
+    await fixture();
+    // No node_modules/.bin/vite exists; if dry-run tried to build it would throw.
+    const result = await runPackage({ dir: tmpDir, dryRun: true });
+    expect(result.outputPath).toBeUndefined();
+  });
 });

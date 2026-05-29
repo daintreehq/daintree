@@ -84,7 +84,8 @@ export async function runPackage(opts: PackageOptions = {}): Promise<PackageResu
     await fs.readFile(path.join(dir, "plugin.json"), "utf8")
   ) as MinimalManifest;
 
-  if (!opts.skipBuild) {
+  // A dry run is a no-side-effects preview — never trigger the Vite build.
+  if (!opts.skipBuild && !opts.dryRun) {
     await runViteBuild(dir);
   }
 
@@ -120,7 +121,11 @@ export async function runPackage(opts: PackageOptions = {}): Promise<PackageResu
     }
   }
 
-  const outputName = `${manifest.name}-${manifest.version}.dntr`;
+  // `name` is regex-guarded by the schema, but `version` is only `min(1)` —
+  // strip any path-significant characters so a hostile `"version": "../../x"`
+  // can't write the archive outside the plugin directory.
+  const safeVersion = manifest.version.replace(/[^\w.\-]/g, "");
+  const outputName = `${manifest.name}-${safeVersion}.dntr`;
   const outputPath = path.join(dir, outputName);
 
   if (opts.dryRun) {

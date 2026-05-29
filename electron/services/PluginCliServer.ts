@@ -148,6 +148,8 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
   }
 
   function handleConnection(socket: net.Socket): void {
+    openSockets.add(socket);
+    socket.once("close", () => openSockets.delete(socket));
     socket.setEncoding("utf8");
     let buffer = "";
     let overflowed = false;
@@ -178,6 +180,7 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
   }
 
   let server: net.Server | null = null;
+  const openSockets = new Set<net.Socket>();
 
   async function listen(): Promise<void> {
     if (server) return;
@@ -206,6 +209,12 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
     const srv = server;
     server = null;
     if (!srv) return;
+    // Drop any half-open client connections so `server.close()` resolves
+    // promptly instead of waiting on a client that never sent a full frame.
+    for (const socket of openSockets) {
+      socket.destroy();
+    }
+    openSockets.clear();
     await new Promise<void>((resolve) => srv.close(() => resolve()));
     if (isFileSocket(socketPath)) {
       await fs.rm(socketPath, { force: true }).catch(() => {});
@@ -242,8 +251,11 @@ export async function startPluginCliServer(): Promise<void> {
       uninstall: ({ pluginId, deleteSettings }) => handleUninstall(pluginId, deleteSettings),
     },
   });
-  singleton = server;
+  // Only claim the singleton once the socket is actually bound — if listen()
+  // throws (EADDRINUSE, permissions), a later retry must not be blocked by a
+  // dead reference.
   await server.listen();
+  singleton = server;
 }
 
 /** Stop the singleton CLI control server (best-effort). */

@@ -332,13 +332,17 @@ export async function initGlobalServices(
     registerDeferredTask({
       name: "plugin-cli-server",
       run: async () => {
-        try {
-          const { startPluginCliServer } = await import("../services/PluginCliServer.js");
-          await startPluginCliServer();
-          console.log("[MAIN] Plugin CLI control socket listening");
-        } catch (err) {
-          console.warn("[MAIN] Plugin CLI control socket failed to start (non-fatal):", err);
-        }
+        // Fire-and-forget: startPluginCliServer() internally awaits
+        // pluginService.waitForInit() (which only settles after startup
+        // activation), so awaiting it here would stall every later deferred
+        // task behind plugin activation. The waitForReady gate guarantees no
+        // CLI request is serviced before init settles, so binding async is safe.
+        const { startPluginCliServer } = await import("../services/PluginCliServer.js");
+        void startPluginCliServer()
+          .then(() => console.log("[MAIN] Plugin CLI control socket listening"))
+          .catch((err) =>
+            console.warn("[MAIN] Plugin CLI control socket failed to start (non-fatal):", err)
+          );
       },
     });
   }

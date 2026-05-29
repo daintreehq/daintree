@@ -215,6 +215,10 @@ function openZip(archivePath: string): Promise<yauzl.ZipFile> {
  * the rest. The entry must be the first in the zip's local file order.
  */
 export async function readArchiveManifest(archivePath: string): Promise<PluginManifest> {
+  const stat = await fs.stat(archivePath);
+  if (stat.size > MAX_DNTR_BYTES) {
+    throw new Error(`Archive size ${stat.size} exceeds ${MAX_DNTR_BYTES} byte limit`);
+  }
   const zipfile = await openZip(archivePath);
 
   return new Promise((resolve, reject) => {
@@ -226,6 +230,15 @@ export async function readArchiveManifest(archivePath: string): Promise<PluginMa
         settled = true;
         zipfile.close();
         return reject(new Error(`First entry must be plugin.json, got "${entry.fileName}"`));
+      }
+
+      // Guard against a zip whose compressed form fits the cap but whose
+      // plugin.json declares a multi-hundred-MB uncompressed size — without
+      // this, the chunk buffer below would exhaust the main-process heap.
+      if (entry.uncompressedSize > MAX_DNTR_BYTES) {
+        settled = true;
+        zipfile.close();
+        return reject(new Error(`plugin.json exceeds ${MAX_DNTR_BYTES} byte limit`));
       }
 
       zipfile.openReadStream(entry, (err, stream) => {

@@ -17,7 +17,8 @@ function isUrl(target: string): boolean {
  * owns the bounded download. Throws with a clear message if Daintree isn't
  * running or the install fails.
  */
-export async function runInstall(target: string): Promise<void> {
+export async function runInstall(rawTarget: string): Promise<void> {
+  const target = rawTarget.trim();
   const params = isUrl(target) ? { url: target } : { path: path.resolve(process.cwd(), target) };
 
   const result = (await sendCliRequest("plugin.install", params)) as InstallResponse;
