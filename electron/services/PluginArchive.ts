@@ -250,6 +250,98 @@ export async function readArchiveManifest(archivePath: string): Promise<PluginMa
 }
 
 /**
+ * Extract every entry of a `.dntr` archive into `destDir`. The caller owns
+ * `destDir` (created beforehand) and is responsible for cleanup on failure.
+ *
+ * Each entry is guarded against path traversal: the resolved on-disk path must
+ * stay within `destDir`. Backslashes, leading slashes, and drive letters are
+ * rejected via {@link isValidEntryName} before resolution. Directory entries
+ * (trailing `/`) only create the directory; file entries stream to disk and
+ * the next entry is read only after the write stream closes (`lazyEntries`).
+ */
+export async function extractPluginArchive(archivePath: string, destDir: string): Promise<void> {
+  const stat = await fs.stat(archivePath);
+  if (stat.size > MAX_DNTR_BYTES) {
+    throw new Error(`Archive size ${stat.size} exceeds ${MAX_DNTR_BYTES} byte limit`);
+  }
+
+  const root = path.resolve(destDir);
+  const zipfile = await openZip(archivePath);
+
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    // Running total of declared uncompressed bytes. yauzl validates each
+    // entry's decompressed length against its `uncompressedSize` header by
+    // default, so this is a trustworthy bound — it guards against a zip-bomb
+    // whose compressed form fits under MAX_DNTR_BYTES but expands to many GB.
+    let totalUncompressed = 0;
+    const fail = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      zipfile.close();
+      reject(err);
+    };
+
+    zipfile.on("entry", (entry: yauzl.Entry) => {
+      const name = normalizePath(entry.fileName);
+
+      // Reject any raw name that isn't already POSIX-normalized — backslashes,
+      // leading slashes, and drive letters are always invalid in a `.dntr`.
+      if (entry.fileName !== name) {
+        return fail(
+          new Error(
+            `Invalid entry path "${entry.fileName}": path must use forward slashes, no leading / or drive letters`
+          )
+        );
+      }
+      const pathErr = isValidEntryName(name);
+      if (pathErr) {
+        return fail(new Error(`Invalid entry path "${name}": ${pathErr}`));
+      }
+
+      totalUncompressed += entry.uncompressedSize;
+      if (totalUncompressed > MAX_DNTR_BYTES) {
+        return fail(new Error(`Uncompressed archive size exceeds ${MAX_DNTR_BYTES} byte limit`));
+      }
+
+      const resolved = path.resolve(root, name);
+      if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+        return fail(new Error(`Entry "${name}" escapes the extraction directory`));
+      }
+
+      // Directory entry — create and advance.
+      if (name.endsWith("/")) {
+        fs.mkdir(resolved, { recursive: true }).then(() => zipfile.readEntry(), fail);
+        return;
+      }
+
+      fs.mkdir(path.dirname(resolved), { recursive: true }).then(() => {
+        zipfile.openReadStream(entry, (err, stream) => {
+          if (err) return fail(err);
+          const out = createWriteStream(resolved, { mode: 0o644 });
+          stream.on("error", fail);
+          out.on("error", fail);
+          out.on("finish", () => zipfile.readEntry());
+          stream.pipe(out);
+        });
+      }, fail);
+    });
+
+    zipfile.on("end", () => {
+      if (!settled) {
+        settled = true;
+        zipfile.close();
+        resolve();
+      }
+    });
+
+    zipfile.on("error", (err) => fail(err));
+
+    zipfile.readEntry();
+  });
+}
+
+/**
  * Verify a `.dntr` archive against the format spec.
  * Checks: max size, first entry is plugin.json, path validity,
  * exclusion patterns, manifest schema.

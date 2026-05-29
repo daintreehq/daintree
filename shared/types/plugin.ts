@@ -317,6 +317,65 @@ export interface InstalledPluginRecord {
   loadError: PluginLoadError | null;
 }
 
+/**
+ * Discriminated failure code for {@link PluginInstallResult}. Each value maps
+ * to a distinct failure branch in `PluginService.installPlugin` so the install
+ * dialog (F22a/b/F23/F24) can render a tailored message instead of a raw
+ * stringified error.
+ *
+ * - `lock_failed` — couldn't acquire the cross-process `install.lock`
+ * - `archive_invalid` — `.dntr` extraction failed (bad zip, path traversal, oversize)
+ * - `manifest_invalid` — `plugin.json` failed the strict Zod schema
+ * - `engine_incompatible` — `engines.daintree` range doesn't satisfy the running version
+ * - `namespace_unauthorized` — reserved `daintree.*` name or publisher/name disagreement
+ * - `hash_failed` — couldn't compute the archive SHA-256
+ * - `unload_failed` — the existing plugin's disposer cascade threw
+ * - `swap_failed` — atomic rename failed but the prior state was restored
+ * - `swap_unrecoverable` — rename failed AND rollback failed; on-disk state is inconsistent
+ * - `load_failed` — swap committed but the new plugin failed to load
+ */
+export type PluginInstallErrorCode =
+  | "lock_failed"
+  | "archive_invalid"
+  | "manifest_invalid"
+  | "engine_incompatible"
+  | "namespace_unauthorized"
+  | "hash_failed"
+  | "unload_failed"
+  | "swap_failed"
+  | "swap_unrecoverable"
+  | "load_failed";
+
+/**
+ * Structured install validation error. `path` is the JSON pointer segments
+ * into `plugin.json` for `manifest_invalid` failures (empty for non-manifest
+ * errors) so the dialog can highlight the offending field.
+ */
+export interface PluginInstallError {
+  code: PluginInstallErrorCode;
+  path?: string[];
+  message: string;
+}
+
+/**
+ * Result of {@link PluginService.installPlugin}. Returned as plain data (never
+ * thrown) so structured validation errors survive Electron's structured-clone
+ * IPC boundary intact (#3769). The discriminant is `status` rather than `ok`
+ * because `ok`/`success` keys collide with the IPC success envelope and are
+ * rejected by `ForbidIpcEnvelopeKeys` at the handler boundary.
+ */
+export type PluginInstallResult =
+  | { status: "installed"; pluginId: string }
+  | { status: "failed"; errors: PluginInstallError[] };
+
+/** Optional provenance hints recorded on a successful install. */
+export interface PluginInstallOptions {
+  /** How the install was initiated. Defaults to `"sideload"` when omitted. */
+  source?: PluginInstallSource;
+  /** Original download URL for catalog/url installs. Never logged. */
+  originalUrl?: string | null;
+}
+
 export interface LoadedPluginInfo {
   manifest: PluginManifest;
   dir: string;
