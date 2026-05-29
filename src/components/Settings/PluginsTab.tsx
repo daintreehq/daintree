@@ -688,8 +688,8 @@ export function PluginsTab() {
       onDrop={handleDrop}
     >
       {isDragOverFiles && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-[var(--radius-lg)] bg-daintree-bg/80 ring-2 ring-daintree-accent pointer-events-none">
-          <Download className="w-6 h-6 text-daintree-accent" aria-hidden="true" />
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-[var(--radius-lg)] bg-daintree-bg/80 border-2 border-dashed border-daintree-border pointer-events-none">
+          <Download className="w-6 h-6 text-daintree-text/60" aria-hidden="true" />
           <p className="text-sm font-medium text-daintree-text">Drop a .dntr file to install</p>
         </div>
       )}
