@@ -329,6 +329,27 @@ const PLUGIN_LOG_LINE_MAX_CHARS = 2048;
 /** Max audit records included per plugin in a diagnostics snapshot. */
 const PLUGIN_DIAGNOSTICS_AUDIT_PER_PLUGIN = 50;
 
+/**
+ * Serialize an arbitrary logger payload without ever throwing. Tries
+ * `JSON.stringify`, falls back to `String()`, and absorbs a throwing
+ * `toString` so `host.logger.*` keeps its no-throw contract for adversarial
+ * `fields`. Returns the empty string only when serialization yields nothing
+ * useful.
+ */
+function safeStringify(value: unknown): string {
+  try {
+    const json = JSON.stringify(value);
+    if (typeof json === "string") return json;
+  } catch {
+    // fall through to String()
+  }
+  try {
+    return String(value);
+  } catch {
+    return "[unserializable]";
+  }
+}
+
 function runUnloadStep(pluginId: string, step: string, fn: () => void): void {
   try {
     fn();
@@ -1512,33 +1533,39 @@ export class PluginService {
 
   /**
    * Append one line to a plugin's diagnostic ring buffer and mirror it to the
-   * host console. No-ops once the plugin is unloaded (membership is the
-   * liveness gate, same as the other non-revoke-guarded host methods).
-   * `fields`, when present, is JSON-serialized and folded into the message; an
-   * unserializable payload falls back to `String(fields)` rather than throwing
-   * — a logger call must never propagate an error back into plugin code.
+   * host console. `boundPlugin` is the {@link LoadedPlugin} the calling host
+   * was created for; the write no-ops unless it is still the live instance for
+   * `pluginId`. This is stricter than a `this.plugins.has(pluginId)` check: it
+   * also rejects a stale host left over from a previous activation after a
+   * same-id reload (dev-mode rescan), so the old session's timers can't
+   * pollute the new buffer.
+   *
+   * `fields`, when present, is JSON-serialized and folded into the message;
+   * serialization is fully defensive (a circular ref or a throwing `toString`
+   * never escapes). The rendered line is truncated codepoint-aware so a
+   * multi-byte glyph is never split into a lone surrogate — a lone surrogate
+   * would make `encodeURIComponent` throw downstream in `buildReportIssueUrl`.
+   * A logger call must never propagate an error back into plugin code.
    */
   private recordPluginLog(
+    boundPlugin: LoadedPlugin,
     pluginId: string,
     level: PluginDiagnosticsLogLine["level"],
     message: string,
     fields?: Record<string, unknown>
   ): void {
-    if (!this.plugins.has(pluginId)) return;
+    if (this.plugins.get(pluginId) !== boundPlugin) return;
 
-    const text = typeof message === "string" ? message : String(message);
-    let rendered = text;
+    let rendered = typeof message === "string" ? message : safeStringify(message);
     if (fields !== undefined) {
-      let serialized: string;
-      try {
-        serialized = JSON.stringify(fields);
-      } catch {
-        serialized = String(fields);
-      }
-      rendered = serialized ? `${text} ${serialized}` : text;
+      const serialized = safeStringify(fields);
+      rendered = serialized ? `${rendered} ${serialized}` : rendered;
     }
-    if (rendered.length > PLUGIN_LOG_LINE_MAX_CHARS) {
-      rendered = `${rendered.slice(0, PLUGIN_LOG_LINE_MAX_CHARS - 1)}…`;
+    // Codepoint-aware cap: spreading splits at codepoint (not UTF-16 code-unit)
+    // boundaries, so the slice can never bisect a surrogate pair.
+    const codepoints = Array.from(rendered);
+    if (codepoints.length > PLUGIN_LOG_LINE_MAX_CHARS) {
+      rendered = `${codepoints.slice(0, PLUGIN_LOG_LINE_MAX_CHARS - 1).join("")}…`;
     }
 
     let buffer = this.logBuffers.get(pluginId);
@@ -1604,6 +1631,10 @@ export class PluginService {
 
   private createHost(pluginId: string): { host: PluginHostApi; revoke: () => void } {
     let revoked = false;
+    // The LoadedPlugin this host is bound to. recordPluginLog compares against
+    // the live instance so a stale host (post-unload, or after a same-id
+    // reload) can't write into the current session's log buffer.
+    const boundPlugin = this.plugins.get(pluginId);
     const host: PluginHostApi = {
       get pluginId() {
         return pluginId;
@@ -1975,9 +2006,15 @@ export class PluginService {
       // membership (enforced inside recordPluginLog) — writes silently no-op
       // once the plugin unloads. Synchronous void return; never throws.
       logger: {
-        info: (message, fields) => this.recordPluginLog(pluginId, "info", message, fields),
-        warn: (message, fields) => this.recordPluginLog(pluginId, "warn", message, fields),
-        error: (message, fields) => this.recordPluginLog(pluginId, "error", message, fields),
+        info: (message, fields) => {
+          if (boundPlugin) this.recordPluginLog(boundPlugin, pluginId, "info", message, fields);
+        },
+        warn: (message, fields) => {
+          if (boundPlugin) this.recordPluginLog(boundPlugin, pluginId, "warn", message, fields);
+        },
+        error: (message, fields) => {
+          if (boundPlugin) this.recordPluginLog(boundPlugin, pluginId, "error", message, fields);
+        },
       },
       // NOT revoke-guarded: plugins read/write settings throughout their
       // lifetime (IPC handlers, timers), long after activate() resolves. The

@@ -1402,6 +1402,37 @@ describe("PluginService integration — diagnostic logger", () => {
     expect(line.endsWith("…")).toBe(true);
   });
 
+  it("truncates multi-byte glyph lines without producing a lone surrogate", async () => {
+    const service = await loadWithLoggerActivate(
+      "acme.logger-emoji",
+      "__loggerHost5",
+      `host.logger.info("😀".repeat(3000));`
+    );
+
+    const entry = service
+      .getDiagnosticsSnapshot()
+      .plugins.find((p) => p.pluginId === "acme.logger-emoji");
+    const line = entry?.logLines[0]?.message ?? "";
+    // A lone surrogate would make encodeURIComponent throw downstream.
+    expect(() => encodeURIComponent(line)).not.toThrow();
+    expect(line.endsWith("…")).toBe(true);
+  });
+
+  it("keeps per-plugin log buffers isolated", async () => {
+    await loadWithLoggerActivate("acme.logger-a", "__loggerHost6a", `host.logger.info("from-a");`);
+    const service = await loadWithLoggerActivate(
+      "acme.logger-b",
+      "__loggerHost6b",
+      `host.logger.info("from-b");`
+    );
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    const a = snapshot.plugins.find((p) => p.pluginId === "acme.logger-a");
+    const b = snapshot.plugins.find((p) => p.pluginId === "acme.logger-b");
+    expect(a?.logLines.map((l) => l.message)).toEqual(["from-a"]);
+    expect(b?.logLines.map((l) => l.message)).toEqual(["from-b"]);
+  });
+
   it("logger writes are a silent no-op after the plugin unloads", async () => {
     const service = await loadWithLoggerActivate(
       "acme.logger-unload",

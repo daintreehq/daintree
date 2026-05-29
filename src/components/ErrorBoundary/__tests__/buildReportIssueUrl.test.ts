@@ -507,12 +507,33 @@ describe("buildReportIssueUrl — plugin diagnostics", () => {
       })
     );
 
-    // The huge section forces clipboard fallback or in-URL drop; either way the
-    // URL stays within budget and the full payload retains the diagnostics.
+    // The diagnostics section is dropped (rung 4) but system info is kept —
+    // the ladder must NOT fall through to the stub. Asserting systemInfo is
+    // present guards against a regression that drops too much.
     expect(getEncodedBodyLength(result.url)).toBeLessThanOrEqual(URL_BODY_BUDGET);
+    expect(result.usedClipboardFallback).toBe(false);
     expect(result.fullBody).toContain("Plugin diagnostics (1)");
     const urlBody = decodeURIComponent(new URL(result.url).searchParams.get("body") ?? "");
     expect(urlBody).not.toContain("log line number 250");
+    expect(urlBody).toContain("<summary>System info</summary>");
+  });
+
+  it("does not throw on log lines containing multi-byte glyphs", () => {
+    // A lone surrogate (from a naive code-unit slice upstream) would make
+    // encodeURIComponent throw; assert a well-formed multi-byte line is safe.
+    const result = buildReportIssueUrl(
+      makeInput({
+        pluginDiagnostics: {
+          plugins: [
+            makePluginEntry({
+              logLines: [{ ts: 1700000001000, level: "info", message: "😀".repeat(50) }],
+            }),
+          ],
+        },
+      })
+    );
+    expect(() => new URL(result.url)).not.toThrow();
+    expect(result.fullBody).toContain("😀");
   });
 
   it("adds a plugin-count line to the clipboard-fallback stub body", () => {
