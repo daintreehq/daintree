@@ -74,6 +74,8 @@ interface WorktreeSelectionState {
   lastFocusedTerminalByWorktree: Map<string, string>;
   isFleetScopeActive: boolean;
   _previousActiveWorktreeId: string | null;
+  /** Durable selection captured at fleet-scope entry, restored on exit (#9512). */
+  _previousRestoreWorktreeId: string | null;
   _fleetScopeToken: FleetScopeToken | null;
 
   setActiveWorktree: (id: string | null) => void;
@@ -264,6 +266,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   lastFocusedTerminalByWorktree: new Map<string, string>(),
   isFleetScopeActive: false,
   _previousActiveWorktreeId: null,
+  _previousRestoreWorktreeId: null,
   _fleetScopeToken: null,
 
   setActiveWorktree: (id) => {
@@ -674,6 +677,9 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     set({
       isFleetScopeActive: true,
       _previousActiveWorktreeId: activeWorktreeId,
+      // Snapshot the durable selection too so exiting scope can't downgrade an
+      // incidentally-active worktree into the persisted restore target (#9512).
+      _previousRestoreWorktreeId: get().restoreWorktreeId,
       _fleetScopeToken: token,
       _policyGeneration: generation,
     });
@@ -706,6 +712,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     // stale exit apart from a legitimate one.
     if (get()._fleetScopeToken !== token) return;
     const restoreId = get()._previousActiveWorktreeId;
+    const previousRestoreId = get()._previousRestoreWorktreeId;
     const generation = get()._policyGeneration + 1;
     // Snapshot the primary (most-recently-armed) terminal BEFORE `set()` so
     // the value used for focus restore is stable against any reads/writes
@@ -714,8 +721,12 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     set({
       isFleetScopeActive: false,
       _previousActiveWorktreeId: null,
+      _previousRestoreWorktreeId: null,
       _fleetScopeToken: null,
       activeWorktreeId: restoreId,
+      // Restore the durable selection captured at entry so a focus-promotion
+      // that happened before scope entry survives the cycle (#9512).
+      restoreWorktreeId: previousRestoreId,
       focusedWorktreeId: restoreId,
       _policyGeneration: generation,
     });
@@ -784,6 +795,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       lastFocusedTerminalByWorktree: new Map<string, string>(),
       isFleetScopeActive: false,
       _previousActiveWorktreeId: null,
+      _previousRestoreWorktreeId: null,
       _fleetScopeToken: null,
       // Bump the generation so any in-flight deferred policy/focus-restore
       // microtask (which captured an older generation) sees a mismatch and
