@@ -1,8 +1,13 @@
 import { app, BrowserWindow } from "electron";
+import path from "node:path";
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { handleDirectoryOpen } from "../menu.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
+import { broadcastToRenderer } from "../ipc/utils.js";
+import { CHANNELS } from "../ipc/channels.js";
 import { setSignalShutdown, setSafetyBeltTimer } from "./signalShutdownState.js";
 import { isWindowRecreating } from "./windowRecreationState.js";
 import { SAFETY_BELT_TIMEOUT_MS } from "./shutdownConfig.js";
@@ -27,6 +32,121 @@ export function extractCliPath(argv: string[]): string | null {
     }
   }
   return null;
+}
+
+// `.dntr` plugin archives double-clicked on Windows/Linux arrive as bare argv
+// entries (no `--flag`) on the `second-instance` event. The OS may supply a
+// relative path resolved against the launching shell's cwd, so the second
+// instance's `workingDirectory` is used to normalize it. Extension matching is
+// case-insensitive for Windows.
+export function extractDntrPaths(argv: string[], workingDirectory: string): string[] {
+  const paths: string[] = [];
+  for (const arg of argv) {
+    if (!arg || arg.startsWith("--")) continue;
+    // XDG file managers pass `file://` URIs because electron-builder appends
+    // `%U` to the Linux .desktop Exec line. Decode to an OS path before the
+    // extension check and resolution.
+    let candidate = arg;
+    if (candidate.startsWith("file://")) {
+      try {
+        candidate = fileURLToPath(candidate);
+      } catch {
+        continue;
+      }
+    }
+    if (!candidate.toLowerCase().endsWith(".dntr")) continue;
+    paths.push(path.resolve(workingDirectory, candidate));
+  }
+  return paths;
+}
+
+// Queue for `.dntr` paths received before a window exists (cold-launched second
+// instance). A `string[]` rather than a scalar because the OS can pass multiple
+// archives in one launch; they are drained sequentially through the installer's
+// lock. Mirrors the `pendingCliPath` pattern.
+let pendingDntrPaths: string[] = [];
+
+export function getPendingDntrPaths(): string[] {
+  return [...pendingDntrPaths];
+}
+
+export function clearPendingDntrPaths(): void {
+  pendingDntrPaths = [];
+}
+
+// Zip local-file-header magic. A `.dntr` archive is a zip; anything else is
+// rejected before the installer (which assumes valid zip input) ever sees it.
+const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+
+async function isValidDntrArchive(filePath: string): Promise<boolean> {
+  if (!fs.existsSync(filePath)) return false;
+  let handle: fs.promises.FileHandle | undefined;
+  try {
+    handle = await fs.promises.open(filePath, "r");
+    const buf = Buffer.alloc(4);
+    const { bytesRead } = await handle.read(buf, 0, 4, 0);
+    return bytesRead === 4 && buf.equals(ZIP_MAGIC);
+  } catch {
+    return false;
+  } finally {
+    // A close() rejection in finally would supersede the return value and
+    // escape the catch — swallow it so validation can't throw.
+    await handle?.close().catch(() => {});
+  }
+}
+
+// Validate + sideload a single `.dntr` archive. The magic-byte gate lives here
+// (not in the installer); invalid files and install failures surface as error
+// toasts. `PluginService` is imported lazily to preserve the #9285 main-process
+// module-isolation boundary.
+export async function installDntrPath(archivePath: string): Promise<void> {
+  if (!(await isValidDntrArchive(archivePath))) {
+    broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      type: "error",
+      title: "Invalid plugin file",
+      message: `"${archivePath}" isn't a valid Daintree plugin archive.`,
+    });
+    return;
+  }
+  try {
+    const { pluginService } = await import("../services/PluginService.js");
+    const result = await pluginService.installPlugin(archivePath, {
+      source: "sideload",
+      originalUrl: undefined,
+    });
+    if (result.status === "installed") {
+      broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+        type: "success",
+        title: "Plugin installed",
+        message: `Installed "${result.pluginId}".`,
+      });
+    } else if (result.status === "failed") {
+      broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+        type: "error",
+        title: "Plugin install failed",
+        message: result.errors[0]?.message ?? "Couldn't install the plugin.",
+      });
+    }
+  } catch (err) {
+    console.error("[MAIN] Failed to install .dntr plugin:", err);
+    broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      type: "error",
+      title: "Plugin install failed",
+      message: `Couldn't install "${archivePath}".`,
+    });
+  }
+}
+
+// Drain the pending `.dntr` queue once a window is ready. The snapshot is
+// cleared up front so a `second-instance` event firing mid-drain appends to a
+// fresh queue rather than re-installing in-flight paths. Installs run
+// sequentially through the installer's lock.
+export async function drainPendingDntrPaths(): Promise<void> {
+  const queued = getPendingDntrPaths();
+  clearPendingDntrPaths();
+  for (const archivePath of queued) {
+    await installDntrPath(archivePath);
+  }
 }
 
 export interface AppLifecycleOptions {
@@ -95,29 +215,50 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
     process.on("SIGHUP", signalHandler);
   }
 
-  app.on("second-instance", (_event, commandLine, _workingDirectory) => {
+  app.on("second-instance", (_event, commandLine, workingDirectory) => {
     console.log("[MAIN] Second instance detected");
     const mainWindow = opts.windowRegistry?.getPrimary()?.browserWindow ?? opts.getMainWindow();
+    const liveWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
     const cliPath = extractCliPath(commandLine);
+    const dntrPaths = extractDntrPaths(commandLine, workingDirectory);
 
     if (cliPath) {
-      if (mainWindow && !mainWindow.isDestroyed() && opts.onCreateWindowForPath) {
+      if (liveWindow && opts.onCreateWindowForPath) {
         console.log("[MAIN] Creating new window for CLI path:", cliPath);
         opts.onCreateWindowForPath(cliPath);
-      } else if (mainWindow && !mainWindow.isDestroyed()) {
+      } else if (liveWindow) {
         console.log("[MAIN] Opening CLI path in existing window:", cliPath);
         handleDirectoryOpen(
           cliPath,
-          mainWindow,
+          liveWindow,
           opts.getCliAvailabilityService() ?? undefined
         ).catch((err) => console.error("[MAIN] Failed to open CLI path:", err));
       } else {
         pendingCliPath = cliPath;
         console.log("[MAIN] Queuing CLI path for when window is ready:", cliPath);
       }
-    } else if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
+    }
+
+    if (dntrPaths.length > 0) {
+      if (liveWindow) {
+        console.log("[MAIN] Installing .dntr paths from second instance:", dntrPaths);
+        void (async () => {
+          for (const archivePath of dntrPaths) {
+            await installDntrPath(archivePath);
+          }
+        })().catch((err) => console.error("[MAIN] Failed to install .dntr plugin(s):", err));
+      } else {
+        pendingDntrPaths.push(...dntrPaths);
+        console.log("[MAIN] Queuing .dntr paths for when window is ready:", dntrPaths);
+      }
+    }
+
+    // Bring the primary window to the front for `.dntr` installs and for plain
+    // re-launches (no path argument). The CLI-path branch manages its own
+    // window via onCreateWindowForPath / handleDirectoryOpen, so it is excluded.
+    if (liveWindow && (dntrPaths.length > 0 || !cliPath)) {
+      if (liveWindow.isMinimized()) liveWindow.restore();
+      liveWindow.focus();
     }
   });
 

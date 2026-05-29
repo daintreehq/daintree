@@ -23,7 +23,15 @@ import {
   kickOffEarlyPathRefresh,
 } from "../setup/environment.js";
 import { shouldDeferRendererLoadForE2E } from "./earlyRenderer.js";
-import { extractCliPath, getPendingCliPath, setPendingCliPath } from "../lifecycle/appLifecycle.js";
+import {
+  extractCliPath,
+  getPendingCliPath,
+  setPendingCliPath,
+  extractDntrPaths,
+  getPendingDntrPaths,
+  drainPendingDntrPaths,
+  installDntrPath,
+} from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { resetDeferredQueue } from "./deferredInitQueue.js";
 import { initGlobalServices } from "./globalServicesInit.js";
@@ -40,6 +48,8 @@ import {
   setCleanupIpcHandlers,
   getProcessArgvCliHandled,
   setProcessArgvCliHandled,
+  getProcessArgvDntrHandled,
+  setProcessArgvDntrHandled,
   getIpcHandlersRegistered,
   setIpcHandlersRegistered,
   getGlobalServicesInitialized,
@@ -559,6 +569,24 @@ export async function setupWindowServices(
     handleDirectoryOpen(opts.initialProjectPath, win, cliAvailabilityService ?? undefined).catch(
       (err) => console.error("[MAIN] Failed to open initial project path:", err)
     );
+  }
+
+  // `.dntr` plugin-archive handling — independent of project/CLI-path routing.
+  // First-launch (cold double-click) archives arrive in process.argv; second
+  // instances queue into pendingDntrPaths. Both are sideloaded once the first
+  // window is ready so install toasts have a live renderer target. Fire-and-
+  // forget: installs run sequentially through the installer's lock.
+  const firstLaunchDntrPaths = !getProcessArgvDntrHandled()
+    ? extractDntrPaths(process.argv, process.cwd())
+    : [];
+  if (firstLaunchDntrPaths.length > 0) setProcessArgvDntrHandled(true);
+  if (firstLaunchDntrPaths.length > 0 || getPendingDntrPaths().length > 0) {
+    void (async () => {
+      for (const archivePath of firstLaunchDntrPaths) {
+        await installDntrPath(archivePath);
+      }
+      await drainPendingDntrPaths();
+    })().catch((err) => console.error("[MAIN] Failed to install .dntr plugin(s):", err));
   }
 
   // ── Last-window-close: reset per-window deferred queue ──

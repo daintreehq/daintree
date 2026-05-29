@@ -175,6 +175,14 @@ module.exports = async function () {
       uninstallDisplayName: "Daintree",
       differentialPackage: true,
       buildUniversalInstaller: false,
+      // `.dntr` (plugin archive) file association is registered via a custom
+      // NSIS include rather than electron-builder's `fileAssociations`: the
+      // built-in path requires `perMachine: true` (HKLM, system-wide), which
+      // would force elevation on install AND on every auto-update. We keep the
+      // per-user (HKCU) install model and register the association by hand in
+      // build/installer.nsh. Double-clicking a `.dntr` then launches Daintree
+      // with the file path in argv, picked up by the second-instance handler.
+      include: "build/installer.nsh",
     },
     linux: {
       icon: "build/icon.png",
@@ -182,6 +190,17 @@ module.exports = async function () {
       target: ["AppImage", "deb"],
       category: "Development",
       desktop: { entry: { StartupWMClass: "daintree" } },
+      // `.dntr` plugin-archive association. electron-builder generates the XDG
+      // mime-type XML and adds `MimeType=application/x-dntr` to the .desktop
+      // entry; double-clicking then launches Daintree with the path in argv.
+      fileAssociations: [
+        {
+          ext: "dntr",
+          name: "Daintree Plugin",
+          description: "Daintree plugin archive",
+          mimeType: "application/x-dntr",
+        },
+      ],
       extraResources: [
         { from: "scripts/daintree-cli.sh", to: "daintree-cli.sh" },
         { from: "build/linux/daintree.apparmor", to: "daintree.apparmor" },
