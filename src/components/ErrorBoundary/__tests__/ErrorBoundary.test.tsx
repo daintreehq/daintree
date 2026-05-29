@@ -327,9 +327,12 @@ describe("ErrorBoundary", () => {
     );
 
     fireEvent.click(screen.getByText("Report issue"));
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+
+    await waitFor(() =>
+      expect(
+        vi.mocked(actionService.dispatch).mock.calls.find(([id]) => id === "system.openExternal")
+      ).toBeDefined()
+    );
 
     expect(electron.system.getReportEnrichment).toHaveBeenCalledTimes(1);
     const dispatchCall = vi
@@ -360,9 +363,12 @@ describe("ErrorBoundary", () => {
     );
 
     fireEvent.click(screen.getByText("Report issue"));
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+
+    await waitFor(() =>
+      expect(
+        vi.mocked(actionService.dispatch).mock.calls.find(([id]) => id === "system.openExternal")
+      ).toBeDefined()
+    );
 
     const dispatchCall = vi
       .mocked(actionService.dispatch)
@@ -601,9 +607,7 @@ describe("ErrorBoundary", () => {
     );
 
     fireEvent.click(screen.getByText("Report issue")); // first click — hangs
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(actionService.dispatch).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(actionService.dispatch).toHaveBeenCalledTimes(1));
 
     // User gives up and recovers the pane while the first report is still in flight.
     shouldThrow = false;

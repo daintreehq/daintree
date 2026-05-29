@@ -136,6 +136,10 @@ describe("registerPluginHandlers", () => {
       expect.any(Function)
     );
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:export-audit-log", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:get-diagnostics-snapshot",
+      expect.any(Function)
+    );
   });
 
   it("throws before registering any handler when invoked before enforceIpcSenderValidation", () => {
