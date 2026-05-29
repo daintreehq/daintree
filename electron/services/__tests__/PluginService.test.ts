@@ -1888,6 +1888,28 @@ describe("PluginService built-in plugin loading", () => {
       await expect(fs.access(settingsFile)).rejects.toThrow();
     });
 
+    it("clears the launch-time name reservation so a same-session reinstall isn't blocked", async () => {
+      // Regression: a disabled-at-launch plugin reserves its name; uninstall
+      // must release it or loadPlugin rejects the reinstall as a duplicate.
+      storeMock._state.set("plugins", { disabled: ["acme.reserve"] });
+      await writePlugin("acme.reserve", { name: "acme.reserve", version: "1.0.0" });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+      const reserved = () =>
+        (service as unknown as { reservedNames: Set<string> }).reservedNames.has("acme.reserve");
+      expect(reserved()).toBe(true);
+
+      await service.uninstallPlugin("acme.reserve");
+
+      expect(reserved()).toBe(false);
+    });
+
+    it("rejects a path-traversal or non-scoped plugin id before touching the filesystem", async () => {
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await expect(service.uninstallPlugin("../../../etc")).rejects.toThrow(/scoped plugin name/);
+      await expect(service.uninstallPlugin("no-dot")).rejects.toThrow(/scoped plugin name/);
+    });
+
     it("rejects on an empty or whitespace-only plugin id", async () => {
       const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
       await expect(service.uninstallPlugin("")).rejects.toThrow(/non-empty string/);

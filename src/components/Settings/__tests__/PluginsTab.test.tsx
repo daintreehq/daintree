@@ -267,6 +267,28 @@ describe("PluginsTab", () => {
     );
   });
 
+  it("resets the secrets checkbox after cancelling and re-arming uninstall", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
+    renderTab();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+
+    // Arm, tick the box, then cancel.
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall Acme Demo" }));
+    await waitFor(() => expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy());
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Also delete stored settings and secrets" })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Keep plugin" }));
+
+    // Re-arm and confirm without touching the box — the prior tick must not leak.
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall Acme Demo" }));
+    await waitFor(() => expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
+    await waitFor(() =>
+      expect(window.electron.plugin.uninstall).toHaveBeenCalledWith("acme.demo", false)
+    );
+  });
+
   it("disables the check-for-update button", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderTab();

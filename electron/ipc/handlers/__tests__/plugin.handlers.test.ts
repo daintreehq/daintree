@@ -268,6 +268,19 @@ describe("registerPluginHandlers", () => {
     expect(mockUninstallPlugin).not.toHaveBeenCalled();
   });
 
+  it("PLUGIN_UNINSTALL rejects a path-traversal id without touching the service", async () => {
+    const handler = getHandler("plugin:uninstall");
+    await expect(handler({}, "../../../etc")).rejects.toThrow(/scoped plugin name/);
+    await expect(handler({}, "no-dot")).rejects.toThrow(/scoped plugin name/);
+    expect(mockUninstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_UNINSTALL rejects a non-boolean deleteSettings", async () => {
+    const handler = getHandler("plugin:uninstall");
+    await expect(handler({}, "acme.my-plugin", "true")).rejects.toThrow(/must be a boolean/);
+    expect(mockUninstallPlugin).not.toHaveBeenCalled();
+  });
+
   it("PLUGIN_CHECK_FOR_UPDATE returns not-implemented", async () => {
     const handler = getHandler("plugin:check-for-update");
     const result = await handler({}, "acme.my-plugin");

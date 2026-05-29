@@ -41,7 +41,11 @@ interface ProperLockfile {
   lock(file: string, opts?: LockOptions): Promise<() => Promise<void>>;
 }
 const properLockfile: ProperLockfile = req("proper-lockfile");
-import { getPluginManifestSchema, PluginToastOptionsSchema } from "../schemas/plugin.js";
+import {
+  getPluginManifestSchema,
+  PluginToastOptionsSchema,
+  SCOPED_PLUGIN_NAME_PATTERN,
+} from "../schemas/plugin.js";
 import { extractPluginArchive, computeArchiveHash } from "./PluginArchive.js";
 import { resilientRename } from "../utils/fs.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
@@ -3341,6 +3345,15 @@ export class PluginService {
     if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
       throw new Error("uninstallPlugin: pluginId must be a non-empty string");
     }
+    // Defense-in-depth (the IPC handler validates too): pluginId is joined onto
+    // pluginsRoot for `fs.rm`, so reject anything that isn't a scoped plugin
+    // name before touching the filesystem — blocks `..` traversal and separators.
+    if (!SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+      throw new Error("uninstallPlugin: pluginId must be a scoped plugin name (publisher.name)");
+    }
+    // Coerce so a non-TypeScript caller can't pass a truthy non-boolean and
+    // silently wipe secrets the user meant to keep.
+    const wipeSettings = deleteSettings === true;
 
     // Capture the record (running or skipped-at-launch) before unload clears it
     // so we know whether the on-disk dir is ours to delete — built-ins live in
@@ -3402,17 +3415,23 @@ export class PluginService {
       }
 
       // Optionally delete user-scope stored settings/secrets. `force` is a safe
-      // no-op when the file doesn't exist. The in-memory store was already
-      // dropped by `unloadPlugin`'s clearPluginSettingsState step.
-      if (deleteSettings) {
+      // no-op when the file doesn't exist; the retry options mirror the plugin
+      // dir deletion so a still-closing settings writer on Windows doesn't strand
+      // the uninstall. The in-memory store was already dropped by
+      // `unloadPlugin`'s clearPluginSettingsState step.
+      if (wipeSettings) {
         const settingsFile = path.join(this.settingsRoot(), `${pluginId}.json`);
-        await fs.rm(settingsFile, { force: true });
+        await fs.rm(settingsFile, { force: true, maxRetries: 5, retryDelay: 100 });
       }
 
       // Bookkeeping runs only after the filesystem deletion succeeds — if `fs.rm`
       // throws, the record stays so the row remains and the user can retry,
       // rather than seeing a "gone" plugin whose files are still on disk.
       this.disabledPlugins.delete(pluginId);
+      // Release the launch-time name reservation (set when a disabled plugin is
+      // skipped at startup) so a same-session reinstall isn't rejected as a
+      // duplicate name.
+      this.reservedNames.delete(pluginId);
       // Clear it from the persisted `plugins.disabled` intent list so a disabled
       // plugin can't resurrect itself on the next launch's disabled-dir re-scan.
       this.setEnabled(pluginId, true);
