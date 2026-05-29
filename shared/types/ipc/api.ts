@@ -1516,6 +1516,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         complete: boolean;
       }) => void
     ): () => void;
+    /** Subscribe to plugin keybinding registry changes. Returns a cleanup. */
+    onKeybindingsChanged(
+      callback: (payload: {
+        keybindings: import("../plugin.js").PluginKeybindingDescriptor[];
+        complete: boolean;
+      }) => void
+    ): () => void;
   };
   crashRecovery: {
     getPending(): Promise<import("./crashRecovery.js").PendingCrash | null>;

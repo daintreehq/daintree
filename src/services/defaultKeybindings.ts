@@ -1131,3 +1131,10 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
   ...CORE_KEYBINDINGS,
   ...WINDOWS_KEYBINDINGS,
 ];
+
+export const KEYBINDING_PRIORITY = {
+  DEFAULT: 0,
+  PLUGIN: 1,
+  ELEVATED: 5,
+  OVERRIDE: 10,
+} as const;

@@ -1888,6 +1888,13 @@ export interface IpcEventMap {
     complete: boolean;
   };
 
+  // Plugin keybinding registry events (main → renderer). Same `complete` flag
+  // semantics as toolbar buttons and menu items.
+  "plugin:keybindings-changed": {
+    keybindings: import("../plugin.js").PluginKeybindingDescriptor[];
+    complete: boolean;
+  };
+
   // Plugin file-decoration invalidation (main → renderer). Carries only the
   // changed scope (optionally narrowed to `paths`) — never decoration data.
   // The renderer re-pulls fresh decorations via `plugin:file-decorations-get`.
@@ -1977,6 +1984,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:toolbar-buttons-changed"
   // Plugin menu item registry (global broadcast)
   | "plugin:menu-items-changed"
+  // Plugin keybinding registry (global broadcast)
+  | "plugin:keybindings-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
   // Plugin provenance record changed (global broadcast)
