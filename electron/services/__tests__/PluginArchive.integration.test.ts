@@ -4,9 +4,11 @@ import path from "path";
 import os from "os";
 import {
   packPluginArchive,
+  packPluginArchiveFromFiles,
   computeArchiveHash,
   readArchiveManifest,
   verifyPluginArchive,
+  isExcludedArchiveEntry,
 } from "../PluginArchive.js";
 
 let tmpDir: string;
@@ -264,5 +266,98 @@ describe("verifyPluginArchive", () => {
     } catch {
       // packPluginArchive might succeed since it only checks for existence
     }
+  });
+});
+
+describe("packPluginArchiveFromFiles (CLI packager surface)", () => {
+  it("hoists plugin.json to the first entry regardless of input order", async () => {
+    const sourceDir = path.join(tmpDir, "source");
+    await createFixture(sourceDir, {
+      "plugin.json": JSON.stringify(validManifest({ main: "dist/index.js" })),
+      "dist/index.js": "console.log('hi')",
+      "icons/logo.svg": "<svg/>",
+    });
+
+    const archivePath = path.join(tmpDir, "out.dntr");
+    // Deliberately unsorted, plugin.json last.
+    await packPluginArchiveFromFiles(sourceDir, archivePath, [
+      "icons/logo.svg",
+      "dist/index.js",
+      "plugin.json",
+    ]);
+
+    const manifest = await readArchiveManifest(archivePath);
+    expect(manifest.name).toBe("acme.test-plugin");
+    const result = await verifyPluginArchive(archivePath);
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.entryCount).toBe(3);
+    }
+  });
+
+  it("produces byte-identical output across repeated runs with the same file list", async () => {
+    const sourceDir = path.join(tmpDir, "source");
+    await createFixture(sourceDir, {
+      "plugin.json": JSON.stringify(validManifest({ main: "dist/index.js" })),
+      "dist/index.js": "export const x = 1;",
+      "dist/util.js": "export const y = 2;",
+    });
+
+    const files = ["dist/util.js", "dist/index.js", "plugin.json"];
+    const first = path.join(tmpDir, "first.dntr");
+    const second = path.join(tmpDir, "second.dntr");
+    const hashA = await packPluginArchiveFromFiles(sourceDir, first, files);
+    const hashB = await packPluginArchiveFromFiles(sourceDir, second, files);
+    expect(hashA).toBe(hashB);
+    expect(await computeArchiveHash(first)).toBe(await computeArchiveHash(second));
+  });
+
+  it("matches packPluginArchive output for the same effective file set", async () => {
+    const sourceDir = path.join(tmpDir, "source");
+    await createFixture(sourceDir, {
+      "plugin.json": JSON.stringify(validManifest({ main: "dist/index.js" })),
+      "dist/index.js": "export const x = 1;",
+    });
+
+    const viaWalk = path.join(tmpDir, "walk.dntr");
+    const viaList = path.join(tmpDir, "list.dntr");
+    const walkHash = await packPluginArchive(sourceDir, viaWalk);
+    const listHash = await packPluginArchiveFromFiles(sourceDir, viaList, [
+      "plugin.json",
+      "dist/index.js",
+    ]);
+    expect(listHash).toBe(walkHash);
+  });
+
+  it("throws when the file list omits plugin.json", async () => {
+    const sourceDir = path.join(tmpDir, "source");
+    await createFixture(sourceDir, {
+      "plugin.json": JSON.stringify(validManifest()),
+      "dist/index.js": "export const x = 1;",
+    });
+
+    await expect(
+      packPluginArchiveFromFiles(sourceDir, path.join(tmpDir, "out.dntr"), ["dist/index.js"])
+    ).rejects.toThrow(/plugin\.json/);
+  });
+});
+
+describe("isExcludedArchiveEntry (shared CLI exclusion predicate)", () => {
+  it("excludes node_modules, .git, and source files", () => {
+    expect(isExcludedArchiveEntry("node_modules/foo/index.js")).toBe(true);
+    expect(isExcludedArchiveEntry(".git/config")).toBe(true);
+    expect(isExcludedArchiveEntry("src/index.ts")).toBe(true);
+    expect(isExcludedArchiveEntry("src/Panel.tsx")).toBe(true);
+  });
+
+  it("excludes source maps by default, includes them when sourcemaps=true", () => {
+    expect(isExcludedArchiveEntry("dist/index.js.map")).toBe(true);
+    expect(isExcludedArchiveEntry("dist/index.js.map", true)).toBe(false);
+  });
+
+  it("keeps compiled output and assets", () => {
+    expect(isExcludedArchiveEntry("plugin.json")).toBe(false);
+    expect(isExcludedArchiveEntry("dist/index.js")).toBe(false);
+    expect(isExcludedArchiveEntry("icons/logo.svg")).toBe(false);
   });
 });

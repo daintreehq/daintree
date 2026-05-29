@@ -61,7 +61,7 @@
     "knip": "knip",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc --noEmit && tsc -b electron/tsconfig.json && tsc --noEmit -p electron/tsconfig.preload.json",
+    "typecheck": "tsc --noEmit && tsc -b electron/tsconfig.json && tsc --noEmit -p electron/tsconfig.preload.json && tsc --noEmit -p packages/daintree-plugin/tsconfig.json && tsc --noEmit -p packages/create-daintree-plugin/tsconfig.json",
     "check:channels": "node scripts/ci/check-channel-drift.mjs",
     "check:preload-backdoors": "node scripts/ci/check-preload-backdoors.mjs",
     "check:crash-loop-constants": "node scripts/ci/check-crash-loop-constants.mjs",

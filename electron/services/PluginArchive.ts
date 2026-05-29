@@ -59,6 +59,17 @@ function matchesExclusionPattern(name: string, sourcemaps: boolean): boolean {
   return false;
 }
 
+/**
+ * Apply the normative `.dntr` exclusion list to a POSIX-relative path.
+ * Shared with the `daintree-plugin` CLI packager (F32) so the CLI's
+ * `.gitignore`-aware file collection still drops `node_modules/`, `.git/`,
+ * source files, and (unless `sourcemaps`) source maps using the exact same
+ * predicate the host packs with — keeping the wire format in one place.
+ */
+export function isExcludedArchiveEntry(name: string, sourcemaps = false): boolean {
+  return matchesExclusionPattern(name, sourcemaps);
+}
+
 async function collectFiles(dir: string, baseDir: string, sourcemaps: boolean): Promise<string[]> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   const files: string[] = [];
@@ -98,7 +109,25 @@ export async function packPluginArchive(
 ): Promise<string> {
   const sourcemaps = opts.sourcemaps ?? false;
   const files = await collectFiles(sourceDir, sourceDir, sourcemaps);
-  const sorted = sortEntries(files);
+  return packPluginArchiveFromFiles(sourceDir, outputPath, files);
+}
+
+/**
+ * Pack an explicit, pre-filtered list of POSIX-relative paths under
+ * `sourceDir` into a deterministic `.dntr` archive. The `daintree-plugin` CLI
+ * uses this after it has done its own `.gitignore`-aware collection (F32) so
+ * the host's normative ordering, `plugin.json`-first rule, MS-DOS-epoch
+ * timestamps, and pre-stat insertion guard all stay in this one place. The
+ * caller owns exclusion filtering; this function still sorts and enforces the
+ * `plugin.json`-present invariant. Returns the SHA-256 hex digest of the
+ * written archive bytes.
+ */
+export async function packPluginArchiveFromFiles(
+  sourceDir: string,
+  outputPath: string,
+  files: readonly string[]
+): Promise<string> {
+  const sorted = sortEntries([...files]);
 
   if (!sorted.includes("plugin.json")) {
     throw new Error("plugin.json not found in source directory");
