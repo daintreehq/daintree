@@ -322,6 +322,11 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       }
     },
     settings,
+    logger: {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    },
 
     registeredActions,
     registeredHandlers,

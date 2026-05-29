@@ -26,6 +26,7 @@ export const PLUGIN_METHOD_CHANNELS = {
   setAuditEnabled: "plugin:set-audit-enabled",
   setAuditMaxRecords: "plugin:set-audit-max-records",
   exportAuditLog: "plugin:export-audit-log",
+  getDiagnosticsSnapshot: "plugin:get-diagnostics-snapshot",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PLUGIN_METHOD_CHANNELS;
