@@ -1481,6 +1481,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // helpers that aren't expressible through IpcInvokeMap, and the on*
   // entries are renderer-only subscriptions.
   plugin: GeneratedElectronAPI["plugin"] & {
+    /**
+     * Resolve the absolute native filesystem path of a dropped File via
+     * `webUtils.getPathForFile`. Plugin-scoped (never exposed globally) so
+     * native-path recovery stays confined to the plugin install surface
+     * (#9295). Returns `""` for synthetic/non-disk File objects (clipboard
+     * paste, virtual files) — treat empty as a structured error.
+     */
+    getDroppedFilePath(file: File): string;
     invoke(pluginId: string, channel: string, ...args: unknown[]): Promise<unknown>;
     on(pluginId: string, channel: string, callback: (payload: unknown) => void): () => void;
     /** Subscribe to plugin-action registry changes. Returns a cleanup. */

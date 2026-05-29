@@ -386,6 +386,9 @@ export interface GeneratedElectronAPI {
     installFromFile(
       ...args: IpcInvokeMap["plugin:install-from-file"]["args"]
     ): Promise<IpcInvokeMap["plugin:install-from-file"]["result"]>;
+    installFromPath(
+      ...args: IpcInvokeMap["plugin:install-from-path"]["args"]
+    ): Promise<IpcInvokeMap["plugin:install-from-path"]["result"]>;
     installFromUrl(
       ...args: IpcInvokeMap["plugin:install-from-url"]["args"]
     ): Promise<IpcInvokeMap["plugin:install-from-url"]["result"]>;
