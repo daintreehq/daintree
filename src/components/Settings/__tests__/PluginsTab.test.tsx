@@ -274,6 +274,23 @@ describe("PluginsTab", () => {
     );
   });
 
+  it("keeps the URL dialog open and shows an error on an invalid URL", async () => {
+    (window.electron.plugin.installFromUrl as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: "invalid-url",
+    });
+    renderTab();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Plugin URL"), { target: { value: "not a url" } });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    await waitFor(() => expect(screen.getByText(/valid URL/)).toBeTruthy());
+    // Dialog stays open so the user can correct the URL.
+    expect(screen.getByLabelText("Plugin URL")).toBeTruthy();
+  });
+
   it("shows a notice when install-from-file isn't implemented yet", async () => {
     renderTab();
     await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());

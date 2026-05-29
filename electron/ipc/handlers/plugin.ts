@@ -106,8 +106,19 @@ async function handleInstallFromUrl(url: string): Promise<PluginInstallResult> {
   if (typeof url !== "string" || url.trim().length === 0) {
     return { status: "invalid-url" };
   }
-  // F24 will validate (size / MIME / timeout / redirect) and route the URL
-  // through the bounded install flow here.
+  // Cheap well-formedness + scheme gate so obvious garbage ("not a url",
+  // "javascript:…") surfaces the invalid-url state immediately. The bounded
+  // download path (size / MIME / timeout / redirect) is F24's job.
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return { status: "invalid-url" };
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return { status: "invalid-url" };
+  }
+  // F24 will validate and route the URL through the bounded install flow here.
   return { status: "not-implemented" };
 }
 

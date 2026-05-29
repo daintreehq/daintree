@@ -3337,7 +3337,16 @@ export class PluginService {
     if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
       throw new Error("uninstallPlugin: pluginId must be a non-empty string");
     }
+    // A plugin is either running (`this.plugins`) or skipped-at-launch because
+    // it was disabled (`this.disabledPlugins`). `unloadPlugin` only touches the
+    // running set, so a disabled plugin must also be dropped from the skipped
+    // map — otherwise `listPlugins()` keeps returning it and the row survives a
+    // "successful" uninstall.
     this.unloadPlugin(pluginId);
+    this.disabledPlugins.delete(pluginId);
+    // Clear it from the persisted `plugins.disabled` intent list so a disabled
+    // plugin can't resurrect itself on the next launch's disabled-dir re-scan.
+    this.setEnabled(pluginId, true);
     const records = this.getInstalledRecords();
     if (pluginId in records) {
       delete records[pluginId];

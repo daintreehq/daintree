@@ -63,7 +63,9 @@ function PluginRow({ plugin, toggling, onToggle, onUninstall }: PluginRowProps) 
   const canCheckUpdate = plugin.originalUrl !== null;
   const updateTooltip = canCheckUpdate
     ? "Checking for updates isn't available yet"
-    : "No update URL — reinstall from a file to update";
+    : plugin.isBuiltin
+      ? "Built-in plugins update with Daintree"
+      : "No update URL — reinstall from a file to update";
 
   return (
     <div className="relative w-full p-4 rounded-[var(--radius-lg)] border border-daintree-border text-daintree-text">
@@ -259,7 +261,8 @@ export function PluginsTab() {
     const id = plugin.manifest.name;
     if (pending.has(id)) return;
     const next = plugin.disabled === true; // currently disabled → enabling
-    const before = plugins;
+    const wasDisabled = plugin.disabled;
+    const wasPendingRestart = plugin.pendingRestart;
 
     setPending((prev) => new Set(prev).add(id));
     // Optimistic flip: a single toggle always flips both the desired state and
@@ -273,7 +276,16 @@ export function PluginsTab() {
       setError(null);
       await window.electron.plugin.setEnabled(id, next);
     } catch (err) {
-      setPlugins(before); // revert the optimistic flip
+      // Revert only this plugin's fields with a functional updater — a
+      // whole-list snapshot could resurrect a plugin another view uninstalled
+      // (via onProvenanceChanged) while this toggle was in flight.
+      setPlugins((prev) =>
+        prev.map((p) =>
+          p.manifest.name === id
+            ? { ...p, disabled: wasDisabled, pendingRestart: wasPendingRestart }
+            : p
+        )
+      );
       setError(formatErrorMessage(err, "Failed to update plugin"));
       logError("Failed to update plugin enabled state", err);
     } finally {
