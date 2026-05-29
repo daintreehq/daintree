@@ -21,6 +21,9 @@ import type { windowsStoreNotifierService as WindowsStoreNotifierServiceType } f
 // Guard: process.argv CLI path should only be consumed by the first window
 let processArgvCliHandled = false;
 
+// Guard: process.argv `.dntr` archives should only be consumed by the first window
+let processArgvDntrHandled = false;
+
 // Guard: IPC handlers are globally scoped (ipcMain.handle throws on re-registration)
 let ipcHandlersRegistered = false;
 
@@ -126,6 +129,12 @@ export function getProcessArgvCliHandled(): boolean {
 }
 export function setProcessArgvCliHandled(v: boolean): void {
   processArgvCliHandled = v;
+}
+export function getProcessArgvDntrHandled(): boolean {
+  return processArgvDntrHandled;
+}
+export function setProcessArgvDntrHandled(v: boolean): void {
+  processArgvDntrHandled = v;
 }
 export function getIpcHandlersRegistered(): boolean {
   return ipcHandlersRegistered;
