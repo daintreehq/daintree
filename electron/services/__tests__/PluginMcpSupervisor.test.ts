@@ -95,6 +95,26 @@ function makeFakeSubprocess(opts?: { pid?: number }) {
     return [...stdinLines];
   }
 
+  function lastCallMethod(): string | undefined {
+    const last = stdinLines.at(-1);
+    if (!last) return undefined;
+    try {
+      return (JSON.parse(last) as { method?: string }).method;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function lastCallParams(): Record<string, unknown> | undefined {
+    const last = stdinLines.at(-1);
+    if (!last) return undefined;
+    try {
+      return (JSON.parse(last) as { params?: Record<string, unknown> }).params;
+    } catch {
+      return undefined;
+    }
+  }
+
   return {
     subprocess,
     handle,
@@ -103,8 +123,14 @@ function makeFakeSubprocess(opts?: { pid?: number }) {
     answerLastCall,
     answerLastCallWithError,
     readStdinLines,
+    lastCallMethod,
+    lastCallParams,
     emitStderr(line: string) {
       stderr.write(line);
+    },
+    /** Write a raw JSON-RPC message (e.g. a server notification) onto stdout. */
+    emitStdout(message: unknown) {
+      stdout.write(JSON.stringify(message) + "\n");
     },
     closeStdout() {
       stdout.end();
@@ -595,5 +621,332 @@ describe("PluginMcpSupervisor (issue #9233)", () => {
     });
     callPromise.catch(() => {});
     await expect(callPromise).rejects.toMatchObject({ code: "WRITE_FAILED" });
+  });
+});
+
+describe("PluginMcpSupervisor lazy tool discovery (issue #9235)", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const CONTRIBUTION = { id: "linear", name: "Linear", command: "node" };
+
+  /** Spawn one server and drive it to `ready`. */
+  async function startReady(
+    supervisor: PluginMcpSupervisor,
+    fake: ReturnType<typeof makeFakeSubprocess>
+  ): Promise<void> {
+    const startPromise = supervisor.start({
+      pluginId: "acme.demo",
+      contributions: [CONTRIBUTION],
+      resolveSettings: async () => "",
+    });
+    await fake.waitForStdinCount(1);
+    fake.answerInitialize();
+    await startPromise;
+  }
+
+  it("fetches tools/list on first enumeration and returns tier-1 summaries without schemas", async () => {
+    const fake = makeFakeSubprocess();
+    const supervisor = new PluginMcpSupervisor({ spawner: () => fake.handle, killTree: () => {} });
+    await startReady(supervisor, fake);
+
+    const longDescription = "x".repeat(250);
+    const listPromise = supervisor.listTools("acme.demo", "linear");
+    // initialize + notifications/initialized + tools/list = 3 frames.
+    await fake.waitForStdinCount(3);
+    expect(fake.lastCallMethod()).toBe("tools/list");
+    expect(fake.lastCallParams()).toEqual({});
+    fake.answerLastCall({
+      tools: [
+        { name: "getIssue", description: "Fetch an issue", inputSchema: { type: "object" } },
+        { name: "verbose", description: longDescription, inputSchema: { type: "object" } },
+      ],
+    });
+
+    const result = await listPromise;
+    expect(result.tools).toEqual([
+      { name: "getIssue", description: "Fetch an issue" },
+      { name: "verbose", description: `${"x".repeat(200)}…` },
+    ]);
+    // Tier-1 must not leak the input schema.
+    for (const tool of result.tools) {
+      expect(tool).not.toHaveProperty("inputSchema");
+    }
+    expect(result.truncated).toBe(false);
+    expect(result.maxToolsPerSession).toBe(200);
+  });
+
+  it("follows the tools/list pagination cursor across pages", async () => {
+    const fake = makeFakeSubprocess();
+    const supervisor = new PluginMcpSupervisor({ spawner: () => fake.handle, killTree: () => {} });
+    await startReady(supervisor, fake);
+
+    const listPromise = supervisor.listTools("acme.demo", "linear");
+    await fake.waitForStdinCount(3);
+    expect(fake.lastCallParams()).toEqual({});
+    fake.answerLastCall({ tools: [{ name: "a", inputSchema: {} }], nextCursor: "cursor-2" });
+
+    await fake.waitForStdinCount(4);
+    expect(fake.lastCallMethod()).toBe("tools/list");
+    expect(fake.lastCallParams()).toEqual({ cursor: "cursor-2" });
+    fake.answerLastCall({ tools: [{ name: "b", inputSchema: {} }] });
+
+    const result = await listPromise;
+    expect(result.tools.map((t) => t.name)).toEqual(["a", "b"]);
+    // No third page requested.
+    expect(fake.readStdinLines()).toHaveLength(4);
+  });
+
+  it("serves the cached tool list on the second enumeration without a refetch", async () => {
+    const fake = makeFakeSubprocess();
+    const supervisor = new PluginMcpSupervisor({ spawner: () => fake.handle, killTree: () => {} });
+    await startReady(supervisor, fake);
+
+    const first = supervisor.listTools("acme.demo", "linear");
+    await fake.waitForStdinCount(3);
+    fake.answerLastCall({ tools: [{ name: "a", inputSchema: {} }] });
+    await first;
+
+    const second = await supervisor.listTools("acme.demo", "linear");
+    expect(second.tools.map((t) => t.name)).toEqual(["a"]);
+    // Still only 3 frames: no second tools/list went out.
+    expect(fake.readStdinLines()).toHaveLength(3);
+  });
+
+  it("deduplicates concurrent enumerations into one tools/list round (singleflight)", async () => {
+    const fake = makeFakeSubprocess();
+    const supervisor = new PluginMcpSupervisor({ spawner: () => fake.handle, killTree: () => {} });
+    await startReady(supervisor, fake);
+
+    const p1 = supervisor.listTools("acme.demo", "linear");
+    const p2 = supervisor.listTools("acme.demo", "linear");
+    await fake.waitForStdinCount(3);
+    fake.answerLastCall({ tools: [{ name: "a", inputSchema: {} }] });
+
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1.tools.map((t) => t.name)).toEqual(["a"]);
+    expect(r2.tools.map((t) => t.name)).toEqual(["a"]);
+    // One tools/list frame only.
+    expect(fake.readStdinLines()).toHaveLength(3);
+  });
+
+  it("returns the full tool definition from getFullSchema, or not-found for an unknown name", async () => {
+    const fake = makeFakeSubprocess();
+    const supervisor = new PluginMcpSupervisor({ spawner: () => fake.handle, killTree: () => {} });
+    await startReady(supervisor, fake);
+
+    const schemaPromise = supervisor.getFullSchema("acme.demo", "linear", "getIssue");
+    await fake.waitForStdinCount(3);
+    fake.answerLastCall({
+      tools: [
+        {
+          name: "getIssue",
+          description: "Fetch an issue",
+          inputSchema: { type: "object", properties: { id: { type: "string" } } },
+          annotations: { readOnly: true },
+        },
+      ],
+    });
+    const hit = await schemaPromise;
+    expect(hit).toEqual({
+      found: true,
+      tool: {
+        name: "getIssue",
+        description: "Fetch an issue",
+        inputSchema: { type: "object", properties: { id: { type: "string" } } },
+        annotations: { readOnly: true },
+      },
+    });
+
+    // Second lookup hits the cache (no new frame) and misses on an unknown name.
+    const miss = await supervisor.getFullSchema("acme.demo", "linear", "nope");
+    expect(miss).toEqual({ found: false });
+    expect(fake.readStdinLines()).toHaveLength(3);
+  });
+
+  it("invalidates the cache on a notifications/tools/list_changed and refetches", async () => {
+    const fake = makeFakeSubprocess();
+    const supervisor = new PluginMcpSupervisor({ spawner: () => fake.handle, killTree: () => {} });
+    await startReady(supervisor, fake);
+
+    const first = supervisor.listTools("acme.demo", "linear");
+    await fake.waitForStdinCount(3);
+    fake.answerLastCall({ tools: [{ name: "a", inputSchema: {} }] });
+    await first;
+
+    fake.emitStdout({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+    await flushMicrotasks();
+
+    const second = supervisor.listTools("acme.demo", "linear");
+    // Cache was dropped — a fresh tools/list goes out (frame 4).
+    await fake.waitForStdinCount(4);
+    expect(fake.lastCallMethod()).toBe("tools/list");
+    fake.answerLastCall({ tools: [{ name: "a", inputSchema: {} }, { name: "b", inputSchema: {} }] });
+    const result = await second;
+    expect(result.tools.map((t) => t.name)).toEqual(["a", "b"]);
+  });
+
+  it("ignores unrelated notifications and keeps the cache", async () => {
+    const fake = makeFakeSubprocess();
+    const supervisor = new PluginMcpSupervisor({ spawner: () => fake.handle, killTree: () => {} });
+    await startReady(supervisor, fake);
+
+    const first = supervisor.listTools("acme.demo", "linear");
+    await fake.waitForStdinCount(3);
+    fake.answerLastCall({ tools: [{ name: "a", inputSchema: {} }] });
+    await first;
+
+    fake.emitStdout({ jsonrpc: "2.0", method: "notifications/message", params: { level: "info" } });
+    await flushMicrotasks();
+
+    const second = await supervisor.listTools("acme.demo", "linear");
+    expect(second.tools.map((t) => t.name)).toEqual(["a"]);
+    // Cache survived — no refetch.
+    expect(fake.readStdinLines()).toHaveLength(3);
+  });
+
+  it("invalidates the cache on crash and refetches after restart", async () => {
+    const fakes = [makeFakeSubprocess({ pid: 1 }), makeFakeSubprocess({ pid: 2 })];
+    let nth = 0;
+    const supervisor = new PluginMcpSupervisor({
+      spawner: () => fakes[nth++]!.handle,
+      killTree: () => {},
+    });
+    await startReady(supervisor, fakes[0]!);
+
+    const first = supervisor.listTools("acme.demo", "linear");
+    await fakes[0]!.waitForStdinCount(3);
+    fakes[0]!.answerLastCall({ tools: [{ name: "a", inputSchema: {} }] });
+    await first;
+
+    // Crash the server: cache must be dropped.
+    fakes[0]!.closeStdout();
+    await flushMicrotasks();
+    expect(supervisor.list()[0]?.status).toBe("crashed");
+
+    // Restart and enumerate again — a fresh tools/list must go out on the new
+    // subprocess (the cache did not survive the crash).
+    const restartPromise = supervisor.restart({
+      pluginId: "acme.demo",
+      serverId: "linear",
+      contribution: CONTRIBUTION,
+      resolveSettings: async () => "",
+    });
+    await fakes[1]!.waitForStdinCount(1);
+    fakes[1]!.answerInitialize();
+    await restartPromise;
+
+    const second = supervisor.listTools("acme.demo", "linear");
+    await fakes[1]!.waitForStdinCount(3);
+    expect(fakes[1]!.lastCallMethod()).toBe("tools/list");
+    fakes[1]!.answerLastCall({ tools: [{ name: "b", inputSchema: {} }] });
+    const result = await second;
+    expect(result.tools.map((t) => t.name)).toEqual(["b"]);
+  });
+
+  it("rejects an in-flight enumeration when the server crashes mid-fetch and recovers after restart", async () => {
+    const fakes = [makeFakeSubprocess({ pid: 1 }), makeFakeSubprocess({ pid: 2 })];
+    let nth = 0;
+    const supervisor = new PluginMcpSupervisor({
+      spawner: () => fakes[nth++]!.handle,
+      killTree: () => {},
+    });
+    await startReady(supervisor, fakes[0]!);
+
+    const pending = supervisor.listTools("acme.demo", "linear");
+    pending.catch(() => {});
+    await fakes[0]!.waitForStdinCount(3);
+    // Crash before answering tools/list.
+    fakes[0]!.closeStdout();
+    await flushMicrotasks();
+    await expect(pending).rejects.toThrow();
+
+    // The inflight guard must have cleared so a post-restart enumeration runs.
+    const restartPromise = supervisor.restart({
+      pluginId: "acme.demo",
+      serverId: "linear",
+      contribution: CONTRIBUTION,
+      resolveSettings: async () => "",
+    });
+    await fakes[1]!.waitForStdinCount(1);
+    fakes[1]!.answerInitialize();
+    await restartPromise;
+
+    const recovered = supervisor.listTools("acme.demo", "linear");
+    await fakes[1]!.waitForStdinCount(3);
+    fakes[1]!.answerLastCall({ tools: [{ name: "ok", inputSchema: {} }] });
+    expect((await recovered).tools.map((t) => t.name)).toEqual(["ok"]);
+  });
+
+  it("enforces the global tool cap and reports truncation", async () => {
+    const fake = makeFakeSubprocess();
+    const supervisor = new PluginMcpSupervisor({ spawner: () => fake.handle, killTree: () => {} });
+    await startReady(supervisor, fake);
+
+    const listPromise = supervisor.listTools("acme.demo", "linear", 2);
+    await fake.waitForStdinCount(3);
+    fake.answerLastCall({
+      tools: [
+        { name: "a", inputSchema: {} },
+        { name: "b", inputSchema: {} },
+        { name: "c", inputSchema: {} },
+      ],
+    });
+    const result = await listPromise;
+    expect(result.tools.map((t) => t.name)).toEqual(["a", "b"]);
+    expect(result.truncated).toBe(true);
+    expect(result.maxToolsPerSession).toBe(2);
+  });
+
+  it("spreads the global cap budget across multiple servers", async () => {
+    const fakes = [makeFakeSubprocess({ pid: 1 }), makeFakeSubprocess({ pid: 2 })];
+    let nth = 0;
+    const supervisor = new PluginMcpSupervisor({
+      spawner: () => fakes[nth++]!.handle,
+      killTree: () => {},
+    });
+    const startPromise = supervisor.start({
+      pluginId: "acme.demo",
+      contributions: [
+        { id: "linear", name: "Linear", command: "node" },
+        { id: "github", name: "GitHub", command: "node" },
+      ],
+      resolveSettings: async () => "",
+    });
+    await fakes[0]!.waitForStdinCount(1);
+    fakes[0]!.answerInitialize();
+    await fakes[1]!.waitForStdinCount(1);
+    fakes[1]!.answerInitialize();
+    await startPromise;
+
+    // First server surfaces 2 of its 2 tools (budget 3 → remaining 3).
+    const firstPromise = supervisor.listTools("acme.demo", "linear", 3);
+    await fakes[0]!.waitForStdinCount(3);
+    fakes[0]!.answerLastCall({
+      tools: [
+        { name: "l1", inputSchema: {} },
+        { name: "l2", inputSchema: {} },
+      ],
+    });
+    const first = await firstPromise;
+    expect(first.tools.map((t) => t.name)).toEqual(["l1", "l2"]);
+    expect(first.truncated).toBe(false);
+
+    // Second server only has 1 slot of budget left (3 - 2 already surfaced).
+    const secondPromise = supervisor.listTools("acme.demo", "github", 3);
+    await fakes[1]!.waitForStdinCount(3);
+    fakes[1]!.answerLastCall({
+      tools: [
+        { name: "g1", inputSchema: {} },
+        { name: "g2", inputSchema: {} },
+      ],
+    });
+    const second = await secondPromise;
+    expect(second.tools.map((t) => t.name)).toEqual(["g1"]);
+    expect(second.truncated).toBe(true);
   });
 });

@@ -4,6 +4,10 @@ export const PLUGIN_MCP_METHOD_CHANNELS = {
   list: "plugin-mcp:list",
   getStderr: "plugin-mcp:get-stderr",
   restart: "plugin-mcp:restart",
+  listTools: "plugin-mcp:list-tools",
+  getFullSchema: "plugin-mcp:get-full-schema",
+  getConfig: "plugin-mcp:get-config",
+  setConfig: "plugin-mcp:set-config",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PLUGIN_MCP_METHOD_CHANNELS;
