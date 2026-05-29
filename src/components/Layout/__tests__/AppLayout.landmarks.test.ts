@@ -73,8 +73,7 @@ describe("ARIA page landmarks — issue #5416", () => {
       // status containers), so aria-hidden would trap focusable controls
       // beneath aria-hidden=true and fail axe's aria-hidden-focus rule.
       // role="none" drops the empty landmark instead — see test below.
-      expect(source).not.toMatch(/aria-hidden=\{[^}]*hasDocked[^}]*\}/);
-      expect(source).not.toMatch(/aria-hidden="true"/);
+      expect(source).not.toMatch(/aria-hidden/);
     });
 
     it("drops the landmark role instead of inerting the empty dock (#9527)", () => {

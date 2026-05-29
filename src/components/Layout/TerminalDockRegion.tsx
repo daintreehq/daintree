@@ -35,7 +35,9 @@ export function TerminalDockRegion() {
       // don't announce a dead-end "Dock" region. `role="none"` strips the
       // landmark without affecting descendants — unlike `inert`, the always-
       // rendered launch button and right-click menu stay interactive so users
-      // can still spawn an agent from an empty dock.
+      // can still spawn an agent from an empty dock. Chromium honors
+      // `role="none"` here because tabIndex=-1 is not tab-order-reachable; the
+      // ARIA conflict-resolution clause only ignores the role for tabIndex>=0.
       role={shouldInertDock ? "none" : "region"}
       tabIndex={-1}
       aria-label={shouldInertDock ? undefined : "Dock"}
