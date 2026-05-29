@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PluginsTab } from "../PluginsTab";
 import { SettingsValidationProvider } from "../SettingsValidationRegistry";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -426,6 +426,102 @@ describe("PluginsTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Install from file" }));
     await waitFor(() => expect(screen.getByText(/isn't available yet/)).toBeTruthy());
+  });
+
+  it("gates an http:// URL behind a confirm dialog before calling installFromUrl", async () => {
+    renderTab();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Plugin URL"), {
+      target: { value: "http://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    // The confirm gate appears and the IPC call has NOT fired yet.
+    await waitFor(() => expect(screen.getByText("Install over HTTP?")).toBeTruthy());
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+  });
+
+  it("cancelling the http confirm does not call installFromUrl", async () => {
+    renderTab();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Plugin URL"), {
+      target: { value: "http://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+    await waitFor(() => expect(screen.getByText("Install over HTTP?")).toBeTruthy());
+
+    // The destructive confirm renders as an alertdialog — scope to it so the
+    // URL dialog's own "Cancel" (animating out) doesn't collide.
+    const confirm = within(screen.getByRole("alertdialog"));
+    fireEvent.click(confirm.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByText("Install over HTTP?")).toBeNull());
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+  });
+
+  it("confirming the http warning routes the URL through installFromUrl", async () => {
+    (window.electron.plugin.installFromUrl as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: "installed",
+      pluginId: "acme.demo",
+    });
+    renderTab();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Plugin URL"), {
+      target: { value: "http://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+    await waitFor(() => expect(screen.getByText("Install over HTTP?")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Install over HTTP" }));
+    await waitFor(() =>
+      expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
+        "http://example.com/p.dntr"
+      )
+    );
+  });
+
+  it("shows a tailored error when a URL install fails with size_exceeded", async () => {
+    (window.electron.plugin.installFromUrl as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: "failed",
+      errors: [{ code: "size_exceeded", message: "too big" }],
+    });
+    renderTab();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Plugin URL"), {
+      target: { value: "https://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    await waitFor(() => expect(screen.getByText(/larger than the 30 MB limit/)).toBeTruthy());
+  });
+
+  it("shows a tailored error when a URL install times out", async () => {
+    (window.electron.plugin.installFromUrl as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: "failed",
+      errors: [{ code: "fetch_timeout", message: "slow" }],
+    });
+    renderTab();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Plugin URL"), {
+      target: { value: "https://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    await waitFor(() => expect(screen.getByText(/download timed out/)).toBeTruthy());
   });
 
   it("re-fetches the list when a provenance-changed event fires", async () => {

@@ -13,7 +13,11 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
-import type { LoadedPluginInfo, PluginInstallSource } from "@shared/types/plugin";
+import type {
+  LoadedPluginInfo,
+  PluginInstallError,
+  PluginInstallSource,
+} from "@shared/types/plugin";
 
 /** Enabled plugins first, then alphabetically by display name. */
 function sortPlugins(list: readonly LoadedPluginInfo[]): LoadedPluginInfo[] {
@@ -38,6 +42,26 @@ const UP_TO_DATE_NOTIFICATION_DURATION_MS = 4000;
 
 function pluginLabel(plugin: LoadedPluginInfo): string {
   return plugin.manifest.displayName ?? plugin.manifest.name;
+}
+
+/**
+ * Map a structured install failure to user-facing copy. The bounded-fetch codes
+ * (F24) get tailored guidance; everything else falls back to the error's own
+ * message so manifest/engine failures still read clearly.
+ */
+function installErrorMessage(error: PluginInstallError | undefined): string {
+  switch (error?.code) {
+    case "fetch_timeout":
+      return "The download timed out. Check your connection and try again.";
+    case "size_exceeded":
+      return "That plugin is larger than the 30 MB limit.";
+    case "content_type_rejected":
+      return "That URL didn't return a plugin archive (.dntr). Check the URL and try again.";
+    case "fetch_failed":
+      return "Couldn't download the plugin. Check the URL and try again.";
+    default:
+      return error?.message ?? "Installation failed. Check the file and try again.";
+  }
 }
 
 interface PluginRowProps {
@@ -281,6 +305,7 @@ export function PluginsTab() {
     >;
   } | null>(null);
   const [isReinstalling, setIsReinstalling] = useState(false);
+  const [pendingHttpUrl, setPendingHttpUrl] = useState<string | null>(null);
 
   useSettingsTabValidation("plugins", Boolean(error));
 
@@ -385,6 +410,11 @@ export function PluginsTab() {
       case "invalid-url":
         setError("That doesn't look like a valid URL. Check it and try again.");
         return;
+      case "failed": {
+        setNotice(null);
+        setError(installErrorMessage(result.errors[0]));
+        return;
+      }
     }
   };
 
@@ -402,9 +432,7 @@ export function PluginsTab() {
     }
   };
 
-  const handleInstallFromUrl = async () => {
-    const url = urlInput.trim();
-    if (!url || isInstalling) return;
+  const performInstallFromUrl = async (url: string) => {
     setIsInstalling(true);
     try {
       const result = await window.electron.plugin.installFromUrl(url);
@@ -420,6 +448,43 @@ export function PluginsTab() {
     } finally {
       setIsInstalling(false);
     }
+  };
+
+  const handleInstallFromUrl = async () => {
+    const url = urlInput.trim();
+    if (!url || isInstalling) return;
+    // Tier D2: a plaintext HTTP download is unauthenticated and unencrypted, so
+    // gate it behind an explicit confirm before the request leaves the app. The
+    // IPC handler still accepts http:// — this is the renderer's risk surface.
+    let protocol: string;
+    try {
+      protocol = new URL(url).protocol;
+    } catch {
+      // Let the handler return invalid-url so the messaging stays consistent.
+      await performInstallFromUrl(url);
+      return;
+    }
+    if (protocol === "http:") {
+      // Stack avoidance: close the URL input and surface the confirm on its
+      // own. Cancelling reopens the input with the URL intact so the user can
+      // switch to https; confirming proceeds with the install.
+      setShowUrlDialog(false);
+      setPendingHttpUrl(url);
+      return;
+    }
+    await performInstallFromUrl(url);
+  };
+
+  const confirmHttpInstall = async () => {
+    if (!pendingHttpUrl) return;
+    const url = pendingHttpUrl;
+    setPendingHttpUrl(null);
+    await performInstallFromUrl(url);
+  };
+
+  const cancelHttpInstall = () => {
+    setPendingHttpUrl(null);
+    setShowUrlDialog(true);
   };
 
   const confirmUninstall = async () => {
@@ -643,6 +708,18 @@ export function PluginsTab() {
           </div>
         )}
       </ConfirmDialog>
+
+      <ConfirmDialog
+        isOpen={pendingHttpUrl !== null}
+        onClose={isInstalling ? undefined : cancelHttpInstall}
+        title="Install over HTTP?"
+        description="This URL doesn't use HTTPS, so the download isn't encrypted or authenticated in transit. Only continue if you trust the source."
+        confirmLabel="Install over HTTP"
+        cancelLabel="Cancel"
+        onConfirm={() => void confirmHttpInstall()}
+        isConfirmLoading={isInstalling}
+        variant="destructive"
+      />
 
       <AppDialog
         isOpen={showUrlDialog}

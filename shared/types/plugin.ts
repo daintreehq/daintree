@@ -409,6 +409,13 @@ export interface InstalledPluginRecord {
  * - `swap_failed` — atomic rename failed but the prior state was restored
  * - `swap_unrecoverable` — rename failed AND rollback failed; on-disk state is inconsistent
  * - `load_failed` — swap committed but the new plugin failed to load
+ *
+ * Install-from-URL bounded-fetch failures (F24), produced before the archive
+ * reaches `PluginService.installPlugin`:
+ * - `fetch_failed` — non-2xx HTTP status or a network/transport error
+ * - `fetch_timeout` — the download exceeded the 10s deadline
+ * - `size_exceeded` — declared `Content-Length` or the streamed bytes exceeded 30 MB
+ * - `content_type_rejected` — response wasn't a plugin archive (bad MIME and the URL doesn't end in `.dntr`)
  */
 export type PluginInstallErrorCode =
   | "lock_failed"
@@ -420,7 +427,11 @@ export type PluginInstallErrorCode =
   | "unload_failed"
   | "swap_failed"
   | "swap_unrecoverable"
-  | "load_failed";
+  | "load_failed"
+  | "fetch_failed"
+  | "fetch_timeout"
+  | "size_exceeded"
+  | "content_type_rejected";
 
 /**
  * Structured install validation error. `path` is the JSON pointer segments

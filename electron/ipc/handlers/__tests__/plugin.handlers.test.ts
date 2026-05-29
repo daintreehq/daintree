@@ -7,6 +7,7 @@ const mockListPlugins = vi.fn();
 const mockSetEnabled = vi.fn();
 const mockUninstallPlugin = vi.fn();
 const mockCheckForUpdate = vi.fn();
+const mockInstallPlugin = vi.fn();
 const mockListPluginActions = vi.fn();
 const mockRegisterPluginAction = vi.fn();
 const mockUnregisterPluginAction = vi.fn();
@@ -17,6 +18,7 @@ vi.mock("../../../services/PluginService.js", () => ({
     setEnabled: (...args: unknown[]) => mockSetEnabled(...args),
     uninstallPlugin: (...args: unknown[]) => mockUninstallPlugin(...args),
     checkForUpdate: (...args: unknown[]) => mockCheckForUpdate(...args),
+    installPlugin: (...args: unknown[]) => mockInstallPlugin(...args),
     dispatchHandler: (...args: unknown[]) => mockDispatchHandler(...args),
     registerHandler: (...args: unknown[]) => mockRegisterHandler(...args),
     removeHandlers: (...args: unknown[]) => mockRemoveHandlers(...args),
@@ -70,6 +72,7 @@ const mockIpcMainHandle = vi.fn();
 const mockIpcMainRemoveHandler = vi.fn();
 const mockShowOpenDialog = vi.fn();
 const mockGetFocusedWindow = vi.fn();
+const mockNetFetch = vi.fn();
 vi.mock("electron", () => ({
   ipcMain: {
     handle: (...args: unknown[]) => mockIpcMainHandle(...args),
@@ -80,6 +83,9 @@ vi.mock("electron", () => ({
   },
   BrowserWindow: {
     getFocusedWindow: (...args: unknown[]) => mockGetFocusedWindow(...args),
+  },
+  net: {
+    fetch: (...args: unknown[]) => mockNetFetch(...args),
   },
 }));
 
@@ -97,6 +103,8 @@ beforeEach(() => {
   mockGetFileDecorationImpls.mockReturnValue([]);
   mockGetFocusedWindow.mockReturnValue(null);
   mockShowOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
+  mockInstallPlugin.mockResolvedValue({ status: "installed", pluginId: "acme.my-plugin" });
+  mockNetFetch.mockReset();
   _resetIpcGuardForTesting();
   markIpcSecurityReady();
 });
@@ -262,10 +270,174 @@ describe("registerPluginHandlers", () => {
     expect(result).toEqual({ status: "invalid-url" });
   });
 
-  it("PLUGIN_INSTALL_FROM_URL returns not-implemented for a valid URL", async () => {
+  // --- Install-from-URL bounded fetch (F24) ---
+
+  function streamFromChunks(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+  }
+
+  function mockResponse(opts: {
+    ok?: boolean;
+    status?: number;
+    headers?: Record<string, string>;
+    body?: ReadableStream<Uint8Array> | null;
+  }) {
+    const headerMap = new Map<string, string>(
+      Object.entries(opts.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v])
+    );
+    return {
+      ok: opts.ok ?? true,
+      status: opts.status ?? 200,
+      headers: { get: (name: string) => headerMap.get(name.toLowerCase()) ?? null },
+      body: opts.body ?? streamFromChunks([new Uint8Array([1, 2, 3])]),
+    };
+  }
+
+  function abortError(name: "AbortError" | "TimeoutError" = "AbortError"): DOMException {
+    return new DOMException("The operation was aborted", name);
+  }
+
+  it("PLUGIN_INSTALL_FROM_URL installs a zip archive and passes url provenance", async () => {
+    mockNetFetch.mockResolvedValue(
+      mockResponse({ headers: { "content-type": "application/zip" } })
+    );
     const handler = getHandler("plugin:install-from-url");
     const result = await handler({}, "https://example.com/p.dntr");
-    expect(result).toEqual({ status: "not-implemented" });
+    expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
+    expect(mockInstallPlugin).toHaveBeenCalledTimes(1);
+    const [archivePath, opts] = mockInstallPlugin.mock.calls[0] as [string, unknown];
+    expect(archivePath).toMatch(/daintree-plugin-.*\.dntr$/);
+    expect(opts).toEqual({ source: "url", originalUrl: "https://example.com/p.dntr" });
+  });
+
+  it("PLUGIN_INSTALL_FROM_URL accepts application/x-dntr content type", async () => {
+    mockNetFetch.mockResolvedValue(
+      mockResponse({ headers: { "content-type": "application/x-dntr" } })
+    );
+    const handler = getHandler("plugin:install-from-url");
+    const result = await handler({}, "https://example.com/download");
+    expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
+  });
+
+  it("PLUGIN_INSTALL_FROM_URL accepts an unknown MIME when the URL ends in .dntr", async () => {
+    mockNetFetch.mockResolvedValue(
+      mockResponse({ headers: { "content-type": "application/octet-stream" } })
+    );
+    const handler = getHandler("plugin:install-from-url");
+    const result = await handler({}, "https://example.com/p.dntr");
+    expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
+  });
+
+  it("PLUGIN_INSTALL_FROM_URL rejects an unknown MIME with no .dntr suffix", async () => {
+    mockNetFetch.mockResolvedValue(
+      mockResponse({ headers: { "content-type": "text/html" } })
+    );
+    const handler = getHandler("plugin:install-from-url");
+    const result = await handler({}, "https://example.com/oops");
+    expect(result).toEqual({
+      status: "failed",
+      errors: [{ code: "content_type_rejected", message: expect.any(String) }],
+    });
+    expect(mockInstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INSTALL_FROM_URL returns fetch_failed on a non-2xx response", async () => {
+    mockNetFetch.mockResolvedValue(mockResponse({ ok: false, status: 404 }));
+    const handler = getHandler("plugin:install-from-url");
+    const result = (await handler({}, "https://example.com/p.dntr")) as {
+      status: string;
+      errors: Array<{ code: string }>;
+    };
+    expect(result.status).toBe("failed");
+    expect(result.errors[0]!.code).toBe("fetch_failed");
+    expect(mockInstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INSTALL_FROM_URL returns fetch_failed on a network error", async () => {
+    mockNetFetch.mockRejectedValue(new Error("ENOTFOUND"));
+    const handler = getHandler("plugin:install-from-url");
+    const result = (await handler({}, "https://example.com/p.dntr")) as {
+      status: string;
+      errors: Array<{ code: string }>;
+    };
+    expect(result.status).toBe("failed");
+    expect(result.errors[0]!.code).toBe("fetch_failed");
+  });
+
+  it("PLUGIN_INSTALL_FROM_URL returns fetch_timeout when the request aborts", async () => {
+    mockNetFetch.mockRejectedValue(abortError("AbortError"));
+    const handler = getHandler("plugin:install-from-url");
+    const result = (await handler({}, "https://example.com/p.dntr")) as {
+      status: string;
+      errors: Array<{ code: string }>;
+    };
+    expect(result.status).toBe("failed");
+    expect(result.errors[0]!.code).toBe("fetch_timeout");
+  });
+
+  it("PLUGIN_INSTALL_FROM_URL rejects when Content-Length exceeds the cap", async () => {
+    mockNetFetch.mockResolvedValue(
+      mockResponse({
+        headers: {
+          "content-type": "application/zip",
+          "content-length": String(31 * 1024 * 1024),
+        },
+      })
+    );
+    const handler = getHandler("plugin:install-from-url");
+    const result = (await handler({}, "https://example.com/p.dntr")) as {
+      status: string;
+      errors: Array<{ code: string }>;
+    };
+    expect(result.status).toBe("failed");
+    expect(result.errors[0]!.code).toBe("size_exceeded");
+    expect(mockInstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INSTALL_FROM_URL aborts mid-stream when bytes exceed the cap", async () => {
+    const oversized = new Uint8Array(31 * 1024 * 1024);
+    mockNetFetch.mockResolvedValue(
+      mockResponse({
+        headers: { "content-type": "application/zip" },
+        body: streamFromChunks([oversized]),
+      })
+    );
+    const handler = getHandler("plugin:install-from-url");
+    const result = (await handler({}, "https://example.com/p.dntr")) as {
+      status: string;
+      errors: Array<{ code: string }>;
+    };
+    expect(result.status).toBe("failed");
+    expect(result.errors[0]!.code).toBe("size_exceeded");
+    expect(mockInstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INSTALL_FROM_URL rejects a non-http(s) scheme as invalid-url", async () => {
+    const handler = getHandler("plugin:install-from-url");
+    const result = await handler({}, "file:///etc/passwd");
+    expect(result).toEqual({ status: "invalid-url" });
+    expect(mockNetFetch).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INSTALL_FROM_URL propagates an installPlugin failure", async () => {
+    mockNetFetch.mockResolvedValue(
+      mockResponse({ headers: { "content-type": "application/zip" } })
+    );
+    mockInstallPlugin.mockResolvedValue({
+      status: "failed",
+      errors: [{ code: "manifest_invalid", message: "bad manifest" }],
+    });
+    const handler = getHandler("plugin:install-from-url");
+    const result = await handler({}, "https://example.com/p.dntr");
+    expect(result).toEqual({
+      status: "failed",
+      errors: [{ code: "manifest_invalid", message: "bad manifest" }],
+    });
   });
 
   it("PLUGIN_UNINSTALL delegates to pluginService.uninstallPlugin", async () => {
