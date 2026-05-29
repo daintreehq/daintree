@@ -1,6 +1,7 @@
 import { app, BrowserWindow } from "electron";
 import path from "node:path";
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { handleDirectoryOpen } from "../menu.js";
@@ -42,8 +43,19 @@ export function extractDntrPaths(argv: string[], workingDirectory: string): stri
   const paths: string[] = [];
   for (const arg of argv) {
     if (!arg || arg.startsWith("--")) continue;
-    if (!arg.toLowerCase().endsWith(".dntr")) continue;
-    paths.push(path.resolve(workingDirectory, arg));
+    // XDG file managers pass `file://` URIs because electron-builder appends
+    // `%U` to the Linux .desktop Exec line. Decode to an OS path before the
+    // extension check and resolution.
+    let candidate = arg;
+    if (candidate.startsWith("file://")) {
+      try {
+        candidate = fileURLToPath(candidate);
+      } catch {
+        continue;
+      }
+    }
+    if (!candidate.toLowerCase().endsWith(".dntr")) continue;
+    paths.push(path.resolve(workingDirectory, candidate));
   }
   return paths;
 }
@@ -77,7 +89,9 @@ async function isValidDntrArchive(filePath: string): Promise<boolean> {
   } catch {
     return false;
   } finally {
-    await handle?.close();
+    // A close() rejection in finally would supersede the return value and
+    // escape the catch — swallow it so validation can't throw.
+    await handle?.close().catch(() => {});
   }
 }
 
@@ -232,7 +246,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
           for (const archivePath of dntrPaths) {
             await installDntrPath(archivePath);
           }
-        })();
+        })().catch((err) => console.error("[MAIN] Failed to install .dntr plugin(s):", err));
       } else {
         pendingDntrPaths.push(...dntrPaths);
         console.log("[MAIN] Queuing .dntr paths for when window is ready:", dntrPaths);

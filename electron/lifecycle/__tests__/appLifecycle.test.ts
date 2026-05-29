@@ -568,6 +568,20 @@ describe("extractDntrPaths", () => {
     const { extractDntrPaths } = await import("../appLifecycle.js");
     expect(extractDntrPaths(["daintree"], "/work")).toEqual([]);
   });
+
+  it("decodes file:// URIs passed by Linux file managers (electron-builder %U)", async () => {
+    const { extractDntrPaths } = await import("../appLifecycle.js");
+    expect(extractDntrPaths(["daintree", "file:///home/alice/plugin.dntr"], "/")).toEqual([
+      "/home/alice/plugin.dntr",
+    ]);
+  });
+
+  it("decodes percent-encoded characters in a file:// URI", async () => {
+    const { extractDntrPaths } = await import("../appLifecycle.js");
+    expect(extractDntrPaths(["daintree", "file:///home/a%20b/my%20plugin.dntr"], "/")).toEqual([
+      "/home/a b/my plugin.dntr",
+    ]);
+  });
 });
 
 describe("installDntrPath / drainPendingDntrPaths", () => {
@@ -642,6 +656,24 @@ describe("installDntrPath / drainPendingDntrPaths", () => {
     );
   });
 
+  it("rejects files shorter than the 4-byte magic without throwing", async () => {
+    const { installDntrPath } = await import("../appLifecycle.js");
+    for (const bytes of [[], [0x50], [0x50, 0x4b, 0x03]]) {
+      installPluginMock.mockClear();
+      const p = nodePath.join(os.tmpdir(), `dntr-short-${bytes.length}-${process.pid}.dntr`);
+      fs.writeFileSync(p, Buffer.from(bytes));
+      tmpFiles.push(p);
+
+      await expect(installDntrPath(p)).resolves.toBeUndefined();
+
+      expect(installPluginMock).not.toHaveBeenCalled();
+      expect(broadcastToRenderer).toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
+        expect.objectContaining({ type: "error", title: "Invalid plugin file" })
+      );
+    }
+  });
+
   it("surfaces the installer's structured failure message", async () => {
     const { installDntrPath } = await import("../appLifecycle.js");
     installPluginMock.mockResolvedValue({
@@ -700,6 +732,44 @@ describe("installDntrPath / drainPendingDntrPaths", () => {
     expect(installPluginMock).toHaveBeenNthCalledWith(1, a, expect.any(Object));
     expect(installPluginMock).toHaveBeenNthCalledWith(2, b, expect.any(Object));
     expect(getPendingDntrPaths()).toEqual([]);
+  });
+
+  it("keeps a path that arrives mid-drain queued rather than dropping it", async () => {
+    const { registerAppLifecycleHandlers, drainPendingDntrPaths, getPendingDntrPaths } =
+      await import("../appLifecycle.js");
+    const a = makeDntrFile(true);
+    const b = makeDntrFile(true);
+    const c = makeDntrFile(true);
+
+    vi.spyOn(process, "on").mockImplementation(() => process);
+    registerAppLifecycleHandlers(makeOpts({ getMainWindow: vi.fn(() => null) }));
+    const secondInstanceCall = appMock.on.mock.calls.find(
+      ([event]: string[]) => event === "second-instance"
+    );
+    const handler = secondInstanceCall![1] as (
+      event: unknown,
+      commandLine: string[],
+      workingDirectory: string
+    ) => void;
+
+    // Seed the queue with a, b.
+    handler({}, ["daintree", a, b], "/work");
+
+    // While the first install is in flight, a fresh second-instance event pushes
+    // c. Because drain snapshots-and-clears up front, c lands in a fresh queue.
+    let pushed = false;
+    installPluginMock.mockImplementation(async () => {
+      if (!pushed) {
+        pushed = true;
+        handler({}, ["daintree", c], "/work");
+      }
+      return { status: "installed", pluginId: "p" };
+    });
+
+    await drainPendingDntrPaths();
+
+    expect(installPluginMock).toHaveBeenCalledTimes(2);
+    expect(getPendingDntrPaths()).toEqual([c]);
   });
 });
 
