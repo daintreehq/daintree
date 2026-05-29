@@ -320,6 +320,10 @@ export function PluginsTab() {
   // derived from it for the overlay render.
   const dragDepthRef = useRef(0);
   const [isDragOverFiles, setIsDragOverFiles] = useState(false);
+  // Synchronous mutex for the drop install loop. The `isInstalling` state lags
+  // a render, so two drops dispatched before React flushes could both read a
+  // stale `false`; the ref flips immediately and serializes them.
+  const installingRef = useRef(false);
 
   useSettingsTabValidation("plugins", Boolean(error));
 
@@ -521,26 +525,38 @@ export function PluginsTab() {
       setNotice("Only .dntr files can be installed.");
       return;
     }
-    if (isInstalling) return;
+    if (installingRef.current) return;
+    installingRef.current = true;
     setNotice(null);
+    setError(null);
     setIsInstalling(true);
+    // Collect per-file failures so a later file's success can't silently clear
+    // an earlier file's error (the loop installs one file at a time).
+    const failures: string[] = [];
     try {
       for (const file of dntrFiles) {
         const path = window.electron.plugin.getDroppedFilePath(file);
         if (!path) {
-          setNotice(null);
-          setError("Couldn't read that file's location — try Install from file instead.");
+          failures.push(`${file.name} — couldn't read its location, try Install from file`);
           continue;
         }
-        const result = await window.electron.plugin.installFromPath(path);
-        handleInstallResult(result);
+        try {
+          const result = await window.electron.plugin.installFromPath(path);
+          if (result.status === "failed") {
+            failures.push(`${file.name} — ${result.errors[0]?.message ?? "install failed"}`);
+          } else {
+            handleInstallResult(result);
+          }
+        } catch (err) {
+          failures.push(`${file.name} — ${formatErrorMessage(err, "install failed")}`);
+          logError("Failed to install plugin from drop", err);
+        }
       }
-    } catch (err) {
-      setError(formatErrorMessage(err, "Failed to install plugin"));
-      logError("Failed to install plugin from drop", err);
     } finally {
+      installingRef.current = false;
       setIsInstalling(false);
     }
+    if (failures.length > 0) setError(failures.join("; "));
   };
 
   const handleDragEnter = (e: React.DragEvent) => {

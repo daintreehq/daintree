@@ -528,7 +528,7 @@ describe("registerPluginHandlers", () => {
   it("PLUGIN_INSTALL_FROM_PATH rejects a relative path", async () => {
     const handler = getHandler("plugin:install-from-path");
     const result = await handler({}, "relative/plugin.dntr");
-    expect(result).toMatchObject({ status: "failed" });
+    expect(result).toMatchObject({ status: "failed", errors: [{ code: "archive_invalid" }] });
     expect(mockInstallPlugin).not.toHaveBeenCalled();
   });
 
@@ -545,7 +545,7 @@ describe("registerPluginHandlers", () => {
   it("PLUGIN_INSTALL_FROM_PATH fails when the file can't be read", async () => {
     const handler = getHandler("plugin:install-from-path");
     const result = await handler({}, "/tmp/does-not-exist-9295.dntr");
-    expect(result).toMatchObject({ status: "failed" });
+    expect(result).toMatchObject({ status: "failed", errors: [{ code: "archive_invalid" }] });
     expect(mockInstallPlugin).not.toHaveBeenCalled();
   });
 
@@ -555,7 +555,7 @@ describe("registerPluginHandlers", () => {
     try {
       const handler = getHandler("plugin:install-from-path");
       const result = await handler({}, file);
-      expect(result).toMatchObject({ status: "failed" });
+      expect(result).toMatchObject({ status: "failed", errors: [{ code: "archive_invalid" }] });
       expect(mockInstallPlugin).not.toHaveBeenCalled();
     } finally {
       await rm(file, { force: true });
