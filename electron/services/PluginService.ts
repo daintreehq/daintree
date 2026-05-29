@@ -125,6 +125,12 @@ import { getWindowRegistry, getProjectViewManager } from "../window/windowRef.js
 import type { ActionDispatchResult } from "../../shared/types/actions.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
 import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
+import { getPluginActionAuditService } from "./PluginActionAuditService.js";
+import type {
+  PluginDiagnosticsAuditRecord,
+  PluginDiagnosticsLogLine,
+  PluginDiagnosticsSnapshot,
+} from "../../shared/types/ipc/pluginDiagnostics.js";
 import { store } from "../store.js";
 import { BUILT_IN_ACTION_IDS } from "../../shared/config/actionIds.js";
 
@@ -316,6 +322,13 @@ function toPluginLoadError(err: unknown): PluginLoadError {
  * thrown disposer would strand later steps and leak registrations that fail
  * the next load with a duplicate-id error.
  */
+/** Max retained log lines per plugin in the in-memory diagnostics ring buffer. */
+const PLUGIN_LOG_BUFFER_MAX = 500;
+/** Max bytes for a single rendered log line; longer lines are truncated with an ellipsis. */
+const PLUGIN_LOG_LINE_MAX_CHARS = 2048;
+/** Max audit records included per plugin in a diagnostics snapshot. */
+const PLUGIN_DIAGNOSTICS_AUDIT_PER_PLUGIN = 50;
+
 function runUnloadStep(pluginId: string, step: string, fn: () => void): void {
   try {
     fn();
@@ -399,6 +412,15 @@ type WorkspaceWorktreeEvent = "worktree-update" | "worktree-activated" | "worktr
 
 export class PluginService {
   private plugins = new Map<string, LoadedPlugin>();
+  /**
+   * Per-plugin diagnostic log ring buffer, keyed by `pluginId` (= manifest
+   * name). Written by `host.logger.*`, capped at {@link PLUGIN_LOG_BUFFER_MAX}
+   * lines (FIFO eviction), and cleared in {@link unloadPlugin} so a reload of
+   * the same plugin starts clean. Lines are stored raw — secret/path scrubbing
+   * happens only at the report-export boundary, never here (mirrors the
+   * action-breadcrumb ring's raw-capture convention).
+   */
+  private logBuffers = new Map<string, PluginDiagnosticsLogLine[]>();
   private handlerMap = new Map<string, PluginIpcHandler>();
   /**
    * Per-channel Zod schemas for typed `registerHandler` registrations, keyed
@@ -1488,6 +1510,98 @@ export class PluginService {
     await Promise.allSettled([...targets].map((id) => this.activatePlugin(id)));
   }
 
+  /**
+   * Append one line to a plugin's diagnostic ring buffer and mirror it to the
+   * host console. No-ops once the plugin is unloaded (membership is the
+   * liveness gate, same as the other non-revoke-guarded host methods).
+   * `fields`, when present, is JSON-serialized and folded into the message; an
+   * unserializable payload falls back to `String(fields)` rather than throwing
+   * — a logger call must never propagate an error back into plugin code.
+   */
+  private recordPluginLog(
+    pluginId: string,
+    level: PluginDiagnosticsLogLine["level"],
+    message: string,
+    fields?: Record<string, unknown>
+  ): void {
+    if (!this.plugins.has(pluginId)) return;
+
+    const text = typeof message === "string" ? message : String(message);
+    let rendered = text;
+    if (fields !== undefined) {
+      let serialized: string;
+      try {
+        serialized = JSON.stringify(fields);
+      } catch {
+        serialized = String(fields);
+      }
+      rendered = serialized ? `${text} ${serialized}` : text;
+    }
+    if (rendered.length > PLUGIN_LOG_LINE_MAX_CHARS) {
+      rendered = `${rendered.slice(0, PLUGIN_LOG_LINE_MAX_CHARS - 1)}…`;
+    }
+
+    let buffer = this.logBuffers.get(pluginId);
+    if (!buffer) {
+      buffer = [];
+      this.logBuffers.set(pluginId, buffer);
+    }
+    buffer.push({ ts: Date.now(), level, message: rendered });
+    if (buffer.length > PLUGIN_LOG_BUFFER_MAX) {
+      buffer.splice(0, buffer.length - PLUGIN_LOG_BUFFER_MAX);
+    }
+
+    console[level](`[plugin:${pluginId}] ${rendered}`);
+  }
+
+  /**
+   * Atomic, post-activation diagnostics snapshot of every loaded plugin:
+   * provenance, the per-plugin log ring buffer, and the last
+   * {@link PLUGIN_DIAGNOSTICS_AUDIT_PER_PLUGIN} audit records. Consumed by the
+   * error-report builder. `originalUrl` is intentionally omitted (it can embed
+   * install-time credentials); `argsHash`/`argsPlaintext` are dropped from
+   * audit records. Returns `{ plugins: [] }` when nothing is loaded so the
+   * report can omit the section entirely.
+   */
+  getDiagnosticsSnapshot(): PluginDiagnosticsSnapshot {
+    // getRecords() is global and newest-first; bucket per plugin in one pass,
+    // capping each bucket — no per-plugin sort needed.
+    const auditByPlugin = new Map<string, PluginDiagnosticsAuditRecord[]>();
+    for (const record of getPluginActionAuditService().getRecords()) {
+      let list = auditByPlugin.get(record.pluginId);
+      if (!list) {
+        list = [];
+        auditByPlugin.set(record.pluginId, list);
+      }
+      if (list.length >= PLUGIN_DIAGNOSTICS_AUDIT_PER_PLUGIN) continue;
+      const { argsHash: _argsHash, argsPlaintext: _argsPlaintext, ...rest } = record;
+      list.push(rest);
+    }
+
+    const plugins = this.listPlugins()
+      .filter((info) => this.plugins.has(info.manifest.name))
+      .map((info) => {
+        const pluginId = info.manifest.name;
+        const buffer = this.logBuffers.get(pluginId);
+        return {
+          pluginId,
+          displayName: info.manifest.displayName ?? info.manifest.name,
+          version: info.manifest.version,
+          source: info.source,
+          installedAt: info.installedAt,
+          isBuiltin: info.isBuiltin,
+          devMode: info.devMode,
+          disabled: info.disabled,
+          archiveHash: info.archiveHash,
+          loadError: info.loadError,
+          logLines: buffer ? buffer.map((line) => ({ ...line })) : [],
+          auditRecords: auditByPlugin.get(pluginId) ?? [],
+        };
+      });
+
+    return { plugins };
+  }
+
   private createHost(pluginId: string): { host: PluginHostApi; revoke: () => void } {
     let revoked = false;
     const host: PluginHostApi = {
@@ -1855,6 +1969,15 @@ export class PluginService {
           };
         }
         return this.sendDispatchToRenderer(actionId, args);
+      },
+      // NOT revoke-guarded for the same reason as showToast/dispatch: plugins
+      // log from post-activation callbacks and timers. Liveness is plugin
+      // membership (enforced inside recordPluginLog) — writes silently no-op
+      // once the plugin unloads. Synchronous void return; never throws.
+      logger: {
+        info: (message, fields) => this.recordPluginLog(pluginId, "info", message, fields),
+        warn: (message, fields) => this.recordPluginLog(pluginId, "warn", message, fields),
+        error: (message, fields) => this.recordPluginLog(pluginId, "error", message, fields),
       },
       // NOT revoke-guarded: plugins read/write settings throughout their
       // lifetime (IPC handlers, timers), long after activate() resolves. The
@@ -2975,6 +3098,10 @@ export class PluginService {
     // Drop the load-time-error marker (#9281) so a reload with a fixed
     // manifest can successfully clear `loadError` on next activation.
     this.pluginsWithLoadTimeErrors.delete(pluginId);
+
+    // Drop the diagnostic log ring buffer so a reload of the same plugin
+    // doesn't carry forward log lines from the previous session.
+    this.logBuffers.delete(pluginId);
 
     this.plugins.delete(pluginId);
 

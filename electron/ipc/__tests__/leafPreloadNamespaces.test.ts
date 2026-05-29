@@ -148,6 +148,9 @@ describe("leaf preload namespace bindings", () => {
       expect(PLUGIN_METHOD_CHANNELS.setAuditEnabled).toBe(CHANNELS.PLUGIN_SET_AUDIT_ENABLED);
       expect(PLUGIN_METHOD_CHANNELS.setAuditMaxRecords).toBe(CHANNELS.PLUGIN_SET_AUDIT_MAX_RECORDS);
       expect(PLUGIN_METHOD_CHANNELS.exportAuditLog).toBe(CHANNELS.PLUGIN_EXPORT_AUDIT_LOG);
+      expect(PLUGIN_METHOD_CHANNELS.getDiagnosticsSnapshot).toBe(
+        CHANNELS.PLUGIN_GET_DIAGNOSTICS_SNAPSHOT
+      );
     });
 
     it("scratch matches", () => {

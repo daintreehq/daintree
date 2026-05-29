@@ -8,6 +8,7 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { buildReportIssueUrl } from "./buildReportIssueUrl";
 import { notify } from "@/lib/notify";
 import type { ReportIssueEnrichment } from "../../../shared/types/ipc/system";
+import type { PluginDiagnosticsSnapshot } from "../../../shared/types/ipc/pluginDiagnostics";
 
 const ENRICHMENT_TIMEOUT_MS = 2000;
 
@@ -18,6 +19,19 @@ async function fetchReportEnrichment(): Promise<ReportIssueEnrichment | null> {
   if (!getter) return null;
   try {
     return await Promise.race<ReportIssueEnrichment | null>([
+      getter(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), ENRICHMENT_TIMEOUT_MS)),
+    ]);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchPluginDiagnostics(): Promise<PluginDiagnosticsSnapshot | null> {
+  const getter = window.electron?.plugin?.getDiagnosticsSnapshot;
+  if (!getter) return null;
+  try {
+    return await Promise.race<PluginDiagnosticsSnapshot | null>([
       getter(),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), ENRICHMENT_TIMEOUT_MS)),
     ]);
@@ -181,7 +195,10 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
       if (!error) return;
 
-      const enrichment = await fetchReportEnrichment();
+      const [enrichment, pluginDiagnostics] = await Promise.all([
+        fetchReportEnrichment(),
+        fetchPluginDiagnostics(),
+      ]);
 
       const { url, fullBody, usedClipboardFallback } = buildReportIssueUrl({
         incidentId,
@@ -192,6 +209,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         context,
         systemInfo: enrichment?.systemInfo,
         recentActions: enrichment?.recentActions,
+        pluginDiagnostics,
       });
 
       if (usedClipboardFallback) {

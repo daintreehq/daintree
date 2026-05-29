@@ -679,6 +679,32 @@ export interface PluginHostApi {
    * `chmod 0o600` on POSIX — no OS keychain (#9167). See {@link SettingsApi}.
    */
   readonly settings: SettingsApi;
+  /**
+   * Structured diagnostic logger backed by a bounded per-plugin ring buffer in
+   * the main process. Lines are forwarded to the host console (prefixed
+   * `[plugin:{pluginId}]`) and retained for the most recent ~500 entries so
+   * they can be folded into an error report on demand. See {@link PluginLogger}.
+   *
+   * Like {@link invalidateFileDecorations}, {@link showToast}, and
+   * {@link dispatch} this is NOT revoke-guarded: plugins log from
+   * post-activation callbacks and timers. Writes become a silent no-op once the
+   * plugin is unloaded.
+   */
+  readonly logger: PluginLogger;
+}
+
+/**
+ * Synchronous, fire-and-forget diagnostic logger handed to a plugin via
+ * {@link PluginHostApi.logger}. Each call appends one line to the plugin's
+ * ring buffer and mirrors it to the host console. `fields` is an optional
+ * structured payload serialized alongside the message; an unserializable
+ * payload is coerced to a string rather than thrown. Calls return `void` — the
+ * write is enqueued internally and never rejects.
+ */
+export interface PluginLogger {
+  info(message: string, fields?: Record<string, unknown>): void;
+  warn(message: string, fields?: Record<string, unknown>): void;
+  error(message: string, fields?: Record<string, unknown>): void;
 }
 
 export type PluginActivate = (

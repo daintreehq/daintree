@@ -8,6 +8,7 @@ import {
   type ReportIssueInput,
 } from "../buildReportIssueUrl";
 import type { ActionBreadcrumb } from "../../../../shared/types/ipc/crashRecovery";
+import type { PluginDiagnosticsSnapshot } from "../../../../shared/types/ipc/pluginDiagnostics";
 
 function getEncodedBodyLength(url: string): number {
   const bodyParam = new URL(url).searchParams.get("body") ?? "";
@@ -433,5 +434,104 @@ describe("buildNotificationReportUrl", () => {
       makeNotificationInput({ notificationType: undefined })
     );
     expect(result.fullBody).not.toContain("**Type:**");
+  });
+});
+
+describe("buildReportIssueUrl — plugin diagnostics", () => {
+  function makePluginEntry(
+    overrides: Partial<PluginDiagnosticsSnapshot["plugins"][number]> = {}
+  ): PluginDiagnosticsSnapshot["plugins"][number] {
+    return {
+      pluginId: "acme.demo",
+      displayName: "Demo Plugin",
+      version: "2.0.0",
+      source: "sideload",
+      installedAt: 1700000000000,
+      isBuiltin: false,
+      devMode: false,
+      disabled: false,
+      archiveHash: "abc123",
+      loadError: null,
+      logLines: [{ ts: 1700000001000, level: "info", message: "started" }],
+      auditRecords: [],
+      ...overrides,
+    };
+  }
+
+  it("renders a plugin diagnostics section when plugins are loaded", () => {
+    const result = buildReportIssueUrl(
+      makeInput({ pluginDiagnostics: { plugins: [makePluginEntry()] } })
+    );
+    expect(result.fullBody).toContain("Plugin diagnostics (1)");
+    expect(result.fullBody).toContain("### Demo Plugin v2.0.0");
+    expect(result.fullBody).toContain("- id: acme.demo");
+    expect(result.fullBody).toContain("[info] started");
+  });
+
+  it("omits the section entirely when no plugins are loaded", () => {
+    const empty = buildReportIssueUrl(makeInput({ pluginDiagnostics: { plugins: [] } }));
+    expect(empty.fullBody).not.toContain("Plugin diagnostics");
+
+    const nullish = buildReportIssueUrl(makeInput({ pluginDiagnostics: null }));
+    expect(nullish.fullBody).not.toContain("Plugin diagnostics");
+  });
+
+  it("scrubs secrets and user paths in log lines", () => {
+    const result = buildReportIssueUrl(
+      makeInput({
+        pluginDiagnostics: {
+          plugins: [
+            makePluginEntry({
+              logLines: [
+                { ts: 1700000001000, level: "error", message: "read /Users/alice/secret.txt" },
+              ],
+            }),
+          ],
+        },
+      })
+    );
+    expect(result.fullBody).toContain("/Users/USER/secret.txt");
+    expect(result.fullBody).not.toContain("/Users/alice/");
+  });
+
+  it("drops the diagnostics section but keeps system info when the URL budget is tight", () => {
+    const bigLogLines = Array.from({ length: 500 }, (_, i) => ({
+      ts: 1700000001000 + i,
+      level: "info" as const,
+      message: `log line number ${i} with some padding to inflate the encoded size`,
+    }));
+    const result = buildReportIssueUrl(
+      makeInput({
+        systemInfo: "os: macOS\napp: 1.0.0",
+        pluginDiagnostics: { plugins: [makePluginEntry({ logLines: bigLogLines })] },
+      })
+    );
+
+    // The huge section forces clipboard fallback or in-URL drop; either way the
+    // URL stays within budget and the full payload retains the diagnostics.
+    expect(getEncodedBodyLength(result.url)).toBeLessThanOrEqual(URL_BODY_BUDGET);
+    expect(result.fullBody).toContain("Plugin diagnostics (1)");
+    const urlBody = decodeURIComponent(new URL(result.url).searchParams.get("body") ?? "");
+    expect(urlBody).not.toContain("log line number 250");
+  });
+
+  it("adds a plugin-count line to the clipboard-fallback stub body", () => {
+    // Long individual lines survive middle-truncation, forcing the stub path
+    // (mirrors the existing clipboard-fallback fixture).
+    const longLine = "x".repeat(1200);
+    const stack = Array.from({ length: 25 }, () => longLine).join("\n");
+    const componentStack = Array.from({ length: 10 }, () => longLine).join("\n");
+    const result = buildReportIssueUrl(
+      makeInput({
+        stack,
+        componentStack,
+        pluginDiagnostics: {
+          plugins: [makePluginEntry(), makePluginEntry({ pluginId: "acme.two" })],
+        },
+      })
+    );
+    expect(result.usedClipboardFallback).toBe(true);
+    const urlBody = decodeURIComponent(new URL(result.url).searchParams.get("body") ?? "");
+    expect(urlBody).toContain("2 plugins loaded");
   });
 });

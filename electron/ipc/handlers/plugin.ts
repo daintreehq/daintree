@@ -12,6 +12,7 @@ import {
   type PluginActionAuditRecord,
   type PluginAuditConfig,
 } from "../../../shared/types/ipc/pluginAudit.js";
+import type { PluginDiagnosticsSnapshot } from "../../../shared/types/ipc/pluginDiagnostics.js";
 import { PLUGIN_METHOD_CHANNELS } from "./plugin.preload.js";
 import { pluginService } from "../../services/PluginService.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
@@ -399,6 +400,16 @@ async function handleExportAuditLog(records: PluginActionAuditRecord[]): Promise
   return true;
 }
 
+// ── Plugin diagnostics snapshot ───────────────────────────────────────────
+
+async function handleGetDiagnosticsSnapshot(): Promise<PluginDiagnosticsSnapshot> {
+  // Block until startup activation settles so the snapshot is post-activation
+  // (mirrors handleToolbarButtons) — otherwise a fast renderer could read an
+  // empty plugin set before any activate() runs.
+  await pluginService.waitForInit();
+  return pluginService.getDiagnosticsSnapshot();
+}
+
 export const pluginNamespace = defineIpcNamespace({
   name: "plugin",
   ops: {
@@ -422,6 +433,10 @@ export const pluginNamespace = defineIpcNamespace({
     setAuditEnabled: op(PLUGIN_METHOD_CHANNELS.setAuditEnabled, handleSetAuditEnabled),
     setAuditMaxRecords: op(PLUGIN_METHOD_CHANNELS.setAuditMaxRecords, handleSetAuditMaxRecords),
     exportAuditLog: op(PLUGIN_METHOD_CHANNELS.exportAuditLog, handleExportAuditLog),
+    getDiagnosticsSnapshot: op(
+      PLUGIN_METHOD_CHANNELS.getDiagnosticsSnapshot,
+      handleGetDiagnosticsSnapshot
+    ),
   },
 });
 

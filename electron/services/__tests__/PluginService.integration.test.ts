@@ -33,7 +33,11 @@ import { randomUUID } from "crypto";
 
 const storeState = new Map<string, unknown>();
 vi.mock("electron", () => ({
-  app: { getVersion: vi.fn(() => "0.0.0") },
+  // getPath is needed because importing PluginService transitively constructs
+  // the eager ProjectStore singleton (which reads app.getPath("userData")).
+  // The path is never written to disk in these tests — ProjectStore only does
+  // I/O in initialize(), which they don't call.
+  app: { getVersion: vi.fn(() => "0.0.0"), getPath: vi.fn(() => "/tmp/daintree-plugin-int") },
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: vi.fn(),
@@ -1311,5 +1315,110 @@ describe("PluginService integration — built-in plugin loading", () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+});
+
+describe("PluginService integration — diagnostic logger", () => {
+  async function loadWithLoggerActivate(
+    pluginName: string,
+    hostKey: string,
+    activateBody: string
+  ): Promise<PluginService> {
+    globalMarkers.add(hostKey);
+    const pluginDir = await writePlugin(pluginName, { name: pluginName, version: "1.2.3" });
+    const mainFile = `logger-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) {\n  globalThis[${JSON.stringify(hostKey)}] = host;\n  ${activateBody}\n}\n`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: pluginName,
+        version: "1.2.3",
+        displayName: "Logger Plugin",
+        main: mainFile,
+      })
+    );
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    // Activation is deferred — the logger is wired inside activate(), so it
+    // only fires once the startup fan-out runs (mirrors the line-918 pattern).
+    await service.activateStartupFinishedPlugins();
+    return service;
+  }
+
+  it("captures logger lines (level, message, folded fields) in the snapshot", async () => {
+    const service = await loadWithLoggerActivate(
+      "acme.logger",
+      "__loggerHost1",
+      `host.logger.info("hello");
+       host.logger.warn("careful", { code: 42 });
+       host.logger.error("boom");`
+    );
+
+    const entry = service
+      .getDiagnosticsSnapshot()
+      .plugins.find((p) => p.pluginId === "acme.logger");
+    expect(entry).toBeDefined();
+    expect(entry?.displayName).toBe("Logger Plugin");
+    expect(entry?.version).toBe("1.2.3");
+    expect(entry?.logLines.map((l) => ({ level: l.level, message: l.message }))).toEqual([
+      { level: "info", message: "hello" },
+      { level: "warn", message: 'careful {"code":42}' },
+      { level: "error", message: "boom" },
+    ]);
+    expect(entry?.logLines.every((l) => typeof l.ts === "number")).toBe(true);
+  });
+
+  it("evicts oldest lines beyond the 500-entry cap (FIFO)", async () => {
+    const service = await loadWithLoggerActivate(
+      "acme.logger-cap",
+      "__loggerHost2",
+      `for (let i = 0; i < 600; i++) host.logger.info("line-" + i);`
+    );
+
+    const entry = service
+      .getDiagnosticsSnapshot()
+      .plugins.find((p) => p.pluginId === "acme.logger-cap");
+    expect(entry?.logLines).toHaveLength(500);
+    // Oldest 100 evicted: buffer holds line-100 .. line-599.
+    expect(entry?.logLines[0]?.message).toBe("line-100");
+    expect(entry?.logLines.at(-1)?.message).toBe("line-599");
+  });
+
+  it("truncates a single line longer than the per-line byte cap with an ellipsis", async () => {
+    const service = await loadWithLoggerActivate(
+      "acme.logger-long",
+      "__loggerHost3",
+      `host.logger.info("x".repeat(5000));`
+    );
+
+    const entry = service
+      .getDiagnosticsSnapshot()
+      .plugins.find((p) => p.pluginId === "acme.logger-long");
+    const line = entry?.logLines[0]?.message ?? "";
+    expect(line).toHaveLength(2048);
+    expect(line.endsWith("…")).toBe(true);
+  });
+
+  it("logger writes are a silent no-op after the plugin unloads", async () => {
+    const service = await loadWithLoggerActivate(
+      "acme.logger-unload",
+      "__loggerHost4",
+      `host.logger.info("before-unload");`
+    );
+    const host = (globalThis as Record<string, unknown>).__loggerHost4 as {
+      logger: { info: (m: string) => void };
+    };
+
+    service.unloadPlugin("acme.logger-unload");
+    // The post-unload call must not throw and must not resurrect the buffer.
+    expect(() => host.logger.info("after-unload")).not.toThrow();
+
+    const entry = service
+      .getDiagnosticsSnapshot()
+      .plugins.find((p) => p.pluginId === "acme.logger-unload");
+    expect(entry).toBeUndefined();
   });
 });

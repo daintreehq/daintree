@@ -7,6 +7,11 @@ import {
 import { scrubReportText } from "@shared/utils/reportScrubbers";
 
 import type { ActionBreadcrumb } from "../../../shared/types/ipc/crashRecovery";
+import type {
+  PluginDiagnosticsAuditRecord,
+  PluginDiagnosticsLogLine,
+  PluginDiagnosticsSnapshot,
+} from "../../../shared/types/ipc/pluginDiagnostics";
 
 // Re-exported so existing importers (and tests) keep a stable surface; the
 // canonical definition now lives in the shared helper.
@@ -43,6 +48,8 @@ export interface ReportIssueInput {
   systemInfo?: string;
   /** Recent action breadcrumbs (oldest first). */
   recentActions?: ActionBreadcrumb[];
+  /** Loaded-plugin diagnostics (logger ring buffer + audit tail + provenance). */
+  pluginDiagnostics?: PluginDiagnosticsSnapshot | null;
   /** Override the "now" reference for relative timestamps (test-only). */
   now?: number;
 }
@@ -110,6 +117,67 @@ function formatRecentActionsSection(actions: ActionBreadcrumb[] | undefined, now
   );
 }
 
+function formatPluginAuditLine(record: PluginDiagnosticsAuditRecord): string {
+  const ts = new Date(record.ts).toISOString();
+  const kind = record.recordType ?? "action-dispatch";
+  const parts = [ts, kind, record.actionId, record.result, `${record.durationMs}ms`];
+  if (record.errorMessage) parts.push(`— ${record.errorMessage}`);
+  return parts.join(" ");
+}
+
+function formatPluginLogLine(line: PluginDiagnosticsLogLine): string {
+  return `${new Date(line.ts).toISOString()} [${line.level}] ${line.message}`;
+}
+
+function formatPluginEntry(plugin: PluginDiagnosticsSnapshot["plugins"][number]): string {
+  const tags = [
+    plugin.isBuiltin ? "builtin" : null,
+    plugin.devMode ? "dev" : null,
+    plugin.disabled ? "disabled" : null,
+  ].filter(Boolean);
+  const tagSuffix = tags.length > 0 ? ` (${tags.join(", ")})` : "";
+  const installed = plugin.installedAt ? new Date(plugin.installedAt).toISOString() : "n/a";
+
+  const meta = [
+    `### ${plugin.displayName} v${plugin.version}${tagSuffix}`,
+    `- id: ${plugin.pluginId}`,
+    `- source: ${plugin.source}`,
+    `- installed: ${installed}`,
+    `- archiveHash: ${plugin.archiveHash ?? "n/a"}`,
+    `- loadError: ${plugin.loadError ? plugin.loadError.message : "none"}`,
+  ].join("\n");
+
+  const auditBlock =
+    plugin.auditRecords.length > 0
+      ? `\n\naudit (${plugin.auditRecords.length}):\n\`\`\`\n` +
+        `${plugin.auditRecords.map(formatPluginAuditLine).join("\n")}\n\`\`\``
+      : "";
+
+  const logBlock =
+    plugin.logLines.length > 0
+      ? `\n\nlogs (${plugin.logLines.length}):\n\`\`\`\n` +
+        `${plugin.logLines.map(formatPluginLogLine).join("\n")}\n\`\`\``
+      : "";
+
+  return meta + auditBlock + logBlock;
+}
+
+function formatPluginDiagnosticsSection(
+  snapshot: PluginDiagnosticsSnapshot | null | undefined
+): string {
+  if (!snapshot || snapshot.plugins.length === 0) return "";
+  const body = snapshot.plugins.map(formatPluginEntry).join("\n\n");
+  // Scrub the whole block once — log lines and loadError messages can carry
+  // user paths or secret sigils. scrubReportText only rewrites those, never
+  // the surrounding Markdown structure.
+  const scrubbed = scrubReportText(body);
+  return (
+    `\n\n<details>\n<summary>Plugin diagnostics (${snapshot.plugins.length})</summary>\n\n` +
+    `${scrubbed}\n\n` +
+    `</details>`
+  );
+}
+
 function formatBody(params: {
   componentName: string | undefined;
   incidentId: string | null;
@@ -119,6 +187,7 @@ function formatBody(params: {
   componentStack: string;
   systemInfo?: string;
   recentActions?: ActionBreadcrumb[];
+  pluginDiagnostics?: PluginDiagnosticsSnapshot | null;
   now: number;
 }): string {
   const {
@@ -130,6 +199,7 @@ function formatBody(params: {
     componentStack,
     systemInfo,
     recentActions,
+    pluginDiagnostics,
     now,
   } = params;
   return (
@@ -142,7 +212,8 @@ function formatBody(params: {
     `**Stack Trace:**\n\`\`\`\n${stack || "No stack trace"}\n\`\`\`\n\n` +
     `**Component Stack:**\n\`\`\`\n${componentStack || "No component stack"}\n\`\`\`` +
     formatSystemInfoSection(systemInfo) +
-    formatRecentActionsSection(recentActions, now)
+    formatRecentActionsSection(recentActions, now) +
+    formatPluginDiagnosticsSection(pluginDiagnostics)
   );
 }
 
@@ -196,15 +267,21 @@ function buildStubBody(params: {
   componentName: string | undefined;
   incidentId: string | null;
   message: string;
+  pluginCount: number;
 }): string {
-  const { componentName, incidentId, message } = params;
+  const { componentName, incidentId, message, pluginCount } = params;
   const cappedMessage = capForBudget(message || "Unknown error", STUB_MESSAGE_BUDGET);
+  const pluginLine =
+    pluginCount > 0
+      ? `\n_${pluginCount} plugin${pluginCount === 1 ? "" : "s"} loaded — full diagnostics in the clipboard payload._\n`
+      : "";
   return (
     `## Error Report\n\n` +
     `The full error details were copied to your clipboard — please paste them below.\n\n` +
     `**Component:** ${componentName || "Unknown"}\n` +
     `**Incident ID:** ${incidentId ?? "unknown"}\n` +
-    `**Message:** ${cappedMessage}\n`
+    `**Message:** ${cappedMessage}\n` +
+    pluginLine
   );
 }
 
@@ -229,9 +306,10 @@ function buildNotificationStubBody(params: { incidentId: string | null; message:
  *   1. Full body + enrichment sections fit → use it
  *   2. Drop componentStack, keep enrichment
  *   3. Middle-truncate stack, keep enrichment
- *   4. Drop recentActions section, keep systemInfo
- *   5. Drop systemInfo too
- *   6. Stub body + clipboard fallback
+ *   4. Drop plugin diagnostics (the largest section), keep systemInfo + actions
+ *   5. Drop recentActions section, keep systemInfo
+ *   6. Drop systemInfo too
+ *   7. Stub body + clipboard fallback
  */
 export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult {
   // Redact user paths/secrets before the stack enters either the URL body or
@@ -255,6 +333,7 @@ export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult 
     componentStack,
     systemInfo: input.systemInfo,
     recentActions: input.recentActions,
+    pluginDiagnostics: input.pluginDiagnostics,
   });
 
   if (encodeURIComponent(fullBody).length <= URL_BODY_BUDGET) {
@@ -267,6 +346,7 @@ export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult 
     componentStack: COMPONENT_STACK_PLACEHOLDER,
     systemInfo: input.systemInfo,
     recentActions: input.recentActions,
+    pluginDiagnostics: input.pluginDiagnostics,
   });
 
   if (encodeURIComponent(withoutComponentStack).length <= URL_BODY_BUDGET) {
@@ -284,6 +364,7 @@ export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult 
     componentStack: COMPONENT_STACK_PLACEHOLDER,
     systemInfo: input.systemInfo,
     recentActions: input.recentActions,
+    pluginDiagnostics: input.pluginDiagnostics,
   });
 
   if (encodeURIComponent(withTruncatedStack).length <= URL_BODY_BUDGET) {
@@ -294,7 +375,27 @@ export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult 
     };
   }
 
-  // Drop recent actions first — the system info is more compact and more
+  // Drop plugin diagnostics next — it's the largest enrichment section (a
+  // 500-line log buffer per plugin), and the full payload is preserved on the
+  // clipboard regardless. systemInfo + recent actions stay in the URL.
+  const withoutPluginDiagnostics = formatBody({
+    ...base,
+    stack: truncatedStack,
+    componentStack: COMPONENT_STACK_PLACEHOLDER,
+    systemInfo: input.systemInfo,
+    recentActions: input.recentActions,
+    pluginDiagnostics: undefined,
+  });
+
+  if (encodeURIComponent(withoutPluginDiagnostics).length <= URL_BODY_BUDGET) {
+    return {
+      url: makeUrl(title, withoutPluginDiagnostics),
+      fullBody,
+      usedClipboardFallback: false,
+    };
+  }
+
+  // Drop recent actions next — the system info is more compact and more
   // useful for triage than a long action log when budget is tight.
   const withoutActions = formatBody({
     ...base,
@@ -302,6 +403,7 @@ export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult 
     componentStack: COMPONENT_STACK_PLACEHOLDER,
     systemInfo: input.systemInfo,
     recentActions: undefined,
+    pluginDiagnostics: undefined,
   });
 
   if (encodeURIComponent(withoutActions).length <= URL_BODY_BUDGET) {
@@ -332,6 +434,7 @@ export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult 
     componentName: input.componentName,
     incidentId: input.incidentId,
     message: input.message,
+    pluginCount: input.pluginDiagnostics?.plugins.length ?? 0,
   });
 
   return { url: makeUrl(title, stubBody), fullBody, usedClipboardFallback: true };

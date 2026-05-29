@@ -651,6 +651,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./pluginAudit.js").PluginActionAuditRecord[];
   };
+  "plugin:get-diagnostics-snapshot": {
+    args: [];
+    result: import("./pluginDiagnostics.js").PluginDiagnosticsSnapshot;
+  };
   "plugin:install": {
     args: [archivePath: string, opts?: import("../plugin.js").PluginInstallOptions | undefined];
     result: import("../plugin.js").PluginInstallResult;
