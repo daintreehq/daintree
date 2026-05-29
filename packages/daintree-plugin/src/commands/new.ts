@@ -52,13 +52,10 @@ export async function scaffoldPlugin(opts: ScaffoldPluginOptions): Promise<Scaff
   }
 
   const dir = path.resolve(opts.cwd, opts.targetDir);
-  let dirExists = false;
-  try {
-    await fs.access(dir);
-    dirExists = true;
-  } catch {
-    dirExists = false;
-  }
+  const dirExists = await fs
+    .access(dir)
+    .then(() => true)
+    .catch(() => false);
   if (dirExists) {
     throw new Error(`Directory already exists: ${dir}`);
   }

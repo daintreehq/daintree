@@ -1034,6 +1034,9 @@ export default tseslint.config(
       "dist/**",
       "dist-electron/**",
       "dist-typecheck/**",
+      // Built output of the workspace CLI packages (tsup). Bundled JS isn't
+      // source and trips no-undef on Node globals when linted locally.
+      "packages/*/dist/**",
       "release/**",
       "node_modules/**",
       "*.config.js",
