@@ -116,3 +116,18 @@ export interface DevPreviewProxyInfo {
   /** The live port the dev-preview reverse proxy is listening on (#9100). */
   port: number;
 }
+
+export interface DevPreviewMintBrowserTokenRequest {
+  panelId: string;
+  projectId: string;
+  // Path (+ query) the external browser should land on after the bootstrap
+  // redirect, e.g. `/dashboard?tab=1`. Untrusted; the proxy re-validates and
+  // falls back to `/` for anything that isn't a same-origin absolute path.
+  redirectPath: string;
+}
+
+export interface DevPreviewMintBrowserTokenResult {
+  // Full `http://dp-*.localhost:<port>/_daintree/bootstrap?...` URL to hand to
+  // the system browser. The token is short-lived (≤60s) and single-use.
+  bootstrapUrl: string;
+}

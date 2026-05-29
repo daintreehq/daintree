@@ -107,6 +107,9 @@ export interface GeneratedElectronAPI {
     getState(
       ...args: IpcInvokeMap["dev-preview:get-state"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:get-state"]["result"]>;
+    mintBrowserToken(
+      ...args: IpcInvokeMap["dev-preview:mint-browser-token"]["args"]
+    ): Promise<IpcInvokeMap["dev-preview:mint-browser-token"]["result"]>;
     reinstallAndRestart(
       ...args: IpcInvokeMap["dev-preview:reinstall-and-restart"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:reinstall-and-restart"]["result"]>;

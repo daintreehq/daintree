@@ -1,6 +1,6 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { DevPreviewProxyService } from "../DevPreviewProxyService.js";
 
@@ -16,12 +16,17 @@ interface ProxyResponse {
   headers: http.IncomingHttpHeaders;
 }
 
-function request(proxyPort: number, host: string, path = "/"): Promise<ProxyResponse> {
+function request(
+  proxyPort: number,
+  host: string,
+  path = "/",
+  method = "GET"
+): Promise<ProxyResponse> {
   return new Promise((resolve, reject) => {
     const req = http.request(
       // agent: false — disable the global keep-alive pool so a socket pooled to the fixed
       // proxy port from a prior test (whose proxy was disposed) is never reused.
-      { host: "127.0.0.1", port: proxyPort, path, headers: { host }, agent: false },
+      { host: "127.0.0.1", port: proxyPort, path, method, headers: { host }, agent: false },
       (res) => {
         let body = "";
         res.on("data", (chunk) => (body += chunk));
@@ -31,6 +36,14 @@ function request(proxyPort: number, host: string, path = "/"): Promise<ProxyResp
     req.on("error", reject);
     req.end();
   });
+}
+
+// Split a minted bootstrap URL into the (host, path+query) a loopback request
+// needs — Node doesn't resolve *.localhost, so we hit 127.0.0.1 and pass the
+// subdomain via the Host header.
+function splitBootstrapUrl(bootstrapUrl: string): { host: string; path: string } {
+  const u = new URL(bootstrapUrl);
+  return { host: u.host, path: `${u.pathname}${u.search}` };
 }
 
 describe("DevPreviewProxyService", () => {
@@ -219,5 +232,172 @@ describe("DevPreviewProxyService", () => {
     proxy.dispose();
 
     await expect(request(proxyPort, `dp-x.localhost:${proxyPort}`)).rejects.toBeTruthy();
+  });
+
+  describe("browser handoff bootstrap (#9101)", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("302-redirects a valid token to its payload path and sets a scoped session cookie", async () => {
+      proxy = new DevPreviewProxyService(() => null);
+      const proxyPort = await proxy.start();
+
+      const bootstrapUrl = proxy.mintBrowserToken("panel-1", "proj-1", "/dashboard?tab=2");
+      const { host, path } = splitBootstrapUrl(bootstrapUrl);
+      const res = await request(proxyPort, host, path);
+
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toBe("/dashboard?tab=2");
+      const cookie = res.headers["set-cookie"]?.[0] ?? "";
+      expect(cookie).toContain("__dp_sess=");
+      expect(cookie).toContain("HttpOnly");
+      expect(cookie).toContain("SameSite=Strict");
+      expect(cookie).toContain("Path=/");
+      expect(cookie).toContain("Max-Age=60");
+      // Domain= would be rejected by Chromium on .localhost — the cookie must be host-only.
+      expect(cookie.toLowerCase()).not.toContain("domain=");
+    });
+
+    it("mints a bootstrap URL on the panel's stable origin", async () => {
+      proxy = new DevPreviewProxyService(() => null);
+      await proxy.start();
+
+      const bootstrapUrl = proxy.mintBrowserToken("panel-1", "proj-1", "/x");
+      const u = new URL(bootstrapUrl);
+      expect(u.hostname).toBe(`dp-proj-1-panel-1.localhost`);
+      expect(u.pathname).toBe("/_daintree/bootstrap");
+      expect(u.searchParams.get("token")).toBeTruthy();
+    });
+
+    it("rejects a token on its second use (single-use)", async () => {
+      proxy = new DevPreviewProxyService(() => null);
+      const proxyPort = await proxy.start();
+
+      const bootstrapUrl = proxy.mintBrowserToken("panel-1", "proj-1", "/");
+      const { host, path } = splitBootstrapUrl(bootstrapUrl);
+
+      const first = await request(proxyPort, host, path);
+      expect(first.status).toBe(302);
+
+      const second = await request(proxyPort, host, path);
+      expect(second.status).toBe(403);
+    });
+
+    it("redirects to the signed payload path, ignoring a tampered rd query param", async () => {
+      proxy = new DevPreviewProxyService(() => null);
+      const proxyPort = await proxy.start();
+
+      const bootstrapUrl = proxy.mintBrowserToken("panel-1", "proj-1", "/safe");
+      const u = new URL(bootstrapUrl);
+      // Attacker swaps rd to an open-redirect target; the proxy must use the
+      // payload's path, not the query param.
+      u.searchParams.set("rd", "//evil.com");
+      const res = await request(proxyPort, u.host, `${u.pathname}${u.search}`);
+
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toBe("/safe");
+    });
+
+    it("rejects a forged/garbage token with 403", async () => {
+      proxy = new DevPreviewProxyService(() => null);
+      const proxyPort = await proxy.start();
+
+      const res = await request(
+        proxyPort,
+        `dp-proj-1-panel-1.localhost:${proxyPort}`,
+        "/_daintree/bootstrap?token=not-a-real-token"
+      );
+      expect(res.status).toBe(403);
+    });
+
+    it("rejects a request with no token with 403", async () => {
+      proxy = new DevPreviewProxyService(() => null);
+      const proxyPort = await proxy.start();
+
+      const res = await request(
+        proxyPort,
+        `dp-proj-1-panel-1.localhost:${proxyPort}`,
+        "/_daintree/bootstrap"
+      );
+      expect(res.status).toBe(403);
+    });
+
+    it("rejects an expired token with 403", async () => {
+      // Fake only the Date clock so HTTP/socket timers stay real; advance past the
+      // 60s TTL between minting and redeeming.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      proxy = new DevPreviewProxyService(() => null);
+      const proxyPort = await proxy.start();
+
+      const bootstrapUrl = proxy.mintBrowserToken("panel-1", "proj-1", "/");
+      const { host, path } = splitBootstrapUrl(bootstrapUrl);
+
+      vi.setSystemTime(Date.now() + 61_000);
+      const res = await request(proxyPort, host, path);
+      expect(res.status).toBe(403);
+    });
+
+    it("rejects a token redeemed against a different panel's origin (panel binding)", async () => {
+      proxy = new DevPreviewProxyService(() => null);
+      const proxyPort = await proxy.start();
+
+      const bootstrapUrl = proxy.mintBrowserToken("panel-1", "proj-1", "/");
+      const { path } = splitBootstrapUrl(bootstrapUrl);
+      // Same token, but hit panel-2's origin — must be rejected and set no cookie.
+      const res = await request(proxyPort, `dp-proj-1-panel-2.localhost:${proxyPort}`, path);
+
+      expect(res.status).toBe(403);
+      expect(res.headers["set-cookie"]).toBeUndefined();
+
+      // And the token must still be valid for its real panel afterwards (a wrong-host
+      // attempt must not burn it).
+      const { host, path: realPath } = splitBootstrapUrl(bootstrapUrl);
+      const real = await request(proxyPort, host, realPath);
+      expect(real.status).toBe(302);
+    });
+
+    it("rejects HEAD without consuming the token, so the real GET still succeeds", async () => {
+      proxy = new DevPreviewProxyService(() => null);
+      const proxyPort = await proxy.start();
+
+      const bootstrapUrl = proxy.mintBrowserToken("panel-1", "proj-1", "/");
+      const { host, path } = splitBootstrapUrl(bootstrapUrl);
+
+      const head = await request(proxyPort, host, path, "HEAD");
+      expect(head.status).toBe(405);
+
+      const get = await request(proxyPort, host, path);
+      expect(get.status).toBe(302);
+    });
+
+    it("rejects a non-GET method on the bootstrap route with 405 without consuming the token", async () => {
+      proxy = new DevPreviewProxyService(() => null);
+      const proxyPort = await proxy.start();
+
+      const bootstrapUrl = proxy.mintBrowserToken("panel-1", "proj-1", "/");
+      const { host, path } = splitBootstrapUrl(bootstrapUrl);
+
+      const post = await request(proxyPort, host, path, "POST");
+      expect(post.status).toBe(405);
+
+      // The rejected POST must not have burned the single-use token.
+      const get = await request(proxyPort, host, path);
+      expect(get.status).toBe(302);
+    });
+
+    it("treats a token at exactly its expiry as expired (boundary)", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      proxy = new DevPreviewProxyService(() => null);
+      const proxyPort = await proxy.start();
+
+      const bootstrapUrl = proxy.mintBrowserToken("panel-1", "proj-1", "/");
+      const { host, path } = splitBootstrapUrl(bootstrapUrl);
+
+      // Advance to exactly the 60s TTL — verify and reaper both treat this as expired.
+      vi.setSystemTime(Date.now() + 60_000);
+      const res = await request(proxyPort, host, path);
+      expect(res.status).toBe(403);
+    });
   });
 });

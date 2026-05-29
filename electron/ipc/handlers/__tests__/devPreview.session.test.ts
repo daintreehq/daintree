@@ -19,6 +19,16 @@ vi.mock("../../utils.js", () => ({
     );
     return () => ipcMainMock.removeHandler(channel);
   },
+  typedHandleValidated: (
+    channel: string,
+    schema: { parse: (v: unknown) => unknown },
+    handler: unknown
+  ) => {
+    ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
+      (handler as (...a: unknown[]) => unknown)(schema.parse(args[0]))
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
   typedHandleWithContext: (channel: string, handler: unknown) => {
     ipcMainMock.handle(
       channel,

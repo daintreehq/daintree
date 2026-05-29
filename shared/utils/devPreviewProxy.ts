@@ -18,6 +18,14 @@ const SUBDOMAIN_PREFIX = "dp-";
 const LOCALHOST_SUFFIX = ".localhost";
 
 /**
+ * Path the proxy reserves for the "open in real browser" handoff (#9101). The
+ * main process mints a short-lived single-use token, builds a URL on the panel's
+ * stable origin pointing here, and `shell.openExternal`s it; the proxy validates
+ * the token, sets a session cookie, and 302-redirects to the requested path.
+ */
+export const DEV_PREVIEW_BOOTSTRAP_PATH = "/_daintree/bootstrap";
+
+/**
  * Reduce an arbitrary id to a DNS-label-safe token: lowercased, every character outside
  * `[a-z0-9-]` collapsed to a hyphen, capped at 24 chars (well under the 63-char DNS label
  * limit, even combined as `dp-<a>-<b>`). Lowercasing is essential, not cosmetic — hostnames
@@ -68,4 +76,37 @@ export function parseDevPreviewProxyHost(host: string | undefined | null): strin
   const label = hostname.slice(0, -LOCALHOST_SUFFIX.length);
   if (!label || !label.startsWith(SUBDOMAIN_PREFIX)) return null;
   return label;
+}
+
+/**
+ * Coerce an untrusted redirect target into a safe same-origin absolute path,
+ * defaulting to `/` for anything unsafe so the bootstrap handoff (#9101) can
+ * never become an open redirect. Rejects (→ `/`): empty input, paths missing a
+ * leading `/`, and scheme-relative `//` or `/\` forms that browsers resolve to
+ * a different origin. Validation rounds the path through the URL constructor —
+ * string-prefix checks alone miss encoded bypasses (see #4702). The returned
+ * value preserves the path + query + fragment of a valid input.
+ */
+export function normalizeBootstrapRedirectPath(input: string | undefined | null): string {
+  if (!input || !input.startsWith("/") || input.startsWith("//") || input.startsWith("/\\")) {
+    return "/";
+  }
+  try {
+    const resolved = new URL(input, "http://dp.localhost");
+    if (resolved.origin !== "http://dp.localhost") return "/";
+    return `${resolved.pathname}${resolved.search}${resolved.hash}`;
+  } catch {
+    return "/";
+  }
+}
+
+/**
+ * Build the full bootstrap URL the system browser should open for a panel's
+ * stable origin (#9101): `<origin>/_daintree/bootstrap?token=<t>&rd=<path>`.
+ * `rd` is included only as a fast-fail hint — the proxy reads the authoritative
+ * redirect target from the signed token payload, not this query param.
+ */
+export function buildBootstrapUrl(origin: string, token: string, redirectPath: string): string {
+  const params = new URLSearchParams({ token, rd: redirectPath });
+  return `${origin}${DEV_PREVIEW_BOOTSTRAP_PATH}?${params.toString()}`;
 }
