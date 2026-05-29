@@ -323,6 +323,55 @@ describe("installPlugin — upgrade swap", () => {
     service.dispose();
   });
 
+  it("preserves installedAt and records updatedAt on an upgrade", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const v1 = await makeArchive({ name: "acme.stamp", version: "1.0.0" });
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+    const firstInfo = service.listPlugins().find((p) => p.manifest.name === "acme.stamp");
+    expect(firstInfo).toBeDefined();
+    const originalInstalledAt = firstInfo!.installedAt;
+    expect(originalInstalledAt).toBeGreaterThan(0);
+    // First install records no upgrade timestamp.
+    expect(firstInfo!.updatedAt).toBeUndefined();
+
+    const before = Date.now();
+    const v2 = await makeArchive({ name: "acme.stamp", version: "2.0.0" });
+    expect((await service.installPlugin(v2)).status).toBe("installed");
+
+    const secondInfo = service.listPlugins().find((p) => p.manifest.name === "acme.stamp");
+    expect(secondInfo).toBeDefined();
+    // installedAt is preserved from the first install; updatedAt is newly set.
+    expect(secondInfo!.installedAt).toBe(originalInstalledAt);
+    expect(secondInfo!.updatedAt).toBeGreaterThanOrEqual(before);
+
+    service.dispose();
+  });
+
+  it("clears a prior updateAvailable flag on a successful upgrade", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const v1 = await makeArchive({ name: "acme.clearflag", version: "1.0.0" });
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+
+    // Simulate an update-check having flagged an available update.
+    const records = storeMock.get("plugins") as { installed?: Record<string, unknown> } | undefined;
+    const installed = (records?.installed ?? {}) as Record<string, Record<string, unknown>>;
+    installed["acme.clearflag"] = {
+      ...installed["acme.clearflag"],
+      updateAvailable: { version: "2.0.0", channel: "manual" },
+    };
+    storeMock.set("plugins", { ...records, installed });
+
+    const v2 = await makeArchive({ name: "acme.clearflag", version: "2.0.0" });
+    expect((await service.installPlugin(v2)).status).toBe("installed");
+
+    const info = service.listPlugins().find((p) => p.manifest.name === "acme.clearflag");
+    expect(info?.updateAvailable).toBeNull();
+
+    service.dispose();
+  });
+
   it("restores the old plugin's runtime state when the swap rolls back", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
 

@@ -291,16 +291,37 @@ export interface SettingsApi {
 export type PluginInstallSource = "builtin" | "sideload" | "url" | "catalog";
 
 /**
- * Outcome of a manual update check (`plugin:check-for-update`). Update support
- * (manual reinstall preserving settings — never auto) is owned by F25 and
- * hasn't landed, so the handler resolves `{ status: "not-implemented" }` and
- * the UI keeps the per-row button disabled.
+ * Discriminant for {@link PluginCheckUpdateResult}. A manual update check
+ * (`plugin:check-for-update`) re-fetches the plugin's `originalUrl`, hashes the
+ * archive, and compares it against the installed `archiveHash` — the check is
+ * purely informational and never installs. Manual reinstall (preserving
+ * settings, never auto) is the user's follow-up action.
+ *
+ * - `up-to-date` — the re-fetched archive hashes identically to the installed one
+ * - `available` — the hashes differ; the result carries the new manifest preview
+ * - `invalid-id` — no installed record, or the record has no `originalUrl`
+ *   (sideload/builtin); the UI gate makes the no-URL case unreachable in practice
+ * - `fetch-failed` — network error, non-2xx response, bad content-type, or an
+ *   archive that exceeds the size cap / fails to parse; carries a `message`
  */
-export type PluginUpdateCheckStatus = "available" | "up-to-date" | "invalid-id" | "not-implemented";
+export type PluginUpdateCheckStatus = "available" | "up-to-date" | "invalid-id" | "fetch-failed";
 
-export interface PluginCheckUpdateResult {
-  status: PluginUpdateCheckStatus;
-}
+/**
+ * Outcome of a manual update check. Returned as plain data (never thrown) so the
+ * structured result survives Electron's structured-clone IPC boundary (#3769) —
+ * domain failures (`fetch-failed`) come back as data, not as a rejected promise.
+ */
+export type PluginCheckUpdateResult =
+  | { status: "up-to-date" }
+  | {
+      status: "available";
+      name: string;
+      version: string;
+      displayName?: string;
+      capabilities: PluginCapability[];
+    }
+  | { status: "invalid-id" }
+  | { status: "fetch-failed"; message: string };
 
 export interface PluginLoadError {
   message: string;
@@ -321,6 +342,13 @@ export interface PluginUpdateAvailable {
 export interface InstalledPluginRecord {
   source: PluginInstallSource;
   installedAt: number;
+  /**
+   * When the plugin was last reinstalled over an existing install (the #9292
+   * swap path). Absent on first install — `installedAt` alone marks an untouched
+   * install. Preserved separately from `installedAt` so a manual update keeps
+   * the original install date while recording the upgrade.
+   */
+  updatedAt?: number;
   archiveHash: string | null;
   originalUrl: string | null;
   disabled: boolean;
@@ -413,6 +441,11 @@ export interface LoadedPluginInfo {
   source: PluginInstallSource;
   /** When the plugin was first installed (record created). `0` for builtins. */
   installedAt: number;
+  /**
+   * When the plugin was last reinstalled over an existing install. `undefined`
+   * for builtins and for plugins that have never been upgraded.
+   */
+  updatedAt?: number;
   /** SHA-256 of the `.dntr` archive at install time. `null` for builtins and dev-mode dir loads. */
   archiveHash: string | null;
   /** Original install URL. `null` for builtins and sideloads. Never logged to console. */

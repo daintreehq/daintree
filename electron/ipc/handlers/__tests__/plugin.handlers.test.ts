@@ -6,6 +6,7 @@ const mockRemoveHandlers = vi.fn();
 const mockListPlugins = vi.fn();
 const mockSetEnabled = vi.fn();
 const mockUninstallPlugin = vi.fn();
+const mockCheckForUpdate = vi.fn();
 const mockListPluginActions = vi.fn();
 const mockRegisterPluginAction = vi.fn();
 const mockUnregisterPluginAction = vi.fn();
@@ -15,6 +16,7 @@ vi.mock("../../../services/PluginService.js", () => ({
     listPlugins: (...args: unknown[]) => mockListPlugins(...args),
     setEnabled: (...args: unknown[]) => mockSetEnabled(...args),
     uninstallPlugin: (...args: unknown[]) => mockUninstallPlugin(...args),
+    checkForUpdate: (...args: unknown[]) => mockCheckForUpdate(...args),
     dispatchHandler: (...args: unknown[]) => mockDispatchHandler(...args),
     registerHandler: (...args: unknown[]) => mockRegisterHandler(...args),
     removeHandlers: (...args: unknown[]) => mockRemoveHandlers(...args),
@@ -281,10 +283,29 @@ describe("registerPluginHandlers", () => {
     expect(mockUninstallPlugin).not.toHaveBeenCalled();
   });
 
-  it("PLUGIN_CHECK_FOR_UPDATE returns not-implemented", async () => {
+  it("PLUGIN_CHECK_FOR_UPDATE delegates to pluginService.checkForUpdate and returns the result", async () => {
+    mockCheckForUpdate.mockResolvedValue({
+      status: "available",
+      name: "acme.my-plugin",
+      version: "2.0.0",
+      capabilities: ["network:fetch"],
+    });
     const handler = getHandler("plugin:check-for-update");
     const result = await handler({}, "acme.my-plugin");
-    expect(result).toEqual({ status: "not-implemented" });
+    expect(mockCheckForUpdate).toHaveBeenCalledWith("acme.my-plugin");
+    expect(result).toEqual({
+      status: "available",
+      name: "acme.my-plugin",
+      version: "2.0.0",
+      capabilities: ["network:fetch"],
+    });
+  });
+
+  it("PLUGIN_CHECK_FOR_UPDATE returns invalid-id for an empty id without delegating", async () => {
+    const handler = getHandler("plugin:check-for-update");
+    const result = await handler({}, "");
+    expect(result).toEqual({ status: "invalid-id" });
+    expect(mockCheckForUpdate).not.toHaveBeenCalled();
   });
 
   it("PLUGIN_INVOKE handler delegates to pluginService.dispatchHandler for trusted senders", async () => {

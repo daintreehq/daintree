@@ -46,7 +46,12 @@ import {
   PluginToastOptionsSchema,
   SCOPED_PLUGIN_NAME_PATTERN,
 } from "../schemas/plugin.js";
-import { extractPluginArchive, computeArchiveHash } from "./PluginArchive.js";
+import {
+  extractPluginArchive,
+  computeArchiveHash,
+  readArchiveManifest,
+  MAX_DNTR_BYTES,
+} from "./PluginArchive.js";
 import { resilientRename } from "../utils/fs.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
 import { z } from "zod";
@@ -69,6 +74,7 @@ import type {
   PluginInstallErrorCode,
   PluginInstallResult,
   PluginInstallOptions,
+  PluginCheckUpdateResult,
   PluginSettingsScope,
   ViewContribution,
 } from "../../shared/types/plugin.js";
@@ -292,6 +298,9 @@ interface PendingPluginDispatch {
  * activation), since `allSettled` waits for every promise to settle.
  */
 const IMPORT_TIMEOUT_MS = 5000;
+
+/** Timeout for the manual update-check download (#9297). */
+const FETCH_TIMEOUT_MS = 30_000;
 
 /**
  * Normalise the value thrown out of `activate()` into a serialisable record.
@@ -2905,13 +2914,20 @@ export class PluginService {
       // cleanup doesn't delete the freshly installed plugin.
       tmpDir = null;
 
-      // 5. Persist provenance and load the new plugin.
+      // 5. Persist provenance and load the new plugin. On an upgrade over an
+      // existing install (the swap path) preserve the original `installedAt`
+      // and record `updatedAt` instead — `upsertInstalledRecord` spreads over
+      // the prior record, so omitting `installedAt` from the patch keeps it.
+      // Clear any prior update signal: the user just reinstalled, so whatever
+      // `updateAvailable` flagged is now resolved (#9297).
       this.upsertInstalledRecord(pluginId, {
         source: opts?.source ?? "sideload",
-        installedAt: Date.now(),
         originalUrl: opts?.originalUrl ?? null,
         archiveHash: hash,
         loadError: null,
+        ...(existing
+          ? { updatedAt: Date.now(), updateAvailable: null }
+          : { installedAt: Date.now() }),
       });
 
       // A plugin disabled in Preferences installs to disk but is intentionally
@@ -3035,6 +3051,170 @@ export class PluginService {
       });
     }
     return null;
+  }
+
+  /**
+   * Manual update check (#9297). Re-fetches the plugin's `originalUrl`, hashes
+   * the downloaded archive, and compares it against the installed `archiveHash`.
+   * Purely informational — it never installs. The user's follow-up is a manual
+   * reinstall (via `installFromUrl`), which preserves settings and `installedAt`.
+   *
+   * Domain failures (no record, no URL, network/content-type/size faults, a
+   * malformed archive) are returned as data — never thrown — so the structured
+   * result survives the structured-clone IPC boundary (#3769). The download is
+   * lock-free: it writes to a private temp dir and reads the hash/manifest, so
+   * it doesn't contend with the install lock.
+   */
+  async checkForUpdate(pluginId: string): Promise<PluginCheckUpdateResult> {
+    if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
+      return { status: "invalid-id" };
+    }
+    const record = this.getInstalledRecord(pluginId);
+    // No record, or a sideload/builtin with no original URL — the UI gates the
+    // button on `originalUrl !== null`, so the no-URL case is unreachable in
+    // practice; treat it as `invalid-id` defensively.
+    if (!record || !record.originalUrl) {
+      return { status: "invalid-id" };
+    }
+    const url = record.originalUrl;
+    // Without a baseline hash (corrupt record, or a dir-load that never hashed)
+    // there's nothing to compare against — a string never equals `null`, so the
+    // diff would always read as "available". Fail loudly instead of misleading.
+    if (!record.archiveHash) {
+      return { status: "fetch-failed", message: "No baseline archive hash to compare against" };
+    }
+    const baselineHash = record.archiveHash;
+
+    // `net` requires a full Electron runtime; lazy-import it so the service
+    // module stays importable in unit tests that don't fetch.
+    const { net } = await import("electron");
+
+    let tmpRoot: string | null = null;
+    try {
+      tmpRoot = await fs.mkdtemp(path.join(this.pluginsRoot, ".update-check-"));
+      const tmpArchive = path.join(tmpRoot, "plugin.dntr");
+
+      let response: Awaited<ReturnType<typeof net.fetch>>;
+      try {
+        response = await net.fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+      } catch (err) {
+        return {
+          status: "fetch-failed",
+          message: `Couldn't reach ${url}: ${(err as Error).message}`,
+        };
+      }
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        return { status: "fetch-failed", message: `Server responded with HTTP ${response.status}` };
+      }
+
+      // Content-type guard — match the install flow's accepted archive types.
+      const contentType = (response.headers.get("content-type") ?? "")
+        .split(";")[0]
+        .trim()
+        .toLowerCase();
+      const ALLOWED_CONTENT_TYPES = [
+        "application/octet-stream",
+        "application/zip",
+        "application/x-zip",
+      ];
+      if (contentType && !ALLOWED_CONTENT_TYPES.includes(contentType)) {
+        await response.body?.cancel().catch(() => {});
+        return { status: "fetch-failed", message: `Unexpected content type "${contentType}"` };
+      }
+
+      // Stream to disk with a running byte counter so an oversized body is
+      // aborted before the whole 30 MB is written (defense in depth ahead of
+      // `computeArchiveHash`'s stat-based cap).
+      const body = response.body;
+      if (!body) {
+        return { status: "fetch-failed", message: "Response had no body" };
+      }
+      // A read/write fault mid-stream must come back as a structured
+      // `fetch-failed`, not a thrown rejection — the "never throws for domain
+      // outcomes" contract (#3769). A `null` sentinel signals the oversize abort
+      // so the early-return stays out of the catch.
+      let oversized = false;
+      try {
+        const handle = await fs.open(tmpArchive, "w");
+        try {
+          const reader = body.getReader();
+          let bytes = 0;
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done || !value) break;
+            bytes += value.byteLength;
+            if (bytes > MAX_DNTR_BYTES) {
+              await reader.cancel().catch(() => {});
+              oversized = true;
+              break;
+            }
+            await handle.write(value);
+          }
+        } finally {
+          await handle.close();
+        }
+      } catch (err) {
+        return {
+          status: "fetch-failed",
+          message: `Couldn't download the archive: ${(err as Error).message}`,
+        };
+      }
+      if (oversized) {
+        return {
+          status: "fetch-failed",
+          message: `Archive exceeds the ${MAX_DNTR_BYTES}-byte size limit`,
+        };
+      }
+
+      let downloadedHash: string;
+      try {
+        downloadedHash = await computeArchiveHash(tmpArchive);
+      } catch (err) {
+        return {
+          status: "fetch-failed",
+          message: `Couldn't hash the archive: ${(err as Error).message}`,
+        };
+      }
+      if (downloadedHash === baselineHash) {
+        return { status: "up-to-date" };
+      }
+
+      // Hashes differ — surface the new manifest's preview so the confirm dialog
+      // can show what the reinstall would bring in.
+      let manifest: PluginManifest;
+      try {
+        manifest = await readArchiveManifest(tmpArchive);
+      } catch (err) {
+        return {
+          status: "fetch-failed",
+          message: `Downloaded archive isn't a valid plugin: ${(err as Error).message}`,
+        };
+      }
+      // The URL must still serve the SAME plugin — a redirected or swapped URL
+      // could serve a different archive, and a later reinstall would replace
+      // this plugin's directory with a stranger's. Reject the mismatch rather
+      // than presenting a foreign plugin as an "update".
+      if (manifest.name !== pluginId) {
+        return {
+          status: "fetch-failed",
+          message: `Downloaded archive is for a different plugin ("${manifest.name}")`,
+        };
+      }
+      return {
+        status: "available",
+        name: manifest.name,
+        version: manifest.version,
+        displayName: manifest.displayName,
+        capabilities: manifest.capabilities ?? [],
+      };
+    } finally {
+      if (tmpRoot) {
+        await fs.rm(tmpRoot, { recursive: true, force: true }).catch((err) => {
+          console.warn(`[PluginService] Failed to clean up update-check temp dir ${tmpRoot}:`, err);
+        });
+      }
+    }
   }
 
   unloadPlugin(pluginId: string): void {
@@ -3268,6 +3448,7 @@ export class PluginService {
         isBuiltin: false,
         source: record?.source ?? "sideload",
         installedAt: record?.installedAt ?? 0,
+        updatedAt: record?.updatedAt,
         archiveHash: record?.archiveHash ?? null,
         originalUrl: record?.originalUrl ?? null,
         loadError: record?.loadError ?? null,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Plug, AlertCircle, FilePlus, Link2, Trash2, RefreshCw, Info } from "lucide-react";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,8 @@ const SOURCE_BADGE_LABELS: Record<PluginInstallSource, string> = {
   catalog: "Catalog",
 };
 
+const UP_TO_DATE_NOTIFICATION_DURATION_MS = 4000;
+
 function pluginLabel(plugin: LoadedPluginInfo): string {
   return plugin.manifest.displayName ?? plugin.manifest.name;
 }
@@ -40,8 +42,11 @@ function pluginLabel(plugin: LoadedPluginInfo): string {
 interface PluginRowProps {
   plugin: LoadedPluginInfo;
   toggling: boolean;
+  checkingUpdate: boolean;
+  upToDate: boolean;
   onToggle: () => void;
   onUninstall: () => void;
+  onCheckForUpdate: () => void;
 }
 
 /**
@@ -52,17 +57,27 @@ interface PluginRowProps {
  * Row expansion (capabilities, contributed actions, load-error stack trace) is
  * left as a follow-up slot per the issue.
  */
-function PluginRow({ plugin, toggling, onToggle, onUninstall }: PluginRowProps) {
+function PluginRow({
+  plugin,
+  toggling,
+  checkingUpdate,
+  upToDate,
+  onToggle,
+  onUninstall,
+  onCheckForUpdate,
+}: PluginRowProps) {
   const label = pluginLabel(plugin);
   const enabled = plugin.disabled !== true;
   const restartRequired = plugin.pendingRestart === true;
   const sourceLabel = SOURCE_BADGE_LABELS[plugin.source] ?? plugin.source;
-  // File-installed plugins have no upstream, so check-for-update has nothing to
-  // hit; URL-installed ones do, but the update flow (F25) hasn't landed yet —
-  // either way the button stays disabled with an explanatory tooltip.
+  // URL-installed plugins have an upstream to re-fetch and compare against;
+  // file-installed plugins and built-ins don't, so the button stays disabled
+  // with an explanatory tooltip.
   const canCheckUpdate = plugin.originalUrl !== null;
   const updateTooltip = canCheckUpdate
-    ? "Checking for updates isn't available yet"
+    ? checkingUpdate
+      ? "Checking for a new version…"
+      : "Check for a new version"
     : plugin.isBuiltin
       ? "Built-in plugins update with Daintree"
       : "No update URL — reinstall from a file to update";
@@ -102,7 +117,14 @@ function PluginRow({ plugin, toggling, onToggle, onUninstall }: PluginRowProps) 
             )}
             {!plugin.isBuiltin && plugin.installedAt > 0 && (
               <div className="text-[11px] text-daintree-text/40 mt-1">
-                Installed {formatRelativeTime(plugin.installedAt)}
+                {plugin.updatedAt
+                  ? `Updated ${formatRelativeTime(plugin.updatedAt)}`
+                  : `Installed ${formatRelativeTime(plugin.installedAt)}`}
+              </div>
+            )}
+            {upToDate && (
+              <div className="text-[11px] text-daintree-text/50 mt-1" role="status">
+                Already up to date
               </div>
             )}
           </div>
@@ -115,10 +137,11 @@ function PluginRow({ plugin, toggling, onToggle, onUninstall }: PluginRowProps) 
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  disabled
+                  onClick={onCheckForUpdate}
+                  disabled={checkingUpdate}
                   aria-label={`Check ${label} for updates`}
                 >
-                  <RefreshCw />
+                  <RefreshCw className={checkingUpdate ? "animate-spin" : undefined} />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">{updateTooltip}</TooltipContent>
@@ -202,10 +225,13 @@ function RowSkeleton() {
  * or URL, enable/disable (#9284), uninstall, provenance, and a check-for-update
  * affordance. Section chrome (header + install buttons) paints before the
  * bridge call resolves; the installed list shows `animate-pulse-delayed` row
- * skeletons during the initial pull. The install flows are thin callers — the
- * atomic extract/validate/swap install (F21/F23/F24) and update check (F25)
- * land separately, so those operations currently surface a "not available yet"
- * notice. Uninstall is fully wired (Tier D1 `ConfirmDialog`).
+ * skeletons during the initial pull. The install-from-file/URL flows are thin
+ * callers — the atomic extract/validate/swap install (F21/F23/F24) lands
+ * separately, so those operations currently surface a "not available yet"
+ * notice. The manual update check (#9297) is fully wired: it re-fetches the
+ * plugin's URL, compares archive hashes, and either shows "Already up to date"
+ * or opens a confirm dialog to reinstall. Uninstall is fully wired (Tier D1
+ * `ConfirmDialog`).
  */
 export function PluginsTab() {
   const [plugins, setPlugins] = useState<LoadedPluginInfo[]>([]);
@@ -234,8 +260,31 @@ export function PluginsTab() {
   const [showUrlDialog, setShowUrlDialog] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [isInstalling, setIsInstalling] = useState(false);
+  // Update-check state. `checkingUpdate` drives the per-row spinner; the ref is
+  // the synchronous reentrancy guard (state batches, leaving a double-click
+  // window — #4703). `upToDateId` shows the transient "Already up to date" note;
+  // `pendingUpdate` holds the fetched manifest preview for the confirm dialog.
+  const [checkingUpdate, setCheckingUpdate] = useState<Set<string>>(new Set());
+  const checkingUpdateRef = useRef<Set<string>>(new Set());
+  const [upToDateId, setUpToDateId] = useState<string | null>(null);
+  const upToDateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [pendingUpdate, setPendingUpdate] = useState<{
+    plugin: LoadedPluginInfo;
+    result: Extract<
+      Awaited<ReturnType<typeof window.electron.plugin.checkForUpdate>>,
+      { status: "available" }
+    >;
+  } | null>(null);
+  const [isReinstalling, setIsReinstalling] = useState(false);
 
   useSettingsTabValidation("plugins", Boolean(error));
+
+  // Clear the "Already up to date" auto-dismiss timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (upToDateTimerRef.current) clearTimeout(upToDateTimerRef.current);
+    };
+  }, []);
 
   // Single data-loading effect, keyed on `refreshKey`. Mutations re-pull by
   // bumping the counter rather than splitting into a second effect that shares
@@ -268,6 +317,9 @@ export function PluginsTab() {
   useEffect(() => {
     return window.electron.plugin.onProvenanceChanged(() => {
       setRefreshKey((k) => k + 1);
+      // A plugin may have been uninstalled in another window — close any open
+      // reinstall confirm so it can't fire `installFromUrl` on a stale record.
+      setPendingUpdate(null);
     });
   }, []);
 
@@ -383,6 +435,73 @@ export function PluginsTab() {
     }
   };
 
+  const handleCheckForUpdate = async (plugin: LoadedPluginInfo) => {
+    const id = plugin.manifest.name;
+    // Synchronous reentrancy guard — a rapid double-click would otherwise fire
+    // two downloads before the first render flips the spinner (#4703).
+    if (checkingUpdateRef.current.has(id)) return;
+    checkingUpdateRef.current.add(id);
+    setCheckingUpdate((prev) => new Set(prev).add(id));
+    // A fresh check supersedes any lingering "up to date" note for this plugin.
+    if (upToDateId === id) setUpToDateId(null);
+    try {
+      setError(null);
+      const result = await window.electron.plugin.checkForUpdate(id);
+      switch (result.status) {
+        case "up-to-date":
+          if (upToDateTimerRef.current) clearTimeout(upToDateTimerRef.current);
+          setUpToDateId(id);
+          upToDateTimerRef.current = setTimeout(
+            () => setUpToDateId(null),
+            UP_TO_DATE_NOTIFICATION_DURATION_MS
+          );
+          break;
+        case "available":
+          setPendingUpdate({ plugin, result });
+          break;
+        case "fetch-failed":
+          setError(`Couldn't check for an update: ${result.message}`);
+          break;
+        case "invalid-id":
+          // The button is gated on `originalUrl !== null`, so this is a bug, not
+          // a user-facing state — log it without a toast.
+          logError("Update check returned invalid-id", new Error(id));
+          break;
+      }
+    } catch (err) {
+      setError(formatErrorMessage(err, "Failed to check for update"));
+      logError("Failed to check plugin for update", err);
+    } finally {
+      checkingUpdateRef.current.delete(id);
+      setCheckingUpdate((prev) => {
+        const copy = new Set(prev);
+        copy.delete(id);
+        return copy;
+      });
+    }
+  };
+
+  const confirmReinstall = async () => {
+    if (!pendingUpdate) return;
+    const url = pendingUpdate.plugin.originalUrl;
+    if (!url) {
+      setPendingUpdate(null);
+      return;
+    }
+    setIsReinstalling(true);
+    try {
+      setError(null);
+      const result = await window.electron.plugin.installFromUrl(url);
+      setPendingUpdate(null);
+      handleInstallResult(result);
+    } catch (err) {
+      setError(formatErrorMessage(err, "Failed to reinstall plugin"));
+      logError("Failed to reinstall plugin from URL", err);
+    } finally {
+      setIsReinstalling(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
@@ -442,8 +561,11 @@ export function PluginsTab() {
               key={plugin.manifest.name}
               plugin={plugin}
               toggling={pending.has(plugin.manifest.name)}
+              checkingUpdate={checkingUpdate.has(plugin.manifest.name)}
+              upToDate={upToDateId === plugin.manifest.name}
               onToggle={() => void handleToggle(plugin)}
               onUninstall={() => armUninstall(plugin)}
+              onCheckForUpdate={() => void handleCheckForUpdate(plugin)}
             />
           ))}
         </div>
@@ -477,6 +599,44 @@ export function PluginsTab() {
           />
           Also delete stored settings and secrets
         </label>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        isOpen={pendingUpdate !== null}
+        onClose={isReinstalling ? undefined : () => setPendingUpdate(null)}
+        title={pendingUpdate ? `Update '${pluginLabel(pendingUpdate.plugin)}'?` : ""}
+        description="Downloads the latest archive and reinstalls over the current version. Your settings are kept."
+        confirmLabel="Reinstall plugin"
+        cancelLabel="Cancel"
+        onConfirm={() => void confirmReinstall()}
+        isConfirmLoading={isReinstalling}
+        variant="default"
+      >
+        {pendingUpdate && (
+          <div className="mt-3 space-y-1.5 text-xs text-daintree-text/70">
+            <div>
+              <span className="text-daintree-text/50">New version</span>{" "}
+              <span className="font-medium text-daintree-text">
+                v{pendingUpdate.result.version}
+              </span>
+              {pendingUpdate.result.displayName &&
+                pendingUpdate.result.displayName !== pluginLabel(pendingUpdate.plugin) && (
+                  <span className="text-daintree-text/50">
+                    {" "}
+                    · now named {pendingUpdate.result.displayName}
+                  </span>
+                )}
+            </div>
+            {pendingUpdate.result.capabilities.length > 0 && (
+              <div>
+                <span className="text-daintree-text/50">Capabilities</span>{" "}
+                <span className="text-daintree-text">
+                  {pendingUpdate.result.capabilities.join(", ")}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
       </ConfirmDialog>
 
       <AppDialog
