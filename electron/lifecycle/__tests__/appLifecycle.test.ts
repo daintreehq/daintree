@@ -552,9 +552,9 @@ describe("extractDntrPaths", () => {
 
   it("skips flag arguments and non-.dntr paths", async () => {
     const { extractDntrPaths } = await import("../appLifecycle.js");
-    expect(
-      extractDntrPaths(["daintree", "--cli-path", "/dir", "--foo=bar.dntr"], "/work")
-    ).toEqual([]);
+    expect(extractDntrPaths(["daintree", "--cli-path", "/dir", "--foo=bar.dntr"], "/work")).toEqual(
+      []
+    );
   });
 
   it("returns both .dntr paths when the OS passes multiple", async () => {
@@ -588,10 +588,7 @@ describe("installDntrPath / drainPendingDntrPaths", () => {
   const tmpFiles: string[] = [];
 
   function makeDntrFile(magic: boolean): string {
-    const p = nodePath.join(
-      os.tmpdir(),
-      `dntr-test-${tmpFiles.length}-${process.pid}.dntr`
-    );
+    const p = nodePath.join(os.tmpdir(), `dntr-test-${tmpFiles.length}-${process.pid}.dntr`);
     const header = magic ? Buffer.from([0x50, 0x4b, 0x03, 0x04]) : Buffer.from("not a zip");
     fs.writeFileSync(p, Buffer.concat([header, Buffer.from("rest")]));
     tmpFiles.push(p);
@@ -830,7 +827,8 @@ describe("registerAppLifecycleHandlers – second-instance .dntr handling", () =
   });
 
   it("queues a .dntr archive when no window exists yet", async () => {
-    const { registerAppLifecycleHandlers, getPendingDntrPaths } = await import("../appLifecycle.js");
+    const { registerAppLifecycleHandlers, getPendingDntrPaths } =
+      await import("../appLifecycle.js");
     registerAppLifecycleHandlers(makeOpts({ getMainWindow: vi.fn(() => null) }));
 
     getHandler()({}, ["daintree", dntrFile], "/work");
