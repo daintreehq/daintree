@@ -50,6 +50,9 @@ import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { CONTEXT_COMPONENTS, WorktreeMenuItems } from "./WorktreeMenuItems";
+import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
+import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
+import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { isAgentFleetActionEligible, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { useWorktreeDevServerSession } from "@/hooks/app/useWorktreeDevServerSession";
@@ -213,6 +216,12 @@ export function WorktreeCard({
   } = useWorktreeTerminals(worktree.id);
 
   const devServerSession = useWorktreeDevServerSession(worktree.id);
+
+  const pluginMenuContext = useMemo<WhenClauseContext>(
+    () => ({ worktreeId: worktree.id }),
+    [worktree.id]
+  );
+  const pluginItems = usePluginContextMenuItems("worktree", pluginMenuContext);
 
   // Border accent flash — fires once when the dominant *execution* state for
   // this card meaningfully changes. `directing` is excluded because it's
@@ -1132,6 +1141,7 @@ export function WorktreeCard({
           onStopDevServer={handleStopDevServer}
           onRestartDevServer={handleRestartDevServer}
         />
+        <PluginContextMenuSection items={pluginItems} />
       </ContextMenuContent>
     </ContextMenu>
   );

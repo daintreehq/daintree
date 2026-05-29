@@ -138,6 +138,7 @@ import type {
   PluginActionDescriptor,
   MenuItemContribution,
   PluginKeybindingDescriptor,
+  ContextMenuContribution,
 } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
 import type { ToolbarButtonConfig } from "../shared/config/toolbarButtonRegistry.js";
@@ -2490,6 +2491,12 @@ const api: ElectronAPI = {
     onKeybindingsChanged: (
       callback: (payload: { keybindings: PluginKeybindingDescriptor[]; complete: boolean }) => void
     ) => _eventBusOn("plugin:keybindings-changed", callback),
+    onContextMenuItemsChanged: (
+      callback: (payload: {
+        items: Array<{ pluginId: string; item: ContextMenuContribution }>;
+        complete: boolean;
+      }) => void
+    ) => _eventBusOn("plugin:context-menu-items-changed", callback),
     onDecorationsChanged: (callback: (payload: { scope: string; paths?: string[] }) => void) =>
       _eventBusOn("plugin:decorations-changed", callback),
   },

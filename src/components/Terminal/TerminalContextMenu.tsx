@@ -13,6 +13,9 @@ import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isBrowserPanel, isDevPreviewPanel, isPtyPanel, isReviewPanel } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
+import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
+import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
+import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
@@ -108,6 +111,12 @@ export function TerminalContextMenu({
   // `multiSelectGestures`.
   const fleetEligible = isFleetArmEligible(terminal);
   const sourceRef = useRef<MenuActionSourceValue>("user");
+
+  const pluginMenuContext = useMemo<WhenClauseContext>(
+    () => ({ panelId: terminalId, panelKind: terminal?.kind }),
+    [terminalId, terminal?.kind]
+  );
+  const pluginItems = usePluginContextMenuItems("terminal", pluginMenuContext);
 
   const [hasSelection, setHasSelection] = useState(false);
   const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
@@ -888,6 +897,7 @@ export function TerminalContextMenu({
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
             Kill Terminal
           </ContextMenuItem>
+          <PluginContextMenuSection items={pluginItems} />
         </ContextMenuContent>
       </ContextMenu>
     </>

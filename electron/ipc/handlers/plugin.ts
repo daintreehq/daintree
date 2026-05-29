@@ -78,6 +78,10 @@ async function handleKeybindings() {
 }
 
 async function handleContextMenuItems() {
+  // Same init-race guard as `handleMenuItems` — block until startup activation
+  // settles so the renderer's mount-time pull can't observe an empty registry
+  // before plugins finish registering (#9285).
+  await pluginService.waitForInit();
   return getPluginContextMenuItems();
 }
 
