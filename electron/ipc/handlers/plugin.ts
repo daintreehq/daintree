@@ -187,31 +187,40 @@ async function handleInstallFromUrl(url: string): Promise<PluginInstallResult> {
       return failed("fetch_failed", "Couldn't download the plugin from that URL.");
     }
 
+    // Drop the open connection on any early return so the socket isn't held
+    // until GC; the body is never consumed on these paths.
+    const abandon = async (result: PluginInstallResult): Promise<PluginInstallResult> => {
+      await response.body?.cancel().catch(() => {});
+      return result;
+    };
+
     if (!response.ok) {
-      return failed("fetch_failed", `The server returned HTTP ${response.status}.`);
+      return abandon(failed("fetch_failed", `The server returned HTTP ${response.status}.`));
     }
 
     const contentLength = response.headers.get("content-length");
     if (contentLength) {
       const declared = Number.parseInt(contentLength, 10);
       if (Number.isFinite(declared) && declared > PLUGIN_DOWNLOAD_MAX_BYTES) {
-        return failed("size_exceeded", "The plugin file is larger than the 30 MB limit.");
+        return abandon(
+          failed("size_exceeded", "The plugin file is larger than the 30 MB limit.")
+        );
       }
     }
 
-    // Accept canonical zip, the optional x-dntr type, or any 2xx whose URL path
-    // ends in `.dntr` (case-insensitive for pasted URLs). response.url is
-    // unreliable in Electron, so the `.dntr` suffix is checked on the original
-    // user URL.
-    const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
-    const mimeOk =
-      contentType.startsWith("application/zip") ||
-      contentType.startsWith("application/x-dntr");
+    // Accept canonical zip (with or without a `; charset=…` parameter), the
+    // optional x-dntr type, or any 2xx whose URL path ends in `.dntr`
+    // (case-insensitive for pasted URLs). An exact/`;`-prefixed match avoids
+    // `application/zipper` slipping through. response.url is unreliable in
+    // Electron, so the `.dntr` suffix is checked on the original user URL.
+    const contentType = (response.headers.get("content-type") ?? "").toLowerCase().trim();
+    const mimeMatches = (type: string) =>
+      contentType === type || contentType.startsWith(`${type};`);
+    const mimeOk = mimeMatches("application/zip") || mimeMatches("application/x-dntr");
     const suffixOk = parsed.pathname.toLowerCase().endsWith(".dntr");
     if (!mimeOk && !suffixOk) {
-      return failed(
-        "content_type_rejected",
-        "That URL didn't return a plugin archive (.dntr)."
+      return abandon(
+        failed("content_type_rejected", "That URL didn't return a plugin archive (.dntr).")
       );
     }
 

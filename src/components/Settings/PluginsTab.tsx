@@ -437,8 +437,16 @@ export function PluginsTab() {
     try {
       const result = await window.electron.plugin.installFromUrl(url);
       handleInstallResult(result);
-      // Keep the dialog open on an invalid URL so the user can correct it.
-      if (result.status !== "invalid-url") {
+      // Keep the dialog open for URL-correctable failures so the user can edit
+      // in place: a malformed URL, a download error (404 / DNS), or a response
+      // that wasn't a plugin archive. Size/timeout failures and successful
+      // installs close it.
+      const correctable =
+        result.status === "invalid-url" ||
+        (result.status === "failed" &&
+          (result.errors[0]?.code === "fetch_failed" ||
+            result.errors[0]?.code === "content_type_rejected"));
+      if (!correctable) {
         setShowUrlDialog(false);
         setUrlInput("");
       }

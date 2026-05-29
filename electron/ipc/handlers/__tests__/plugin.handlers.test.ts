@@ -294,7 +294,8 @@ describe("registerPluginHandlers", () => {
       ok: opts.ok ?? true,
       status: opts.status ?? 200,
       headers: { get: (name: string) => headerMap.get(name.toLowerCase()) ?? null },
-      body: opts.body ?? streamFromChunks([new Uint8Array([1, 2, 3])]),
+      // Honor an explicit `body: null`; only default when the key is absent.
+      body: "body" in opts ? opts.body : streamFromChunks([new Uint8Array([1, 2, 3])]),
     };
   }
 
@@ -331,6 +332,74 @@ describe("registerPluginHandlers", () => {
     const handler = getHandler("plugin:install-from-url");
     const result = await handler({}, "https://example.com/p.dntr");
     expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
+  });
+
+  it("PLUGIN_INSTALL_FROM_URL accepts application/zip with a charset parameter", async () => {
+    mockNetFetch.mockResolvedValue(
+      mockResponse({ headers: { "content-type": "application/zip; charset=utf-8" } })
+    );
+    const handler = getHandler("plugin:install-from-url");
+    const result = await handler({}, "https://example.com/download");
+    expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
+  });
+
+  it("PLUGIN_INSTALL_FROM_URL rejects a near-miss MIME like application/zipper", async () => {
+    mockNetFetch.mockResolvedValue(
+      mockResponse({ headers: { "content-type": "application/zipper" } })
+    );
+    const handler = getHandler("plugin:install-from-url");
+    const result = (await handler({}, "https://example.com/download")) as {
+      status: string;
+      errors: Array<{ code: string }>;
+    };
+    expect(result.status).toBe("failed");
+    expect(result.errors[0]!.code).toBe("content_type_rejected");
+    expect(mockInstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INSTALL_FROM_URL returns fetch_failed when the response has no body", async () => {
+    mockNetFetch.mockResolvedValue(
+      mockResponse({ headers: { "content-type": "application/zip" }, body: null })
+    );
+    const handler = getHandler("plugin:install-from-url");
+    const result = (await handler({}, "https://example.com/p.dntr")) as {
+      status: string;
+      errors: Array<{ code: string }>;
+    };
+    expect(result.status).toBe("failed");
+    expect(result.errors[0]!.code).toBe("fetch_failed");
+    expect(mockInstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INSTALL_FROM_URL accepts a stream of exactly the 30 MB cap", async () => {
+    const atCap = new Uint8Array(30 * 1024 * 1024);
+    mockNetFetch.mockResolvedValue(
+      mockResponse({
+        headers: { "content-type": "application/zip" },
+        body: streamFromChunks([atCap]),
+      })
+    );
+    const handler = getHandler("plugin:install-from-url");
+    const result = await handler({}, "https://example.com/p.dntr");
+    expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
+  });
+
+  it("PLUGIN_INSTALL_FROM_URL aborts a stream one byte over the cap", async () => {
+    const overCap = new Uint8Array(30 * 1024 * 1024 + 1);
+    mockNetFetch.mockResolvedValue(
+      mockResponse({
+        headers: { "content-type": "application/zip" },
+        body: streamFromChunks([overCap]),
+      })
+    );
+    const handler = getHandler("plugin:install-from-url");
+    const result = (await handler({}, "https://example.com/p.dntr")) as {
+      status: string;
+      errors: Array<{ code: string }>;
+    };
+    expect(result.status).toBe("failed");
+    expect(result.errors[0]!.code).toBe("size_exceeded");
+    expect(mockInstallPlugin).not.toHaveBeenCalled();
   });
 
   it("PLUGIN_INSTALL_FROM_URL rejects an unknown MIME with no .dntr suffix", async () => {

@@ -462,6 +462,13 @@ describe("PluginsTab", () => {
     fireEvent.click(confirm.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByText("Install over HTTP?")).toBeNull());
     expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+    // Cancelling reopens the URL dialog with the typed URL intact so the user
+    // can switch to https.
+    await waitFor(() =>
+      expect((screen.getByLabelText("Plugin URL") as HTMLInputElement).value).toBe(
+        "http://example.com/p.dntr"
+      )
+    );
   });
 
   it("confirming the http warning routes the URL through installFromUrl", async () => {
