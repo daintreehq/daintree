@@ -2575,7 +2575,6 @@ export class PluginService {
     await fs.mkdir(this.pluginsRoot, { recursive: true });
 
     const lockPath = path.join(this.pluginsRoot, "install.lock");
-    let release: (() => Promise<void>) | null = null;
     // Set if proper-lockfile reports the lock was compromised mid-hold (mtime
     // drift, external deletion). When that happens a second instance could
     // reclaim the lock, so we abort before the irreversible swap step rather
@@ -2583,6 +2582,9 @@ export class PluginService {
     // `onCompromised` is unsafe — it fires from a timer and would surface as an
     // uncaught exception — so we flag and check at the commit point instead.
     let lockCompromised = false;
+    // Definitely assigned below or the catch returns, so the `finally` can
+    // release unconditionally without a null guard.
+    let release: () => Promise<void>;
     try {
       release = await properLockfile.lock(lockPath, {
         // Sub-30s stale TTL with mid-hold refresh every 10s. A crashed prior
@@ -2802,11 +2804,9 @@ export class PluginService {
           console.warn(`[PluginService] Failed to clean up install temp dir ${tmpDir}:`, err);
         });
       }
-      if (release) {
-        await release().catch((err) => {
-          console.warn("[PluginService] Failed to release install lock:", err);
-        });
-      }
+      await release().catch((err) => {
+        console.warn("[PluginService] Failed to release install lock:", err);
+      });
     }
   }
 
