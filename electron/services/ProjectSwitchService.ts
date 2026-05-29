@@ -156,33 +156,32 @@ export class ProjectSwitchService {
   }
 
   /**
-   * Save the current active worktree ID to the outgoing project's per-project state.
-   * This ensures the worktree selection is remembered when switching back to the project.
+   * Persist the outgoing project's non-worktree per-project state on switch-away.
+   *
+   * The active worktree selection is owned by `persistOutgoingProjectState`
+   * (project switch IPC handler), which writes the live renderer selection and
+   * runs before this method on every switch. This method must NOT re-derive the
+   * selection from `appState.activeWorktreeId`: that main-process value lags the
+   * renderer by the async `app:set-state` write, so reading it here could
+   * resurrect a stale or incidental worktree (e.g. a temporary PR worktree from
+   * a batch merge) and clobber the correct value the renderer just persisted
+   * (#9512). The existing `activeWorktreeId` is preserved verbatim.
    */
   private async saveOutgoingProjectWorktreeState(projectId: string): Promise<void> {
     try {
       const currentAppState = store.get("appState");
-      const activeWorktreeId = currentAppState.activeWorktreeId;
 
-      // Get existing project state to preserve all fields
+      // Get existing project state to preserve all fields, including the
+      // renderer-authored activeWorktreeId.
       const existingState = await projectStore.getProjectState(projectId);
-      if (existingState?.activeWorktreeId === activeWorktreeId) {
-        return;
-      }
 
-      // Persist only when the active worktree changed to avoid unnecessary disk writes.
-      // Null/undefined changes are still persisted because the equality check above compares exact values.
       await projectStore.saveProjectState(projectId, {
         ...existingState,
         projectId,
-        activeWorktreeId,
+        activeWorktreeId: existingState?.activeWorktreeId,
         sidebarWidth: existingState?.sidebarWidth ?? currentAppState.sidebarWidth ?? 350,
         terminals: existingState?.terminals ?? [],
       });
-
-      console.log(
-        `[ProjectSwitch] Saved activeWorktreeId (${activeWorktreeId ?? "null"}) to project ${projectId}`
-      );
     } catch (error) {
       // Non-fatal: log but don't block the switch
       console.error("[ProjectSwitch] Failed to save outgoing project worktree state:", error);

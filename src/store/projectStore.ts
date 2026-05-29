@@ -19,6 +19,7 @@ import {
   clearFleetArmingThroughAccessor,
   getPanelStoreSnapshot,
   getWorktreeSelectionSnapshot,
+  getWorktreeIdSet,
 } from "./storeAccessors";
 import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
@@ -41,7 +42,18 @@ function shouldPersistTerminal(t: NonNullable<CarrierPanel>): boolean {
 
 function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   const draftInputs = useTerminalInputStore.getState().getProjectDraftInputs(projectId);
-  const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? undefined;
+  // Persist the *durable* selection, not whatever is incidentally active. A
+  // focus promotion (e.g. a temporary PR worktree spun up by a batch merge)
+  // leaves `restoreWorktreeId` pointing at the last deliberate selection, so it
+  // round-trips correctly on switch-back (#9512). Validate it against the
+  // current view's worktrees: if it was removed before the switch, send
+  // `undefined` so hydration falls back to the main worktree instead of
+  // resurrecting a stale id. When no view store is mounted (`null`), skip
+  // validation and preserve the candidate.
+  const restoreId = getWorktreeSelectionSnapshot()?.restoreWorktreeId ?? undefined;
+  const knownIds = getWorktreeIdSet();
+  const activeWorktreeId =
+    restoreId && (knownIds === null || knownIds.has(restoreId)) ? restoreId : undefined;
 
   // Synchronously snapshot terminal state from the Zustand store before the
   // renderer gets detached.  This captures browser/dev-preview panel state

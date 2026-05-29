@@ -17,11 +17,13 @@ import {
   setPanelStoreAccessor,
   setPanelStoreClearForSwitchAccessor,
   setWorktreeSelectionAccessor,
+  setWorktreeIdSetAccessor,
   setFleetArmingClearAccessor,
   setFleetArmedIdsAccessor,
   setFleetLastArmedIdAccessor,
   resetStoreAccessorsForTesting,
 } from "./storeAccessors";
+import { getCurrentViewStoreOrNull } from "./createWorktreeStore";
 import { setActiveContextAccessors } from "@/lib/notify";
 import { debounce } from "@/utils/debounce";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
@@ -50,7 +52,13 @@ export function initStoreOrchestrator(): () => void {
   });
   setWorktreeSelectionAccessor(() => ({
     activeWorktreeId: useWorktreeSelectionStore.getState().activeWorktreeId,
+    restoreWorktreeId: useWorktreeSelectionStore.getState().restoreWorktreeId,
   }));
+  setWorktreeIdSetAccessor(() => {
+    const viewStore = getCurrentViewStoreOrNull();
+    if (!viewStore) return null;
+    return new Set(viewStore.getState().worktrees.keys());
+  });
   setFleetArmingClearAccessor(() => {
     useFleetArmingStore.getState().clear();
   });
@@ -110,7 +118,9 @@ export function initStoreOrchestrator(): () => void {
           if (!terminal?.worktreeId) return;
           const worktreeState = useWorktreeSelectionStore.getState();
           if (terminal.worktreeId !== worktreeState.activeWorktreeId) {
-            worktreeState.selectWorktree(terminal.worktreeId);
+            // Focus promotion is incidental, not a deliberate selection: mark it
+            // so it doesn't become the persisted restore target (#9512).
+            worktreeState.selectWorktree(terminal.worktreeId, { source: "focus" });
           }
         }
       )
