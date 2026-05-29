@@ -109,6 +109,13 @@ interface SupervisedServerState {
   pendingCalls: Map<number, PendingCall>;
   /** Resolves when the handshake completes (or rejects on failure). */
   readyPromise: Promise<void> | null;
+  /**
+   * Resolves when the in-flight `startOne` run for this server settles (ready
+   * or crashed) — never rejects. Concurrent lazy-spawn callers (two windows
+   * opening the same cold plugin) await this so they don't race the handshake
+   * and see a transient `spawning` status. Cleared once the run settles (#9235).
+   */
+  inflightStart: Promise<void> | null;
   /** Stdout NDJSON parse buffer carryover across stream chunks. */
   stdoutBuffer: string;
   /**
@@ -136,6 +143,13 @@ interface SupervisedServerState {
 const HANDSHAKE_TIMEOUT_MS = 15_000;
 const SHUTDOWN_GRACE_MS = 3_000;
 const TOOL_CALL_TIMEOUT_MS = 30_000;
+/**
+ * Upper bound on `tools/list` cursor pages (#9235). A misbehaving server that
+ * returns the same non-empty `nextCursor` forever would otherwise loop without
+ * end and accumulate tools unbounded — the cap is only applied after the full
+ * fetch. 200 tools/page × 100 pages is far above any legitimate tool surface.
+ */
+export const TOOLS_LIST_MAX_PAGES = 100;
 
 const MCP_PROTOCOL_VERSION = "2025-06-18";
 const CLIENT_INFO = { name: "daintree-plugin-supervisor", version: "1" } as const;
@@ -204,7 +218,13 @@ export class PluginMcpSupervisor {
     );
   }
 
-  private async startOne(
+  /**
+   * Idempotent per `(pluginId, serverId)`. A call against an already-spawning or
+   * ready server returns the in-flight start promise (so concurrent lazy-spawn
+   * callers await readiness rather than proceeding against a transient
+   * `spawning` state — #9235) instead of being a fire-and-forget no-op.
+   */
+  private startOne(
     pluginId: string,
     pluginDir: string | undefined,
     contribution: McpServerContribution,
@@ -212,7 +232,31 @@ export class PluginMcpSupervisor {
   ): Promise<void> {
     const key = stateKey(pluginId, contribution.id);
     const existing = this.states.get(key);
-    if (existing && (existing.status === "spawning" || existing.status === "ready")) return;
+    if (existing && (existing.status === "spawning" || existing.status === "ready")) {
+      return existing.inflightStart ?? Promise.resolve();
+    }
+    // `doStartOne` runs synchronously up to its first `await` — by the time it
+    // returns the promise the state is already in the map, so we can stamp the
+    // in-flight handle onto it for concurrent callers to await.
+    const run = this.doStartOne(pluginId, pluginDir, contribution, resolveSettings);
+    const state = this.states.get(key);
+    if (state) {
+      state.inflightStart = run;
+      void run.finally(() => {
+        if (state.inflightStart === run) state.inflightStart = null;
+      });
+    }
+    return run;
+  }
+
+  private async doStartOne(
+    pluginId: string,
+    pluginDir: string | undefined,
+    contribution: McpServerContribution,
+    resolveSettings: (template: string) => Promise<string>
+  ): Promise<void> {
+    const key = stateKey(pluginId, contribution.id);
+    const existing = this.states.get(key);
 
     const state: SupervisedServerState = existing ?? {
       pluginId,
@@ -227,6 +271,7 @@ export class PluginMcpSupervisor {
       nextRequestId: 1,
       pendingCalls: new Map(),
       readyPromise: null,
+      inflightStart: null,
       stdoutBuffer: "",
       toolsCache: null,
       toolsListInflight: null,
@@ -469,6 +514,10 @@ export class PluginMcpSupervisor {
     if (message.method === "notifications/tools/list_changed") {
       state.toolsCache = null;
       state.surfacedToolCount = 0;
+      // Supersede any in-flight fetch so its resolution can't re-cache the
+      // pre-notification tool list (the `.then` identity guard then no-ops). The
+      // next enumeration starts a fresh fetch.
+      state.toolsListInflight = null;
       return;
     }
     // Other notifications (no id) are ignored — we don't subscribe to any.
@@ -689,12 +738,14 @@ export class PluginMcpSupervisor {
     if (state.toolsListInflight) return state.toolsListInflight;
     const promise = this.runToolsListFetch(state)
       .then((tools) => {
-        state.toolsCache = tools;
+        // Identity guard: a crash/restart or a mid-fetch
+        // `notifications/tools/list_changed` may have invalidated this fetch by
+        // nulling/replacing the in-flight handle. Only cache if we still own it,
+        // so a superseded fetch can't repopulate the cache with stale tools.
+        if (state.toolsListInflight === promise) state.toolsCache = tools;
         return tools;
       })
       .finally(() => {
-        // Identity guard: a crash/restart may have already nulled (or replaced)
-        // the field; only clear the slot this fetch owns.
         if (state.toolsListInflight === promise) state.toolsListInflight = null;
       });
     state.toolsListInflight = promise;
@@ -703,8 +754,13 @@ export class PluginMcpSupervisor {
 
   /** Drive the `tools/list` cursor loop to completion, paging until exhausted. */
   private async runToolsListFetch(state: SupervisedServerState): Promise<PluginMcpFullTool[]> {
-    // Await the handshake so a first-call-after-lazy-spawn enumeration doesn't
-    // race the `initialize` round. A handshake failure rejects here.
+    // Await the in-flight spawn first — there's a window where a concurrent
+    // lazy spawn has registered the state (`status: "spawning"`) but not yet
+    // assigned `readyPromise`. Awaiting `inflightStart` closes that race so a
+    // first-call-after-lazy-spawn enumeration doesn't see a transient status.
+    if (state.inflightStart) await state.inflightStart;
+    // Then await the handshake so the `initialize` round has completed. A
+    // handshake failure rejects here.
     if (state.readyPromise) await state.readyPromise;
     if (state.status !== "ready") {
       throw plainError(
@@ -714,17 +770,22 @@ export class PluginMcpSupervisor {
     }
     const tools: PluginMcpFullTool[] = [];
     let cursor: string | undefined;
-    for (;;) {
+    for (let page = 0; page < TOOLS_LIST_MAX_PAGES; page++) {
       const params = cursor === undefined ? {} : { cursor };
       const result = await this.sendRequest(state, "tools/list", params, TOOL_CALL_TIMEOUT_MS, () =>
         plainError("TIMEOUT", `tools/list for "${state.pluginId}/${state.serverId}" timed out`)
       );
-      const page = parseToolsListResult(result);
-      tools.push(...page.tools);
-      if (!page.nextCursor) break;
-      cursor = page.nextCursor;
+      const parsed = parseToolsListResult(result);
+      tools.push(...parsed.tools);
+      if (!parsed.nextCursor) return tools;
+      cursor = parsed.nextCursor;
     }
-    return tools;
+    // Exhausted the page budget without a terminal page — a server paging
+    // forever. Fail rather than loop unbounded.
+    throw plainError(
+      "TOOLS_LIST_PAGINATION",
+      `tools/list for "${state.pluginId}/${state.serverId}" exceeded ${TOOLS_LIST_MAX_PAGES} pages`
+    );
   }
 
   /** Tools already surfaced by every OTHER server — the consumed cap budget. */
@@ -753,6 +814,12 @@ export class PluginMcpSupervisor {
     const state = this.states.get(key);
     if (!state) return;
     state.status = "stopped";
+    // Drop the tool cache and release this server's slice of the global cap
+    // budget so a stopped/unloaded server doesn't pin tools or budget (#9235).
+    // Done before the `!subprocess` early-return so it always runs.
+    state.toolsCache = null;
+    state.toolsListInflight = null;
+    state.surfacedToolCount = 0;
     const subprocess = state.subprocess;
     if (!subprocess) return;
     const pid = state.pid;

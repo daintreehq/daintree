@@ -5411,7 +5411,7 @@ describe("reserved contribution point warnings", () => {
     );
   });
 
-  it("forwards a contributes.experimental_mcpServers entry to the PluginMcpSupervisor (#9233)", async () => {
+  it("registers a contributes.experimental_mcpServers entry without eagerly spawning it (#9235)", async () => {
     mockPluginMcpSupervisor.start.mockClear();
     await writePlugin("mcp", {
       name: "acme.mcp",
@@ -5434,21 +5434,19 @@ describe("reserved contribution point warnings", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
-    expect(mockPluginMcpSupervisor.start).toHaveBeenCalledTimes(1);
-    const call = mockPluginMcpSupervisor.start.mock.calls[0]?.[0] as {
-      pluginId: string;
-      contributions: Array<{ id: string; name: string; command: string }>;
-    };
-    expect(call.pluginId).toBe("acme.mcp");
-    expect(call.contributions).toEqual([
-      {
-        id: "linear",
-        name: "Linear MCP",
-        command: "node",
-        args: ["./server.js"],
-        env: { LINEAR_API_KEY: "secret" },
-      },
-    ]);
+    // Lazy discovery (#9235): activation must NOT spawn the MCP subprocess —
+    // it starts on the first `plugin-mcp:list-tools` enumeration instead.
+    expect(mockPluginMcpSupervisor.start).not.toHaveBeenCalled();
+    // The contribution is still registered so the IPC boundary can resolve and
+    // lazily start it on demand.
+    const lookup = service.findMcpServerContribution("acme.mcp", "linear");
+    expect(lookup?.contribution).toEqual({
+      id: "linear",
+      name: "Linear MCP",
+      command: "node",
+      args: ["./server.js"],
+      env: { LINEAR_API_KEY: "secret" },
+    });
   });
 
   it("registers a contributes.forgeProviders entry with the forge provider registry", async () => {
@@ -5573,8 +5571,10 @@ describe("reserved contribution point warnings", () => {
         'experimental_views entry "main" has location "sidebar" which is not yet implemented'
       )
     );
-    // experimental_mcpServers now reaches the supervisor instead of warning (#9233).
-    expect(mockPluginMcpSupervisor.start).toHaveBeenCalledTimes(1);
+    // experimental_mcpServers is registered (no warning) but, under lazy
+    // discovery (#9235), is NOT spawned at activation.
+    expect(mockPluginMcpSupervisor.start).not.toHaveBeenCalled();
+    expect(service.findMcpServerContribution("acme.mixed", "svc")).toBeDefined();
   });
 
   it("logs one warning per orphan or unsupported view entry", async () => {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PassThrough } from "node:stream";
-import { PluginMcpSupervisor } from "../PluginMcpSupervisor.js";
+import { PluginMcpSupervisor, TOOLS_LIST_MAX_PAGES } from "../PluginMcpSupervisor.js";
 import { PLUGIN_MCP_STDERR_RING_LINES } from "../../../shared/types/ipc/pluginMcp.js";
 
 async function flushMicrotasks(): Promise<void> {
@@ -648,6 +648,122 @@ describe("PluginMcpSupervisor lazy tool discovery (issue #9235)", () => {
     fake.answerInitialize();
     await startPromise;
   }
+
+  it("resolves a concurrent first-call enumeration that races the lazy spawn", async () => {
+    // Regression for the readyPromise-null window: enumerate while the server is
+    // still "spawning" (readyPromise not yet assigned). The call must await the
+    // in-flight start rather than fast-failing with NOT_READY.
+    const fake = makeFakeSubprocess();
+    const supervisor = new PluginMcpSupervisor({ spawner: () => fake.handle, killTree: () => {} });
+
+    const startPromise = supervisor.start({
+      pluginId: "acme.demo",
+      contributions: [CONTRIBUTION],
+      resolveSettings: async () => "",
+    });
+    // Enumerate immediately — before the handshake completes.
+    const listPromise = supervisor.listTools("acme.demo", "linear");
+
+    await fake.waitForStdinCount(1);
+    fake.answerInitialize();
+    await startPromise;
+    await fake.waitForStdinCount(3);
+    fake.answerLastCall({ tools: [{ name: "a", inputSchema: {} }] });
+
+    const result = await listPromise;
+    expect(result.tools.map((t) => t.name)).toEqual(["a"]);
+  });
+
+  it("does not repopulate the cache when list_changed arrives mid-fetch", async () => {
+    const fake = makeFakeSubprocess();
+    const supervisor = new PluginMcpSupervisor({ spawner: () => fake.handle, killTree: () => {} });
+    await startReady(supervisor, fake);
+
+    const first = supervisor.listTools("acme.demo", "linear");
+    await fake.waitForStdinCount(3);
+    // Invalidation lands while the tools/list request is still in flight.
+    fake.emitStdout({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+    await flushMicrotasks();
+    // The now-superseded request resolves with the OLD data.
+    fake.answerLastCall({ tools: [{ name: "old", inputSchema: {} }] });
+    await first;
+
+    // The cache must NOT hold the old data — the next call refetches.
+    const second = supervisor.listTools("acme.demo", "linear");
+    await fake.waitForStdinCount(4);
+    expect(fake.lastCallMethod()).toBe("tools/list");
+    fake.answerLastCall({ tools: [{ name: "fresh", inputSchema: {} }] });
+    expect((await second).tools.map((t) => t.name)).toEqual(["fresh"]);
+  });
+
+  it("rejects a tools/list that pages past the pagination guard", async () => {
+    const fake = makeFakeSubprocess();
+    const supervisor = new PluginMcpSupervisor({ spawner: () => fake.handle, killTree: () => {} });
+    await startReady(supervisor, fake);
+
+    const listPromise = supervisor.listTools("acme.demo", "linear");
+    listPromise.catch(() => {});
+    // Always hand back the same non-empty cursor so the loop never terminates
+    // on its own — it must bail out at the page guard.
+    for (let i = 0; i < TOOLS_LIST_MAX_PAGES; i++) {
+      await fake.waitForStdinCount(3 + i);
+      fake.answerLastCall({ tools: [{ name: `t${i}`, inputSchema: {} }], nextCursor: "loop" });
+    }
+    await expect(listPromise).rejects.toMatchObject({ code: "TOOLS_LIST_PAGINATION" });
+  });
+
+  it("releases a stopped server's slice of the global cap budget on shutdown", async () => {
+    const fakes = [makeFakeSubprocess({ pid: 1 }), makeFakeSubprocess({ pid: 2 })];
+    let nth = 0;
+    const supervisor = new PluginMcpSupervisor({
+      spawner: () => fakes[nth++]!.handle,
+      killTree: () => {},
+    });
+    const startA = supervisor.start({
+      pluginId: "acme.a",
+      contributions: [{ id: "s", name: "S", command: "node" }],
+      resolveSettings: async () => "",
+    });
+    await fakes[0]!.waitForStdinCount(1);
+    fakes[0]!.answerInitialize();
+    await startA;
+    const startB = supervisor.start({
+      pluginId: "acme.b",
+      contributions: [{ id: "s", name: "S", command: "node" }],
+      resolveSettings: async () => "",
+    });
+    await fakes[1]!.waitForStdinCount(1);
+    fakes[1]!.answerInitialize();
+    await startB;
+
+    // A surfaces 2 of a budget of 3.
+    const aPromise = supervisor.listTools("acme.a", "s", 3);
+    await fakes[0]!.waitForStdinCount(3);
+    fakes[0]!.answerLastCall({
+      tools: [
+        { name: "a1", inputSchema: {} },
+        { name: "a2", inputSchema: {} },
+      ],
+    });
+    await aPromise;
+
+    // Shut A down — its budget slice must be released.
+    await supervisor.shutdown({ pluginId: "acme.a" });
+
+    // B now sees the FULL budget of 3, not the leftover 1.
+    const bPromise = supervisor.listTools("acme.b", "s", 3);
+    await fakes[1]!.waitForStdinCount(3);
+    fakes[1]!.answerLastCall({
+      tools: [
+        { name: "b1", inputSchema: {} },
+        { name: "b2", inputSchema: {} },
+        { name: "b3", inputSchema: {} },
+      ],
+    });
+    const bResult = await bPromise;
+    expect(bResult.tools.map((t) => t.name)).toEqual(["b1", "b2", "b3"]);
+    expect(bResult.truncated).toBe(false);
+  });
 
   it("fetches tools/list on first enumeration and returns tier-1 summaries without schemas", async () => {
     const fake = makeFakeSubprocess();
