@@ -995,3 +995,87 @@ describe("kickOffEarlyPathRefresh", () => {
     expect(process.env.PATH).toBe("/old/path");
   });
 });
+
+describe("macOS open-file handler", () => {
+  type OpenFileEvent = { preventDefault: () => void };
+  type OpenFileHandler = (event: OpenFileEvent, filePath: string) => void;
+
+  function getOpenFileHandler(): OpenFileHandler | undefined {
+    const call = electronMock.app.on.mock.calls.find((c) => c[0] === "open-file");
+    return call?.[1] as OpenFileHandler | undefined;
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.resetAllMocks();
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    process.argv = ["electron", "main.js"];
+    fsMock.existsSync.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+    process.argv = originalArgv;
+  });
+
+  it("registers an open-file listener on macOS", async () => {
+    await import("../environment.js");
+    expect(getOpenFileHandler()).toBeTypeOf("function");
+  });
+
+  it("does not register an open-file listener on Linux", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", writable: true });
+    await import("../environment.js");
+    expect(getOpenFileHandler()).toBeUndefined();
+  });
+
+  it("does not register an open-file listener on Windows", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", writable: true });
+    await import("../environment.js");
+    expect(getOpenFileHandler()).toBeUndefined();
+  });
+
+  it("calls preventDefault and queues the path when no consumer is set", async () => {
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    const event = { preventDefault: vi.fn() };
+    handler(event, "/tmp/foo.dntr");
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(env.getPendingOpenFilePaths()).toEqual(["/tmp/foo.dntr"]);
+  });
+
+  it("queues multiple paths in FIFO order", async () => {
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    handler({ preventDefault: vi.fn() }, "/a.dntr");
+    handler({ preventDefault: vi.fn() }, "/b.dntr");
+    expect(env.getPendingOpenFilePaths()).toEqual(["/a.dntr", "/b.dntr"]);
+  });
+
+  it("clearPendingOpenFilePaths empties the queue", async () => {
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    handler({ preventDefault: vi.fn() }, "/a.dntr");
+    env.clearPendingOpenFilePaths();
+    expect(env.getPendingOpenFilePaths()).toEqual([]);
+  });
+
+  it("routes to the consumer instead of queueing once one is set", async () => {
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    const consumer = vi.fn();
+    env.setOpenFileConsumer(consumer);
+    handler({ preventDefault: vi.fn() }, "/live.dntr");
+    expect(consumer).toHaveBeenCalledWith("/live.dntr");
+    expect(env.getPendingOpenFilePaths()).toEqual([]);
+  });
+
+  it("getPendingOpenFilePaths returns a copy so caller mutation is isolated", async () => {
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    handler({ preventDefault: vi.fn() }, "/a.dntr");
+    const snapshot = env.getPendingOpenFilePaths();
+    snapshot.push("/injected.dntr");
+    expect(env.getPendingOpenFilePaths()).toEqual(["/a.dntr"]);
+  });
+});

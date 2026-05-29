@@ -100,6 +100,24 @@ module.exports = async function () {
       ],
       category: "public.app-category.developer-tools",
       icon: "build/icon.icns",
+      // Register the `.dntr` plugin-archive association so Finder double-click
+      // and "Open With → Daintree" route through the open-file handler (#9293).
+      // Gated on CSC_LINK (set only in signed CI release runs) so unsigned dev
+      // builds don't pollute the macOS Launch Services database with an
+      // unsigned mapping. `icon` is relative to buildResources ("build/"), so
+      // the value is "icons/dntr.icns" — not "build/icons/dntr.icns".
+      fileAssociations: process.env.CSC_LINK
+        ? [
+            {
+              ext: "dntr",
+              name: "Daintree Plugin",
+              role: "Editor",
+              rank: "Owner",
+              isPackage: false,
+              icon: "icons/dntr.icns",
+            },
+          ]
+        : [],
       extendInfo: {
         CFBundleIconName: "Icon",
         NSPrefersDisplaySafeAreaCompatibilityMode: false,

@@ -72,6 +72,7 @@ import { getProjectStatsService } from "./ipc/handlers/projectCrud/index.js";
 import { getIdleTerminalNotificationService } from "./services/IdleTerminalNotificationService.js";
 import { preAgentSnapshotService } from "./services/PreAgentSnapshotService.js";
 import { isSmokeTest, kickOffEarlyPathRefresh } from "./setup/environment.js";
+import { activateOpenFileInstaller } from "./setup/openFileInstall.js";
 import { store } from "./store.js";
 import { initializeLogger, registerLoggerTransport, setLogLevelOverrides } from "./utils/logger.js";
 import { broadcastToRenderer } from "./ipc/utils.js";
@@ -451,6 +452,11 @@ if (!gotTheLock) {
       registerDaintreeFileProtocol();
       const { pluginService } = await import("./services/PluginService.js");
       registerPluginProtocol((pluginId) => pluginService.getPluginDir(pluginId));
+      // macOS: drain any `.dntr` paths queued during cold launch (Finder
+      // double-click / "Open With") and take over live open-file events now
+      // that PluginService can install them. Fire-and-forget — install runs
+      // concurrently with the rest of startup. #9293
+      void activateOpenFileInstaller(pluginService);
       setupWebviewCSP();
       // Prime the hydrate prefetch cache for the last-active project so the
       // renderer's first `app:boot` invoke resolves as a cache hit instead of
