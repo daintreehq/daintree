@@ -112,8 +112,8 @@ export class PortalManager {
     }
   }
 
-  createTab(tabId: string, url: string): void {
-    console.log(`[PortalManager] Creating tab ${tabId} for ${url}`);
+  createTab(tabId: string, url: string, partition: string = "persist:portal"): void {
+    console.log(`[PortalManager] Creating tab ${tabId} for ${url} on ${partition}`);
     if (this.viewMap.has(tabId)) return;
 
     try {
@@ -132,7 +132,7 @@ export class PortalManager {
           nodeIntegration: false,
           contextIsolation: true,
           sandbox: true,
-          partition: "persist:portal",
+          partition,
           navigateOnDragDrop: false,
           disableBlinkFeatures: "Auxclick",
         },

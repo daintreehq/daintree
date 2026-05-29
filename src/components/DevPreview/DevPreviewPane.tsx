@@ -75,6 +75,7 @@ import { useDevPreviewLoadLifecycle, type SessionStorageEntry } from "./useDevPr
 import { BlockedNavBanner, blockedNavReducer } from "./BlockedNavBanner";
 import { looksLikeOAuthUrl } from "@shared/utils/urlUtils";
 import { buildDevPreviewProxyOrigin } from "@shared/utils/devPreviewProxy";
+import { buildDevPreviewPartition } from "@shared/utils/partitionUtils";
 
 async function captureWebviewSessionStorage(
   webviewElement: Electron.WebviewTag | null
@@ -223,12 +224,6 @@ function DevPreviewStuckBanner({
   );
 }
 
-function sanitizePartitionToken(value: string | undefined): string {
-  const token = (value ?? "default").trim().toLowerCase();
-  const sanitized = token.replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-");
-  return sanitized || "default";
-}
-
 export function DevPreviewPane({
   id,
   title,
@@ -298,12 +293,10 @@ export function DevPreviewPane({
     turbopackEnabled: projectSettings?.turbopackEnabled ?? true,
   });
 
-  const webviewPartition = useMemo(() => {
-    const projectToken = sanitizePartitionToken(currentProjectId);
-    const worktreeToken = sanitizePartitionToken(worktreeId ?? "main");
-    const panelToken = sanitizePartitionToken(id);
-    return `persist:dev-preview-${projectToken}-${worktreeToken}-${panelToken}`;
-  }, [currentProjectId, worktreeId, id]);
+  const webviewPartition = useMemo(
+    () => buildDevPreviewPartition(currentProjectId, worktreeId, id),
+    [currentProjectId, worktreeId, id]
+  );
 
   // Resolve the dev-preview reverse proxy port once, then derive the stable origin this
   // panel's webview loads (#9100). `undefined` = still fetching (hold navigation until it
@@ -844,6 +837,17 @@ export function DevPreviewPane({
       context: "Opening dev preview URL externally",
     });
   }, [currentUrl, proxyOrigin, currentProjectId, id]);
+
+  const isPromotingRef = useRef(false);
+  const handlePromoteToPortal = useCallback(() => {
+    if (isPromotingRef.current) return;
+    isPromotingRef.current = true;
+    void actionService
+      .dispatch("devPreview.promoteToPortal", { panelId: id }, { source: "user" })
+      .finally(() => {
+        isPromotingRef.current = false;
+      });
+  }, [id]);
 
   const handleZoomChange = useCallback((newZoom: number) => {
     const clamped = Math.max(0.25, Math.min(2.0, newZoom));
@@ -1410,6 +1414,7 @@ export function DevPreviewPane({
           onReload={handleReload}
           onHardReload={handleHardReload}
           onOpenExternal={handleOpenExternal}
+          onPromoteToPortal={currentUrl ? handlePromoteToPortal : undefined}
           onZoomChange={handleZoomChange}
           onCaptureScreenshot={handleCaptureScreenshot}
           onToggleDevTools={handleToggleDevTools}
