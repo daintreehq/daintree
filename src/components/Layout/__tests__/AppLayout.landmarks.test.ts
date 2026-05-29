@@ -57,9 +57,11 @@ describe("ARIA page landmarks — issue #5416", () => {
       source = await fs.readFile(TERMINAL_DOCK_PATH, "utf-8");
     });
 
-    it("uses an <aside> region landmark with an accessible name", () => {
-      expect(source).toMatch(/<aside[\s\S]*?aria-label="Dock"/);
-      expect(source).toMatch(/<aside[\s\S]*?role="region"/);
+    it("uses an <aside> region landmark with an accessible name when populated", () => {
+      // The landmark role/name are conditional on dock contents (#9527): a
+      // populated dock is a named "Dock" region; an empty one drops both.
+      expect(source).toMatch(/aria-label=\{shouldInertDock \? undefined : "Dock"\}/);
+      expect(source).toMatch(/role=\{shouldInertDock \? "none" : "region"\}/);
     });
 
     it("keeps tabIndex=-1 so the macro-focus cycler can target it", () => {
@@ -70,17 +72,18 @@ describe("ARIA page landmarks — issue #5416", () => {
       // The dock always renders interactive content (Help Agent button,
       // status containers), so aria-hidden would trap focusable controls
       // beneath aria-hidden=true and fail axe's aria-hidden-focus rule.
-      // `inert` is used instead — see test below.
+      // role="none" drops the empty landmark instead — see test below.
       expect(source).not.toMatch(/aria-hidden=\{[^}]*hasDocked[^}]*\}/);
       expect(source).not.toMatch(/aria-hidden="true"/);
     });
 
-    it("uses `inert` only when the dock has no interactive descendants", () => {
+    it("drops the landmark role instead of inerting the empty dock (#9527)", () => {
       // When no panels are docked and no status affordances are visible, the
-      // aside is a dead-end landmark. Trash/waiting status controls must keep
-      // the dock interactive so pointer and keyboard users can restore panels.
+      // aside is a dead-end landmark, so its role/name are dropped. It must NOT
+      // be `inert` — the launch button and context menu are always rendered and
+      // must stay interactive so users can spawn an agent from an empty dock.
       expect(source).toMatch(/const shouldInertDock = !hasDocked && !hasStatus;/);
-      expect(source).toMatch(/inert=\{shouldInertDock \|\| undefined\}/);
+      expect(source).not.toMatch(/inert=/);
     });
   });
 
