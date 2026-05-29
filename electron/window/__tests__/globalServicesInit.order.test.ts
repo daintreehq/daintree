@@ -185,6 +185,7 @@ vi.mock("../../services/ProjectStore.js", () => ({
 
 vi.mock("../../setup/environment.js", () => ({
   exposeGc: vi.fn(),
+  isSmokeTest: false,
 }));
 
 vi.mock("../../services/HelpSessionService.js", () => ({

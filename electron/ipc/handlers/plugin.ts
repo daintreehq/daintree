@@ -146,7 +146,7 @@ const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
  * back as structured `{ status: "failed" }` data (never thrown) so the tab can
  * render an inline message.
  */
-async function handleInstallFromPath(path: string): Promise<PluginInstallResult> {
+export async function handleInstallFromPath(path: string): Promise<PluginInstallResult> {
   const fail = (message: string): PluginInstallResult => ({
     status: "failed",
     errors: [{ code: "archive_invalid", message }],
@@ -193,7 +193,7 @@ async function handleInstallFromPath(path: string): Promise<PluginInstallResult>
  * (PluginService extracts into its own temp dir and doesn't take ownership of
  * the download artifact).
  */
-async function handleInstallFromUrl(url: string): Promise<PluginInstallResult> {
+export async function handleInstallFromUrl(url: string): Promise<PluginInstallResult> {
   if (typeof url !== "string" || url.trim().length === 0) {
     return { status: "invalid-url" };
   }
@@ -316,7 +316,7 @@ async function handleInstallFromUrl(url: string): Promise<PluginInstallResult> {
   }
 }
 
-async function handleUninstall(pluginId: string, deleteSettings?: boolean): Promise<void> {
+export async function handleUninstall(pluginId: string, deleteSettings?: boolean): Promise<void> {
   if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
     throw new Error("uninstall: pluginId must be a non-empty string");
   }

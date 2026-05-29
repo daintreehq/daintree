@@ -4,6 +4,7 @@
 // that need to verify the throwing behavior (e.g. `ipcGuard.test.ts`) reset
 // the flag explicitly via `_resetIpcGuardForTesting()`.
 
+import { vi } from "vitest";
 import { markIpcSecurityReady } from "./electron/ipc/ipcGuard.js";
 import { primeRadix } from "./src/components/ui/radix-loader";
 
@@ -38,14 +39,24 @@ if (typeof globalThis !== "undefined") {
 // rAF in production. Install a sync default that runs the callback inline so
 // tests retain synchronous expectations without each file repeating the shim.
 // Tests that exercise rAF pacing explicitly override these globals locally.
+//
+// Use `vi.stubGlobal` rather than a raw `globalThis` assignment: forks-pool
+// workers are reused across files, and a raw shim installed while a node-env
+// file runs gets adopted as the "original" global by the next file's jsdom
+// environment setup, then restored on its teardown — permanently shadowing
+// jsdom's async rAF for every later jsdom file in that worker (which made
+// async-effect renders flush in the wrong order, e.g. PluginSettingsForm's
+// reveal-secret control intermittently missing). Stubbed globals are tracked
+// and cleared by vitest between files, so the shim can't leak across the
+// node→jsdom boundary.
 if (typeof globalThis.requestAnimationFrame !== "function") {
-  globalThis.requestAnimationFrame = ((cb: FrameRequestCallback): number => {
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback): number => {
     cb(0);
     return 0;
-  }) as typeof globalThis.requestAnimationFrame;
+  });
 }
 if (typeof globalThis.cancelAnimationFrame !== "function") {
-  globalThis.cancelAnimationFrame = (() => {}) as typeof globalThis.cancelAnimationFrame;
+  vi.stubGlobal("cancelAnimationFrame", () => {});
 }
 
 // Node 25 exposes a broken native `localStorage` stub on `globalThis` (no

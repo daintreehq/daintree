@@ -1,0 +1,26 @@
+{
+  "name": "create-daintree-plugin",
+  "version": "0.1.0",
+  "description": "Scaffold a new Daintree plugin. Shim for `npm create daintree-plugin`.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "create-daintree-plugin": "./dist/create.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "daintree-plugin": "*"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.0"
+  }
+}

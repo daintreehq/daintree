@@ -234,6 +234,11 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           import("../services/PluginMcpSupervisor.js")
             .then(({ getPluginMcpSupervisor }) => getPluginMcpSupervisor().shutdownAll())
             .catch(() => {}),
+          // Close the CLI control socket and unlink the socket file (F32). Same
+          // lazy-import guard — the module only loaded if the deferred task ran.
+          import("../services/PluginCliServer.js")
+            .then(({ stopPluginCliServer }) => stopPluginCliServer())
+            .catch(() => {}),
           new Promise<void>((resolve) => {
             // Global singletons that previously tore down on last-window-close
             // (electron/window/windowServices.ts) live here now so they cover
