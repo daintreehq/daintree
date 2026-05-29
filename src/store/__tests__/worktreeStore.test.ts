@@ -553,6 +553,88 @@ describe("worktreeStore", () => {
     expect(setFocusedMock).not.toHaveBeenCalledWith("term-a");
   });
 
+  describe("durable restore selection (#9512)", () => {
+    it("selectWorktree (default user source) records the durable restore target", () => {
+      useWorktreeSelectionStore.getState().selectWorktree("wt-user-pick");
+
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.activeWorktreeId).toBe("wt-user-pick");
+      expect(state.restoreWorktreeId).toBe("wt-user-pick");
+    });
+
+    it("selectWorktree with source 'focus' updates active but NOT the restore target", () => {
+      // Seed a deliberate selection first.
+      useWorktreeSelectionStore.getState().selectWorktree("wt-root");
+      recordMruMock.mockClear();
+
+      // A terminal in a temp worktree gains focus → incidental promotion.
+      useWorktreeSelectionStore.getState().selectWorktree("wt-temp-pr", { source: "focus" });
+
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.activeWorktreeId).toBe("wt-temp-pr");
+      // The durable selection stays on root, so the project round-trips to root.
+      expect(state.restoreWorktreeId).toBe("wt-root");
+      // Incidental promotion must not pollute the worktree MRU.
+      expect(recordMruMock).not.toHaveBeenCalledWith("worktree:wt-temp-pr");
+    });
+
+    it("setActiveWorktree records the durable restore target for a concrete id", () => {
+      useWorktreeSelectionStore.getState().setActiveWorktree("wt-card-click");
+
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.activeWorktreeId).toBe("wt-card-click");
+      expect(state.restoreWorktreeId).toBe("wt-card-click");
+    });
+
+    it("setActiveWorktree(null) clears the restore target when the cleared worktree WAS durable", () => {
+      // The active worktree is also the durable selection (a feature worktree
+      // the user deliberately selected), then it gets removed.
+      useWorktreeSelectionStore.getState().setActiveWorktree("wt-feature");
+      expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBe("wt-feature");
+
+      useWorktreeSelectionStore.getState().setActiveWorktree(null);
+
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.activeWorktreeId).toBeNull();
+      expect(state.restoreWorktreeId).toBeNull();
+    });
+
+    it("setActiveWorktree(null) preserves the restore target when a focus-promoted worktree is cleared", () => {
+      // Durable selection = root; a temp worktree is only incidentally active.
+      useWorktreeSelectionStore.getState().selectWorktree("wt-root");
+      useWorktreeSelectionStore.getState().selectWorktree("wt-temp-pr", { source: "focus" });
+      expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBe("wt-root");
+
+      // The temp worktree is torn down → active cleared.
+      useWorktreeSelectionStore.getState().setActiveWorktree(null);
+
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.activeWorktreeId).toBeNull();
+      // Root remains the restore target so switch-back lands on root.
+      expect(state.restoreWorktreeId).toBe("wt-root");
+    });
+
+    it("re-selecting the already-active worktree as a user action upgrades it to durable", () => {
+      // Worktree became active only via focus promotion (no durable selection).
+      useWorktreeSelectionStore.getState().selectWorktree("wt-temp", { source: "focus" });
+      expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBeNull();
+
+      // User then deliberately clicks the same worktree.
+      useWorktreeSelectionStore.getState().selectWorktree("wt-temp");
+
+      expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBe("wt-temp");
+    });
+
+    it("reset clears the restore target", () => {
+      useWorktreeSelectionStore.getState().selectWorktree("wt-x");
+      expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBe("wt-x");
+
+      useWorktreeSelectionStore.getState().reset();
+
+      expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBeNull();
+    });
+  });
+
   describe("fleet scope", () => {
     it("starts inactive with no previous worktree or token captured", () => {
       const state = useWorktreeSelectionStore.getState();

@@ -15,10 +15,13 @@ export interface PanelStoreSnapshot {
 
 export interface WorktreeSelectionSnapshot {
   activeWorktreeId: string | null;
+  /** Durable selection that should round-trip across project switches (#9512). */
+  restoreWorktreeId: string | null;
 }
 
 let _getPanelStoreState: (() => PanelStoreSnapshot) | null = null;
 let _getWorktreeSelectionState: (() => WorktreeSelectionSnapshot) | null = null;
+let _getWorktreeIdSet: (() => Set<string> | null) | null = null;
 let _clearPanelStoreForSwitch: (() => void) | null = null;
 let _clearFleetArming: (() => void) | null = null;
 let _getFleetArmedIds: (() => Set<string>) | null = null;
@@ -38,6 +41,19 @@ export function setWorktreeSelectionAccessor(getter: () => WorktreeSelectionSnap
 
 export function getWorktreeSelectionSnapshot(): WorktreeSelectionSnapshot | null {
   return _getWorktreeSelectionState?.() ?? null;
+}
+
+export function setWorktreeIdSetAccessor(getter: () => Set<string> | null): void {
+  _getWorktreeIdSet = getter;
+}
+
+/**
+ * The set of worktree IDs known to the current project view, or `null` when no
+ * view store is mounted (validation should be skipped). Lets the outgoing-state
+ * builder drop a stale restore target that no longer exists (#9512).
+ */
+export function getWorktreeIdSet(): Set<string> | null {
+  return _getWorktreeIdSet?.() ?? null;
 }
 
 export function setPanelStoreClearForSwitchAccessor(callback: () => void): void {
@@ -75,6 +91,7 @@ export function getFleetLastArmedId(): string | null {
 export function resetStoreAccessorsForTesting(): void {
   _getPanelStoreState = null;
   _getWorktreeSelectionState = null;
+  _getWorktreeIdSet = null;
   _clearPanelStoreForSwitch = null;
   _clearFleetArming = null;
   _getFleetArmedIds = null;
