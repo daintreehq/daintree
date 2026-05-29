@@ -41,6 +41,8 @@ import type {
   PluginIpcContext,
   PluginActionContribution,
   PluginActionDescriptor,
+  PluginInstallOptions,
+  PluginInstallResult,
 } from "../../../shared/types/plugin.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { assertIpcSecurityReady } from "../ipcGuard.js";
@@ -51,6 +53,26 @@ async function handleList(): Promise<LoadedPluginInfo[]> {
 
 async function handleSetEnabled(pluginId: string, enabled: boolean): Promise<void> {
   pluginService.setEnabled(pluginId, enabled);
+}
+
+/**
+ * Install a plugin from a `.dntr` archive (or pre-extracted directory) path.
+ * Structured validation failures come back as `{ status: "failed", errors }`
+ * data — never thrown — so the install dialog can render per-field messages
+ * intact across the IPC boundary (#3769). Only unexpected infrastructure
+ * faults (a lock subsystem crash) propagate as a thrown Error.
+ */
+async function handleInstall(
+  archivePath: string,
+  opts?: PluginInstallOptions
+): Promise<PluginInstallResult> {
+  if (typeof archivePath !== "string" || archivePath.length === 0) {
+    return {
+      status: "failed",
+      errors: [{ code: "archive_invalid", message: "Install path must be a non-empty string" }],
+    };
+  }
+  return pluginService.installPlugin(archivePath, opts);
 }
 
 async function handleToolbarButtons(): Promise<ToolbarButtonConfig[]> {
@@ -381,6 +403,7 @@ export const pluginNamespace = defineIpcNamespace({
   name: "plugin",
   ops: {
     list: op(PLUGIN_METHOD_CHANNELS.list, handleList),
+    install: op(PLUGIN_METHOD_CHANNELS.install, handleInstall),
     setEnabled: op(PLUGIN_METHOD_CHANNELS.setEnabled, handleSetEnabled),
     toolbarButtons: op(PLUGIN_METHOD_CHANNELS.toolbarButtons, handleToolbarButtons),
     menuItems: op(PLUGIN_METHOD_CHANNELS.menuItems, handleMenuItems),

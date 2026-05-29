@@ -137,6 +137,7 @@
     "node-addon-api": "^8.8.0",
     "node-pty": "1.2.0-beta.12",
     "posix-pty-reaper": "file:electron/native/posix-pty-reaper",
+    "proper-lockfile": "^4.1.2",
     "react-colorful": "^5.6.1",
     "safe-stable-stringify": "^2.5.0",
     "smol-toml": "^1.6.1",

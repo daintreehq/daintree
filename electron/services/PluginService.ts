@@ -27,7 +27,23 @@ interface ValidateFn {
 interface AjvInstance {
   compile(schema: Record<string, unknown>): ValidateFn;
 }
+
+// proper-lockfile is CJS-only and ships no bundled types. Require it via the
+// same createRequire interop as ajv and declare the narrow surface we use.
+interface LockOptions {
+  stale?: number;
+  update?: number;
+  realpath?: boolean;
+  retries?: number | { retries: number; minTimeout?: number; maxTimeout?: number };
+  onCompromised?: (err: Error) => void;
+}
+interface ProperLockfile {
+  lock(file: string, opts?: LockOptions): Promise<() => Promise<void>>;
+}
+const properLockfile: ProperLockfile = req("proper-lockfile");
 import { getPluginManifestSchema, PluginToastOptionsSchema } from "../schemas/plugin.js";
+import { extractPluginArchive, computeArchiveHash } from "./PluginArchive.js";
+import { resilientRename } from "../utils/fs.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
 import { z } from "zod";
 import type {
@@ -45,6 +61,10 @@ import type {
   InstalledPluginRecord,
   PluginLoadError,
   PluginInstallSource,
+  PluginInstallError,
+  PluginInstallErrorCode,
+  PluginInstallResult,
+  PluginInstallOptions,
   PluginSettingsScope,
   ViewContribution,
 } from "../../shared/types/plugin.js";
@@ -817,7 +837,11 @@ export class PluginService {
       throw err;
     }
 
-    const pluginDirs = entries.filter((e) => e.isDirectory());
+    // Skip dot-prefixed dirs: plugin ids are `publisher.name` and a publisher
+    // segment can never start with a dot, so `.install-tmp-*` staging dirs and
+    // `.old-*` parked dirs left by the installer (e.g. after a crash mid-swap)
+    // are never mistaken for installable plugins.
+    const pluginDirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith("."));
     // Disabled state applies to built-in and user plugins alike (#9284).
     const disabled = this.getDisabledIds();
     const results = await Promise.allSettled(
@@ -2513,6 +2537,280 @@ export class PluginService {
         this.channelRequires.delete(key);
       }
     }
+  }
+
+  /**
+   * Atomically install a plugin from a `.dntr` archive path or a pre-extracted
+   * directory. This is the ONLY path that mutates {@link pluginsRoot} — direct
+   * IPC writes to the plugins directory are a review blocker (#9292).
+   *
+   * The flow, with rollback on every failure branch:
+   * 1. Acquire the cross-process `install.lock` (sub-30s stale TTL so a crashed
+   *    prior install can't hold it forever). A second instance blocks, not races.
+   * 2. Extract / copy the source into a sibling `.install-tmp-*` dir — same
+   *    filesystem as the final location so the eventual rename is atomic.
+   * 3. Validate `plugin.json` with the strict Zod schema (unknown keys, reserved
+   *    `daintree.*` namespace, publisher/name agreement) and the engine range.
+   * 4. Compute the `.dntr` SHA-256 for the `archiveHash` provenance field.
+   * 5. If the id already exists: `unloadPlugin` (disposer cascade), then swap via
+   *    rename — park old aside → move new in → restore old on failure. Per-plugin
+   *    settings/secrets live under a separate `plugin-settings/` root, so the
+   *    directory swap never touches them; no preserve/restore step is needed.
+   * 6. On any failure the temp dir is removed, the lock released, and a structured
+   *    error returned. The on-disk plugin directory is never left half-written.
+   *
+   * Structured validation errors are RETURNED as `{ status: "failed", errors }`
+   * data, never thrown, so they survive the IPC structured-clone boundary
+   * intact (#3769) for the F22/F23/F24 install dialogs.
+   */
+  async installPlugin(
+    archivePath: string,
+    opts?: PluginInstallOptions
+  ): Promise<PluginInstallResult> {
+    const fail = (code: PluginInstallErrorCode, message: string): PluginInstallResult => ({
+      status: "failed",
+      errors: [{ code, message }],
+    });
+
+    await fs.mkdir(this.pluginsRoot, { recursive: true });
+
+    const lockPath = path.join(this.pluginsRoot, "install.lock");
+    let release: (() => Promise<void>) | null = null;
+    try {
+      release = await properLockfile.lock(lockPath, {
+        // Sub-30s stale TTL with mid-hold refresh every 10s. A crashed prior
+        // install's lock is reclaimed after 20s instead of being held forever.
+        stale: 20_000,
+        update: 10_000,
+        // The lock target need not pre-exist — proper-lockfile creates
+        // `install.lock.lock` adjacent. `realpath: false` skips the existence
+        // probe that would otherwise reject before the lock dir is made.
+        realpath: false,
+        retries: { retries: 5, minTimeout: 100, maxTimeout: 1_000 },
+        onCompromised: (err) => {
+          console.error("[PluginService] install.lock compromised during install:", err);
+        },
+      });
+    } catch (err) {
+      return fail(
+        "lock_failed",
+        `Couldn't acquire the plugin install lock: ${(err as Error).message}`
+      );
+    }
+
+    let tmpDir: string | null = null;
+    try {
+      tmpDir = await fs.mkdtemp(path.join(this.pluginsRoot, ".install-tmp-"));
+
+      // 1. Materialize the plugin into the temp dir.
+      let sourceIsDir: boolean;
+      try {
+        sourceIsDir = (await fs.stat(archivePath)).isDirectory();
+      } catch (err) {
+        return fail("archive_invalid", `Install source not found: ${(err as Error).message}`);
+      }
+
+      let hash: string | null = null;
+      if (sourceIsDir) {
+        try {
+          await fs.cp(archivePath, tmpDir, { recursive: true });
+        } catch (err) {
+          return fail(
+            "archive_invalid",
+            `Failed to copy plugin directory: ${(err as Error).message}`
+          );
+        }
+      } else {
+        try {
+          await extractPluginArchive(archivePath, tmpDir);
+        } catch (err) {
+          return fail("archive_invalid", `Failed to extract archive: ${(err as Error).message}`);
+        }
+        try {
+          hash = await computeArchiveHash(archivePath);
+        } catch (err) {
+          return fail("hash_failed", `Failed to compute archive hash: ${(err as Error).message}`);
+        }
+      }
+
+      // 2. Read + strictly validate the manifest.
+      let rawManifest: string;
+      try {
+        rawManifest = await fs.readFile(path.join(tmpDir, "plugin.json"), "utf-8");
+      } catch {
+        return fail("manifest_invalid", "plugin.json not found at the archive root");
+      }
+      let json: unknown;
+      try {
+        json = JSON.parse(rawManifest);
+      } catch {
+        return fail("manifest_invalid", "plugin.json is not valid JSON");
+      }
+      const parsed = getPluginManifestSchema(false).safeParse(json);
+      if (!parsed.success) {
+        const errors: PluginInstallError[] = parsed.error.issues.map((issue) => {
+          const isNamespace =
+            issue.code === "custom" &&
+            (issue as unknown as { params?: { errorCode?: string } }).params?.errorCode ===
+              "namespace_reserved";
+          return {
+            code: isNamespace ? "namespace_unauthorized" : "manifest_invalid",
+            path: issue.path.map(String),
+            message: issue.message,
+          };
+        });
+        return { status: "failed", errors };
+      }
+      const manifest = parsed.data;
+
+      // 3. Engine compatibility.
+      const requiredRange = manifest.engines?.daintree;
+      if (
+        requiredRange &&
+        !semver.satisfies(this.appVersion, requiredRange, { includePrerelease: true })
+      ) {
+        return fail(
+          "engine_incompatible",
+          `Plugin requires Daintree ${requiredRange} but the running version is ${this.appVersion}`
+        );
+      }
+
+      // 4. Atomic swap into the final location.
+      const pluginId = manifest.name;
+      const finalDir = path.join(this.pluginsRoot, pluginId);
+      let existing = false;
+      try {
+        await fs.access(finalDir);
+        existing = true;
+      } catch {
+        existing = false;
+      }
+
+      if (existing) {
+        try {
+          this.unloadPlugin(pluginId);
+        } catch (err) {
+          return fail(
+            "unload_failed",
+            `Failed to unload the existing "${pluginId}" before upgrade: ${(err as Error).message}`
+          );
+        }
+      }
+
+      const swapError = await this._swapPluginDir(tmpDir, finalDir, existing);
+      if (swapError) return { status: "failed", errors: [swapError] };
+      // The temp dir was renamed into place — drop the handle so the `finally`
+      // cleanup doesn't delete the freshly installed plugin.
+      tmpDir = null;
+
+      // 5. Persist provenance and load the new plugin.
+      this.upsertInstalledRecord(pluginId, {
+        source: opts?.source ?? "sideload",
+        installedAt: Date.now(),
+        originalUrl: opts?.originalUrl ?? null,
+        archiveHash: hash,
+        loadError: null,
+      });
+
+      const loaded = await this.loadPlugin(this.pluginsRoot, pluginId, {
+        isBuiltin: false,
+        disabled: this.getDisabledIds(),
+      });
+      if (!loaded) {
+        // The swap committed and provenance is persisted, so the directory is
+        // intact and consistent — the user can retry activation or reinstall
+        // without re-downloading. We deliberately leave the directory in place.
+        return {
+          status: "failed",
+          errors: [
+            {
+              code: "load_failed",
+              message: `Plugin "${pluginId}" installed but failed to load. Retry from Settings.`,
+            },
+          ],
+        };
+      }
+
+      // setPluginArchiveHash requires the plugin to be loaded; call it after.
+      if (hash) this.setPluginArchiveHash(pluginId, hash);
+      await this.activatePlugin(pluginId);
+
+      return { status: "installed", pluginId };
+    } finally {
+      if (tmpDir) {
+        await fs.rm(tmpDir, { recursive: true, force: true }).catch((err) => {
+          console.warn(`[PluginService] Failed to clean up install temp dir ${tmpDir}:`, err);
+        });
+      }
+      if (release) {
+        await release().catch((err) => {
+          console.warn("[PluginService] Failed to release install lock:", err);
+        });
+      }
+    }
+  }
+
+  /**
+   * Atomic directory swap for {@link installPlugin}. Returns `null` on success
+   * or a structured {@link PluginInstallError} on failure. When `existing` is
+   * true the current `finalDir` is parked aside first and restored if the new
+   * directory can't be moved in.
+   *
+   * `swap_unrecoverable` is reserved for the case where BOTH the move-in AND
+   * the restore fail — the plugin directory may be missing and the message
+   * says so explicitly rather than swallowing the inconsistency.
+   */
+  private async _swapPluginDir(
+    tmpDir: string,
+    finalDir: string,
+    existing: boolean
+  ): Promise<PluginInstallError | null> {
+    const parked = existing ? `${finalDir}.old-${randomUUID()}` : null;
+
+    if (parked) {
+      try {
+        await resilientRename(finalDir, parked);
+      } catch (err) {
+        return {
+          code: "swap_failed",
+          message: `Couldn't move the existing plugin aside: ${(err as Error).message}`,
+        };
+      }
+    }
+
+    try {
+      await resilientRename(tmpDir, finalDir);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const detail =
+        code === "EXDEV"
+          ? `cross-device rename not supported — the staging dir is on a different filesystem than ${finalDir}`
+          : (err as Error).message;
+      if (parked) {
+        try {
+          await resilientRename(parked, finalDir);
+        } catch (restoreErr) {
+          return {
+            code: "swap_unrecoverable",
+            message: `Install failed (${detail}) and the previous plugin couldn't be restored (${(restoreErr as Error).message}). The directory at ${finalDir} may be missing — reinstall to recover.`,
+          };
+        }
+      }
+      return {
+        code: "swap_failed",
+        message: `Couldn't move the new plugin into place: ${detail}`,
+      };
+    }
+
+    // New dir is in place — remove the parked old copy best-effort. A failure
+    // here only leaks a `.old-*` dir (skipped by the load scan), never the
+    // installed plugin.
+    if (parked) {
+      await fs.rm(parked, { recursive: true, force: true }).catch((err) => {
+        console.warn(`[PluginService] Failed to remove parked old plugin dir ${parked}:`, err);
+      });
+    }
+    return null;
   }
 
   unloadPlugin(pluginId: string): void {
