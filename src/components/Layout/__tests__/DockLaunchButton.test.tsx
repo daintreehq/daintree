@@ -132,6 +132,38 @@ describe("DockLaunchButton", () => {
     expect(labels).toEqual(["Launch agent", "Launch panel", "Launch recipe"]);
   });
 
+  it("splits agents into Pinned/Other groups when pinnedCount is a strict subset", () => {
+    const { getAllByTestId } = render(
+      <DockLaunchButton
+        agents={AGENTS}
+        pinnedCount={1}
+        hasDevPreview={false}
+        onLaunchAgent={vi.fn()}
+        activeWorktreeId={null}
+        cwd="/tmp"
+      />
+    );
+
+    const labels = getAllByTestId("dock-launcher-label").map((el) => el.textContent);
+    expect(labels).toEqual(["Pinned", "Other", "Launch panel"]);
+  });
+
+  it("keeps a flat Launch agent group when all agents are pinned", () => {
+    const { getAllByTestId } = render(
+      <DockLaunchButton
+        agents={AGENTS}
+        pinnedCount={AGENTS.length}
+        hasDevPreview={false}
+        onLaunchAgent={vi.fn()}
+        activeWorktreeId={null}
+        cwd="/tmp"
+      />
+    );
+
+    const labels = getAllByTestId("dock-launcher-label").map((el) => el.textContent);
+    expect(labels).toEqual(["Launch agent", "Launch panel"]);
+  });
+
   it("invokes onLaunchAgent for a launchable agent", () => {
     const onLaunchAgent = vi.fn();
     const { getByText } = render(

@@ -25,6 +25,7 @@ const DROPDOWN_COMPONENTS: DockLaunchMenuComponents = {
 
 interface DockLaunchButtonProps {
   agents: ReadonlyArray<DockLaunchAgent>;
+  pinnedCount?: number;
   hasDevPreview: boolean;
   onLaunchAgent: (agentId: string) => void;
   activeWorktreeId: string | null;
@@ -34,6 +35,7 @@ interface DockLaunchButtonProps {
 
 export function DockLaunchButton({
   agents,
+  pinnedCount,
   hasDevPreview,
   onLaunchAgent,
   activeWorktreeId,
@@ -102,6 +104,7 @@ export function DockLaunchButton({
         <DockLaunchMenuItems
           components={DROPDOWN_COMPONENTS}
           agents={agents}
+          pinnedCount={pinnedCount}
           hasDevPreview={hasDevPreview}
           activeWorktreeId={activeWorktreeId}
           cwd={cwd}
