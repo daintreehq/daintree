@@ -122,11 +122,11 @@ async function handleInstallFromUrl(url: string): Promise<PluginInstallResult> {
   return { status: "not-implemented" };
 }
 
-async function handleUninstall(pluginId: string): Promise<void> {
+async function handleUninstall(pluginId: string, deleteSettings?: boolean): Promise<void> {
   if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
     throw new Error("uninstall: pluginId must be a non-empty string");
   }
-  pluginService.uninstallPlugin(pluginId);
+  await pluginService.uninstallPlugin(pluginId, deleteSettings);
 }
 
 async function handleCheckForUpdate(pluginId: string): Promise<PluginCheckUpdateResult> {

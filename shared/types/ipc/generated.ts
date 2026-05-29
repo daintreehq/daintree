@@ -704,7 +704,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];
   };
   "plugin:uninstall": {
-    args: [pluginId: string];
+    args: [pluginId: string, deleteSettings?: boolean | undefined];
     result: void;
   };
   "plugin:validate-action-ids": {

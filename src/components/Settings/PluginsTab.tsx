@@ -151,13 +151,13 @@ function PluginRow({ plugin, toggling, onToggle, onUninstall }: PluginRowProps) 
                   variant="ghost"
                   size="icon-sm"
                   onClick={onUninstall}
-                  aria-label={`Delete ${label}`}
+                  aria-label={`Uninstall ${label}`}
                   className="text-daintree-text/50 hover:text-status-error"
                 >
                   <Trash2 />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Delete plugin</TooltipContent>
+              <TooltipContent side="bottom">Uninstall plugin</TooltipContent>
             </Tooltip>
           )}
 
@@ -216,7 +216,21 @@ export function PluginsTab() {
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [refreshKey, setRefreshKey] = useState(0);
   const [pendingUninstall, setPendingUninstall] = useState<LoadedPluginInfo | null>(null);
+  // Defaults off so stored secrets survive a reinstall — the user opts in to
+  // wiping them. Reset whenever a new uninstall is armed so a prior tick can't
+  // carry over to the next plugin.
+  const [deleteSettings, setDeleteSettings] = useState(false);
   const [isUninstalling, setIsUninstalling] = useState(false);
+
+  const armUninstall = (plugin: LoadedPluginInfo) => {
+    setDeleteSettings(false);
+    setPendingUninstall(plugin);
+  };
+
+  const closeUninstall = () => {
+    setPendingUninstall(null);
+    setDeleteSettings(false);
+  };
   const [showUrlDialog, setShowUrlDialog] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [isInstalling, setIsInstalling] = useState(false);
@@ -357,8 +371,8 @@ export function PluginsTab() {
     setIsUninstalling(true);
     try {
       setError(null);
-      await window.electron.plugin.uninstall(id);
-      setPendingUninstall(null);
+      await window.electron.plugin.uninstall(id, deleteSettings);
+      closeUninstall();
       // Re-pull the authoritative list rather than splicing the closure (#5087).
       setRefreshKey((k) => k + 1);
     } catch (err) {
@@ -429,7 +443,7 @@ export function PluginsTab() {
               plugin={plugin}
               toggling={pending.has(plugin.manifest.name)}
               onToggle={() => void handleToggle(plugin)}
-              onUninstall={() => setPendingUninstall(plugin)}
+              onUninstall={() => armUninstall(plugin)}
             />
           ))}
         </div>
@@ -444,15 +458,26 @@ export function PluginsTab() {
 
       <ConfirmDialog
         isOpen={pendingUninstall !== null}
-        onClose={isUninstalling ? undefined : () => setPendingUninstall(null)}
-        title={pendingUninstall ? `Delete '${pluginLabel(pendingUninstall)}'?` : ""}
-        description="Removes the plugin and unloads its panels, commands, and integrations. Its stored settings stay on disk until cleared separately."
-        confirmLabel="Delete plugin"
+        onClose={isUninstalling ? undefined : closeUninstall}
+        title={pendingUninstall ? `Uninstall '${pluginLabel(pendingUninstall)}'?` : ""}
+        description="Removes the plugin and deletes its files, unloading its panels, commands, and integrations. Stored settings and secrets are kept unless you check the box below."
+        confirmLabel="Uninstall plugin"
         cancelLabel="Keep plugin"
         onConfirm={() => void confirmUninstall()}
         isConfirmLoading={isUninstalling}
         variant="destructive"
-      />
+      >
+        <label className="flex items-center gap-2 text-xs text-daintree-text/70 select-none cursor-pointer">
+          <input
+            type="checkbox"
+            checked={deleteSettings}
+            onChange={(e) => setDeleteSettings(e.target.checked)}
+            disabled={isUninstalling}
+            className="size-3.5 rounded-sm border border-daintree-border bg-daintree-bg accent-daintree-text/70"
+          />
+          Also delete stored settings and secrets
+        </label>
+      </ConfirmDialog>
 
       <AppDialog
         isOpen={showUrlDialog}

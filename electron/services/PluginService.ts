@@ -3320,39 +3320,113 @@ export class PluginService {
   }
 
   /**
-   * Remove a non-builtin plugin from the running session and drop its
-   * provenance record. Composes the existing {@link unloadPlugin} (which tears
-   * down all of the plugin's contributions and broadcasts the registry
-   * changes) with deletion of the persisted `plugins.installed` record, then
-   * fires a `plugin:provenance-changed` broadcast so every project view's
-   * Settings tab re-pulls the list.
+   * Remove a non-builtin plugin from the running session, delete its on-disk
+   * install, and drop its provenance record. Composes the existing
+   * {@link unloadPlugin} (which tears down all of the plugin's contributions and
+   * broadcasts the registry changes) with deletion of the plugin directory,
+   * optional deletion of its user-scope settings/secrets, and removal of the
+   * persisted `plugins.installed` record, then fires a
+   * `plugin:provenance-changed` broadcast so every project view's Settings tab
+   * re-pulls the list.
    *
-   * This is the F26-precursor: it unloads and forgets the plugin but does NOT
-   * delete the on-disk archive or its stored settings/secrets — that
-   * filesystem cleanup (and the secret-preservation prompt) is owned by F26.
-   * Built-ins have no installed record and cannot be uninstalled; calling this
-   * for one is a no-op beyond the unload.
+   * Holds the same `install.lock` {@link installPlugin} uses, so an install and
+   * an uninstall of the same plugin can't race on the directory. A throwing
+   * disposer never blocks the on-disk deletion — a broken plugin must still be
+   * uninstallable. `deleteSettings` defaults to `false` so stored secrets
+   * survive a reinstall; project-scope settings (per-repo `.daintree/`, tracked
+   * git artifacts) are never touched. Built-ins are app-bundled with no
+   * installed record — their directory is never deleted.
    */
-  uninstallPlugin(pluginId: string): void {
+  async uninstallPlugin(pluginId: string, deleteSettings = false): Promise<void> {
     if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
       throw new Error("uninstallPlugin: pluginId must be a non-empty string");
     }
-    // A plugin is either running (`this.plugins`) or skipped-at-launch because
-    // it was disabled (`this.disabledPlugins`). `unloadPlugin` only touches the
-    // running set, so a disabled plugin must also be dropped from the skipped
-    // map — otherwise `listPlugins()` keeps returning it and the row survives a
-    // "successful" uninstall.
-    this.unloadPlugin(pluginId);
-    this.disabledPlugins.delete(pluginId);
-    // Clear it from the persisted `plugins.disabled` intent list so a disabled
-    // plugin can't resurrect itself on the next launch's disabled-dir re-scan.
-    this.setEnabled(pluginId, true);
-    const records = this.getInstalledRecords();
-    if (pluginId in records) {
-      delete records[pluginId];
-      this.writeInstalledRecords(records);
+
+    // Capture the record (running or skipped-at-launch) before unload clears it
+    // so we know whether the on-disk dir is ours to delete — built-ins live in
+    // the app bundle and must survive.
+    const record = this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId);
+    const isBuiltin = record?.isBuiltin ?? false;
+
+    await fs.mkdir(this.pluginsRoot, { recursive: true });
+
+    const lockPath = path.join(this.pluginsRoot, "install.lock");
+    // Definitely assigned below or the catch throws, so `finally` can release
+    // unconditionally without a null guard.
+    let release: () => Promise<void>;
+    try {
+      release = await properLockfile.lock(lockPath, {
+        stale: 20_000,
+        update: 10_000,
+        realpath: false,
+        retries: { retries: 5, minTimeout: 100, maxTimeout: 1_000 },
+        onCompromised: (err) => {
+          console.error("[PluginService] install.lock compromised during uninstall:", err);
+        },
+      });
+    } catch (err) {
+      throw new Error(`Couldn't acquire the plugin install lock: ${(err as Error).message}`);
     }
-    this.broadcastProvenanceChanged();
+
+    try {
+      // A plugin is either running (`this.plugins`) or skipped-at-launch because
+      // it was disabled (`this.disabledPlugins`). `unloadPlugin` only touches the
+      // running set, so a disabled plugin must also be dropped from the skipped
+      // map below. The disposer cascade already swallows per-step errors, but
+      // guard the whole call too: a broken plugin must still be uninstallable.
+      try {
+        this.unloadPlugin(pluginId);
+      } catch (err) {
+        console.error(`[PluginService] unloadPlugin during uninstall of "${pluginId}" threw:`, err);
+      }
+
+      // `unloadPlugin` fires the MCP shutdown fire-and-forget; await it
+      // explicitly here so subprocess handles are released before `fs.rm`
+      // (idempotent — re-shutting-down an already-stopped server is a no-op).
+      // The await covers the signal path only; the Windows tree-kill grace
+      // window is ridden out by the `fs.rm` retry options below.
+      try {
+        await getPluginMcpSupervisor().shutdown({ pluginId });
+      } catch (err) {
+        console.error(`[PluginService] MCP shutdown during uninstall of "${pluginId}" threw:`, err);
+      }
+
+      // Delete the on-disk install. The dir is deterministic — `installPlugin`
+      // always materializes to `<pluginsRoot>/<pluginId>` — so this also reaps
+      // an orphaned record whose plugin failed to load. `force` makes a missing
+      // dir a no-op; the retry options ride out Windows EBUSY/EPERM from handles
+      // still closing during the shutdown grace window. Skip built-ins.
+      if (!isBuiltin) {
+        const pluginDir = path.join(this.pluginsRoot, pluginId);
+        await fs.rm(pluginDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+
+      // Optionally delete user-scope stored settings/secrets. `force` is a safe
+      // no-op when the file doesn't exist. The in-memory store was already
+      // dropped by `unloadPlugin`'s clearPluginSettingsState step.
+      if (deleteSettings) {
+        const settingsFile = path.join(this.settingsRoot(), `${pluginId}.json`);
+        await fs.rm(settingsFile, { force: true });
+      }
+
+      // Bookkeeping runs only after the filesystem deletion succeeds — if `fs.rm`
+      // throws, the record stays so the row remains and the user can retry,
+      // rather than seeing a "gone" plugin whose files are still on disk.
+      this.disabledPlugins.delete(pluginId);
+      // Clear it from the persisted `plugins.disabled` intent list so a disabled
+      // plugin can't resurrect itself on the next launch's disabled-dir re-scan.
+      this.setEnabled(pluginId, true);
+      const records = this.getInstalledRecords();
+      if (pluginId in records) {
+        delete records[pluginId];
+        this.writeInstalledRecords(records);
+      }
+      this.broadcastProvenanceChanged();
+    } finally {
+      await release().catch((err) =>
+        console.warn("[PluginService] Failed to release install.lock after uninstall:", err)
+      );
+    }
   }
 
   private broadcastProvenanceChanged(): void {

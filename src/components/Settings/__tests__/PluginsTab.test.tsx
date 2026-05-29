@@ -228,23 +228,43 @@ describe("PluginsTab", () => {
     ]);
     renderTab();
     await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-    expect(screen.queryByRole("button", { name: "Delete Acme Demo" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Uninstall Acme Demo" })).toBeNull();
     expect(screen.getByText("Built-in")).toBeTruthy();
   });
 
-  it("opens a confirm dialog and uninstalls, then re-fetches the list", async () => {
+  it("opens a confirm dialog and uninstalls (settings preserved by default), then re-fetches the list", async () => {
     const listMock = window.electron.plugin.list as ReturnType<typeof vi.fn>;
     listMock.mockResolvedValueOnce([makePlugin()]).mockResolvedValueOnce([]);
     renderTab();
     await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete Acme Demo" }));
-    await waitFor(() => expect(screen.getByText("Delete 'Acme Demo'?")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall Acme Demo" }));
+    await waitFor(() => expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy());
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete plugin" }));
-    await waitFor(() => expect(window.electron.plugin.uninstall).toHaveBeenCalledWith("acme.demo"));
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
+    await waitFor(() =>
+      expect(window.electron.plugin.uninstall).toHaveBeenCalledWith("acme.demo", false)
+    );
     await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
     expect(listMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes deleteSettings=true when the secrets checkbox is checked", async () => {
+    const listMock = window.electron.plugin.list as ReturnType<typeof vi.fn>;
+    listMock.mockResolvedValueOnce([makePlugin()]).mockResolvedValueOnce([]);
+    renderTab();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall Acme Demo" }));
+    await waitFor(() => expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy());
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Also delete stored settings and secrets" })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
+    await waitFor(() =>
+      expect(window.electron.plugin.uninstall).toHaveBeenCalledWith("acme.demo", true)
+    );
   });
 
   it("disables the check-for-update button", async () => {

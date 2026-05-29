@@ -253,7 +253,13 @@ describe("registerPluginHandlers", () => {
   it("PLUGIN_UNINSTALL delegates to pluginService.uninstallPlugin", async () => {
     const handler = getHandler("plugin:uninstall");
     await handler({}, "acme.my-plugin");
-    expect(mockUninstallPlugin).toHaveBeenCalledWith("acme.my-plugin");
+    expect(mockUninstallPlugin).toHaveBeenCalledWith("acme.my-plugin", undefined);
+  });
+
+  it("PLUGIN_UNINSTALL forwards the deleteSettings flag", async () => {
+    const handler = getHandler("plugin:uninstall");
+    await handler({}, "acme.my-plugin", true);
+    expect(mockUninstallPlugin).toHaveBeenCalledWith("acme.my-plugin", true);
   });
 
   it("PLUGIN_UNINSTALL throws on an empty id without unloading anything", async () => {

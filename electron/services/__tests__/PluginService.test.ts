@@ -1801,15 +1801,16 @@ describe("PluginService built-in plugin loading", () => {
   });
 
   describe("uninstallPlugin", () => {
-    it("removes a running plugin from listPlugins and broadcasts provenance-changed", async () => {
+    it("removes a running plugin from listPlugins, deletes its dir, and broadcasts provenance-changed", async () => {
       await writePlugin("acme.live", { name: "acme.live", version: "1.0.0" });
       const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
       await service.initialize();
       expect(service.listPlugins()).toHaveLength(1);
 
-      service.uninstallPlugin("acme.live");
+      await service.uninstallPlugin("acme.live");
 
       expect(service.listPlugins()).toEqual([]);
+      await expect(fs.access(path.join(tmpDir, "acme.live"))).rejects.toThrow();
       expect(broadcastToRendererMock).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ name: "plugin:provenance-changed" })
@@ -1827,30 +1828,70 @@ describe("PluginService built-in plugin loading", () => {
       expect(service.listPlugins()).toHaveLength(1);
       expect(service.listPlugins()[0]).toMatchObject({ disabled: true });
 
-      service.uninstallPlugin("acme.off");
+      await service.uninstallPlugin("acme.off");
 
       expect(service.listPlugins()).toEqual([]);
+      await expect(fs.access(path.join(tmpDir, "acme.off"))).rejects.toThrow();
       const stored = storeMock._state.get("plugins") as { disabled?: string[] };
       expect(stored.disabled ?? []).not.toContain("acme.off");
     });
 
-    it("deletes the installed provenance record", () => {
+    it("deletes the installed provenance record", async () => {
       storeMock._state.set("plugins", {
         disabled: [],
         installed: { "acme.gone": { source: "sideload", installedAt: 1 } },
       });
       const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
 
-      service.uninstallPlugin("acme.gone");
+      await service.uninstallPlugin("acme.gone");
 
       const stored = storeMock._state.get("plugins") as { installed?: Record<string, unknown> };
       expect(stored.installed ?? {}).not.toHaveProperty("acme.gone");
     });
 
-    it("throws on an empty or whitespace-only plugin id", () => {
+    it("preserves the user-scope settings file by default", async () => {
+      const pluginsRoot = path.join(tmpDir, "plugins");
+      await fs.mkdir(path.join(pluginsRoot, "acme.keep"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginsRoot, "acme.keep", "plugin.json"),
+        JSON.stringify({ name: "acme.keep", version: "1.0.0" })
+      );
+      const settingsFile = path.join(tmpDir, "plugin-settings", "acme.keep.json");
+      await fs.mkdir(path.dirname(settingsFile), { recursive: true });
+      await fs.writeFile(settingsFile, JSON.stringify({ token: "secret" }));
+      const service = new PluginService(pluginsRoot, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      await service.uninstallPlugin("acme.keep");
+
+      await expect(fs.access(path.join(pluginsRoot, "acme.keep"))).rejects.toThrow();
+      // Secrets survive a plain uninstall.
+      await expect(fs.access(settingsFile)).resolves.toBeUndefined();
+    });
+
+    it("deletes the user-scope settings file when deleteSettings is true", async () => {
+      const pluginsRoot = path.join(tmpDir, "plugins");
+      await fs.mkdir(path.join(pluginsRoot, "acme.wipe"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginsRoot, "acme.wipe", "plugin.json"),
+        JSON.stringify({ name: "acme.wipe", version: "1.0.0" })
+      );
+      const settingsFile = path.join(tmpDir, "plugin-settings", "acme.wipe.json");
+      await fs.mkdir(path.dirname(settingsFile), { recursive: true });
+      await fs.writeFile(settingsFile, JSON.stringify({ token: "secret" }));
+      const service = new PluginService(pluginsRoot, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      await service.uninstallPlugin("acme.wipe", true);
+
+      await expect(fs.access(path.join(pluginsRoot, "acme.wipe"))).rejects.toThrow();
+      await expect(fs.access(settingsFile)).rejects.toThrow();
+    });
+
+    it("rejects on an empty or whitespace-only plugin id", async () => {
       const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
-      expect(() => service.uninstallPlugin("")).toThrow(/non-empty string/);
-      expect(() => service.uninstallPlugin("   ")).toThrow(/non-empty string/);
+      await expect(service.uninstallPlugin("")).rejects.toThrow(/non-empty string/);
+      await expect(service.uninstallPlugin("   ")).rejects.toThrow(/non-empty string/);
     });
   });
 
