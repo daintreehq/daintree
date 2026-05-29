@@ -403,9 +403,7 @@ describe("registerPluginHandlers", () => {
   });
 
   it("PLUGIN_INSTALL_FROM_URL rejects an unknown MIME with no .dntr suffix", async () => {
-    mockNetFetch.mockResolvedValue(
-      mockResponse({ headers: { "content-type": "text/html" } })
-    );
+    mockNetFetch.mockResolvedValue(mockResponse({ headers: { "content-type": "text/html" } }));
     const handler = getHandler("plugin:install-from-url");
     const result = await handler({}, "https://example.com/oops");
     expect(result).toEqual({

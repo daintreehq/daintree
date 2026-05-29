@@ -202,9 +202,7 @@ async function handleInstallFromUrl(url: string): Promise<PluginInstallResult> {
     if (contentLength) {
       const declared = Number.parseInt(contentLength, 10);
       if (Number.isFinite(declared) && declared > PLUGIN_DOWNLOAD_MAX_BYTES) {
-        return abandon(
-          failed("size_exceeded", "The plugin file is larger than the 30 MB limit.")
-        );
+        return abandon(failed("size_exceeded", "The plugin file is larger than the 30 MB limit."));
       }
     }
 
