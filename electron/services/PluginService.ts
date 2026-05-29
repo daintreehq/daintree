@@ -3320,6 +3320,50 @@ export class PluginService {
   }
 
   /**
+   * Remove a non-builtin plugin from the running session and drop its
+   * provenance record. Composes the existing {@link unloadPlugin} (which tears
+   * down all of the plugin's contributions and broadcasts the registry
+   * changes) with deletion of the persisted `plugins.installed` record, then
+   * fires a `plugin:provenance-changed` broadcast so every project view's
+   * Settings tab re-pulls the list.
+   *
+   * This is the F26-precursor: it unloads and forgets the plugin but does NOT
+   * delete the on-disk archive or its stored settings/secrets — that
+   * filesystem cleanup (and the secret-preservation prompt) is owned by F26.
+   * Built-ins have no installed record and cannot be uninstalled; calling this
+   * for one is a no-op beyond the unload.
+   */
+  uninstallPlugin(pluginId: string): void {
+    if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
+      throw new Error("uninstallPlugin: pluginId must be a non-empty string");
+    }
+    // A plugin is either running (`this.plugins`) or skipped-at-launch because
+    // it was disabled (`this.disabledPlugins`). `unloadPlugin` only touches the
+    // running set, so a disabled plugin must also be dropped from the skipped
+    // map — otherwise `listPlugins()` keeps returning it and the row survives a
+    // "successful" uninstall.
+    this.unloadPlugin(pluginId);
+    this.disabledPlugins.delete(pluginId);
+    // Clear it from the persisted `plugins.disabled` intent list so a disabled
+    // plugin can't resurrect itself on the next launch's disabled-dir re-scan.
+    this.setEnabled(pluginId, true);
+    const records = this.getInstalledRecords();
+    if (pluginId in records) {
+      delete records[pluginId];
+      this.writeInstalledRecords(records);
+    }
+    this.broadcastProvenanceChanged();
+  }
+
+  private broadcastProvenanceChanged(): void {
+    if (this.disposed) return;
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+      name: "plugin:provenance-changed",
+      payload: {},
+    });
+  }
+
+  /**
    * Record the archive hash for a loaded plugin. Called by the installer (F21)
    * after computing SHA-256 over the `.dntr` archive bytes.
    * Rejects non-hex inputs — only lowercase SHA-256 hex digests are valid.

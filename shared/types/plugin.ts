@@ -290,6 +290,18 @@ export interface SettingsApi {
 
 export type PluginInstallSource = "builtin" | "sideload" | "url" | "catalog";
 
+/**
+ * Outcome of a manual update check (`plugin:check-for-update`). Update support
+ * (manual reinstall preserving settings — never auto) is owned by F25 and
+ * hasn't landed, so the handler resolves `{ status: "not-implemented" }` and
+ * the UI keeps the per-row button disabled.
+ */
+export type PluginUpdateCheckStatus = "available" | "up-to-date" | "invalid-id" | "not-implemented";
+
+export interface PluginCheckUpdateResult {
+  status: PluginUpdateCheckStatus;
+}
+
 export interface PluginLoadError {
   message: string;
   stack?: string;
@@ -358,15 +370,25 @@ export interface PluginInstallError {
 }
 
 /**
- * Result of {@link PluginService.installPlugin}. Returned as plain data (never
- * thrown) so structured validation errors survive Electron's structured-clone
- * IPC boundary intact (#3769). The discriminant is `status` rather than `ok`
- * because `ok`/`success` keys collide with the IPC success envelope and are
- * rejected by `ForbidIpcEnvelopeKeys` at the handler boundary.
+ * Result of a plugin install attempt. Returned as plain data (never thrown) so
+ * structured validation errors survive Electron's structured-clone IPC boundary
+ * intact (#3769). The discriminant is `status` rather than `ok` because
+ * `ok`/`success` keys collide with the IPC success envelope and are rejected by
+ * `ForbidIpcEnvelopeKeys` at the handler boundary.
+ *
+ * `installed`/`failed` are the terminal outcomes of {@link
+ * PluginService.installPlugin}. The remaining statuses are produced by the thin
+ * install entry points before the atomic flow runs: `cancelled` is a
+ * user-dismissed file picker (no message to show), `invalid-url` is a malformed
+ * URL, and `not-implemented` is the current state — the install-from-file /
+ * install-from-url flow (F21/F23/F24) hasn't landed yet.
  */
 export type PluginInstallResult =
   | { status: "installed"; pluginId: string }
-  | { status: "failed"; errors: PluginInstallError[] };
+  | { status: "failed"; errors: PluginInstallError[] }
+  | { status: "cancelled" }
+  | { status: "invalid-url" }
+  | { status: "not-implemented" };
 
 /** Optional provenance hints recorded on a successful install. */
 export interface PluginInstallOptions {

@@ -341,6 +341,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["os-dnd:get-state"]["result"]>;
   };
   plugin: {
+    checkForUpdate(
+      ...args: IpcInvokeMap["plugin:check-for-update"]["args"]
+    ): Promise<IpcInvokeMap["plugin:check-for-update"]["result"]>;
     clearAuditLog(
       ...args: IpcInvokeMap["plugin:clear-audit-log"]["args"]
     ): Promise<IpcInvokeMap["plugin:clear-audit-log"]["result"]>;
@@ -374,6 +377,12 @@ export interface GeneratedElectronAPI {
     install(
       ...args: IpcInvokeMap["plugin:install"]["args"]
     ): Promise<IpcInvokeMap["plugin:install"]["result"]>;
+    installFromFile(
+      ...args: IpcInvokeMap["plugin:install-from-file"]["args"]
+    ): Promise<IpcInvokeMap["plugin:install-from-file"]["result"]>;
+    installFromUrl(
+      ...args: IpcInvokeMap["plugin:install-from-url"]["args"]
+    ): Promise<IpcInvokeMap["plugin:install-from-url"]["result"]>;
     keybindings(
       ...args: IpcInvokeMap["plugin:keybindings"]["args"]
     ): Promise<IpcInvokeMap["plugin:keybindings"]["result"]>;
@@ -398,6 +407,9 @@ export interface GeneratedElectronAPI {
     toolbarButtons(
       ...args: IpcInvokeMap["plugin:toolbar-buttons"]["args"]
     ): Promise<IpcInvokeMap["plugin:toolbar-buttons"]["result"]>;
+    uninstall(
+      ...args: IpcInvokeMap["plugin:uninstall"]["args"]
+    ): Promise<IpcInvokeMap["plugin:uninstall"]["result"]>;
     unregisterAction(
       ...args: IpcInvokeMap["plugin:actions-unregister"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-unregister"]["result"]>;

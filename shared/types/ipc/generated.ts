@@ -623,6 +623,10 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, actionId: string];
     result: void;
   };
+  "plugin:check-for-update": {
+    args: [pluginId: string];
+    result: import("../plugin.js").PluginCheckUpdateResult;
+  };
   "plugin:clear-audit-log": {
     args: [];
     result: void;
@@ -659,6 +663,14 @@ export interface GeneratedIpcInvokeMap {
     args: [archivePath: string, opts?: import("../plugin.js").PluginInstallOptions | undefined];
     result: import("../plugin.js").PluginInstallResult;
   };
+  "plugin:install-from-file": {
+    args: [];
+    result: import("../plugin.js").PluginInstallResult;
+  };
+  "plugin:install-from-url": {
+    args: [url: string];
+    result: import("../plugin.js").PluginInstallResult;
+  };
   "plugin:keybindings": {
     args: [];
     result: { pluginId: string; item: import("../plugin.js").KeybindingContribution }[];
@@ -690,6 +702,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin:toolbar-buttons": {
     args: [];
     result: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];
+  };
+  "plugin:uninstall": {
+    args: [pluginId: string];
+    result: void;
   };
   "plugin:validate-action-ids": {
     args: [actionIds: string[]];

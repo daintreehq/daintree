@@ -1,4 +1,4 @@
-import { ipcMain, dialog } from "electron";
+import { ipcMain, dialog, BrowserWindow } from "electron";
 import { writeFile } from "node:fs/promises";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
@@ -44,7 +44,9 @@ import type {
   PluginActionDescriptor,
   PluginInstallOptions,
   PluginInstallResult,
+  PluginCheckUpdateResult,
 } from "../../../shared/types/plugin.js";
+import type { IpcContext } from "../types.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { assertIpcSecurityReady } from "../ipcGuard.js";
 
@@ -74,6 +76,65 @@ async function handleInstall(
     };
   }
   return pluginService.installPlugin(archivePath, opts);
+}
+
+// Install-from-file / install-from-URL are thin callers: this tab owns the
+// entry point (native picker, URL dialog) but the atomic install flow
+// (temp-extract / validate / swap / rollback) is owned by F21/F23/F24 and is
+// not yet landed. The handlers capture the user's input and resolve a
+// structured `not-implemented` status so the renderer can surface a clear "not
+// available yet" notice; the `installed` branch and the real PluginService
+// install call land with those features.
+async function handleInstallFromFile(ctx: IpcContext): Promise<PluginInstallResult> {
+  const win = ctx.senderWindow ?? BrowserWindow.getFocusedWindow();
+  const dialogOptions = {
+    title: "Install plugin",
+    filters: [{ name: "Daintree plugins", extensions: ["dntr"] }],
+    properties: ["openFile" as const],
+  };
+  const result = win
+    ? await dialog.showOpenDialog(win, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+  if (result.canceled || result.filePaths.length === 0) {
+    return { status: "cancelled" };
+  }
+  // F21/F23 will route result.filePaths[0] through the install flow here.
+  return { status: "not-implemented" };
+}
+
+async function handleInstallFromUrl(url: string): Promise<PluginInstallResult> {
+  if (typeof url !== "string" || url.trim().length === 0) {
+    return { status: "invalid-url" };
+  }
+  // Cheap well-formedness + scheme gate so obvious garbage ("not a url",
+  // "javascript:…") surfaces the invalid-url state immediately. The bounded
+  // download path (size / MIME / timeout / redirect) is F24's job.
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return { status: "invalid-url" };
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return { status: "invalid-url" };
+  }
+  // F24 will validate and route the URL through the bounded install flow here.
+  return { status: "not-implemented" };
+}
+
+async function handleUninstall(pluginId: string): Promise<void> {
+  if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
+    throw new Error("uninstall: pluginId must be a non-empty string");
+  }
+  pluginService.uninstallPlugin(pluginId);
+}
+
+async function handleCheckForUpdate(pluginId: string): Promise<PluginCheckUpdateResult> {
+  if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
+    return { status: "invalid-id" };
+  }
+  // F25 owns the manual update check (reinstall preserving settings).
+  return { status: "not-implemented" };
 }
 
 async function handleToolbarButtons(): Promise<ToolbarButtonConfig[]> {
@@ -416,6 +477,12 @@ export const pluginNamespace = defineIpcNamespace({
     list: op(PLUGIN_METHOD_CHANNELS.list, handleList),
     install: op(PLUGIN_METHOD_CHANNELS.install, handleInstall),
     setEnabled: op(PLUGIN_METHOD_CHANNELS.setEnabled, handleSetEnabled),
+    installFromFile: op(PLUGIN_METHOD_CHANNELS.installFromFile, handleInstallFromFile, {
+      withContext: true,
+    }),
+    installFromUrl: op(PLUGIN_METHOD_CHANNELS.installFromUrl, handleInstallFromUrl),
+    uninstall: op(PLUGIN_METHOD_CHANNELS.uninstall, handleUninstall),
+    checkForUpdate: op(PLUGIN_METHOD_CHANNELS.checkForUpdate, handleCheckForUpdate),
     toolbarButtons: op(PLUGIN_METHOD_CHANNELS.toolbarButtons, handleToolbarButtons),
     menuItems: op(PLUGIN_METHOD_CHANNELS.menuItems, handleMenuItems),
     keybindings: op(PLUGIN_METHOD_CHANNELS.keybindings, handleKeybindings),

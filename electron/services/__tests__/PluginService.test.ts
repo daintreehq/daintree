@@ -1800,6 +1800,60 @@ describe("PluginService built-in plugin loading", () => {
     });
   });
 
+  describe("uninstallPlugin", () => {
+    it("removes a running plugin from listPlugins and broadcasts provenance-changed", async () => {
+      await writePlugin("acme.live", { name: "acme.live", version: "1.0.0" });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+      expect(service.listPlugins()).toHaveLength(1);
+
+      service.uninstallPlugin("acme.live");
+
+      expect(service.listPlugins()).toEqual([]);
+      expect(broadcastToRendererMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ name: "plugin:provenance-changed" })
+      );
+    });
+
+    it("removes a launch-disabled plugin and clears it from plugins.disabled (no zombie row)", async () => {
+      // Regression: a disabled plugin lives in `disabledPlugins`, not `plugins`,
+      // so unloadPlugin alone leaves the row in listPlugins and resurrects it on
+      // the next launch.
+      storeMock._state.set("plugins", { disabled: ["acme.off"] });
+      await writePlugin("acme.off", { name: "acme.off", version: "1.0.0" });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+      expect(service.listPlugins()).toHaveLength(1);
+      expect(service.listPlugins()[0]).toMatchObject({ disabled: true });
+
+      service.uninstallPlugin("acme.off");
+
+      expect(service.listPlugins()).toEqual([]);
+      const stored = storeMock._state.get("plugins") as { disabled?: string[] };
+      expect(stored.disabled ?? []).not.toContain("acme.off");
+    });
+
+    it("deletes the installed provenance record", () => {
+      storeMock._state.set("plugins", {
+        disabled: [],
+        installed: { "acme.gone": { source: "sideload", installedAt: 1 } },
+      });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+
+      service.uninstallPlugin("acme.gone");
+
+      const stored = storeMock._state.get("plugins") as { installed?: Record<string, unknown> };
+      expect(stored.installed ?? {}).not.toHaveProperty("acme.gone");
+    });
+
+    it("throws on an empty or whitespace-only plugin id", () => {
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      expect(() => service.uninstallPlugin("")).toThrow(/non-empty string/);
+      expect(() => service.uninstallPlugin("   ")).toThrow(/non-empty string/);
+    });
+  });
+
   it("emits toast when a user plugin uses the daintree.* namespace", async () => {
     const { broadcastToRenderer } = await import("../../ipc/utils.js");
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
