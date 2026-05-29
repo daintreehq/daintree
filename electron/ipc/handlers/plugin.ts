@@ -46,6 +46,8 @@ import type {
   PluginInstallOptions,
   PluginInstallResult,
   PluginCheckUpdateResult,
+  PluginSettingsScope,
+  PluginSettingsUiValues,
 } from "../../../shared/types/plugin.js";
 import type { IpcContext } from "../types.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
@@ -483,6 +485,44 @@ async function handleGetDiagnosticsSnapshot(): Promise<PluginDiagnosticsSnapshot
   return pluginService.getDiagnosticsSnapshot();
 }
 
+// ── Plugin settings UI bridge (#9301) ─────────────────────────────────────
+
+async function handleSettingsGetValues(
+  pluginId: string,
+  scope: PluginSettingsScope,
+  projectId: string | null
+): Promise<PluginSettingsUiValues> {
+  return pluginService.getSettingValuesForUi(pluginId, scope, projectId);
+}
+
+async function handleSettingsSetValue(
+  pluginId: string,
+  key: string,
+  value: unknown,
+  scope: PluginSettingsScope,
+  projectId: string | null
+): Promise<void> {
+  await pluginService.setSettingValueFromUi(pluginId, key, value, scope, projectId);
+}
+
+async function handleSettingsDeleteValue(
+  pluginId: string,
+  key: string,
+  scope: PluginSettingsScope,
+  projectId: string | null
+): Promise<void> {
+  await pluginService.deleteSettingValueFromUi(pluginId, key, scope, projectId);
+}
+
+async function handleSettingsRevealSecret(
+  pluginId: string,
+  key: string,
+  scope: PluginSettingsScope,
+  projectId: string | null
+): Promise<string | null> {
+  return pluginService.revealSecretSettingForUi(pluginId, key, scope, projectId);
+}
+
 export const pluginNamespace = defineIpcNamespace({
   name: "plugin",
   ops: {
@@ -516,6 +556,10 @@ export const pluginNamespace = defineIpcNamespace({
       PLUGIN_METHOD_CHANNELS.getDiagnosticsSnapshot,
       handleGetDiagnosticsSnapshot
     ),
+    getSettingValues: op(PLUGIN_METHOD_CHANNELS.getSettingValues, handleSettingsGetValues),
+    setSettingValue: op(PLUGIN_METHOD_CHANNELS.setSettingValue, handleSettingsSetValue),
+    deleteSettingValue: op(PLUGIN_METHOD_CHANNELS.deleteSettingValue, handleSettingsDeleteValue),
+    revealSecretSetting: op(PLUGIN_METHOD_CHANNELS.revealSecretSetting, handleSettingsRevealSecret),
   },
 });
 

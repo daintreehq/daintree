@@ -350,6 +350,9 @@ export interface GeneratedElectronAPI {
     contextMenuItems(
       ...args: IpcInvokeMap["plugin:context-menu-items"]["args"]
     ): Promise<IpcInvokeMap["plugin:context-menu-items"]["result"]>;
+    deleteSettingValue(
+      ...args: IpcInvokeMap["plugin:settings-delete-value"]["args"]
+    ): Promise<IpcInvokeMap["plugin:settings-delete-value"]["result"]>;
     exportAuditLog(
       ...args: IpcInvokeMap["plugin:export-audit-log"]["args"]
     ): Promise<IpcInvokeMap["plugin:export-audit-log"]["result"]>;
@@ -374,6 +377,9 @@ export interface GeneratedElectronAPI {
     getPanelKinds(
       ...args: IpcInvokeMap["plugin:panel-kinds-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:panel-kinds-get"]["result"]>;
+    getSettingValues(
+      ...args: IpcInvokeMap["plugin:settings-get-values"]["args"]
+    ): Promise<IpcInvokeMap["plugin:settings-get-values"]["result"]>;
     install(
       ...args: IpcInvokeMap["plugin:install"]["args"]
     ): Promise<IpcInvokeMap["plugin:install"]["result"]>;
@@ -395,6 +401,9 @@ export interface GeneratedElectronAPI {
     registerAction(
       ...args: IpcInvokeMap["plugin:actions-register"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-register"]["result"]>;
+    revealSecretSetting(
+      ...args: IpcInvokeMap["plugin:settings-reveal-secret"]["args"]
+    ): Promise<IpcInvokeMap["plugin:settings-reveal-secret"]["result"]>;
     setAuditEnabled(
       ...args: IpcInvokeMap["plugin:set-audit-enabled"]["args"]
     ): Promise<IpcInvokeMap["plugin:set-audit-enabled"]["result"]>;
@@ -404,6 +413,9 @@ export interface GeneratedElectronAPI {
     setEnabled(
       ...args: IpcInvokeMap["plugin:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["plugin:set-enabled"]["result"]>;
+    setSettingValue(
+      ...args: IpcInvokeMap["plugin:settings-set-value"]["args"]
+    ): Promise<IpcInvokeMap["plugin:settings-set-value"]["result"]>;
     toolbarButtons(
       ...args: IpcInvokeMap["plugin:toolbar-buttons"]["args"]
     ): Promise<IpcInvokeMap["plugin:toolbar-buttons"]["result"]>;

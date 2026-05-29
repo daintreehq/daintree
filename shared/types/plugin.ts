@@ -228,26 +228,62 @@ export interface PluginManifest {
 }
 
 /**
- * Declaration for a single plugin setting. Reserved for `contributes.settings`
- * (F29), which owns the canonical schema (types, defaults, UI metadata). The
- * shape here is intentionally permissive — only `id` is load-bearing today, used
- * by {@link SettingsApi.set} key validation.
+ * Field control kind for a {@link SettingDefinition}. Drives which input the
+ * generated settings form renders (#9301):
+ * - `string` → single-line text input (default when `type` is omitted)
+ * - `number` → numeric input, optionally range-bounded by `min`/`max`
+ * - `boolean` → toggle switch
+ * - `enum` → select, choices from `options`
+ * - `json` → multi-line textarea, validated as JSON on blur
+ * - `secret` → password input, never rendered with its stored value until the
+ *   user explicitly reveals it
+ */
+export type SettingFieldType = "string" | "number" | "boolean" | "enum" | "json" | "secret";
+
+/**
+ * Declaration for a single plugin setting under `contributes.settings` (#9301).
+ * Rendered as a generated form field in Preferences → Plugins and persisted via
+ * {@link SettingsApi}. `id` is the storage key; `type` selects the control. The
+ * manifest schema coerces the legacy `secret: true` flag to `type: "secret"`, so
+ * consumers only need to switch on `type`.
  */
 export interface SettingDefinition {
   id: string;
-  type?: "string" | "number" | "boolean" | "object";
+  type?: SettingFieldType;
   label?: string;
   description?: string;
   default?: unknown;
+  /** Where the value is stored. Defaults to `"user"`. */
+  scope?: PluginSettingsScope;
+  /** Allowed values for `type: "enum"`. Ignored for other types. */
+  options?: string[];
+  /** Inclusive lower bound for `type: "number"`. */
+  min?: number;
+  /** Inclusive upper bound for `type: "number"`. */
+  max?: number;
   /**
-   * UI-only hint (F19): the Settings tab renders a "stored in plaintext"
-   * warning for the field. Does NOT change storage mechanics — values are
-   * always plaintext JSON regardless of this flag (#9167).
+   * Legacy plaintext-secret hint (F19). The manifest schema normalizes
+   * `secret: true` to `type: "secret"`; new manifests should use the type.
+   * Storage is always plaintext JSON regardless of this flag (#9167).
    */
   secret?: boolean;
 }
 
 export type PluginSettingsScope = "user" | "project";
+
+/**
+ * Snapshot of one plugin's stored setting values for a single scope, returned to
+ * the settings UI (#9301). Secret values are deliberately never included —
+ * `secretsSet` only reports *which* secret keys have a stored value so the form
+ * can show a "saved" affordance without exposing the secret. Revealing a secret
+ * requires a separate, explicit `revealSecretSetting` call.
+ */
+export interface PluginSettingsUiValues {
+  /** Stored non-secret values keyed by setting id. A missing key means unset. */
+  values: Record<string, unknown>;
+  /** Ids of secret-typed settings that currently have a stored value. */
+  secretsSet: string[];
+}
 
 /**
  * Persistent, plugin-scoped key/value settings exposed on

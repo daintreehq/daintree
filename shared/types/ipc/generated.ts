@@ -699,6 +699,42 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, enabled: boolean];
     result: void;
   };
+  "plugin:settings-delete-value": {
+    args: [
+      pluginId: string,
+      key: string,
+      scope: import("../plugin.js").PluginSettingsScope,
+      projectId: string | null,
+    ];
+    result: void;
+  };
+  "plugin:settings-get-values": {
+    args: [
+      pluginId: string,
+      scope: import("../plugin.js").PluginSettingsScope,
+      projectId: string | null,
+    ];
+    result: import("../plugin.js").PluginSettingsUiValues;
+  };
+  "plugin:settings-reveal-secret": {
+    args: [
+      pluginId: string,
+      key: string,
+      scope: import("../plugin.js").PluginSettingsScope,
+      projectId: string | null,
+    ];
+    result: string | null;
+  };
+  "plugin:settings-set-value": {
+    args: [
+      pluginId: string,
+      key: string,
+      value: unknown,
+      scope: import("../plugin.js").PluginSettingsScope,
+      projectId: string | null,
+    ];
+    result: void;
+  };
   "plugin:toolbar-buttons": {
     args: [];
     result: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];

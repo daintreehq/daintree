@@ -37,6 +37,7 @@ const windowRefMock = vi.hoisted(() => ({
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProject: vi.fn((): { path: string } | null => null),
+  getProjectById: vi.fn((_id: string): { path: string } | null => null),
 }));
 const storeMock = vi.hoisted(() => {
   const state = new Map<string, unknown>();
