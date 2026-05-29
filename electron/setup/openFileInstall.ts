@@ -1,8 +1,11 @@
 import path from "path";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { appendPendingError } from "../ipc/pendingErrorsStore.js";
+import { getAllAppWebContents } from "../window/webContentsRegistry.js";
 import type { MainProcessToastPayload } from "../../shared/types/ipc/maps.js";
 import type { PluginInstallResult } from "../../shared/types/plugin.js";
+import type { ErrorRecord } from "../../shared/types/ipc/errors.js";
 import type { PluginService } from "../services/PluginService.js";
 import {
   clearPendingOpenFilePaths,
@@ -14,8 +17,42 @@ import {
 // dependency graph into its static import surface (the type is erased).
 type PluginInstaller = Pick<PluginService, "installPlugin">;
 
+function hasLiveRenderer(): boolean {
+  return getAllAppWebContents().some((wc) => !wc.isDestroyed());
+}
+
 function showToast(payload: MainProcessToastPayload): void {
   broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, payload);
+}
+
+/**
+ * Surface an install failure. On a cold launch the queued-path drain can finish
+ * before the first window paints, and on macOS the app stays alive with no
+ * windows — in both cases `broadcastToRenderer` has no targets and the toast is
+ * dropped. So when no renderer is live, persist the failure via
+ * `appendPendingError` (the same durable inbox `globalErrorHandlers` uses for
+ * pre-ready fatals) so it surfaces on the next renderer mount instead of
+ * vanishing. A live renderer gets the immediate toast.
+ */
+function surfaceInstallError(fileName: string, detail: string): void {
+  if (hasLiveRenderer()) {
+    showToast({
+      type: "error",
+      title: "Plugin install failed",
+      message: `Couldn't install "${fileName}": ${detail}`,
+    });
+    return;
+  }
+  const record: ErrorRecord = {
+    id: `plugin-sideload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    timestamp: Date.now(),
+    type: "validation",
+    message: `Couldn't install "${fileName}": ${detail}`,
+    source: "main-process",
+    retryability: "none",
+    dismissed: false,
+  };
+  appendPendingError(record);
 }
 
 /**
@@ -38,30 +75,28 @@ async function installSideloadedPlugin(
       originalUrl: undefined,
     });
   } catch (err) {
-    showToast({
-      type: "error",
-      title: "Plugin install failed",
-      message: `Couldn't install "${fileName}": ${
-        err instanceof Error ? err.message : "an unexpected error occurred."
-      }`,
-    });
+    surfaceInstallError(
+      fileName,
+      err instanceof Error ? err.message : "an unexpected error occurred."
+    );
     return;
   }
 
   if (result.status === "installed") {
-    showToast({
-      type: "success",
-      title: "Plugin installed",
-      message: `Installed "${fileName}".`,
-    });
+    // Success feedback is best-effort: if no window is open (cold launch still
+    // painting, or all windows closed on macOS), skip the toast — the plugin
+    // list reflects the install when a window next mounts. Only failures get
+    // the durable `appendPendingError` fallback, since a lost error is worse
+    // than a lost success.
+    if (hasLiveRenderer()) {
+      showToast({
+        type: "success",
+        title: "Plugin installed",
+        message: `Installed "${fileName}".`,
+      });
+    }
   } else if (result.status === "failed") {
-    showToast({
-      type: "error",
-      title: "Plugin install failed",
-      message: `Couldn't install "${fileName}": ${
-        result.errors[0]?.message ?? "the archive is invalid."
-      }`,
-    });
+    surfaceInstallError(fileName, result.errors[0]?.message ?? "the archive is invalid.");
   }
   // cancelled / invalid-url / not-implemented cannot occur for a direct
   // archive-path install — intentionally ignored.

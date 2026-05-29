@@ -10,8 +10,22 @@ const utilsMock = vi.hoisted(() => ({
   broadcastToRenderer: vi.fn(),
 }));
 
+const pendingErrorsMock = vi.hoisted(() => ({
+  appendPendingError: vi.fn(),
+}));
+
+const registryMock = vi.hoisted(() => ({
+  // Default: one live renderer, so toasts fire. Tests that exercise the
+  // no-renderer fallback override this to return [].
+  getAllAppWebContents: vi.fn<() => { isDestroyed: () => boolean }[]>(() => [
+    { isDestroyed: () => false },
+  ]),
+}));
+
 vi.mock("../environment.js", () => envMock);
 vi.mock("../../ipc/utils.js", () => utilsMock);
+vi.mock("../../ipc/pendingErrorsStore.js", () => pendingErrorsMock);
+vi.mock("../../window/webContentsRegistry.js", () => registryMock);
 vi.mock("../../ipc/channels.js", () => ({
   CHANNELS: { NOTIFICATION_SHOW_TOAST: "notification:show-toast" },
 }));
@@ -31,6 +45,7 @@ describe("activateOpenFileInstaller", () => {
     vi.resetModules();
     vi.clearAllMocks();
     envMock.getPendingOpenFilePaths.mockReturnValue([]);
+    registryMock.getAllAppWebContents.mockReturnValue([{ isDestroyed: () => false }]);
   });
 
   it("sets a consumer and clears the queue even when empty", async () => {
@@ -55,6 +70,43 @@ describe("activateOpenFileInstaller", () => {
     expect(svc.installPlugin).toHaveBeenCalledTimes(2);
     expect(svc.installPlugin).toHaveBeenCalledWith("/a.dntr", SIDELOAD_OPTS);
     expect(svc.installPlugin).toHaveBeenCalledWith("/b.dntr", SIDELOAD_OPTS);
+  });
+
+  it("drains the queue in FIFO order", async () => {
+    envMock.getPendingOpenFilePaths.mockReturnValue(["/a.dntr", "/b.dntr"]);
+    const { activateOpenFileInstaller } = await import("../openFileInstall.js");
+    const svc = makePluginService({ status: "installed", pluginId: "x" });
+
+    await activateOpenFileInstaller(svc);
+
+    expect(svc.installPlugin).toHaveBeenNthCalledWith(1, "/a.dntr", SIDELOAD_OPTS);
+    expect(svc.installPlugin).toHaveBeenNthCalledWith(2, "/b.dntr", SIDELOAD_OPTS);
+  });
+
+  it("drains sequentially — the next install waits for the previous to settle", async () => {
+    envMock.getPendingOpenFilePaths.mockReturnValue(["/a.dntr", "/b.dntr"]);
+    let resolveFirst: (() => void) | null = null;
+    const svc = {
+      installPlugin: vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<InstallResult>((resolve) => {
+              resolveFirst = () => resolve({ status: "installed", pluginId: "x" });
+            })
+        )
+        .mockResolvedValue({ status: "installed", pluginId: "y" }),
+    };
+    const { activateOpenFileInstaller } = await import("../openFileInstall.js");
+
+    const done = activateOpenFileInstaller(svc);
+    // First install is pending; the second must not have started yet.
+    await Promise.resolve();
+    expect(svc.installPlugin).toHaveBeenCalledTimes(1);
+
+    resolveFirst!();
+    await done;
+    expect(svc.installPlugin).toHaveBeenCalledTimes(2);
   });
 
   it("shows a success toast naming the file on a successful install", async () => {
@@ -110,6 +162,39 @@ describe("activateOpenFileInstaller", () => {
         message: expect.stringContaining("disk gone"),
       })
     );
+  });
+
+  it("persists a pending error (no toast) when no renderer is live", async () => {
+    registryMock.getAllAppWebContents.mockReturnValue([]);
+    envMock.getPendingOpenFilePaths.mockReturnValue(["/bad.dntr"]);
+    const { activateOpenFileInstaller } = await import("../openFileInstall.js");
+
+    await activateOpenFileInstaller(
+      makePluginService({
+        status: "failed",
+        errors: [{ code: "archive_invalid", message: "not a valid zip" }],
+      })
+    );
+
+    expect(utilsMock.broadcastToRenderer).not.toHaveBeenCalled();
+    expect(pendingErrorsMock.appendPendingError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "validation",
+        retryability: "none",
+        message: expect.stringContaining("not a valid zip"),
+      })
+    );
+  });
+
+  it("skips the success toast when no renderer is live", async () => {
+    registryMock.getAllAppWebContents.mockReturnValue([]);
+    envMock.getPendingOpenFilePaths.mockReturnValue(["/ok.dntr"]);
+    const { activateOpenFileInstaller } = await import("../openFileInstall.js");
+
+    await activateOpenFileInstaller(makePluginService({ status: "installed", pluginId: "x" }));
+
+    expect(utilsMock.broadcastToRenderer).not.toHaveBeenCalled();
+    expect(pendingErrorsMock.appendPendingError).not.toHaveBeenCalled();
   });
 
   it("routes live consumer events through installPlugin", async () => {

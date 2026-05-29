@@ -743,7 +743,9 @@ if (process.platform === "darwin") {
     event.preventDefault();
     if (_openFileConsumer) {
       _openFileConsumer(filePath);
-    } else {
+    } else if (!_pendingOpenFilePaths.includes(filePath)) {
+      // Dedup: a burst of `open -a Daintree same.dntr` before activation
+      // shouldn't queue N copies and trigger N redundant reinstalls.
       _pendingOpenFilePaths.push(filePath);
     }
   });

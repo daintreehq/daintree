@@ -1070,6 +1070,23 @@ describe("macOS open-file handler", () => {
     expect(env.getPendingOpenFilePaths()).toEqual([]);
   });
 
+  it("calls preventDefault on the consumer path too", async () => {
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    env.setOpenFileConsumer(vi.fn());
+    const event = { preventDefault: vi.fn() };
+    handler(event, "/live.dntr");
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("deduplicates identical queued paths before activation", async () => {
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    handler({ preventDefault: vi.fn() }, "/dup.dntr");
+    handler({ preventDefault: vi.fn() }, "/dup.dntr");
+    expect(env.getPendingOpenFilePaths()).toEqual(["/dup.dntr"]);
+  });
+
   it("getPendingOpenFilePaths returns a copy so caller mutation is isolated", async () => {
     const env = await import("../environment.js");
     const handler = getOpenFileHandler()!;
