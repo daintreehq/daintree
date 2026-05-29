@@ -15,6 +15,7 @@ import {
 import type { PluginDiagnosticsSnapshot } from "../../../shared/types/ipc/pluginDiagnostics.js";
 import { PLUGIN_METHOD_CHANNELS } from "./plugin.preload.js";
 import { pluginService } from "../../services/PluginService.js";
+import { SCOPED_PLUGIN_NAME_PATTERN } from "../../schemas/plugin.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { stableArgsSha256 } from "../../utils/pluginMcpHash.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -122,11 +123,21 @@ async function handleInstallFromUrl(url: string): Promise<PluginInstallResult> {
   return { status: "not-implemented" };
 }
 
-async function handleUninstall(pluginId: string): Promise<void> {
+async function handleUninstall(pluginId: string, deleteSettings?: boolean): Promise<void> {
   if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
     throw new Error("uninstall: pluginId must be a non-empty string");
   }
-  pluginService.uninstallPlugin(pluginId);
+  // Validate against the scoped-name format before the service touches the
+  // filesystem — uninstall feeds pluginId straight into `fs.rm(<root>/<id>)`,
+  // so a compromised renderer passing `"../.."` must be rejected at the trust
+  // boundary, not just defended in depth in the service.
+  if (!SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+    throw new Error("uninstall: pluginId must be a scoped plugin name (publisher.name)");
+  }
+  if (deleteSettings !== undefined && typeof deleteSettings !== "boolean") {
+    throw new Error("uninstall: deleteSettings must be a boolean");
+  }
+  await pluginService.uninstallPlugin(pluginId, deleteSettings);
 }
 
 async function handleCheckForUpdate(pluginId: string): Promise<PluginCheckUpdateResult> {

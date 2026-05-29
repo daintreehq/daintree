@@ -253,12 +253,31 @@ describe("registerPluginHandlers", () => {
   it("PLUGIN_UNINSTALL delegates to pluginService.uninstallPlugin", async () => {
     const handler = getHandler("plugin:uninstall");
     await handler({}, "acme.my-plugin");
-    expect(mockUninstallPlugin).toHaveBeenCalledWith("acme.my-plugin");
+    expect(mockUninstallPlugin).toHaveBeenCalledWith("acme.my-plugin", undefined);
+  });
+
+  it("PLUGIN_UNINSTALL forwards the deleteSettings flag", async () => {
+    const handler = getHandler("plugin:uninstall");
+    await handler({}, "acme.my-plugin", true);
+    expect(mockUninstallPlugin).toHaveBeenCalledWith("acme.my-plugin", true);
   });
 
   it("PLUGIN_UNINSTALL throws on an empty id without unloading anything", async () => {
     const handler = getHandler("plugin:uninstall");
     await expect(handler({}, "")).rejects.toThrow(/non-empty string/);
+    expect(mockUninstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_UNINSTALL rejects a path-traversal id without touching the service", async () => {
+    const handler = getHandler("plugin:uninstall");
+    await expect(handler({}, "../../../etc")).rejects.toThrow(/scoped plugin name/);
+    await expect(handler({}, "no-dot")).rejects.toThrow(/scoped plugin name/);
+    expect(mockUninstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_UNINSTALL rejects a non-boolean deleteSettings", async () => {
+    const handler = getHandler("plugin:uninstall");
+    await expect(handler({}, "acme.my-plugin", "true")).rejects.toThrow(/must be a boolean/);
     expect(mockUninstallPlugin).not.toHaveBeenCalled();
   });
 
