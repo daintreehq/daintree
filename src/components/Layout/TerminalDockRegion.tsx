@@ -31,12 +31,16 @@ export function TerminalDockRegion() {
   return (
     <aside
       ref={dockRegionRef}
-      role="region"
+      // When the dock is empty, drop the landmark role/name so screen readers
+      // don't announce a dead-end "Dock" region. `role="none"` strips the
+      // landmark without affecting descendants — unlike `inert`, the always-
+      // rendered launch button and right-click menu stay interactive so users
+      // can still spawn an agent from an empty dock. Chromium honors
+      // `role="none"` here because tabIndex=-1 is not tab-order-reachable; the
+      // ARIA conflict-resolution clause only ignores the role for tabIndex>=0.
+      role={shouldInertDock ? "none" : "region"}
       tabIndex={-1}
-      aria-label="Dock"
-      // `inert` removes the empty dock from focus / a11y tree so screen
-      // readers don't land on a dead-end landmark when nothing is docked.
-      inert={shouldInertDock || undefined}
+      aria-label={shouldInertDock ? undefined : "Dock"}
       data-macro-focus={isMacroFocused ? "true" : undefined}
       className="outline-hidden data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-border-default data-[macro-focus=true]:ring-inset"
     >
