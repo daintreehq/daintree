@@ -706,6 +706,51 @@ if (isSmokeTest) {
   }
 }
 
+// macOS `open-file` handler (#9293) — fires when the user double-clicks a
+// `.dntr` plugin archive in Finder or picks "Open With → Daintree". This file
+// is imported on the first line of main.ts, so the listener is registered
+// synchronously at module load — before `app.whenReady()` resolves. That
+// timing matters: on a cold launch the OS delivers `open-file` during early
+// startup, and a listener registered later (e.g. inside the whenReady chain)
+// would miss it. Paths that arrive before PluginService exists are queued;
+// `activateOpenFileInstaller` (./openFileInstall.ts) drains the queue and
+// takes over live events once the service is ready. macOS-only — `open-file`
+// never fires on Windows/Linux.
+const _pendingOpenFilePaths: string[] = [];
+let _openFileConsumer: ((filePath: string) => void) | null = null;
+
+/** Snapshot (copy) of paths queued before the installer was activated. */
+export function getPendingOpenFilePaths(): string[] {
+  return [..._pendingOpenFilePaths];
+}
+
+export function clearPendingOpenFilePaths(): void {
+  _pendingOpenFilePaths.length = 0;
+}
+
+/**
+ * Install the live `open-file` consumer. Once set, incoming paths route
+ * directly to it instead of the pre-ready queue. Pass `null` to detach.
+ */
+export function setOpenFileConsumer(consumer: ((filePath: string) => void) | null): void {
+  _openFileConsumer = consumer;
+}
+
+if (process.platform === "darwin") {
+  app.on("open-file", (event, filePath) => {
+    // Required: without preventDefault, Chromium's default handling may try to
+    // navigate the focused window to the file path.
+    event.preventDefault();
+    if (_openFileConsumer) {
+      _openFileConsumer(filePath);
+    } else if (!_pendingOpenFilePaths.includes(filePath)) {
+      // Dedup: a burst of `open -a Daintree same.dntr` before activation
+      // shouldn't queue N copies and trigger N redundant reinstalls.
+      _pendingOpenFilePaths.push(filePath);
+    }
+  });
+}
+
 app.enableSandbox();
 
 // Prevent macOS keychain prompt ("Daintree Safe Storage").
