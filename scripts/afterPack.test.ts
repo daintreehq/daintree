@@ -607,4 +607,33 @@ describe("afterPack", () => {
       expect(consoleSpy).toHaveBeenCalledWith("[afterPack] Complete - native modules validated");
     });
   });
+
+  describe("VAD native dependencies (#9177)", () => {
+    const unpackedBase = "/build/mac/Daintree.app/Contents/Resources/app.asar.unpacked";
+
+    it("verifies onnxruntime-node and avr-vad are unpacked", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("darwin", "/build/mac"));
+
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(unpackedBase, "node_modules/onnxruntime-node")
+      );
+      expect(mockExistsSync).toHaveBeenCalledWith(path.join(unpackedBase, "node_modules/avr-vad"));
+      expect(consoleSpy).toHaveBeenCalledWith(
+        `[afterPack] onnxruntime-node verified: ${path.join(unpackedBase, "node_modules/onnxruntime-node")}`
+      );
+    });
+
+    it("throws when onnxruntime-node is not unpacked", async () => {
+      // Everything present except onnxruntime-node.
+      mockExistsSync.mockImplementation(
+        (p) => !String(p).endsWith(path.join("node_modules", "onnxruntime-node"))
+      );
+
+      await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
+        /onnxruntime-node not found/
+      );
+    });
+  });
 });

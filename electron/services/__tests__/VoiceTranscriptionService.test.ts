@@ -105,6 +105,69 @@ vi.mock("ws", () => {
   return { default: ctor };
 });
 
+// ── Mock the VAD worker (`node:worker_threads`) ──────────────────────────────
+//
+// The OpenAI provider spawns a Silero VAD worker. Replace it with a stub so the
+// coordinator tests can drive speech-end events synchronously instead of
+// loading ONNX or spawning a real thread.
+
+type VadListener = (...args: unknown[]) => void;
+
+class MockVadWorker {
+  terminateCalls = 0;
+  private listeners: Map<string, Set<VadListener>> = new Map();
+
+  constructor(_path: string | URL) {
+    vadWorkers.push(this);
+  }
+
+  on(event: string, listener: VadListener): this {
+    if (!this.listeners.has(event)) this.listeners.set(event, new Set());
+    this.listeners.get(event)!.add(listener);
+    return this;
+  }
+
+  removeAllListeners(event?: string): this {
+    if (event) this.listeners.delete(event);
+    else this.listeners.clear();
+    return this;
+  }
+
+  postMessage(): void {}
+
+  terminate(): Promise<number> {
+    this.terminateCalls++;
+    return Promise.resolve(0);
+  }
+
+  private fire(event: string, ...args: unknown[]): void {
+    const set = this.listeners.get(event);
+    if (!set) return;
+    for (const listener of set) listener(...args);
+  }
+
+  emitSpeechStart(): void {
+    this.fire("message", { type: "speech-start" });
+  }
+  emitSpeechEnd(): void {
+    this.fire("message", { type: "speech-end" });
+  }
+}
+
+const vadWorkers: MockVadWorker[] = [];
+
+vi.mock("node:worker_threads", () => ({
+  Worker: function (this: unknown, scriptPath: string | URL) {
+    return new MockVadWorker(scriptPath);
+  } as unknown as new (scriptPath: string | URL) => MockVadWorker,
+}));
+
+function latestVadWorker(): MockVadWorker {
+  const worker = vadWorkers.at(-1);
+  if (!worker) throw new Error("No MockVadWorker instance created");
+  return worker;
+}
+
 // Import AFTER vi.mock so the providers use the mocked `ws`.
 const { VoiceTranscriptionService } = await import("../VoiceTranscriptionService.js");
 type VoiceTranscriptionServiceInstance = InstanceType<typeof VoiceTranscriptionService>;
@@ -168,6 +231,7 @@ async function bringDeepgramReady(
 describe("VoiceTranscriptionService (coordinator)", () => {
   beforeEach(() => {
     instances.length = 0;
+    vadWorkers.length = 0;
     vi.useFakeTimers();
   });
 
@@ -229,16 +293,21 @@ describe("VoiceTranscriptionService (coordinator)", () => {
 
   // ── Server-VAD-driven segmentation difference ─────────────────────────────
 
-  it("runs the client commit timer for OpenAI but not for Deepgram", async () => {
+  it("commits on client VAD speech-end for OpenAI but not for Deepgram", async () => {
     const openai = new VoiceTranscriptionService();
     const openaiSocket = await bringOpenAiReady(openai);
+    const worker = latestVadWorker();
     openai.sendAudioChunk(new Uint8Array(5_000).buffer);
-    vi.advanceTimersByTime(2_000);
+    // The client-side VAD drives the commit at end-of-speech.
+    worker.emitSpeechStart();
+    worker.emitSpeechEnd();
     expect(
       openaiSocket.textFrames().filter((f) => f.type === "input_audio_buffer.commit")
     ).toHaveLength(1);
     openai.stop();
 
+    // Deepgram has server-side VAD — no client worker is spawned and no client
+    // commit is ever sent.
     const deepgram = new VoiceTranscriptionService();
     const deepgramSocket = await bringDeepgramReady(deepgram);
     deepgram.sendAudioChunk(new Uint8Array(5_000).buffer);

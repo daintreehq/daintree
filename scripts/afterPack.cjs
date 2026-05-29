@@ -111,6 +111,30 @@ function validatePosixReaperExec(binaryPath) {
 }
 
 /**
+ * Validate that the Silero VAD side-chain's native dependencies (#9177) were
+ * unpacked from the ASAR. `onnxruntime-node` ships per-platform native binaries
+ * (.node/.dll/.dylib/.so) that require real filesystem access for the N-API
+ * load, and `avr-vad` reads its bundled silero_vad_v5.onnx via `fs` relative to
+ * its own dir — both must live outside `app.asar`. A missing directory means a
+ * broken `asarUnpack` config: VAD-driven segmentation would fall back to the
+ * backstop timer for every user. A presence check (not a load probe) keeps this
+ * portable across the cross-arch packaging matrix; the app itself degrades
+ * gracefully if the runtime load ever fails.
+ */
+function validateOnnxRuntime(unpackedPath) {
+  for (const mod of ["onnxruntime-node", "avr-vad"]) {
+    const modPath = path.join(unpackedPath, "node_modules", mod);
+    if (!fs.existsSync(modPath)) {
+      throw new Error(
+        `[afterPack] CRITICAL: ${mod} not found at ${modPath}. ` +
+          "Voice VAD segmentation (#9177) will be disabled. Check asarUnpack configuration."
+      );
+    }
+    console.log(`[afterPack] ${mod} verified: ${modPath}`);
+  }
+}
+
+/**
  * Get the path to unpacked resources for the platform
  */
 function getUnpackedResourcesPath(appOutDir, electronPlatformName, appName) {
@@ -304,6 +328,8 @@ exports.default = async function afterPack(context) {
   validateBetterSqliteAbi(betterSqliteNative);
 
   console.log(`[afterPack] better-sqlite3 verified: ${betterSqliteNative}`);
+
+  validateOnnxRuntime(unpackedPath);
 
   console.log("[afterPack] Complete - native modules validated");
 };
