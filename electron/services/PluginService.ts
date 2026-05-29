@@ -2576,6 +2576,13 @@ export class PluginService {
 
     const lockPath = path.join(this.pluginsRoot, "install.lock");
     let release: (() => Promise<void>) | null = null;
+    // Set if proper-lockfile reports the lock was compromised mid-hold (mtime
+    // drift, external deletion). When that happens a second instance could
+    // reclaim the lock, so we abort before the irreversible swap step rather
+    // than risk two installs racing on the same directory. Re-throwing inside
+    // `onCompromised` is unsafe — it fires from a timer and would surface as an
+    // uncaught exception — so we flag and check at the commit point instead.
+    let lockCompromised = false;
     try {
       release = await properLockfile.lock(lockPath, {
         // Sub-30s stale TTL with mid-hold refresh every 10s. A crashed prior
@@ -2588,6 +2595,7 @@ export class PluginService {
         realpath: false,
         retries: { retries: 5, minTimeout: 100, maxTimeout: 1_000 },
         onCompromised: (err) => {
+          lockCompromised = true;
           console.error("[PluginService] install.lock compromised during install:", err);
         },
       });
@@ -2686,6 +2694,13 @@ export class PluginService {
         existing = false;
       }
 
+      // Abort before the irreversible swap if the lock was compromised — a
+      // second instance may now hold it and racing the rename would corrupt
+      // the directory. Nothing has been written to the final location yet.
+      if (lockCompromised) {
+        return fail("lock_failed", "Install lock was compromised mid-install; aborted before swap");
+      }
+
       if (existing) {
         try {
           this.unloadPlugin(pluginId);
@@ -2698,7 +2713,28 @@ export class PluginService {
       }
 
       const swapError = await this._swapPluginDir(tmpDir, finalDir, existing);
-      if (swapError) return { status: "failed", errors: [swapError] };
+      if (swapError) {
+        // On a recoverable upgrade failure the old directory was restored on
+        // disk, but `unloadPlugin` already tore down its runtime state. Re-load
+        // it so the previous version stays live this session (rollback must
+        // restore runtime state too, not just disk). `swap_unrecoverable` means
+        // the directory may be missing — don't attempt a reload there.
+        if (existing && swapError.code === "swap_failed") {
+          try {
+            const restored = await this.loadPlugin(this.pluginsRoot, pluginId, {
+              isBuiltin: false,
+              disabled: this.getDisabledIds(),
+            });
+            if (restored) await this.activatePlugin(pluginId);
+          } catch (reloadErr) {
+            console.error(
+              `[PluginService] Failed to restore "${pluginId}" runtime state after swap rollback:`,
+              reloadErr
+            );
+          }
+        }
+        return { status: "failed", errors: [swapError] };
+      }
       // The temp dir was renamed into place — drop the handle so the `finally`
       // cleanup doesn't delete the freshly installed plugin.
       tmpDir = null;
@@ -2712,10 +2748,34 @@ export class PluginService {
         loadError: null,
       });
 
-      const loaded = await this.loadPlugin(this.pluginsRoot, pluginId, {
-        isBuiltin: false,
-        disabled: this.getDisabledIds(),
-      });
+      // A plugin disabled in Preferences installs to disk but is intentionally
+      // not loaded this session (`loadPlugin` would return null for it). The
+      // files and provenance are committed, so this is a successful install.
+      if (this.getDisabledIds().has(pluginId)) {
+        return { status: "installed", pluginId };
+      }
+
+      let loaded: LoadedPlugin | null;
+      try {
+        loaded = await this.loadPlugin(this.pluginsRoot, pluginId, {
+          isBuiltin: false,
+          disabled: this.getDisabledIds(),
+        });
+      } catch (err) {
+        // A manifest field that passes the schema but throws downstream (e.g. a
+        // malformed `when` expression rejected by the when-clause parser) must
+        // surface as a structured result, not an unhandled rejection. The swap
+        // committed and provenance is persisted; leave the directory in place.
+        return {
+          status: "failed",
+          errors: [
+            {
+              code: "load_failed",
+              message: `Plugin "${pluginId}" installed but failed to load: ${(err as Error).message}. Retry from Settings.`,
+            },
+          ],
+        };
+      }
       if (!loaded) {
         // The swap committed and provenance is persisted, so the directory is
         // intact and consistent — the user can retry activation or reinstall

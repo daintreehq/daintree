@@ -88,9 +88,16 @@ vi.mock("../PluginMcpSupervisor.js", () => ({
     getStderr: vi.fn(() => ({ pluginId: "", serverId: "", lines: [], totalLines: 0 })),
   }),
 }));
+// resilientRename is spied (default = real impl) so the swap-rollback test can
+// force the move-in rename to fail while leaving every other call real.
+vi.mock("../../utils/fs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/fs.js")>();
+  return { ...actual, resilientRename: vi.fn(actual.resilientRename) };
+});
 
 import { PluginService } from "../PluginService.js";
 import { packPluginArchive } from "../PluginArchive.js";
+import { resilientRename } from "../../utils/fs.js";
 
 const storeState = storeMock._state;
 
@@ -312,6 +319,99 @@ describe("installPlugin — upgrade swap", () => {
     expect(JSON.parse(await fs.readFile(settingsFile, "utf-8"))).toEqual({
       apiKey: "secret-token",
     });
+
+    service.dispose();
+  });
+
+  it("restores the old plugin's runtime state when the swap rolls back", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const v1 = await makeArchive({ name: "acme.rollback", version: "1.0.0" }, { "v1.txt": "one" });
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+    expect(service.listPlugins().some((p) => p.manifest.name === "acme.rollback")).toBe(true);
+
+    // Fail the move-in rename (2nd call) so the swap rolls back: 1=park-aside,
+    // 2=move-new-in (throws), 3=restore-parked. Real impl for park + restore.
+    const real = (await vi.importActual<typeof import("../../utils/fs.js")>("../../utils/fs.js"))
+      .resilientRename;
+    vi.mocked(resilientRename)
+      .mockImplementationOnce((s, d) => real(s, d))
+      .mockImplementationOnce(() =>
+        Promise.reject(Object.assign(new Error("disk full"), { code: "ENOSPC" }))
+      )
+      .mockImplementationOnce((s, d) => real(s, d));
+
+    const v2 = await makeArchive({ name: "acme.rollback", version: "2.0.0" }, { "v2.txt": "two" });
+    const result = await service.installPlugin(v2);
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") expect(result.errors[0].code).toBe("swap_failed");
+    // On-disk rollback: the old version is restored, no parked dir leaks.
+    expect(await exists(path.join(pluginsRoot, "acme.rollback", "v1.txt"))).toBe(true);
+    expect(await exists(path.join(pluginsRoot, "acme.rollback", "v2.txt"))).toBe(false);
+    expect((await fs.readdir(pluginsRoot)).filter((e) => e.includes(".old-"))).toHaveLength(0);
+    // Runtime rollback: the old plugin is loaded again, not left torn down.
+    expect(service.listPlugins().some((p) => p.manifest.name === "acme.rollback")).toBe(true);
+
+    service.dispose();
+  });
+});
+
+describe("installPlugin — load + provenance edge cases", () => {
+  it("returns load_failed (not an unhandled rejection) when a manifest field throws downstream", async () => {
+    // A malformed `when` expression passes the schema (any non-empty string)
+    // but throws in the when-clause parser during loadPlugin.
+    const archive = await makeArchive({
+      name: "acme.bad-when",
+      version: "1.0.0",
+      contributes: {
+        menuItems: [
+          { label: "Run", location: "terminal", actionId: "acme.bad-when.run", when: "foo &&" },
+        ],
+      },
+    });
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const result = await service.installPlugin(archive);
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") expect(result.errors[0].code).toBe("load_failed");
+    // The swap committed; the directory is deliberately left in place.
+    expect(await exists(path.join(pluginsRoot, "acme.bad-when", "plugin.json"))).toBe(true);
+
+    service.dispose();
+  });
+
+  it("returns installed (not load_failed) when the plugin id is disabled", async () => {
+    storeState.set("plugins", { disabled: ["acme.disabled-install"] });
+    const archive = await makeArchive({ name: "acme.disabled-install", version: "1.0.0" });
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const result = await service.installPlugin(archive);
+
+    expect(result).toEqual({ status: "installed", pluginId: "acme.disabled-install" });
+    expect(await exists(path.join(pluginsRoot, "acme.disabled-install", "plugin.json"))).toBe(true);
+    const installed = (storeState.get("plugins") as { installed: Record<string, unknown> })
+      .installed["acme.disabled-install"] as { source: string };
+    expect(installed.source).toBe("sideload");
+
+    service.dispose();
+  });
+
+  it("clears archiveHash when an archive install is replaced by a directory install", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const archive = await makeArchive({ name: "acme.rehash", version: "1.0.0" });
+    await service.installPlugin(archive);
+    const afterArchive = (storeState.get("plugins") as { installed: Record<string, unknown> })
+      .installed["acme.rehash"] as { archiveHash: string | null };
+    expect(afterArchive.archiveHash).toMatch(/^[a-f0-9]{64}$/);
+
+    const dir = await makeSourceDir({ name: "acme.rehash", version: "2.0.0" });
+    await service.installPlugin(dir);
+    const afterDir = (storeState.get("plugins") as { installed: Record<string, unknown> })
+      .installed["acme.rehash"] as { archiveHash: string | null };
+    expect(afterDir.archiveHash).toBeNull();
 
     service.dispose();
   });

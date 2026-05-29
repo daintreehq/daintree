@@ -270,6 +270,11 @@ export async function extractPluginArchive(archivePath: string, destDir: string)
 
   return new Promise<void>((resolve, reject) => {
     let settled = false;
+    // Running total of declared uncompressed bytes. yauzl validates each
+    // entry's decompressed length against its `uncompressedSize` header by
+    // default, so this is a trustworthy bound — it guards against a zip-bomb
+    // whose compressed form fits under MAX_DNTR_BYTES but expands to many GB.
+    let totalUncompressed = 0;
     const fail = (err: Error) => {
       if (settled) return;
       settled = true;
@@ -292,6 +297,11 @@ export async function extractPluginArchive(archivePath: string, destDir: string)
       const pathErr = isValidEntryName(name);
       if (pathErr) {
         return fail(new Error(`Invalid entry path "${name}": ${pathErr}`));
+      }
+
+      totalUncompressed += entry.uncompressedSize;
+      if (totalUncompressed > MAX_DNTR_BYTES) {
+        return fail(new Error(`Uncompressed archive size exceeds ${MAX_DNTR_BYTES} byte limit`));
       }
 
       const resolved = path.resolve(root, name);

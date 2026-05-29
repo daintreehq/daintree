@@ -32,32 +32,53 @@ async function createFixture(baseDir: string, files: Record<string, string>): Pr
 // before writing). This is the only way to forge a genuine zip-slip archive to
 // exercise extractPluginArchive's traversal guards — the bundled writer would
 // never emit one.
-function buildRawZip(entries: Array<{ name: string; content: string }>): Buffer {
+// Each entry is either STORE (`content` string) or a real DEFLATE entry
+// (`deflateOf` raw buffer) so a genuine, internally-consistent zip-bomb can be
+// built — large uncompressedSize, tiny compressed payload, valid CRC — that
+// yauzl accepts and only the installer's own size guard rejects.
+type RawEntry = { name: string; content: string } | { name: string; deflateOf: Buffer };
+
+function buildRawZip(entries: RawEntry[]): Buffer {
   const chunks: Buffer[] = [];
   const central: Buffer[] = [];
   let offset = 0;
   for (const e of entries) {
-    const data = Buffer.from(e.content);
     const nameBuf = Buffer.from(e.name, "utf-8");
-    const crc = zlib.crc32(data) >>> 0;
+    let method: number;
+    let stored: Buffer;
+    let uncompressedSize: number;
+    let crc: number;
+    if ("deflateOf" in e) {
+      method = 8;
+      stored = zlib.deflateRawSync(e.deflateOf);
+      uncompressedSize = e.deflateOf.length;
+      crc = zlib.crc32(e.deflateOf) >>> 0;
+    } else {
+      method = 0;
+      stored = Buffer.from(e.content);
+      uncompressedSize = stored.length;
+      crc = zlib.crc32(stored) >>> 0;
+    }
     const lfh = Buffer.alloc(30);
     lfh.writeUInt32LE(0x04034b50, 0);
     lfh.writeUInt16LE(20, 4);
+    lfh.writeUInt16LE(method, 8);
     lfh.writeUInt32LE(crc, 14);
-    lfh.writeUInt32LE(data.length, 18);
-    lfh.writeUInt32LE(data.length, 22);
+    lfh.writeUInt32LE(stored.length, 18);
+    lfh.writeUInt32LE(uncompressedSize, 22);
     lfh.writeUInt16LE(nameBuf.length, 26);
     const localOffset = offset;
-    chunks.push(lfh, nameBuf, data);
-    offset += lfh.length + nameBuf.length + data.length;
+    chunks.push(lfh, nameBuf, stored);
+    offset += lfh.length + nameBuf.length + stored.length;
 
     const cdh = Buffer.alloc(46);
     cdh.writeUInt32LE(0x02014b50, 0);
     cdh.writeUInt16LE(20, 4);
     cdh.writeUInt16LE(20, 6);
+    cdh.writeUInt16LE(method, 10);
     cdh.writeUInt32LE(crc, 16);
-    cdh.writeUInt32LE(data.length, 20);
-    cdh.writeUInt32LE(data.length, 24);
+    cdh.writeUInt32LE(stored.length, 20);
+    cdh.writeUInt32LE(uncompressedSize, 24);
     cdh.writeUInt16LE(nameBuf.length, 28);
     cdh.writeUInt32LE(localOffset, 42);
     central.push(Buffer.concat([cdh, nameBuf]));
@@ -147,6 +168,30 @@ describe("extractPluginArchive", () => {
     await fs.mkdir(dest, { recursive: true });
 
     await expect(extractPluginArchive(archivePath, dest)).rejects.toThrow();
+  });
+
+  it("rejects a zip-bomb whose declared uncompressed size exceeds the limit", async () => {
+    const archivePath = path.join(tmpDir, "bomb.dntr");
+    await fs.writeFile(
+      archivePath,
+      buildRawZip([
+        { name: "plugin.json", content: JSON.stringify(validManifest()) },
+        // 31 MB of zeroes deflates to a few KB — a valid entry yauzl accepts,
+        // whose uncompressedSize trips the installer's cumulative size guard.
+        { name: "huge.bin", deflateOf: Buffer.alloc(31 * 1024 * 1024) },
+      ])
+    );
+    const dest = path.join(tmpDir, "extracted-bomb");
+    await fs.mkdir(dest, { recursive: true });
+
+    await expect(extractPluginArchive(archivePath, dest)).rejects.toThrow(/exceeds/);
+    // Guard trips before the bomb entry is written.
+    expect(
+      await fs
+        .access(path.join(dest, "huge.bin"))
+        .then(() => true)
+        .catch(() => false)
+    ).toBe(false);
   });
 
   it("rejects an oversize archive before extracting", async () => {
