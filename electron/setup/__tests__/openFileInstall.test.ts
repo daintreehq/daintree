@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginInstallResult } from "../../../shared/types/plugin.js";
 
 const envMock = vi.hoisted(() => ({
   getPendingOpenFilePaths: vi.fn<() => string[]>(() => []),
@@ -30,11 +31,7 @@ vi.mock("../../ipc/channels.js", () => ({
   CHANNELS: { NOTIFICATION_SHOW_TOAST: "notification:show-toast" },
 }));
 
-type InstallResult =
-  | { status: "installed"; pluginId: string }
-  | { status: "failed"; errors: { code: string; message: string }[] };
-
-function makePluginService(result: InstallResult) {
+function makePluginService(result: PluginInstallResult) {
   return { installPlugin: vi.fn(async () => result) };
 }
 
@@ -91,7 +88,7 @@ describe("activateOpenFileInstaller", () => {
         .fn()
         .mockImplementationOnce(
           () =>
-            new Promise<InstallResult>((resolve) => {
+            new Promise<PluginInstallResult>((resolve) => {
               resolveFirst = () => resolve({ status: "installed", pluginId: "x" });
             })
         )

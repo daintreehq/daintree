@@ -3,6 +3,7 @@ import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { appendPendingError } from "../ipc/pendingErrorsStore.js";
 import { getAllAppWebContents } from "../window/webContentsRegistry.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { MainProcessToastPayload } from "../../shared/types/ipc/maps.js";
 import type { PluginInstallResult } from "../../shared/types/plugin.js";
 import type { ErrorRecord } from "../../shared/types/ipc/errors.js";
@@ -75,10 +76,7 @@ async function installSideloadedPlugin(
       originalUrl: undefined,
     });
   } catch (err) {
-    surfaceInstallError(
-      fileName,
-      err instanceof Error ? err.message : "an unexpected error occurred."
-    );
+    surfaceInstallError(fileName, formatErrorMessage(err, "an unexpected error occurred"));
     return;
   }
 
