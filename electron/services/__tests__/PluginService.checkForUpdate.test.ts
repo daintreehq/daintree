@@ -151,8 +151,9 @@ async function installUrlPlugin(
   const archive = await makeArchive(manifest);
   const res = await service.installPlugin(archive, { source: "url", originalUrl: url });
   expect(res.status).toBe("installed");
-  const installed = (storeState.get("plugins") as { installed: Record<string, { archiveHash: string }> })
-    .installed[manifest.name];
+  const installed = (
+    storeState.get("plugins") as { installed: Record<string, { archiveHash: string }> }
+  ).installed[manifest.name];
   return installed.archiveHash;
 }
 
@@ -209,7 +210,9 @@ describe("checkForUpdate — guards", () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
     await installUrlPlugin(service, { name: "acme.nohash", version: "1.0.0" });
     // Corrupt the record so archiveHash is null.
-    const plugins = storeState.get("plugins") as { installed: Record<string, { archiveHash: unknown }> };
+    const plugins = storeState.get("plugins") as {
+      installed: Record<string, { archiveHash: unknown }>;
+    };
     plugins.installed["acme.nohash"].archiveHash = null;
     storeState.set("plugins", plugins);
 

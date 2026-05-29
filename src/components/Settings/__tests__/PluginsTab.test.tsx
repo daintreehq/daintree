@@ -323,7 +323,9 @@ describe("PluginsTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Check Acme Demo for updates" }));
 
-    await waitFor(() => expect(window.electron.plugin.checkForUpdate).toHaveBeenCalledWith("acme.demo"));
+    await waitFor(() =>
+      expect(window.electron.plugin.checkForUpdate).toHaveBeenCalledWith("acme.demo")
+    );
     await waitFor(() => expect(screen.getByText("Already up to date")).toBeTruthy());
   });
 

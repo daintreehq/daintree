@@ -3098,7 +3098,10 @@ export class PluginService {
       try {
         response = await net.fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       } catch (err) {
-        return { status: "fetch-failed", message: `Couldn't reach ${url}: ${(err as Error).message}` };
+        return {
+          status: "fetch-failed",
+          message: `Couldn't reach ${url}: ${(err as Error).message}`,
+        };
       }
       if (!response.ok) {
         await response.body?.cancel().catch(() => {});
@@ -3106,8 +3109,15 @@ export class PluginService {
       }
 
       // Content-type guard — match the install flow's accepted archive types.
-      const contentType = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
-      const ALLOWED_CONTENT_TYPES = ["application/octet-stream", "application/zip", "application/x-zip"];
+      const contentType = (response.headers.get("content-type") ?? "")
+        .split(";")[0]
+        .trim()
+        .toLowerCase();
+      const ALLOWED_CONTENT_TYPES = [
+        "application/octet-stream",
+        "application/zip",
+        "application/x-zip",
+      ];
       if (contentType && !ALLOWED_CONTENT_TYPES.includes(contentType)) {
         await response.body?.cancel().catch(() => {});
         return { status: "fetch-failed", message: `Unexpected content type "${contentType}"` };
@@ -3145,7 +3155,10 @@ export class PluginService {
           await handle.close();
         }
       } catch (err) {
-        return { status: "fetch-failed", message: `Couldn't download the archive: ${(err as Error).message}` };
+        return {
+          status: "fetch-failed",
+          message: `Couldn't download the archive: ${(err as Error).message}`,
+        };
       }
       if (oversized) {
         return {
@@ -3158,7 +3171,10 @@ export class PluginService {
       try {
         downloadedHash = await computeArchiveHash(tmpArchive);
       } catch (err) {
-        return { status: "fetch-failed", message: `Couldn't hash the archive: ${(err as Error).message}` };
+        return {
+          status: "fetch-failed",
+          message: `Couldn't hash the archive: ${(err as Error).message}`,
+        };
       }
       if (downloadedHash === baselineHash) {
         return { status: "up-to-date" };

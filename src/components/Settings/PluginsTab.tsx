@@ -33,6 +33,8 @@ const SOURCE_BADGE_LABELS: Record<PluginInstallSource, string> = {
   catalog: "Catalog",
 };
 
+const UP_TO_DATE_NOTIFICATION_DURATION_MS = 4000;
+
 function pluginLabel(plugin: LoadedPluginInfo): string {
   return plugin.manifest.displayName ?? plugin.manifest.name;
 }
@@ -449,7 +451,10 @@ export function PluginsTab() {
         case "up-to-date":
           if (upToDateTimerRef.current) clearTimeout(upToDateTimerRef.current);
           setUpToDateId(id);
-          upToDateTimerRef.current = setTimeout(() => setUpToDateId(null), 4000);
+          upToDateTimerRef.current = setTimeout(
+            () => setUpToDateId(null),
+            UP_TO_DATE_NOTIFICATION_DURATION_MS
+          );
           break;
         case "available":
           setPendingUpdate({ plugin, result });
@@ -605,12 +610,15 @@ export function PluginsTab() {
         cancelLabel="Cancel"
         onConfirm={() => void confirmReinstall()}
         isConfirmLoading={isReinstalling}
+        variant="default"
       >
         {pendingUpdate && (
           <div className="mt-3 space-y-1.5 text-xs text-daintree-text/70">
             <div>
               <span className="text-daintree-text/50">New version</span>{" "}
-              <span className="font-medium text-daintree-text">v{pendingUpdate.result.version}</span>
+              <span className="font-medium text-daintree-text">
+                v{pendingUpdate.result.version}
+              </span>
               {pendingUpdate.result.displayName &&
                 pendingUpdate.result.displayName !== pluginLabel(pendingUpdate.plugin) && (
                   <span className="text-daintree-text/50">
