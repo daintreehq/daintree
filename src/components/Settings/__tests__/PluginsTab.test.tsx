@@ -68,7 +68,7 @@ beforeEach(() => {
       installFromFile: vi.fn().mockResolvedValue({ status: "not-implemented" }),
       installFromUrl: vi.fn().mockResolvedValue({ status: "not-implemented" }),
       uninstall: vi.fn().mockResolvedValue(undefined),
-      checkForUpdate: vi.fn().mockResolvedValue({ status: "not-implemented" }),
+      checkForUpdate: vi.fn().mockResolvedValue({ status: "up-to-date" }),
       onProvenanceChanged: vi.fn().mockReturnValue(() => {}),
     },
   } as unknown as typeof window.electron;
@@ -289,12 +289,81 @@ describe("PluginsTab", () => {
     );
   });
 
-  it("disables the check-for-update button", async () => {
+  it("disables the check-for-update button for a file-installed plugin", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderTab();
     await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
     const checkBtn = screen.getByRole("button", { name: "Check Acme Demo for updates" });
     expect(checkBtn.hasAttribute("disabled")).toBe(true);
+  });
+
+  const urlPlugin = (overrides: Partial<LoadedPluginInfo> = {}) =>
+    makePlugin({
+      source: "url",
+      originalUrl: "https://example.com/p.dntr",
+      archiveHash: "abc123",
+      ...overrides,
+    });
+
+  it("enables the check-for-update button for a URL-installed plugin", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([urlPlugin()]);
+    renderTab();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    const checkBtn = screen.getByRole("button", { name: "Check Acme Demo for updates" });
+    expect(checkBtn.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("shows 'Already up to date' when the check finds a matching hash", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([urlPlugin()]);
+    (window.electron.plugin.checkForUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: "up-to-date",
+    });
+    renderTab();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Check Acme Demo for updates" }));
+
+    await waitFor(() => expect(window.electron.plugin.checkForUpdate).toHaveBeenCalledWith("acme.demo"));
+    await waitFor(() => expect(screen.getByText("Already up to date")).toBeTruthy());
+  });
+
+  it("opens a confirm dialog with the new version and reinstalls on confirm", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([urlPlugin()]);
+    (window.electron.plugin.checkForUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: "available",
+      name: "acme.demo",
+      version: "2.0.0",
+      capabilities: ["network:fetch"],
+    });
+    renderTab();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Check Acme Demo for updates" }));
+
+    await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
+    expect(screen.getByText("v2.0.0")).toBeTruthy();
+    expect(screen.getByText("network:fetch")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    await waitFor(() =>
+      expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
+        "https://example.com/p.dntr"
+      )
+    );
+  });
+
+  it("shows an error when the update check fails to fetch", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([urlPlugin()]);
+    (window.electron.plugin.checkForUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: "fetch-failed",
+      message: "HTTP 500",
+    });
+    renderTab();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Check Acme Demo for updates" }));
+
+    await waitFor(() => expect(screen.getByText(/HTTP 500/)).toBeTruthy());
   });
 
   it("opens the URL dialog and routes the URL through installFromUrl", async () => {

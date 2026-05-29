@@ -144,8 +144,9 @@ async function handleCheckForUpdate(pluginId: string): Promise<PluginCheckUpdate
   if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
     return { status: "invalid-id" };
   }
-  // F25 owns the manual update check (reinstall preserving settings).
-  return { status: "not-implemented" };
+  // The service owns the bounded download + hash compare and returns a
+  // structured result for every domain outcome (#9297).
+  return pluginService.checkForUpdate(pluginId);
 }
 
 async function handleToolbarButtons(): Promise<ToolbarButtonConfig[]> {
