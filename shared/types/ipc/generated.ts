@@ -667,6 +667,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../plugin.js").PluginInstallResult;
   };
+  "plugin:install-from-path": {
+    args: [path: string];
+    result: import("../plugin.js").PluginInstallResult;
+  };
   "plugin:install-from-url": {
     args: [url: string];
     result: import("../plugin.js").PluginInstallResult;

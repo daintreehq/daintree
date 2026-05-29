@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const mockDispatchHandler = vi.fn();
 const mockRegisterHandler = vi.fn();
 const mockRemoveHandlers = vi.fn();
 const mockListPlugins = vi.fn();
 const mockSetEnabled = vi.fn();
+const mockInstallPlugin = vi.fn();
 const mockUninstallPlugin = vi.fn();
 const mockCheckForUpdate = vi.fn();
-const mockInstallPlugin = vi.fn();
 const mockListPluginActions = vi.fn();
 const mockRegisterPluginAction = vi.fn();
 const mockUnregisterPluginAction = vi.fn();
@@ -16,9 +19,9 @@ vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
     listPlugins: (...args: unknown[]) => mockListPlugins(...args),
     setEnabled: (...args: unknown[]) => mockSetEnabled(...args),
+    installPlugin: (...args: unknown[]) => mockInstallPlugin(...args),
     uninstallPlugin: (...args: unknown[]) => mockUninstallPlugin(...args),
     checkForUpdate: (...args: unknown[]) => mockCheckForUpdate(...args),
-    installPlugin: (...args: unknown[]) => mockInstallPlugin(...args),
     dispatchHandler: (...args: unknown[]) => mockDispatchHandler(...args),
     registerHandler: (...args: unknown[]) => mockRegisterHandler(...args),
     removeHandlers: (...args: unknown[]) => mockRemoveHandlers(...args),
@@ -112,12 +115,16 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(30);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(31);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:install", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:set-enabled", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
       "plugin:install-from-file",
+      expect.any(Function)
+    );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:install-from-path",
       expect.any(Function)
     );
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:install-from-url", expect.any(Function));
@@ -199,6 +206,7 @@ describe("registerPluginHandlers", () => {
     const cleanup = registerPluginHandlers();
     cleanup();
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:list");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:install-from-path");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:invoke");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:toolbar-buttons");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:menu-items");
@@ -505,6 +513,82 @@ describe("registerPluginHandlers", () => {
       status: "failed",
       errors: [{ code: "manifest_invalid", message: "bad manifest" }],
     });
+  });
+
+  it("PLUGIN_INSTALL_FROM_PATH rejects an empty path without touching the installer", async () => {
+    const handler = getHandler("plugin:install-from-path");
+    const result = await handler({}, "");
+    expect(result).toEqual({
+      status: "failed",
+      errors: [{ code: "archive_invalid", message: expect.any(String) }],
+    });
+    expect(mockInstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INSTALL_FROM_PATH rejects a relative path", async () => {
+    const handler = getHandler("plugin:install-from-path");
+    const result = await handler({}, "relative/plugin.dntr");
+    expect(result).toMatchObject({ status: "failed", errors: [{ code: "archive_invalid" }] });
+    expect(mockInstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INSTALL_FROM_PATH rejects a non-.dntr extension", async () => {
+    const handler = getHandler("plugin:install-from-path");
+    const result = await handler({}, "/tmp/not-a-plugin.txt");
+    expect(result).toEqual({
+      status: "failed",
+      errors: [{ code: "archive_invalid", message: "Only .dntr files can be installed" }],
+    });
+    expect(mockInstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INSTALL_FROM_PATH fails when the file can't be read", async () => {
+    const handler = getHandler("plugin:install-from-path");
+    const result = await handler({}, "/tmp/does-not-exist-9295.dntr");
+    expect(result).toMatchObject({ status: "failed", errors: [{ code: "archive_invalid" }] });
+    expect(mockInstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INSTALL_FROM_PATH rejects a file without the ZIP magic bytes", async () => {
+    const file = join(tmpdir(), `plugin-bad-magic-${process.pid}.dntr`);
+    await writeFile(file, Buffer.from("not a zip"));
+    try {
+      const handler = getHandler("plugin:install-from-path");
+      const result = await handler({}, file);
+      expect(result).toMatchObject({ status: "failed", errors: [{ code: "archive_invalid" }] });
+      expect(mockInstallPlugin).not.toHaveBeenCalled();
+    } finally {
+      await rm(file, { force: true });
+    }
+  });
+
+  it("PLUGIN_INSTALL_FROM_PATH delegates to installPlugin for a valid .dntr archive", async () => {
+    const file = join(tmpdir(), `plugin-good-magic-${process.pid}.dntr`);
+    // ZIP local-file-header signature + filler so the 4-byte read succeeds.
+    await writeFile(file, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]));
+    mockInstallPlugin.mockResolvedValue({ status: "installed", pluginId: "acme.dropped" });
+    try {
+      const handler = getHandler("plugin:install-from-path");
+      const result = await handler({}, file);
+      expect(mockInstallPlugin).toHaveBeenCalledWith(file);
+      expect(result).toEqual({ status: "installed", pluginId: "acme.dropped" });
+    } finally {
+      await rm(file, { force: true });
+    }
+  });
+
+  it("PLUGIN_INSTALL_FROM_PATH accepts an uppercase .DNTR extension", async () => {
+    const file = join(tmpdir(), `plugin-upper-${process.pid}.DNTR`);
+    await writeFile(file, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    mockInstallPlugin.mockResolvedValue({ status: "installed", pluginId: "acme.upper" });
+    try {
+      const handler = getHandler("plugin:install-from-path");
+      const result = await handler({}, file);
+      expect(mockInstallPlugin).toHaveBeenCalledWith(file);
+      expect(result).toEqual({ status: "installed", pluginId: "acme.upper" });
+    } finally {
+      await rm(file, { force: true });
+    }
   });
 
   it("PLUGIN_UNINSTALL delegates to pluginService.uninstallPlugin", async () => {

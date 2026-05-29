@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { Plug, AlertCircle, FilePlus, Link2, Trash2, RefreshCw, Info } from "lucide-react";
+import {
+  Plug,
+  AlertCircle,
+  FilePlus,
+  Link2,
+  Trash2,
+  RefreshCw,
+  Info,
+  Download,
+} from "lucide-react";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
 import { Button } from "@/components/ui/button";
@@ -306,6 +315,15 @@ export function PluginsTab() {
   } | null>(null);
   const [isReinstalling, setIsReinstalling] = useState(false);
   const [pendingHttpUrl, setPendingHttpUrl] = useState<string | null>(null);
+  // Integer depth counter so the overlay survives child enter/leave churn
+  // without flicker (same pattern as the terminal drop zone). The boolean is
+  // derived from it for the overlay render.
+  const dragDepthRef = useRef(0);
+  const [isDragOverFiles, setIsDragOverFiles] = useState(false);
+  // Synchronous mutex for the drop install loop. The `isInstalling` state lags
+  // a render, so two drops dispatched before React flushes could both read a
+  // stale `false`; the ref flips immediately and serializes them.
+  const installingRef = useRef(false);
 
   useSettingsTabValidation("plugins", Boolean(error));
 
@@ -495,6 +513,87 @@ export function PluginsTab() {
     setShowUrlDialog(true);
   };
 
+  // Install one or more dropped `.dntr` files sequentially through #9292's
+  // install lock — one dialog per file, no batch UX (#9295). Non-`.dntr` drops
+  // surface a quiet inline notice; an empty path (synthetic File object that
+  // `getDroppedFilePath` can't resolve) is a structured error, not a missing
+  // file.
+  const installDroppedFiles = async (files: File[]) => {
+    const dntrFiles = files.filter((f) => f.name.toLowerCase().endsWith(".dntr"));
+    if (dntrFiles.length === 0) {
+      setError(null);
+      setNotice("Only .dntr files can be installed.");
+      return;
+    }
+    if (installingRef.current) return;
+    installingRef.current = true;
+    setNotice(null);
+    setError(null);
+    setIsInstalling(true);
+    // Collect per-file failures so a later file's success can't silently clear
+    // an earlier file's error (the loop installs one file at a time).
+    const failures: string[] = [];
+    try {
+      for (const file of dntrFiles) {
+        const path = window.electron.plugin.getDroppedFilePath(file);
+        if (!path) {
+          failures.push(`${file.name} — couldn't read its location, try Install from file`);
+          continue;
+        }
+        try {
+          const result = await window.electron.plugin.installFromPath(path);
+          if (result.status === "failed") {
+            failures.push(`${file.name} — ${result.errors[0]?.message ?? "install failed"}`);
+          } else {
+            handleInstallResult(result);
+          }
+        } catch (err) {
+          failures.push(`${file.name} — ${formatErrorMessage(err, "install failed")}`);
+          logError("Failed to install plugin from drop", err);
+        }
+      }
+    } finally {
+      installingRef.current = false;
+      setIsInstalling(false);
+    }
+    if (failures.length > 0) setError(failures.join("; "));
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragDepthRef.current++;
+    if (dragDepthRef.current === 1) setIsDragOverFiles(true);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.stopPropagation();
+    dragDepthRef.current--;
+    if (dragDepthRef.current <= 0) {
+      dragDepthRef.current = 0;
+      setIsDragOverFiles(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragDepthRef.current = 0;
+    setIsDragOverFiles(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) void installDroppedFiles(files);
+  };
+
   const confirmUninstall = async () => {
     if (!pendingUninstall) return;
     const id = pendingUninstall.manifest.name;
@@ -581,7 +680,19 @@ export function PluginsTab() {
   };
 
   return (
-    <div className="space-y-6">
+    <div
+      className="relative space-y-6"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDragOverFiles && (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-[var(--radius-lg)] bg-daintree-bg/80 border-2 border-dashed border-daintree-border pointer-events-none">
+          <Download className="w-6 h-6 text-daintree-text/60" aria-hidden="true" />
+          <p className="text-sm font-medium text-daintree-text">Drop a .dntr file to install</p>
+        </div>
+      )}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h3 className="text-sm font-medium text-daintree-text">Installed plugins</h3>

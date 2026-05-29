@@ -1,10 +1,10 @@
 import { ipcMain, dialog, BrowserWindow, net } from "electron";
-import { writeFile, rm } from "node:fs/promises";
+import { open, writeFile, rm } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import os from "node:os";
-import path from "node:path";
+import path, { extname, isAbsolute } from "node:path";
 import crypto from "node:crypto";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
@@ -128,6 +128,57 @@ function isAbortLikeError(err: unknown): boolean {
   if (typeof err !== "object" || err === null) return false;
   const name = (err as { name?: unknown }).name;
   return name === "AbortError" || name === "TimeoutError";
+}
+
+// Local-file-header signature that prefixes every ZIP (and therefore every
+// `.dntr`) archive. Cheap structural gate before the path reaches #9292's
+// atomic install flow.
+const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+
+/**
+ * Install a plugin from a path produced by a drag-and-drop onto the Plugin
+ * settings tab (#9295). The renderer resolves the native path via the
+ * plugin-scoped `getDroppedFilePath` bridge and hands it here; main owns every
+ * trust gate because the renderer can't be trusted to validate before #9292
+ * runs: the path must be a non-empty absolute `.dntr`, and its first four bytes
+ * must be the ZIP magic. Only the header is read — never the whole archive —
+ * so a hostile multi-GB file can't be slurped into memory. All failures come
+ * back as structured `{ status: "failed" }` data (never thrown) so the tab can
+ * render an inline message.
+ */
+async function handleInstallFromPath(path: string): Promise<PluginInstallResult> {
+  const fail = (message: string): PluginInstallResult => ({
+    status: "failed",
+    errors: [{ code: "archive_invalid", message }],
+  });
+  if (typeof path !== "string" || path.length === 0) {
+    return fail("Couldn't resolve the dropped file's path");
+  }
+  // Segment-aware guards, never a `..` substring match (#4702): require an
+  // absolute path and a `.dntr` extension before touching the filesystem.
+  if (!isAbsolute(path)) {
+    return fail("Install path must be an absolute filesystem path");
+  }
+  if (extname(path).toLowerCase() !== ".dntr") {
+    return fail("Only .dntr files can be installed");
+  }
+  let header: Buffer;
+  try {
+    const fh = await open(path, "r");
+    try {
+      const buf = Buffer.alloc(4);
+      const { bytesRead } = await fh.read(buf, 0, 4, 0);
+      header = buf.subarray(0, bytesRead);
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return fail("Couldn't read the dropped file");
+  }
+  if (header.length < 4 || !header.equals(ZIP_MAGIC)) {
+    return fail("That file isn't a valid .dntr plugin archive");
+  }
+  return pluginService.installPlugin(path);
 }
 
 /**
@@ -672,6 +723,7 @@ export const pluginNamespace = defineIpcNamespace({
     installFromFile: op(PLUGIN_METHOD_CHANNELS.installFromFile, handleInstallFromFile, {
       withContext: true,
     }),
+    installFromPath: op(PLUGIN_METHOD_CHANNELS.installFromPath, handleInstallFromPath),
     installFromUrl: op(PLUGIN_METHOD_CHANNELS.installFromUrl, handleInstallFromUrl),
     uninstall: op(PLUGIN_METHOD_CHANNELS.uninstall, handleUninstall),
     checkForUpdate: op(PLUGIN_METHOD_CHANNELS.checkForUpdate, handleCheckForUpdate),
