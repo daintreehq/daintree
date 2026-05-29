@@ -901,7 +901,12 @@ describe("PluginMcpSupervisor lazy tool discovery (issue #9235)", () => {
     // Cache was dropped — a fresh tools/list goes out (frame 4).
     await fake.waitForStdinCount(4);
     expect(fake.lastCallMethod()).toBe("tools/list");
-    fake.answerLastCall({ tools: [{ name: "a", inputSchema: {} }, { name: "b", inputSchema: {} }] });
+    fake.answerLastCall({
+      tools: [
+        { name: "a", inputSchema: {} },
+        { name: "b", inputSchema: {} },
+      ],
+    });
     const result = await second;
     expect(result.tools.map((t) => t.name)).toEqual(["a", "b"]);
   });
