@@ -99,10 +99,20 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
     // in its own slot.
     const [retryCount, setRetryCount] = useState(0);
 
-    const controllerRef = useRef<AbortController | null>(null);
-    if (controllerRef.current === null) {
-      controllerRef.current = new AbortController();
-    }
+    // The dispose controller lives in state because its signal is consumed
+    // during render (passed to the plugin view as `disposeSignal`), and refs
+    // must not be read during render. A retry swaps in a fresh controller via
+    // handleReset so the new lazy import sees an unaborted signal.
+    const [controller, setController] = useState<AbortController>(() => new AbortController());
+
+    // Mirror the current controller into a ref so the long-lived (deps: [])
+    // teardown effect below reads the *latest* controller at call time — i.e.
+    // the post-retry one — without having to re-subscribe to the
+    // panel-kinds-changed broadcast on every retry.
+    const controllerRef = useRef(controller);
+    useEffect(() => {
+      controllerRef.current = controller;
+    }, [controller]);
 
     useEffect(() => {
       let disposed = false;
@@ -130,9 +140,9 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
     }, []);
 
     const handleReset = (): void => {
-      // Create a fresh AbortController for the retry so the new lazy import
-      // sees an unaborted signal — the prior controller stays aborted.
-      controllerRef.current = new AbortController();
+      // Fresh controller for the retry so the new lazy import sees an unaborted
+      // signal; the mirror effect propagates it to controllerRef for teardown.
+      setController(new AbortController());
       setLazyView(() => createLazyView());
       setRetryCount((c) => c + 1);
     };
@@ -146,11 +156,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
       >
         <Suspense fallback={<BrowserPaneSkeleton label={`Loading ${displayName}`} />}>
           <ContentFadeIn className="flex flex-col h-full w-full">
-            <LazyView
-              panelId={props.id}
-              pluginId={pluginId!}
-              disposeSignal={controllerRef.current!.signal}
-            />
+            <LazyView panelId={props.id} pluginId={pluginId!} disposeSignal={controller.signal} />
           </ContentFadeIn>
         </Suspense>
       </ErrorBoundary>

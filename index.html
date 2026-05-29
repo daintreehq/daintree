@@ -17,18 +17,6 @@
         }
       }
 
-      @keyframes skeleton-logo-pulse {
-        0% {
-          opacity: 0.08;
-        }
-        50% {
-          opacity: 0.15;
-        }
-        100% {
-          opacity: 0.08;
-        }
-      }
-
       /*
        * Doherty 400ms anti-flicker gate. `animation-fill-mode: backwards`
        * holds the `from` keyframe (opacity: 0) during the 400ms delay so
@@ -385,8 +373,15 @@
       .skeleton-logo {
         color: var(--theme-text-primary, #e4e4e7);
         opacity: 0.08;
-        animation: skeleton-logo-pulse 2.5s ease-in-out infinite;
         margin-bottom: 16px;
+        /* The stroke-draw reveal is driven by public/skeleton-logo.js, which
+           lifts opacity inline while drawing; this transition eases it back to
+           the 0.08 resting value (or the project-identified 0.16) when done. */
+        transition: opacity 600ms ease-out;
+      }
+      .skeleton-logo-fill {
+        fill: currentColor;
+        shape-rendering: geometricPrecision;
       }
       .skeleton-title {
         position: relative;
@@ -916,6 +911,7 @@
         .skeleton-logo {
           animation: none;
           opacity: 0.08;
+          transition: none;
         }
         .skel-reveal {
           animation: none;
@@ -1062,25 +1058,155 @@
             <div class="skeleton-main-inner">
               <!-- Logo + title (reveals third) -->
               <div class="skeleton-logo-section skel-reveal skel-reveal-d3">
+                <!-- Daintree mark. Stroke-draw reveal animated by
+                     public/skeleton-logo.js (no animation library). The masks
+                     wipe each fill in via stroke-dash; the `d` baked here is the
+                     final frame so the logo is correct with JS disabled. -->
                 <svg
                   class="skeleton-logo"
-                  viewBox="0 0 177.31 132.85"
-                  width="112"
+                  viewBox="150 262 724 518"
+                  width="157"
                   height="112"
                   fill="currentColor"
                   xmlns="http://www.w3.org/2000/svg"
+                  aria-hidden="true"
                 >
+                  <defs>
+                    <mask
+                      id="skeleton-logo-mask-trunk"
+                      maskUnits="userSpaceOnUse"
+                      maskContentUnits="userSpaceOnUse"
+                      x="0"
+                      y="0"
+                      width="1024"
+                      height="1024"
+                      style="mask-type: alpha"
+                    >
+                      <path
+                        id="skeleton-logo-maskline-trunk"
+                        d="M510 918C510 918 511 372 511 372"
+                        fill="none"
+                        stroke="#fff"
+                        stroke-width="69"
+                        stroke-linecap="round"
+                        stroke-linejoin="miter"
+                        stroke-miterlimit="4"
+                      />
+                    </mask>
+                    <mask
+                      id="skeleton-logo-mask-leftleg"
+                      maskUnits="userSpaceOnUse"
+                      maskContentUnits="userSpaceOnUse"
+                      x="0"
+                      y="0"
+                      width="1024"
+                      height="1024"
+                      style="mask-type: alpha"
+                    >
+                      <path
+                        id="skeleton-logo-maskline-leftleg"
+                        d="M395 693C395 666 430 522 304 492"
+                        fill="none"
+                        stroke="#fff"
+                        stroke-width="69"
+                        stroke-linecap="round"
+                        stroke-linejoin="miter"
+                        stroke-miterlimit="4"
+                      />
+                    </mask>
+                    <mask
+                      id="skeleton-logo-mask-rightleg"
+                      maskUnits="userSpaceOnUse"
+                      maskContentUnits="userSpaceOnUse"
+                      x="0"
+                      y="0"
+                      width="1024"
+                      height="1024"
+                      style="mask-type: alpha"
+                    >
+                      <path
+                        id="skeleton-logo-maskline-rightleg"
+                        d="M631.464 693C631.464 666 596.464 522 722.464 492"
+                        fill="none"
+                        stroke="#fff"
+                        stroke-width="69"
+                        stroke-linecap="round"
+                        stroke-linejoin="miter"
+                        stroke-miterlimit="4"
+                      />
+                    </mask>
+                    <mask
+                      id="skeleton-logo-mask-archleft"
+                      maskUnits="userSpaceOnUse"
+                      maskContentUnits="userSpaceOnUse"
+                      x="0"
+                      y="0"
+                      width="1024"
+                      height="1024"
+                      style="mask-type: alpha"
+                    >
+                      <path
+                        id="skeleton-logo-maskline-archleft"
+                        d="M227 651C228 622 216.194 529.114 250.892 460.963C296 388 403 343 510 303C635 341 739 411 766 444C793 477 803 600 800 641"
+                        fill="none"
+                        stroke="#fff"
+                        stroke-width="69"
+                        stroke-linecap="round"
+                        stroke-linejoin="miter"
+                        stroke-miterlimit="4"
+                      />
+                    </mask>
+                    <mask
+                      id="skeleton-logo-mask-archright"
+                      maskUnits="userSpaceOnUse"
+                      maskContentUnits="userSpaceOnUse"
+                      x="0"
+                      y="0"
+                      width="1024"
+                      height="1024"
+                      style="mask-type: alpha"
+                    >
+                      <path
+                        id="skeleton-logo-maskline-archright"
+                        d="M227 651C228 622 216.194 529.114 250.892 460.963C296 388 403 343 510 303C635 341 739 411 766 444C793 477 803 600 800 641"
+                        fill="none"
+                        stroke="#fff"
+                        stroke-width="69"
+                        stroke-linecap="round"
+                        stroke-linejoin="miter"
+                        stroke-miterlimit="4"
+                      />
+                    </mask>
+                  </defs>
                   <path
-                    d="M95.92,132.85h-14.52c-.59,0-1.07-.48-1.07-1.07V36.42c0-.74.27-1.46.77-1.99,2.04-2.17,4.79-3.25,7.55-3.25s5.52,1.09,7.55,3.26c.5.54.77,1.26.77,1.99v95.35c0,.59-.47,1.07-1.07,1.07Z"
+                    id="skeleton-logo-trunk"
+                    class="skeleton-logo-fill"
+                    mask="url(#skeleton-logo-mask-trunk)"
+                    d="M537.5077 743.1317C537.5077 743.1317 486.5425 743.1317 486.5425 743.1317C484.4716 743.1317 482.7868 741.4469 482.7868 739.376C482.7868 739.376 482.7868 404.6624 482.7868 404.6624C482.7868 402.065 483.7345 399.5378 485.4895 397.6775C492.6499 390.0608 502.3024 386.27 511.99 386.27C521.6776 386.27 531.3652 390.0959 538.4905 397.7126C540.2455 399.608 541.1932 402.1352 541.1932 404.6975C541.1932 404.6975 541.1932 739.376 541.1932 739.376C541.1932 741.4469 539.5435 743.1317 537.4375 743.1317C537.4375 743.1317 537.5077 743.1317 537.5077 743.1317Z"
                   />
                   <path
-                    d="M177.31,70.43v19.64c0,.59-.48,1.07-1.07,1.07h-14.52c-.59,0-1.07-.48-1.07-1.07v-19.67c0-10.29-5.49-19.81-14.41-24.95l-43.18-24.93c-8.92-5.15-19.9-5.15-28.82,0l-43.18,24.93c-8.92,5.15-14.41,14.66-14.41,24.95v17.75c0,.06,0,.13,0,2.14,0,.59-.48,1.07-1.07,1.07H1.07c-.59,0-1.07-.48-1.07-1.07v-19.86c0-16.27,8.68-31.3,22.76-39.43L65.89,6.1c14.09-8.13,31.44-8.13,45.53,0l43.12,24.89c14.09,8.13,22.77,23.17,22.77,39.44Z"
+                    id="skeleton-logo-leftleg"
+                    class="skeleton-logo-fill"
+                    mask="url(#skeleton-logo-mask-leftleg)"
+                    d="M424.2751 592.9388C424.2751 592.9388 424.2751 688.3757 424.2751 688.3757C424.2751 690.4466 422.5903 692.1314 420.5194 692.1314C420.5194 692.1314 369.5542 692.1314 369.5542 692.1314C367.4833 692.1314 365.7985 690.4466 365.7985 688.3757C365.7985 688.3757 365.7985 593.009 365.7985 593.009C365.7985 572.3 354.742 553.2056 336.8059 542.816C336.8059 542.816 316.3426 530.9873 316.3426 530.9873C314.026 529.6535 312.3061 527.4773 311.569 524.915C310.8319 522.3527 310.1299 518.7374 310.1299 514.7711C310.1299 498.3443 321.397 483.2513 338.1748 479.285C340.702 478.6883 343.3696 479.1095 345.6511 480.4082C345.6511 480.4082 366.1495 492.2018 366.1495 492.2018C402.127 512.981 424.2751 551.3453 424.2751 592.9037C424.2751 592.9037 424.2751 592.9388 424.2751 592.9388Z"
                   />
                   <path
-                    d="M63.66,90.05v27.19c0,.59-.48,1.07-1.07,1.07h-14.52c-.59,0-1.07-.48-1.07-1.07v-27.17c0-5.9-3.15-11.34-8.26-14.3l-5.83-3.37c-.66-.38-1.15-1-1.36-1.73s-.41-1.76-.41-2.89c0-4.68,3.21-8.98,7.99-10.11.72-.17,1.48-.05,2.13.32l5.84,3.36c10.25,5.92,16.56,16.85,16.56,28.69Z"
+                    id="skeleton-logo-rightleg"
+                    class="skeleton-logo-fill"
+                    mask="url(#skeleton-logo-mask-rightleg)"
+                    d="M599.74 592.9388C599.74 592.9388 599.74 688.3757 599.74 688.3757C599.74 690.4466 601.4248 692.1314 603.4957 692.1314C603.4957 692.1314 654.4609 692.1314 654.4609 692.1314C656.5318 692.1314 658.2166 690.4466 658.2166 688.3757C658.2166 688.3757 658.2166 593.009 658.2166 593.009C658.2166 572.3 669.2731 553.2056 687.2092 542.816C687.2092 542.816 707.6725 530.9873 707.6725 530.9873C709.9891 529.6535 711.709 527.4773 712.4461 524.915C713.1832 522.3527 713.8852 518.7374 713.8852 514.7711C713.8852 498.3443 702.6181 483.2513 685.8403 479.285C683.3131 478.6883 680.6455 479.1095 678.364 480.4082C678.364 480.4082 657.8656 492.2018 657.8656 492.2018C621.8881 512.981 599.74 551.3453 599.74 592.9037C599.74 592.9037 599.74 592.9388 599.74 592.9388Z"
                   />
                   <path
-                    d="M113.65,90.05v27.19c0,.59.48,1.07,1.07,1.07h14.52c.59,0,1.07-.48,1.07-1.07v-27.17c0-5.9,3.15-11.34,8.26-14.3l5.83-3.37c.66-.38,1.15-1,1.36-1.73s.41-1.76.41-2.89c0-4.68-3.21-8.98-7.99-10.11-.72-.17-1.48-.05-2.13.32l-5.84,3.36c-10.25,5.92-16.56,16.85-16.56,28.69Z"
+                    id="skeleton-logo-archleft"
+                    class="skeleton-logo-fill"
+                    mask="url(#skeleton-logo-mask-archleft)"
+                    d="M823.1866 524.0726C823.1866 524.0726 823.1866 593.009 823.1866 593.009C823.1866 595.0799 821.5018 596.7647 819.4309 596.7647C819.4309 596.7647 768.4657 596.7647 768.4657 596.7647C766.3948 596.7647 764.71 595.0799 764.71 593.009C764.71 593.009 764.71 523.9673 764.71 523.9673C764.71 487.8494 745.4401 454.4342 714.1309 436.3928C714.1309 436.3928 562.5691 348.8885 562.5691 348.8885C531.2599 330.812 492.7201 330.812 461.4109 348.8885C461.4109 348.8885 309.8491 436.3928 309.8491 436.3928C278.5399 454.4693 259.27 487.8494 259.27 523.9673C259.27 523.9673 259.27 586.2698 259.27 586.2698C259.27 586.4804 259.27 586.7261 259.27 593.7812C259.27 595.8521 257.5852 597.5369 255.5143 597.5369C255.5143 597.5369 204.5491 597.5369 204.5491 597.5369C202.4782 597.5369 200.7934 595.8521 200.7934 593.7812C200.7934 593.7812 200.7934 524.0726 200.7934 524.0726C200.7934 466.9649 231.2602 414.2096 280.681 385.6733C280.681 385.6733 432.0673 298.2743 432.0673 298.2743C481.5232 269.738 542.4217 269.738 591.8776 298.2743C591.8776 298.2743 743.2288 385.6382 743.2288 385.6382C792.6847 414.1745 823.1515 466.9649 823.1515 524.0726C823.1515 524.0726 823.1866 524.0726 823.1866 524.0726Z"
+                  />
+                  <path
+                    id="skeleton-logo-archright"
+                    class="skeleton-logo-fill"
+                    mask="url(#skeleton-logo-mask-archright)"
+                    d="M823.1866 524.0726C823.1866 524.0726 823.1866 593.009 823.1866 593.009C823.1866 595.0799 821.5018 596.7647 819.4309 596.7647C819.4309 596.7647 768.4657 596.7647 768.4657 596.7647C766.3948 596.7647 764.71 595.0799 764.71 593.009C764.71 593.009 764.71 523.9673 764.71 523.9673C764.71 487.8494 745.4401 454.4342 714.1309 436.3928C714.1309 436.3928 562.5691 348.8885 562.5691 348.8885C531.2599 330.812 492.7201 330.812 461.4109 348.8885C461.4109 348.8885 309.8491 436.3928 309.8491 436.3928C278.5399 454.4693 259.27 487.8494 259.27 523.9673C259.27 523.9673 259.27 586.2698 259.27 586.2698C259.27 586.4804 259.27 586.7261 259.27 593.7812C259.27 595.8521 257.5852 597.5369 255.5143 597.5369C255.5143 597.5369 204.5491 597.5369 204.5491 597.5369C202.4782 597.5369 200.7934 595.8521 200.7934 593.7812C200.7934 593.7812 200.7934 524.0726 200.7934 524.0726C200.7934 466.9649 231.2602 414.2096 280.681 385.6733C280.681 385.6733 432.0673 298.2743 432.0673 298.2743C481.5232 269.738 542.4217 269.738 591.8776 298.2743C591.8776 298.2743 743.2288 385.6382 743.2288 385.6382C792.6847 414.1745 823.1515 466.9649 823.1515 524.0726C823.1515 524.0726 823.1866 524.0726 823.1866 524.0726Z"
                   />
                 </svg>
                 <div class="skeleton-title"></div>
@@ -1193,6 +1319,7 @@
     </div>
     <script src="/skeleton-heatmap.js"></script>
     <script src="/skeleton-stuck.js"></script>
+    <script src="/skeleton-logo.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
