@@ -583,6 +583,14 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: boolean | undefined;
   };
+  "plugin-mcp:get-config": {
+    args: [];
+    result: import("./pluginMcp.js").PluginMcpConfig;
+  };
+  "plugin-mcp:get-full-schema": {
+    args: [key: import("./pluginMcp.js").PluginMcpToolKey];
+    result: import("./pluginMcp.js").PluginMcpGetFullSchemaResult;
+  };
   "plugin-mcp:get-stderr": {
     args: [key: import("./pluginMcp.js").PluginMcpServerKey];
     result: import("./pluginMcp.js").PluginMcpStderrResult;
@@ -591,9 +599,17 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./pluginMcp.js").PluginMcpServerInfo[];
   };
+  "plugin-mcp:list-tools": {
+    args: [key: import("./pluginMcp.js").PluginMcpServerKey];
+    result: import("./pluginMcp.js").PluginMcpListToolsResult;
+  };
   "plugin-mcp:restart": {
     args: [key: import("./pluginMcp.js").PluginMcpServerKey];
     result: void;
+  };
+  "plugin-mcp:set-config": {
+    args: [config: import("./pluginMcp.js").PluginMcpConfig];
+    result: import("./pluginMcp.js").PluginMcpConfig;
   };
   "plugin:actions-get": {
     args: [];

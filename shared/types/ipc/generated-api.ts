@@ -400,15 +400,27 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["plugin:validate-action-ids"]["result"]>;
   };
   pluginMcp: {
+    getConfig(
+      ...args: IpcInvokeMap["plugin-mcp:get-config"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:get-config"]["result"]>;
+    getFullSchema(
+      ...args: IpcInvokeMap["plugin-mcp:get-full-schema"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:get-full-schema"]["result"]>;
     getStderr(
       ...args: IpcInvokeMap["plugin-mcp:get-stderr"]["args"]
     ): Promise<IpcInvokeMap["plugin-mcp:get-stderr"]["result"]>;
     list(
       ...args: IpcInvokeMap["plugin-mcp:list"]["args"]
     ): Promise<IpcInvokeMap["plugin-mcp:list"]["result"]>;
+    listTools(
+      ...args: IpcInvokeMap["plugin-mcp:list-tools"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:list-tools"]["result"]>;
     restart(
       ...args: IpcInvokeMap["plugin-mcp:restart"]["args"]
     ): Promise<IpcInvokeMap["plugin-mcp:restart"]["result"]>;
+    setConfig(
+      ...args: IpcInvokeMap["plugin-mcp:set-config"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:set-config"]["result"]>;
   };
   portal: {
     closeTab(

@@ -20,6 +20,7 @@ import { PLUGIN_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/pluginAudi
 import type { PluginMcpAuditRecord } from "../shared/types/ipc/pluginMcpAudit.js";
 import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/pluginMcpAudit.js";
 import type { PluginMcpConsentRecord } from "../shared/types/pluginMcpConsent.js";
+import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pluginMcp.js";
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/forge.js";
 import type { BuiltInAgentId } from "../shared/config/agentIds.js";
@@ -394,6 +395,16 @@ export interface StoreSchema {
     pins?: PluginMcpConsentRecord[];
     revoked?: string[];
   };
+  /**
+   * Advanced plugin-MCP tuning (#9235). `maxToolsPerSession` is the hard cap on
+   * the number of tools surfaced into agent context across ALL supervised
+   * servers per session — lazy tier-1 enumeration clips to this so a chatty
+   * server can't flood the agent's tool budget. Additive key; absence falls
+   * back to {@link PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION}.
+   */
+  pluginMcpConfig: {
+    maxToolsPerSession: number;
+  };
 }
 
 const storeOptions = {
@@ -561,6 +572,9 @@ const storeOptions = {
       auditMaxRecords: PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS,
     },
     pluginMcpConsent: {},
+    pluginMcpConfig: {
+      maxToolsPerSession: PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION,
+    },
   },
   cwd: process.env.DAINTREE_USER_DATA,
 };

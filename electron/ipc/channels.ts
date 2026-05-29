@@ -829,6 +829,13 @@ export const CHANNELS = {
   PLUGIN_MCP_LIST: "plugin-mcp:list",
   PLUGIN_MCP_GET_STDERR: "plugin-mcp:get-stderr",
   PLUGIN_MCP_RESTART: "plugin-mcp:restart",
+  // Lazy two-tier tool discovery (#9235): tier-1 summaries on demand and the
+  // tier-2 full schema for a single selected tool.
+  PLUGIN_MCP_LIST_TOOLS: "plugin-mcp:list-tools",
+  PLUGIN_MCP_GET_FULL_SCHEMA: "plugin-mcp:get-full-schema",
+  // Advanced tuning: the global tool-count cap surfaced as a setting (#9235).
+  PLUGIN_MCP_GET_CONFIG: "plugin-mcp:get-config",
+  PLUGIN_MCP_SET_CONFIG: "plugin-mcp:set-config",
 
   // Config reload channels
   APP_RELOAD_CONFIG: "app:reload-config",

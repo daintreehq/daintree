@@ -1080,23 +1080,11 @@ export class PluginService {
       this.scheduleContextMenuItemsBroadcast(false);
     }
 
-    if (manifest.contributes.experimental_mcpServers.length > 0) {
-      const contributions = manifest.contributes.experimental_mcpServers;
-      const pluginId = manifest.name;
-      // Eager spawn at activation time so readiness is observable before any
-      // tools/call dispatch. Errors are absorbed inside start() — a single
-      // failing MCP server can't strand plugin activation.
-      void getPluginMcpSupervisor()
-        .start({
-          pluginId,
-          pluginDir,
-          contributions,
-          resolveSettings: (settingId) => this.resolveSettingTemplate(pluginId, settingId),
-        })
-        .catch((err) => {
-          console.warn(`[PluginService] Plugin "${pluginId}": MCP supervisor start failed:`, err);
-        });
-    }
+    // Lazy MCP discovery (#9235): plugin activation no longer eagerly spawns
+    // contributed MCP servers. The subprocess starts on the first tool
+    // enumeration (`plugin-mcp:list-tools`), which resolves the contribution
+    // and calls the (idempotent) supervisor `start()` at the IPC boundary. This
+    // keeps idle plugins from holding live subprocesses they never use.
 
     if (manifest.contributes.forgeProviders.length > 0) {
       registerForgeProviders(manifest.name, manifest.contributes.forgeProviders);

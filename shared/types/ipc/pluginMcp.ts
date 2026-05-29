@@ -54,5 +54,94 @@ export interface PluginMcpServerKey {
   serverId: string;
 }
 
+/**
+ * Identifier passed to `plugin-mcp:get-full-schema` — the server pair plus the
+ * tool name whose full input schema the agent has selected (tier 2).
+ */
+export interface PluginMcpToolKey extends PluginMcpServerKey {
+  toolName: string;
+}
+
+/**
+ * Tier-1 tool summary injected into agent context at session start (#9235):
+ * just the name and a short, truncated description — never the input schema.
+ * The full schema is fetched lazily via `plugin-mcp:get-full-schema` only when
+ * the agent's own discovery query matches a tool.
+ */
+export interface PluginMcpToolSummary {
+  name: string;
+  /** Truncated to {@link PLUGIN_MCP_TOOL_DESCRIPTION_CAP} chars; absent if the server gave none. */
+  description?: string;
+}
+
+/**
+ * Tier-2 full tool definition — the cached `tools/list` entry including the
+ * JSON input schema and annotations. Returned by `plugin-mcp:get-full-schema`.
+ * `inputSchema` is typed `unknown` because no shared JSON-schema type exists
+ * and the supervisor never inspects its shape (consistent with how
+ * `PluginMcpConsentService` types it for TOFU fingerprinting).
+ */
+export interface PluginMcpFullTool {
+  name: string;
+  description?: string;
+  inputSchema: unknown;
+  annotations?: unknown;
+}
+
+/**
+ * Result of `plugin-mcp:list-tools`. Carries the tier-1 summaries plus the cap
+ * that was applied — `truncated` is true when the global per-session cap
+ * ({@link PluginMcpServerKey}-spanning) clipped this server's list.
+ */
+export interface PluginMcpListToolsResult {
+  pluginId: string;
+  serverId: string;
+  tools: PluginMcpToolSummary[];
+  /** True when the global per-session cap clipped the returned list. */
+  truncated: boolean;
+  /** The cap applied (advanced setting `pluginMcpConfig.maxToolsPerSession`). */
+  maxToolsPerSession: number;
+}
+
+/**
+ * Result of `plugin-mcp:get-full-schema`. A discriminated union so callers can
+ * handle the not-found case (e.g. a stale tool name after a crash refetch)
+ * without a thrown error — mirrors `getStderr` returning an empty result for
+ * an unknown server rather than throwing.
+ */
+export type PluginMcpGetFullSchemaResult =
+  | { found: true; tool: PluginMcpFullTool }
+  | { found: false };
+
+/**
+ * Advanced plugin-MCP tuning surfaced via `plugin-mcp:get-config` /
+ * `plugin-mcp:set-config` (#9235). Persisted in the `pluginMcpConfig` store
+ * slice. Kept a distinct object (rather than loose IPC args) so future tuning
+ * knobs can be added without widening the channel signature.
+ */
+export interface PluginMcpConfig {
+  /** Hard cap on tools surfaced across ALL servers per session. */
+  maxToolsPerSession: number;
+}
+
 /** Per-server ring cap — capped lines retained for the `Settings → MCP` log view. */
 export const PLUGIN_MCP_STDERR_RING_LINES = 500;
+
+/** Clamp bounds for the user-configurable tool cap. */
+export const PLUGIN_MCP_MIN_MAX_TOOLS_PER_SESSION = 1;
+export const PLUGIN_MCP_MAX_MAX_TOOLS_PER_SESSION = 10_000;
+
+/**
+ * Tier-1 description cap (#9235). Descriptions longer than this are sliced and
+ * suffixed with an ellipsis before injection so a verbose third-party server
+ * can't blow the agent's context budget at session start.
+ */
+export const PLUGIN_MCP_TOOL_DESCRIPTION_CAP = 200;
+
+/**
+ * Default hard cap on the number of tools surfaced across ALL supervised
+ * servers within a session (#9235). Surfaced as the advanced setting
+ * `pluginMcpConfig.maxToolsPerSession`; this constant is the fallback when the
+ * setting is absent or invalid.
+ */
+export const PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION = 200;
