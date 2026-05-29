@@ -52,9 +52,27 @@ describe("sortAgentsByToolbarPin", () => {
     expect(pinnedCount).toBe(0);
   });
 
-  it("returns pinnedCount === length when all agents are pinned", () => {
+  it("returns pinnedCount === length and applies leftButtons order when all agents are pinned", () => {
     const agents = [agent("claude", "ready"), agent("gemini", "ready")];
-    const { pinnedCount } = sortAgentsByToolbarPin(agents, ["gemini", "claude"], settings({}));
+    const { sorted, pinnedCount } = sortAgentsByToolbarPin(
+      agents,
+      ["gemini", "claude"],
+      settings({})
+    );
+    // leftButtons reverses the input order — guards against a sort that counts
+    // pinned agents correctly but ignores the toolbar ordering.
+    expect(sorted.map((a) => a.id)).toEqual(["gemini", "claude"]);
+    expect(pinnedCount).toBe(2);
+  });
+
+  it("orders [inLeftButtons, pinned-absent, unpinned] across all three groups", () => {
+    const agents = [
+      agent("gemini", "ready"), // pinned, absent from leftButtons → end of pinned group
+      agent("codex", "missing"), // unpinned
+      agent("claude", "ready"), // pinned, leftButtons index 0
+    ];
+    const { sorted, pinnedCount } = sortAgentsByToolbarPin(agents, ["claude"], settings({}));
+    expect(sorted.map((a) => a.id)).toEqual(["claude", "gemini", "codex"]);
     expect(pinnedCount).toBe(2);
   });
 

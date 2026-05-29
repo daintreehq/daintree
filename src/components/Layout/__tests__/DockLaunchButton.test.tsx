@@ -133,7 +133,7 @@ describe("DockLaunchButton", () => {
   });
 
   it("splits agents into Pinned/Other groups when pinnedCount is a strict subset", () => {
-    const { getAllByTestId } = render(
+    const { getAllByTestId, container } = render(
       <DockLaunchButton
         agents={AGENTS}
         pinnedCount={1}
@@ -146,6 +146,13 @@ describe("DockLaunchButton", () => {
 
     const labels = getAllByTestId("dock-launcher-label").map((el) => el.textContent);
     expect(labels).toEqual(["Pinned", "Other", "Launch panel"]);
+
+    // Assert document order so a regression that puts both agents under one
+    // group (or swaps them) is caught: Pinned → Claude → Other → Gemini.
+    const text = container.textContent ?? "";
+    expect(text.indexOf("Pinned")).toBeLessThan(text.indexOf("Claude"));
+    expect(text.indexOf("Claude")).toBeLessThan(text.indexOf("Other"));
+    expect(text.indexOf("Other")).toBeLessThan(text.indexOf("Gemini"));
   });
 
   it("keeps a flat Launch agent group when all agents are pinned", () => {
