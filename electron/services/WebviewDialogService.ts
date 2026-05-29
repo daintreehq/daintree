@@ -12,14 +12,16 @@ type SessionStorageEntry = [string, string];
 
 class WebviewDialogService {
   private panelMap = new Map<number, string>();
+  private kindMap = new Map<number, string>();
   private pendingDialogs = new Map<string, PendingDialog>();
   private pendingOAuthSessionStorage = new Map<string, Promise<SessionStorageEntry[]>>();
   private destroyedListeners = new Set<number>();
 
-  registerPanel(webContentsId: number, panelId: string): void {
+  registerPanel(webContentsId: number, panelId: string, kind?: string): void {
     const wc = webContents.fromId(webContentsId);
     if (!wc || wc.isDestroyed()) {
       this.panelMap.delete(webContentsId);
+      this.kindMap.delete(webContentsId);
       this.destroyedListeners.delete(webContentsId);
       return;
     }
@@ -27,9 +29,17 @@ class WebviewDialogService {
     const previousPanelId = this.panelMap.get(webContentsId);
     if (previousPanelId && previousPanelId !== panelId) {
       this.pendingOAuthSessionStorage.delete(previousPanelId);
+      // Drop a stale kind when the webContents is rebound to a different panel;
+      // the new owner re-supplies it on its own registration.
+      this.kindMap.delete(webContentsId);
     }
 
     this.panelMap.set(webContentsId, panelId);
+    // Registration happens from multiple effects (dialog + console capture);
+    // only some pass a kind. Preserve a previously-set kind when omitted.
+    if (kind !== undefined) {
+      this.kindMap.set(webContentsId, kind);
+    }
 
     if (!this.destroyedListeners.has(webContentsId)) {
       this.destroyedListeners.add(webContentsId);
@@ -40,6 +50,7 @@ class WebviewDialogService {
           this.pendingOAuthSessionStorage.delete(panelId);
         }
         this.panelMap.delete(webContentsId);
+        this.kindMap.delete(webContentsId);
         this.destroyedListeners.delete(webContentsId);
       });
     }
@@ -47,6 +58,10 @@ class WebviewDialogService {
 
   getPanelId(webContentsId: number): string | undefined {
     return this.panelMap.get(webContentsId);
+  }
+
+  getPanelKind(webContentsId: number): string | undefined {
+    return this.kindMap.get(webContentsId);
   }
 
   registerDialog(

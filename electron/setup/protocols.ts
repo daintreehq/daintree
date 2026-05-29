@@ -775,7 +775,10 @@ export function setupWebviewCSP(): void {
       contents.on("unresponsive", notifyUnresponsive);
       contents.on("responsive", notifyResponsive);
 
-      // Intercept find-in-page shortcuts (Cmd/Ctrl+F, Cmd/Ctrl+G, Escape) from webview guests
+      // Intercept find-in-page (Cmd/Ctrl+F, Cmd/Ctrl+G, Escape) and reload
+      // (Cmd/Ctrl+R) shortcuts from webview guests. When the guest has focus
+      // Chromium routes keystrokes directly to it, so the outer renderer's
+      // keydown listener never sees these — they must be caught here.
       contents.on("before-input-event", (event, input) => {
         if (input.type !== "keyDown") return;
         const isMac = process.platform === "darwin";
@@ -790,15 +793,35 @@ export function setupWebviewCSP(): void {
           shortcut = input.shift ? "prev" : "next";
         }
 
-        if (!shortcut) return;
+        const isReload = mod && input.key.toLowerCase() === "r" && !input.alt && !input.shift;
 
-        const panelId = getWebviewDialogService().getPanelId(contents.id);
+        if (!shortcut && !isReload) return;
+
+        const dialogService = getWebviewDialogService();
+        const panelId = dialogService.getPanelId(contents.id);
         if (!panelId) return;
+
+        const findParentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
+
+        if (isReload) {
+          // Only dev-preview guests get Cmd/Ctrl+R reload — claiming the key for
+          // other webview kinds (e.g. the browser panel) would swallow it from
+          // the guest page, which has no reload handler of its own here.
+          if (dialogService.getPanelKind(contents.id) !== "dev-preview") return;
+          // preventDefault only when the signal can actually be delivered, so a
+          // window teardown race doesn't eat the key with no reload to show for it.
+          if (findParentWindow && !findParentWindow.isDestroyed()) {
+            event.preventDefault();
+            getAppWebContents(findParentWindow).send(CHANNELS.WEBVIEW_RELOAD_SHORTCUT, {
+              panelId,
+            });
+          }
+          return;
+        }
 
         if (shortcut !== "close") {
           event.preventDefault();
         }
-        const findParentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
         if (findParentWindow && !findParentWindow.isDestroyed()) {
           getAppWebContents(findParentWindow).send(CHANNELS.WEBVIEW_FIND_SHORTCUT, {
             panelId,

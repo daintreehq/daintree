@@ -677,6 +677,14 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Portal",
   },
   {
+    actionId: "devPreview.reloadPreview",
+    combo: "Cmd+R",
+    scope: "dev-preview",
+    priority: 20,
+    description: "Reload dev preview",
+    category: "Dev Preview",
+  },
+  {
     actionId: "nav.toggleSidebar",
     combo: "Cmd+B",
     scope: "global",

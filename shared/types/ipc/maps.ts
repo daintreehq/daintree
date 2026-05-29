@@ -1782,6 +1782,11 @@ export interface IpcEventMap {
     shortcut: "find" | "next" | "prev" | "close";
   };
 
+  // Webview reload shortcut (Cmd/Ctrl+R) forwarded from focused guest
+  "webview:reload-shortcut": {
+    panelId: string;
+  };
+
   // Webview navigation blocked — cross-origin navigation was prevented
   "webview:navigation-blocked": {
     panelId: string;

@@ -58,6 +58,7 @@ import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { WebviewDialog } from "../Browser/WebviewDialog";
 import { FindBar } from "../Browser/FindBar";
 import { useFindInPage } from "@/hooks/useFindInPage";
+import { useKeybindingScope } from "@/hooks/useKeybinding";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
   getViewportPreset,
@@ -1268,7 +1269,8 @@ export function DevPreviewPane({
   const { currentDialog, handleDialogRespond } = useWebviewDialog(
     id,
     isEvicted ? null : webviewElement,
-    isWebviewReady && !isEvicted
+    isWebviewReady && !isEvicted,
+    "dev-preview"
   );
 
   // Consolidated emulation effect above handles all preset/rotation/DPR changes.
@@ -1280,6 +1282,11 @@ export function DevPreviewPane({
     isWebviewReady && !isEvicted,
     isFocused
   );
+
+  // Activate the dev-preview keybinding scope while focused so Cmd/Ctrl+R maps
+  // to devPreview.reloadPreview when the panel chrome (toolbar/header) has focus.
+  // The guest-focused case is covered separately by onReloadShortcut below.
+  useKeybindingScope("dev-preview", isFocused);
 
   // Listen for blocked navigation events from main process.
   // 150ms debounce: latest URL wins — repeated blocks within the window
@@ -1350,6 +1357,17 @@ export function DevPreviewPane({
       setCrashDetails(null);
     }
   }, [currentUrl, crashState]);
+
+  // Listen for the reload shortcut (Cmd/Ctrl+R) forwarded from the focused
+  // webview guest. When the guest has focus, the outer renderer's keybinding
+  // handler never fires, so the main process intercepts the key and forwards it.
+  useEffect(() => {
+    const cleanup = window.electron.webview.onReloadShortcut((payload) => {
+      if (payload.panelId !== id) return;
+      handleHardReload();
+    });
+    return cleanup;
+  }, [id, handleHardReload]);
 
   // Listen for action-driven hard-reload events
   useEffect(() => {

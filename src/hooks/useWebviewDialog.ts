@@ -7,7 +7,8 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 export function useWebviewDialog(
   panelId: string,
   webviewElement: Electron.WebviewTag | null,
-  isWebviewReady: boolean
+  isWebviewReady: boolean,
+  kind?: string
 ) {
   const [dialogQueue, setDialogQueue] = useState<WebviewDialogRequest[]>([]);
 
@@ -16,7 +17,7 @@ export function useWebviewDialog(
     if (!webviewElement || !isWebviewReady) return;
     try {
       const webContentsId = webviewElement.getWebContentsId();
-      window.electron.webview.registerPanel(webContentsId, panelId).catch((err) => {
+      window.electron.webview.registerPanel(webContentsId, panelId, kind).catch((err) => {
         // Registration failed — dialogs will fall back to native. Surface at
         // warn (not error) since native fallback is a working UX, not broken.
         logWarn("Webview dialog registration failed", {
@@ -28,7 +29,7 @@ export function useWebviewDialog(
       // Intentional: getWebContentsId() throws when the webview isn't attached
       // yet — the next ready cycle re-runs this effect.
     }
-  }, [panelId, webviewElement, isWebviewReady]);
+  }, [panelId, webviewElement, isWebviewReady, kind]);
 
   // Subscribe to dialog requests for this panel
   useEffect(() => {

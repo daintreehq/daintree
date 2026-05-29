@@ -110,6 +110,7 @@ vi.mock("../../services/WebviewDialogService.js", () => ({
   getWebviewDialogService: vi.fn(() => ({
     registerDialog: vi.fn(),
     getPanelId: vi.fn(() => "panel-browser-1"),
+    getPanelKind: vi.fn(() => "dev-preview"),
     storeOAuthSessionStorage: vi.fn(),
   })),
 }));
@@ -121,6 +122,7 @@ vi.mock("../../window/windowRef.js", () => ({
 vi.mock("../../ipc/channels.js", () => ({
   CHANNELS: {
     WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
+    WEBVIEW_RELOAD_SHORTCUT: "webview:reload-shortcut",
     WEBVIEW_NAVIGATION_BLOCKED: "webview:navigation-blocked",
   },
 }));
@@ -408,6 +410,101 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
         panelId: "panel-1",
         shortcut: "find",
       });
+    });
+
+    it("sends reload shortcut (Cmd/Ctrl+R) to the parent window and prevents default (#9497)", () => {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-1"),
+        getPanelKind: vi.fn(() => "dev-preview"),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+
+      const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
+      const mockEvent = { preventDefault: vi.fn() };
+      beforeInputHandlers[0](mockEvent, {
+        type: "keyDown",
+        key: "r",
+        meta: true,
+        control: true,
+        alt: false,
+        shift: false,
+      });
+
+      expect(mockEvent.preventDefault).toHaveBeenCalledTimes(1);
+      expect(mockSend).toHaveBeenCalledWith("webview:reload-shortcut", {
+        panelId: "panel-1",
+      });
+    });
+
+    it("does not swallow Cmd/Ctrl+R for non-dev-preview webviews like browser panels (#9497)", () => {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-browser-1"),
+        getPanelKind: vi.fn(() => "browser"),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+
+      const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
+      const mockEvent = { preventDefault: vi.fn() };
+      beforeInputHandlers[0](mockEvent, {
+        type: "keyDown",
+        key: "r",
+        meta: true,
+        control: true,
+        alt: false,
+        shift: false,
+      });
+
+      expect(mockEvent.preventDefault).not.toHaveBeenCalled();
+      expect(mockSend).not.toHaveBeenCalledWith("webview:reload-shortcut", expect.anything());
+    });
+
+    it("ignores Cmd/Ctrl+Shift+R so it does not shadow other reload variants (#9497)", () => {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-1"),
+        getPanelKind: vi.fn(() => "dev-preview"),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+
+      const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
+      const mockEvent = { preventDefault: vi.fn() };
+      beforeInputHandlers[0](mockEvent, {
+        type: "keyDown",
+        key: "r",
+        meta: true,
+        control: true,
+        alt: false,
+        shift: true,
+      });
+
+      expect(mockEvent.preventDefault).not.toHaveBeenCalled();
+      expect(mockSend).not.toHaveBeenCalledWith("webview:reload-shortcut", expect.anything());
     });
   });
 

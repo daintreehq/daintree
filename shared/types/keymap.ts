@@ -169,6 +169,9 @@ export type BuiltInKeyAction =
   | "portal.nextTab"
   | "portal.prevTab"
 
+  // Dev preview actions
+  | "devPreview.reloadPreview"
+
   // Action palette
   | "action.palette"
   | "action.palette.open"
@@ -350,6 +353,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "portal.closeTab",
   "portal.nextTab",
   "portal.prevTab",
+  "devPreview.reloadPreview",
   "action.palette",
   "action.palette.open",
   "action.repeatLast",

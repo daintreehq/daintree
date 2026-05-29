@@ -1,7 +1,14 @@
 import type { BuiltInActionId, ActionId } from "@shared/types/actions";
 import { isMac } from "@/lib/platform";
 
-export type KeyScope = "global" | "terminal" | "modal" | "worktreeList" | "portal" | "worktreeGrid";
+export type KeyScope =
+  | "global"
+  | "terminal"
+  | "modal"
+  | "worktreeList"
+  | "portal"
+  | "worktreeGrid"
+  | "dev-preview";
 
 export interface KeybindingConfig {
   actionId: BuiltInActionId;

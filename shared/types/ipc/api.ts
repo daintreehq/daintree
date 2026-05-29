@@ -876,7 +876,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Freeze or unfreeze a webview's JS execution via CDP Page.setWebLifecycleState */
     setLifecycleState(webContentsId: number, frozen: boolean): Promise<void>;
     /** Register a webview's webContentsId with its panel ID for dialog routing */
-    registerPanel(webContentsId: number, panelId: string): Promise<void>;
+    registerPanel(webContentsId: number, panelId: string, kind?: string): Promise<void>;
     /** Respond to a JavaScript dialog (alert/confirm/prompt) shown by a webview */
     respondToDialog(dialogId: string, confirmed: boolean, response?: string): Promise<void>;
     /** Subscribe to dialog requests from webview guests */
@@ -893,6 +893,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onFindShortcut(
       callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void
     ): () => void;
+    /** Subscribe to reload shortcut (Cmd/Ctrl+R) forwarded from focused webview guests */
+    onReloadShortcut(callback: (payload: { panelId: string }) => void): () => void;
     /** Subscribe to blocked cross-origin navigation events from webview guests */
     onNavigationBlocked(
       callback: (payload: { panelId: string; url: string; canOpenExternal: boolean }) => void

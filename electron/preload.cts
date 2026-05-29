@@ -1778,8 +1778,8 @@ const api: ElectronAPI = {
   webview: {
     setLifecycleState: (webContentsId: number, frozen: boolean): Promise<void> =>
       _unwrappingInvoke(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, webContentsId, frozen),
-    registerPanel: (webContentsId: number, panelId: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.WEBVIEW_REGISTER_PANEL, { webContentsId, panelId }),
+    registerPanel: (webContentsId: number, panelId: string, kind?: string): Promise<void> =>
+      _unwrappingInvoke(CHANNELS.WEBVIEW_REGISTER_PANEL, { webContentsId, panelId, kind }),
     respondToDialog: (dialogId: string, confirmed: boolean, response?: string): Promise<void> =>
       _unwrappingInvoke(CHANNELS.WEBVIEW_DIALOG_RESPONSE, { dialogId, confirmed, response }),
     onDialogRequest: (
@@ -1794,6 +1794,8 @@ const api: ElectronAPI = {
     onFindShortcut: (
       callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void
     ): (() => void) => _typedOn(CHANNELS.WEBVIEW_FIND_SHORTCUT, callback),
+    onReloadShortcut: (callback: (payload: { panelId: string }) => void): (() => void) =>
+      _typedOn(CHANNELS.WEBVIEW_RELOAD_SHORTCUT, callback),
     onNavigationBlocked: (
       callback: (payload: { panelId: string; url: string; canOpenExternal: boolean }) => void
     ): (() => void) => _typedOn(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, callback),

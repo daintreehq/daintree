@@ -390,6 +390,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         registerPanel: vi.fn(() => Promise.resolve()),
         onDialogRequest: vi.fn(() => vi.fn()),
         onFindShortcut: vi.fn(() => vi.fn()),
+        onReloadShortcut: vi.fn(() => vi.fn()),
         onNavigationBlocked: vi.fn(() => vi.fn()),
         onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
         setLifecycleState: vi.fn().mockResolvedValue(undefined),
@@ -433,6 +434,49 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     });
 
     expect(webview.setZoomFactor).toHaveBeenCalledWith(1.4);
+  });
+
+  it("hard-reloads the focused webview guest when onReloadShortcut fires for this panel (#9497)", async () => {
+    let reloadCb: ((payload: { panelId: string }) => void) | undefined;
+    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
+      .electron;
+    electron.webview.onReloadShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
+      reloadCb = cb;
+      return vi.fn();
+    });
+    const reloadIgnoringCache = electron.webview.reloadIgnoringCache as ReturnType<typeof vi.fn>;
+
+    const { container } = render(<DevPreviewPane {...baseProps} />);
+    getWebviewElement(container);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(reloadCb).toBeDefined();
+
+    // A shortcut targeting a different panel must not reload this one
+    act(() => {
+      reloadCb?.({ panelId: "some-other-panel" });
+    });
+    expect(reloadIgnoringCache).not.toHaveBeenCalled();
+
+    // A shortcut targeting this panel triggers a cache-ignoring reload
+    act(() => {
+      reloadCb?.({ panelId: "dev-preview-panel-1" });
+    });
+    expect(reloadIgnoringCache).toHaveBeenCalledWith(42, "dev-preview-panel-1");
+  });
+
+  it("unsubscribes from onReloadShortcut on unmount (#9497)", () => {
+    const unsubscribe = vi.fn();
+    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
+      .electron;
+    electron.webview.onReloadShortcut = vi.fn(() => unsubscribe);
+
+    const { unmount } = render(<DevPreviewPane {...baseProps} />);
+    expect(electron.webview.onReloadShortcut).toHaveBeenCalled();
+    unmount();
+    expect(unsubscribe).toHaveBeenCalled();
   });
 
   it("binds loading listeners when webview mounts after initial waiting state", async () => {
@@ -824,6 +868,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         registerPanel: vi.fn(() => Promise.resolve()),
         onDialogRequest: vi.fn(() => vi.fn()),
         onFindShortcut: vi.fn(() => vi.fn()),
+        onReloadShortcut: vi.fn(() => vi.fn()),
         onNavigationBlocked: vi.fn(() => vi.fn()),
         onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
         onUnresponsive: vi.fn(() => vi.fn()),
@@ -882,6 +927,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         registerPanel: vi.fn(() => Promise.resolve()),
         onDialogRequest: vi.fn(() => vi.fn()),
         onFindShortcut: vi.fn(() => vi.fn()),
+        onReloadShortcut: vi.fn(() => vi.fn()),
         onNavigationBlocked: vi.fn(() => vi.fn()),
         onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
         onUnresponsive: vi.fn(() => vi.fn()),
@@ -930,6 +976,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         registerPanel: vi.fn(() => Promise.resolve()),
         onDialogRequest: vi.fn(() => vi.fn()),
         onFindShortcut: vi.fn(() => vi.fn()),
+        onReloadShortcut: vi.fn(() => vi.fn()),
         onNavigationBlocked: vi.fn(() => vi.fn()),
         onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
         onUnresponsive: vi.fn(() => vi.fn()),
