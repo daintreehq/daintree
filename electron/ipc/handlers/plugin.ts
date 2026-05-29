@@ -1,5 +1,11 @@
-import { ipcMain, dialog, BrowserWindow } from "electron";
-import { writeFile } from "node:fs/promises";
+import { ipcMain, dialog, BrowserWindow, net } from "electron";
+import { writeFile, rm } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import os from "node:os";
+import path from "node:path";
+import crypto from "node:crypto";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
 import {
@@ -44,6 +50,7 @@ import type {
   PluginActionContribution,
   PluginActionDescriptor,
   PluginInstallOptions,
+  PluginInstallError,
   PluginInstallResult,
   PluginCheckUpdateResult,
   PluginSettingsScope,
@@ -105,24 +112,157 @@ async function handleInstallFromFile(ctx: IpcContext): Promise<PluginInstallResu
   return { status: "not-implemented" };
 }
 
+// Bounded download limits for install-from-URL (F24). Mirrors the spec in
+// docs/plugins/distribution.md: a 30 MB hard cap aborted mid-stream, a 10s
+// deadline, and a MIME/suffix allowlist so a stray HTML error page never
+// reaches the installer.
+const PLUGIN_DOWNLOAD_MAX_BYTES = 30 * 1024 * 1024;
+const PLUGIN_DOWNLOAD_TIMEOUT_MS = 10_000;
+
+function isAbortLikeError(err: unknown): boolean {
+  // AbortSignal.timeout() rejects as "AbortError" (not "TimeoutError") under
+  // Chromium 146, and the size-cap controller.abort() also surfaces as
+  // "AbortError" — so both names are treated as abort-like and disambiguated
+  // by the caller's `sizeAborted` flag. These rejections are DOMExceptions,
+  // which are NOT `Error` instances in Node, so duck-type the `name`.
+  if (typeof err !== "object" || err === null) return false;
+  const name = (err as { name?: unknown }).name;
+  return name === "AbortError" || name === "TimeoutError";
+}
+
+/**
+ * Download a `.dntr` archive from a user-supplied URL into a temp file under
+ * bounded conditions, then hand the path to the atomic installer (F24).
+ *
+ * Guards, in order: well-formed URL + http/https scheme, a 10s deadline, a
+ * MIME/`.dntr`-suffix allowlist, a `Content-Length` pre-check, and a mid-stream
+ * 30 MB byte cap that aborts the in-flight request. All failures resolve as
+ * structured `{ status: "failed", errors }` data so the dialog can render a
+ * tailored message; the handler-owned temp file is always removed in `finally`
+ * (PluginService extracts into its own temp dir and doesn't take ownership of
+ * the download artifact).
+ */
 async function handleInstallFromUrl(url: string): Promise<PluginInstallResult> {
   if (typeof url !== "string" || url.trim().length === 0) {
     return { status: "invalid-url" };
   }
-  // Cheap well-formedness + scheme gate so obvious garbage ("not a url",
-  // "javascript:…") surfaces the invalid-url state immediately. The bounded
-  // download path (size / MIME / timeout / redirect) is F24's job.
+  const trimmed = url.trim();
   let parsed: URL;
   try {
-    parsed = new URL(url.trim());
+    parsed = new URL(trimmed);
   } catch {
     return { status: "invalid-url" };
   }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     return { status: "invalid-url" };
   }
-  // F24 will validate and route the URL through the bounded install flow here.
-  return { status: "not-implemented" };
+
+  const failed = (code: PluginInstallError["code"], message: string): PluginInstallResult => ({
+    status: "failed",
+    errors: [{ code, message }],
+  });
+
+  const tempPath = path.join(os.tmpdir(), `daintree-plugin-${crypto.randomUUID()}.dntr`);
+  // `redirect: "manual"` rejects immediately in Electron's net.fetch and can't
+  // count hops, so we rely on Chromium's built-in follow (capped at 20, well
+  // above the spec's 5). The size controller and the timeout signal both feed
+  // a single AbortSignal.any().
+  const sizeController = new AbortController();
+  let sizeAborted = false;
+  let wroteTempFile = false;
+
+  try {
+    const signal = AbortSignal.any([
+      sizeController.signal,
+      AbortSignal.timeout(PLUGIN_DOWNLOAD_TIMEOUT_MS),
+    ]);
+
+    let response: Response;
+    try {
+      response = await net.fetch(trimmed, { signal });
+    } catch (err) {
+      if (isAbortLikeError(err)) {
+        return failed("fetch_timeout", "The download timed out before it finished.");
+      }
+      return failed("fetch_failed", "Couldn't download the plugin from that URL.");
+    }
+
+    // Drop the open connection on any early return so the socket isn't held
+    // until GC; the body is never consumed on these paths.
+    const abandon = async (result: PluginInstallResult): Promise<PluginInstallResult> => {
+      await response.body?.cancel().catch(() => {});
+      return result;
+    };
+
+    if (!response.ok) {
+      return abandon(failed("fetch_failed", `The server returned HTTP ${response.status}.`));
+    }
+
+    const contentLength = response.headers.get("content-length");
+    if (contentLength) {
+      const declared = Number.parseInt(contentLength, 10);
+      if (Number.isFinite(declared) && declared > PLUGIN_DOWNLOAD_MAX_BYTES) {
+        return abandon(failed("size_exceeded", "The plugin file is larger than the 30 MB limit."));
+      }
+    }
+
+    // Accept canonical zip (with or without a `; charset=…` parameter), the
+    // optional x-dntr type, or any 2xx whose URL path ends in `.dntr`
+    // (case-insensitive for pasted URLs). An exact/`;`-prefixed match avoids
+    // `application/zipper` slipping through. response.url is unreliable in
+    // Electron, so the `.dntr` suffix is checked on the original user URL.
+    const contentType = (response.headers.get("content-type") ?? "").toLowerCase().trim();
+    const mimeMatches = (type: string) =>
+      contentType === type || contentType.startsWith(`${type};`);
+    const mimeOk = mimeMatches("application/zip") || mimeMatches("application/x-dntr");
+    const suffixOk = parsed.pathname.toLowerCase().endsWith(".dntr");
+    if (!mimeOk && !suffixOk) {
+      return abandon(
+        failed("content_type_rejected", "That URL didn't return a plugin archive (.dntr).")
+      );
+    }
+
+    if (!response.body) {
+      return failed("fetch_failed", "The server returned an empty response.");
+    }
+
+    let bytesRead = 0;
+    const counter = new Transform({
+      transform(chunk: Buffer, _enc, cb) {
+        bytesRead += chunk.length;
+        if (bytesRead > PLUGIN_DOWNLOAD_MAX_BYTES) {
+          sizeAborted = true;
+          sizeController.abort();
+          cb(new Error("size_exceeded"));
+          return;
+        }
+        cb(null, chunk);
+      },
+    });
+
+    wroteTempFile = true;
+    try {
+      await pipeline(
+        Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]),
+        counter,
+        createWriteStream(tempPath)
+      );
+    } catch (err) {
+      if (sizeAborted) {
+        return failed("size_exceeded", "The plugin file is larger than the 30 MB limit.");
+      }
+      if (isAbortLikeError(err)) {
+        return failed("fetch_timeout", "The download timed out before it finished.");
+      }
+      return failed("fetch_failed", "Couldn't download the plugin from that URL.");
+    }
+
+    return pluginService.installPlugin(tempPath, { source: "url", originalUrl: trimmed });
+  } finally {
+    if (wroteTempFile) {
+      await rm(tempPath, { force: true }).catch(() => {});
+    }
+  }
 }
 
 async function handleUninstall(pluginId: string, deleteSettings?: boolean): Promise<void> {
