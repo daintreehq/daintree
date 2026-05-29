@@ -3378,7 +3378,9 @@ export class PluginService {
         },
       });
     } catch (err) {
-      throw new Error(`Couldn't acquire the plugin install lock: ${(err as Error).message}`);
+      throw new Error(`Couldn't acquire the plugin install lock: ${(err as Error).message}`, {
+        cause: err,
+      });
     }
 
     try {
