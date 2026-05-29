@@ -104,7 +104,7 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(26);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(30);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:install", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:set-enabled", expect.any(Function));
@@ -159,6 +159,22 @@ describe("registerPluginHandlers", () => {
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:export-audit-log", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
       "plugin:get-diagnostics-snapshot",
+      expect.any(Function)
+    );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:settings-get-values",
+      expect.any(Function)
+    );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:settings-set-value",
+      expect.any(Function)
+    );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:settings-delete-value",
+      expect.any(Function)
+    );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:settings-reveal-secret",
       expect.any(Function)
     );
   });
