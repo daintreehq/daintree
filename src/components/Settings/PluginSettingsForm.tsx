@@ -1,0 +1,502 @@
+import { useCallback, useEffect, useState } from "react";
+import { Eye, EyeOff, RotateCcw } from "lucide-react";
+import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
+import { Button } from "@/components/ui/button";
+import { useProjectStore } from "@/store/projectStore";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logError } from "@/utils/logger";
+import type {
+  LoadedPluginInfo,
+  PluginSettingsScope,
+  SettingDefinition,
+  SettingFieldType,
+} from "@shared/types/plugin";
+
+const SCOPE_BADGE_LABEL: Record<PluginSettingsScope, string> = {
+  user: "User",
+  project: "Project",
+};
+
+const INPUT_CLASS =
+  "w-full px-2.5 py-1.5 text-sm rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border text-daintree-text placeholder:text-daintree-text/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed";
+
+function settingScope(def: SettingDefinition): PluginSettingsScope {
+  return def.scope ?? "user";
+}
+
+function effectiveType(def: SettingDefinition): SettingFieldType {
+  if (def.secret === true) return "secret";
+  return def.type ?? "string";
+}
+
+function fieldLabel(def: SettingDefinition): string {
+  return def.label ?? def.id;
+}
+
+/** Stringify a stored/default value for a text, number, or JSON input. */
+function toDraft(value: unknown, type: SettingFieldType): string {
+  if (value === undefined || value === null) return "";
+  if (type === "json") {
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return "";
+    }
+  }
+  return String(value);
+}
+
+interface SettingFieldProps {
+  def: SettingDefinition;
+  pluginId: string;
+  projectId: string | null;
+  /** Stored non-secret value for this field's scope, or undefined when unset. */
+  storedValue: unknown;
+  /** Whether a secret value is currently stored (secret fields only). */
+  secretIsSet: boolean;
+  /** Whether this field's scope values have finished loading. */
+  loaded: boolean;
+}
+
+/**
+ * One generated field. Owns its own draft/validation/reveal state. Project-scoped
+ * fields are remounted by the parent on project switch (keyed on projectId), so
+ * the draft re-initializes from the new project's stored value.
+ */
+function SettingField({
+  def,
+  pluginId,
+  projectId,
+  storedValue,
+  secretIsSet,
+  loaded,
+}: SettingFieldProps) {
+  const type = effectiveType(def);
+  const scope = settingScope(def);
+  const isSecret = type === "secret";
+  const scopeReady = scope === "user" || projectId !== null;
+
+  // Draft for text / number / json / enum inputs (string-backed).
+  const [draft, setDraft] = useState("");
+  // Last value committed to storage, to skip no-op writes on blur.
+  const [committed, setCommitted] = useState("");
+  const [boolValue, setBoolValue] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  // Secret-specific state.
+  const [hasStored, setHasStored] = useState(secretIsSet);
+  const [revealed, setRevealed] = useState(false);
+
+  // Initialize from stored value (falling back to the declared default) once the
+  // scope's values resolve. Runs once per (re)mount when `loaded` flips true.
+  useEffect(() => {
+    if (!loaded) return;
+    if (isSecret) {
+      setHasStored(secretIsSet);
+      setRevealed(false);
+      setDraft("");
+      return;
+    }
+    if (type === "boolean") {
+      const initial = storedValue ?? def.default;
+      setBoolValue(initial === true);
+      return;
+    }
+    const initial = toDraft(storedValue ?? def.default, type);
+    setDraft(initial);
+    setCommitted(initial);
+    setError(null);
+  }, [loaded, storedValue, secretIsSet, isSecret, type, def.default]);
+
+  // Returns whether the write succeeded so callers can advance their committed
+  // state; never throws (the error is surfaced inline) so blur handlers can fire
+  // it without an unhandled rejection.
+  const writeValue = useCallback(
+    async (value: unknown): Promise<boolean> => {
+      setSaving(true);
+      try {
+        await window.electron.plugin.setSettingValue(pluginId, def.id, value, scope, projectId);
+        setError(null);
+        return true;
+      } catch (err) {
+        setError(formatErrorMessage(err, "Couldn't save setting"));
+        logError(`Failed to save plugin setting ${pluginId}.${def.id}`, err);
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [pluginId, def.id, scope, projectId]
+  );
+
+  const handleReset = useCallback(async () => {
+    setSaving(true);
+    try {
+      await window.electron.plugin.deleteSettingValue(pluginId, def.id, scope, projectId);
+      setError(null);
+      if (isSecret) {
+        setHasStored(false);
+        setRevealed(false);
+        setDraft("");
+      } else if (type === "boolean") {
+        setBoolValue(def.default === true);
+      } else {
+        const reset = toDraft(def.default, type);
+        setDraft(reset);
+        setCommitted(reset);
+      }
+    } catch (err) {
+      setError(formatErrorMessage(err, "Couldn't reset setting"));
+      logError(`Failed to reset plugin setting ${pluginId}.${def.id}`, err);
+    } finally {
+      setSaving(false);
+    }
+  }, [pluginId, def.id, def.default, scope, projectId, isSecret, type]);
+
+  const controlsDisabled = !loaded || !scopeReady || saving;
+  const fieldId = `plugin-setting-${pluginId}-${def.id}`;
+  const describedBy = error ? `${fieldId}-error` : def.description ? `${fieldId}-desc` : undefined;
+
+  const commitText = async () => {
+    if (draft === committed) return;
+    if (type === "number") {
+      const trimmed = draft.trim();
+      if (trimmed === "") {
+        // Empty clears the field back to default — drop the stored override.
+        await handleReset();
+        return;
+      }
+      const num = Number(trimmed);
+      if (!Number.isFinite(num)) {
+        setError("Enter a valid number");
+        return;
+      }
+      if (def.min !== undefined && num < def.min) {
+        setError(`Must be at least ${def.min}`);
+        return;
+      }
+      if (def.max !== undefined && num > def.max) {
+        setError(`Must be at most ${def.max}`);
+        return;
+      }
+      if (await writeValue(num)) setCommitted(draft);
+      return;
+    }
+    if (type === "json") {
+      const trimmed = draft.trim();
+      if (trimmed === "") {
+        await handleReset();
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        setError("Enter valid JSON");
+        return;
+      }
+      if (await writeValue(parsed)) setCommitted(draft);
+      return;
+    }
+    // string
+    if (await writeValue(draft)) setCommitted(draft);
+  };
+
+  const handleReveal = async () => {
+    try {
+      const value = await window.electron.plugin.revealSecretSetting(
+        pluginId,
+        def.id,
+        scope,
+        projectId
+      );
+      setDraft(value ?? "");
+      setRevealed(true);
+      setError(null);
+    } catch (err) {
+      setError(formatErrorMessage(err, "Couldn't reveal secret"));
+      logError(`Failed to reveal plugin secret ${pluginId}.${def.id}`, err);
+    }
+  };
+
+  const commitSecret = async () => {
+    // Re-mask on blur regardless; only persist when something was typed.
+    const value = draft;
+    setRevealed(false);
+    setDraft("");
+    if (value === "") return;
+    if (await writeValue(value)) setHasStored(true);
+  };
+
+  const renderControl = () => {
+    if (type === "boolean") {
+      return (
+        <SettingsSwitch
+          id={fieldId}
+          checked={boolValue}
+          disabled={controlsDisabled}
+          aria-describedby={describedBy}
+          aria-label={fieldLabel(def)}
+          onCheckedChange={(next) => {
+            setBoolValue(next);
+            void writeValue(next);
+          }}
+        />
+      );
+    }
+    if (type === "enum") {
+      const options = def.options ?? [];
+      return (
+        <select
+          id={fieldId}
+          value={draft}
+          disabled={controlsDisabled}
+          aria-describedby={describedBy}
+          className={INPUT_CLASS}
+          onChange={(e) => {
+            const next = e.target.value;
+            setDraft(next);
+            setCommitted(next);
+            void writeValue(next);
+          }}
+        >
+          {/* Empty placeholder so an unset enum doesn't silently adopt the first option. */}
+          {draft === "" && <option value="">Select…</option>}
+          {options.map((opt) => (
+            <option key={opt} value={opt}>
+              {opt}
+            </option>
+          ))}
+        </select>
+      );
+    }
+    if (type === "json") {
+      return (
+        <textarea
+          id={fieldId}
+          value={draft}
+          disabled={controlsDisabled}
+          aria-describedby={describedBy}
+          rows={4}
+          spellCheck={false}
+          className={`${INPUT_CLASS} font-mono text-xs resize-y`}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={() => void commitText()}
+        />
+      );
+    }
+    if (type === "secret") {
+      return (
+        <div className="flex items-center gap-1.5">
+          <input
+            id={fieldId}
+            type={revealed ? "text" : "password"}
+            value={draft}
+            disabled={controlsDisabled}
+            aria-describedby={describedBy}
+            placeholder={hasStored ? "••••••••" : "Not set"}
+            autoComplete="off"
+            className={INPUT_CLASS}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => void commitSecret()}
+          />
+          {hasStored && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              disabled={controlsDisabled}
+              aria-label={revealed ? `Hide ${fieldLabel(def)}` : `Reveal ${fieldLabel(def)}`}
+              // Toggle reveal without firing the input's blur-commit.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                if (revealed) {
+                  setRevealed(false);
+                  setDraft("");
+                } else {
+                  void handleReveal();
+                }
+              }}
+            >
+              {revealed ? <EyeOff /> : <Eye />}
+            </Button>
+          )}
+        </div>
+      );
+    }
+    // string
+    return (
+      <input
+        id={fieldId}
+        type="text"
+        value={draft}
+        disabled={controlsDisabled}
+        aria-describedby={describedBy}
+        className={INPUT_CLASS}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => void commitText()}
+      />
+    );
+  };
+
+  const canReset =
+    (isSecret ? hasStored : storedValue !== undefined) && loaded && scopeReady && !saving;
+
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <label htmlFor={fieldId} className="text-xs font-medium text-daintree-text">
+          {fieldLabel(def)}
+        </label>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span className="text-[10px] uppercase tracking-wide text-daintree-text/40">
+            {SCOPE_BADGE_LABEL[scope]}
+          </span>
+          {canReset && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Reset ${fieldLabel(def)} to default`}
+              className="text-daintree-text/40 hover:text-daintree-text/70"
+              onClick={() => void handleReset()}
+            >
+              <RotateCcw />
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* boolean lays the switch beside the description; others stack. */}
+      {type === "boolean" ? (
+        <div className="flex items-center justify-between gap-3">
+          {def.description ? (
+            <p id={`${fieldId}-desc`} className="text-[11px] text-daintree-text/50">
+              {def.description}
+            </p>
+          ) : (
+            <span />
+          )}
+          {renderControl()}
+        </div>
+      ) : (
+        <>
+          {renderControl()}
+          {def.description && (
+            <p id={`${fieldId}-desc`} className="text-[11px] text-daintree-text/50">
+              {def.description}
+            </p>
+          )}
+        </>
+      )}
+
+      {!scopeReady && (
+        <p className="text-[11px] text-daintree-text/40">Open a project to edit this setting.</p>
+      )}
+      {error && (
+        <p id={`${fieldId}-error`} className="text-[11px] text-status-danger">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+interface PluginSettingsFormProps {
+  plugin: LoadedPluginInfo;
+}
+
+/**
+ * Generated settings form for one plugin's `contributes.settings` (#9301). Field
+ * chrome (labels, controls, scope badges) renders synchronously from the already
+ * loaded manifest; stored values hydrate asynchronously per scope. User-scoped
+ * values load once; project-scoped values reload whenever the active project
+ * changes (the fields are remounted so their drafts re-initialize).
+ */
+export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
+  const pluginId = plugin.manifest.name;
+  const settings = plugin.manifest.contributes.settings ?? [];
+  const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
+
+  const hasUserScope = settings.some((s) => settingScope(s) === "user");
+  const hasProjectScope = settings.some((s) => settingScope(s) === "project");
+
+  const [userValues, setUserValues] = useState<Record<string, unknown> | null>(null);
+  const [userSecrets, setUserSecrets] = useState<Set<string>>(new Set());
+  const [projectValues, setProjectValues] = useState<Record<string, unknown> | null>(null);
+  const [projectSecrets, setProjectSecrets] = useState<Set<string>>(new Set());
+
+  // User-scoped values: load once per plugin.
+  useEffect(() => {
+    if (!hasUserScope) return;
+    let cancelled = false;
+    window.electron.plugin
+      .getSettingValues(pluginId, "user", null)
+      .then((res) => {
+        if (cancelled) return;
+        setUserValues(res.values);
+        setUserSecrets(new Set(res.secretsSet));
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setUserValues({});
+        logError(`Failed to load user plugin settings for ${pluginId}`, err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pluginId, hasUserScope]);
+
+  // Project-scoped values: reload on project switch (#9301 re-render requirement).
+  useEffect(() => {
+    if (!hasProjectScope) return;
+    if (projectId === null) {
+      setProjectValues({});
+      setProjectSecrets(new Set());
+      return;
+    }
+    let cancelled = false;
+    setProjectValues(null);
+    window.electron.plugin
+      .getSettingValues(pluginId, "project", projectId)
+      .then((res) => {
+        if (cancelled) return;
+        setProjectValues(res.values);
+        setProjectSecrets(new Set(res.secretsSet));
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setProjectValues({});
+        logError(`Failed to load project plugin settings for ${pluginId}`, err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pluginId, hasProjectScope, projectId]);
+
+  if (settings.length === 0) return null;
+
+  return (
+    <div className="mt-4 pt-4 border-t border-daintree-border space-y-4">
+      <h4 className="text-xs font-medium text-daintree-text/70">Settings</h4>
+      {settings.map((def) => {
+        const scope = settingScope(def);
+        const loaded = scope === "user" ? userValues !== null : projectValues !== null;
+        const values = scope === "user" ? userValues : projectValues;
+        const secrets = scope === "user" ? userSecrets : projectSecrets;
+        return (
+          <SettingField
+            // Remount project-scoped fields on project switch so drafts reset.
+            key={scope === "project" ? `${def.id}:${projectId ?? "none"}` : def.id}
+            def={def}
+            pluginId={pluginId}
+            projectId={projectId}
+            storedValue={values?.[def.id]}
+            secretIsSet={secrets.has(def.id)}
+            loaded={loaded}
+          />
+        );
+      })}
+    </div>
+  );
+}

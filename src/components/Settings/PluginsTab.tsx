@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Plug, AlertCircle, FilePlus, Link2, Trash2, RefreshCw, Info } from "lucide-react";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
+import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -200,6 +201,10 @@ function PluginRow({
             Failed to load: {plugin.loadError.message}
           </p>
         </div>
+      )}
+
+      {enabled && (plugin.manifest.contributes.settings?.length ?? 0) > 0 && (
+        <PluginSettingsForm plugin={plugin} />
       )}
     </div>
   );

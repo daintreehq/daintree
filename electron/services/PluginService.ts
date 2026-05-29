@@ -76,6 +76,7 @@ import type {
   PluginInstallOptions,
   PluginCheckUpdateResult,
   PluginSettingsScope,
+  PluginSettingsUiValues,
   ViewContribution,
 } from "../../shared/types/plugin.js";
 import { PluginSettingsStore } from "./PluginSettingsStore.js";
@@ -3940,6 +3941,118 @@ export class PluginService {
       name: "plugin:context-menu-items-changed",
       payload: { items: getPluginContextMenuItems(), complete },
     });
+  }
+
+  /**
+   * Fetch all non-secret setting values and the list of secret keys for a
+   * plugin + scope. Used by the plugin settings UI to populate form fields.
+   * Secrets are not returned — only their key names (so the UI can render
+   * masked fields) and a "reveal" affordance.
+   */
+  async getSettingValuesForUi(
+    pluginId: string,
+    scope: PluginSettingsScope,
+    _projectId: string | null
+  ): Promise<PluginSettingsUiValues> {
+    const filePath = this.resolveSettingsFilePath(pluginId, scope);
+    if (!filePath) {
+      return { values: {}, secretsSet: [] };
+    }
+
+    const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
+    const manifest = this.plugins.get(pluginId)?.manifest;
+    const settings = manifest?.contributes.settings ?? [];
+
+    const values: Record<string, unknown> = {};
+    const secretsSet: string[] = [];
+
+    for (const setting of settings) {
+      const value = await store.get<unknown>(setting.id);
+      if (value !== undefined) {
+        if (setting.secret) {
+          secretsSet.push(setting.id);
+        } else {
+          values[setting.id] = value;
+        }
+      }
+    }
+
+    return { values, secretsSet };
+  }
+
+  /**
+   * Persist a single setting value. The UI calls this when the user changes
+   * a form field. Values are JSON-serialized; secret settings are handled
+   * identically to non-secret ones at storage time (the secret classification
+   * is metadata, not an encryption marker).
+   */
+  async setSettingValueFromUi(
+    pluginId: string,
+    key: string,
+    value: unknown,
+    scope: PluginSettingsScope,
+    _projectId: string | null
+  ): Promise<void> {
+    assertSettingsKey(pluginId, "set", key);
+    if (value === undefined) {
+      throw new Error(
+        `Plugin "${pluginId}" settings: value for "${key}" is undefined — settings cannot store undefined`
+      );
+    }
+    this.assertSettingDeclared(pluginId, key);
+    const filePath = this.resolveSettingsFilePath(pluginId, scope);
+    if (!filePath) {
+      throw new Error(
+        `Plugin "${pluginId}" settings: no active project — "project" scope has no target`
+      );
+    }
+    const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
+    const changed = await store.set(key, value);
+    if (changed) this.notifySettingsSubscribers(pluginId, scope, key, value);
+  }
+
+  /**
+   * Delete a setting value. The UI calls this when the user clears a form
+   * field (for optional settings).
+   */
+  async deleteSettingValueFromUi(
+    pluginId: string,
+    key: string,
+    scope: PluginSettingsScope,
+    _projectId: string | null
+  ): Promise<void> {
+    assertSettingsKey(pluginId, "delete", key);
+    const filePath = this.resolveSettingsFilePath(pluginId, scope);
+    if (!filePath) {
+      throw new Error(
+        `Plugin "${pluginId}" settings: no active project — "project" scope has no target`
+      );
+    }
+    const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
+    const changed = await store.delete(key);
+    if (changed) this.notifySettingsSubscribers(pluginId, scope, key, undefined);
+  }
+
+  /**
+   * Decrypt/reveal a secret setting value. Secrets are stored as plaintext
+   * (there's no encryption), so revealing just means returning the stored
+   * value. Returns `null` if the setting is not set. The UI uses this when
+   * the user clicks "reveal" on a masked field.
+   */
+  async revealSecretSettingForUi(
+    pluginId: string,
+    key: string,
+    scope: PluginSettingsScope,
+    _projectId: string | null
+  ): Promise<string | null> {
+    assertSettingsKey(pluginId, "get", key);
+    this.assertSettingDeclared(pluginId, key);
+    const filePath = this.resolveSettingsFilePath(pluginId, scope);
+    if (!filePath) return null;
+    const value = await this.getOrCreateSettingsStore(pluginId, scope, filePath).get<unknown>(key);
+    if (value === undefined || value === null) return null;
+    if (typeof value === "string") return value;
+    return JSON.stringify(value);
   }
 
   /**

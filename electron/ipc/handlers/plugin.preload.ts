@@ -31,6 +31,10 @@ export const PLUGIN_METHOD_CHANNELS = {
   setAuditMaxRecords: "plugin:set-audit-max-records",
   exportAuditLog: "plugin:export-audit-log",
   getDiagnosticsSnapshot: "plugin:get-diagnostics-snapshot",
+  getSettingValues: "plugin:settings-get-values",
+  setSettingValue: "plugin:settings-set-value",
+  deleteSettingValue: "plugin:settings-delete-value",
+  revealSecretSetting: "plugin:settings-reveal-secret",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PLUGIN_METHOD_CHANNELS;

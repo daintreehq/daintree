@@ -67,6 +67,36 @@ export class PluginSettingsStore {
     return true;
   }
 
+  /**
+   * Remove `key`. Resolves to `true` when a stored value was actually deleted
+   * (so the caller can fire change subscribers with `undefined`), `false` when
+   * the key was already absent. On write failure the optimistic in-memory delete
+   * is rolled back and the error rethrown. Serialized through the same write
+   * chain as {@link set} so a concurrent set/delete can't interleave.
+   */
+  async delete(key: string): Promise<boolean> {
+    const result = this.writeChain.then(() => this.doDelete(key));
+    this.writeChain = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  private async doDelete(key: string): Promise<boolean> {
+    const cache = await this.load();
+    if (!cache.has(key)) return false;
+    const prev = cache.get(key);
+    cache.delete(key);
+    try {
+      await this.persist(cache);
+    } catch (err) {
+      cache.set(key, prev);
+      throw err;
+    }
+    return true;
+  }
+
   private async load(): Promise<Map<string, unknown>> {
     if (this.cache) return this.cache;
     if (!this.loadPromise) {

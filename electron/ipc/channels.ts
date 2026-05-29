@@ -824,6 +824,10 @@ export const CHANNELS = {
   PLUGIN_SET_AUDIT_MAX_RECORDS: "plugin:set-audit-max-records",
   PLUGIN_EXPORT_AUDIT_LOG: "plugin:export-audit-log",
   PLUGIN_GET_DIAGNOSTICS_SNAPSHOT: "plugin:get-diagnostics-snapshot",
+  PLUGIN_SETTINGS_GET_VALUES: "plugin:settings-get-values",
+  PLUGIN_SETTINGS_SET_VALUE: "plugin:settings-set-value",
+  PLUGIN_SETTINGS_DELETE_VALUE: "plugin:settings-delete-value",
+  PLUGIN_SETTINGS_REVEAL_SECRET: "plugin:settings-reveal-secret",
   /** Bridge: main process dispatches a plugin-sourced action request to the renderer. */
   PLUGIN_DISPATCH_ACTION_REQUEST: "plugin:dispatch-action-request",
   /** Bridge: renderer returns the plugin-sourced action dispatch result to the main process. */

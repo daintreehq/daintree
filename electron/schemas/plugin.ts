@@ -361,6 +361,52 @@ export const PluginToastOptionsSchema = z
   })
   .strict();
 
+/**
+ * One `contributes.settings` field declaration (#9301). `type` is optional
+ * (renders as a text field when omitted); the legacy `secret: true` flag is
+ * normalized to `type: "secret"` by the transform so downstream consumers only
+ * switch on `type`. A plain object (not `discriminatedUnion`) is used because
+ * `type` is optional on the string/number/boolean branch. Strict so a misspelled
+ * field key surfaces as a manifest error rather than silently dropping.
+ */
+export const SettingDefinitionSchema = z
+  .object({
+    id: z.string().min(1),
+    type: z.enum(["string", "number", "boolean", "enum", "json", "secret"]).optional(),
+    label: z.string().min(1).optional(),
+    description: z.string().min(1).optional(),
+    default: z.unknown().optional(),
+    scope: z.enum(["user", "project"]).default("user"),
+    options: z.array(z.string().min(1)).min(1).optional(),
+    min: z.number().optional(),
+    max: z.number().optional(),
+    secret: z.boolean().optional(),
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    const effectiveType = val.secret === true ? "secret" : (val.type ?? "string");
+    if (effectiveType === "enum" && (!val.options || val.options.length === 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Settings of type "enum" require a non-empty options array',
+        path: ["options"],
+      });
+    }
+    if (val.min !== undefined && val.max !== undefined && val.min > val.max) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Setting min cannot be greater than max",
+        path: ["min"],
+      });
+    }
+  })
+  .transform((val) => {
+    if (val.secret === true && val.type !== "secret") {
+      return { ...val, type: "secret" as const };
+    }
+    return val;
+  });
+
 export function getPluginManifestSchema(isBuiltin: boolean) {
   return z
     .strictObject({
@@ -398,6 +444,7 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
           experimental_mcpServers: z.array(McpServerContributionSchema).default([]),
           forgeProviders: z.array(ForgeProviderContributionSchema).default([]),
           fileDecorationProviders: z.array(FileDecorationContributionSchema).default([]),
+          settings: z.array(SettingDefinitionSchema).default([]),
         })
         .default({
           panels: [],
@@ -410,6 +457,7 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
           experimental_mcpServers: [],
           forgeProviders: [],
           fileDecorationProviders: [],
+          settings: [],
         }),
     })
     .superRefine((manifest, ctx) => {

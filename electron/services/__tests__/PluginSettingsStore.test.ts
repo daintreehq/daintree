@@ -141,4 +141,54 @@ describe("PluginSettingsStore", () => {
     const raw = await fs.readFile(filePath, "utf-8");
     expect(JSON.parse(raw)).toEqual({ a: 1, b: 2, c: 3, d: 4 });
   });
+
+  describe("delete", () => {
+    it("removes a stored key and reports the change", async () => {
+      const { store, filePath } = storeAt("acme.plugin.json");
+      await store.set("token", "sk-test");
+      expect(await store.delete("token")).toBe(true);
+      expect(await store.get("token")).toBeUndefined();
+      const raw = await fs.readFile(filePath, "utf-8");
+      expect(JSON.parse(raw)).toEqual({});
+    });
+
+    it("returns false when deleting an absent key", async () => {
+      const { store } = storeAt("acme.plugin.json");
+      expect(await store.delete("missing")).toBe(false);
+    });
+
+    it("leaves sibling keys intact", async () => {
+      const { store } = storeAt("acme.plugin.json");
+      await store.set("a", 1);
+      await store.set("b", 2);
+      expect(await store.delete("a")).toBe(true);
+      expect(await store.get("a")).toBeUndefined();
+      expect(await store.get<number>("b")).toBe(2);
+    });
+
+    it("persists the deletion across instances", async () => {
+      const { store, filePath } = storeAt("acme.plugin.json");
+      await store.set("token", "sk-test");
+      await store.delete("token");
+      const reopened = new PluginSettingsStore(filePath);
+      expect(await reopened.get("token")).toBeUndefined();
+    });
+
+    const rollbackDeleteIt =
+      process.platform === "win32" || process.getuid?.() === 0 ? it.skip : it;
+    rollbackDeleteIt("rolls back the in-memory delete when the write fails", async () => {
+      const dir = path.join(tmpDir, "ro-del");
+      await fs.mkdir(dir, { recursive: true });
+      const store = new PluginSettingsStore(path.join(dir, "acme.plugin.json"));
+      await store.set("token", "value");
+      await fs.chmod(dir, 0o555);
+      try {
+        await expect(store.delete("token")).rejects.toBeTruthy();
+        // The optimistic in-memory delete must not survive a failed persist.
+        expect(await store.get<string>("token")).toBe("value");
+      } finally {
+        await fs.chmod(dir, 0o755);
+      }
+    });
+  });
 });
