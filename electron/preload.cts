@@ -2477,6 +2477,8 @@ const api: ElectronAPI = {
 
     onActionsChanged: (callback: (payload: { actions: PluginActionDescriptor[] }) => void) =>
       _eventBusOn("plugin:actions-changed", callback),
+    onProvenanceChanged: (callback: (payload: Record<string, never>) => void) =>
+      _eventBusOn("plugin:provenance-changed", callback),
     onPanelKindsChanged: (callback: (payload: { kinds: PanelKindConfig[] }) => void) =>
       _eventBusOn("plugin:panel-kinds-changed", callback),
     onToolbarButtonsChanged: (

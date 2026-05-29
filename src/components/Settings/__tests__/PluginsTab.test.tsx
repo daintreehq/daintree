@@ -4,6 +4,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { PluginsTab } from "../PluginsTab";
 import { SettingsValidationProvider } from "../SettingsValidationRegistry";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { LoadedPluginInfo } from "@shared/types/plugin";
 
 vi.mock("@/utils/logger", () => ({
@@ -12,6 +13,15 @@ vi.mock("@/utils/logger", () => ({
   logInfo: vi.fn(),
   logDebug: vi.fn(),
 }));
+
+// AppDialog (used by the uninstall confirm + URL dialog) observes its scroll
+// container, which jsdom lacks.
+class StubResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+vi.stubGlobal("ResizeObserver", StubResizeObserver);
 
 function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo {
   return {
@@ -55,15 +65,22 @@ beforeEach(() => {
     plugin: {
       list: vi.fn().mockResolvedValue([]),
       setEnabled: vi.fn().mockResolvedValue(undefined),
+      installFromFile: vi.fn().mockResolvedValue({ status: "not-implemented" }),
+      installFromUrl: vi.fn().mockResolvedValue({ status: "not-implemented" }),
+      uninstall: vi.fn().mockResolvedValue(undefined),
+      checkForUpdate: vi.fn().mockResolvedValue({ status: "not-implemented" }),
+      onProvenanceChanged: vi.fn().mockReturnValue(() => {}),
     },
   } as unknown as typeof window.electron;
 });
 
 function renderTab() {
   return render(
-    <SettingsValidationProvider>
-      <PluginsTab />
-    </SettingsValidationProvider>
+    <TooltipProvider>
+      <SettingsValidationProvider>
+        <PluginsTab />
+      </SettingsValidationProvider>
+    </TooltipProvider>
   );
 }
 
@@ -167,5 +184,119 @@ describe("PluginsTab", () => {
     fireEvent.click(toggle());
     await waitFor(() => expect(screen.queryByText("Restart required")).toBeNull());
     expect(window.electron.plugin.setEnabled).toHaveBeenLastCalledWith("acme.demo", true);
+  });
+
+  it("renders the install buttons immediately, before the list resolves", () => {
+    // list() never resolves in this test — chrome must still paint.
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise(() => {})
+    );
+    renderTab();
+    expect(screen.getByRole("button", { name: "Install from file" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Install from URL" })).toBeTruthy();
+  });
+
+  it("shows a source badge and install time for a file-installed plugin", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePlugin({ source: "sideload", installedAt: Date.now() - 60_000 }),
+    ]);
+    renderTab();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    expect(screen.getByText("File")).toBeTruthy();
+    expect(screen.getByText(/Installed.*ago/)).toBeTruthy();
+  });
+
+  it("shows a Dev badge for a dev-mode plugin", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePlugin({ devMode: true }),
+    ]);
+    renderTab();
+    await waitFor(() => expect(screen.getByText("Dev")).toBeTruthy());
+  });
+
+  it("renders a load-error indicator when loadError is set", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePlugin({ loadError: { message: "boom", at: 1 } }),
+    ]);
+    renderTab();
+    await waitFor(() => expect(screen.getByText(/Failed to load: boom/)).toBeTruthy());
+  });
+
+  it("does not offer uninstall for a built-in plugin", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePlugin({ isBuiltin: true, source: "builtin" }),
+    ]);
+    renderTab();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "Delete Acme Demo" })).toBeNull();
+    expect(screen.getByText("Built-in")).toBeTruthy();
+  });
+
+  it("opens a confirm dialog and uninstalls, then re-fetches the list", async () => {
+    const listMock = window.electron.plugin.list as ReturnType<typeof vi.fn>;
+    listMock.mockResolvedValueOnce([makePlugin()]).mockResolvedValueOnce([]);
+    renderTab();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete Acme Demo" }));
+    await waitFor(() => expect(screen.getByText("Delete 'Acme Demo'?")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete plugin" }));
+    await waitFor(() => expect(window.electron.plugin.uninstall).toHaveBeenCalledWith("acme.demo"));
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+    expect(listMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("disables the check-for-update button", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
+    renderTab();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    const checkBtn = screen.getByRole("button", { name: "Check Acme Demo for updates" });
+    expect(checkBtn.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("opens the URL dialog and routes the URL through installFromUrl", async () => {
+    renderTab();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
+
+    fireEvent.change(screen.getByLabelText("Plugin URL"), {
+      target: { value: "https://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    await waitFor(() =>
+      expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
+        "https://example.com/p.dntr"
+      )
+    );
+  });
+
+  it("shows a notice when install-from-file isn't implemented yet", async () => {
+    renderTab();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from file" }));
+    await waitFor(() => expect(screen.getByText(/isn't available yet/)).toBeTruthy());
+  });
+
+  it("re-fetches the list when a provenance-changed event fires", async () => {
+    let fireProvenance: (() => void) | undefined;
+    (window.electron.plugin.onProvenanceChanged as ReturnType<typeof vi.fn>).mockImplementation(
+      (cb: () => void) => {
+        fireProvenance = cb;
+        return () => {};
+      }
+    );
+    const listMock = window.electron.plugin.list as ReturnType<typeof vi.fn>;
+    listMock.mockResolvedValue([]);
+    renderTab();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+    expect(listMock).toHaveBeenCalledTimes(1);
+
+    fireProvenance?.();
+    await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
   });
 });

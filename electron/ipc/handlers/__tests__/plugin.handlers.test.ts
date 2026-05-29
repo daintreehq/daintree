@@ -5,6 +5,7 @@ const mockRegisterHandler = vi.fn();
 const mockRemoveHandlers = vi.fn();
 const mockListPlugins = vi.fn();
 const mockSetEnabled = vi.fn();
+const mockUninstallPlugin = vi.fn();
 const mockListPluginActions = vi.fn();
 const mockRegisterPluginAction = vi.fn();
 const mockUnregisterPluginAction = vi.fn();
@@ -13,6 +14,7 @@ vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
     listPlugins: (...args: unknown[]) => mockListPlugins(...args),
     setEnabled: (...args: unknown[]) => mockSetEnabled(...args),
+    uninstallPlugin: (...args: unknown[]) => mockUninstallPlugin(...args),
     dispatchHandler: (...args: unknown[]) => mockDispatchHandler(...args),
     registerHandler: (...args: unknown[]) => mockRegisterHandler(...args),
     removeHandlers: (...args: unknown[]) => mockRemoveHandlers(...args),
@@ -64,10 +66,18 @@ vi.mock("../../../services/PluginActionAuditService.js", () => ({
 
 const mockIpcMainHandle = vi.fn();
 const mockIpcMainRemoveHandler = vi.fn();
+const mockShowOpenDialog = vi.fn();
+const mockGetFocusedWindow = vi.fn();
 vi.mock("electron", () => ({
   ipcMain: {
     handle: (...args: unknown[]) => mockIpcMainHandle(...args),
     removeHandler: (...args: unknown[]) => mockIpcMainRemoveHandler(...args),
+  },
+  dialog: {
+    showOpenDialog: (...args: unknown[]) => mockShowOpenDialog(...args),
+  },
+  BrowserWindow: {
+    getFocusedWindow: (...args: unknown[]) => mockGetFocusedWindow(...args),
   },
 }));
 
@@ -83,6 +93,8 @@ beforeEach(() => {
   mockListPluginActions.mockReturnValue([]);
   mockGetRegisteredForgeProviders.mockReturnValue([]);
   mockGetFileDecorationImpls.mockReturnValue([]);
+  mockGetFocusedWindow.mockReturnValue(null);
+  mockShowOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
   _resetIpcGuardForTesting();
   markIpcSecurityReady();
 });
@@ -90,10 +102,17 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(21);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(26);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:install", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:set-enabled", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:install-from-file",
+      expect.any(Function)
+    );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:install-from-url", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:uninstall", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:check-for-update", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:invoke", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:toolbar-buttons", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:menu-items", expect.any(Function));
@@ -186,6 +205,67 @@ describe("registerPluginHandlers", () => {
 
     await setEnabledHandler({}, "acme.my-plugin", false);
     expect(mockSetEnabled).toHaveBeenCalledWith("acme.my-plugin", false);
+  });
+
+  function getHandler(channel: string) {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === channel)![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  it("PLUGIN_INSTALL_FROM_FILE returns cancelled when the picker is dismissed", async () => {
+    mockShowOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
+    const handler = getHandler("plugin:install-from-file");
+    const result = await handler({ sender: { id: 1 } });
+    expect(result).toEqual({ status: "cancelled" });
+  });
+
+  it("PLUGIN_INSTALL_FROM_FILE filters the picker to .dntr archives", async () => {
+    mockShowOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
+    const handler = getHandler("plugin:install-from-file");
+    await handler({ sender: { id: 1 } });
+    const opts = mockShowOpenDialog.mock.calls[0]![0] as {
+      filters: Array<{ extensions: string[] }>;
+    };
+    expect(opts.filters[0]!.extensions).toEqual(["dntr"]);
+  });
+
+  it("PLUGIN_INSTALL_FROM_FILE returns not-implemented when a file is chosen", async () => {
+    mockShowOpenDialog.mockResolvedValue({ canceled: false, filePaths: ["/tmp/p.dntr"] });
+    const handler = getHandler("plugin:install-from-file");
+    const result = await handler({ sender: { id: 1 } });
+    expect(result).toEqual({ status: "not-implemented" });
+  });
+
+  it("PLUGIN_INSTALL_FROM_URL rejects an empty URL without claiming not-implemented", async () => {
+    const handler = getHandler("plugin:install-from-url");
+    const result = await handler({}, "  ");
+    expect(result).toEqual({ status: "invalid-url" });
+  });
+
+  it("PLUGIN_INSTALL_FROM_URL returns not-implemented for a valid URL", async () => {
+    const handler = getHandler("plugin:install-from-url");
+    const result = await handler({}, "https://example.com/p.dntr");
+    expect(result).toEqual({ status: "not-implemented" });
+  });
+
+  it("PLUGIN_UNINSTALL delegates to pluginService.uninstallPlugin", async () => {
+    const handler = getHandler("plugin:uninstall");
+    await handler({}, "acme.my-plugin");
+    expect(mockUninstallPlugin).toHaveBeenCalledWith("acme.my-plugin");
+  });
+
+  it("PLUGIN_UNINSTALL throws on an empty id without unloading anything", async () => {
+    const handler = getHandler("plugin:uninstall");
+    await expect(handler({}, "")).rejects.toThrow(/non-empty string/);
+    expect(mockUninstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_CHECK_FOR_UPDATE returns not-implemented", async () => {
+    const handler = getHandler("plugin:check-for-update");
+    const result = await handler({}, "acme.my-plugin");
+    expect(result).toEqual({ status: "not-implemented" });
   });
 
   it("PLUGIN_INVOKE handler delegates to pluginService.dispatchHandler for trusted senders", async () => {

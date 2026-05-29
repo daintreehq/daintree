@@ -1488,6 +1488,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: { actions: import("../plugin.js").PluginActionDescriptor[] }) => void
     ): () => void;
     /**
+     * Subscribe to provenance/installed-set changes (install, uninstall). The
+     * callback carries no data — re-pull via {@link list}. Returns a cleanup.
+     */
+    onProvenanceChanged(callback: (payload: Record<string, never>) => void): () => void;
+    /**
      * Subscribe to file-decoration invalidations. The callback fires with the
      * changed scope (and optionally the narrowed paths) — it carries no
      * decoration data; re-pull via {@link getDecorations}. Returns a cleanup.
