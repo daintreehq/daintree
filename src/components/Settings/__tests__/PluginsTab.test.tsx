@@ -352,6 +352,22 @@ describe("PluginsTab", () => {
     );
   });
 
+  it("guards against double-clicks while a check is in flight", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([urlPlugin()]);
+    // Never-resolving check keeps the in-flight guard active across both clicks.
+    (window.electron.plugin.checkForUpdate as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise(() => {})
+    );
+    renderTab();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+
+    const btn = screen.getByRole("button", { name: "Check Acme Demo for updates" });
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+
+    expect(window.electron.plugin.checkForUpdate).toHaveBeenCalledTimes(1);
+  });
+
   it("shows an error when the update check fails to fetch", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([urlPlugin()]);
     (window.electron.plugin.checkForUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({

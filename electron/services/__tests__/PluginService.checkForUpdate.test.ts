@@ -134,6 +134,9 @@ function fakeResponse(
             : Promise.resolve({ done: true, value: undefined }),
         cancel,
       }),
+      // Real ReadableStream exposes cancel() on the stream itself (used by the
+      // early-return cleanup paths before any reader is acquired).
+      cancel: () => Promise.resolve(),
     },
     _cancel: cancel,
   };
@@ -198,6 +201,21 @@ describe("checkForUpdate — guards", () => {
     await service.installPlugin(archive); // sideload — no originalUrl
     const result = await service.checkForUpdate("acme.sideload");
     expect(result).toEqual({ status: "invalid-id" });
+    expect(netMock.fetch).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it("returns fetch-failed (no fetch) when the record has no baseline hash", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await installUrlPlugin(service, { name: "acme.nohash", version: "1.0.0" });
+    // Corrupt the record so archiveHash is null.
+    const plugins = storeState.get("plugins") as { installed: Record<string, { archiveHash: unknown }> };
+    plugins.installed["acme.nohash"].archiveHash = null;
+    storeState.set("plugins", plugins);
+
+    const result = await service.checkForUpdate("acme.nohash");
+
+    expect(result.status).toBe("fetch-failed");
     expect(netMock.fetch).not.toHaveBeenCalled();
     service.dispose();
   });
@@ -309,6 +327,48 @@ describe("checkForUpdate — fetch failures", () => {
     expect(result.status).toBe("fetch-failed");
     if (result.status === "fetch-failed") expect(result.message).toContain("size limit");
     expect(response._cancel).toHaveBeenCalled();
+    expect(await leftoverTempDirs()).toHaveLength(0);
+    service.dispose();
+  });
+
+  it("returns fetch-failed when the archive is for a different plugin", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await installUrlPlugin(service, { name: "acme.victim", version: "1.0.0" });
+    // A redirected/swapped URL now serves a completely different plugin.
+    const bytes = await readArchiveBytes({ name: "evil.other", version: "9.9.9" });
+    netMock.fetch.mockResolvedValueOnce(fakeResponse([new Uint8Array(bytes)]));
+
+    const result = await service.checkForUpdate("acme.victim");
+
+    expect(result.status).toBe("fetch-failed");
+    if (result.status === "fetch-failed") expect(result.message).toContain("evil.other");
+    expect(await leftoverTempDirs()).toHaveLength(0);
+    service.dispose();
+  });
+
+  it("returns fetch-failed (not a thrown rejection) when the body read fails mid-stream", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await installUrlPlugin(service, { name: "acme.streamerr", version: "1.0.0" });
+    let read = 0;
+    netMock.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/octet-stream" },
+      body: {
+        getReader: () => ({
+          read: () =>
+            read++ === 0
+              ? Promise.resolve({ done: false, value: new Uint8Array([1, 2, 3]) })
+              : Promise.reject(new Error("stream aborted")),
+          cancel: () => Promise.resolve(),
+        }),
+      },
+    });
+
+    const result = await service.checkForUpdate("acme.streamerr");
+
+    expect(result.status).toBe("fetch-failed");
+    if (result.status === "fetch-failed") expect(result.message).toContain("stream aborted");
     expect(await leftoverTempDirs()).toHaveLength(0);
     service.dispose();
   });

@@ -315,6 +315,9 @@ export function PluginsTab() {
   useEffect(() => {
     return window.electron.plugin.onProvenanceChanged(() => {
       setRefreshKey((k) => k + 1);
+      // A plugin may have been uninstalled in another window — close any open
+      // reinstall confirm so it can't fire `installFromUrl` on a stale record.
+      setPendingUpdate(null);
     });
   }, []);
 

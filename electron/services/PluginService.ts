@@ -3077,6 +3077,13 @@ export class PluginService {
       return { status: "invalid-id" };
     }
     const url = record.originalUrl;
+    // Without a baseline hash (corrupt record, or a dir-load that never hashed)
+    // there's nothing to compare against — a string never equals `null`, so the
+    // diff would always read as "available". Fail loudly instead of misleading.
+    if (!record.archiveHash) {
+      return { status: "fetch-failed", message: "No baseline archive hash to compare against" };
+    }
+    const baselineHash = record.archiveHash;
 
     // `net` requires a full Electron runtime; lazy-import it so the service
     // module stays importable in unit tests that don't fetch.
@@ -3094,6 +3101,7 @@ export class PluginService {
         return { status: "fetch-failed", message: `Couldn't reach ${url}: ${(err as Error).message}` };
       }
       if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
         return { status: "fetch-failed", message: `Server responded with HTTP ${response.status}` };
       }
 
@@ -3101,6 +3109,7 @@ export class PluginService {
       const contentType = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
       const ALLOWED_CONTENT_TYPES = ["application/octet-stream", "application/zip", "application/x-zip"];
       if (contentType && !ALLOWED_CONTENT_TYPES.includes(contentType)) {
+        await response.body?.cancel().catch(() => {});
         return { status: "fetch-failed", message: `Unexpected content type "${contentType}"` };
       }
 
@@ -3111,25 +3120,38 @@ export class PluginService {
       if (!body) {
         return { status: "fetch-failed", message: "Response had no body" };
       }
-      const handle = await fs.open(tmpArchive, "w");
+      // A read/write fault mid-stream must come back as a structured
+      // `fetch-failed`, not a thrown rejection — the "never throws for domain
+      // outcomes" contract (#3769). A `null` sentinel signals the oversize abort
+      // so the early-return stays out of the catch.
+      let oversized = false;
       try {
-        const reader = body.getReader();
-        let bytes = 0;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done || !value) break;
-          bytes += value.byteLength;
-          if (bytes > MAX_DNTR_BYTES) {
-            await reader.cancel().catch(() => {});
-            return {
-              status: "fetch-failed",
-              message: `Archive exceeds the ${MAX_DNTR_BYTES}-byte size limit`,
-            };
+        const handle = await fs.open(tmpArchive, "w");
+        try {
+          const reader = body.getReader();
+          let bytes = 0;
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done || !value) break;
+            bytes += value.byteLength;
+            if (bytes > MAX_DNTR_BYTES) {
+              await reader.cancel().catch(() => {});
+              oversized = true;
+              break;
+            }
+            await handle.write(value);
           }
-          await handle.write(value);
+        } finally {
+          await handle.close();
         }
-      } finally {
-        await handle.close();
+      } catch (err) {
+        return { status: "fetch-failed", message: `Couldn't download the archive: ${(err as Error).message}` };
+      }
+      if (oversized) {
+        return {
+          status: "fetch-failed",
+          message: `Archive exceeds the ${MAX_DNTR_BYTES}-byte size limit`,
+        };
       }
 
       let downloadedHash: string;
@@ -3138,7 +3160,7 @@ export class PluginService {
       } catch (err) {
         return { status: "fetch-failed", message: `Couldn't hash the archive: ${(err as Error).message}` };
       }
-      if (downloadedHash === record.archiveHash) {
+      if (downloadedHash === baselineHash) {
         return { status: "up-to-date" };
       }
 
@@ -3151,6 +3173,16 @@ export class PluginService {
         return {
           status: "fetch-failed",
           message: `Downloaded archive isn't a valid plugin: ${(err as Error).message}`,
+        };
+      }
+      // The URL must still serve the SAME plugin — a redirected or swapped URL
+      // could serve a different archive, and a later reinstall would replace
+      // this plugin's directory with a stranger's. Reject the mismatch rather
+      // than presenting a foreign plugin as an "update".
+      if (manifest.name !== pluginId) {
+        return {
+          status: "fetch-failed",
+          message: `Downloaded archive is for a different plugin ("${manifest.name}")`,
         };
       }
       return {
