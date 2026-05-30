@@ -420,7 +420,9 @@ describe("registerPluginHandlers", () => {
     const handler = getHandler("plugin:install-from-url");
     const result = await handler({}, "https://example.com/p.dntr");
     expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
-  });
+    // Writing the full 30 MB to a real temp file and hashing it back is slow on
+    // Windows CI (disk + Defender), so this boundary case gets a wider timeout.
+  }, 60_000);
 
   it("PLUGIN_INSTALL_FROM_URL aborts a stream one byte over the cap", async () => {
     const overCap = new Uint8Array(30 * 1024 * 1024 + 1);
