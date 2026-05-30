@@ -502,18 +502,38 @@ export class PluginInstaller {
 
     if (!parked) return failed;
 
+    // Move the broken new dir ASIDE before restoring the old one, so `finalDir`
+    // is never left missing if the restore rename fails. Deleting `finalDir`
+    // first (then renaming `parked` back) would lose BOTH versions on a rename
+    // failure. The aside reuses the parked `.old-<uuid>` naming so the startup
+    // sweep reaps it if we crash in the micro-window between the two renames.
+    const brokenAside = `${finalDir}.old-${randomUUID()}`;
     try {
-      await fs.rm(finalDir, { recursive: true, force: true });
+      await resilientRename(finalDir, brokenAside);
+    } catch (asideErr) {
+      // Couldn't even move the broken dir aside — nothing was destroyed (broken
+      // new + parked old both remain on disk); report and let the user retry.
+      console.error(
+        `[PluginService] Failed to move aside broken "${pluginId}" during rollback:`,
+        asideErr
+      );
+      return failed;
+    }
+    try {
       await resilientRename(parked, finalDir);
     } catch (restoreErr) {
-      // Couldn't restore the old version — leave the new (broken) dir in place
-      // rather than risk a missing directory, and report the load failure.
+      // Restore failed — put the broken dir back so `finalDir` isn't missing,
+      // then report. (The parked old copy stays on disk under its `.old-<uuid>`
+      // name; the next startup sweep reaps it.)
+      await resilientRename(brokenAside, finalDir).catch(() => {});
       console.error(
         `[PluginService] Failed to restore previous "${pluginId}" after a post-swap load failure:`,
         restoreErr
       );
       return failed;
     }
+    // Old version is back in place — drop the broken copy best-effort.
+    await fs.rm(brokenAside, { recursive: true, force: true }).catch(() => {});
 
     // The old directory is back — restore its provenance record so it matches
     // what's on disk. `previousRecord` is always defined on the upgrade path
