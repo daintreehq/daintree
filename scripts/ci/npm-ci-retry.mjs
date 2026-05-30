@@ -38,13 +38,25 @@ export const TRANSIENT_PATTERNS = [
   /\bnpm (error|err!).*network/i,
 ];
 
+// Transient infrastructure crashes that can be logged underneath node-gyp.
+// These must be checked before the broad node-gyp deterministic pattern.
+export const TRANSIENT_OVERRIDE_PATTERNS = [
+  /AssertionError \[ERR_ASSERTION\][\s\S]*assert\(!this\.paused\)[\s\S]*node-gyp[\s\S]*undici/i,
+];
+
 /**
  * Classify accumulated stderr text to decide whether to retry.
  * Deterministic patterns win over transient ones — a compile error
- * that also logged a network warning is still a compile error.
+ * that also logged a network warning is still a compile error. Explicit
+ * transient overrides handle known toolchain/network crashes that happen
+ * below node-gyp but are not native compile failures.
  */
 export function classifyFailure(stderrText) {
   if (!stderrText) return "unknown";
+
+  for (const pattern of TRANSIENT_OVERRIDE_PATTERNS) {
+    if (pattern.test(stderrText)) return "transient";
+  }
 
   for (const pattern of DETERMINISTIC_PATTERNS) {
     if (pattern.test(stderrText)) return "deterministic";

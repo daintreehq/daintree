@@ -18,10 +18,11 @@ afterAll(() => {
   process.dlopen = originalDlopen;
 });
 
-function createContext(platform: string, appOutDir: string, appName = "Daintree") {
+function createContext(platform: string, appOutDir: string, appName = "Daintree", arch?: number) {
   return {
     appOutDir,
     electronPlatformName: platform,
+    arch,
     packager: { appInfo: { productFilename: appName } },
   };
 }
@@ -502,6 +503,26 @@ describe("afterPack", () => {
 
       await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
         /win-job-object failed to load/
+      );
+    });
+
+    it("should skip win-job-object dlopen when packaging a different Windows arch", async () => {
+      mockExistsSync.mockReturnValue(true);
+      const crossArch = process.arch === "arm64" ? 1 : 3;
+      const dlopenCalls: string[] = [];
+      process.dlopen = ((_mod: unknown, filename: string) => {
+        dlopenCalls.push(filename);
+        if (filename.includes("win_job_object")) {
+          throw new Error("not a valid Win32 application");
+        }
+        throw new Error("NODE_MODULE_VERSION mismatch");
+      }) as typeof process.dlopen;
+
+      await afterPack(createContext("win32", "/build/win", "Daintree", crossArch));
+
+      expect(dlopenCalls.some((c) => c.includes("win_job_object"))).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Skipping win-job-object load check")
       );
     });
 

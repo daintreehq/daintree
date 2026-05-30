@@ -74,6 +74,18 @@ function validateWinJobObjectAbi(nativeBinaryPath) {
   }
 }
 
+function getWindowsPackageArch(contextArch) {
+  if (contextArch === 0) return "ia32";
+  if (contextArch === 1) return "x64";
+  if (contextArch === 3) return "arm64";
+  return null;
+}
+
+function canLoadWindowsPackageNativeAddons(contextArch) {
+  const packageArch = getWindowsPackageArch(contextArch);
+  return packageArch === null || packageArch === process.arch;
+}
+
 /**
  * Validate that the posix-pty-reaper supervisor executable can actually exec —
  * catching a missing shared library, wrong arch, or bad interpreter that the
@@ -261,7 +273,15 @@ exports.default = async function afterPack(context) {
     }
     console.log(`[afterPack] win-job-object verified: ${winJobObjectBinary}`);
 
-    validateWinJobObjectAbi(winJobObjectBinary);
+    if (canLoadWindowsPackageNativeAddons(context.arch)) {
+      validateWinJobObjectAbi(winJobObjectBinary);
+    } else {
+      console.warn(
+        `[afterPack] Skipping win-job-object load check for ${getWindowsPackageArch(
+          context.arch
+        )} package on ${process.arch} runner`
+      );
+    }
   } else {
     // macOS and Linux use pty.node
     const nativeBinaryPath = path.join(nodePtyPath, "build/Release/pty.node");
