@@ -341,9 +341,11 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // invalidate any key that disappeared. `applyRemove`/`applySnapshot` always
     // build a fresh `new Map(...)` on real changes (the value-equality fast path
     // preserves the same ref), so the ref-equality guard reliably skips
-    // unrelated-slice updates. `invalidate` is synchronous and a no-op for
-    // absent ids, so re-invalidating a key the event path already handled is
-    // safe (#9536).
+    // unrelated-slice updates. `invalidate` is synchronous and functionally
+    // idempotent — it clears whatever is present and corrupts nothing on an
+    // already-clean key — so on a normal single removal the `worktree-removed`
+    // event path and this subscription each fire it once for the same id
+    // (the second call re-publishes correct state, nothing more) (#9536).
     cleanups.push(
       store.subscribe((state, prevState) => {
         if (state.worktrees === prevState.worktrees) return;

@@ -42,12 +42,36 @@ function makeWorktree(id: string, overrides: Partial<WorktreeSnapshot> = {}): Wo
   } as WorktreeSnapshot;
 }
 
-function seedPulse(worktreeId: string): void {
+// Seed every worktree-keyed map `invalidate` touches so a regression that
+// stops clearing any one of the seven is caught. `timer` lets a test plant a
+// real retry timer to verify it gets cancelled on prune.
+function seedPulse(worktreeId: string, timer?: ReturnType<typeof setTimeout>): void {
   usePulseStore.setState((prev) => ({
     pulses: new Map(prev.pulses).set(worktreeId, { commits: [] } as unknown as ProjectPulse),
-    loading: new Map(prev.loading).set(worktreeId, false),
-    errors: new Map(prev.errors).set(worktreeId, null),
+    loading: new Map(prev.loading).set(worktreeId, true),
+    errors: new Map(prev.errors).set(worktreeId, "boom"),
+    requestIds: new Map(prev.requestIds).set(worktreeId, 123),
+    retryCount: new Map(prev.retryCount).set(worktreeId, 2),
+    lastRetryTimestamp: new Map(prev.lastRetryTimestamp).set(worktreeId, 456),
+    ...(timer ? { retryTimers: new Map(prev.retryTimers).set(worktreeId, timer) } : {}),
   }));
+}
+
+const PULSE_MAP_KEYS = [
+  "pulses",
+  "loading",
+  "errors",
+  "requestIds",
+  "retryCount",
+  "lastRetryTimestamp",
+  "retryTimers",
+] as const;
+
+function expectFullyPruned(worktreeId: string): void {
+  const state = usePulseStore.getState();
+  for (const key of PULSE_MAP_KEYS) {
+    expect(state[key].has(worktreeId)).toBe(false);
+  }
 }
 
 function setCurrentProject(path: string | null): void {
@@ -126,9 +150,27 @@ describe("WorktreeStoreProvider — pulse-cache snapshot pruning", () => {
     });
 
     expect(usePulseStore.getState().pulses.has("wt-1")).toBe(true);
-    expect(usePulseStore.getState().pulses.has("wt-2")).toBe(false);
-    expect(usePulseStore.getState().loading.has("wt-2")).toBe(false);
-    expect(usePulseStore.getState().errors.has("wt-2")).toBe(false);
+    // All seven worktree-keyed maps must be cleared for the dropped worktree.
+    expectFullyPruned("wt-2");
+  });
+
+  it("cancels the pending retry timer for a worktree dropped by applySnapshot", async () => {
+    const { store } = await renderProvider();
+
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1"), makeWorktree("wt-2")], nextV());
+    });
+
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    const timer = setTimeout(() => {}, 60_000);
+    seedPulse("wt-2", timer);
+
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(timer);
+    expect(usePulseStore.getState().retryTimers.has("wt-2")).toBe(false);
   });
 
   it("does not invalidate when an unrelated slice changes (worktrees ref stable)", async () => {
