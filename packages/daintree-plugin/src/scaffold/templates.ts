@@ -21,7 +21,24 @@ export interface ScaffoldContext {
   template: TemplateKind;
 }
 
-const DAINTREE_ENGINE_RANGE = ">=0.11.0";
+const DAINTREE_ENGINE_RANGE = "^0.11.0";
+
+/**
+ * A `contributes.panels` entry paired with an `experimental_views` entry of the
+ * same `id`. The runtime (`PluginService.loadPlugin`) only registers a panel
+ * kind while iterating declared `panels`, attaching the view's `componentPath`
+ * when ids match; a view with no matching panel is ignored, so the scaffold
+ * must emit both for a generated view to render. `iconId: "puzzle"` and the
+ * plugin brand color are the canonical defaults for plugin-contributed panels.
+ */
+function viewPanelContribution(ctx: ScaffoldContext): Record<string, unknown> {
+  return {
+    id: "main",
+    name: ctx.displayName,
+    iconId: "puzzle",
+    color: "var(--theme-category-orange)",
+  };
+}
 
 /** A safely-quoted JS/TS string literal for embedding author text in source. */
 function q(value: string): string {
@@ -126,10 +143,11 @@ function commandEntry(ctx: ScaffoldContext): string {
 
 /**
  * ${c(ctx.displayName)} — command plugin entry. Daintree calls \`activate\` once
- * when the plugin loads; return a disposer to clean up on unload.
+ * when the plugin loads; return a disposer to clean up on unload. Actions are
+ * unregistered automatically on unload, so the disposer here is a no-op.
  */
 export async function activate(host: PluginHostApi): Promise<() => void> {
-  const dispose = host.registerAction(
+  host.registerAction(
     {
       id: "run",
       title: ${title},
@@ -144,9 +162,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
     }
   );
 
-  return () => {
-    dispose();
-  };
+  return () => {};
 }
 `;
 }
@@ -231,6 +247,7 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
     case "view": {
       return {
         "plugin.json": manifest(ctx, {
+          panels: [viewPanelContribution(ctx)],
           experimental_views: [
             {
               id: "main",
@@ -282,6 +299,7 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
               keywords: [ctx.pluginName, "run"],
             },
           ],
+          panels: [viewPanelContribution(ctx)],
           experimental_views: [
             {
               id: "main",

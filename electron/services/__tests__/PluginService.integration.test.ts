@@ -1453,3 +1453,34 @@ describe("PluginService integration — diagnostic logger", () => {
     expect(entry).toBeUndefined();
   });
 });
+
+describe("PluginService integration — stale temp dir sweep", () => {
+  it("reaps crash-left staging dirs at initialize() but keeps real plugins", async () => {
+    await fs.mkdir(path.join(tmpDir, ".install-tmp-x"), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, ".install-tmp-x", "leftover.txt"), "x");
+    await fs.mkdir(path.join(tmpDir, ".update-check-y"), { recursive: true });
+    await fs.mkdir(path.join(tmpDir, ".old-z"), { recursive: true });
+
+    await writePlugin("acme.real-plugin", {
+      name: "acme.real-plugin",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#abc" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    const remaining = await fs.readdir(tmpDir);
+    expect(remaining).not.toContain(".install-tmp-x");
+    expect(remaining).not.toContain(".update-check-y");
+    expect(remaining).not.toContain(".old-z");
+    expect(remaining).toContain("acme.real-plugin");
+
+    expect(getPanelKindConfig("acme.real-plugin.viewer")).toMatchObject({
+      id: "acme.real-plugin.viewer",
+      extensionId: "acme.real-plugin",
+    });
+  });
+});

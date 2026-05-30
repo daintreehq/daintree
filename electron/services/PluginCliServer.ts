@@ -1,9 +1,9 @@
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { z } from "zod";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { getCliSocketPath } from "../../shared/utils/cliSocketPath.js";
 
 /**
  * Local control socket that lets the `daintree-plugin` CLI drive a running
@@ -35,8 +35,10 @@ const InstallParamsSchema = z
     path: z.string().min(1).optional(),
     url: z.string().min(1).optional(),
   })
-  .refine((p) => Boolean(p.path) || Boolean(p.url), {
-    message: "install requires a 'path' or 'url' parameter",
+  // Exactly one source: both-present silently preferred 'url' before, which
+  // hid a caller bug. Reject the ambiguous frame at the boundary instead.
+  .refine((p) => Boolean(p.path) !== Boolean(p.url), {
+    message: "install requires exactly one of 'path' or 'url'",
   });
 
 const UninstallParamsSchema = z.object({
@@ -62,20 +64,10 @@ export interface PluginCliServer {
   readonly socketPath: string;
 }
 
-/**
- * Platform socket path: a named pipe on Windows (which doesn't live on disk),
- * else `~/.daintree/cli.sock`. Kept in lockstep with the CLI client's resolver.
- */
-export function getCliSocketPath(): string {
-  const override = process.env.DAINTREE_CLI_SOCKET;
-  if (override && override.length > 0) {
-    return override;
-  }
-  if (process.platform === "win32") {
-    return "\\\\.\\pipe\\daintree-cli";
-  }
-  return path.join(os.homedir(), ".daintree", "cli.sock");
-}
+// Re-exported from `shared/utils/cliSocketPath.ts` so the host and the
+// `daintree-plugin` CLI client resolve the control socket from a single source
+// of truth rather than two byte-for-byte copies that drift.
+export { getCliSocketPath };
 
 /** True for filesystem-backed sockets (everything but Windows named pipes). */
 function isFileSocket(socketPath: string): boolean {
@@ -186,8 +178,14 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
     if (server) return;
     await waitForReady();
 
-    if (isFileSocket(socketPath)) {
-      await fs.mkdir(path.dirname(socketPath), { recursive: true });
+    const fileSocket = isFileSocket(socketPath);
+    if (fileSocket) {
+      // Lock the control channel to the owning user: it dispatches plugin
+      // install/uninstall (arbitrary path/URL) straight to the trust-gated host
+      // handlers with no peer-credential check, and plugins run in-process in
+      // the host's trust model. 0700 dir / 0600 socket keep other local users
+      // off the socket on shared Unix hosts.
+      await fs.mkdir(path.dirname(socketPath), { recursive: true, mode: 0o700 });
       // Remove any stale socket left by a crashed prior run; otherwise listen()
       // fails with EADDRINUSE on a file that no process is bound to.
       await fs.rm(socketPath, { force: true }).catch(() => {});
@@ -202,6 +200,9 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
         resolve();
       });
     });
+    if (fileSocket) {
+      await fs.chmod(socketPath, 0o600);
+    }
     server = srv;
   }
 
@@ -244,9 +245,10 @@ export async function startPluginCliServer(): Promise<void> {
     waitForReady: () => pluginService.waitForInit(),
     handlers: {
       install: ({ path: installPath, url }) => {
+        // Schema guarantees exactly one source; these branches are defensive.
         if (url) return handleInstallFromUrl(url);
         if (installPath) return handleInstallFromPath(installPath);
-        return Promise.reject(new Error("install requires a 'path' or 'url' parameter"));
+        return Promise.reject(new Error("install requires exactly one of 'path' or 'url'"));
       },
       uninstall: ({ pluginId, deleteSettings }) => handleUninstall(pluginId, deleteSettings),
     },

@@ -3,8 +3,7 @@ import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import { pathToFileURL } from "url";
-import { app, ipcMain } from "electron";
-import { randomUUID } from "node:crypto";
+import { app } from "electron";
 import * as semver from "semver";
 // Aliased to avoid colliding with Vite's auto-injected ESM shim
 // (`import { createRequire } from 'module'; const require = createRequire(import.meta.url);`),
@@ -28,31 +27,7 @@ interface AjvInstance {
   compile(schema: Record<string, unknown>): ValidateFn;
 }
 
-// proper-lockfile is CJS-only and ships no bundled types. Require it via the
-// same createRequire interop as ajv and declare the narrow surface we use.
-interface LockOptions {
-  stale?: number;
-  update?: number;
-  realpath?: boolean;
-  retries?: number | { retries: number; minTimeout?: number; maxTimeout?: number };
-  onCompromised?: (err: Error) => void;
-}
-interface ProperLockfile {
-  lock(file: string, opts?: LockOptions): Promise<() => Promise<void>>;
-}
-const properLockfile: ProperLockfile = req("proper-lockfile");
-import {
-  getPluginManifestSchema,
-  PluginToastOptionsSchema,
-  SCOPED_PLUGIN_NAME_PATTERN,
-} from "../schemas/plugin.js";
-import {
-  extractPluginArchive,
-  computeArchiveHash,
-  readArchiveManifest,
-  MAX_DNTR_BYTES,
-} from "./PluginArchive.js";
-import { resilientRename } from "../utils/fs.js";
+import { getPluginManifestSchema, PluginToastOptionsSchema } from "../schemas/plugin.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
 import { z } from "zod";
 import type {
@@ -67,21 +42,20 @@ import type {
   PluginTypedIpcHandler,
   ActionHandler,
   BuiltInPluginCapability,
-  InstalledPluginRecord,
   PluginLoadError,
-  PluginInstallSource,
-  PluginInstallError,
-  PluginInstallErrorCode,
   PluginInstallResult,
   PluginInstallOptions,
   PluginCheckUpdateResult,
   PluginSettingsScope,
   PluginSettingsUiValues,
   ViewContribution,
-  SettingDefinition,
 } from "../../shared/types/plugin.js";
-import { PluginSettingsStore } from "./PluginSettingsStore.js";
-import { projectStore } from "./ProjectStore.js";
+import { PluginInstalledRecordsStore } from "./plugin/PluginInstalledRecordsStore.js";
+import { PluginContributionBroadcaster } from "./plugin/PluginContributionBroadcaster.js";
+import { PluginRendererDispatcher } from "./plugin/PluginRendererDispatcher.js";
+import { PluginSettingsManager, assertSettingsKey } from "./plugin/PluginSettingsManager.js";
+import { PluginChannelRegistry, isChannelSchema } from "./plugin/PluginChannelRegistry.js";
+import { PluginInstaller } from "./plugin/PluginInstaller.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
@@ -90,27 +64,19 @@ import {
   unregisterPluginPanelKinds,
   onPanelKindRegistered,
   onPanelKindUnregistered,
-  getPluginPanelKinds,
 } from "../../shared/config/panelKindRegistry.js";
 import {
   registerToolbarButton,
   unregisterPluginToolbarButtons,
-  getAllPluginToolbarButtonConfigs,
 } from "../../shared/config/toolbarButtonRegistry.js";
-import {
-  registerPluginMenuItem,
-  unregisterPluginMenuItems,
-  getPluginMenuItems,
-} from "./pluginMenuRegistry.js";
+import { registerPluginMenuItem, unregisterPluginMenuItems } from "./pluginMenuRegistry.js";
 import {
   registerPluginKeybinding,
   unregisterPluginKeybindings,
-  getPluginKeybindings,
 } from "./pluginKeybindingRegistry.js";
 import {
   registerPluginContextMenuItem,
   unregisterPluginContextMenuItems,
-  getPluginContextMenuItems,
 } from "./pluginContextMenuRegistry.js";
 import {
   trackPluginExpression,
@@ -133,8 +99,6 @@ import {
 } from "./fileDecorationRegistry.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
-import { getWindowRegistry, getProjectViewManager } from "../window/windowRef.js";
-import type { ActionDispatchResult } from "../../shared/types/actions.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
 import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
 import { getPluginActionAuditService } from "./PluginActionAuditService.js";
@@ -143,7 +107,6 @@ import type {
   PluginDiagnosticsLogLine,
   PluginDiagnosticsSnapshot,
 } from "../../shared/types/ipc/pluginDiagnostics.js";
-import { store } from "../store.js";
 import { BUILT_IN_ACTION_IDS } from "../../shared/config/actionIds.js";
 
 /** Plugin action IDs must be `{pluginId}.{actionId}`. Built-in IDs use colons, so the formats cannot collide. */
@@ -272,26 +235,6 @@ interface LoadedPlugin {
 
 const ACTIVATE_TIMEOUT_MS = 5000;
 /**
- * Time budget for a `host.dispatch()` main→renderer round-trip. Matches the MCP
- * dispatch timeout (`MCP_DISPATCH_TIMEOUT_MS`); without it a destroyed or
- * unresponsive renderer would leak entries in `pendingPluginDispatches` forever.
- * On timeout the pending request resolves with an `EXECUTION_ERROR` result.
- */
-const PLUGIN_DISPATCH_TIMEOUT_MS = 30_000;
-
-/**
- * A `host.dispatch()` request awaiting its renderer response. Unlike the MCP
- * bridge's `PendingRequest`, the promise always resolves with an
- * {@link ActionDispatchResult} (never rejects) — `host.dispatch` returns the
- * `{ ok: false }` envelope on failure rather than throwing.
- */
-interface PendingPluginDispatch {
-  resolve: (result: ActionDispatchResult) => void;
-  timer: ReturnType<typeof setTimeout>;
-  webContentsId: number;
-  destroyedCleanup?: () => void;
-}
-/**
  * Time budget for the dynamic `import()` step in {@link PluginService._doActivate}.
  * Separate from {@link ACTIVATE_TIMEOUT_MS} (which guards the plugin's exported
  * `activate()` function) so a plugin with a hanging top-level await cannot pin
@@ -300,9 +243,6 @@ interface PendingPluginDispatch {
  * activation), since `allSettled` waits for every promise to settle.
  */
 const IMPORT_TIMEOUT_MS = 5000;
-
-/** Timeout for the manual update-check download (#9297). */
-const FETCH_TIMEOUT_MS = 30_000;
 
 /**
  * Normalise the value thrown out of `activate()` into a serialisable record.
@@ -373,37 +313,6 @@ function runUnloadStep(pluginId: string, step: string, fn: () => void): void {
   }
 }
 
-function assertSettingsKey(pluginId: string, method: string, key: unknown): asserts key is string {
-  if (typeof key !== "string" || key.length === 0) {
-    throw new Error(`Plugin "${pluginId}" settings.${method}: key must be a non-empty string`);
-  }
-}
-
-/**
- * Discriminate between the typed `registerHandler(channel, schema, handler)`
- * overload and the legacy `registerHandler(channel, handler)` overload. A
- * typed schema must expose `args` and `result` Zod-compatible types — we
- * probe for a `safeParse` method on both rather than trusting structural
- * shape alone, so a JS plugin author bypassing TypeScript can't slip a
- * malformed `{ args: {}, result: ... }` past registration only to crash at
- * dispatch with a raw `safeParse is not a function` TypeError outside the
- * documented `SCHEMA_ERROR:` envelope.
- */
-function isChannelSchema(value: unknown): value is PluginChannelSchema<unknown, unknown> {
-  if (typeof value !== "object" || value === null) return false;
-  if (!("args" in value) || !("result" in value)) return false;
-  const args = (value as { args: unknown }).args;
-  const result = (value as { result: unknown }).result;
-  return (
-    typeof args === "object" &&
-    args !== null &&
-    typeof (args as { safeParse?: unknown }).safeParse === "function" &&
-    typeof result === "object" &&
-    result !== null &&
-    typeof (result as { safeParse?: unknown }).safeParse === "function"
-  );
-}
-
 /**
  * Validate a manifest-declared `experimental_views[].componentPath` before we
  * resolve it to a `plugin://` URL (#9229). The protocol handler at
@@ -444,6 +353,32 @@ function buildPluginViewUrl(pluginId: string, componentPath: string): string {
   return `plugin://${pluginId}/${normalized}`;
 }
 
+/**
+ * Suffix match for the installer's parked-old copy (`<pluginId>.old-<uuid>`,
+ * no leading dot — see `PluginInstaller._swapPluginDir` /
+ * `STALE_PARKED_OLD_RE`). A real plugin dir is exactly `publisher.name`, which
+ * can never end with `.old-` + a hyphenated UUID, so this can't exclude a
+ * legitimate install.
+ */
+const PARKED_OLD_DIR_RE = /\.old-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Defence-in-depth guard for {@link PluginService.loadFromDir}: returns true for
+ * any installer staging/parked/leftover dir name that must never be scanned as
+ * a real plugin even if `sweepStalePluginTempDirs` missed it. Covers the parked
+ * `<pluginId>.old-<uuid>` copy (no leading dot — the dot filter alone wouldn't
+ * catch it) plus the dot-prefixed `.install-tmp-*` / `.update-check-*` /
+ * `.old-*` staging names (belt-and-suspenders against the leading-dot filter).
+ */
+function isParkedOrTempDirName(name: string): boolean {
+  return (
+    name.startsWith(".install-tmp-") ||
+    name.startsWith(".update-check-") ||
+    name.startsWith(".old-") ||
+    PARKED_OLD_DIR_RE.test(name)
+  );
+}
+
 type WorkspaceWorktreeEvent = "worktree-update" | "worktree-activated" | "worktree-removed";
 
 export class PluginService {
@@ -457,23 +392,13 @@ export class PluginService {
    * action-breadcrumb ring's raw-capture convention).
    */
   private logBuffers = new Map<string, PluginDiagnosticsLogLine[]>();
-  private handlerMap = new Map<string, PluginIpcHandler>();
   /**
-   * Per-channel Zod schemas for typed `registerHandler` registrations, keyed
-   * by the same `pluginId:channel` key as {@link handlerMap}. Only populated
-   * for the typed overload — legacy untyped registrations omit the entry and
-   * skip schema validation at dispatch. Cleared per-plugin in
-   * {@link removeHandlers} alongside the handler entry.
+   * Owns the typed/legacy IPC handler maps, the registration capability gate,
+   * per-channel schema/requires bookkeeping, and per-plugin removal. The
+   * dispatch path ({@link dispatchHandler}, which stays here) reads the maps
+   * through the collaborator's getters so dispatch semantics are unchanged.
    */
-  private channelSchemas = new Map<string, PluginChannelSchema<unknown, unknown>>();
-  /**
-   * Per-channel capability gate for typed `registerHandler` registrations,
-   * keyed by the same `pluginId:channel` key as {@link handlerMap}.
-   * Authoritative check runs at registration (throws `PERMISSION_REQUIRED:`
-   * for missing capabilities); the dispatch-time re-check is defense-in-depth
-   * for future code paths that mutate manifests after load.
-   */
-  private channelRequires = new Map<string, readonly BuiltInPluginCapability[]>();
+  private readonly channels: PluginChannelRegistry;
   private cleanupMap = new Map<string, () => void>();
   /**
    * Plugin ids whose `activate()` has resolved successfully this session.
@@ -537,24 +462,6 @@ export class PluginService {
   private pluginsWithLoadTimeErrors = new Set<string>();
   private ajv: AjvInstance | null = null;
   private pluginEventCleanups = new Map<string, Array<() => void>>();
-  /**
-   * Persisted-settings stores keyed by `{pluginId}\u0000{scope}\u0000{filePath}`.
-   * The NUL (`\u0000`) separator is unambiguous because a valid plugin id can
-   * never contain it (see the manifest name pattern). Keyed on the resolved path
-   * (not just scope) so a project switch — which changes the `project`-scope
-   * path — creates a fresh store without evicting the old project's cache.
-   * Entries for a plugin are dropped on unload.
-   */
-  private settingsStores = new Map<string, PluginSettingsStore>();
-  /**
-   * Active `host.settings.onDidChange` subscriptions per plugin. Held here (not
-   * on the store) so they survive project-root switches and are flushed in one
-   * place on unload. Each disposer is also tracked in {@link pluginEventCleanups}.
-   */
-  private settingsSubscribers = new Map<
-    string,
-    Set<{ key: string; scope: PluginSettingsScope; cb: (value: unknown) => void }>
-  >();
   private workspaceClient: WorkspaceClient | null = null;
   /**
    * Event subscriptions registered during plugin `activate()` when the
@@ -588,6 +495,7 @@ export class PluginService {
     string,
     { manifest: PluginManifest; dir: string; isBuiltin: boolean }
   >();
+  private records = new PluginInstalledRecordsStore();
   private pluginsRoot: string;
   /**
    * Optional override for the built-in plugins directory. When unset, the
@@ -607,45 +515,12 @@ export class PluginService {
   private sideloadPluginsRoot: string | undefined;
   private appVersion: string;
   /**
-   * Coalesces multiple registry events fired in the same tick (e.g., when a
-   * plugin contributes several panel kinds, or when `unregisterPluginPanelKinds`
-   * removes N kinds in one call) into a single broadcast carrying the current
-   * snapshot.
+   * Owns the coalesced per-tick contribution broadcasts (actions, panel kinds,
+   * toolbar buttons, menu items, keybindings, context-menu items) plus the
+   * cold-start {@link pushSnapshotTo} replay. Constructed in the constructor
+   * after {@link initPromise} is set, so it can await the init gate.
    */
-  private panelKindsBroadcastPending = false;
-  /**
-   * Same coalescing rationale as {@link panelKindsBroadcastPending}: a plugin
-   * contributing N toolbar buttons calls `registerToolbarButton` N times in
-   * `loadPlugin()`, and `unregisterPluginToolbarButtons` removes them in one
-   * call on unload — batch into a single snapshot broadcast per tick.
-   */
-  private toolbarButtonsBroadcastPending = false;
-  /**
-   * OR-accumulated across triggers coalesced into one tick: true if any was an
-   * unload (uninstall). The registry at microtask-drain time always reflects
-   * the current set, so a tick that included an unload is an authoritative
-   * snapshot the renderer may safely sweep against; a tick of only loads is a
-   * partial/growing snapshot (concurrent load + deferred init) and must not.
-   */
-  private toolbarButtonsBroadcastComplete = false;
-  /**
-   * Same coalescing rationale as {@link toolbarButtonsBroadcastPending}. Menu
-   * items are mutated only from `loadPlugin()` / `unloadPlugin()`, so the two
-   * call sites invoke {@link scheduleMenuItemsBroadcast} directly.
-   */
-  private menuItemsBroadcastPending = false;
-  /** Mirrors {@link toolbarButtonsBroadcastComplete} for menu items. */
-  private menuItemsBroadcastComplete = false;
-  private keybindingsBroadcastPending = false;
-  private keybindingsBroadcastComplete = false;
-  /**
-   * Same coalescing rationale as {@link menuItemsBroadcastPending}. Context-menu
-   * items are mutated only from `loadPlugin()` / `unloadPlugin()`, so the two
-   * call sites invoke {@link scheduleContextMenuItemsBroadcast} directly.
-   */
-  private contextMenuItemsBroadcastPending = false;
-  /** Mirrors {@link menuItemsBroadcastComplete} for context-menu items. */
-  private contextMenuItemsBroadcastComplete = false;
+  private readonly broadcaster: PluginContributionBroadcaster;
   private disposed = false;
   private readonly disposeRegistrySubscriptions: () => void;
   /**
@@ -659,17 +534,28 @@ export class PluginService {
   private readonly initPromise: Promise<void>;
   private resolveInit: (() => void) | null = null;
   /**
-   * In-flight `host.dispatch()` round-trips keyed by `requestId`. Each entry is
-   * resolved by the {@link CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE} listener,
-   * the timeout, the renderer's `destroyed` event, or {@link dispose}.
-   */
-  private pendingPluginDispatches = new Map<string, PendingPluginDispatch>();
-  /**
-   * Removes the lazily-registered `ipcMain` response listener for plugin
-   * dispatch. `null` until the first `host.dispatch()` registers it; cleared in
+   * Owns the `host.dispatch()` main→renderer round-trip: the active-renderer
+   * resolution, the lazy `ipcMain` response listener, and the pending-request
+   * map with per-request timeout + destroyed-cleanup. Torn down from
    * {@link dispose}.
    */
-  private pluginDispatchListenerCleanup: (() => void) | null = null;
+  private readonly dispatcher: PluginRendererDispatcher;
+  /**
+   * Owns the per-(plugin, scope, path) settings store cache, scope/file-path
+   * resolution, subscriber notification, the settings-template resolver, and the
+   * renderer-facing settings-UI bridge. The settings stores and subscribers live
+   * inside it; the manifest stays core-owned and is read through an injected
+   * lookup callback.
+   */
+  private readonly settings: PluginSettingsManager;
+  /**
+   * Owns the atomic install/upgrade orchestration, the manual update-check
+   * download/compare flow, the uninstall flow, and the stale-temp-dir sweep at
+   * init. Reaches core lifecycle (load/unload/activate, record CRUD, archive
+   * hashing, provenance broadcast) purely through the injected callback bag, so
+   * it never imports the PluginService class — breaking the cycle.
+   */
+  private readonly installer: PluginInstaller;
 
   constructor(
     pluginsRoot?: string,
@@ -685,8 +571,45 @@ export class PluginService {
       this.resolveInit = resolve;
     });
 
-    const offRegister = onPanelKindRegistered(() => this.schedulePanelKindsBroadcast());
-    const offUnregister = onPanelKindUnregistered(() => this.schedulePanelKindsBroadcast());
+    this.broadcaster = new PluginContributionBroadcaster({
+      isDisposed: () => this.disposed,
+      listPluginActions: () => this.listPluginActions(),
+      initPromise: this.initPromise,
+    });
+
+    this.dispatcher = new PluginRendererDispatcher({
+      isDisposed: () => this.disposed,
+    });
+
+    this.settings = new PluginSettingsManager({
+      getPluginsRoot: () => this.pluginsRoot,
+      getManifest: (pluginId) => this.plugins.get(pluginId)?.manifest,
+    });
+
+    this.channels = new PluginChannelRegistry({
+      getManifest: (pluginId) => this.plugins.get(pluginId)?.manifest,
+    });
+
+    this.installer = new PluginInstaller({
+      getPluginsRoot: () => this.pluginsRoot,
+      getAppVersion: () => this.appVersion,
+      records: this.records,
+      getSettingsRoot: () => this.settings.settingsRoot(),
+      loadPlugin: (root, pluginId, opts) => this.loadPlugin(root, pluginId, opts),
+      unloadPlugin: (pluginId) => this.unloadPlugin(pluginId),
+      activatePlugin: (pluginId) => this.activatePlugin(pluginId),
+      setPluginArchiveHash: (pluginId, hash) => this.setPluginArchiveHash(pluginId, hash),
+      setEnabled: (pluginId, enabled) => this.setEnabled(pluginId, enabled),
+      broadcastProvenanceChanged: () => this.broadcaster.broadcastProvenanceChanged(),
+      getPlugin: (pluginId) => this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId),
+      reservedNames: this.reservedNames,
+      disabledPlugins: this.disabledPlugins,
+    });
+
+    const offRegister = onPanelKindRegistered(() => this.broadcaster.schedulePanelKindsBroadcast());
+    const offUnregister = onPanelKindUnregistered(() =>
+      this.broadcaster.schedulePanelKindsBroadcast()
+    );
     this.disposeRegistrySubscriptions = () => {
       offRegister();
       offUnregister();
@@ -714,26 +637,24 @@ export class PluginService {
    */
   dispose(): void {
     this.disposed = true;
+    // Run each loaded plugin's full disposer cascade (cleanupMap, event-cleanups,
+    // contribution unregisters, best-effort MCP shutdown) so service teardown
+    // honors the Disposable contract. App-quit MCP teardown remains owned by
+    // lifecycle/shutdown.ts; this covers service-scoped disposal and test reuse.
+    for (const id of [...this.plugins.keys()]) {
+      try {
+        this.unloadPlugin(id);
+      } catch (err) {
+        console.error(`[PluginService] unloadPlugin("${id}") threw during dispose:`, err);
+      }
+    }
     this.disposeRegistrySubscriptions();
-    this.pluginDispatchListenerCleanup?.();
-    this.pluginDispatchListenerCleanup = null;
     // Settle the init gate so unit tests that tear down the service without
     // running activateStartupFinishedPlugins() don't hang IPC callers awaiting
     // waitForInit().
     this.resolveInit?.();
     this.resolveInit = null;
-    for (const pending of this.pendingPluginDispatches.values()) {
-      clearTimeout(pending.timer);
-      pending.destroyedCleanup?.();
-      pending.resolve({
-        ok: false,
-        error: {
-          code: "EXECUTION_ERROR",
-          message: "PluginService disposed before plugin action dispatch resolved",
-        },
-      });
-    }
-    this.pendingPluginDispatches.clear();
+    this.dispatcher.dispose();
   }
 
   /**
@@ -756,6 +677,18 @@ export class PluginService {
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
+
+    // Reap crash-left staging/parked dirs from the user root BEFORE any
+    // user-plugin scan. A parked `<pluginId>.old-<uuid>` dir (no leading dot)
+    // can contain a plugin.json, so if it survived into the scan it could be
+    // loaded as a real plugin and win the duplicate-name race against the live
+    // install — after which this sweep would delete the now-loaded directory.
+    // Sweeping first closes that window; loadFromDir also defensively skips
+    // parked/temp names so a dir the sweep missed is still never loaded.
+    // initialize() runs before any install/update-check/swap can start this
+    // session, so this can't race a live temp dir; it only touches the user
+    // root, never the built-in or sideload roots.
+    await this.installer.sweepStalePluginTempDirs();
 
     // Built-ins load first so user plugins with a colliding manifest.name are
     // rejected by the duplicate guard in loadPlugin() — built-in wins.
@@ -814,73 +747,6 @@ export class PluginService {
     }
   }
 
-  /**
-   * Read disabled plugin ids (built-in and user) from the user store.
-   * Defensive against missing keys (in-memory fallback during tests) and read
-   * failures — a failed read returns an empty set so all plugins activate,
-   * matching the safest startup behavior.
-   */
-  private getDisabledIds(): Set<string> {
-    try {
-      const value = store.get("plugins") as { disabled?: unknown } | undefined;
-      const list = Array.isArray(value?.disabled) ? value.disabled : [];
-      return new Set(list.filter((id): id is string => typeof id === "string"));
-    } catch (err) {
-      console.warn("[PluginService] Failed to read disabled plugins from store:", err);
-      return new Set();
-    }
-  }
-
-  private getInstalledRecords(): Record<string, InstalledPluginRecord> {
-    try {
-      const plugins = store.get("plugins") as { installed?: unknown } | undefined;
-      const raw = plugins?.installed;
-      if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
-        return raw as Record<string, InstalledPluginRecord>;
-      }
-      return {};
-    } catch {
-      return {};
-    }
-  }
-
-  private getInstalledRecord(name: string): InstalledPluginRecord | undefined {
-    return this.getInstalledRecords()[name];
-  }
-
-  private writeInstalledRecords(records: Record<string, InstalledPluginRecord>): void {
-    try {
-      const current = store.get("plugins");
-      store.set("plugins", { ...current, installed: records });
-    } catch (err) {
-      console.warn("[PluginService] Failed to write installed plugin records:", err);
-    }
-  }
-
-  private upsertInstalledRecord(
-    name: string,
-    patch: Partial<InstalledPluginRecord>
-  ): InstalledPluginRecord {
-    const records = this.getInstalledRecords();
-    const existing = records[name];
-    const updated: InstalledPluginRecord = existing
-      ? { ...existing, ...patch }
-      : {
-          source: "sideload" as PluginInstallSource,
-          installedAt: Date.now(),
-          archiveHash: null,
-          originalUrl: null,
-          disabled: false,
-          updateAvailable: null,
-          devMode: false,
-          loadError: null,
-          ...patch,
-        };
-    records[name] = updated;
-    this.writeInstalledRecords(records);
-    return updated;
-  }
-
   private async loadFromDir(root: string, opts: { isBuiltin: boolean }): Promise<number> {
     let entries: import("fs").Dirent[];
     try {
@@ -897,11 +763,16 @@ export class PluginService {
 
     // Skip dot-prefixed dirs: plugin ids are `publisher.name` and a publisher
     // segment can never start with a dot, so `.install-tmp-*` staging dirs and
-    // `.old-*` parked dirs left by the installer (e.g. after a crash mid-swap)
-    // are never mistaken for installable plugins.
-    const pluginDirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith("."));
+    // leading-dot `.old-*` leftovers are never mistaken for installable plugins.
+    // The installer's parked-old copies are named `<pluginId>.old-<uuid>` (no
+    // leading dot); `sweepStalePluginTempDirs` (run before this scan) reaps
+    // them first, but `isParkedOrTempDirName` defensively excludes them here
+    // too so a leaked parked dir is never loaded even if the sweep missed it.
+    const pluginDirs = entries.filter(
+      (e) => e.isDirectory() && !e.name.startsWith(".") && !isParkedOrTempDirName(e.name)
+    );
     // Disabled state applies to built-in and user plugins alike (#9284).
-    const disabled = this.getDisabledIds();
+    const disabled = this.records.getDisabledIds();
     const results = await Promise.allSettled(
       pluginDirs.map((d) => this.loadPlugin(root, d.name, { isBuiltin: opts.isBuiltin, disabled }))
     );
@@ -959,7 +830,7 @@ export class PluginService {
           message: `Plugin "${String(inferredName ?? dirName)}" uses the reserved "daintree.*" namespace, which is restricted to first-party plugins.`,
         });
         if (!opts.isBuiltin) {
-          this.upsertInstalledRecord(String(inferredName ?? dirName), {
+          this.records.upsertInstalledRecord(String(inferredName ?? dirName), {
             loadError: { message: namespaceIssue.message, at: Date.now() },
           });
         }
@@ -1024,9 +895,9 @@ export class PluginService {
     // the plugin is going to load. Must run after the engine gate above so
     // incompatible plugins don't leave zombie records in the store.
     if (!opts.isBuiltin) {
-      const existing = this.getInstalledRecord(manifest.name);
+      const existing = this.records.getInstalledRecord(manifest.name);
       if (!existing) {
-        this.upsertInstalledRecord(manifest.name, {});
+        this.records.upsertInstalledRecord(manifest.name, {});
       }
     }
 
@@ -1135,7 +1006,7 @@ export class PluginService {
       });
     }
     if (manifest.contributes.toolbarButtons.length > 0) {
-      this.scheduleToolbarButtonsBroadcast(false);
+      this.broadcaster.scheduleToolbarButtonsBroadcast(false);
     }
 
     for (const menuItem of manifest.contributes.menuItems) {
@@ -1143,7 +1014,7 @@ export class PluginService {
       registerPluginMenuItem(manifest.name, menuItem);
     }
     if (manifest.contributes.menuItems.length > 0) {
-      this.scheduleMenuItemsBroadcast(false);
+      this.broadcaster.scheduleMenuItemsBroadcast(false);
     }
 
     for (const keybinding of manifest.contributes.keybindings) {
@@ -1151,7 +1022,7 @@ export class PluginService {
       registerPluginKeybinding(manifest.name, keybinding);
     }
     if (manifest.contributes.keybindings.length > 0) {
-      this.scheduleKeybindingsBroadcast(false);
+      this.broadcaster.scheduleKeybindingsBroadcast(false);
     }
 
     for (const ctxMenu of manifest.contributes.contextMenus) {
@@ -1159,7 +1030,7 @@ export class PluginService {
       registerPluginContextMenuItem(manifest.name, ctxMenu);
     }
     if (manifest.contributes.contextMenus.length > 0) {
-      this.scheduleContextMenuItemsBroadcast(false);
+      this.broadcaster.scheduleContextMenuItemsBroadcast(false);
     }
 
     // Lazy MCP discovery (#9235): plugin activation no longer eagerly spawns
@@ -1192,7 +1063,7 @@ export class PluginService {
     // writes its own `loadError` via `registerManifestCommands` (#9281), and
     // clearing it back to `null` here would silently lose the diagnostic.
     if (!plugin.resolvedMain && !opts.isBuiltin) {
-      this.upsertInstalledRecord(manifest.name, { loadError: null });
+      this.records.upsertInstalledRecord(manifest.name, { loadError: null });
     }
 
     // Manifest-declared commands (#9281): register descriptors at load time so
@@ -1230,7 +1101,7 @@ export class PluginService {
         const message = `Plugin "${pluginId}" command id "${namespacedId}" collides with a built-in action id`;
         console.error(`[PluginService] ${message}`);
         if (!isBuiltin) {
-          this.upsertInstalledRecord(pluginId, {
+          this.records.upsertInstalledRecord(pluginId, {
             loadError: { message, at: Date.now() },
           });
           // Mark so a later `_doActivate()` success doesn't clear this
@@ -1253,7 +1124,7 @@ export class PluginService {
           err
         );
         if (!isBuiltin) {
-          this.upsertInstalledRecord(pluginId, { loadError });
+          this.records.upsertInstalledRecord(pluginId, { loadError });
           this.pluginsWithLoadTimeErrors.add(pluginId);
         }
         continue;
@@ -1280,7 +1151,7 @@ export class PluginService {
       // `Command "{id}" has no handler` toast.
     }
     if (registered) {
-      this.broadcastPluginActions();
+      this.broadcaster.broadcastPluginActions();
     }
   }
 
@@ -1402,12 +1273,12 @@ export class PluginService {
       // manifest command id collision, #9281) are exempted: their diagnostic
       // is a manifest-level fact that doesn't go away when `main` activates.
       if (!plugin.isBuiltin && !this.pluginsWithLoadTimeErrors.has(pluginId)) {
-        this.upsertInstalledRecord(pluginId, { loadError: null });
+        this.records.upsertInstalledRecord(pluginId, { loadError: null });
       }
     } catch (err) {
       const loadError = toPluginLoadError(err);
       if (!plugin.isBuiltin) {
-        this.upsertInstalledRecord(pluginId, { loadError });
+        this.records.upsertInstalledRecord(pluginId, { loadError });
       }
       console.error(`[PluginService] Failed to load main entry for ${pluginId}:`, err);
       throw err;
@@ -1707,7 +1578,7 @@ export class PluginService {
         }
         owners.add(namespacedId);
 
-        this.broadcastPluginActions();
+        this.broadcaster.broadcastPluginActions();
       },
       registerHandler: ((
         channel: string,
@@ -2014,7 +1885,7 @@ export class PluginService {
             },
           };
         }
-        return this.sendDispatchToRenderer(actionId, args);
+        return this.dispatcher.sendDispatchToRenderer(actionId, args);
       },
       // NOT revoke-guarded for the same reason as showToast/dispatch: plugins
       // log from post-activation callbacks and timers. Liveness is plugin
@@ -2040,11 +1911,11 @@ export class PluginService {
           scope: PluginSettingsScope = "user"
         ): Promise<T | undefined> => {
           assertSettingsKey(pluginId, "get", key);
-          const filePath = this.resolveSettingsFilePath(pluginId, scope);
+          const filePath = this.settings.resolveSettingsFilePath(pluginId, scope);
           // Project scope with no active project: read resolves to undefined
           // rather than throwing, matching the "unset key" return.
           if (!filePath) return undefined;
-          return this.getOrCreateSettingsStore(pluginId, scope, filePath).get<T>(key);
+          return this.settings.getOrCreateSettingsStore(pluginId, scope, filePath).get<T>(key);
         },
         set: async <T = unknown>(
           key: string,
@@ -2057,27 +1928,17 @@ export class PluginService {
               `Plugin "${pluginId}" settings.set: value for "${key}" is undefined — settings cannot store undefined`
             );
           }
-          let serialized: string | undefined;
-          try {
-            serialized = JSON.stringify(value);
-          } catch {
-            serialized = undefined;
-          }
-          if (serialized === undefined) {
-            throw new Error(
-              `Plugin "${pluginId}" settings.set: value for "${key}" is not JSON-serializable`
-            );
-          }
-          this.assertSettingDeclared(pluginId, key);
-          const filePath = this.resolveSettingsFilePath(pluginId, scope);
+          this.settings.assertSettingSerializable(pluginId, key, value);
+          this.settings.assertSettingDeclared(pluginId, key, scope);
+          const filePath = this.settings.resolveSettingsFilePath(pluginId, scope);
           if (!filePath) {
             throw new Error(
               `Plugin "${pluginId}" settings.set: no active project — "project" scope has no target`
             );
           }
-          const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
+          const store = this.settings.getOrCreateSettingsStore(pluginId, scope, filePath);
           const changed = await store.set(key, value);
-          if (changed) this.notifySettingsSubscribers(pluginId, scope, key, value);
+          if (changed) this.settings.notifySettingsSubscribers(pluginId, scope, key, value);
         },
         onDidChange: <T = unknown>(
           key: string,
@@ -2095,23 +1956,15 @@ export class PluginService {
               `Plugin "${pluginId}" settings.onDidChange: callback must be a function`
             );
           }
+          this.settings.assertSettingScope(pluginId, key, scope);
           const sub = { key, scope, cb: callback as (value: unknown) => void };
-          let subs = this.settingsSubscribers.get(pluginId);
-          if (!subs) {
-            subs = new Set();
-            this.settingsSubscribers.set(pluginId, subs);
-          }
-          subs.add(sub);
+          this.settings.addSubscriber(pluginId, sub);
 
           let disposed = false;
           const dispose = (): void => {
             if (disposed) return;
             disposed = true;
-            const set = this.settingsSubscribers.get(pluginId);
-            if (set) {
-              set.delete(sub);
-              if (set.size === 0) this.settingsSubscribers.delete(pluginId);
-            }
+            this.settings.removeSubscriber(pluginId, sub);
             const list = this.pluginEventCleanups.get(pluginId);
             if (!list) return;
             const idx = list.indexOf(dispose);
@@ -2135,244 +1988,6 @@ export class PluginService {
         revoked = true;
       },
     };
-  }
-
-  /**
-   * Resolve the active project's renderer WebContents, mirroring the MCP
-   * renderer bridge's resolution order: walk every live window's active
-   * project view first, then fall back to the global `ProjectViewManager`.
-   * Returns `null` (rather than throwing) when no renderer is available so
-   * `sendDispatchToRenderer` can return an error result.
-   */
-  private resolveActiveWebContents(): Electron.WebContents | null {
-    const registry = getWindowRegistry();
-    if (registry) {
-      for (const ctx of registry.all()) {
-        if (ctx.browserWindow.isDestroyed()) continue;
-        const webContents = ctx.services.projectViewManager?.getActiveView()?.webContents;
-        if (webContents && !webContents.isDestroyed()) {
-          return webContents;
-        }
-      }
-    }
-    const fallback = getProjectViewManager()?.getActiveView()?.webContents;
-    if (fallback && !fallback.isDestroyed()) {
-      return fallback;
-    }
-    return null;
-  }
-
-  /**
-   * Lazily register the single `ipcMain` listener that resolves plugin dispatch
-   * responses. Registered on first `host.dispatch()` and torn down in
-   * {@link dispose}. The handler validates `event.sender.id` against the
-   * pending request's `webContentsId` so a renderer in another window cannot
-   * resolve a dispatch initiated for a different window (#4641).
-   */
-  private ensurePluginDispatchListener(): void {
-    if (this.pluginDispatchListenerCleanup) return;
-    const handler = (
-      event: Electron.IpcMainEvent,
-      payload: { requestId: string; result: ActionDispatchResult }
-    ) => {
-      if (!payload || typeof payload.requestId !== "string") return;
-      const pending = this.pendingPluginDispatches.get(payload.requestId);
-      if (!pending) return;
-      if (event.sender.id !== pending.webContentsId) {
-        console.warn(
-          `[PluginService] Ignoring dispatch response from unexpected sender ${event.sender.id} (expected ${pending.webContentsId}, requestId=${payload.requestId})`
-        );
-        return;
-      }
-      clearTimeout(pending.timer);
-      pending.destroyedCleanup?.();
-      this.pendingPluginDispatches.delete(payload.requestId);
-      pending.resolve(payload.result);
-    };
-    ipcMain.on(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE, handler);
-    this.pluginDispatchListenerCleanup = () => {
-      ipcMain.removeListener(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE, handler);
-    };
-  }
-
-  /**
-   * Send a plugin-sourced action dispatch to the active renderer and await its
-   * response. Always resolves with an {@link ActionDispatchResult} — failures
-   * (no renderer, timeout, destroyed view, send error) come back as
-   * `EXECUTION_ERROR` rather than a rejected promise.
-   */
-  private sendDispatchToRenderer(actionId: string, args: unknown): Promise<ActionDispatchResult> {
-    return new Promise((resolve) => {
-      if (this.disposed) {
-        resolve({
-          ok: false,
-          error: {
-            code: "EXECUTION_ERROR",
-            message: "PluginService is disposed",
-          },
-        });
-        return;
-      }
-      const webContents = this.resolveActiveWebContents();
-      if (!webContents) {
-        resolve({
-          ok: false,
-          error: {
-            code: "EXECUTION_ERROR",
-            message: "No active renderer available to dispatch plugin action",
-          },
-        });
-        return;
-      }
-
-      this.ensurePluginDispatchListener();
-
-      const requestId = randomUUID();
-      const webContentsId = webContents.id;
-      const timer = setTimeout(() => {
-        const pending = this.pendingPluginDispatches.get(requestId);
-        if (!pending) return;
-        pending.destroyedCleanup?.();
-        this.pendingPluginDispatches.delete(requestId);
-        resolve({
-          ok: false,
-          error: {
-            code: "EXECUTION_ERROR",
-            message: `Plugin action dispatch timed out: ${actionId}`,
-          },
-        });
-      }, PLUGIN_DISPATCH_TIMEOUT_MS);
-
-      const onDestroyed = () => {
-        const pending = this.pendingPluginDispatches.get(requestId);
-        if (!pending) return;
-        clearTimeout(pending.timer);
-        this.pendingPluginDispatches.delete(requestId);
-        resolve({
-          ok: false,
-          error: {
-            code: "EXECUTION_ERROR",
-            message: "Renderer destroyed before plugin action dispatch resolved",
-          },
-        });
-      };
-      webContents.once("destroyed", onDestroyed);
-      const destroyedCleanup = () => {
-        try {
-          webContents.removeListener("destroyed", onDestroyed);
-        } catch {
-          // best-effort; webContents may already be gone
-        }
-      };
-
-      this.pendingPluginDispatches.set(requestId, {
-        resolve,
-        timer,
-        webContentsId,
-        destroyedCleanup,
-      });
-
-      try {
-        webContents.send(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST, { requestId, actionId, args });
-      } catch {
-        clearTimeout(timer);
-        destroyedCleanup();
-        this.pendingPluginDispatches.delete(requestId);
-        resolve({
-          ok: false,
-          error: {
-            code: "EXECUTION_ERROR",
-            message: `Failed to dispatch plugin action: ${actionId}`,
-          },
-        });
-      }
-    });
-  }
-
-  /**
-   * Root directory for user-scope plugin settings: a sibling of the plugins
-   * dir. Production: `~/.daintree/plugin-settings`. Derived from
-   * {@link pluginsRoot} so tests that pass a custom root stay isolated.
-   */
-  private settingsRoot(): string {
-    return path.join(path.dirname(this.pluginsRoot), "plugin-settings");
-  }
-
-  /**
-   * Resolve the JSON file backing a plugin's settings for a scope. User scope is
-   * fixed; project scope resolves the active project at call time and returns
-   * `undefined` when none is active.
-   */
-  private resolveSettingsFilePath(
-    pluginId: string,
-    scope: PluginSettingsScope
-  ): string | undefined {
-    if (scope === "project") {
-      const root = projectStore.getCurrentProject()?.path;
-      if (!root) return undefined;
-      return path.join(root, ".daintree", "plugin-settings", `${pluginId}.json`);
-    }
-    return path.join(this.settingsRoot(), `${pluginId}.json`);
-  }
-
-  private getOrCreateSettingsStore(
-    pluginId: string,
-    scope: PluginSettingsScope,
-    filePath: string
-  ): PluginSettingsStore {
-    const cacheKey = `${pluginId}\u0000${scope}\u0000${filePath}`;
-    let store = this.settingsStores.get(cacheKey);
-    if (!store) {
-      store = new PluginSettingsStore(filePath);
-      this.settingsStores.set(cacheKey, store);
-    }
-    return store;
-  }
-
-  /**
-   * Enforce `contributes.settings` key declarations on `set`. F29 has not landed
-   * yet, so manifests never declare settings today and any key is accepted; once
-   * a plugin declares them, undeclared keys are rejected.
-   */
-  private assertSettingDeclared(pluginId: string, key: string): void {
-    const declared = this.plugins.get(pluginId)?.manifest.contributes.settings;
-    if (!declared || declared.length === 0) return;
-    if (!declared.some((s) => s.id === key)) {
-      throw new Error(
-        `Plugin "${pluginId}" settings.set: key "${key}" is not declared in contributes.settings`
-      );
-    }
-  }
-
-  private notifySettingsSubscribers(
-    pluginId: string,
-    scope: PluginSettingsScope,
-    key: string,
-    value: unknown
-  ): void {
-    const subs = this.settingsSubscribers.get(pluginId);
-    if (!subs) return;
-    // Snapshot so a callback that disposes itself doesn't mutate the live set
-    // mid-iteration.
-    for (const sub of [...subs]) {
-      if (sub.key !== key || sub.scope !== scope) continue;
-      try {
-        sub.cb(value);
-      } catch (err) {
-        console.error(
-          `[PluginService] settings.onDidChange callback for "${pluginId}" key "${key}" failed:`,
-          err
-        );
-      }
-    }
-  }
-
-  private clearPluginSettingsState(pluginId: string): void {
-    this.settingsSubscribers.delete(pluginId);
-    const prefix = `${pluginId}\u0000`;
-    for (const cacheKey of [...this.settingsStores.keys()]) {
-      if (cacheKey.startsWith(prefix)) this.settingsStores.delete(cacheKey);
-    }
   }
 
   private async fetchAllWorktreeSnapshots(): Promise<WorktreeSnapshot[]> {
@@ -2501,59 +2116,12 @@ export class PluginService {
       | PluginTypedIpcHandler<unknown, unknown>,
     typedHandler?: PluginTypedIpcHandler<unknown, unknown>
   ): void {
-    const plugin = this.plugins.get(pluginId);
-    if (!plugin) {
-      throw new Error(`Unknown plugin: ${pluginId}`);
-    }
-    if (channel.includes(":")) {
-      throw new Error(`Plugin channel must not contain colons: ${channel}`);
-    }
-
-    const key = `${pluginId}:${channel}`;
-    const isTypedOverload = isChannelSchema(schemaOrHandler);
-
-    if (isTypedOverload) {
-      const schema = schemaOrHandler;
-      if (typeof typedHandler !== "function") {
-        throw new Error(`Plugin handler must be a function, got ${typeof typedHandler}`);
-      }
-      // Fail-closed at registration: every capability listed in `requires`
-      // must already be declared in the plugin's manifest. Throwing here
-      // surfaces author misconfiguration loudly at load instead of at first
-      // dispatch (where it would look like a transient runtime error).
-      const requires = schema.requires ?? [];
-      const declared = new Set<BuiltInPluginCapability>(plugin.manifest.capabilities ?? []);
-      const missing = requires.filter((cap) => !declared.has(cap));
-      if (missing.length > 0) {
-        throw new Error(
-          `PERMISSION_REQUIRED: channel "${channel}" requires capability "${missing[0]}" which is not declared in plugin "${pluginId}" manifest.capabilities`
-        );
-      }
-
-      const boundHandler = typedHandler;
-      // Adapt the single-payload typed handler to the variadic
-      // PluginIpcHandler shape so the dispatch path stays uniform. The
-      // first variadic arg is the parsed payload; `dispatchHandler` only
-      // calls this after `schema.args.safeParse` succeeds, so the cast is
-      // safe at call time.
-      const adapter: PluginIpcHandler = (ctx, ...args) =>
-        boundHandler(ctx, args.length > 0 ? args[0] : undefined);
-
-      this.handlerMap.set(key, adapter);
-      this.channelSchemas.set(key, schema);
-      this.channelRequires.set(key, requires);
-      return;
-    }
-
-    if (typeof schemaOrHandler !== "function") {
-      throw new Error(`Plugin handler must be a function, got ${typeof schemaOrHandler}`);
-    }
-    // Re-registration drops any prior typed-channel metadata so a legacy
-    // re-bind doesn't strand a stale schema or capability gate keyed to the
-    // same channel.
-    this.channelSchemas.delete(key);
-    this.channelRequires.delete(key);
-    this.handlerMap.set(key, schemaOrHandler);
+    (this.channels.register as (...args: unknown[]) => void)(
+      pluginId,
+      channel,
+      schemaOrHandler,
+      typedHandler
+    );
   }
 
   async dispatchHandler(
@@ -2575,7 +2143,7 @@ export class PluginService {
     // already guarantees this, and the guard mirrors the input-schema check.
     let actionHandler =
       descriptor?.pluginId === pluginId ? this.pluginActionHandlers.get(channel) : undefined;
-    const handler = this.handlerMap.get(key);
+    const handler = this.channels.getHandler(key);
     // Manifest-declared command (#9281): descriptor registered at load time,
     // handler module deferred until first dispatch. Lazy-load now, then fall
     // through to the existing action-handler dispatch path. A missing handler
@@ -2648,8 +2216,8 @@ export class PluginService {
     // `registerHandler`). The capability gate already fired at registration
     // — this re-check is defense-in-depth against a future code path that
     // mutates a loaded manifest after registration.
-    const channelSchema = this.channelSchemas.get(key);
-    const channelRequires = this.channelRequires.get(key);
+    const channelSchema = this.channels.getSchema(key);
+    const channelRequires = this.channels.getRequires(key);
     if (channelRequires && channelRequires.length > 0) {
       const declared = new Set<BuiltInPluginCapability>(
         this.plugins.get(pluginId)?.manifest.capabilities ?? []
@@ -2703,520 +2271,30 @@ export class PluginService {
   }
 
   removeHandlers(pluginId: string): void {
-    const prefix = `${pluginId}:`;
-    for (const key of [...this.handlerMap.keys()]) {
-      if (key.startsWith(prefix)) {
-        this.handlerMap.delete(key);
-        this.actionValidators.delete(key.slice(prefix.length));
-        this.channelSchemas.delete(key);
-        this.channelRequires.delete(key);
-      }
-    }
+    this.channels.removeHandlers(pluginId);
   }
 
   /**
    * Atomically install a plugin from a `.dntr` archive path or a pre-extracted
    * directory. This is the ONLY path that mutates {@link pluginsRoot} — direct
-   * IPC writes to the plugins directory are a review blocker (#9292).
-   *
-   * The flow, with rollback on every failure branch:
-   * 1. Acquire the cross-process `install.lock` (sub-30s stale TTL so a crashed
-   *    prior install can't hold it forever). A second instance blocks, not races.
-   * 2. Extract / copy the source into a sibling `.install-tmp-*` dir — same
-   *    filesystem as the final location so the eventual rename is atomic.
-   * 3. Validate `plugin.json` with the strict Zod schema (unknown keys, reserved
-   *    `daintree.*` namespace, publisher/name agreement) and the engine range.
-   * 4. Compute the `.dntr` SHA-256 for the `archiveHash` provenance field.
-   * 5. If the id already exists: `unloadPlugin` (disposer cascade), then swap via
-   *    rename — park old aside → move new in → restore old on failure. Per-plugin
-   *    settings/secrets live under a separate `plugin-settings/` root, so the
-   *    directory swap never touches them; no preserve/restore step is needed.
-   * 6. On any failure the temp dir is removed, the lock released, and a structured
-   *    error returned. The on-disk plugin directory is never left half-written.
-   *
-   * Structured validation errors are RETURNED as `{ status: "failed", errors }`
-   * data, never thrown, so they survive the IPC structured-clone boundary
-   * intact (#3769) for the F22/F23/F24 install dialogs.
+   * IPC writes to the plugins directory are a review blocker (#9292). The full
+   * lockfile/staging/swap/rollback orchestration lives in {@link PluginInstaller};
+   * this thin delegate preserves the public signature IPC handlers call.
    */
   async installPlugin(
     archivePath: string,
     opts?: PluginInstallOptions
   ): Promise<PluginInstallResult> {
-    const fail = (code: PluginInstallErrorCode, message: string): PluginInstallResult => ({
-      status: "failed",
-      errors: [{ code, message }],
-    });
-
-    await fs.mkdir(this.pluginsRoot, { recursive: true });
-
-    const lockPath = path.join(this.pluginsRoot, "install.lock");
-    // Set if proper-lockfile reports the lock was compromised mid-hold (mtime
-    // drift, external deletion). When that happens a second instance could
-    // reclaim the lock, so we abort before the irreversible swap step rather
-    // than risk two installs racing on the same directory. Re-throwing inside
-    // `onCompromised` is unsafe — it fires from a timer and would surface as an
-    // uncaught exception — so we flag and check at the commit point instead.
-    let lockCompromised = false;
-    // Definitely assigned below or the catch returns, so the `finally` can
-    // release unconditionally without a null guard.
-    let release: () => Promise<void>;
-    try {
-      release = await properLockfile.lock(lockPath, {
-        // Sub-30s stale TTL with mid-hold refresh every 10s. A crashed prior
-        // install's lock is reclaimed after 20s instead of being held forever.
-        stale: 20_000,
-        update: 10_000,
-        // The lock target need not pre-exist — proper-lockfile creates
-        // `install.lock.lock` adjacent. `realpath: false` skips the existence
-        // probe that would otherwise reject before the lock dir is made.
-        realpath: false,
-        retries: { retries: 5, minTimeout: 100, maxTimeout: 1_000 },
-        onCompromised: (err) => {
-          lockCompromised = true;
-          console.error("[PluginService] install.lock compromised during install:", err);
-        },
-      });
-    } catch (err) {
-      return fail(
-        "lock_failed",
-        `Couldn't acquire the plugin install lock: ${(err as Error).message}`
-      );
-    }
-
-    let tmpDir: string | null = null;
-    try {
-      tmpDir = await fs.mkdtemp(path.join(this.pluginsRoot, ".install-tmp-"));
-
-      // 1. Materialize the plugin into the temp dir.
-      let sourceIsDir: boolean;
-      try {
-        sourceIsDir = (await fs.stat(archivePath)).isDirectory();
-      } catch (err) {
-        return fail("archive_invalid", `Install source not found: ${(err as Error).message}`);
-      }
-
-      let hash: string | null = null;
-      if (sourceIsDir) {
-        try {
-          await fs.cp(archivePath, tmpDir, { recursive: true });
-        } catch (err) {
-          return fail(
-            "archive_invalid",
-            `Failed to copy plugin directory: ${(err as Error).message}`
-          );
-        }
-      } else {
-        try {
-          await extractPluginArchive(archivePath, tmpDir);
-        } catch (err) {
-          return fail("archive_invalid", `Failed to extract archive: ${(err as Error).message}`);
-        }
-        try {
-          hash = await computeArchiveHash(archivePath);
-        } catch (err) {
-          return fail("hash_failed", `Failed to compute archive hash: ${(err as Error).message}`);
-        }
-      }
-
-      // 2. Read + strictly validate the manifest.
-      let rawManifest: string;
-      try {
-        rawManifest = await fs.readFile(path.join(tmpDir, "plugin.json"), "utf-8");
-      } catch {
-        return fail("manifest_invalid", "plugin.json not found at the archive root");
-      }
-      let json: unknown;
-      try {
-        json = JSON.parse(rawManifest);
-      } catch {
-        return fail("manifest_invalid", "plugin.json is not valid JSON");
-      }
-      const parsed = getPluginManifestSchema(false).safeParse(json);
-      if (!parsed.success) {
-        const errors: PluginInstallError[] = parsed.error.issues.map((issue) => {
-          const isNamespace =
-            issue.code === "custom" &&
-            (issue as unknown as { params?: { errorCode?: string } }).params?.errorCode ===
-              "namespace_reserved";
-          return {
-            code: isNamespace ? "namespace_unauthorized" : "manifest_invalid",
-            path: issue.path.map(String),
-            message: issue.message,
-          };
-        });
-        return { status: "failed", errors };
-      }
-      const manifest = parsed.data;
-
-      // 3. Engine compatibility.
-      const requiredRange = manifest.engines?.daintree;
-      if (
-        requiredRange &&
-        !semver.satisfies(this.appVersion, requiredRange, { includePrerelease: true })
-      ) {
-        return fail(
-          "engine_incompatible",
-          `Plugin requires Daintree ${requiredRange} but the running version is ${this.appVersion}`
-        );
-      }
-
-      // 4. Atomic swap into the final location.
-      const pluginId = manifest.name;
-      const finalDir = path.join(this.pluginsRoot, pluginId);
-      let existing = false;
-      try {
-        await fs.access(finalDir);
-        existing = true;
-      } catch {
-        existing = false;
-      }
-
-      // Abort before the irreversible swap if the lock was compromised — a
-      // second instance may now hold it and racing the rename would corrupt
-      // the directory. Nothing has been written to the final location yet.
-      if (lockCompromised) {
-        return fail("lock_failed", "Install lock was compromised mid-install; aborted before swap");
-      }
-
-      if (existing) {
-        try {
-          this.unloadPlugin(pluginId);
-        } catch (err) {
-          return fail(
-            "unload_failed",
-            `Failed to unload the existing "${pluginId}" before upgrade: ${(err as Error).message}`
-          );
-        }
-      }
-
-      const swapError = await this._swapPluginDir(tmpDir, finalDir, existing);
-      if (swapError) {
-        // On a recoverable upgrade failure the old directory was restored on
-        // disk, but `unloadPlugin` already tore down its runtime state. Re-load
-        // it so the previous version stays live this session (rollback must
-        // restore runtime state too, not just disk). `swap_unrecoverable` means
-        // the directory may be missing — don't attempt a reload there.
-        if (existing && swapError.code === "swap_failed") {
-          try {
-            const restored = await this.loadPlugin(this.pluginsRoot, pluginId, {
-              isBuiltin: false,
-              disabled: this.getDisabledIds(),
-            });
-            if (restored) await this.activatePlugin(pluginId);
-          } catch (reloadErr) {
-            console.error(
-              `[PluginService] Failed to restore "${pluginId}" runtime state after swap rollback:`,
-              reloadErr
-            );
-          }
-        }
-        return { status: "failed", errors: [swapError] };
-      }
-      // The temp dir was renamed into place — drop the handle so the `finally`
-      // cleanup doesn't delete the freshly installed plugin.
-      tmpDir = null;
-
-      // 5. Persist provenance and load the new plugin. On an upgrade over an
-      // existing install (the swap path) preserve the original `installedAt`
-      // and record `updatedAt` instead — `upsertInstalledRecord` spreads over
-      // the prior record, so omitting `installedAt` from the patch keeps it.
-      // Clear any prior update signal: the user just reinstalled, so whatever
-      // `updateAvailable` flagged is now resolved (#9297).
-      this.upsertInstalledRecord(pluginId, {
-        source: opts?.source ?? "sideload",
-        originalUrl: opts?.originalUrl ?? null,
-        archiveHash: hash,
-        loadError: null,
-        ...(existing
-          ? { updatedAt: Date.now(), updateAvailable: null }
-          : { installedAt: Date.now() }),
-      });
-
-      // A plugin disabled in Preferences installs to disk but is intentionally
-      // not loaded this session (`loadPlugin` would return null for it). The
-      // files and provenance are committed, so this is a successful install.
-      if (this.getDisabledIds().has(pluginId)) {
-        return { status: "installed", pluginId };
-      }
-
-      let loaded: LoadedPlugin | null;
-      try {
-        loaded = await this.loadPlugin(this.pluginsRoot, pluginId, {
-          isBuiltin: false,
-          disabled: this.getDisabledIds(),
-        });
-      } catch (err) {
-        // A manifest field that passes the schema but throws downstream (e.g. a
-        // malformed `when` expression rejected by the when-clause parser) must
-        // surface as a structured result, not an unhandled rejection. The swap
-        // committed and provenance is persisted; leave the directory in place.
-        return {
-          status: "failed",
-          errors: [
-            {
-              code: "load_failed",
-              message: `Plugin "${pluginId}" installed but failed to load: ${(err as Error).message}. Retry from Settings.`,
-            },
-          ],
-        };
-      }
-      if (!loaded) {
-        // The swap committed and provenance is persisted, so the directory is
-        // intact and consistent — the user can retry activation or reinstall
-        // without re-downloading. We deliberately leave the directory in place.
-        return {
-          status: "failed",
-          errors: [
-            {
-              code: "load_failed",
-              message: `Plugin "${pluginId}" installed but failed to load. Retry from Settings.`,
-            },
-          ],
-        };
-      }
-
-      // setPluginArchiveHash requires the plugin to be loaded; call it after.
-      if (hash) this.setPluginArchiveHash(pluginId, hash);
-      await this.activatePlugin(pluginId);
-
-      return { status: "installed", pluginId };
-    } finally {
-      if (tmpDir) {
-        await fs.rm(tmpDir, { recursive: true, force: true }).catch((err) => {
-          console.warn(`[PluginService] Failed to clean up install temp dir ${tmpDir}:`, err);
-        });
-      }
-      await release().catch((err) => {
-        console.warn("[PluginService] Failed to release install lock:", err);
-      });
-    }
-  }
-
-  /**
-   * Atomic directory swap for {@link installPlugin}. Returns `null` on success
-   * or a structured {@link PluginInstallError} on failure. When `existing` is
-   * true the current `finalDir` is parked aside first and restored if the new
-   * directory can't be moved in.
-   *
-   * `swap_unrecoverable` is reserved for the case where BOTH the move-in AND
-   * the restore fail — the plugin directory may be missing and the message
-   * says so explicitly rather than swallowing the inconsistency.
-   */
-  private async _swapPluginDir(
-    tmpDir: string,
-    finalDir: string,
-    existing: boolean
-  ): Promise<PluginInstallError | null> {
-    const parked = existing ? `${finalDir}.old-${randomUUID()}` : null;
-
-    if (parked) {
-      try {
-        await resilientRename(finalDir, parked);
-      } catch (err) {
-        return {
-          code: "swap_failed",
-          message: `Couldn't move the existing plugin aside: ${(err as Error).message}`,
-        };
-      }
-    }
-
-    try {
-      await resilientRename(tmpDir, finalDir);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      const detail =
-        code === "EXDEV"
-          ? `cross-device rename not supported — the staging dir is on a different filesystem than ${finalDir}`
-          : (err as Error).message;
-      if (parked) {
-        try {
-          await resilientRename(parked, finalDir);
-        } catch (restoreErr) {
-          return {
-            code: "swap_unrecoverable",
-            message: `Install failed (${detail}) and the previous plugin couldn't be restored (${(restoreErr as Error).message}). The directory at ${finalDir} may be missing — reinstall to recover.`,
-          };
-        }
-      }
-      return {
-        code: "swap_failed",
-        message: `Couldn't move the new plugin into place: ${detail}`,
-      };
-    }
-
-    // New dir is in place — remove the parked old copy best-effort. A failure
-    // here only leaks a `.old-*` dir (skipped by the load scan), never the
-    // installed plugin.
-    if (parked) {
-      await fs.rm(parked, { recursive: true, force: true }).catch((err) => {
-        console.warn(`[PluginService] Failed to remove parked old plugin dir ${parked}:`, err);
-      });
-    }
-    return null;
+    return this.installer.installPlugin(archivePath, opts);
   }
 
   /**
    * Manual update check (#9297). Re-fetches the plugin's `originalUrl`, hashes
    * the downloaded archive, and compares it against the installed `archiveHash`.
-   * Purely informational — it never installs. The user's follow-up is a manual
-   * reinstall (via `installFromUrl`), which preserves settings and `installedAt`.
-   *
-   * Domain failures (no record, no URL, network/content-type/size faults, a
-   * malformed archive) are returned as data — never thrown — so the structured
-   * result survives the structured-clone IPC boundary (#3769). The download is
-   * lock-free: it writes to a private temp dir and reads the hash/manifest, so
-   * it doesn't contend with the install lock.
+   * Purely informational — it never installs. Delegates to {@link PluginInstaller}.
    */
   async checkForUpdate(pluginId: string): Promise<PluginCheckUpdateResult> {
-    if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
-      return { status: "invalid-id" };
-    }
-    const record = this.getInstalledRecord(pluginId);
-    // No record, or a sideload/builtin with no original URL — the UI gates the
-    // button on `originalUrl !== null`, so the no-URL case is unreachable in
-    // practice; treat it as `invalid-id` defensively.
-    if (!record || !record.originalUrl) {
-      return { status: "invalid-id" };
-    }
-    const url = record.originalUrl;
-    // Without a baseline hash (corrupt record, or a dir-load that never hashed)
-    // there's nothing to compare against — a string never equals `null`, so the
-    // diff would always read as "available". Fail loudly instead of misleading.
-    if (!record.archiveHash) {
-      return { status: "fetch-failed", message: "No baseline archive hash to compare against" };
-    }
-    const baselineHash = record.archiveHash;
-
-    // `net` requires a full Electron runtime; lazy-import it so the service
-    // module stays importable in unit tests that don't fetch.
-    const { net } = await import("electron");
-
-    let tmpRoot: string | null = null;
-    try {
-      tmpRoot = await fs.mkdtemp(path.join(this.pluginsRoot, ".update-check-"));
-      const tmpArchive = path.join(tmpRoot, "plugin.dntr");
-
-      let response: Awaited<ReturnType<typeof net.fetch>>;
-      try {
-        response = await net.fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-      } catch (err) {
-        return {
-          status: "fetch-failed",
-          message: `Couldn't reach ${url}: ${(err as Error).message}`,
-        };
-      }
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => {});
-        return { status: "fetch-failed", message: `Server responded with HTTP ${response.status}` };
-      }
-
-      // Content-type guard — match the install flow's accepted archive types.
-      const contentType = (response.headers.get("content-type") ?? "")
-        .split(";")[0]
-        .trim()
-        .toLowerCase();
-      const ALLOWED_CONTENT_TYPES = [
-        "application/octet-stream",
-        "application/zip",
-        "application/x-zip",
-      ];
-      if (contentType && !ALLOWED_CONTENT_TYPES.includes(contentType)) {
-        await response.body?.cancel().catch(() => {});
-        return { status: "fetch-failed", message: `Unexpected content type "${contentType}"` };
-      }
-
-      // Stream to disk with a running byte counter so an oversized body is
-      // aborted before the whole 30 MB is written (defense in depth ahead of
-      // `computeArchiveHash`'s stat-based cap).
-      const body = response.body;
-      if (!body) {
-        return { status: "fetch-failed", message: "Response had no body" };
-      }
-      // A read/write fault mid-stream must come back as a structured
-      // `fetch-failed`, not a thrown rejection — the "never throws for domain
-      // outcomes" contract (#3769). A `null` sentinel signals the oversize abort
-      // so the early-return stays out of the catch.
-      let oversized = false;
-      try {
-        const handle = await fs.open(tmpArchive, "w");
-        try {
-          const reader = body.getReader();
-          let bytes = 0;
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done || !value) break;
-            bytes += value.byteLength;
-            if (bytes > MAX_DNTR_BYTES) {
-              await reader.cancel().catch(() => {});
-              oversized = true;
-              break;
-            }
-            await handle.write(value);
-          }
-        } finally {
-          await handle.close();
-        }
-      } catch (err) {
-        return {
-          status: "fetch-failed",
-          message: `Couldn't download the archive: ${(err as Error).message}`,
-        };
-      }
-      if (oversized) {
-        return {
-          status: "fetch-failed",
-          message: `Archive exceeds the ${MAX_DNTR_BYTES}-byte size limit`,
-        };
-      }
-
-      let downloadedHash: string;
-      try {
-        downloadedHash = await computeArchiveHash(tmpArchive);
-      } catch (err) {
-        return {
-          status: "fetch-failed",
-          message: `Couldn't hash the archive: ${(err as Error).message}`,
-        };
-      }
-      if (downloadedHash === baselineHash) {
-        return { status: "up-to-date" };
-      }
-
-      // Hashes differ — surface the new manifest's preview so the confirm dialog
-      // can show what the reinstall would bring in.
-      let manifest: PluginManifest;
-      try {
-        manifest = await readArchiveManifest(tmpArchive);
-      } catch (err) {
-        return {
-          status: "fetch-failed",
-          message: `Downloaded archive isn't a valid plugin: ${(err as Error).message}`,
-        };
-      }
-      // The URL must still serve the SAME plugin — a redirected or swapped URL
-      // could serve a different archive, and a later reinstall would replace
-      // this plugin's directory with a stranger's. Reject the mismatch rather
-      // than presenting a foreign plugin as an "update".
-      if (manifest.name !== pluginId) {
-        return {
-          status: "fetch-failed",
-          message: `Downloaded archive is for a different plugin ("${manifest.name}")`,
-        };
-      }
-      return {
-        status: "available",
-        name: manifest.name,
-        version: manifest.version,
-        displayName: manifest.displayName,
-        capabilities: manifest.capabilities ?? [],
-      };
-    } finally {
-      if (tmpRoot) {
-        await fs.rm(tmpRoot, { recursive: true, force: true }).catch((err) => {
-          console.warn(`[PluginService] Failed to clean up update-check temp dir ${tmpRoot}:`, err);
-        });
-      }
-    }
+    return this.installer.checkForUpdate(pluginId);
   }
 
   unloadPlugin(pluginId: string): void {
@@ -3265,19 +2343,19 @@ export class PluginService {
     );
     runUnloadStep(pluginId, "unregisterPluginMenuItems", () => unregisterPluginMenuItems(pluginId));
     runUnloadStep(pluginId, "scheduleMenuItemsBroadcast", () =>
-      this.scheduleMenuItemsBroadcast(true)
+      this.broadcaster.scheduleMenuItemsBroadcast(true)
     );
     runUnloadStep(pluginId, "unregisterPluginKeybindings", () =>
       unregisterPluginKeybindings(pluginId)
     );
     runUnloadStep(pluginId, "scheduleKeybindingsBroadcast", () =>
-      this.scheduleKeybindingsBroadcast(true)
+      this.broadcaster.scheduleKeybindingsBroadcast(true)
     );
     runUnloadStep(pluginId, "unregisterPluginContextMenuItems", () =>
       unregisterPluginContextMenuItems(pluginId)
     );
     runUnloadStep(pluginId, "scheduleContextMenuItemsBroadcast", () =>
-      this.scheduleContextMenuItemsBroadcast(true)
+      this.broadcaster.scheduleContextMenuItemsBroadcast(true)
     );
     runUnloadStep(pluginId, "unregisterWhenClausePlugin", () =>
       unregisterWhenClausePlugin(pluginId)
@@ -3286,7 +2364,7 @@ export class PluginService {
       unregisterPluginToolbarButtons(pluginId)
     );
     runUnloadStep(pluginId, "scheduleToolbarButtonsBroadcast", () =>
-      this.scheduleToolbarButtonsBroadcast(true)
+      this.broadcaster.scheduleToolbarButtonsBroadcast(true)
     );
     runUnloadStep(pluginId, "unregisterPluginPanelKinds", () =>
       unregisterPluginPanelKinds(pluginId)
@@ -3305,7 +2383,7 @@ export class PluginService {
     // this drops any leftover subscriber-set entry and the in-memory settings
     // store caches so a reload starts from disk.
     runUnloadStep(pluginId, "clearPluginSettingsState", () =>
-      this.clearPluginSettingsState(pluginId)
+      this.settings.clearPluginSettingsState(pluginId)
     );
 
     // Tear down any MCP servers contributed by this plugin (#9233). Best-effort
@@ -3392,19 +2470,7 @@ export class PluginService {
    * `"undefined"`.
    */
   async resolveSettingTemplate(pluginId: string, settingId: string): Promise<string> {
-    const filePath = this.resolveSettingsFilePath(pluginId, "user");
-    if (!filePath) return "";
-    const value = await this.getOrCreateSettingsStore(pluginId, "user", filePath).get<unknown>(
-      settingId
-    );
-    if (value === undefined || value === null) return "";
-    if (typeof value === "string") return value;
-    if (typeof value === "number" || typeof value === "boolean") return String(value);
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return "";
-    }
+    return this.settings.resolveSettingTemplate(pluginId, settingId);
   }
 
   listPlugins(): LoadedPluginInfo[] {
@@ -3413,8 +2479,8 @@ export class PluginService {
     // skipped at launch — disabling never unloads at runtime). Reporting both
     // lets the renderer show the correct switch position and a "restart
     // required" cue that survives a tab remount (#9284).
-    const desiredDisabled = this.getDisabledIds();
-    const installed = this.getInstalledRecords();
+    const desiredDisabled = this.records.getDisabledIds();
+    const installed = this.records.getInstalledRecords();
 
     const toInfo = (
       p: { manifest: PluginManifest; dir: string; isBuiltin: boolean },
@@ -3490,155 +2556,19 @@ export class PluginService {
    * a declared-intent list, not a live registry, so no existence check.
    */
   setEnabled(pluginId: string, enabled: boolean): void {
-    if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
-      throw new Error("setEnabled: pluginId must be a non-empty string");
-    }
-    if (typeof enabled !== "boolean") {
-      throw new Error("setEnabled: enabled must be a boolean");
-    }
-    const plugins = (store.get("plugins") as { disabled?: unknown } | undefined) ?? {};
-    const current = Array.isArray(plugins.disabled)
-      ? plugins.disabled.filter((id): id is string => typeof id === "string")
-      : [];
-    const next = enabled
-      ? current.filter((id) => id !== pluginId)
-      : Array.from(new Set([...current, pluginId]));
-    store.set("plugins", { ...plugins, disabled: next } as never);
+    this.records.setEnabled(pluginId, enabled);
   }
 
   /**
    * Remove a non-builtin plugin from the running session, delete its on-disk
-   * install, and drop its provenance record. Composes the existing
-   * {@link unloadPlugin} (which tears down all of the plugin's contributions and
-   * broadcasts the registry changes) with deletion of the plugin directory,
-   * optional deletion of its user-scope settings/secrets, and removal of the
-   * persisted `plugins.installed` record, then fires a
-   * `plugin:provenance-changed` broadcast so every project view's Settings tab
-   * re-pulls the list.
-   *
-   * Holds the same `install.lock` {@link installPlugin} uses, so an install and
-   * an uninstall of the same plugin can't race on the directory. A throwing
-   * disposer never blocks the on-disk deletion — a broken plugin must still be
-   * uninstallable. `deleteSettings` defaults to `false` so stored secrets
-   * survive a reinstall; project-scope settings (per-repo `.daintree/`, tracked
-   * git artifacts) are never touched. Built-ins are app-bundled with no
-   * installed record — their directory is never deleted.
+   * install, and drop its provenance record. The full unload + delete + consent
+   * purge + MCP shutdown + record-removal orchestration lives in
+   * {@link PluginInstaller}; this thin delegate preserves the public signature
+   * IPC handlers call. `deleteSettings` defaults to `false` so stored secrets
+   * survive a reinstall.
    */
   async uninstallPlugin(pluginId: string, deleteSettings = false): Promise<void> {
-    if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
-      throw new Error("uninstallPlugin: pluginId must be a non-empty string");
-    }
-    // Defense-in-depth (the IPC handler validates too): pluginId is joined onto
-    // pluginsRoot for `fs.rm`, so reject anything that isn't a scoped plugin
-    // name before touching the filesystem — blocks `..` traversal and separators.
-    if (!SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
-      throw new Error("uninstallPlugin: pluginId must be a scoped plugin name (publisher.name)");
-    }
-    // Coerce so a non-TypeScript caller can't pass a truthy non-boolean and
-    // silently wipe secrets the user meant to keep.
-    const wipeSettings = deleteSettings === true;
-
-    // Capture the record (running or skipped-at-launch) before unload clears it
-    // so we know whether the on-disk dir is ours to delete — built-ins live in
-    // the app bundle and must survive.
-    const record = this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId);
-    const isBuiltin = record?.isBuiltin ?? false;
-
-    await fs.mkdir(this.pluginsRoot, { recursive: true });
-
-    const lockPath = path.join(this.pluginsRoot, "install.lock");
-    // Definitely assigned below or the catch throws, so `finally` can release
-    // unconditionally without a null guard.
-    let release: () => Promise<void>;
-    try {
-      release = await properLockfile.lock(lockPath, {
-        stale: 20_000,
-        update: 10_000,
-        realpath: false,
-        retries: { retries: 5, minTimeout: 100, maxTimeout: 1_000 },
-        onCompromised: (err) => {
-          console.error("[PluginService] install.lock compromised during uninstall:", err);
-        },
-      });
-    } catch (err) {
-      throw new Error(`Couldn't acquire the plugin install lock: ${(err as Error).message}`, {
-        cause: err,
-      });
-    }
-
-    try {
-      // A plugin is either running (`this.plugins`) or skipped-at-launch because
-      // it was disabled (`this.disabledPlugins`). `unloadPlugin` only touches the
-      // running set, so a disabled plugin must also be dropped from the skipped
-      // map below. The disposer cascade already swallows per-step errors, but
-      // guard the whole call too: a broken plugin must still be uninstallable.
-      try {
-        this.unloadPlugin(pluginId);
-      } catch (err) {
-        console.error(`[PluginService] unloadPlugin during uninstall of "${pluginId}" threw:`, err);
-      }
-
-      // `unloadPlugin` fires the MCP shutdown fire-and-forget; await it
-      // explicitly here so subprocess handles are released before `fs.rm`
-      // (idempotent — re-shutting-down an already-stopped server is a no-op).
-      // The await covers the signal path only; the Windows tree-kill grace
-      // window is ridden out by the `fs.rm` retry options below.
-      try {
-        await getPluginMcpSupervisor().shutdown({ pluginId });
-      } catch (err) {
-        console.error(`[PluginService] MCP shutdown during uninstall of "${pluginId}" threw:`, err);
-      }
-
-      // Delete the on-disk install. The dir is deterministic — `installPlugin`
-      // always materializes to `<pluginsRoot>/<pluginId>` — so this also reaps
-      // an orphaned record whose plugin failed to load. `force` makes a missing
-      // dir a no-op; the retry options ride out Windows EBUSY/EPERM from handles
-      // still closing during the shutdown grace window. Skip built-ins.
-      if (!isBuiltin) {
-        const pluginDir = path.join(this.pluginsRoot, pluginId);
-        await fs.rm(pluginDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-      }
-
-      // Optionally delete user-scope stored settings/secrets. `force` is a safe
-      // no-op when the file doesn't exist; the retry options mirror the plugin
-      // dir deletion so a still-closing settings writer on Windows doesn't strand
-      // the uninstall. The in-memory store was already dropped by
-      // `unloadPlugin`'s clearPluginSettingsState step.
-      if (wipeSettings) {
-        const settingsFile = path.join(this.settingsRoot(), `${pluginId}.json`);
-        await fs.rm(settingsFile, { force: true, maxRetries: 5, retryDelay: 100 });
-      }
-
-      // Bookkeeping runs only after the filesystem deletion succeeds — if `fs.rm`
-      // throws, the record stays so the row remains and the user can retry,
-      // rather than seeing a "gone" plugin whose files are still on disk.
-      this.disabledPlugins.delete(pluginId);
-      // Release the launch-time name reservation (set when a disabled plugin is
-      // skipped at startup) so a same-session reinstall isn't rejected as a
-      // duplicate name.
-      this.reservedNames.delete(pluginId);
-      // Clear it from the persisted `plugins.disabled` intent list so a disabled
-      // plugin can't resurrect itself on the next launch's disabled-dir re-scan.
-      this.setEnabled(pluginId, true);
-      const records = this.getInstalledRecords();
-      if (pluginId in records) {
-        delete records[pluginId];
-        this.writeInstalledRecords(records);
-      }
-      this.broadcastProvenanceChanged();
-    } finally {
-      await release().catch((err) =>
-        console.warn("[PluginService] Failed to release install.lock after uninstall:", err)
-      );
-    }
-  }
-
-  private broadcastProvenanceChanged(): void {
-    if (this.disposed) return;
-    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:provenance-changed",
-      payload: {},
-    });
+    return this.installer.uninstallPlugin(pluginId, deleteSettings);
   }
 
   /**
@@ -3657,7 +2587,7 @@ export class PluginService {
     }
     plugin.archiveHash = archiveHash;
     if (!plugin.isBuiltin) {
-      this.upsertInstalledRecord(pluginId, { archiveHash });
+      this.records.upsertInstalledRecord(pluginId, { archiveHash });
     }
   }
 
@@ -3667,7 +2597,7 @@ export class PluginService {
    * persisted provenance record so the error survives a host restart.
    */
   getPluginLoadError(pluginId: string): PluginLoadError | undefined {
-    return this.getInstalledRecord(pluginId)?.loadError ?? undefined;
+    return this.records.getInstalledRecord(pluginId)?.loadError ?? undefined;
   }
 
   /**
@@ -3770,7 +2700,7 @@ export class PluginService {
     }
     owners.add(descriptor.id);
 
-    this.broadcastPluginActions();
+    this.broadcaster.broadcastPluginActions();
   }
 
   /** Remove a single plugin-registered action. Silent no-op if unknown. */
@@ -3789,7 +2719,7 @@ export class PluginService {
       if (owners.size === 0) this.pluginActionOwners.delete(pluginId);
     }
 
-    this.broadcastPluginActions();
+    this.broadcaster.broadcastPluginActions();
   }
 
   /** Bulk cleanup when a plugin is unloaded. Emits a single broadcast. */
@@ -3806,142 +2736,12 @@ export class PluginService {
     }
     this.pluginActionOwners.delete(pluginId);
 
-    this.broadcastPluginActions();
+    this.broadcaster.broadcastPluginActions();
   }
 
   /** Flattened snapshot of all plugin-registered actions (for renderer pull-on-mount). */
   listPluginActions(): PluginActionDescriptor[] {
     return Array.from(this.pluginActions.values());
-  }
-
-  private broadcastPluginActions(): void {
-    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:actions-changed",
-      payload: { actions: this.listPluginActions() },
-    });
-  }
-
-  /**
-   * Coalesce multiple registry mutations in the same microtask into a single
-   * broadcast. `unregisterPluginPanelKinds` fires the unregister listener once
-   * per removed kind; without this batching a plugin contributing N panels
-   * would trigger N broadcasts on unload, each carrying the same shrinking
-   * snapshot.
-   */
-  private schedulePanelKindsBroadcast(): void {
-    if (this.disposed) return;
-    if (this.panelKindsBroadcastPending) return;
-    this.panelKindsBroadcastPending = true;
-    queueMicrotask(() => {
-      this.panelKindsBroadcastPending = false;
-      // Disposal between scheduling and the microtask draining must not leak
-      // a phantom broadcast — particularly important for test isolation where
-      // a service from one test could otherwise emit into the next.
-      if (this.disposed) return;
-      this.broadcastPluginPanelKinds();
-    });
-  }
-
-  private broadcastPluginPanelKinds(): void {
-    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:panel-kinds-changed",
-      payload: { kinds: getPluginPanelKinds() },
-    });
-  }
-
-  /**
-   * Coalesce toolbar-button registry mutations the same way panel kinds are
-   * batched (see {@link schedulePanelKindsBroadcast}). Toolbar buttons are only
-   * ever mutated from `loadPlugin()` / `unloadPlugin()`, so the two call sites
-   * invoke this directly rather than via registry event listeners.
-   */
-  private scheduleToolbarButtonsBroadcast(complete: boolean): void {
-    if (this.disposed) return;
-    if (complete) this.toolbarButtonsBroadcastComplete = true;
-    if (this.toolbarButtonsBroadcastPending) return;
-    this.toolbarButtonsBroadcastPending = true;
-    queueMicrotask(() => {
-      this.toolbarButtonsBroadcastPending = false;
-      const complete = this.toolbarButtonsBroadcastComplete;
-      this.toolbarButtonsBroadcastComplete = false;
-      if (this.disposed) return;
-      this.broadcastPluginToolbarButtons(complete);
-    });
-  }
-
-  private broadcastPluginToolbarButtons(complete: boolean): void {
-    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:toolbar-buttons-changed",
-      payload: { buttons: getAllPluginToolbarButtonConfigs(), complete },
-    });
-  }
-
-  /**
-   * Same shape as {@link scheduleToolbarButtonsBroadcast}; see that method for
-   * the coalescing and `complete`-OR-accumulation rationale.
-   */
-  private scheduleMenuItemsBroadcast(complete: boolean): void {
-    if (this.disposed) return;
-    if (complete) this.menuItemsBroadcastComplete = true;
-    if (this.menuItemsBroadcastPending) return;
-    this.menuItemsBroadcastPending = true;
-    queueMicrotask(() => {
-      this.menuItemsBroadcastPending = false;
-      const drained = this.menuItemsBroadcastComplete;
-      this.menuItemsBroadcastComplete = false;
-      if (this.disposed) return;
-      this.broadcastPluginMenuItems(drained);
-    });
-  }
-
-  private broadcastPluginMenuItems(complete: boolean): void {
-    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:menu-items-changed",
-      payload: { items: getPluginMenuItems(), complete },
-    });
-  }
-
-  private scheduleKeybindingsBroadcast(complete: boolean): void {
-    this.keybindingsBroadcastComplete ||= complete;
-    if (this.keybindingsBroadcastPending) {
-      return;
-    }
-    this.keybindingsBroadcastPending = true;
-    queueMicrotask(() => {
-      const isComplete = this.keybindingsBroadcastComplete;
-      this.keybindingsBroadcastPending = false;
-      this.keybindingsBroadcastComplete = false;
-      if (this.disposed) return;
-      broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-        name: "plugin:keybindings-changed",
-        payload: { keybindings: getPluginKeybindings(), complete: isComplete },
-      });
-    });
-  }
-
-  /**
-   * Same shape as {@link scheduleMenuItemsBroadcast}; see that method for the
-   * coalescing and `complete`-OR-accumulation rationale.
-   */
-  private scheduleContextMenuItemsBroadcast(complete: boolean): void {
-    if (this.disposed) return;
-    if (complete) this.contextMenuItemsBroadcastComplete = true;
-    if (this.contextMenuItemsBroadcastPending) return;
-    this.contextMenuItemsBroadcastPending = true;
-    queueMicrotask(() => {
-      this.contextMenuItemsBroadcastPending = false;
-      const drained = this.contextMenuItemsBroadcastComplete;
-      this.contextMenuItemsBroadcastComplete = false;
-      if (this.disposed) return;
-      this.broadcastPluginContextMenuItems(drained);
-    });
-  }
-
-  private broadcastPluginContextMenuItems(complete: boolean): void {
-    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:context-menu-items-changed",
-      payload: { items: getPluginContextMenuItems(), complete },
-    });
   }
 
   // ============================================================
@@ -3956,76 +2756,14 @@ export class PluginService {
   // window's active-project values.
   // ============================================================
 
-  private uiSettingDefinitions(pluginId: string): SettingDefinition[] {
-    return this.plugins.get(pluginId)?.manifest.contributes.settings ?? [];
-  }
-
-  /**
-   * A setting is secret when it declares the canonical `type: "secret"` OR the
-   * legacy `secret: true` flag. Both must be checked — the manifest schema keeps
-   * the boolean when coercing `secret: true` to `type: "secret"`, but a manifest
-   * authored directly as `{ type: "secret" }` carries no boolean, so a
-   * `secret`-only check would leak its value into {@link getSettingValuesForUi}.
-   */
-  private isSecretSetting(def: SettingDefinition): boolean {
-    return def.type === "secret" || def.secret === true;
-  }
-
-  /**
-   * Resolve the settings file path for a UI call. User scope is fixed; project
-   * scope resolves the explicit `projectId` (returns `null` for an
-   * unknown/absent id, which callers treat as "no project active").
-   *
-   * Invariant: the renderer passes its own `currentProject.id`, the same id
-   * space `projectStore.getProjectById` is keyed on. This is what makes
-   * per-window project scoping correct — a form in one window resolves *its*
-   * project, not the main process's globally-"current" project, which may
-   * belong to a different window.
-   */
-  private resolveUiSettingsFilePath(
-    pluginId: string,
-    scope: PluginSettingsScope,
-    projectId: string | null
-  ): string | null {
-    if (scope === "project") {
-      if (!projectId) return null;
-      const root = projectStore.getProjectById(projectId)?.path;
-      if (!root) return null;
-      return path.join(root, ".daintree", "plugin-settings", `${pluginId}.json`);
-    }
-    return path.join(this.settingsRoot(), `${pluginId}.json`);
-  }
-
-  /**
-   * Read stored values for one plugin + scope, for the settings form. Secret
-   * settings are never returned by value — their ids appear in `secretsSet` when
-   * a value is stored. Only settings whose declared scope matches `scope` are
-   * included, so a stray key in the wrong file can't surface under the other
-   * scope.
-   */
   async getSettingValuesForUi(
     pluginId: string,
     scope: PluginSettingsScope,
     projectId: string | null
   ): Promise<PluginSettingsUiValues> {
-    const values: Record<string, unknown> = {};
-    const secretsSet: string[] = [];
-    const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
-    if (!filePath) return { values, secretsSet };
-    const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
-    const defs = this.uiSettingDefinitions(pluginId).filter((d) => (d.scope ?? "user") === scope);
-    await Promise.all(
-      defs.map(async (def) => {
-        const stored = await store.get<unknown>(def.id);
-        if (stored === undefined) return;
-        if (this.isSecretSetting(def)) secretsSet.push(def.id);
-        else values[def.id] = stored;
-      })
-    );
-    return { values, secretsSet };
+    return this.settings.getSettingValuesForUi(pluginId, scope, projectId);
   }
 
-  /** Persist a value from the settings form, firing the plugin's `onDidChange`. */
   async setSettingValueFromUi(
     pluginId: string,
     key: string,
@@ -4033,68 +2771,25 @@ export class PluginService {
     scope: PluginSettingsScope,
     projectId: string | null
   ): Promise<void> {
-    assertSettingsKey(pluginId, "set", key);
-    if (value === undefined) {
-      throw new Error(
-        `Plugin "${pluginId}" settings: value for "${key}" is undefined — settings cannot store undefined`
-      );
-    }
-    this.assertSettingDeclared(pluginId, key);
-    const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
-    if (!filePath) {
-      throw new Error(
-        `Plugin "${pluginId}" settings: no active project — "project" scope has no target`
-      );
-    }
-    const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
-    const changed = await store.set(key, value);
-    if (changed) this.notifySettingsSubscribers(pluginId, scope, key, value);
+    return this.settings.setSettingValueFromUi(pluginId, key, value, scope, projectId);
   }
 
-  /**
-   * Clear a stored value (the form's "reset to default" — resetting removes the
-   * stored override rather than writing the declared default). Fires
-   * `onDidChange` with `undefined` so the plugin falls back to its default.
-   */
   async deleteSettingValueFromUi(
     pluginId: string,
     key: string,
     scope: PluginSettingsScope,
     projectId: string | null
   ): Promise<void> {
-    assertSettingsKey(pluginId, "delete", key);
-    this.assertSettingDeclared(pluginId, key);
-    const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
-    if (!filePath) return;
-    const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
-    const changed = await store.delete(key);
-    if (changed) this.notifySettingsSubscribers(pluginId, scope, key, undefined);
+    return this.settings.deleteSettingValueFromUi(pluginId, key, scope, projectId);
   }
 
-  /**
-   * Fetch a single secret value for in-place reveal. Returns `null` when unset.
-   * Non-string secrets are JSON-stringified so the form can display them.
-   *
-   * Only a declared `secret`-typed setting may be revealed — this is the secret
-   * counterpart to the masking in {@link getSettingValuesForUi}. The guard stops
-   * the channel being used as a generic read-any-key bypass that would let a
-   * caller pull non-secret (or undeclared) values one at a time.
-   */
   async revealSecretSettingForUi(
     pluginId: string,
     key: string,
     scope: PluginSettingsScope,
     projectId: string | null
   ): Promise<string | null> {
-    assertSettingsKey(pluginId, "get", key);
-    const def = this.uiSettingDefinitions(pluginId).find((s) => s.id === key);
-    if (!def || !this.isSecretSetting(def)) return null;
-    const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
-    if (!filePath) return null;
-    const value = await this.getOrCreateSettingsStore(pluginId, scope, filePath).get<unknown>(key);
-    if (value === undefined || value === null) return null;
-    if (typeof value === "string") return value;
-    return JSON.stringify(value);
+    return this.settings.revealSecretSettingForUi(pluginId, key, scope, projectId);
   }
 
   /**
@@ -4111,43 +2806,8 @@ export class PluginService {
    * conceptually identical to a coalesced "load tick" broadcast, not an
    * unload sweep.
    */
-  async pushSnapshotTo(webContents: Electron.WebContents): Promise<void> {
-    await this.initPromise;
-    if (this.disposed) return;
-    if (webContents.isDestroyed()) return;
-    // Mirror `broadcastToRenderer`'s defensive send pattern (electron/ipc/utils.ts:337-352):
-    // the wc may be destroyed between the isDestroyed() check above and any
-    // individual send (TOCTOU), and a throw on the first send would otherwise
-    // leave the next two channels un-sent — silently degrading the
-    // cold-restored renderer to its pull-on-mount path for those two channels
-    // only. Each send is independently guarded.
-    const events: Array<{ name: string; payload: unknown }> = [
-      { name: "plugin:actions-changed", payload: { actions: this.listPluginActions() } },
-      { name: "plugin:panel-kinds-changed", payload: { kinds: getPluginPanelKinds() } },
-      {
-        name: "plugin:toolbar-buttons-changed",
-        payload: { buttons: getAllPluginToolbarButtonConfigs(), complete: false },
-      },
-      {
-        name: "plugin:menu-items-changed",
-        payload: { items: getPluginMenuItems(), complete: false },
-      },
-      {
-        name: "plugin:keybindings-changed",
-        payload: { keybindings: getPluginKeybindings(), complete: true },
-      },
-      {
-        name: "plugin:context-menu-items-changed",
-        payload: { items: getPluginContextMenuItems(), complete: false },
-      },
-    ];
-    for (const event of events) {
-      try {
-        webContents.send(CHANNELS.EVENTS_PUSH, event);
-      } catch {
-        // Silently ignore send failures during window initialization/disposal.
-      }
-    }
+  pushSnapshotTo(webContents: Electron.WebContents): Promise<void> {
+    return this.broadcaster.pushSnapshotTo(webContents);
   }
 }
 

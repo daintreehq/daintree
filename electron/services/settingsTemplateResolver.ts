@@ -22,8 +22,13 @@ export class SettingTemplateError extends Error {
   }
 }
 
-const SETTINGS_TEMPLATE_RE =
-  /(?<!\\)\$\{settings:([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\}/g;
+// The id grammar mirrors what a declared setting `id` can actually contain:
+// the manifest schema (electron/schemas/plugin.ts) accepts any non-empty string,
+// and the author CLI matches `[^}]+` (packages/daintree-plugin validate). Matching
+// the same run of non-`}` characters here keeps the three in lockstep — a valid id
+// like `linear-api-token` shows in the UI AND substitutes, instead of silently
+// passing through unresolved. `${settings:}` still fails to match (empty id).
+const SETTINGS_TEMPLATE_RE = /(?<!\\)\$\{settings:([^}]+)\}/g;
 
 /**
  * Scan `text` for `${settings:<id>}` templates and substitute each with the
@@ -32,7 +37,8 @@ const SETTINGS_TEMPLATE_RE =
  * empty string.
  *
  * Near-miss syntax (`$settings:foo`, `${settings:}`, `${other:foo}`) passes
- * through as literal text. Escaped `\${settings:foo}` is left unchanged.
+ * through as literal text — only a non-empty id between the braces matches.
+ * Escaped `\${settings:foo}` is left unchanged.
  */
 export async function resolveSettingsTemplates(
   text: string,

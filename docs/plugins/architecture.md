@@ -34,7 +34,7 @@ Most contributions register eagerly at plugin-load time so the UI reflects them 
 - `toolbarButtons` → `registerToolbarButton()` in `shared/config/toolbarButtonRegistry.ts`
 - `menuItems` → `registerPluginMenuItem()` in `electron/services/pluginMenuRegistry.ts`
 
-Commands are not declared in the manifest. They are registered at runtime via `host.registerAction()` during `activate()`. This keeps the manifest as a static shape contract and the action system as a runtime concern.
+Commands have two registration paths. They MAY be declared in `contributes.commands` — these are registered eagerly at load as `PluginActionDescriptor`s so they appear in the palette before any plugin code runs, with their handler lazily bound to `src/{id}.{ext}` on first dispatch. Or they register imperatively via `host.registerAction()` during `activate()`. The manifest stays a static shape contract; the action system resolves handlers at runtime.
 
 Contributions that require code (e.g., a view component, an MCP server's runtime) are registered as **resolvers** — thunks that import the actual code when first needed.
 
@@ -138,7 +138,7 @@ An iframe model would isolate plugins behind a `postMessage` bridge at the cost 
 
 ## MCP supervisor
 
-`PluginMcpSupervisor` (planned — lives in the same area as existing MCP infrastructure in `electron/services/`) manages plugin-shipped MCP servers.
+`PluginMcpSupervisor` (`electron/services/PluginMcpSupervisor.ts`) manages plugin-shipped MCP servers.
 
 ### Spawn timing
 
@@ -295,11 +295,11 @@ Types a plugin author uses to write `plugin.json`:
 | `ToolbarButtonContribution` | `plugin.ts` |  |
 | `MenuItemContribution` | `plugin.ts` |  |
 | `MenuItemLocation` | `plugin.ts` | `"terminal" \| "file" \| "view" \| "help"` |
-| `ViewContribution` | `plugin.ts` | Reserved — not yet implemented |
+| `ViewContribution` | `plugin.ts` | Panel location wired; sidebar reserved |
 | `ViewLocation` | `plugin.ts` | `"panel" \| "sidebar"` |
-| `McpServerContribution` | `plugin.ts` | Reserved — not yet implemented |
-| `PluginPermission` | `plugin.ts` | Expected rename to `PluginCapability` in #9268 |
-| `BuiltInPluginPermission` | `plugin.ts` | Expected rename to `BuiltInPluginCapability` in #9268 |
+| `McpServerContribution` | `plugin.ts` | Wired via `PluginMcpSupervisor` (`experimental_` prefix retained) |
+| `PluginCapability` | `plugin.ts` |  |
+| `BuiltInPluginCapability` | `plugin.ts` |  |
 | `PluginActionContribution` | `plugin.ts` | Shape for `host.registerAction` (F11) |
 
 ### Host API

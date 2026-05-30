@@ -19,6 +19,7 @@ export function getPluginKeybindings(): Array<{ pluginId: string; item: Keybindi
 }
 
 export function unregisterPluginKeybindings(pluginId: string): void {
+  if (typeof pluginId !== "string" || pluginId.length === 0) return;
   PLUGIN_KEYBINDINGS.delete(pluginId);
 }
 

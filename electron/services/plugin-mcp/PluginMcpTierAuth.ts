@@ -17,11 +17,15 @@ import type { PluginMcpDangerTier } from "../../../shared/types/pluginMcpConsent
  * server can still ask for a confirmation, but cannot reach the "shared-state
  * mutation" tier.
  */
+// Keep in lockstep with `CONFIRM_TRIGGERING_CAPABILITIES` in PluginService.ts —
+// both classify the same high-risk capabilities (irreversible side effects) and
+// must stay in sync so the MCP tier cap matches the action-danger model.
 const HIGH_RISK_CAPABILITIES: ReadonlySet<PluginCapability> = new Set([
   "fs:project-write",
   "fs:user-data-write",
   "git:write",
   "shell:exec",
+  "agent:invoke",
 ]);
 
 export type PluginMcpTierClassification =

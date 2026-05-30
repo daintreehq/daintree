@@ -121,9 +121,9 @@ export async function runPackage(opts: PackageOptions = {}): Promise<PackageResu
     }
   }
 
-  // `name` is regex-guarded by the schema, but `version` is only `min(1)` —
-  // strip any path-significant characters so a hostile `"version": "../../x"`
-  // can't write the archive outside the plugin directory.
+  // The schema already rejects non-semver versions before we reach here, but
+  // strip any path-significant characters as defense-in-depth so a hostile
+  // `"version": "../../x"` can never write the archive outside the plugin dir.
   const safeVersion = manifest.version.replace(/[^\w.-]/g, "");
   const outputName = `${manifest.name}-${safeVersion}.dntr`;
   const outputPath = path.join(dir, outputName);

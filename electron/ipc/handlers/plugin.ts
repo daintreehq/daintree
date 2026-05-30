@@ -21,7 +21,15 @@ import {
 import type { PluginDiagnosticsSnapshot } from "../../../shared/types/ipc/pluginDiagnostics.js";
 import { PLUGIN_METHOD_CHANNELS } from "./plugin.preload.js";
 import { pluginService } from "../../services/PluginService.js";
-import { SCOPED_PLUGIN_NAME_PATTERN } from "../../schemas/plugin.js";
+import { MAX_DNTR_BYTES } from "../../services/PluginArchive.js";
+import {
+  PLUGIN_DOWNLOAD_TIMEOUT_MS,
+  acceptedMime,
+  dntrSuffixOk,
+  fetchWithPrivateHostGuard,
+  urlHasCredentials,
+} from "../../utils/pluginDownloadPolicy.js";
+import { isPrivateOrLoopbackHostname, SCOPED_PLUGIN_NAME_PATTERN } from "../../schemas/plugin.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { stableArgsSha256 } from "../../utils/pluginMcpHash.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -68,103 +76,38 @@ async function handleSetEnabled(pluginId: string, enabled: boolean): Promise<voi
   pluginService.setEnabled(pluginId, enabled);
 }
 
-/**
- * Install a plugin from a `.dntr` archive (or pre-extracted directory) path.
- * Structured validation failures come back as `{ status: "failed", errors }`
- * data — never thrown — so the install dialog can render per-field messages
- * intact across the IPC boundary (#3769). Only unexpected infrastructure
- * faults (a lock subsystem crash) propagate as a thrown Error.
- */
-async function handleInstall(
-  archivePath: string,
-  opts?: PluginInstallOptions
-): Promise<PluginInstallResult> {
-  if (typeof archivePath !== "string" || archivePath.length === 0) {
-    return {
-      status: "failed",
-      errors: [{ code: "archive_invalid", message: "Install path must be a non-empty string" }],
-    };
-  }
-  return pluginService.installPlugin(archivePath, opts);
-}
-
-// Install-from-file / install-from-URL are thin callers: this tab owns the
-// entry point (native picker, URL dialog) but the atomic install flow
-// (temp-extract / validate / swap / rollback) is owned by F21/F23/F24 and is
-// not yet landed. The handlers capture the user's input and resolve a
-// structured `not-implemented` status so the renderer can surface a clear "not
-// available yet" notice; the `installed` branch and the real PluginService
-// install call land with those features.
-async function handleInstallFromFile(ctx: IpcContext): Promise<PluginInstallResult> {
-  const win = ctx.senderWindow ?? BrowserWindow.getFocusedWindow();
-  const dialogOptions = {
-    title: "Install plugin",
-    filters: [{ name: "Daintree plugins", extensions: ["dntr"] }],
-    properties: ["openFile" as const],
-  };
-  const result = win
-    ? await dialog.showOpenDialog(win, dialogOptions)
-    : await dialog.showOpenDialog(dialogOptions);
-  if (result.canceled || result.filePaths.length === 0) {
-    return { status: "cancelled" };
-  }
-  // F21/F23 will route result.filePaths[0] through the install flow here.
-  return { status: "not-implemented" };
-}
-
-// Bounded download limits for install-from-URL (F24). Mirrors the spec in
-// docs/plugins/distribution.md: a 30 MB hard cap aborted mid-stream, a 10s
-// deadline, and a MIME/suffix allowlist so a stray HTML error page never
-// reaches the installer.
-const PLUGIN_DOWNLOAD_MAX_BYTES = 30 * 1024 * 1024;
-const PLUGIN_DOWNLOAD_TIMEOUT_MS = 10_000;
-
-function isAbortLikeError(err: unknown): boolean {
-  // AbortSignal.timeout() rejects as "AbortError" (not "TimeoutError") under
-  // Chromium 146, and the size-cap controller.abort() also surfaces as
-  // "AbortError" — so both names are treated as abort-like and disambiguated
-  // by the caller's `sizeAborted` flag. These rejections are DOMExceptions,
-  // which are NOT `Error` instances in Node, so duck-type the `name`.
-  if (typeof err !== "object" || err === null) return false;
-  const name = (err as { name?: unknown }).name;
-  return name === "AbortError" || name === "TimeoutError";
-}
-
 // Local-file-header signature that prefixes every ZIP (and therefore every
 // `.dntr`) archive. Cheap structural gate before the path reaches #9292's
 // atomic install flow.
 const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 
 /**
- * Install a plugin from a path produced by a drag-and-drop onto the Plugin
- * settings tab (#9295). The renderer resolves the native path via the
- * plugin-scoped `getDroppedFilePath` bridge and hands it here; main owns every
- * trust gate because the renderer can't be trusted to validate before #9292
- * runs: the path must be a non-empty absolute `.dntr`, and its first four bytes
- * must be the ZIP magic. Only the header is read — never the whole archive —
- * so a hostile multi-GB file can't be slurped into memory. All failures come
- * back as structured `{ status: "failed" }` data (never thrown) so the tab can
- * render an inline message.
+ * Trust gate shared by every renderer/CLI entry point that hands a filesystem
+ * path to the installer: require a non-empty absolute `.dntr` path whose first
+ * four bytes are the ZIP magic. Segment-aware guards only — never a `..`
+ * substring match (#4702). Only the header is read (never the whole archive)
+ * so a hostile multi-GB file can't be slurped into memory. Returns a
+ * structured `{ status: "failed" }` on rejection so callers can surface an
+ * inline message without a throw crossing the IPC boundary; returns `null` on
+ * success. PluginService.installPlugin keeps its own defense-in-depth stat.
  */
-export async function handleInstallFromPath(path: string): Promise<PluginInstallResult> {
+async function validateDntrArchivePath(archivePath: string): Promise<PluginInstallResult | null> {
   const fail = (message: string): PluginInstallResult => ({
     status: "failed",
     errors: [{ code: "archive_invalid", message }],
   });
-  if (typeof path !== "string" || path.length === 0) {
+  if (typeof archivePath !== "string" || archivePath.length === 0) {
     return fail("Couldn't resolve the dropped file's path");
   }
-  // Segment-aware guards, never a `..` substring match (#4702): require an
-  // absolute path and a `.dntr` extension before touching the filesystem.
-  if (!isAbsolute(path)) {
+  if (!isAbsolute(archivePath)) {
     return fail("Install path must be an absolute filesystem path");
   }
-  if (extname(path).toLowerCase() !== ".dntr") {
+  if (extname(archivePath).toLowerCase() !== ".dntr") {
     return fail("Only .dntr files can be installed");
   }
   let header: Buffer;
   try {
-    const fh = await open(path, "r");
+    const fh = await open(archivePath, "r");
     try {
       const buf = Buffer.alloc(4);
       const { bytesRead } = await fh.read(buf, 0, 4, 0);
@@ -178,6 +121,79 @@ export async function handleInstallFromPath(path: string): Promise<PluginInstall
   if (header.length < 4 || !header.equals(ZIP_MAGIC)) {
     return fail("That file isn't a valid .dntr plugin archive");
   }
+  return null;
+}
+
+/**
+ * Install a plugin from a `.dntr` archive path. Runs the same trust gate as
+ * {@link handleInstallFromPath} (absolute + `.dntr` + ZIP-magic header sniff)
+ * before touching the installer — both renderer entry points must validate
+ * identically (#3769). Structured validation failures come back as
+ * `{ status: "failed", errors }` data — never thrown — so the install dialog
+ * can render per-field messages intact across the IPC boundary. Only
+ * unexpected infrastructure faults (a lock subsystem crash) propagate as a
+ * thrown Error.
+ */
+async function handleInstall(
+  archivePath: string,
+  opts?: PluginInstallOptions
+): Promise<PluginInstallResult> {
+  const invalid = await validateDntrArchivePath(archivePath);
+  if (invalid) return invalid;
+  return pluginService.installPlugin(archivePath, opts);
+}
+
+// Install-from-file owns the native-picker entry point; the selected path runs
+// the SAME trust gate + installer as the drag-and-drop path
+// ({@link handleInstallFromPath}) so both renderer entries validate identically.
+// A dismissed picker resolves `cancelled`; validation failures come back as
+// structured `{ status: "failed" }` data the dialog can render inline.
+async function handleInstallFromFile(ctx: IpcContext): Promise<PluginInstallResult> {
+  const win = ctx.senderWindow ?? BrowserWindow.getFocusedWindow();
+  const dialogOptions = {
+    title: "Install plugin",
+    filters: [{ name: "Daintree plugins", extensions: ["dntr"] }],
+    properties: ["openFile" as const],
+  };
+  const result = win
+    ? await dialog.showOpenDialog(win, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+  if (result.canceled || result.filePaths.length === 0) {
+    return { status: "cancelled" };
+  }
+  return handleInstallFromPath(result.filePaths[0]!);
+}
+
+// Bounded download limits for install-from-URL (F24). Mirrors the spec in
+// docs/plugins/distribution.md: a 30 MB hard cap aborted mid-stream, a shared
+// deadline, and a MIME/suffix allowlist so a stray HTML error page never
+// reaches the installer. The timeout and MIME/suffix policy are shared with the
+// update-check path via electron/utils/pluginDownloadPolicy.ts so a server that
+// passes one path's gate passes the other's too.
+
+function isAbortLikeError(err: unknown): boolean {
+  // AbortSignal.timeout() rejects as "AbortError" (not "TimeoutError") under
+  // Chromium 146, and the size-cap controller.abort() also surfaces as
+  // "AbortError" — so both names are treated as abort-like and disambiguated
+  // by the caller's `sizeAborted` flag. These rejections are DOMExceptions,
+  // which are NOT `Error` instances in Node, so duck-type the `name`.
+  if (typeof err !== "object" || err === null) return false;
+  const name = (err as { name?: unknown }).name;
+  return name === "AbortError" || name === "TimeoutError";
+}
+
+/**
+ * Install a plugin from a path produced by a drag-and-drop onto the Plugin
+ * settings tab (#9295). The renderer resolves the native path via the
+ * plugin-scoped `getDroppedFilePath` bridge and hands it here; main owns every
+ * trust gate via {@link validateDntrArchivePath} because the renderer can't be
+ * trusted to validate before #9292 runs. All failures come back as structured
+ * `{ status: "failed" }` data (never thrown) so the tab can render an inline
+ * message.
+ */
+export async function handleInstallFromPath(path: string): Promise<PluginInstallResult> {
+  const invalid = await validateDntrArchivePath(path);
+  if (invalid) return invalid;
   return pluginService.installPlugin(path);
 }
 
@@ -185,9 +201,12 @@ export async function handleInstallFromPath(path: string): Promise<PluginInstall
  * Download a `.dntr` archive from a user-supplied URL into a temp file under
  * bounded conditions, then hand the path to the atomic installer (F24).
  *
- * Guards, in order: well-formed URL + http/https scheme, a 10s deadline, a
- * MIME/`.dntr`-suffix allowlist, a `Content-Length` pre-check, and a mid-stream
- * 30 MB byte cap that aborts the in-flight request. All failures resolve as
+ * Guards, in order: well-formed URL + http/https scheme + no embedded
+ * credentials, a private/loopback-host check revalidated on every redirect hop,
+ * the shared download deadline, a MIME/`.dntr`-suffix allowlist, and a
+ * mid-stream 30 MB byte cap that aborts the in-flight request. (Timeout and
+ * MIME/suffix policy live in electron/utils/pluginDownloadPolicy.ts.) All
+ * failures resolve as
  * structured `{ status: "failed", errors }` data so the dialog can render a
  * tailored message; the handler-owned temp file is always removed in `finally`
  * (PluginService extracts into its own temp dir and doesn't take ownership of
@@ -207,6 +226,15 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     return { status: "invalid-url" };
   }
+  if (isPrivateOrLoopbackHostname(parsed.hostname)) {
+    return { status: "invalid-url" };
+  }
+  // Reject `https://user:pass@host` outright — the credentials would otherwise
+  // be fetched AND persisted as installer `originalUrl` provenance (re-fetched
+  // on update-check, shown in Settings). Rejecting keeps the failure visible.
+  if (urlHasCredentials(parsed)) {
+    return { status: "invalid-url" };
+  }
 
   const failed = (code: PluginInstallError["code"], message: string): PluginInstallResult => ({
     status: "failed",
@@ -214,10 +242,11 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
   });
 
   const tempPath = path.join(os.tmpdir(), `daintree-plugin-${crypto.randomUUID()}.dntr`);
-  // `redirect: "manual"` rejects immediately in Electron's net.fetch and can't
-  // count hops, so we rely on Chromium's built-in follow (capped at 20, well
-  // above the spec's 5). The size controller and the timeout signal both feed
-  // a single AbortSignal.any().
+  // Redirects are followed MANUALLY so every hop's host is revalidated through
+  // the private/loopback guard — the original-host check alone is bypassable by
+  // a public URL that 30x-redirects to loopback/link-local/RFC1918 (SSRF). The
+  // size controller and the timeout signal both feed a single AbortSignal.any()
+  // that's threaded through every hop.
   const sizeController = new AbortController();
   let sizeAborted = false;
   let wroteTempFile = false;
@@ -230,7 +259,16 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
 
     let response: Response;
     try {
-      response = await net.fetch(trimmed, { signal });
+      const guarded = await fetchWithPrivateHostGuard(net.fetch, trimmed, { signal });
+      if (!guarded.ok) {
+        return failed(
+          "fetch_failed",
+          guarded.reason === "private-redirect"
+            ? "The download redirected to a private or loopback address."
+            : "The download followed too many redirects."
+        );
+      }
+      response = guarded.response;
     } catch (err) {
       if (isAbortLikeError(err)) {
         return failed("fetch_timeout", "The download timed out before it finished.");
@@ -252,21 +290,18 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
     const contentLength = response.headers.get("content-length");
     if (contentLength) {
       const declared = Number.parseInt(contentLength, 10);
-      if (Number.isFinite(declared) && declared > PLUGIN_DOWNLOAD_MAX_BYTES) {
+      if (Number.isFinite(declared) && declared > MAX_DNTR_BYTES) {
         return abandon(failed("size_exceeded", "The plugin file is larger than the 30 MB limit."));
       }
     }
 
-    // Accept canonical zip (with or without a `; charset=…` parameter), the
-    // optional x-dntr type, or any 2xx whose URL path ends in `.dntr`
-    // (case-insensitive for pasted URLs). An exact/`;`-prefixed match avoids
-    // `application/zipper` slipping through. response.url is unreliable in
-    // Electron, so the `.dntr` suffix is checked on the original user URL.
-    const contentType = (response.headers.get("content-type") ?? "").toLowerCase().trim();
-    const mimeMatches = (type: string) =>
-      contentType === type || contentType.startsWith(`${type};`);
-    const mimeOk = mimeMatches("application/zip") || mimeMatches("application/x-dntr");
-    const suffixOk = parsed.pathname.toLowerCase().endsWith(".dntr");
+    // Accept any of the shared archive MIME types, or fall back to a 2xx whose
+    // URL path ends in `.dntr` (case-insensitive for pasted URLs). response.url
+    // is unreliable in Electron, so the `.dntr` suffix is checked on the
+    // original user URL. Policy is shared with the update-check path.
+    const contentType = response.headers.get("content-type") ?? "";
+    const mimeOk = acceptedMime(contentType);
+    const suffixOk = dntrSuffixOk(parsed.pathname);
     if (!mimeOk && !suffixOk) {
       return abandon(
         failed("content_type_rejected", "That URL didn't return a plugin archive (.dntr).")
@@ -281,7 +316,7 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
     const counter = new Transform({
       transform(chunk: Buffer, _enc, cb) {
         bytesRead += chunk.length;
-        if (bytesRead > PLUGIN_DOWNLOAD_MAX_BYTES) {
+        if (bytesRead > MAX_DNTR_BYTES) {
           sizeAborted = true;
           sizeController.abort();
           cb(new Error("size_exceeded"));

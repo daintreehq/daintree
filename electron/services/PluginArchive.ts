@@ -9,6 +9,10 @@ import type { PluginManifest } from "../../shared/types/plugin.js";
 
 export const ZIP_EPOCH_DATE = new Date("1980-01-01T00:00:00Z");
 export const MAX_DNTR_BYTES = 30 * 1024 * 1024;
+// Cap on total zip entries. A plugin is a handful of compiled files plus
+// assets; thousands of entries means an archive padded with tiny/empty members
+// to force unbounded filesystem ops during extraction (zip-bomb-by-count).
+export const MAX_DNTR_ENTRIES = 4096;
 
 const REQUIRED_EXCLUSIONS: readonly string[] = ["node_modules/", ".git/"];
 
@@ -42,6 +46,19 @@ function isValidEntryName(name: string): string | null {
   const yauzlError = yauzl.validateFileName(name);
   if (yauzlError !== null) return yauzlError;
   if (name.length === 0) return "empty path";
+  return null;
+}
+
+/**
+ * Guard against a zip whose compressed form fits the cap but whose plugin.json
+ * declares a multi-hundred-MB uncompressed size — without this the chunk buffer
+ * that reads the manifest would exhaust the main-process heap. Shared by
+ * {@link readArchiveManifest} and {@link verifyPluginArchive}.
+ */
+function manifestSizeError(entry: yauzl.Entry): string | null {
+  if (entry.uncompressedSize > MAX_DNTR_BYTES) {
+    return `plugin.json exceeds ${MAX_DNTR_BYTES} byte limit`;
+  }
   return null;
 }
 
@@ -232,13 +249,11 @@ export async function readArchiveManifest(archivePath: string): Promise<PluginMa
         return reject(new Error(`First entry must be plugin.json, got "${entry.fileName}"`));
       }
 
-      // Guard against a zip whose compressed form fits the cap but whose
-      // plugin.json declares a multi-hundred-MB uncompressed size — without
-      // this, the chunk buffer below would exhaust the main-process heap.
-      if (entry.uncompressedSize > MAX_DNTR_BYTES) {
+      const sizeErr = manifestSizeError(entry);
+      if (sizeErr) {
         settled = true;
         zipfile.close();
-        return reject(new Error(`plugin.json exceeds ${MAX_DNTR_BYTES} byte limit`));
+        return reject(new Error(sizeErr));
       }
 
       zipfile.openReadStream(entry, (err, stream) => {
@@ -317,6 +332,8 @@ export async function extractPluginArchive(archivePath: string, destDir: string)
     // default, so this is a trustworthy bound — it guards against a zip-bomb
     // whose compressed form fits under MAX_DNTR_BYTES but expands to many GB.
     let totalUncompressed = 0;
+    let entryCount = 0;
+    const seen = new Set<string>();
     const fail = (err: Error) => {
       if (settled) return;
       settled = true;
@@ -326,6 +343,10 @@ export async function extractPluginArchive(archivePath: string, destDir: string)
 
     zipfile.on("entry", (entry: yauzl.Entry) => {
       const name = normalizePath(entry.fileName);
+
+      if (++entryCount > MAX_DNTR_ENTRIES) {
+        return fail(new Error(`Archive exceeds ${MAX_DNTR_ENTRIES} entry limit`));
+      }
 
       // Reject any raw name that isn't already POSIX-normalized — backslashes,
       // leading slashes, and drive letters are always invalid in a `.dntr`.
@@ -340,6 +361,11 @@ export async function extractPluginArchive(archivePath: string, destDir: string)
       if (pathErr) {
         return fail(new Error(`Invalid entry path "${name}": ${pathErr}`));
       }
+
+      if (seen.has(name)) {
+        return fail(new Error(`Duplicate entry "${name}" in archive`));
+      }
+      seen.add(name);
 
       totalUncompressed += entry.uncompressedSize;
       if (totalUncompressed > MAX_DNTR_BYTES) {
@@ -419,12 +445,23 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
 
   let entryIndex = 0;
   let manifest: PluginManifest | null = null;
+  const entryNames = new Set<string>();
+  const seen = new Set<string>();
 
   return new Promise((resolve) => {
     let settled = false;
 
     zipfile.on("entry", (entry: yauzl.Entry) => {
       const name = normalizePath(entry.fileName);
+
+      if (entryIndex + 1 > MAX_DNTR_ENTRIES) {
+        settled = true;
+        zipfile.close();
+        return resolve({
+          valid: false,
+          error: `Archive exceeds ${MAX_DNTR_ENTRIES} entry limit`,
+        });
+      }
 
       // Validate the raw entry name before any normalization — backslashes
       // and absolute paths in the raw name are always invalid.
@@ -436,6 +473,16 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
           error: `Invalid entry path "${entry.fileName}": path must use forward slashes, no leading / or drive letters`,
         });
       }
+
+      if (seen.has(name)) {
+        settled = true;
+        zipfile.close();
+        return resolve({
+          valid: false,
+          error: `Duplicate entry "${name}" in archive`,
+        });
+      }
+      seen.add(name);
 
       if (entryIndex === 0 && name !== "plugin.json") {
         settled = true;
@@ -465,7 +512,17 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
         });
       }
 
+      if (!name.endsWith("/")) {
+        entryNames.add(name);
+      }
+
       if (entryIndex === 0) {
+        const sizeErr = manifestSizeError(entry);
+        if (sizeErr) {
+          settled = true;
+          zipfile.close();
+          return resolve({ valid: false, error: sizeErr });
+        }
         zipfile.openReadStream(entry, (err, stream) => {
           if (err) {
             settled = true;
@@ -512,6 +569,29 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
       if (!manifest) {
         return resolve({ valid: false, error: "plugin.json not found in archive" });
       }
+
+      const stripLeading = (p: string) => (p.startsWith("./") ? p.slice(2) : p);
+
+      if (manifest.main) {
+        const mainPath = stripLeading(manifest.main);
+        if (!entryNames.has(mainPath)) {
+          return resolve({
+            valid: false,
+            error: `manifest.main "${manifest.main}" is not present in the archive`,
+          });
+        }
+      }
+
+      for (const view of manifest.contributes.experimental_views) {
+        const viewPath = stripLeading(view.componentPath);
+        if (!entryNames.has(viewPath)) {
+          return resolve({
+            valid: false,
+            error: `view componentPath "${view.componentPath}" is not present in the archive`,
+          });
+        }
+      }
+
       resolve({ valid: true, manifest, entryCount: entryIndex });
     });
 

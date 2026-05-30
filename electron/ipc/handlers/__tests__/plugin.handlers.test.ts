@@ -265,11 +265,30 @@ describe("registerPluginHandlers", () => {
     expect(opts.filters[0]!.extensions).toEqual(["dntr"]);
   });
 
-  it("PLUGIN_INSTALL_FROM_FILE returns not-implemented when a file is chosen", async () => {
-    mockShowOpenDialog.mockResolvedValue({ canceled: false, filePaths: ["/tmp/p.dntr"] });
+  it("PLUGIN_INSTALL_FROM_FILE routes the picked file through the path validator + installer", async () => {
+    const file = join(tmpdir(), `plugin-picked-${process.pid}.dntr`);
+    await writeFile(file, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]));
+    mockShowOpenDialog.mockResolvedValue({ canceled: false, filePaths: [file] });
+    mockInstallPlugin.mockResolvedValue({ status: "installed", pluginId: "acme.picked" });
+    try {
+      const handler = getHandler("plugin:install-from-file");
+      const result = await handler({ sender: { id: 1 } });
+      expect(mockInstallPlugin).toHaveBeenCalledWith(file);
+      expect(result).toEqual({ status: "installed", pluginId: "acme.picked" });
+    } finally {
+      await rm(file, { force: true });
+    }
+  });
+
+  it("PLUGIN_INSTALL_FROM_FILE rejects a picked non-.dntr file via the shared validator", async () => {
+    mockShowOpenDialog.mockResolvedValue({ canceled: false, filePaths: ["/tmp/not-a-plugin.txt"] });
     const handler = getHandler("plugin:install-from-file");
     const result = await handler({ sender: { id: 1 } });
-    expect(result).toEqual({ status: "not-implemented" });
+    expect(result).toEqual({
+      status: "failed",
+      errors: [{ code: "archive_invalid", message: "Only .dntr files can be installed" }],
+    });
+    expect(mockInstallPlugin).not.toHaveBeenCalled();
   });
 
   it("PLUGIN_INSTALL_FROM_URL rejects an empty URL without claiming not-implemented", async () => {
@@ -333,10 +352,21 @@ describe("registerPluginHandlers", () => {
     expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
   });
 
-  it("PLUGIN_INSTALL_FROM_URL accepts an unknown MIME when the URL ends in .dntr", async () => {
-    mockNetFetch.mockResolvedValue(
-      mockResponse({ headers: { "content-type": "application/octet-stream" } })
-    );
+  // The accepted MIME set is shared with the update-check flow (T4) so a server
+  // that passes one path's gate passes the other's too. octet-stream / x-zip
+  // are accepted on their own MIME now — no `.dntr` suffix needed.
+  it.each(["application/octet-stream", "application/x-zip", "application/x-dntr"])(
+    "PLUGIN_INSTALL_FROM_URL accepts the shared archive content type %s on a non-.dntr URL",
+    async (contentType) => {
+      mockNetFetch.mockResolvedValue(mockResponse({ headers: { "content-type": contentType } }));
+      const handler = getHandler("plugin:install-from-url");
+      const result = await handler({}, "https://example.com/download");
+      expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
+    }
+  );
+
+  it("PLUGIN_INSTALL_FROM_URL falls back to the .dntr suffix for an unrecognised MIME", async () => {
+    mockNetFetch.mockResolvedValue(mockResponse({ headers: { "content-type": "text/html" } }));
     const handler = getHandler("plugin:install-from-url");
     const result = await handler({}, "https://example.com/p.dntr");
     expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
@@ -499,6 +529,95 @@ describe("registerPluginHandlers", () => {
     expect(mockNetFetch).not.toHaveBeenCalled();
   });
 
+  it.each([
+    "http://127.0.0.1/p.dntr",
+    "https://localhost/p.dntr",
+    "http://169.254.169.254/latest/meta-data",
+    "https://192.168.1.10/p.dntr",
+    "http://[::1]/p.dntr",
+    "https://10.0.0.5/p.dntr",
+  ])("PLUGIN_INSTALL_FROM_URL rejects private/loopback host %s as invalid-url", async (url) => {
+    const handler = getHandler("plugin:install-from-url");
+    const result = await handler({}, url);
+    expect(result).toEqual({ status: "invalid-url" });
+    expect(mockNetFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "https://user:pass@example.com/p.dntr",
+    "https://:pass@example.com/p.dntr",
+    "https://user@example.com/p.dntr",
+  ])(
+    "PLUGIN_INSTALL_FROM_URL rejects an embedded-credentials URL %s as invalid-url",
+    async (url) => {
+      const handler = getHandler("plugin:install-from-url");
+      const result = await handler({}, url);
+      expect(result).toEqual({ status: "invalid-url" });
+      // Never fetched, so the credentials are never sent or persisted as
+      // installer originalUrl provenance.
+      expect(mockNetFetch).not.toHaveBeenCalled();
+      expect(mockInstallPlugin).not.toHaveBeenCalled();
+    }
+  );
+
+  it("PLUGIN_INSTALL_FROM_URL follows a public→public redirect and revalidates each hop", async () => {
+    // First hop 302s to another public host; the second hop serves the archive.
+    mockNetFetch
+      .mockResolvedValueOnce(
+        mockResponse({ status: 302, headers: { location: "https://cdn.example.net/p.dntr" } })
+      )
+      .mockResolvedValueOnce(mockResponse({ headers: { "content-type": "application/zip" } }));
+    const handler = getHandler("plugin:install-from-url");
+    const result = await handler({}, "https://example.com/p.dntr");
+    expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
+    expect(mockNetFetch).toHaveBeenCalledTimes(2);
+    // Redirects are followed manually so each hop can be revalidated.
+    for (const call of mockNetFetch.mock.calls) {
+      expect((call[1] as { redirect?: string }).redirect).toBe("manual");
+    }
+  });
+
+  it.each([
+    "http://127.0.0.1/p.dntr",
+    "https://169.254.169.254/latest/meta-data",
+    "https://10.0.0.5/p.dntr",
+    "https://localhost/p.dntr",
+  ])(
+    "PLUGIN_INSTALL_FROM_URL rejects a redirect to a private host %s (SSRF)",
+    async (privateTarget) => {
+      mockNetFetch.mockResolvedValueOnce(
+        mockResponse({ status: 302, headers: { location: privateTarget } })
+      );
+      const handler = getHandler("plugin:install-from-url");
+      const result = (await handler({}, "https://example.com/p.dntr")) as {
+        status: string;
+        errors: Array<{ code: string }>;
+      };
+      expect(result.status).toBe("failed");
+      expect(result.errors[0]!.code).toBe("fetch_failed");
+      // The first hop was fetched but the private redirect target never was.
+      expect(mockNetFetch).toHaveBeenCalledTimes(1);
+      expect(mockInstallPlugin).not.toHaveBeenCalled();
+    }
+  );
+
+  it("PLUGIN_INSTALL_FROM_URL rejects a redirect chain that exceeds the hop cap", async () => {
+    // Every hop redirects to another public host — the guard caps the chain.
+    mockNetFetch.mockImplementation(() =>
+      Promise.resolve(
+        mockResponse({ status: 302, headers: { location: "https://example.org/next.dntr" } })
+      )
+    );
+    const handler = getHandler("plugin:install-from-url");
+    const result = (await handler({}, "https://example.com/p.dntr")) as {
+      status: string;
+      errors: Array<{ code: string }>;
+    };
+    expect(result.status).toBe("failed");
+    expect(result.errors[0]!.code).toBe("fetch_failed");
+    expect(mockInstallPlugin).not.toHaveBeenCalled();
+  });
+
   it("PLUGIN_INSTALL_FROM_URL propagates an installPlugin failure", async () => {
     mockNetFetch.mockResolvedValue(
       mockResponse({ headers: { "content-type": "application/zip" } })
@@ -586,6 +705,52 @@ describe("registerPluginHandlers", () => {
       const result = await handler({}, file);
       expect(mockInstallPlugin).toHaveBeenCalledWith(file);
       expect(result).toEqual({ status: "installed", pluginId: "acme.upper" });
+    } finally {
+      await rm(file, { force: true });
+    }
+  });
+
+  // The `install` op shares handleInstallFromPath's trust gate (absolute +
+  // .dntr + ZIP-magic header sniff) so both entry points validate identically.
+  it("PLUGIN_INSTALL rejects a relative path without touching the installer", async () => {
+    const handler = getHandler("plugin:install");
+    const result = await handler({}, "relative/plugin.dntr");
+    expect(result).toMatchObject({ status: "failed", errors: [{ code: "archive_invalid" }] });
+    expect(mockInstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INSTALL rejects a non-.dntr extension", async () => {
+    const handler = getHandler("plugin:install");
+    const result = await handler({}, "/tmp/not-a-plugin.txt");
+    expect(result).toEqual({
+      status: "failed",
+      errors: [{ code: "archive_invalid", message: "Only .dntr files can be installed" }],
+    });
+    expect(mockInstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INSTALL rejects a file without the ZIP magic bytes", async () => {
+    const file = join(tmpdir(), `plugin-install-bad-magic-${process.pid}.dntr`);
+    await writeFile(file, Buffer.from("not a zip"));
+    try {
+      const handler = getHandler("plugin:install");
+      const result = await handler({}, file);
+      expect(result).toMatchObject({ status: "failed", errors: [{ code: "archive_invalid" }] });
+      expect(mockInstallPlugin).not.toHaveBeenCalled();
+    } finally {
+      await rm(file, { force: true });
+    }
+  });
+
+  it("PLUGIN_INSTALL delegates to installPlugin for a valid .dntr archive", async () => {
+    const file = join(tmpdir(), `plugin-install-good-magic-${process.pid}.dntr`);
+    await writeFile(file, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]));
+    mockInstallPlugin.mockResolvedValue({ status: "installed", pluginId: "acme.installed" });
+    try {
+      const handler = getHandler("plugin:install");
+      const result = await handler({}, file, { source: "file" });
+      expect(mockInstallPlugin).toHaveBeenCalledWith(file, { source: "file" });
+      expect(result).toEqual({ status: "installed", pluginId: "acme.installed" });
     } finally {
       await rm(file, { force: true });
     }

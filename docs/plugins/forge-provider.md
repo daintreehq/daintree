@@ -38,7 +38,7 @@ Add a `forgeProviders` contribution to `plugin.json`. Daintree reads this eagerl
   "displayName": "Gitea",
   "description": "Gitea forge provider — issues, pull requests, CI status.",
   "main": "main/index.js",
-  "engines": { "daintree": ">=0.11.0" },
+  "engines": { "daintree": "^0.11.0" },
   "contributes": {
     "forgeProviders": [
       {

@@ -82,6 +82,17 @@ describe("resolveSettingsTemplates", () => {
       expect(result).toBe("sk-dot");
     });
 
+    it("substitutes a hyphenated id (matches the schema's any-non-empty-string id grammar)", async () => {
+      api = fakeApi({ "linear-api-token": "sk-hyphen" });
+      const result = await resolveSettingsTemplates(
+        "Bearer ${settings:linear-api-token}",
+        "acme.linear",
+        api
+      );
+      expect(result).toBe("Bearer sk-hyphen");
+      expect(api.get).toHaveBeenCalledWith("linear-api-token");
+    });
+
     it("deduplicates lookups for repeated keys", async () => {
       api = fakeApi({ token: "once" });
       const result = await resolveSettingsTemplates(
@@ -139,40 +150,45 @@ describe("resolveSettingsTemplates", () => {
       expect(result).toBe("${other:foo}");
       expect(api.get).not.toHaveBeenCalled();
     });
+  });
 
-    it("leaves ${settings:1foo} unchanged (starts with digit)", async () => {
-      api = fakeApi({});
+  // The schema (electron/schemas/plugin.ts) accepts any non-empty string as a
+  // setting id, so the resolver's grammar must too — these forms are all valid
+  // declared ids that previously passed through unresolved.
+  describe("schema-aligned ids substitute", () => {
+    it("substitutes an id starting with a digit", async () => {
+      api = fakeApi({ "1foo": "digit-led" });
       const result = await resolveSettingsTemplates("${settings:1foo}", "acme.plugin", api);
-      expect(result).toBe("${settings:1foo}");
-      expect(api.get).not.toHaveBeenCalled();
+      expect(result).toBe("digit-led");
+      expect(api.get).toHaveBeenCalledWith("1foo");
     });
 
-    it("leaves ${settings:foo-bar} unchanged (hyphen in key)", async () => {
-      api = fakeApi({});
+    it("substitutes a hyphenated id", async () => {
+      api = fakeApi({ "foo-bar": "hyphenated" });
       const result = await resolveSettingsTemplates("${settings:foo-bar}", "acme.plugin", api);
-      expect(result).toBe("${settings:foo-bar}");
-      expect(api.get).not.toHaveBeenCalled();
+      expect(result).toBe("hyphenated");
+      expect(api.get).toHaveBeenCalledWith("foo-bar");
     });
 
-    it("leaves ${settings:foo.} unchanged (trailing dot)", async () => {
-      api = fakeApi({});
+    it("substitutes an id with a trailing dot", async () => {
+      api = fakeApi({ "foo.": "trailing-dot" });
       const result = await resolveSettingsTemplates("${settings:foo.}", "acme.plugin", api);
-      expect(result).toBe("${settings:foo.}");
-      expect(api.get).not.toHaveBeenCalled();
+      expect(result).toBe("trailing-dot");
+      expect(api.get).toHaveBeenCalledWith("foo.");
     });
 
-    it("leaves ${settings:.foo} unchanged (leading dot)", async () => {
-      api = fakeApi({});
+    it("substitutes an id with a leading dot", async () => {
+      api = fakeApi({ ".foo": "leading-dot" });
       const result = await resolveSettingsTemplates("${settings:.foo}", "acme.plugin", api);
-      expect(result).toBe("${settings:.foo}");
-      expect(api.get).not.toHaveBeenCalled();
+      expect(result).toBe("leading-dot");
+      expect(api.get).toHaveBeenCalledWith(".foo");
     });
 
-    it("leaves ${settings:foo..bar} unchanged (double dot)", async () => {
-      api = fakeApi({});
+    it("substitutes an id with a double dot", async () => {
+      api = fakeApi({ "foo..bar": "double-dot" });
       const result = await resolveSettingsTemplates("${settings:foo..bar}", "acme.plugin", api);
-      expect(result).toBe("${settings:foo..bar}");
-      expect(api.get).not.toHaveBeenCalled();
+      expect(result).toBe("double-dot");
+      expect(api.get).toHaveBeenCalledWith("foo..bar");
     });
   });
 

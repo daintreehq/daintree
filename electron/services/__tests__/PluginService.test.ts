@@ -125,7 +125,7 @@ vi.mock("../PluginMcpSupervisor.js", () => ({
 
 import { z } from "zod";
 import { PluginService } from "../PluginService.js";
-import { getPluginManifestSchema } from "../../schemas/plugin.js";
+import { getPluginManifestSchema, isPrivateOrLoopbackHostname } from "../../schemas/plugin.js";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   type PluginIpcContext,
@@ -475,6 +475,10 @@ describe("PluginManifestSchema scopes field", () => {
     ["https://intranet", "scope_url_hostname_unqualified"],
     ["https://127.0.0.1", "scope_url_private_target"],
     ["https://[::1]", "scope_url_private_target"],
+    ["https://[fe80::1]", "scope_url_private_target"],
+    ["https://[fc00::1]", "scope_url_private_target"],
+    ["https://[fd00::1]", "scope_url_private_target"],
+    ["https://[::ffff:127.0.0.1]", "scope_url_private_target"],
     ["https://169.254.169.254", "scope_url_private_target"],
     ["https://10.0.0.1", "scope_url_private_target"],
     ["https://192.168.1.1", "scope_url_private_target"],
@@ -590,6 +594,35 @@ describe("PluginManifestSchema scopes field", () => {
   });
 });
 
+describe("isPrivateOrLoopbackHostname (download SSRF guard)", () => {
+  // `new URL` keeps brackets on IPv6 literals, so feed the bracketed form the
+  // install/checkForUpdate paths actually pass.
+  it.each([
+    "[::1]",
+    "[fe80::1]",
+    "[fc00::1]",
+    "[fd00::1]",
+    "[::ffff:127.0.0.1]",
+    "127.0.0.1",
+    "169.254.169.254",
+    "10.0.0.1",
+    "192.168.1.1",
+    "172.16.0.1",
+    "0.0.0.0",
+    "localhost",
+    "localhost.",
+  ])("blocks %j", (host) => {
+    expect(isPrivateOrLoopbackHostname(host)).toBe(true);
+  });
+
+  it.each(["8.8.8.8", "[2606:4700::1111]", "203.0.113.5", "api.example.com"])(
+    "allows public address %j",
+    (host) => {
+      expect(isPrivateOrLoopbackHostname(host)).toBe(false);
+    }
+  );
+});
+
 describe("PluginManifestSchema forgeProviders contribution", () => {
   const validBase = { name: "acme.forge", version: "1.0.0" };
 
@@ -670,16 +703,17 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
     expect(result.success).toBe(false);
   });
 
-  it("strips unknown keys on a forgeProviders entry (matches sibling contribution schemas)", () => {
+  it("rejects unknown keys on a forgeProviders entry (strict schema)", () => {
     const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
         forgeProviders: [{ id: "gh", name: "GitHub", matches: ["github.com"], unknownKey: true }],
       },
     });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.contributes.forgeProviders[0]).not.toHaveProperty("unknownKey");
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const unrecognizedIssue = result.error.issues.find((i) => i.code === "unrecognized_keys");
+      expect(unrecognizedIssue).toBeDefined();
     }
   });
 });
@@ -1887,6 +1921,34 @@ describe("PluginService built-in plugin loading", () => {
 
       await expect(fs.access(path.join(pluginsRoot, "acme.wipe"))).rejects.toThrow();
       await expect(fs.access(settingsFile)).rejects.toThrow();
+    });
+
+    it("never deletes a project-scope settings file, even with deleteSettings", async () => {
+      // Uninstall only ever targets the user-scope settings root; per-repo
+      // `.daintree/plugin-settings/` files are tracked git artifacts and are not
+      // the uninstall's to remove. Drift guard for docs/plugins/distribution.md.
+      const pluginsRoot = path.join(tmpDir, "plugins");
+      await fs.mkdir(path.join(pluginsRoot, "acme.proj"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginsRoot, "acme.proj", "plugin.json"),
+        JSON.stringify({ name: "acme.proj", version: "1.0.0" })
+      );
+      const projectSettingsFile = path.join(
+        tmpDir,
+        "some-project",
+        ".daintree",
+        "plugin-settings",
+        "acme.proj.json"
+      );
+      await fs.mkdir(path.dirname(projectSettingsFile), { recursive: true });
+      await fs.writeFile(projectSettingsFile, JSON.stringify({ team: "platform" }));
+      const service = new PluginService(pluginsRoot, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      await service.uninstallPlugin("acme.proj", true);
+
+      await expect(fs.access(path.join(pluginsRoot, "acme.proj"))).rejects.toThrow();
+      await expect(fs.access(projectSettingsFile)).resolves.toBeUndefined();
     });
 
     it("clears the launch-time name reservation so a same-session reinstall isn't blocked", async () => {
@@ -3685,7 +3747,7 @@ describe("createHost — dispatch", () => {
     });
   });
 
-  it("after dispose() returns EXECUTION_ERROR without re-registering a listener", async () => {
+  it("after dispose() returns PLUGIN_UNLOADED without re-registering a listener", async () => {
     const wc = makeFakeWebContents(11);
     setActiveWebContents(wc);
     await writePlugin("dispatch-after-dispose", {
@@ -3699,14 +3761,19 @@ describe("createHost — dispatch", () => {
       "acme.dispatch-after-dispose"
     );
 
-    // The plugin stays in the map (dispose doesn't unload), so the host's own
-    // PLUGIN_UNLOADED guard wouldn't catch this — the disposed guard must.
+    // dispose() runs the full disposer cascade, which unloads every plugin
+    // (removes it from the map). A post-dispose dispatch therefore fails the
+    // host's PLUGIN_UNLOADED membership guard before any renderer round-trip —
+    // no listener is registered and the renderer is never touched.
     service.dispose();
     const result = await host.dispatch("acme.dispatch-after-dispose.go");
 
     expect(result).toEqual({
       ok: false,
-      error: { code: "EXECUTION_ERROR", message: expect.stringContaining("disposed") },
+      error: {
+        code: "PLUGIN_UNLOADED",
+        message: expect.stringContaining("no longer loaded"),
+      },
     });
     expect(ipcMainMock._listenerCount(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE)).toBe(0);
     expect(wc.send).not.toHaveBeenCalled();
@@ -4714,9 +4781,9 @@ describe("Plugin menu items broadcast", () => {
     const service = new PluginService();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (service as any).scheduleMenuItemsBroadcast(false);
+    (service as any).broadcaster.scheduleMenuItemsBroadcast(false);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (service as any).scheduleMenuItemsBroadcast(true);
+    (service as any).broadcaster.scheduleMenuItemsBroadcast(true);
 
     await Promise.resolve();
     await Promise.resolve();
@@ -4736,7 +4803,7 @@ describe("Plugin menu items broadcast", () => {
     const service = new PluginService();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (service as any).scheduleMenuItemsBroadcast(true);
+    (service as any).broadcaster.scheduleMenuItemsBroadcast(true);
     service.dispose();
 
     await Promise.resolve();
@@ -4754,9 +4821,9 @@ describe("Plugin context-menu items broadcast", () => {
     const service = new PluginService();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (service as any).scheduleContextMenuItemsBroadcast(false);
+    (service as any).broadcaster.scheduleContextMenuItemsBroadcast(false);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (service as any).scheduleContextMenuItemsBroadcast(true);
+    (service as any).broadcaster.scheduleContextMenuItemsBroadcast(true);
 
     await Promise.resolve();
     await Promise.resolve();
@@ -4774,7 +4841,7 @@ describe("Plugin context-menu items broadcast", () => {
     const service = new PluginService();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (service as any).scheduleContextMenuItemsBroadcast(true);
+    (service as any).broadcaster.scheduleContextMenuItemsBroadcast(true);
     service.dispose();
 
     await Promise.resolve();

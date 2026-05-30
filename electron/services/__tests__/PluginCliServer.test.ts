@@ -193,7 +193,46 @@ describe("createPluginCliServer", () => {
     const res = await request({ id: 3, method: "plugin.install", params: {} });
     expect(res.id).toBe(3);
     expect(res.error).toBeTruthy();
+    expect((res.error as { message: string }).message).toMatch(/exactly one of 'path' or 'url'/);
     expect(handlers.install).not.toHaveBeenCalled();
+  });
+
+  it("rejects install params carrying both path and url instead of preferring one", async () => {
+    const handlers = noopHandlers();
+    server = createPluginCliServer({
+      socketPath,
+      waitForReady: () => Promise.resolve(),
+      handlers,
+    });
+    await server.listen();
+
+    const res = await request({
+      id: 5,
+      method: "plugin.install",
+      params: { path: "/tmp/foo.dntr", url: "https://example.com/foo.dntr" },
+    });
+    expect(res.id).toBe(5);
+    expect(res.error).toBeTruthy();
+    expect((res.error as { message: string }).message).toMatch(/exactly one of 'path' or 'url'/);
+    expect(handlers.install).not.toHaveBeenCalled();
+  });
+
+  it("routes a url-only install to the install handler", async () => {
+    const handlers = noopHandlers();
+    server = createPluginCliServer({
+      socketPath,
+      waitForReady: () => Promise.resolve(),
+      handlers,
+    });
+    await server.listen();
+
+    const res = await request({
+      id: 6,
+      method: "plugin.install",
+      params: { url: "https://example.com/foo.dntr" },
+    });
+    expect(res.result).toEqual({ status: "installed" });
+    expect(handlers.install).toHaveBeenCalledWith({ url: "https://example.com/foo.dntr" });
   });
 
   it("surfaces a handler rejection as an error frame", async () => {

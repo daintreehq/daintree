@@ -97,9 +97,13 @@ program
   .command("uninstall")
   .argument("<pluginId>", "scoped plugin id (publisher.name)")
   .description("Uninstall a plugin from the running Daintree")
-  .action(async (pluginId: string) => {
+  .option(
+    "--delete-settings",
+    "also delete this plugin's user-scope settings (per-project .daintree/ settings are always kept)"
+  )
+  .action(async (pluginId: string, opts: { deleteSettings?: boolean }) => {
     try {
-      await runUninstall(pluginId);
+      await runUninstall(pluginId, { deleteSettings: opts.deleteSettings });
     } catch (err) {
       fail((err as Error).message);
     }

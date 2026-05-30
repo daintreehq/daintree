@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PluginMcpConsentStore } from "../PluginMcpConsentStore.js";
 
 function makeConfig() {
@@ -110,6 +110,67 @@ describe("PluginMcpConsentStore", () => {
     store.pin({ pluginId: "a::b", serverId: "c", toolName: "t" }, fpA);
     const lookup = store.lookup({ pluginId: "a", serverId: "b::c", toolName: "t" }, fpA);
     expect(lookup.kind).toBe("first-use");
+  });
+
+  it("revokeAllForPlugin purges every pin for the plugin so a reinstall starts fresh", () => {
+    store.pin({ pluginId: "acme", serverId: "main", toolName: "read_file" }, fpA);
+    store.pin({ pluginId: "acme", serverId: "main", toolName: "write_file" }, fpA);
+    store.pin({ pluginId: "other", serverId: "main", toolName: "read_file" }, fpA);
+
+    store.revokeAllForPlugin("acme");
+
+    // Reinstall: a fresh lookup must re-prompt, not auto-approve from a stale pin.
+    expect(
+      store.lookup({ pluginId: "acme", serverId: "main", toolName: "read_file" }, fpA).kind
+    ).toBe("first-use");
+    expect(
+      store.lookup({ pluginId: "acme", serverId: "main", toolName: "write_file" }, fpA).kind
+    ).toBe("first-use");
+    // Other plugins are untouched.
+    expect(
+      store.lookup({ pluginId: "other", serverId: "main", toolName: "read_file" }, fpA).kind
+    ).toBe("approved");
+  });
+
+  it("revokeAllForPlugin leaves no tombstone — purged pins read first-use, not revoked", () => {
+    store.pin(identity, fpA);
+    store.revoke(identity);
+    expect(store.lookup(identity, fpA).kind).toBe("revoked");
+
+    store.revokeAllForPlugin("acme");
+    expect(store.lookup(identity, fpA).kind).toBe("first-use");
+    // The orphaned revoke marker is gone from persistence too.
+    expect(cfg.raw().revoked).toEqual([]);
+  });
+
+  it("revokeAllForPlugin skips the flush when the plugin had no consent state", () => {
+    store.pin({ pluginId: "keep", serverId: "main", toolName: "t" }, fpA);
+    const before = cfg.raw();
+    const result = store.revokeAllForPlugin("absent");
+    // No write occurred for an absent plugin (same snapshot object reference),
+    // and the no-op purge is reported durable.
+    expect(cfg.raw()).toBe(before);
+    expect(result).toBe(true);
+  });
+
+  it("revokeAllForPlugin reports true when the purge persists", () => {
+    store.pin(identity, fpA);
+    expect(store.revokeAllForPlugin("acme")).toBe(true);
+  });
+
+  it("revokeAllForPlugin surfaces a failed flush instead of swallowing it", () => {
+    // A flush failure after the in-memory drop means the persisted snapshot may
+    // still hold the stale pins — they'd rehydrate on restart. The store must
+    // report that so the uninstall caller can retry or escalate.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const throwingStore = new PluginMcpConsentStore(() => {
+      throw new Error("disk full");
+    }, cfg.read);
+    throwingStore.pin(identity, fpA);
+    // The pin() flush also throws but is swallowed; the purge return value is
+    // the contract under test.
+    expect(throwingStore.revokeAllForPlugin("acme")).toBe(false);
+    errSpy.mockRestore();
   });
 
   it("list() returns newest pins first", () => {

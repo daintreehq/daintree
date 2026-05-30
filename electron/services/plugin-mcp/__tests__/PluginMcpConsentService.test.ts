@@ -202,4 +202,25 @@ describe("PluginMcpConsentService", () => {
     const request = (bridge as any).mock.calls[0]![0];
     expect(request.descriptionDisplay).toBe("Danger: do the thing");
   });
+
+  it("revokeAllForPlugin delegates to the store so a reinstall re-prompts", async () => {
+    const bridge = vi.fn().mockResolvedValue("approved-and-pin");
+    service.setConsentBridge(bridge as any as PluginMcpConsentBridge);
+
+    // First call pins; the second auto-approves from the pin.
+    expect((await service.authorizeToolCall(baseInput)).consentDecision).toBe("approved-and-pin");
+    const second = await service.authorizeToolCall(baseInput);
+    expect(second.kind).toBe("approved");
+    expect(second.consentDecision).toBeUndefined();
+
+    // Uninstall purges consent; a reinstall's first call must prompt again. The
+    // service surfaces whether the purge durably persisted so the uninstall
+    // caller can retry/escalate on failure.
+    expect(service.revokeAllForPlugin(baseInput.identity.pluginId)).toBe(true);
+    bridge.mockClear();
+    const reinstall = await service.authorizeToolCall(baseInput);
+    expect(reinstall.kind).toBe("approved");
+    expect(reinstall.consentDecision).toBe("approved-and-pin");
+    expect(bridge).toHaveBeenCalledTimes(1);
+  });
 });

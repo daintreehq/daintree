@@ -112,6 +112,40 @@ export class PluginMcpConsentStore {
     this.flush();
   }
 
+  /**
+   * Purge all consent state for a plugin — every pin and every orphaned revoke
+   * marker whose key decodes to `pluginId`. Used on uninstall so a reinstall
+   * starts from `first-use` rather than inheriting prior TOFU approvals (the
+   * pluginId is author-controlled, so a reinstalled or rebuilt plugin must
+   * re-prompt). Unlike {@link revoke}, this leaves NO tombstone — the pins are
+   * deleted outright, not converted to revocations. Flushes only when at least
+   * one entry was removed.
+   *
+   * Returns whether the purge is durable: `true` if nothing changed (no stale
+   * state to begin with) or the flush persisted; `false` if the flush threw, so
+   * the caller knows the in-memory pins were dropped but the persisted snapshot
+   * may still hold them — they'd rehydrate on the next launch (consent-bypass
+   * for a same-name reinstall) unless the caller retries or escalates.
+   */
+  revokeAllForPlugin(pluginId: string): boolean {
+    this.hydrate();
+    let changed = false;
+    for (const [key, record] of this.pins) {
+      if (record.pluginId === pluginId) {
+        this.pins.delete(key);
+        changed = true;
+      }
+    }
+    for (const key of this.revoked) {
+      if (decodeKeyPluginId(key) === pluginId) {
+        this.revoked.delete(key);
+        changed = true;
+      }
+    }
+    if (!changed) return true;
+    return this.flush();
+  }
+
   private hydrate(): void {
     if (this.hydrated) return;
     const config = this.readConfig();
@@ -131,14 +165,16 @@ export class PluginMcpConsentStore {
     this.hydrated = true;
   }
 
-  private flush(): void {
+  private flush(): boolean {
     try {
       this.saveConfig({
         pins: [...this.pins.values()],
         revoked: [...this.revoked],
       });
+      return true;
     } catch (err) {
       console.error("[PluginMcpConsentStore] Failed to flush pins:", err);
+      return false;
     }
   }
 
@@ -159,6 +195,20 @@ export class PluginMcpConsentStore {
  */
 function makeKey(identity: PluginMcpToolIdentity): string {
   return JSON.stringify([identity.pluginId, identity.serverId, identity.toolName]);
+}
+
+/**
+ * Decode the pluginId (first component) from a {@link makeKey} string. Returns
+ * `null` for a malformed key so a corrupt persisted `revoked` entry can't throw
+ * during a plugin purge.
+ */
+function decodeKeyPluginId(key: string): string | null {
+  try {
+    const parsed = JSON.parse(key);
+    return Array.isArray(parsed) && typeof parsed[0] === "string" ? parsed[0] : null;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeRecord(raw: unknown): PluginMcpConsentRecord | null {
