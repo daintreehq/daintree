@@ -102,3 +102,44 @@ if (typeof window !== "undefined") {
     });
   }
 }
+
+// xterm 6.1's DOM renderer eagerly builds a WidthCache on `terminal.open()`,
+// which creates a <canvas> and requires a 2d context to measure glyph widths.
+// jsdom returns null from getContext, so xterm's `throwIfFalsy` aborts the open
+// (#9540 bump). Install a minimal 2d-context stub so unit tests that open a real
+// Terminal don't crash. Width values are not meaningful under jsdom — these
+// tests assert lifecycle behavior, not layout. jsdom recreates
+// HTMLCanvasElement per test file, so this can't leak across the node↔jsdom
+// boundary; node-env files skip via the guard.
+if (typeof HTMLCanvasElement !== "undefined") {
+  const make2dContextStub = (canvas: HTMLCanvasElement): unknown => ({
+    canvas,
+    font: "",
+    fillStyle: "",
+    strokeStyle: "",
+    textBaseline: "",
+    measureText: (text: string) => ({ width: text.length * 8 }),
+    getImageData: (_x: number, _y: number, w: number, h: number) => ({
+      data: new Uint8ClampedArray(Math.max(0, w) * Math.max(0, h) * 4),
+      width: w,
+      height: h,
+    }),
+    fillRect: () => {},
+    clearRect: () => {},
+    fillText: () => {},
+    strokeText: () => {},
+    setTransform: () => {},
+    scale: () => {},
+    translate: () => {},
+    save: () => {},
+    restore: () => {},
+    beginPath: () => {},
+    closePath: () => {},
+  });
+  HTMLCanvasElement.prototype.getContext = function getContext(
+    this: HTMLCanvasElement,
+    contextId: string
+  ): unknown {
+    return contextId === "2d" ? make2dContextStub(this) : null;
+  } as typeof HTMLCanvasElement.prototype.getContext;
+}
