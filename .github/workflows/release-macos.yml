@@ -47,7 +47,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: ./.github/actions/checkout-shallow
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Install Linux dependencies
         run: |
@@ -68,7 +71,10 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Check out repository
-        uses: ./.github/actions/checkout-shallow
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Set up Node.js and install dependencies
         uses: ./.github/actions/setup-node-install
@@ -123,7 +129,10 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Check out repository
-        uses: ./.github/actions/checkout-shallow
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Resolve update metadata prefix
         uses: ./.github/actions/resolve-update-metadata-prefix
@@ -318,6 +327,12 @@ jobs:
     timeout-minutes: 15
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
+
       - name: Publish Daintree (macOS)
         uses: ./.github/actions/publish-daintree
         with:

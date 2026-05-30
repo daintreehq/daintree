@@ -10,9 +10,9 @@ import { T_LONG } from "../../helpers/timeouts";
 // A→B→C cycles deterministically evict A as LRU when C loads, so we can
 // observe both the cached-warm path (B) and the cold-restore path (A) without
 // CI memory pressure being able to collapse the cache below the user limit.
-const PROJECT_A = "plugin-A";
-const PROJECT_B = "plugin-B";
-const PROJECT_C = "plugin-C";
+const PROJECT_A = "project-A";
+const PROJECT_B = "project-B";
+const PROJECT_C = "project-C";
 const CACHE_LIMIT = 2;
 
 let ctx: AppContext;

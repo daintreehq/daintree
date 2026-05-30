@@ -43,7 +43,10 @@ runs:
   using: composite
   steps:
     - name: Check out repository
-      uses: ./.github/actions/checkout-shallow
+      uses: actions/checkout@v6
+      with:
+        clean: true
+        fetch-depth: 1
 
     - name: Set up Node.js and install dependencies
       uses: ./.github/actions/setup-node-install

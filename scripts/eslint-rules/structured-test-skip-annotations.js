@@ -1,8 +1,11 @@
 /**
  * ESLint rule: structured-test-skip-annotations
  *
- * Enforces that every `test.skip()` call in an E2E spec is preceded by a
+ * Enforces that every runtime `test.skip()` call in an E2E spec is preceded by
  * `test.info().annotations.push({ type, description })` in the same block body.
+ * Static `test.skip(title, details, body)` declarations must carry the same
+ * structured annotation in Playwright's `details.annotation` field because
+ * `test.info()` is only available while a test is running.
  *
  * Allowed `type` values:
  *   - "quarantine"       — known-flaky test, disabled until root cause is fixed.
@@ -47,18 +50,14 @@ function isAnnotationPush(node) {
 }
 
 /**
- * Extract `type` and `description` from the argument to annotations.push(...).
- * The argument must be an ObjectExpression with at minimum a `type` property.
+ * Extract `type` and `description` from an annotation object expression.
  */
-function extractAnnotation(node) {
-  const expr = node.expression;
-  const arg = expr.arguments[0];
-  if (!arg || arg.type !== "ObjectExpression") return null;
-
+function extractAnnotationObject(arg) {
   let typeVal = null;
   let descVal = null;
 
   for (const prop of arg.properties) {
+    if (prop.type !== "Property") continue;
     if (
       prop.key.type === "Identifier" &&
       prop.key.name === "type" &&
@@ -77,6 +76,51 @@ function extractAnnotation(node) {
 
   if (typeVal === null) return null;
   return { type: typeVal, description: descVal };
+}
+
+/**
+ * Extract `type` and `description` from the argument to annotations.push(...).
+ * The argument must be an ObjectExpression with at minimum a `type` property.
+ */
+function extractAnnotation(node) {
+  const expr = node.expression;
+  const arg = expr.arguments[0];
+  if (!arg || arg.type !== "ObjectExpression") return null;
+  return extractAnnotationObject(arg);
+}
+
+function propertyName(prop) {
+  if (prop.type !== "Property") return null;
+  if (prop.key.type === "Identifier") return prop.key.name;
+  if (prop.key.type === "Literal") return prop.key.value;
+  return null;
+}
+
+function extractStaticSkipDetailsAnnotation(node) {
+  const [titleArg, detailsArg] = node.arguments;
+  if (!titleArg || titleArg.type !== "Literal" || typeof titleArg.value !== "string") {
+    return null;
+  }
+  if (!detailsArg || detailsArg.type !== "ObjectExpression") return null;
+
+  const annotationProp = detailsArg.properties.find((prop) => propertyName(prop) === "annotation");
+  if (!annotationProp || annotationProp.type !== "Property") return null;
+
+  const value = annotationProp.value;
+  if (value.type === "ObjectExpression") return extractAnnotationObject(value);
+  if (value.type !== "ArrayExpression") return null;
+
+  for (const element of value.elements) {
+    if (element?.type !== "ObjectExpression") continue;
+    const annotation = extractAnnotationObject(element);
+    if (annotation) return annotation;
+  }
+  return null;
+}
+
+function isStaticSkipDeclaration(node) {
+  const firstArg = node.arguments[0];
+  return firstArg?.type === "Literal" && typeof firstArg.value === "string";
 }
 
 /**
@@ -174,7 +218,9 @@ export default {
 
         if (!blockBody || skipIndex === -1) return;
 
-        const annotation = findPrecedingAnnotation(blockBody, skipIndex);
+        const annotation = isStaticSkipDeclaration(node)
+          ? extractStaticSkipDetailsAnnotation(node)
+          : findPrecedingAnnotation(blockBody, skipIndex);
 
         if (!annotation) {
           context.report({

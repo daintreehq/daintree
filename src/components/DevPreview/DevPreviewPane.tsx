@@ -843,12 +843,19 @@ export function DevPreviewPane({
   const handlePromoteToPortal = useCallback(() => {
     if (isPromotingRef.current) return;
     isPromotingRef.current = true;
+    if (currentUrl) {
+      setBrowserUrl(id, currentUrl);
+    }
     void actionService
-      .dispatch("devPreview.promoteToPortal", { panelId: id }, { source: "user" })
+      .dispatch(
+        "devPreview.promoteToPortal",
+        { panelId: id, projectId: currentProjectId },
+        { source: "user" }
+      )
       .finally(() => {
         isPromotingRef.current = false;
       });
-  }, [id]);
+  }, [currentProjectId, currentUrl, id, setBrowserUrl]);
 
   const handleZoomChange = useCallback((newZoom: number) => {
     const clamped = Math.max(0.25, Math.min(2.0, newZoom));

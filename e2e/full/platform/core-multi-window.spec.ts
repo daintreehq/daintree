@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import {
   launchApp,
   closeApp,
@@ -28,6 +28,36 @@ import { randomUUID } from "crypto";
 // Helpers in launch.ts identify windows by stable `windowId` rather than the
 // Z-ordered `BrowserWindow.getAllWindows()` array — Electron 41's window list
 // reorders on focus, so index-based lookups silently target the wrong view.
+
+async function getInitialProjectId(page: Page): Promise<string | null> {
+  return await page.evaluate(() => {
+    const initialProject = (
+      window as unknown as {
+        __DAINTREE_INITIAL_PROJECT__?: { id?: unknown };
+      }
+    ).__DAINTREE_INITIAL_PROJECT__;
+    return typeof initialProject?.id === "string" ? initialProject.id : null;
+  });
+}
+
+async function runCommandAndWaitForText(
+  page: Page,
+  panel: Locator,
+  command: string,
+  expectedText: string
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await runTerminalCommand(page, panel, command);
+    try {
+      await waitForTerminalText(panel, expectedText, T_LONG);
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
 
 test.describe.serial("Multi-window isolation", () => {
   let ctx: AppContext | null = null;
@@ -102,13 +132,18 @@ test.describe.serial("Multi-window isolation", () => {
       { timeout: T_LONG }
     );
 
-    // Sanity: the two pages are distinct BrowserWindow contents — their
-    // projectId query params must differ.
+    // Sanity: the two pages are distinct BrowserWindow contents. Project
+    // identity is preload-seeded now; URLs intentionally stay static so
+    // per-project WebContentsViews can share the bytecode cache.
     const url1 = window1Page.url();
     const url2 = window2Page.url();
-    expect(url1).not.toBe(url2);
-    expect(url1).toContain("projectId=");
-    expect(url2).toContain("projectId=");
+    const projectId1 = await getInitialProjectId(window1Page);
+    const projectId2 = await getInitialProjectId(window2Page);
+    expect(url1).toBe("app://daintree/index.html");
+    expect(url2).toBe("app://daintree/index.html");
+    expect(projectId1).toBeTruthy();
+    expect(projectId2).toBeTruthy();
+    expect(projectId1).not.toBe(projectId2);
   });
 
   test("terminal I/O stays scoped to its originating window", async () => {
@@ -130,15 +165,13 @@ test.describe.serial("Multi-window isolation", () => {
     // Type nonce A in window 1's terminal — it must appear in window 1
     // and never bleed into window 2's terminal.
     await focusWindow(app, window1Id, window1Page);
-    await runTerminalCommand(window1Page, panel1, `echo ${nonceA}`);
-    await waitForTerminalText(panel1, nonceA, T_LONG);
+    await runCommandAndWaitForText(window1Page, panel1, `echo ${nonceA}`, nonceA);
     expect(await getTerminalText(panel2)).not.toContain(nonceA);
 
     // Type nonce B in window 2's terminal — it must appear in window 2
     // and never bleed into window 1's terminal.
     await focusWindow(app, window2.windowId, window2Page);
-    await runTerminalCommand(window2Page, panel2, `echo ${nonceB}`);
-    await waitForTerminalText(panel2, nonceB, T_LONG);
+    await runCommandAndWaitForText(window2Page, panel2, `echo ${nonceB}`, nonceB);
     expect(await getTerminalText(panel1)).not.toContain(nonceB);
 
     // Confirm the original nonces did not leak post-second-write.

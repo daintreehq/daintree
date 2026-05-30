@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
+import { openTerminal } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_MEDIUM, T_SHORT } from "../../helpers/timeouts";
 
@@ -18,6 +19,14 @@ test.describe.serial("Core: Diagnostics Dock — auto-open preserves focus", () 
     const { window } = ctx;
 
     const textarea = window.locator(SEL.terminal.xtermHelperTextarea);
+    if (
+      !(await textarea
+        .first()
+        .isVisible({ timeout: 1000 })
+        .catch(() => false))
+    ) {
+      await openTerminal(window);
+    }
     await expect(textarea.first()).toBeVisible({ timeout: T_MEDIUM });
 
     await textarea.first().focus();

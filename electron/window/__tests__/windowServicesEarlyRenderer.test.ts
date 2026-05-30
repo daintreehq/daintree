@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { shouldDeferRendererLoadForE2E } from "../earlyRenderer.js";
 
 describe("shouldDeferRendererLoadForE2E", () => {
-  it("returns true only for the explicit Windows E2E deferral flag", () => {
+  it("returns true only for the explicit E2E deferral flag", () => {
     expect(shouldDeferRendererLoadForE2E({ env: { DAINTREE_E2E_DEFER_RENDERER_LOAD: "1" } })).toBe(
       true
     );

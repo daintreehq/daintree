@@ -3,6 +3,7 @@ import net from "node:net";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { runInstall } from "../commands/install.js";
 import { runUninstall } from "../commands/uninstall.js";
 import { DaintreeUnavailableError } from "../ipc/client.js";
@@ -13,7 +14,10 @@ let server: net.Server | null = null;
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-install-test-"));
-  socketPath = path.join(tmpDir, "cli.sock");
+  socketPath =
+    process.platform === "win32"
+      ? `\\\\.\\pipe\\daintree-install-test-${process.pid}-${randomUUID()}`
+      : path.join(tmpDir, "cli.sock");
   process.env.DAINTREE_CLI_SOCKET = socketPath;
 });
 

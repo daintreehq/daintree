@@ -1,13 +1,7 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import {
-  launchApp,
-  closeApp,
-  mockOpenDialog,
-  refreshActiveWindow,
-  type AppContext,
-} from "../helpers/launch";
+import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
-import { dismissTelemetryConsent } from "../helpers/project";
+import { dismissTelemetryConsent, openAndOnboardProject } from "../helpers/project";
 import { getTerminalText } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
 
@@ -47,16 +41,7 @@ async function focusHybridEditor(page: Page, agentPanel: Locator): Promise<void>
 }
 
 async function openFixtureProject(): Promise<void> {
-  const { app, window } = ctx;
-
-  await mockOpenDialog(app, fixtureDir);
-  await window.getByRole("button", { name: "Open folder" }).click();
-
-  // Re-acquire window after open — ProjectViewManager creates a new
-  // WebContentsView for the project — then dismiss the telemetry consent
-  // dialog if it appears.
-  ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
-  await dismissTelemetryConsent(ctx.window);
+  ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir);
 }
 
 async function launchOpenCodeAgent(): Promise<Locator> {

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  buildPackagedSmokeEnv,
   buildRequiredMarkers,
   parsePositiveInt,
   validateSmokeOutput,
@@ -30,14 +31,14 @@ describe("buildRequiredMarkers", () => {
   it("adds win-job-object on Windows and omits posix-pty-reaper", () => {
     const markers = buildRequiredMarkers("win32");
     expect(markers).toContain("[SMOKE] CHECK: win-job-object native module");
-    expect(markers).not.toContain("[SMOKE] CHECK: posix-pty-reaper native module");
+    expect(markers).not.toContain("[SMOKE] CHECK: posix-pty-reaper supervisor");
   });
 
   it.each(["darwin", "linux"])(
     "adds posix-pty-reaper on %s and omits win-job-object",
     (platform) => {
       const markers = buildRequiredMarkers(platform);
-      expect(markers).toContain("[SMOKE] CHECK: posix-pty-reaper native module");
+      expect(markers).toContain("[SMOKE] CHECK: posix-pty-reaper supervisor");
       expect(markers).not.toContain("[SMOKE] CHECK: win-job-object native module");
     }
   );
@@ -45,7 +46,7 @@ describe("buildRequiredMarkers", () => {
   it("emits no platform-specific reaper marker for unknown platforms", () => {
     const markers = buildRequiredMarkers("aix");
     expect(markers).not.toContain("[SMOKE] CHECK: win-job-object native module");
-    expect(markers).not.toContain("[SMOKE] CHECK: posix-pty-reaper native module");
+    expect(markers).not.toContain("[SMOKE] CHECK: posix-pty-reaper supervisor");
   });
 });
 
@@ -68,6 +69,45 @@ describe("parsePositiveInt", () => {
 
   it("returns fallback for undefined input", () => {
     expect(parsePositiveInt(undefined, 42)).toBe(42);
+  });
+});
+
+describe("buildPackagedSmokeEnv", () => {
+  it("sets APPDIR when launching an extracted Linux AppRun", () => {
+    const env = buildPackagedSmokeEnv(
+      "/tmp/appimage-work/squashfs-root/AppRun",
+      {
+        ELECTRON_RUN_AS_NODE: "1",
+        ATOM_SHELL_INTERNAL_RUN_AS_NODE: "1",
+        NODE_ENV: "development",
+      },
+      "linux"
+    );
+
+    expect(env.APPDIR).toBe("/tmp/appimage-work/squashfs-root");
+    expect(env.NODE_ENV).toBe("production");
+    expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+    expect(env.ATOM_SHELL_INTERNAL_RUN_AS_NODE).toBeUndefined();
+  });
+
+  it("preserves an explicit APPDIR", () => {
+    const env = buildPackagedSmokeEnv(
+      "/tmp/appimage-work/squashfs-root/AppRun",
+      { APPDIR: "/custom/appdir" },
+      "linux"
+    );
+
+    expect(env.APPDIR).toBe("/custom/appdir");
+  });
+
+  it("does not set APPDIR for non-AppRun binaries", () => {
+    const env = buildPackagedSmokeEnv(
+      "/Applications/Daintree.app/Contents/MacOS/Daintree",
+      {},
+      "darwin"
+    );
+
+    expect(env.APPDIR).toBeUndefined();
   });
 });
 
@@ -120,7 +160,7 @@ describe("validateSmokeOutput", () => {
   it("throws when a required marker is missing", () => {
     const markers = buildRequiredMarkers("linux");
     const output = markers
-      .filter((m) => m !== "[SMOKE] CHECK: posix-pty-reaper native module")
+      .filter((m) => m !== "[SMOKE] CHECK: posix-pty-reaper supervisor")
       .join("\n");
     expect(() =>
       validateSmokeOutput(1, 1, { code: 0, signal: null, output, timedOut: false }, markers)

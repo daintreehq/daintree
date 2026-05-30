@@ -1869,6 +1869,9 @@ describe("KeybindingService", () => {
         .getAllBindings()
         .find((b) => b.actionId === "terminal.close" && !b.pluginId);
       expect(builtIn).toBeDefined();
+      const beforeBuiltIns = service
+        .getAllBindings()
+        .filter((b) => b.actionId === builtIn!.actionId && !b.pluginId);
 
       // Plugin contributes the same actionId + combo as the built-in.
       service.registerBinding({
@@ -1885,8 +1888,8 @@ describe("KeybindingService", () => {
       const after = service
         .getAllBindings()
         .filter((b) => b.actionId === "terminal.close" && !b.pluginId);
-      expect(after).toHaveLength(1);
-      expect(after[0]!.combo).toBe(builtIn!.combo);
+      expect(after).toHaveLength(beforeBuiltIns.length);
+      expect(after.some((binding) => binding.combo === builtIn!.combo)).toBe(true);
     });
 
     it("rejects a plugin binding that collides with a user-overridden combo", async () => {

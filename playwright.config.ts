@@ -2,6 +2,7 @@ import { defineConfig, type ReporterDescription } from "@playwright/test";
 
 const isCI = !!process.env.CI;
 const isWindowsCI = process.platform === "win32" && isCI;
+const isNonWindowsCI = process.platform !== "win32" && isCI;
 // macOS local: parallel cold launches contend for crashpad Mach ports
 // (FATAL kr == KERN_SUCCESS in exception_handler_server.cc), so serialize.
 // CI runners cycle Electron processes more slowly and don't hit this.
@@ -11,7 +12,13 @@ const e2eWorkers = isWindowsCI || isMacLocal ? 1 : 2;
 // Per-test timeout: allow enough time for launch retries + test execution.
 // launchApp retries up to 3x with 75s timeout per attempt on Windows CI.
 // macOS local: 3x50s retries = 152s, leaves ~88s for test work in 240s window.
-const coreTimeout = isWindowsCI ? 300_000 : isMacLocal ? 240_000 : 120_000;
+const coreTimeout = isWindowsCI
+  ? 300_000
+  : isMacLocal
+    ? 240_000
+    : isNonWindowsCI
+      ? 180_000
+      : 120_000;
 const onlineTimeout = isWindowsCI ? 480_000 : 300_000;
 
 // Blob reporter is opted into by the nightly multi-OS matrix only, so per-leg

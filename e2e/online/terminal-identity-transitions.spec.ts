@@ -6,15 +6,9 @@ import {
   type Page,
   type TestInfo,
 } from "@playwright/test";
-import {
-  launchApp,
-  closeApp,
-  mockOpenDialog,
-  refreshActiveWindow,
-  type AppContext,
-} from "../helpers/launch";
+import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
-import { dismissTelemetryConsent } from "../helpers/project";
+import { dismissTelemetryConsent, openAndOnboardProject } from "../helpers/project";
 import { getTerminalText, runTerminalCommand } from "../helpers/terminal";
 import { openTerminal, getFirstGridPanel } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
@@ -492,13 +486,9 @@ test.describe("Terminal chrome ↔ live process identity (bidirectional)", () =>
     await test.step("launch app + open project", async () => {
       ctx = await launchApp({ env: { DAINTREE_IDENTITY_DEBUG_PASS: "1" } });
       diagnostics = createIdentityDiagnostics(ctx);
-      const { app, window } = ctx;
-      await mockOpenDialog(app, fixtureDir);
-      await window.getByRole("button", { name: "Open folder" }).click();
+      ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir);
     });
 
-    ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
-    await dismissTelemetryConsent(ctx.window);
     await configureClaudeAuthEnv(ctx.window);
     diagnostics?.attachPage(ctx.window);
     await diagnostics?.captureSnapshot("active project window refreshed", ctx.window);

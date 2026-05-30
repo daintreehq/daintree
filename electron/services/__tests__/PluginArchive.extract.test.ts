@@ -245,12 +245,7 @@ describe("extractPluginArchive", () => {
       archivePath,
       buildRawZip([{ name: "plugin.json", content: JSON.stringify(validManifest()) }])
     );
-    const handle = await fs.open(archivePath, "a");
-    try {
-      await handle.truncate(30 * 1024 * 1024 + 1);
-    } finally {
-      await handle.close();
-    }
+    await fs.truncate(archivePath, 30 * 1024 * 1024 + 1);
     const dest = path.join(tmpDir, "extracted-huge");
     await fs.mkdir(dest, { recursive: true });
 

@@ -18,8 +18,14 @@ on:
         required: false
         type: boolean
         default: false
+      smoke_artifact_run_id:
+        description: "Optional existing release-windows run ID whose release-daintree-windows-latest artifact should be smoke-tested without rebuilding"
+        required: false
+        type: string
+        default: ""
 
 permissions:
+  actions: read
   contents: read
   issues: write
 
@@ -32,12 +38,16 @@ env:
 
 jobs:
   checks:
+    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
     name: Checks
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: ./.github/actions/checkout-shallow
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Install Linux dependencies
         run: |
@@ -53,12 +63,16 @@ jobs:
         run: npm run check
 
   unit-tests:
+    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
     name: Unit Tests (Windows)
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
       - name: Check out repository
-        uses: ./.github/actions/checkout-shallow
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Set up Node.js and install dependencies
         uses: ./.github/actions/setup-node-install
@@ -70,6 +84,7 @@ jobs:
         run: npm run test
 
   e2e-core-gate:
+    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
     needs: [checks, unit-tests]
     uses: ./.github/workflows/e2e.yml
     with:
@@ -83,6 +98,7 @@ jobs:
   # extra Windows slices to keep restart-heavy shards under the reusable
   # workflow timeout.
   e2e-full-gate:
+    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
     needs: [checks, unit-tests]
     strategy:
       fail-fast: false
@@ -103,6 +119,7 @@ jobs:
   # build or publish. Do NOT add job-level continue-on-error here: it is invalid
   # on reusable-workflow (`uses:`) jobs and makes the whole workflow fail to start.
   e2e-online-gate:
+    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
     needs: [checks, unit-tests]
     uses: ./.github/workflows/e2e.yml
     with:
@@ -111,13 +128,17 @@ jobs:
     secrets: inherit
 
   build-daintree-x64:
+    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
     needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
     name: Build Daintree (Windows x64)
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
       - name: Check out repository
-        uses: ./.github/actions/checkout-shallow
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Resolve update metadata prefix
         uses: ./.github/actions/resolve-update-metadata-prefix
@@ -291,13 +312,17 @@ jobs:
           if-no-files-found: error
 
   build-daintree-arm64:
+    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
     needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
     name: Build Daintree (Windows arm64)
     runs-on: windows-11-arm
     timeout-minutes: 90
     steps:
       - name: Check out repository
-        uses: ./.github/actions/checkout-shallow
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Verify version matches tag
         if: startsWith(github.ref, 'refs/tags/v')
@@ -350,13 +375,17 @@ jobs:
           if-no-files-found: error
 
   assemble-windows-release:
+    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
     needs: [build-daintree-x64, build-daintree-arm64]
     name: Assemble Windows release
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: ./.github/actions/checkout-shallow
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Install Linux dependencies
         run: |
@@ -414,13 +443,17 @@ jobs:
   # is uniquely at risk if cross-compile for arm64 fails silently). Gates
   # publish.
   smoke-packaged:
+    if: always() && (github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id != '' || needs.assemble-windows-release.result == 'success')
     needs: [assemble-windows-release]
     name: Smoke (packaged NSIS)
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
       - name: Check out repository
-        uses: ./.github/actions/checkout-shallow
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Set up Node.js and install dependencies
         uses: ./.github/actions/setup-node-install
@@ -429,20 +462,44 @@ jobs:
           msvs_version: "2022"
 
       - name: Download build artifact
+        if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
         uses: actions/download-artifact@v7
         with:
           name: release-daintree-windows-latest
           path: ${{ runner.temp }}/release-artifact
+
+      - name: Download build artifact from existing run
+        if: github.event_name == 'workflow_dispatch' && inputs.smoke_artifact_run_id != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SMOKE_ARTIFACT_RUN_ID: ${{ inputs.smoke_artifact_run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $artifactDir = Join-Path $env:RUNNER_TEMP 'release-artifact'
+          Remove-Item -Recurse -Force $artifactDir -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+          gh run download $env:SMOKE_ARTIFACT_RUN_ID --name release-daintree-windows-latest --dir $artifactDir
 
       - name: Install NSIS package
         id: extract
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $installer = Get-ChildItem -Path "$env:RUNNER_TEMP\release-artifact" -Recurse -Filter '*.exe' |
+          $installers = @(Get-ChildItem -Path "$env:RUNNER_TEMP\release-artifact" -Recurse -Filter '*.exe' |
+            Where-Object { $_.Name -match '-setup\.exe$' } |
+            Sort-Object Name)
+          $runnerArch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+          $installer = $installers |
+            Where-Object { $_.Name -match "-$runnerArch-setup\.exe$" } |
             Select-Object -First 1
+          if (-not $installer -and $runnerArch -eq 'x64') {
+            $installer = $installers |
+              Where-Object { $_.Name -notmatch '-arm64-setup\.exe$' } |
+              Select-Object -First 1
+          }
           if (-not $installer) {
-            Write-Host "::error::No NSIS .exe found in downloaded artifact"
+            Write-Host "::error::No NSIS installer matching runner architecture '$runnerArch' found in downloaded artifact"
             Get-ChildItem -Path "$env:RUNNER_TEMP\release-artifact" -Recurse | Select-Object -First 30 | ForEach-Object { Write-Host $_.FullName }
             exit 1
           }
@@ -496,6 +553,12 @@ jobs:
     timeout-minutes: 15
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
+
       - name: Publish Daintree (Windows)
         uses: ./.github/actions/publish-daintree
         with:

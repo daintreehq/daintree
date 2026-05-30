@@ -1,19 +1,33 @@
 import { test, expect } from "@playwright/test";
-import { createServer, type Server } from "http";
+import { writeFileSync } from "fs";
+import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { getGridPanelCount } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
 let ctx: AppContext;
-let server: Server;
-let port: number;
 let fixtureCleanup: (() => void) | undefined;
 const PROJECT_NAME = "Promote To Portal Test";
 const COOKIE_NAME = "dt_promote_e2e";
 const COOKIE_VALUE = "carried-over";
+const DEV_PREVIEW_ADDRESS_BAR_RE = /^(?:https?:\/\/)?(?:localhost|dp-[a-z0-9-]+\.localhost):\d+$/;
+
+const DEV_SERVER_SCRIPT = `
+const http = require('http');
+const port = parseInt(process.env.PORT || '0', 10);
+
+const server = http.createServer((_req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/html' });
+  res.end('<html><head><title>Promote E2E</title></head><body><h1>Promote E2E</h1></body></html>');
+});
+
+server.listen(port, '127.0.0.1', () => {
+  console.log('http://localhost:' + server.address().port);
+});
+`;
 
 test.describe.serial("Core: Dev preview promote to portal", () => {
   test.beforeAll(async () => {
@@ -26,38 +40,26 @@ test.describe.serial("Core: Dev preview promote to portal", () => {
       "Windows CI: portal not supported with GPU disabled"
     );
 
-    // Set the cookie exactly once (on the dev-preview webview's first load).
-    // Later loads — including the promoted portal tab's own navigation — get NO
-    // Set-Cookie, so the cookie can only be present in the portal view if it
-    // genuinely shares the dev-preview session partition. A view opened on the
-    // default `persist:portal` session would see no cookie and fail the test.
-    let cookieSent = false;
-    server = createServer((_req, res) => {
-      const headers: Record<string, string> = { "Content-Type": "text/html" };
-      if (!cookieSent) {
-        cookieSent = true;
-        headers["Set-Cookie"] = `${COOKIE_NAME}=${COOKIE_VALUE}; Path=/`;
-      }
-      res.writeHead(200, headers);
-      res.end(
-        "<html><head><title>Promote E2E</title></head><body><h1>Promote E2E</h1></body></html>"
-      );
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
-    const addr = server.address();
-    port = typeof addr === "object" && addr ? addr.port : 0;
-
     const fixture = createFixtureRepo({ name: "promote-portal-test" });
     fixtureCleanup = fixture.cleanup;
+    writeFileSync(path.join(fixture.dir, "dev-server.cjs"), DEV_SERVER_SCRIPT);
+
     ctx = await launchApp();
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture.dir, PROJECT_NAME);
+
+    await ctx.window.evaluate(async () => {
+      const current = await window.electron.project.getCurrent();
+      if (!current?.id) return;
+      const settings = await window.electron.project.getSettings(current.id);
+      await window.electron.project.saveSettings(current.id, {
+        ...settings,
+        devServerCommand: "node dev-server.cjs",
+      });
+    });
   });
 
   test.afterAll(async () => {
     if (ctx?.app) await closeApp(ctx.app);
-    server?.close();
     fixtureCleanup?.();
   });
 
@@ -78,24 +80,48 @@ test.describe.serial("Core: Dev preview promote to portal", () => {
     await devBtn.click();
     await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
 
-    // 2. Navigate the preview webview to the local server (sets the cookie on the
-    //    dev-preview partition via the Set-Cookie response header).
+    // 2. Wait for the configured dev server to be running, then write a cookie
+    //    into the preview webview's partition. The server never sets this
+    //    cookie, so the portal can only see it if promotion preserves the
+    //    dev-preview session partition.
+    const consoleBar = window.locator('[aria-controls^="console-drawer-"]').locator("..").first();
+    const statusBadge = consoleBar.locator('[role="status"]');
+    await expect(statusBadge).toContainText("Running", { timeout: T_LONG });
+
     const addressBar = window.locator(SEL.browser.addressBar);
-    if (!(await addressBar.isVisible({ timeout: T_SHORT }).catch(() => false))) {
-      test.info().annotations.push({
-        type: "conditional-skip",
-        description: "Dev preview address bar not visible (panel not open)",
-      });
-      test.skip();
-      return;
-    }
-    await addressBar.click();
-    await addressBar.fill(`http://127.0.0.1:${port}/`);
-    await window.keyboard.press("Enter");
-    await expect(addressBar).toHaveValue(new RegExp(`127\\.0\\.0\\.1:${port}`), {
-      timeout: T_MEDIUM,
-    });
-    await window.waitForTimeout(T_SETTLE);
+    await expect(addressBar).toHaveValue(DEV_PREVIEW_ADDRESS_BAR_RE, { timeout: T_MEDIUM });
+    const displayUrl = (await addressBar.inputValue()).trim();
+    const portalUrlHost = new URL(displayUrl.includes("://") ? displayUrl : `http://${displayUrl}`)
+      .host;
+
+    const readPreviewCookieState = async (): Promise<{ cookie: string; href: string } | null> => {
+      try {
+        return await window.evaluate(
+          async ({ name, value }) => {
+            const wv = document.querySelector("webview") as Electron.WebviewTag | null;
+            if (!wv) return null;
+            try {
+              return await wv.executeJavaScript(`(() => {
+                document.cookie = ${JSON.stringify(`${name}=${value}; Path=/`)};
+                return { cookie: document.cookie, href: window.location.href };
+              })()`);
+            } catch {
+              return null;
+            }
+          },
+          { name: COOKIE_NAME, value: COOKIE_VALUE }
+        );
+      } catch {
+        return null;
+      }
+    };
+
+    await expect.poll(readPreviewCookieState, { timeout: T_LONG }).toEqual(
+      expect.objectContaining({
+        cookie: expect.stringContaining(`${COOKIE_NAME}=${COOKIE_VALUE}`),
+        href: expect.stringContaining(portalUrlHost),
+      })
+    );
 
     // 3. Promote to portal via the toolbar button (the real user path).
     const promoteBtn = window.locator(SEL.browser.promoteToPortal);
@@ -112,22 +138,22 @@ test.describe.serial("Core: Dev preview promote to portal", () => {
 
     // 5. The promoted WebContentsView must share the dev-preview session: its
     //    cookie jar carries the cookie set during the webview navigation. The
-    //    portal tab renders as a WebContentsView (type "browserView"); the
-    //    dev-preview guest is a "webview" and is excluded.
+    //    portal tab is a separate WebContents from the dev-preview guest, whose
+    //    type is "webview" and is excluded.
     await expect
       .poll(
         async () =>
           ctx.app.evaluate(
             async ({ webContents }, { name, urlPart }) => {
               for (const wc of webContents.getAllWebContents()) {
-                if (wc.getType() !== "browserView") continue;
+                if (wc.getType() === "webview") continue;
                 if (!wc.getURL().includes(urlPart)) continue;
                 const cookies = await wc.session.cookies.get({ name });
                 if (cookies.length > 0) return cookies[0]!.value;
               }
               return null;
             },
-            { name: COOKIE_NAME, urlPart: `127.0.0.1:${port}` }
+            { name: COOKIE_NAME, urlPart: portalUrlHost }
           ),
         { timeout: T_LONG }
       )

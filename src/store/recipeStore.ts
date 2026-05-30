@@ -207,11 +207,29 @@ function mergeRecipes(
 ): TerminalRecipe[] {
   // Project-local recipes that share a name with an in-repo recipe are kept but
   // marked as shadowed so the UI can surface them dimmed instead of hiding them.
+  // ProjectFileStore also carries a reconciled mirror of each in-repo recipe so
+  // runtime metadata can survive. Do not render those mirrors as project-local
+  // duplicates; use the mirror as the displayed in-repo recipe instead.
+  const inRepoIds = new Set(inRepoRecipes.map((r) => r.id));
   const inRepoNames = new Set(inRepoRecipes.map((r) => r.name));
-  const projectWithMarkers = projectRecipes.map((r) =>
+  const inRepoMirrors = new Map(
+    projectRecipes
+      .filter((r) => inRepoIds.has(r.id) && isInRepoRecipeId(r))
+      .map((r) => [r.id, r] as const)
+  );
+  const projectLocalRecipes = projectRecipes.filter(
+    (r) => !(inRepoIds.has(r.id) && isInRepoRecipeId(r))
+  );
+  const projectWithMarkers = projectLocalRecipes.map((r) =>
     inRepoNames.has(r.name) ? { ...r, shadowedBy: r.name } : r
   );
-  return [...globalRecipes, ...projectWithMarkers, ...inRepoRecipes];
+  const inRepoWithMirrors = inRepoRecipes.map((r) => {
+    const mirror = inRepoMirrors.get(r.id);
+    if (!mirror) return r;
+    const { shadowedBy: _shadowedBy, ...displayRecipe } = mirror;
+    return displayRecipe;
+  });
+  return [...globalRecipes, ...projectWithMarkers, ...inRepoWithMirrors];
 }
 
 const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({

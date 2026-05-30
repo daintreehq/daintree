@@ -10,9 +10,9 @@
  * var so it exercises the asar payload, asar.unpacked native modules, and
  * codesigning that real users see.
  *
- * Expected markers cover the four native modules: node-pty,
- * better-sqlite3, win-job-object (Windows only), and posix-pty-reaper
- * (macOS / Linux only).
+ * Expected markers cover the shipped native surfaces: node-pty,
+ * better-sqlite3, win-job-object (Windows only), and the posix-pty-reaper
+ * supervisor executable (macOS / Linux only).
  */
 
 import { spawn } from "child_process";
@@ -36,7 +36,7 @@ export function buildRequiredMarkers(platform) {
   if (platform === "win32") {
     markers.push("[SMOKE] CHECK: win-job-object native module");
   } else if (platform === "darwin" || platform === "linux") {
-    markers.push("[SMOKE] CHECK: posix-pty-reaper native module");
+    markers.push("[SMOKE] CHECK: posix-pty-reaper supervisor");
   }
   return markers;
 }
@@ -44,6 +44,25 @@ export function buildRequiredMarkers(platform) {
 export function parsePositiveInt(value, fallback) {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function buildPackagedSmokeEnv(
+  binaryPath,
+  baseEnv = process.env,
+  platform = process.platform
+) {
+  const env = {
+    ...baseEnv,
+    NODE_ENV: "production",
+  };
+  delete env.ELECTRON_RUN_AS_NODE;
+  delete env.ATOM_SHELL_INTERNAL_RUN_AS_NODE;
+
+  if (platform === "linux" && path.basename(binaryPath) === "AppRun" && !env.APPDIR) {
+    env.APPDIR = path.dirname(binaryPath);
+  }
+
+  return env;
 }
 
 function runPackagedSmokeOnce({ binaryPath, runIndex, runCount, timeoutMs, extraArgs }) {
@@ -64,15 +83,8 @@ function runPackagedSmokeOnce({ binaryPath, runIndex, runCount, timeoutMs, extra
 
         console.log(`[PACKAGED-SMOKE] Run ${runIndex}/${runCount}: launching ${binaryPath}`);
 
-        const env = {
-          ...process.env,
-          NODE_ENV: "production",
-        };
-        delete env.ELECTRON_RUN_AS_NODE;
-        delete env.ATOM_SHELL_INTERNAL_RUN_AS_NODE;
-
         const child = spawn(binaryPath, args, {
-          env,
+          env: buildPackagedSmokeEnv(binaryPath),
           stdio: ["ignore", "pipe", "pipe"],
         });
 

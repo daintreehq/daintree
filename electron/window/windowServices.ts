@@ -137,9 +137,9 @@ export async function setupWindowServices(
   // loadRenderer() fires before the workspace/PTY init block, so first
   // paint stops waiting on the PTY handshake. Two paths fall back to the
   // serial after-services-ready trigger: smoke tests (deterministic
-  // readiness checks) and the Windows E2E DAINTREE_E2E_DEFER_RENDERER_LOAD
-  // opt-in, which keeps the WebContentsView load behind the BrowserWindow
-  // sentinel for Playwright's CDP handshake.
+  // readiness checks) and the E2E DAINTREE_E2E_DEFER_RENDERER_LOAD opt-in,
+  // which keeps the WebContentsView load behind the BrowserWindow sentinel
+  // for Playwright's CDP handshake.
   const deferRendererLoadForE2E = shouldDeferRendererLoadForE2E({ env: process.env });
 
   let rendererLoadStarted = false;
@@ -322,8 +322,8 @@ export async function setupWindowServices(
   // On the default path the RENDERER_READY mark can fire before this point,
   // since the renderer is loading concurrently with workspace init.
   markPerformance(PERF_MARKS.SERVICE_INIT_COMPLETE);
-  // Serial fallback: smoke tests and the Windows E2E deferral path land
-  // here after workspace + PTY are ready. With the default path this is a
+  // Serial fallback: smoke tests and the E2E deferral path land here after
+  // workspace + PTY are ready. With the default path this is a
   // no-op (already started above).
   startRendererLoad("after-services-ready");
 

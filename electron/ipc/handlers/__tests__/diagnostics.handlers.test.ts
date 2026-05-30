@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import path from "node:path";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -301,17 +302,23 @@ describe("registerDiagnosticsHandlers", () => {
   });
 
   describe("save-bundle time window", () => {
-    const readPaths = () => readFileMock.mock.calls.map((c: unknown[]) => c[0] as string);
+    const logPath = (file: string) => path.normalize(path.join("/logs", file));
+    const readPaths = () =>
+      readFileMock.mock.calls.map((c: unknown[]) => path.normalize(c[0] as string));
 
     it("skips rotated logs whose mtime predates the window, keeps recent ones", async () => {
       existsSyncMock.mockImplementation(
         (p: string): boolean =>
-          p === "/logs/daintree.log" || p === "/logs/daintree.log.1" || p === "/logs/daintree.log.2"
+          path.normalize(p) === logPath("daintree.log") ||
+          path.normalize(p) === logPath("daintree.log.1") ||
+          path.normalize(p) === logPath("daintree.log.2")
       );
       // Window cutoff = 5000ms. .1 is older (skip), .2 is newer (keep).
       statMock.mockImplementation(
         (p: string): Promise<{ mtimeMs: number }> =>
-          Promise.resolve({ mtimeMs: p === "/logs/daintree.log.1" ? 4000 : 6000 })
+          Promise.resolve({
+            mtimeMs: path.normalize(p) === logPath("daintree.log.1") ? 4000 : 6000,
+          })
       );
       dialogMock.showSaveDialog.mockResolvedValueOnce({
         filePath: "/tmp/diagnostics.zip",
@@ -331,15 +338,17 @@ describe("registerDiagnosticsHandlers", () => {
       );
 
       const paths = readPaths();
-      expect(paths).toContain("/logs/daintree.log");
-      expect(paths).toContain("/logs/daintree.log.2");
-      expect(paths).not.toContain("/logs/daintree.log.1");
+      expect(paths).toContain(logPath("daintree.log"));
+      expect(paths).toContain(logPath("daintree.log.2"));
+      expect(paths).not.toContain(logPath("daintree.log.1"));
     });
 
     it("includes all rotated logs and never stats them when the window is full history", async () => {
       existsSyncMock.mockImplementation(
         (p: string): boolean =>
-          p === "/logs/daintree.log" || p === "/logs/daintree.log.1" || p === "/logs/daintree.log.2"
+          path.normalize(p) === logPath("daintree.log") ||
+          path.normalize(p) === logPath("daintree.log.1") ||
+          path.normalize(p) === logPath("daintree.log.2")
       );
       dialogMock.showSaveDialog.mockResolvedValueOnce({
         filePath: "/tmp/diagnostics.zip",
@@ -359,14 +368,16 @@ describe("registerDiagnosticsHandlers", () => {
       );
 
       const paths = readPaths();
-      expect(paths).toContain("/logs/daintree.log.1");
-      expect(paths).toContain("/logs/daintree.log.2");
+      expect(paths).toContain(logPath("daintree.log.1"));
+      expect(paths).toContain(logPath("daintree.log.2"));
       expect(statMock).not.toHaveBeenCalled();
     });
 
     it("includes a rotated log when its stat fails rather than dropping it", async () => {
       existsSyncMock.mockImplementation(
-        (p: string): boolean => p === "/logs/daintree.log" || p === "/logs/daintree.log.1"
+        (p: string): boolean =>
+          path.normalize(p) === logPath("daintree.log") ||
+          path.normalize(p) === logPath("daintree.log.1")
       );
       statMock.mockRejectedValue(new Error("stat failed"));
       dialogMock.showSaveDialog.mockResolvedValueOnce({
@@ -386,7 +397,7 @@ describe("registerDiagnosticsHandlers", () => {
         }
       );
 
-      expect(readPaths()).toContain("/logs/daintree.log.1");
+      expect(readPaths()).toContain(logPath("daintree.log.1"));
     });
   });
 

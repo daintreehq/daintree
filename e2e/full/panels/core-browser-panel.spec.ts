@@ -271,13 +271,14 @@ test.describe.serial("Core: Browser Panel", () => {
 
   // Find-in-page tests skipped: webview crashes in E2E after Console Capture cleanup.
   // The feature works in manual testing — investigate webview lifecycle in E2E context.
-  test.describe.serial("Find in Page", () => {
+  test.describe.skip("Find in Page", () => {
+    test.describe.configure({ mode: "serial" });
+
     test.beforeAll(() => {
       test.info().annotations.push({
         type: "quarantine",
         description: "2026-05-27 webview instability causes Electron crash in E2E sequence",
       });
-      test.skip(() => true, "webview instability causes Electron crash in E2E sequence");
     });
 
     test.afterAll(async () => {

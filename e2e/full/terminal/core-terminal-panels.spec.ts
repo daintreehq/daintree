@@ -46,6 +46,7 @@ test.describe.serial("Core: Terminal & Panels", () => {
     });
 
     test("worktree dashboard appears with at least one card", async () => {
+      ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
       const { window } = ctx;
 
       const worktreeCards = window.locator("[data-worktree-branch]");

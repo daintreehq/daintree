@@ -470,279 +470,283 @@ test.describe.serial("E2E: OAuth Loopback Flow in Dev Preview", () => {
   // migration fixes; needs a deeper investigation of the CDP interception
   // in `DevPreviewPane` / Keycloak mock integration. Skipping to keep the
   // rest of the full suite green on this Mac; tracked separately.
-  test.info().annotations.push({
-    type: "quarantine",
-    description:
-      "2026-05-27 Full test quarantined: dev-preview: OAuth redirect blocked → Sign in via Browser → authenticated",
-  });
+  test.skip(
+    "dev-preview: OAuth redirect blocked → Sign in via Browser → authenticated",
+    {
+      annotation: {
+        type: "quarantine",
+        description:
+          "2026-05-27 Full test quarantined: dev-preview: OAuth redirect blocked → Sign in via Browser → authenticated",
+      },
+    },
+    async () => {
+      // Use a getter so we always reference the latest page after view transitions
+      const w = () => ctx.window;
+      const worktreeCards = () => w().locator("[data-worktree-branch]");
 
-  test.skip("dev-preview: OAuth redirect blocked → Sign in via Browser → authenticated", async () => {
-    // Use a getter so we always reference the latest page after view transitions
-    const w = () => ctx.window;
-    const worktreeCards = () => w().locator("[data-worktree-branch]");
+      // Ensure we're on the project view (not Welcome page).
+      // Re-acquire the active window — ProjectViewManager may have created a new view.
+      const { getActiveAppWindow } = await import("../../helpers/launch");
+      for (let attempt = 0; attempt < 6; attempt++) {
+        ctx.window = await getActiveAppWindow(ctx.app);
+        if (
+          await worktreeCards()
+            .first()
+            .isVisible({ timeout: 3000 })
+            .catch(() => false)
+        ) {
+          break;
+        }
 
-    // Ensure we're on the project view (not Welcome page).
-    // Re-acquire the active window — ProjectViewManager may have created a new view.
-    const { getActiveAppWindow } = await import("../../helpers/launch");
-    for (let attempt = 0; attempt < 6; attempt++) {
-      ctx.window = await getActiveAppWindow(ctx.app);
-      if (
-        await worktreeCards()
-          .first()
-          .isVisible({ timeout: 3000 })
-          .catch(() => false)
-      ) {
-        break;
+        // If we're back on Welcome, explicitly reopen the fixture project instead of
+        // relying only on the recent-project shortcut state.
+        const openFolder = w().getByRole("button", { name: "Open folder" });
+        if (await openFolder.isVisible({ timeout: 1000 }).catch(() => false)) {
+          await openProject(ctx.app, w(), fixture);
+          await w().waitForTimeout(2000);
+          continue;
+        }
+
+        // Click recent project on Welcome page if visible
+        const recent = w().locator("button", { hasText: /OAuth E2E/i });
+        if (await recent.isVisible({ timeout: 1000 }).catch(() => false)) {
+          await recent.click();
+          await w().waitForTimeout(2000);
+        }
       }
 
-      // If we're back on Welcome, explicitly reopen the fixture project instead of
-      // relying only on the recent-project shortcut state.
-      const openFolder = w().getByRole("button", { name: "Open folder" });
-      if (await openFolder.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await openProject(ctx.app, w(), fixture);
-        await w().waitForTimeout(2000);
-        continue;
-      }
+      // Verify we're on the project view
+      await expect(worktreeCards().first()).toBeVisible({ timeout: T_LONG });
 
-      // Click recent project on Welcome page if visible
-      const recent = w().locator("button", { hasText: /OAuth E2E/i });
-      if (await recent.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await recent.click();
-        await w().waitForTimeout(2000);
-      }
-    }
+      // Open dev-preview via worktree context menu → Launch → Open Dev Preview
+      await worktreeCards().first().click({ button: "right" });
+      const launchTrigger = w().locator('[role="menuitem"]', { hasText: /^Launch$/ });
+      await expect(launchTrigger).toBeVisible({ timeout: T_SHORT });
+      await launchTrigger.hover();
+      const devPreviewItem = w().locator('[role="menuitem"]', { hasText: "Open Dev Preview" });
+      await expect(devPreviewItem).toBeVisible({ timeout: T_SHORT });
+      await devPreviewItem.click();
 
-    // Verify we're on the project view
-    await expect(worktreeCards().first()).toBeVisible({ timeout: T_LONG });
+      // Click "Use 'npm run dev'" to start the dev server
+      const useDevBtn = w().locator("button", { hasText: /Use.*npm run dev/i });
+      await expect(useDevBtn).toBeVisible({ timeout: T_LONG });
+      await useDevBtn.click();
 
-    // Open dev-preview via worktree context menu → Launch → Open Dev Preview
-    await worktreeCards().first().click({ button: "right" });
-    const launchTrigger = w().locator('[role="menuitem"]', { hasText: /^Launch$/ });
-    await expect(launchTrigger).toBeVisible({ timeout: T_SHORT });
-    await launchTrigger.hover();
-    const devPreviewItem = w().locator('[role="menuitem"]', { hasText: "Open Dev Preview" });
-    await expect(devPreviewItem).toBeVisible({ timeout: T_SHORT });
-    await devPreviewItem.click();
+      // Wait for the dev-preview to detect the URL and load the webview
+      const addressBar = w().locator(SEL.browser.addressBar);
+      await expect(addressBar).toHaveValue(new RegExp(`127\\.0\\.0\\.1:${appPort}`), {
+        timeout: T_LONG,
+      });
 
-    // Click "Use 'npm run dev'" to start the dev server
-    const useDevBtn = w().locator("button", { hasText: /Use.*npm run dev/i });
-    await expect(useDevBtn).toBeVisible({ timeout: T_LONG });
-    await useDevBtn.click();
+      // The app auto-redirects to auth.test (fake external Keycloak) after 300ms.
+      // Dev-preview blocks the non-localhost redirect → banner shows "Sign in via Browser"
+      const signInBtn = w().locator("button", { hasText: "Sign in via Browser" });
+      await expect(signInBtn).toBeVisible({ timeout: T_LONG });
 
-    // Wait for the dev-preview to detect the URL and load the webview
-    const addressBar = w().locator(SEL.browser.addressBar);
-    await expect(addressBar).toHaveValue(new RegExp(`127\\.0\\.0\\.1:${appPort}`), {
-      timeout: T_LONG,
-    });
+      // Verify the blocked URL hostname is shown in the banner
+      const blockedBanner = w().locator("text=auth.test");
+      await expect(blockedBanner).toBeVisible({ timeout: T_SHORT });
 
-    // The app auto-redirects to auth.test (fake external Keycloak) after 300ms.
-    // Dev-preview blocks the non-localhost redirect → banner shows "Sign in via Browser"
-    const signInBtn = w().locator("button", { hasText: "Sign in via Browser" });
-    await expect(signInBtn).toBeVisible({ timeout: T_LONG });
+      // Before clicking "Sign in via Browser", set up two intercepts so the full
+      // OAuth flow can complete without DNS resolution for "auth.test":
+      //
+      // 1. Mock shell.openExternal in the main process to simulate the system browser.
+      //    Rewrites auth.test → 127.0.0.1 and makes the HTTP request directly.
+      //
+      // 2. Set up session.webRequest.onBeforeRequest on ALL sessions to redirect
+      //    auth.test → 127.0.0.1 so the webview's token exchange fetch resolves.
 
-    // Verify the blocked URL hostname is shown in the banner
-    const blockedBanner = w().locator("text=auth.test");
-    await expect(blockedBanner).toBeVisible({ timeout: T_SHORT });
-
-    // Before clicking "Sign in via Browser", set up two intercepts so the full
-    // OAuth flow can complete without DNS resolution for "auth.test":
-    //
-    // 1. Mock shell.openExternal in the main process to simulate the system browser.
-    //    Rewrites auth.test → 127.0.0.1 and makes the HTTP request directly.
-    //
-    // 2. Set up session.webRequest.onBeforeRequest on ALL sessions to redirect
-    //    auth.test → 127.0.0.1 so the webview's token exchange fetch resolves.
-
-    await ctx.app.evaluate(({ shell, app, session: sessionMod, net }, _kcPort) => {
-      // Mock shell.openExternal — simulate system browser using Electron's net module.
-      // Rewrites auth.test → 127.0.0.1 so the fake Keycloak is reachable.
-      shell.openExternal = async (url: string): Promise<void> => {
-        const resolved = url.replace(/auth\.test/g, "127.0.0.1");
-        return new Promise<void>((resolve) => {
-          const request = net.request(resolved);
-          request.on("response", (response) => {
-            if (
-              (response.statusCode === 301 || response.statusCode === 302) &&
-              response.headers.location
-            ) {
-              const redirectUrl = Array.isArray(response.headers.location)
-                ? response.headers.location[0]
-                : response.headers.location;
-              const redirect = net.request(redirectUrl);
-              redirect.on("response", () => resolve());
-              redirect.on("error", () => resolve());
-              redirect.end();
-            } else {
-              resolve();
-            }
+      await ctx.app.evaluate(({ shell, app, session: sessionMod, net }, _kcPort) => {
+        // Mock shell.openExternal — simulate system browser using Electron's net module.
+        // Rewrites auth.test → 127.0.0.1 so the fake Keycloak is reachable.
+        shell.openExternal = async (url: string): Promise<void> => {
+          const resolved = url.replace(/auth\.test/g, "127.0.0.1");
+          return new Promise<void>((resolve) => {
+            const request = net.request(resolved);
+            request.on("response", (response) => {
+              if (
+                (response.statusCode === 301 || response.statusCode === 302) &&
+                response.headers.location
+              ) {
+                const redirectUrl = Array.isArray(response.headers.location)
+                  ? response.headers.location[0]
+                  : response.headers.location;
+                const redirect = net.request(redirectUrl);
+                redirect.on("response", () => resolve());
+                redirect.on("error", () => resolve());
+                redirect.end();
+              } else {
+                resolve();
+              }
+            });
+            request.on("error", () => resolve());
+            request.end();
           });
-          request.on("error", () => resolve());
-          request.end();
-        });
-      };
+        };
 
-      // Redirect auth.test → 127.0.0.1 for webview fetches (token exchange)
-      const handler = (
-        details: { url: string },
-        callback: (response: { redirectURL?: string; cancel?: boolean }) => void
-      ) => {
-        if (details.url.includes("auth.test")) {
-          callback({ redirectURL: details.url.replace(/auth\.test/g, "127.0.0.1") });
-        } else {
-          callback({});
-        }
-      };
+        // Redirect auth.test → 127.0.0.1 for webview fetches (token exchange)
+        const handler = (
+          details: { url: string },
+          callback: (response: { redirectURL?: string; cancel?: boolean }) => void
+        ) => {
+          if (details.url.includes("auth.test")) {
+            callback({ redirectURL: details.url.replace(/auth\.test/g, "127.0.0.1") });
+          } else {
+            callback({});
+          }
+        };
 
-      // Apply to all existing and future sessions
-      const applyHandler = (ses: Electron.Session) => {
-        try {
-          ses.webRequest.onBeforeRequest({ urls: ["*://auth.test/*"] }, handler);
-        } catch {
-          // Session may not support webRequest
-        }
-      };
-
-      // Apply to default session and all partitions
-      applyHandler(sessionMod.defaultSession);
-      app.on("session-created", applyHandler);
-    }, keycloakPort);
-
-    // Now click "Sign in via Browser" — triggers the full loopback + CDP flow:
-    // 1. Daintree starts loopback server, rewrites redirect_uri, calls shell.openExternal
-    // 2. Our mock resolves auth.test → 127.0.0.1, makes HTTP request to fake Keycloak
-    // 3. Fake Keycloak auto-approves, redirects to loopback with code
-    // 4. Daintree captures code, attaches CDP Fetch to webview
-    // 5. Daintree navigates webview to /auth/callback?code=...&state=...
-    // 6. Webview JS calls fetch() to auth.test/token → webRequest redirects to 127.0.0.1
-    // 7. CDP intercepts the POST, rewrites redirect_uri in body
-    // 8. Fake Keycloak validates PKCE + redirect_uri → issues tokens
-    // 9. App stores tokens in localStorage, shows "authenticated"
-    await signInBtn.click();
-
-    // Wait for the webview to navigate to /auth/callback
-    await expect(addressBar).toHaveValue(/\/auth\/callback/, { timeout: 30_000 });
-
-    const webview = w().locator("webview");
-    await expect(webview).toBeAttached({ timeout: T_LONG });
-
-    // Prove the full loopback flow completed by asserting the app's callback page
-    // finished the token exchange and stored tokens in the dev-preview webview.
-    await expect
-      .poll(
-        async () => {
+        // Apply to all existing and future sessions
+        const applyHandler = (ses: Electron.Session) => {
           try {
-            return await w().evaluate(async () => {
-              const wv = document.querySelector("webview") as Electron.WebviewTag | null;
-              if (!wv) return null;
-              try {
-                return await wv.executeJavaScript(
-                  `(() => ({
+            ses.webRequest.onBeforeRequest({ urls: ["*://auth.test/*"] }, handler);
+          } catch {
+            // Session may not support webRequest
+          }
+        };
+
+        // Apply to default session and all partitions
+        applyHandler(sessionMod.defaultSession);
+        app.on("session-created", applyHandler);
+      }, keycloakPort);
+
+      // Now click "Sign in via Browser" — triggers the full loopback + CDP flow:
+      // 1. Daintree starts loopback server, rewrites redirect_uri, calls shell.openExternal
+      // 2. Our mock resolves auth.test → 127.0.0.1, makes HTTP request to fake Keycloak
+      // 3. Fake Keycloak auto-approves, redirects to loopback with code
+      // 4. Daintree captures code, attaches CDP Fetch to webview
+      // 5. Daintree navigates webview to /auth/callback?code=...&state=...
+      // 6. Webview JS calls fetch() to auth.test/token → webRequest redirects to 127.0.0.1
+      // 7. CDP intercepts the POST, rewrites redirect_uri in body
+      // 8. Fake Keycloak validates PKCE + redirect_uri → issues tokens
+      // 9. App stores tokens in localStorage, shows "authenticated"
+      await signInBtn.click();
+
+      // Wait for the webview to navigate to /auth/callback
+      await expect(addressBar).toHaveValue(/\/auth\/callback/, { timeout: 30_000 });
+
+      const webview = w().locator("webview");
+      await expect(webview).toBeAttached({ timeout: T_LONG });
+
+      // Prove the full loopback flow completed by asserting the app's callback page
+      // finished the token exchange and stored tokens in the dev-preview webview.
+      await expect
+        .poll(
+          async () => {
+            try {
+              return await w().evaluate(async () => {
+                const wv = document.querySelector("webview") as Electron.WebviewTag | null;
+                if (!wv) return null;
+                try {
+                  return await wv.executeJavaScript(
+                    `(() => ({
                     status: document.getElementById("status")?.textContent ?? null,
                     error: document.getElementById("error")?.textContent ?? null,
                     accessToken: localStorage.getItem("kc_access_token"),
                     refreshToken: localStorage.getItem("kc_refresh_token"),
                     idToken: localStorage.getItem("kc_id_token"),
                   }))()`
-                );
-              } catch {
-                return null;
-              }
-            });
-          } catch {
-            return null;
-          }
-        },
-        { timeout: 30_000 }
-      )
-      .toMatchObject({
-        status: "authenticated",
+                  );
+                } catch {
+                  return null;
+                }
+              });
+            } catch {
+              return null;
+            }
+          },
+          { timeout: 30_000 }
+        )
+        .toMatchObject({
+          status: "authenticated",
+        });
+
+      // -----------------------------------------------------------------------
+      // Layer 1: Protocol-level proof from the fake Keycloak event log
+      // -----------------------------------------------------------------------
+
+      // Exactly one auth request was issued
+      expect(keycloakEvents.authRequests).toHaveLength(1);
+
+      // The auth request's redirect_uri is the loopback pattern
+      // (proves OAuthLoopbackService rewrote the redirect_uri before opening the browser)
+      const authReq = keycloakEvents.authRequests[0];
+      expect(authReq.redirectUri).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/oauth\/callback$/);
+      expect(authReq.clientId).toBe("test-frontend");
+      expect(authReq.codeChallenge).toBeTruthy();
+      expect(authReq.state).toBeTruthy();
+
+      // Exactly one token exchange was attempted
+      expect(keycloakEvents.tokenRequests).toHaveLength(1);
+
+      // The token exchange used the SAME redirect_uri as the auth request
+      // (proves CDP body rewrite worked — the app sent window.location.origin/auth/callback,
+      //  but CDP intercepted and rewrote it to the loopback URI)
+      const tokenReq = keycloakEvents.tokenRequests[0];
+      expect(tokenReq.redirectUri).toBe(authReq.redirectUri);
+      expect(tokenReq.code).toBe(authReq.codeIssued);
+      expect(tokenReq.codeVerifier).toBeTruthy();
+      expect(tokenReq.clientId).toBe("test-frontend");
+
+      // The fake Keycloak accepted the exchange: redirect_uri matched AND PKCE passed
+      expect(keycloakEvents.validations).toHaveLength(1);
+      expect(keycloakEvents.validations[0]).toEqual({
+        codeValid: true,
+        redirectUriValid: true,
+        pkceValid: true,
+        outcome: "success",
       });
 
-    // -----------------------------------------------------------------------
-    // Layer 1: Protocol-level proof from the fake Keycloak event log
-    // -----------------------------------------------------------------------
+      // -----------------------------------------------------------------------
+      // Layer 2: App-level diagnostic state from webview's __oauthDebug
+      // -----------------------------------------------------------------------
 
-    // Exactly one auth request was issued
-    expect(keycloakEvents.authRequests).toHaveLength(1);
+      const debugState = await w().evaluate(async () => {
+        const wv = document.querySelector("webview") as Electron.WebviewTag | null;
+        if (!wv) return null;
+        try {
+          return await wv.executeJavaScript("window.__oauthDebug");
+        } catch {
+          return null;
+        }
+      });
 
-    // The auth request's redirect_uri is the loopback pattern
-    // (proves OAuthLoopbackService rewrote the redirect_uri before opening the browser)
-    const authReq = keycloakEvents.authRequests[0];
-    expect(authReq.redirectUri).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/oauth\/callback$/);
-    expect(authReq.clientId).toBe("test-frontend");
-    expect(authReq.codeChallenge).toBeTruthy();
-    expect(authReq.state).toBeTruthy();
+      // sessionStorage was restored before the callback page ran the exchange
+      expect(debugState).toMatchObject({
+        hadVerifierBeforeExchange: true,
+        hadState: true,
+        storedStateMatched: true,
+        tokenExchangeStarted: true,
+        tokenExchangeSucceeded: true,
+        tokenExchangeError: null,
+        finalStatus: "authenticated",
+      });
 
-    // Exactly one token exchange was attempted
-    expect(keycloakEvents.tokenRequests).toHaveLength(1);
+      // -----------------------------------------------------------------------
+      // Layer 3: UI-level proof — tokens stored in webview localStorage
+      // -----------------------------------------------------------------------
 
-    // The token exchange used the SAME redirect_uri as the auth request
-    // (proves CDP body rewrite worked — the app sent window.location.origin/auth/callback,
-    //  but CDP intercepted and rewrote it to the loopback URI)
-    const tokenReq = keycloakEvents.tokenRequests[0];
-    expect(tokenReq.redirectUri).toBe(authReq.redirectUri);
-    expect(tokenReq.code).toBe(authReq.codeIssued);
-    expect(tokenReq.codeVerifier).toBeTruthy();
-    expect(tokenReq.clientId).toBe("test-frontend");
-
-    // The fake Keycloak accepted the exchange: redirect_uri matched AND PKCE passed
-    expect(keycloakEvents.validations).toHaveLength(1);
-    expect(keycloakEvents.validations[0]).toEqual({
-      codeValid: true,
-      redirectUriValid: true,
-      pkceValid: true,
-      outcome: "success",
-    });
-
-    // -----------------------------------------------------------------------
-    // Layer 2: App-level diagnostic state from webview's __oauthDebug
-    // -----------------------------------------------------------------------
-
-    const debugState = await w().evaluate(async () => {
-      const wv = document.querySelector("webview") as Electron.WebviewTag | null;
-      if (!wv) return null;
-      try {
-        return await wv.executeJavaScript("window.__oauthDebug");
-      } catch {
-        return null;
-      }
-    });
-
-    // sessionStorage was restored before the callback page ran the exchange
-    expect(debugState).toMatchObject({
-      hadVerifierBeforeExchange: true,
-      hadState: true,
-      storedStateMatched: true,
-      tokenExchangeStarted: true,
-      tokenExchangeSucceeded: true,
-      tokenExchangeError: null,
-      finalStatus: "authenticated",
-    });
-
-    // -----------------------------------------------------------------------
-    // Layer 3: UI-level proof — tokens stored in webview localStorage
-    // -----------------------------------------------------------------------
-
-    const authState = await w().evaluate(async () => {
-      const wv = document.querySelector("webview") as Electron.WebviewTag | null;
-      if (!wv) return null;
-      return wv.executeJavaScript(
-        `(() => ({
+      const authState = await w().evaluate(async () => {
+        const wv = document.querySelector("webview") as Electron.WebviewTag | null;
+        if (!wv) return null;
+        return wv.executeJavaScript(
+          `(() => ({
           status: document.getElementById("status")?.textContent ?? null,
           error: document.getElementById("error")?.textContent ?? null,
           hasAccessToken: Boolean(localStorage.getItem("kc_access_token")),
           hasRefreshToken: Boolean(localStorage.getItem("kc_refresh_token")),
           hasIdToken: Boolean(localStorage.getItem("kc_id_token")),
         }))()`
-      );
-    });
+        );
+      });
 
-    expect(authState).toEqual({
-      status: "authenticated",
-      error: "",
-      hasAccessToken: true,
-      hasRefreshToken: true,
-      hasIdToken: true,
-    });
-  });
+      expect(authState).toEqual({
+        status: "authenticated",
+        error: "",
+        hasAccessToken: true,
+        hasRefreshToken: true,
+        hasIdToken: true,
+      });
+    }
+  );
 });

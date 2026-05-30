@@ -38,6 +38,7 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
     });
 
     test("worktree dashboard appears", async () => {
+      ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
       const { window } = ctx;
 
       const worktreeCards = window.locator("[data-worktree-branch]");

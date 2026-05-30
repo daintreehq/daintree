@@ -1294,6 +1294,42 @@ describe("recipeStore", () => {
       expect(state.recipes[0]?.id).toBe("inrepo-test");
     });
 
+    it("loadRecipes de-duplicates ProjectFileStore mirrors for in-repo recipes", async () => {
+      const inRepoRecipe = {
+        id: "recipe-opaque-abc",
+        name: "Team Recipe",
+        scope: "inrepo" as const,
+        terminals: [{ type: "terminal" as const, title: "Shell" }],
+        createdAt: 500,
+      };
+      const projectMirror = {
+        ...inRepoRecipe,
+        projectId: "project-1",
+        lastUsedAt: 900,
+        usageHistory: [800, 900],
+        terminals: [{ type: "terminal" as const, title: "Shell", env: { TOKEN: "" } }],
+      };
+      globalGetRecipesMock.mockResolvedValueOnce([]);
+      getRecipesMock.mockResolvedValueOnce({ recipes: [projectMirror], collisions: [] });
+      getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
+
+      await useRecipeStore.getState().loadRecipes("project-1");
+
+      const state = useRecipeStore.getState();
+      expect(state.projectRecipes).toHaveLength(1);
+      expect(state.inRepoRecipes).toHaveLength(1);
+      expect(state.recipes).toHaveLength(1);
+      expect(state.recipes[0]).toMatchObject({
+        id: "recipe-opaque-abc",
+        scope: "inrepo",
+        projectId: "project-1",
+        lastUsedAt: 900,
+        usageHistory: [800, 900],
+      });
+      expect(state.recipes[0]?.shadowedBy).toBeUndefined();
+      expect(state.recipes[0]?.terminals[0]?.env).toEqual({ TOKEN: "" });
+    });
+
     it("createRecipe assigns an opaque UUID id (not name-derived) and inrepo scope", async () => {
       await useRecipeStore
         .getState()

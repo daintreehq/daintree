@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- window.electron is untyped in Playwright evaluate() */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { clearAllFaults } from "../../helpers/ipcFaults";
 import { SEL } from "../../helpers/selectors";
@@ -102,6 +102,20 @@ async function clearErrorsAndCloseDock(window: Page) {
   }
   // Brief settle for React state updates
   await window.waitForTimeout(200);
+}
+
+async function openRecoveryMenu(window: Page, banner: Locator): Promise<Locator> {
+  const trigger = banner.locator('[aria-label="More recovery options"]');
+  await expect(trigger).toBeVisible();
+  await trigger.focus();
+  await window.keyboard.press("Enter");
+
+  const menu = window.locator("[data-radix-popper-content-wrapper]").last();
+  if (!(await menu.isVisible({ timeout: 1000 }).catch(() => false))) {
+    await trigger.click({ force: true });
+  }
+  await expect(menu).toBeVisible({ timeout: 5000 });
+  return menu;
 }
 
 /* ---------- tests ---------- */
@@ -310,7 +324,8 @@ test.describe.serial("Core: IPC Error Propagation", () => {
 
     // Retry and Trash buttons should be visible
     await expect(banner.locator('[aria-label="Retry starting terminal"]')).toBeVisible();
-    await expect(banner.locator('[aria-label="Move to trash"]')).toBeVisible();
+    const recoveryMenu = await openRecoveryMenu(ctx.window, banner);
+    await expect(recoveryMenu.locator('button[aria-label="Move to trash"]')).toBeVisible();
   });
 
   test("ENOTDIR spawn error shows Change directory action", async () => {
@@ -336,8 +351,11 @@ test.describe.serial("Core: IPC Error Propagation", () => {
     // "Change directory" button should be visible
     await expect(banner.locator('[aria-label="Update working directory"]')).toBeVisible();
 
-    // Retry and Trash should also be visible
-    await expect(banner.locator('[aria-label="Retry starting terminal"]')).toBeVisible();
-    await expect(banner.locator('[aria-label="Move to trash"]')).toBeVisible();
+    // Retry is demoted into overflow when Change directory is the primary action.
+    const recoveryMenu = await openRecoveryMenu(ctx.window, banner);
+    await expect(
+      recoveryMenu.locator('button[aria-label="Retry starting terminal"]')
+    ).toBeVisible();
+    await expect(recoveryMenu.locator('button[aria-label="Move to trash"]')).toBeVisible();
   });
 });
