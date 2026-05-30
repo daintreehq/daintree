@@ -31,7 +31,6 @@ import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
 import { getRestartBannerVariant } from "./restartStatus";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
-import { TerminalPaneSkeleton } from "./TerminalPaneSkeleton";
 import { ReconnectErrorBanner } from "./ReconnectErrorBanner";
 import { ScrollbackRestoreErrorBanner } from "./ScrollbackRestoreErrorBanner";
 import { useShouldSuppressLocalError } from "@/components/Recovery/useShouldSuppressLocalError";
@@ -189,8 +188,24 @@ export function BannerSlot({ visible, children }: BannerSlotProps) {
   );
 }
 
-function TerminalStartupPlaceholder({ agentId: _agentId }: { agentId?: string }) {
-  return <TerminalPaneSkeleton />;
+function TerminalStartupPlaceholder({ agentId }: { agentId?: string }) {
+  const agentName = agentId ? getAgentConfig(agentId)?.name : undefined;
+  const label = agentName ? `Starting ${agentName}…` : "Starting terminal…";
+
+  return (
+    <div
+      className="flex flex-1 min-h-0 w-full items-center justify-center bg-daintree-bg px-4"
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+    >
+      <span className="sr-only">{label}</span>
+      <div className="flex max-w-[28ch] flex-col items-center gap-3 text-center" aria-hidden="true">
+        <Spinner size="xl" className="text-daintree-text/45" />
+        <p className="text-sm text-daintree-text/60 break-words">{label}</p>
+      </div>
+    </div>
+  );
 }
 
 export interface ActivityState {
