@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useState, useCallback, useEffect, useRef, Suspense, lazy, type ReactNode } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { cn } from "@/lib/utils";
 import { Toolbar } from "./Toolbar";
@@ -38,6 +38,16 @@ import { useLayoutState, useOverlayOpen } from "@/hooks";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { logError } from "@/utils/logger";
+
+function preloadGlobalBannerCoordinator() {
+  return import("../Recovery/GlobalBannerCoordinator");
+}
+const LazyGlobalBannerCoordinator = lazy(() =>
+  preloadGlobalBannerCoordinator().then((m) => ({ default: m.GlobalBannerCoordinator }))
+);
+// Fetch eagerly: `safeMode` is set synchronously during hydration, so the
+// first post-hydration render can suspend before the idle preload fires.
+void preloadGlobalBannerCoordinator();
 
 interface AppLayoutProps {
   children?: ReactNode;
@@ -454,6 +464,9 @@ export function AppLayout({
       }}
     >
       <PortalVisibilityController />
+      <Suspense fallback={null}>
+        <LazyGlobalBannerCoordinator />
+      </Suspense>
       <div {...(isThemeBrowserOpen ? { inert: true } : {})}>
         <Toolbar
           onLaunchAgent={handleLaunchAgent}

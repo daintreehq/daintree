@@ -300,16 +300,6 @@ const LazyCrashRecoveryDialog = lazy(() =>
   preloadCrashRecoveryDialog().then((m) => ({ default: m.CrashRecoveryDialog }))
 );
 
-function preloadGlobalBannerCoordinator() {
-  return import("./components/Recovery/GlobalBannerCoordinator");
-}
-const LazyGlobalBannerCoordinator = lazy(() =>
-  preloadGlobalBannerCoordinator().then((m) => ({ default: m.GlobalBannerCoordinator }))
-);
-// Fetch eagerly: `safeMode` is set synchronously during hydration, so the
-// first post-hydration render can suspend before the idle preload fires.
-void preloadGlobalBannerCoordinator();
-
 import { Toaster } from "./components/ui/toaster";
 import { ShortcutHint } from "./components/ui/ShortcutHint";
 import { ReEntrySummary } from "./components/ui/ReEntrySummary";
@@ -558,7 +548,6 @@ function AppInner() {
       void preloadSendToAgentPalette();
       void preloadQuickCreatePalette();
       void preloadLogLevelPalette();
-      void preloadGlobalBannerCoordinator();
       import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
       // Warm the FileViewerModal/DiffViewer chunk split out of the eager
@@ -757,9 +746,6 @@ function AppInner() {
             disableHoverableContent
           >
             <E2EFaultInjector />
-            <Suspense fallback={null}>
-              <LazyGlobalBannerCoordinator />
-            </Suspense>
             <DndProvider>
               <VoiceRecordingAnnouncer />
               <AccessibilityAnnouncer />
