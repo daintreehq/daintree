@@ -345,6 +345,7 @@ describe("ResourceProfileService", () => {
       pollIntervalBackground: RESOURCE_PROFILE_CONFIGS.efficiency.pollIntervalBackground,
       fetchIntervalActiveMs: RESOURCE_PROFILE_CONFIGS.efficiency.fetchIntervalActiveMs,
       fetchIntervalBackgroundMs: RESOURCE_PROFILE_CONFIGS.efficiency.fetchIntervalBackgroundMs,
+      backgroundGitWatcherCap: RESOURCE_PROFILE_CONFIGS.efficiency.backgroundGitWatcherCap,
     });
     expect(hib.setMemoryPressureThresholdMs).toHaveBeenCalledWith(
       RESOURCE_PROFILE_CONFIGS.efficiency.memoryPressureInactiveMs

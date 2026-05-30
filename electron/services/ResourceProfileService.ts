@@ -697,6 +697,7 @@ export class ResourceProfileService {
           pollIntervalBackground: config.pollIntervalBackground,
           fetchIntervalActiveMs: config.fetchIntervalActiveMs,
           fetchIntervalBackgroundMs: config.fetchIntervalBackgroundMs,
+          backgroundGitWatcherCap: config.backgroundGitWatcherCap,
         });
       } catch {
         // non-critical
