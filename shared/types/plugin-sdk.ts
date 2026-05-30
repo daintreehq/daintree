@@ -7,13 +7,9 @@
  * (or from `@daintreehq/plugin-sdk` once the package is published in F31).
  *
  * Host-internal types (LoadedPluginInfo, PluginActionDescriptor,
- * BUILT_IN_PLUGIN_PERMISSIONS) live in `./plugin.js` and are intentionally NOT
+ * BUILT_IN_PLUGIN_CAPABILITIES) live in `./plugin.js` and are intentionally NOT
  * re-exported here. If you add a new forge.js import to `./plugin.js`, you must
  * classify it here first — see docs/plugins/architecture.md#sdk-surface.
- *
- * Note: `permissions` is expected to be renamed to `capabilities` in #9268.
- * Plugin authors should treat the current `permissions` field name as subject
- * to change in a future SDK release.
  *
  * Entry points:
  *   - `@daintreehq/plugin-sdk`        — this module
@@ -33,6 +29,12 @@ export type {
   PluginCapability,
   BuiltInPluginCapability,
   PluginActionContribution,
+  KeybindingContribution,
+  ContextMenuContribution,
+  ContextMenuLocation,
+  PluginManifestScopes,
+  PluginNetworkScope,
+  PluginFsScope,
 } from "./plugin.js";
 
 // ── Manifest root ───────────────────────────────────────────────────
@@ -41,15 +43,31 @@ export type { PluginManifest } from "./plugin.js";
 
 // ── Activation contract ─────────────────────────────────────────────
 
-export type { PluginActivate, PluginHostApi, ActionHandler } from "./plugin.js";
+export type {
+  PluginActivate,
+  PluginHostApi,
+  ActionHandler,
+  PluginToastOptions,
+  PluginLogger,
+} from "./plugin.js";
 
 // ── Settings (host.settings) ────────────────────────────────────────
 
-export type { SettingsApi, PluginSettingsScope, SettingDefinition } from "./plugin.js";
+export type {
+  SettingsApi,
+  PluginSettingsScope,
+  SettingDefinition,
+  SettingFieldType,
+} from "./plugin.js";
 
 // ── IPC (registerHandler, broadcastToRenderer) — ships in v1 ────────
 
-export type { PluginIpcContext, PluginIpcHandler } from "./plugin.js";
+export type {
+  PluginIpcContext,
+  PluginIpcHandler,
+  PluginChannelSchema,
+  PluginTypedIpcHandler,
+} from "./plugin.js";
 
 // ── Worktree observability ──────────────────────────────────────────
 

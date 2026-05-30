@@ -1,8 +1,9 @@
 import path from "node:path";
+import type { PluginInstallStatus } from "../../../../shared/types/plugin.js";
 import { sendCliRequest } from "../ipc/client.js";
 
 interface InstallResponse {
-  status: string;
+  status: PluginInstallStatus;
   pluginId?: string;
   errors?: Array<{ message: string }>;
 }
@@ -30,6 +31,14 @@ export async function runInstall(rawTarget: string): Promise<void> {
 
   if (result.status === "cancelled") {
     throw new Error("Install was cancelled by Daintree");
+  }
+
+  if (result.status === "invalid-url") {
+    throw new Error("That URL isn't a valid plugin source");
+  }
+
+  if (result.status === "not-implemented") {
+    throw new Error("This install path isn't available in your Daintree build yet");
   }
 
   const detail =

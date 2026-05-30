@@ -34,35 +34,35 @@ Templates:
 - **`mcp`** — skeleton MCP server plus manifest wiring
 - **`full`** — command + view + MCP example (largest, for experimenting)
 
-### `daintree-plugin dev`
+### The edit loop (today)
 
-Starts the hot-reload dev loop.
+There's no hot reload yet. The loop that works now is manual:
 
 ```bash
 cd my-plugin
-npx daintree-plugin dev
+# edit src/...
+npx daintree-plugin package
+npx daintree-plugin install ./my-plugin-0.1.0.dntr
 ```
 
-What happens:
+Each `install` replaces the previously installed copy. Daintree unloads the old version — cleaning up all registered handlers, panels, and MCP subprocesses — before loading the new one, so you don't accumulate stale registrations between iterations.
 
-1. Symlinks the plugin directory into `~/.daintree/plugins/{pluginId}` so Daintree can discover it.
-2. Writes a marker file to the plugin directory so Daintree knows it's a dev plugin (different from a sideloaded prod plugin).
-3. Starts Vite in watch mode with the plugin-author Vite config.
-4. Opens a local WebSocket server.
-5. Waits for a running Daintree instance to connect.
+**State preservation:** reinstalling does not preserve plugin state. If you need persistence across iterations, use `host.settings` or a local file; don't stash it in module-scope variables.
 
-When Daintree starts (or is already running) and has a matching dev marker, it connects to the WebSocket. On every successful Vite rebuild:
+**Error surfacing:** if the plugin throws during activate or render, Daintree shows an inline error boundary with the stack trace. The rest of Daintree continues to work.
 
-1. The CLI sends a `reload` message with the new bundle hash.
-2. Daintree calls `unloadPlugin({pluginId})` — cleaning up all registered handlers, panels, MCP subprocesses, etc.
-3. Daintree re-imports the plugin entry with a cache-busting query parameter.
-4. Daintree calls `activate` again.
+### `daintree-plugin dev` (planned, F32b)
 
-**State preservation:** plugins don't preserve state across reloads. This is intentional — state reuse is the main source of "plugin works on first load but not on reload" bugs in other IDEs. If you need persistent state, use `host.settings` or a local file; don't stash it in module-scope variables.
+> Not available yet. Invoking `daintree-plugin dev` currently exits with an error. The hot-reload loop described here is planned for a later release (F32b); until then use the manual edit → package → install loop above.
 
-**Error surfacing:** if the plugin throws during activate or render, Daintree shows an inline error boundary with the stack trace and a Reload button. The rest of Daintree continues to work.
+Once shipped, `dev` will start a hot-reload loop:
 
-**Dev vs prod detection:** dev plugins are visually marked in Daintree (a "DEV" badge on the plugin entry in Preferences). Users can tell at a glance which of their installed plugins are pinned to a local dev folder.
+1. Symlink the plugin directory into `~/.daintree/plugins/{pluginId}` so Daintree can discover it.
+2. Write a marker file so Daintree knows it's a dev plugin (different from a sideloaded prod plugin).
+3. Start Vite in watch mode with the plugin-author Vite config.
+4. Open a local WebSocket server and wait for a running Daintree instance to connect.
+
+On every successful Vite rebuild Daintree will call `unloadPlugin({pluginId})`, re-import the plugin entry with a cache-busting query parameter, and call `activate` again. Dev plugins will carry a "DEV" badge on the plugin entry in Preferences so you can tell at a glance which installed plugins are pinned to a local dev folder.
 
 ### `daintree-plugin validate`
 
@@ -76,7 +76,7 @@ Example output:
 
 ```
 ✓ plugin.json is valid
-⚠  engines.daintree omitted — consider adding ^0.8.0
+⚠  engines.daintree omitted — consider pinning a range, e.g. ^0.11.0
 ⚠  commands[0].keywords is empty — helps discoverability to add 2–3 terms
 ```
 
@@ -137,7 +137,7 @@ Plugin code's own `console.log`s go to the main-process terminal for code runnin
 Check:
 
 - `plugin.json` is at the plugin directory root (not inside a subfolder)
-- Command `name` fields are unique within the plugin
+- Command `id` fields are unique within the plugin
 - No typos in `contributes.commands` (the `s` is easy to drop)
 - Dev symlink in `~/.daintree/plugins/` points to the current working directory
 
@@ -145,8 +145,8 @@ Check:
 
 Check:
 
-- Handler file exists at `src/{name}.{ts,tsx}` (filesystem convention) OR
-- `activate()` called `host.registerAction({id: "{name}"}, handler)` (imperative)
+- Handler file exists at `src/{id}.{ts,tsx,js,mjs}` (filesystem convention) OR
+- `activate()` called `host.registerAction({id: "{id}"}, handler)` (imperative)
 - No import errors in the handler file (these show up as toasts on command invocation)
 
 **Plugin fails to activate with timeout**
@@ -157,10 +157,11 @@ Default timeout is 5 seconds. Causes:
 - Awaiting a network call that's hanging (always add a timeout)
 - Importing a large module at the top of the main entry (import it inside command handlers that use it)
 
-**Hot reload doesn't trigger**
+**Changes don't show up after editing**
 
-- Vite might not be detecting the change (check `vite.config.ts`)
-- Daintree doesn't have an open WebSocket connection (check the `daintree-plugin dev` output — it should say "Connected to Daintree")
+There's no hot reload yet (see [The edit loop](#the-edit-loop-today)). Re-run `package` then `install` to load the new build.
+
+- A stale `.dntr` got installed — confirm you packaged after your edit, and that the path you installed matches the freshly built file
 - A previous `activate()` threw and left the plugin in a broken state. Restart Daintree.
 
 **MCP server doesn't spawn**

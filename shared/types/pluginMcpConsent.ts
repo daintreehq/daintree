@@ -55,8 +55,10 @@ export interface PluginMcpToolFingerprint {
 }
 
 /**
- * Persisted TOFU consent record. Keyed in the store by
- * `${pluginId}::${serverId}::${toolName}` (the identity).
+ * Persisted TOFU consent record. Keyed in the store by the JSON-encoded
+ * `[pluginId, serverId, toolName]` tuple (see `PluginMcpConsentStore.makeKey`).
+ * JSON encoding is deliberate — a `::`-joined string would let identities with
+ * embedded separators collide and inherit another plugin's consent pin.
  */
 export interface PluginMcpConsentRecord {
   pluginId: string;

@@ -179,9 +179,9 @@ describe("plugin-sdk boundary", () => {
       const _check: import("../plugin-sdk.js").PluginActionDescriptor = null;
     });
 
-    it("BUILT_IN_PLUGIN_PERMISSIONS is not in the SDK barrel", () => {
-      // @ts-expect-error — BUILT_IN_PLUGIN_PERMISSIONS is host-internal
-      const _check: import("../plugin-sdk.js").BUILT_IN_PLUGIN_PERMISSIONS = null;
+    it("BUILT_IN_PLUGIN_CAPABILITIES is not in the SDK barrel", () => {
+      // @ts-expect-error — BUILT_IN_PLUGIN_CAPABILITIES is host-internal
+      const _check: import("../plugin-sdk.js").BUILT_IN_PLUGIN_CAPABILITIES = null;
     });
   });
 });

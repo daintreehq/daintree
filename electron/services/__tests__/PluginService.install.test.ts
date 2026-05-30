@@ -431,6 +431,50 @@ describe("installPlugin — load + provenance edge cases", () => {
     service.dispose();
   });
 
+  it("restores the old version on disk and runtime when an upgrade's load fails post-swap", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const v1 = await makeArchive(
+      { name: "acme.up-loadfail", version: "1.0.0" },
+      { "v1.txt": "one" }
+    );
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+    expect(service.listPlugins().some((p) => p.manifest.name === "acme.up-loadfail")).toBe(true);
+
+    // v2's manifest passes the schema but throws in loadPlugin (malformed `when`).
+    const v2 = await makeArchive(
+      {
+        name: "acme.up-loadfail",
+        version: "2.0.0",
+        contributes: {
+          menuItems: [
+            {
+              label: "Run",
+              location: "terminal",
+              actionId: "acme.up-loadfail.run",
+              when: "foo &&",
+            },
+          ],
+        },
+      },
+      { "v2.txt": "two" }
+    );
+    const result = await service.installPlugin(v2);
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") expect(result.errors[0].code).toBe("load_failed");
+
+    // On-disk rollback: v1 restored, v2 gone, no parked dir leaks.
+    expect(await exists(path.join(pluginsRoot, "acme.up-loadfail", "v1.txt"))).toBe(true);
+    expect(await exists(path.join(pluginsRoot, "acme.up-loadfail", "v2.txt"))).toBe(false);
+    expect((await fs.readdir(pluginsRoot)).filter((e) => e.includes(".old-"))).toHaveLength(0);
+
+    // Runtime rollback: v1 is live again, not left torn down.
+    expect(service.listPlugins().some((p) => p.manifest.name === "acme.up-loadfail")).toBe(true);
+
+    service.dispose();
+  });
+
   it("returns installed (not load_failed) when the plugin id is disabled", async () => {
     storeState.set("plugins", { disabled: ["acme.disabled-install"] });
     const archive = await makeArchive({ name: "acme.disabled-install", version: "1.0.0" });
@@ -443,6 +487,100 @@ describe("installPlugin — load + provenance edge cases", () => {
     const installed = (storeState.get("plugins") as { installed: Record<string, unknown> })
       .installed["acme.disabled-install"] as { source: string };
     expect(installed.source).toBe("sideload");
+
+    service.dispose();
+  });
+
+  it("does not leak a parked old dir when a disabled plugin is upgraded", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const v1 = await makeArchive(
+      { name: "acme.disabled-up", version: "1.0.0" },
+      { "v1.txt": "one" }
+    );
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+
+    // Disable the plugin so the upgrade returns early (disabled plugins aren't
+    // reloaded) — the parked old dir must still be reaped before that return.
+    storeState.set("plugins", {
+      ...(storeState.get("plugins") as object),
+      disabled: ["acme.disabled-up"],
+    });
+
+    const v2 = await makeArchive(
+      { name: "acme.disabled-up", version: "2.0.0" },
+      { "v2.txt": "two" }
+    );
+    expect((await service.installPlugin(v2)).status).toBe("installed");
+
+    // New version on disk, and NO parked `<pluginId>.old-<uuid>` dir left behind.
+    expect(await exists(path.join(pluginsRoot, "acme.disabled-up", "v2.txt"))).toBe(true);
+    expect(await exists(path.join(pluginsRoot, "acme.disabled-up", "v1.txt"))).toBe(false);
+    expect((await fs.readdir(pluginsRoot)).filter((e) => e.includes(".old-"))).toHaveLength(0);
+
+    service.dispose();
+  });
+
+  it("leaves the OLD installed record intact when an upgrade's load fails post-swap", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const v1 = await makeArchive({ name: "acme.rec-rollback", version: "1.0.0" });
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+    const before = (storeState.get("plugins") as { installed: Record<string, unknown> }).installed[
+      "acme.rec-rollback"
+    ] as { version?: string; archiveHash: string | null };
+    const oldHash = before.archiveHash;
+    expect(oldHash).toMatch(/^[a-f0-9]{64}$/);
+
+    // v2's manifest passes the schema but throws in loadPlugin (malformed `when`),
+    // so the post-swap rollback restores both the old dir AND its record.
+    const v2 = await makeArchive({
+      name: "acme.rec-rollback",
+      version: "2.0.0",
+      contributes: {
+        menuItems: [
+          {
+            label: "Run",
+            location: "terminal",
+            actionId: "acme.rec-rollback.run",
+            when: "foo &&",
+          },
+        ],
+      },
+    });
+    const result = await service.installPlugin(v2);
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") expect(result.errors[0].code).toBe("load_failed");
+
+    // The store must hold the OLD record (old hash, no new updatedAt), not the
+    // failed new version — Settings + checkForUpdate baseline against this.
+    const after = (storeState.get("plugins") as { installed: Record<string, unknown> }).installed[
+      "acme.rec-rollback"
+    ] as { archiveHash: string | null; updatedAt?: number };
+    expect(after.archiveHash).toBe(oldHash);
+    expect(after.updatedAt).toBeUndefined();
+
+    service.dispose();
+  });
+
+  it("sweeps a leaked `<pluginId>.old-<uuid>` parked dir on initialize", async () => {
+    await fs.mkdir(pluginsRoot, { recursive: true });
+    // A real plugin and a leaked parked dir from a prior crashed upgrade.
+    const realDir = path.join(pluginsRoot, "acme.survivor");
+    await fs.mkdir(realDir, { recursive: true });
+    await fs.writeFile(
+      path.join(realDir, "plugin.json"),
+      JSON.stringify({ name: "acme.survivor", version: "1.0.0" })
+    );
+    const parked = path.join(pluginsRoot, "acme.survivor.old-12345678-1234-4123-8123-1234567890ab");
+    await fs.mkdir(parked, { recursive: true });
+
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await service.initialize();
+
+    // Parked dir reaped; the real plugin dir untouched.
+    expect(await exists(parked)).toBe(false);
+    expect(await exists(realDir)).toBe(true);
 
     service.dispose();
   });

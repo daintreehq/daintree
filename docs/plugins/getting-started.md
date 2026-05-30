@@ -1,6 +1,6 @@
 # Getting Started
 
-Scaffold your first plugin, run it locally with hot reload, and install it in Daintree.
+Scaffold your first plugin, package it, and install it in Daintree.
 
 ## Prerequisites
 
@@ -11,9 +11,11 @@ Scaffold your first plugin, run it locally with hot reload, and install it in Da
 ## Create a plugin
 
 ```bash
-npx create-daintree-plugin my-first-plugin
+npx daintree-plugin new my-first-plugin
 cd my-first-plugin
 ```
+
+`npx create-daintree-plugin my-first-plugin` is an equivalent npm-init shim that forwards to the same scaffolder.
 
 The scaffolder asks a few questions (plugin name, what contribution points to include, package manager) and generates:
 
@@ -37,57 +39,78 @@ A minimal `plugin.json` looks like:
   "displayName": "My First Plugin",
   "description": "An example Daintree plugin.",
   "main": "dist/index.js",
-  "engines": { "daintree": "^0.8.0" },
+  "engines": { "daintree": "^0.11.0" },
   "capabilities": [],
   "contributes": {
     "commands": [
       {
-        "name": "say-hello",
+        "id": "say-hello",
         "title": "Say Hello",
-        "category": "My First Plugin"
+        "description": "Show a greeting toast.",
+        "category": "My First Plugin",
+        "kind": "command",
+        "danger": "safe"
       }
     ]
   }
 }
 ```
 
-The `commands[].name` maps to `src/say-hello.ts` by filesystem convention. Its default export becomes the command handler. See [Contribution points → Commands](./contribution-points.md#commands) for full details.
+The `commands[].id` maps to `src/say-hello.{ts,tsx,js,mjs}` by filesystem convention. Its default export becomes the command handler. See [Contribution points → Commands](./contribution-points.md#commands) for full details.
 
 ## Write the command
 
-```ts
-// src/say-hello.ts
-import { showToast } from "@daintreehq/plugin-sdk";
+The filesystem-convention handler is a default export that receives the action args only — it has no `host`. To call host APIs like `showToast`, register the command imperatively from `activate` instead:
 
-export default async function sayHello() {
-  await showToast({ message: "Hello from my plugin" });
+```ts
+// src/index.ts
+import type { PluginHostApi } from "@daintreehq/plugin-sdk";
+
+export async function activate(host: PluginHostApi): Promise<() => void> {
+  host.registerAction(
+    {
+      id: "say-hello",
+      title: "Say Hello",
+      description: "Show a greeting toast.",
+      category: "My First Plugin",
+      kind: "command",
+      danger: "safe",
+    },
+    async () => {
+      await host.showToast({ message: "Hello from my plugin", type: "success" });
+    }
+  );
+
+  return () => {};
 }
 ```
 
+`activate` runs once when the plugin loads; the returned disposer cleans up on unload. Actions registered through `host.registerAction` are unregistered automatically, so this disposer is a no-op. When you register a command this way, drop the matching `contributes.commands` entry from `plugin.json` — keep either the manifest entry plus a `src/say-hello.ts` handler, or the imperative registration above, not both.
+
 ## Run it
 
+Build, package, and install the plugin into your running Daintree:
+
 ```bash
-npm run dev
+npm run package
+npx daintree-plugin install ./acme.my-first-plugin-0.1.0.dntr
 ```
 
-This launches `daintree-plugin dev`, which:
-
-- Builds your plugin with Vite in watch mode
-- Symlinks it into `~/.daintree/plugins/acme.my-first-plugin` as a dev plugin
-- Opens a WebSocket connection to Daintree
-- Reloads the plugin in Daintree every time you change a source file
+`npm run package` produces `acme.my-first-plugin-0.1.0.dntr` in the project root — a zip file containing the manifest and compiled bundle. `daintree-plugin install` loads it into the running app.
 
 In Daintree, open the command palette and run **My First Plugin: Say Hello**. A toast appears.
 
-Edit `src/say-hello.ts` to change the toast title. Daintree reloads the plugin within about a second. State inside plugins is lost on reload — this is intentional.
+To iterate, edit your source, then re-run `npm run package` and `daintree-plugin install` (which replaces the installed copy). The hot-reload dev loop (`daintree-plugin dev`) is planned for a later release and is not available yet.
 
 ## Package for distribution
+
+The same `.dntr` you installed above is the distributable artifact. Share it directly, or rebuild with:
 
 ```bash
 npm run package
 ```
 
-This produces `acme.my-first-plugin-0.1.0.dntr` in the project root — a zip file containing the manifest and compiled bundle, ready to share. See [Distribution](./distribution.md) for how users install it.
+See [Distribution](./distribution.md) for how users install it.
 
 ## Next steps
 

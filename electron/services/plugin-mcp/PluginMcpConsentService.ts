@@ -115,6 +115,16 @@ export class PluginMcpConsentService {
     this.bridge = bridge;
   }
 
+  /**
+   * Purge every consent pin for a plugin. Delegated to the pin store (which is
+   * private to this service) so uninstall callers go through the service rather
+   * than reaching into the store directly. Used on uninstall so a reinstall
+   * re-prompts instead of inheriting stale TOFU approvals.
+   */
+  revokeAllForPlugin(pluginId: string): void {
+    this.consentStore.revokeAllForPlugin(pluginId);
+  }
+
   async authorizeToolCall(input: PluginMcpAuthorizeInput): Promise<PluginMcpAuthorizeOutcome> {
     const tierResult = deriveDangerTier(input.annotations, input.manifestCapabilities);
     if (tierResult.kind === "deny") {
@@ -150,7 +160,7 @@ export class PluginMcpConsentService {
     const argsSummary =
       dangerTier === "D0" || input.rawArgs === undefined || input.rawArgs === null
         ? ""
-        : summarizeMcpArgs(input.rawArgs);
+        : summarizeMcpArgs(input.rawArgs, stripAnsiAndOscCodes);
 
     const request: PluginMcpConsentRequest = {
       identity: input.identity,

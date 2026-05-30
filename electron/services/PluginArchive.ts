@@ -419,6 +419,7 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
 
   let entryIndex = 0;
   let manifest: PluginManifest | null = null;
+  const entryNames = new Set<string>();
 
   return new Promise((resolve) => {
     let settled = false;
@@ -463,6 +464,10 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
           valid: false,
           error: `Excluded entry found in archive: "${name}"`,
         });
+      }
+
+      if (!name.endsWith("/")) {
+        entryNames.add(name);
       }
 
       if (entryIndex === 0) {
@@ -512,6 +517,29 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
       if (!manifest) {
         return resolve({ valid: false, error: "plugin.json not found in archive" });
       }
+
+      const stripLeading = (p: string) => (p.startsWith("./") ? p.slice(2) : p);
+
+      if (manifest.main) {
+        const mainPath = stripLeading(manifest.main);
+        if (!entryNames.has(mainPath)) {
+          return resolve({
+            valid: false,
+            error: `manifest.main "${manifest.main}" is not present in the archive`,
+          });
+        }
+      }
+
+      for (const view of manifest.contributes.experimental_views) {
+        const viewPath = stripLeading(view.componentPath);
+        if (!entryNames.has(viewPath)) {
+          return resolve({
+            valid: false,
+            error: `view componentPath "${view.componentPath}" is not present in the archive`,
+          });
+        }
+      }
+
       resolve({ valid: true, manifest, entryCount: entryIndex });
     });
 

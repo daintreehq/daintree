@@ -1,4 +1,5 @@
 import path from "node:path";
+import ipaddr from "ipaddr.js";
 import * as semver from "semver";
 import { z } from "zod";
 import { BUILT_IN_PLUGIN_CAPABILITIES } from "../../shared/types/plugin.js";
@@ -20,55 +21,73 @@ const SAFE_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
 export const SCOPED_PLUGIN_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-export const PanelContributionSchema = z.object({
-  id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
-  name: z.string().min(1),
-  iconId: z.string().min(1),
-  color: z.string().min(1),
-  hasPty: z.boolean().default(false),
-  canRestart: z.boolean().default(false),
-  canConvert: z.boolean().default(false),
-  showInPalette: z.boolean().default(true),
-});
+export const PanelContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    name: z.string().min(1),
+    iconId: z.string().min(1),
+    color: z.string().min(1),
+    hasPty: z.boolean().default(false),
+    canRestart: z.boolean().default(false),
+    canConvert: z.boolean().default(false),
+    showInPalette: z.boolean().default(true),
+  })
+  .strict();
 
-export const ToolbarButtonContributionSchema = z.object({
-  id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
-  label: z.string().min(1),
-  iconId: z.string().min(1),
-  actionId: z.string().min(1),
-  priority: z
-    .union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)])
-    .optional(),
-});
+export const ToolbarButtonContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    label: z.string().min(1),
+    iconId: z.string().min(1),
+    actionId: z.string().min(1),
+    priority: z
+      .union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)])
+      .optional(),
+  })
+  .strict();
 
-export const MenuItemContributionSchema = z.object({
-  label: z.string().min(1),
-  actionId: z.string().min(1),
-  location: z.enum(["terminal", "file", "view", "help"]),
-  accelerator: z.string().optional(),
-  when: z.string().min(1).optional(),
-});
+export const MenuItemContributionSchema = z
+  .object({
+    label: z.string().min(1),
+    actionId: z.string().min(1),
+    location: z.enum(["terminal", "file", "view", "help"]),
+    accelerator: z.string().optional(),
+    when: z.string().min(1).optional(),
+  })
+  .strict();
 
-export const KeybindingContributionSchema = z.object({
-  actionId: z.string().min(1),
-  combo: z.string().min(1),
-  // Closed to the renderer's KeyScope union (src/services/keybindingUtils.ts).
-  // An unknown scope would never match the active scope and silently produce an
-  // inert binding, so reject it at the manifest gate instead. Defaults to
-  // "global" in the renderer hook when omitted.
-  scope: z
-    .enum(["global", "terminal", "modal", "worktreeList", "portal", "worktreeGrid"])
-    .optional(),
-  description: z.string().min(1).optional(),
-  when: z.string().min(1).optional(),
-});
+export const KeybindingContributionSchema = z
+  .object({
+    actionId: z.string().min(1),
+    combo: z.string().min(1),
+    // Closed to the renderer's KeyScope union (src/services/keybindingUtils.ts).
+    // An unknown scope would never match the active scope and silently produce an
+    // inert binding, so reject it at the manifest gate instead. Defaults to
+    // "global" in the renderer hook when omitted.
+    scope: z
+      .enum([
+        "global",
+        "terminal",
+        "modal",
+        "worktreeList",
+        "portal",
+        "worktreeGrid",
+        "dev-preview",
+      ])
+      .optional(),
+    description: z.string().min(1).optional(),
+    when: z.string().min(1).optional(),
+  })
+  .strict();
 
-export const ContextMenuContributionSchema = z.object({
-  actionId: z.string().min(1),
-  location: z.enum(["worktree", "terminal", "panel", "file"]),
-  label: z.string().min(1),
-  when: z.string().min(1).optional(),
-});
+export const ContextMenuContributionSchema = z
+  .object({
+    actionId: z.string().min(1),
+    location: z.enum(["worktree", "terminal", "panel", "file"]),
+    label: z.string().min(1),
+    when: z.string().min(1).optional(),
+  })
+  .strict();
 
 /**
  * `contributes.commands` manifest entry. The bare command `id` is namespaced
@@ -101,14 +120,16 @@ export const CommandContributionSchema = z
  * on the contribution point signals that the shape may change before the
  * renderer host ships. See `docs/plugins/architecture.md`.
  */
-export const ViewContributionSchema = z.object({
-  id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
-  name: z.string().min(1),
-  componentPath: z.string().min(1),
-  location: z.enum(["panel", "sidebar"]),
-  iconId: z.string().min(1).optional(),
-  description: z.string().optional(),
-});
+export const ViewContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    name: z.string().min(1),
+    componentPath: z.string().min(1),
+    location: z.enum(["panel", "sidebar"]),
+    iconId: z.string().min(1).optional(),
+    description: z.string().optional(),
+  })
+  .strict();
 
 /**
  * Stdio-only MCP server contribution. Shape mirrors the Claude Desktop /
@@ -136,23 +157,27 @@ export const McpServerContributionSchema = z
  * uninterpreted advisory list (informational only); the host gates behavior
  * on the runtime `ForgeProviderImpl` shape, not these strings.
  */
-const CredentialFieldSchema = z.object({
-  id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
-  label: z.string().min(1),
-  type: z.string().min(1),
-  placeholder: z.string().optional(),
-  helpText: z.string().optional(),
-});
+const CredentialFieldSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    label: z.string().min(1),
+    type: z.string().min(1),
+    placeholder: z.string().optional(),
+    helpText: z.string().optional(),
+  })
+  .strict();
 
-export const ForgeProviderContributionSchema = z.object({
-  id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
-  name: z.string().min(1),
-  matches: z.array(z.string().min(1)).min(1),
-  capabilities: z.array(z.string().min(1)).optional(),
-  credentialFields: z.array(CredentialFieldSchema).optional(),
-  settingsScopeRef: z.string().min(1).optional(),
-  viewRefs: z.array(z.string().min(1)).optional(),
-});
+export const ForgeProviderContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    name: z.string().min(1),
+    matches: z.array(z.string().min(1)).min(1),
+    capabilities: z.array(z.string().min(1)).optional(),
+    credentialFields: z.array(CredentialFieldSchema).optional(),
+    settingsScopeRef: z.string().min(1).optional(),
+    viewRefs: z.array(z.string().min(1)).optional(),
+  })
+  .strict();
 
 /**
  * `fileDecorationProviders` manifest entry. Declares which scopes a plugin's
@@ -195,12 +220,6 @@ const IPV4_RFC1918_TEN_REGEX = /^10\./;
 const IPV4_RFC1918_192_REGEX = /^192\.168\./;
 /** IPv4 RFC1918 172.16.0.0/12 (172.16.* through 172.31.*). */
 const IPV4_RFC1918_172_REGEX = /^172\.(1[6-9]|2\d|3[0-1])\./;
-/**
- * IPv6 literal loopback (::1). `new URL("https://[::1]").hostname` is `"[::1]"`
- * — WHATWG retains the brackets — so the regex matches both the bracketed
- * form (as returned by `new URL`) and a bare `::1` for completeness.
- */
-const IPV6_LOOPBACK_REGEX = /^\[?::1\]?$/;
 
 function normalizeHostname(hostname: string): string {
   // WHATWG URL parsing preserves trailing FQDN dots (RFC 1034 §3.1): the host
@@ -209,15 +228,39 @@ function normalizeHostname(hostname: string): string {
   return hostname.replace(/\.$/, "").toLowerCase();
 }
 
-function isPrivateOrLoopbackHostname(hostname: string): boolean {
+/**
+ * Classify an IPv6 literal. `new URL("https://[::1]").hostname` is `"[::1]"`
+ * — WHATWG retains the brackets — so strip them before parsing. Returns true
+ * for loopback (::1), link-local (fe80::/10), unique-local (fc00::/7), and
+ * IPv4-mapped addresses that unwrap to a blocked IPv4 (e.g. ::ffff:127.0.0.1).
+ */
+function isPrivateOrLoopbackIPv6(normalized: string): boolean {
+  const literal =
+    normalized.startsWith("[") && normalized.endsWith("]") ? normalized.slice(1, -1) : normalized;
+  if (!ipaddr.IPv6.isValid(literal)) return false;
+  const addr = ipaddr.IPv6.parse(literal);
+  if (addr.isIPv4MappedAddress()) {
+    return isPrivateOrLoopbackIPv4(addr.toIPv4Address().toString());
+  }
+  const range = addr.range();
+  return range === "loopback" || range === "linkLocal" || range === "uniqueLocal";
+}
+
+function isPrivateOrLoopbackIPv4(value: string): boolean {
+  return (
+    IPV4_LOOPBACK_REGEX.test(value) ||
+    IPV4_LINK_LOCAL_REGEX.test(value) ||
+    IPV4_RFC1918_TEN_REGEX.test(value) ||
+    IPV4_RFC1918_192_REGEX.test(value) ||
+    IPV4_RFC1918_172_REGEX.test(value)
+  );
+}
+
+export function isPrivateOrLoopbackHostname(hostname: string): boolean {
   const normalized = normalizeHostname(hostname);
   if (PRIVATE_LOOPBACK_HOSTNAME_LITERALS.has(normalized)) return true;
-  if (IPV4_LOOPBACK_REGEX.test(normalized)) return true;
-  if (IPV4_LINK_LOCAL_REGEX.test(normalized)) return true;
-  if (IPV4_RFC1918_TEN_REGEX.test(normalized)) return true;
-  if (IPV4_RFC1918_192_REGEX.test(normalized)) return true;
-  if (IPV4_RFC1918_172_REGEX.test(normalized)) return true;
-  if (IPV6_LOOPBACK_REGEX.test(normalized)) return true;
+  if (isPrivateOrLoopbackIPv4(normalized)) return true;
+  if (isPrivateOrLoopbackIPv6(normalized)) return true;
   return false;
 }
 
@@ -413,7 +456,13 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
       name: z.string().min(1).max(64).regex(SCOPED_PLUGIN_NAME_PATTERN, {
         error: 'Plugin name must be in publisher.name format (e.g. "acme.linear-context")',
       }),
-      version: z.string().min(1),
+      version: z
+        .string()
+        .trim()
+        .min(1)
+        .refine((val) => semver.valid(val) !== null, {
+          message: "version must be a valid semver (e.g. 1.2.3)",
+        }),
       displayName: z.string().optional(),
       description: z.string().optional(),
       main: z.string().optional(),

@@ -129,10 +129,15 @@ export interface PanelViewProps {
 }
 
 /**
- * Reserved contribution point — validated by the manifest schema but ignored
- * at load time with a "not yet implemented" warning. Shape intentionally
- * mirrors the Claude Desktop / Cursor MCP server config format (stdio only;
- * remote servers via `url` are out of scope and deliberately excluded).
+ * Lazily-spawned MCP server contribution (#9235). The declared `command` is
+ * launched as a real subprocess the first time its tools are enumerated (not at
+ * load time), inheriting `args` and `env`. `${settings:*}` templates inside
+ * `args` are resolved from user-scope settings at spawn and on restart, so a
+ * contributed command does run with the plugin author's wiring — treat it as
+ * trust-gated, not inert. Shape intentionally mirrors the Claude Desktop /
+ * Cursor MCP server config format (stdio only; remote servers via `url` are out
+ * of scope and deliberately excluded). The `experimental_` prefix on the
+ * contributes field signals the shape may still change.
  */
 export interface McpServerContribution {
   id: string;
@@ -464,6 +469,13 @@ export type PluginInstallResult =
   | { status: "cancelled" }
   | { status: "invalid-url" }
   | { status: "not-implemented" };
+
+/**
+ * The `status` discriminant of {@link PluginInstallResult}. Exported so the
+ * `daintree-plugin` CLI can type its install-response branches against the host
+ * contract instead of a bare `string`, keeping the two sides from drifting.
+ */
+export type PluginInstallStatus = PluginInstallResult["status"];
 
 /** Optional provenance hints recorded on a successful install. */
 export interface PluginInstallOptions {

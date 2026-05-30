@@ -29,13 +29,26 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
   // Host version compatibility. Optional but strongly recommended.
   // Uses semver range syntax.
   "engines": {
-    "daintree": "^0.8.0",
+    "daintree": "^0.11.0",
   },
 
   // Declared capabilities, shown to the user at install time.
   // Disclosure-first with host-side policy effects (no Node sandbox).
   // See "Capabilities" below and ./trust-model.md.
   "capabilities": ["fs:project-read", "network:fetch"],
+
+  // Per-capability allowlists that attenuate the capability lattice.
+  // Optional. scopes.network.allowedUrls and scopes.fs.allowedPaths reject
+  // wildcards and private/loopback targets. See ./trust-model.md.
+  "scopes": {
+    "network": { "allowedUrls": ["https://api.acme.com/v1"] },
+    "fs": { "allowedPaths": ["/Users/me/.acme/data"] },
+  },
+
+  // Lazy-activation triggers. Optional. Currently only "onStartupFinished".
+  // Plugin code is imported and run when an event fires (or on first use of a
+  // contribution). Omit to activate on first contribution use.
+  "activationEvents": ["onStartupFinished"],
 
   // The plugin's UI and functional contributions.
   "contributes": {
@@ -46,6 +59,18 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
       /* ... */
     ],
     "menuItems": [
+      /* ... */
+    ],
+    "keybindings": [
+      /* ... */
+    ],
+    "contextMenus": [
+      /* ... */
+    ],
+    "commands": [
+      /* ... */
+    ],
+    "settings": [
       /* ... */
     ],
     "experimental_views": [
@@ -112,17 +137,17 @@ Plugins with only static contributions (a theme pack, a standalone MCP server co
 
 ### `engines.daintree`
 
-Semver range expressing which Daintree versions the plugin supports. Examples:
+Semver range expressing which Daintree versions the plugin supports. Examples track the latest pre-1.0 minor; the scaffolder (`npx daintree-plugin new`) generates `"^0.11.0"`:
 
-- `"^0.8.0"` — 0.8.x or any 0.8+ patch/minor in the 0.x series (semver caret on a 0.x version)
-- `">=0.8.0 <2.0.0"` — explicit range
-- `"0.8.x"` — any 0.8 release
+- `"^0.11.0"` — compatible with 0.11 (scaffolder default)
+- `">=0.11.0 <0.13.0"` — explicit range
+- `"0.11.x"` — any 0.11 release
 
 If the running Daintree version doesn't satisfy the range, the plugin is rejected at load with a user-visible warning toast. If `engines.daintree` is omitted entirely, Daintree warns in the console but loads the plugin anyway.
 
-Daintree is pre-1.0. Pin tightly during this phase — a plugin that works on Daintree 0.8 may not work on 0.9 without changes.
+Daintree is pre-1.0. Pin to a current minor during this phase — a plugin that works on Daintree 0.11 may not work on 0.12 without changes.
 
-### `permissions`
+### `capabilities`
 
 Array of capability tokens the plugin wants. The model is **disclosure-first with host-side policy effects** — there is no Node sandbox, so a plugin is not blocked from doing anything regardless of what it declares, but declared tokens are not purely advisory. Five high-risk tokens (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`) currently raise every action the plugin registers to a confirm dialog (`effectiveDanger: "confirm"`) via the host's `CONFIRM_TRIGGERING_CAPABILITIES` set. See the [trust model](./trust-model.md) for the full contract.
 
@@ -142,6 +167,19 @@ Array of capability tokens the plugin wants. The model is **disclosure-first wit
 | `shell:exec`         | Spawn subprocesses                                       |
 
 Declare honestly. The install UI lists what you've declared and users judge plugins by what they ask for; the host also derives policy from the high-risk tokens above. A plugin declaring `shell:exec` for no obvious reason looks suspicious. A plugin that silently executes shells without declaring it damages the ecosystem — and nothing at runtime stops it, which is exactly why honest declaration matters.
+
+### `scopes`
+
+Per-capability allowlists that _attenuate_ the capability lattice — they narrow what a declared capability can reach, they never widen it. Two buckets:
+
+- `scopes.network.allowedUrls` — outbound request targets permitted under `network:fetch`. Wildcards and private/loopback targets are rejected.
+- `scopes.fs.allowedPaths` — paths the filesystem capabilities may touch.
+
+A misspelled bucket (e.g. `networking`) is rejected as a manifest error rather than silently failing to attenuate. See the [trust model](./trust-model.md) for the full scopes semantics and how they compose with capabilities.
+
+### `activationEvents`
+
+Lazy-activation triggers. Plugin code is imported and executed only when one of these events fires (or on first use of a contribution). Currently the sole supported value is `"onStartupFinished"`, which activates the plugin once the app finishes starting. Omit the field to activate on first contribution use.
 
 ### `contributes`
 

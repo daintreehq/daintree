@@ -771,7 +771,7 @@ export function PluginsTab() {
         isOpen={pendingUninstall !== null}
         onClose={isUninstalling ? undefined : closeUninstall}
         title={pendingUninstall ? `Uninstall '${pluginLabel(pendingUninstall)}'?` : ""}
-        description="Removes the plugin and deletes its files, unloading its panels, commands, and integrations. Stored settings and secrets are kept unless you check the box below."
+        description="Removes the plugin and deletes its files, unloading its panels, commands, and integrations. Per-project settings under .daintree/ are always kept; this plugin's saved settings are kept too unless you check the box below."
         confirmLabel="Uninstall plugin"
         cancelLabel="Keep plugin"
         onConfirm={() => void confirmUninstall()}
@@ -786,7 +786,7 @@ export function PluginsTab() {
             disabled={isUninstalling}
             className="size-3.5 rounded-sm border border-daintree-border bg-daintree-bg accent-daintree-text/70"
           />
-          Also delete stored settings and secrets
+          Also delete this plugin's saved settings
         </label>
       </ConfirmDialog>
 

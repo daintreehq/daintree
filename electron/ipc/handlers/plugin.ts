@@ -21,7 +21,13 @@ import {
 import type { PluginDiagnosticsSnapshot } from "../../../shared/types/ipc/pluginDiagnostics.js";
 import { PLUGIN_METHOD_CHANNELS } from "./plugin.preload.js";
 import { pluginService } from "../../services/PluginService.js";
-import { SCOPED_PLUGIN_NAME_PATTERN } from "../../schemas/plugin.js";
+import { MAX_DNTR_BYTES } from "../../services/PluginArchive.js";
+import {
+  PLUGIN_DOWNLOAD_TIMEOUT_MS,
+  acceptedMime,
+  dntrSuffixOk,
+} from "../../utils/pluginDownloadPolicy.js";
+import { isPrivateOrLoopbackHostname, SCOPED_PLUGIN_NAME_PATTERN } from "../../schemas/plugin.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { stableArgsSha256 } from "../../utils/pluginMcpHash.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -68,23 +74,70 @@ async function handleSetEnabled(pluginId: string, enabled: boolean): Promise<voi
   pluginService.setEnabled(pluginId, enabled);
 }
 
+// Local-file-header signature that prefixes every ZIP (and therefore every
+// `.dntr`) archive. Cheap structural gate before the path reaches #9292's
+// atomic install flow.
+const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+
 /**
- * Install a plugin from a `.dntr` archive (or pre-extracted directory) path.
- * Structured validation failures come back as `{ status: "failed", errors }`
- * data — never thrown — so the install dialog can render per-field messages
- * intact across the IPC boundary (#3769). Only unexpected infrastructure
- * faults (a lock subsystem crash) propagate as a thrown Error.
+ * Trust gate shared by every renderer/CLI entry point that hands a filesystem
+ * path to the installer: require a non-empty absolute `.dntr` path whose first
+ * four bytes are the ZIP magic. Segment-aware guards only — never a `..`
+ * substring match (#4702). Only the header is read (never the whole archive)
+ * so a hostile multi-GB file can't be slurped into memory. Returns a
+ * structured `{ status: "failed" }` on rejection so callers can surface an
+ * inline message without a throw crossing the IPC boundary; returns `null` on
+ * success. PluginService.installPlugin keeps its own defense-in-depth stat.
+ */
+async function validateDntrArchivePath(archivePath: string): Promise<PluginInstallResult | null> {
+  const fail = (message: string): PluginInstallResult => ({
+    status: "failed",
+    errors: [{ code: "archive_invalid", message }],
+  });
+  if (typeof archivePath !== "string" || archivePath.length === 0) {
+    return fail("Couldn't resolve the dropped file's path");
+  }
+  if (!isAbsolute(archivePath)) {
+    return fail("Install path must be an absolute filesystem path");
+  }
+  if (extname(archivePath).toLowerCase() !== ".dntr") {
+    return fail("Only .dntr files can be installed");
+  }
+  let header: Buffer;
+  try {
+    const fh = await open(archivePath, "r");
+    try {
+      const buf = Buffer.alloc(4);
+      const { bytesRead } = await fh.read(buf, 0, 4, 0);
+      header = buf.subarray(0, bytesRead);
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return fail("Couldn't read the dropped file");
+  }
+  if (header.length < 4 || !header.equals(ZIP_MAGIC)) {
+    return fail("That file isn't a valid .dntr plugin archive");
+  }
+  return null;
+}
+
+/**
+ * Install a plugin from a `.dntr` archive path. Runs the same trust gate as
+ * {@link handleInstallFromPath} (absolute + `.dntr` + ZIP-magic header sniff)
+ * before touching the installer — both renderer entry points must validate
+ * identically (#3769). Structured validation failures come back as
+ * `{ status: "failed", errors }` data — never thrown — so the install dialog
+ * can render per-field messages intact across the IPC boundary. Only
+ * unexpected infrastructure faults (a lock subsystem crash) propagate as a
+ * thrown Error.
  */
 async function handleInstall(
   archivePath: string,
   opts?: PluginInstallOptions
 ): Promise<PluginInstallResult> {
-  if (typeof archivePath !== "string" || archivePath.length === 0) {
-    return {
-      status: "failed",
-      errors: [{ code: "archive_invalid", message: "Install path must be a non-empty string" }],
-    };
-  }
+  const invalid = await validateDntrArchivePath(archivePath);
+  if (invalid) return invalid;
   return pluginService.installPlugin(archivePath, opts);
 }
 
@@ -113,11 +166,11 @@ async function handleInstallFromFile(ctx: IpcContext): Promise<PluginInstallResu
 }
 
 // Bounded download limits for install-from-URL (F24). Mirrors the spec in
-// docs/plugins/distribution.md: a 30 MB hard cap aborted mid-stream, a 10s
+// docs/plugins/distribution.md: a 30 MB hard cap aborted mid-stream, a shared
 // deadline, and a MIME/suffix allowlist so a stray HTML error page never
-// reaches the installer.
-const PLUGIN_DOWNLOAD_MAX_BYTES = 30 * 1024 * 1024;
-const PLUGIN_DOWNLOAD_TIMEOUT_MS = 10_000;
+// reaches the installer. The timeout and MIME/suffix policy are shared with the
+// update-check path via electron/utils/pluginDownloadPolicy.ts so a server that
+// passes one path's gate passes the other's too.
 
 function isAbortLikeError(err: unknown): boolean {
   // AbortSignal.timeout() rejects as "AbortError" (not "TimeoutError") under
@@ -130,54 +183,18 @@ function isAbortLikeError(err: unknown): boolean {
   return name === "AbortError" || name === "TimeoutError";
 }
 
-// Local-file-header signature that prefixes every ZIP (and therefore every
-// `.dntr`) archive. Cheap structural gate before the path reaches #9292's
-// atomic install flow.
-const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
-
 /**
  * Install a plugin from a path produced by a drag-and-drop onto the Plugin
  * settings tab (#9295). The renderer resolves the native path via the
  * plugin-scoped `getDroppedFilePath` bridge and hands it here; main owns every
- * trust gate because the renderer can't be trusted to validate before #9292
- * runs: the path must be a non-empty absolute `.dntr`, and its first four bytes
- * must be the ZIP magic. Only the header is read — never the whole archive —
- * so a hostile multi-GB file can't be slurped into memory. All failures come
- * back as structured `{ status: "failed" }` data (never thrown) so the tab can
- * render an inline message.
+ * trust gate via {@link validateDntrArchivePath} because the renderer can't be
+ * trusted to validate before #9292 runs. All failures come back as structured
+ * `{ status: "failed" }` data (never thrown) so the tab can render an inline
+ * message.
  */
 export async function handleInstallFromPath(path: string): Promise<PluginInstallResult> {
-  const fail = (message: string): PluginInstallResult => ({
-    status: "failed",
-    errors: [{ code: "archive_invalid", message }],
-  });
-  if (typeof path !== "string" || path.length === 0) {
-    return fail("Couldn't resolve the dropped file's path");
-  }
-  // Segment-aware guards, never a `..` substring match (#4702): require an
-  // absolute path and a `.dntr` extension before touching the filesystem.
-  if (!isAbsolute(path)) {
-    return fail("Install path must be an absolute filesystem path");
-  }
-  if (extname(path).toLowerCase() !== ".dntr") {
-    return fail("Only .dntr files can be installed");
-  }
-  let header: Buffer;
-  try {
-    const fh = await open(path, "r");
-    try {
-      const buf = Buffer.alloc(4);
-      const { bytesRead } = await fh.read(buf, 0, 4, 0);
-      header = buf.subarray(0, bytesRead);
-    } finally {
-      await fh.close();
-    }
-  } catch {
-    return fail("Couldn't read the dropped file");
-  }
-  if (header.length < 4 || !header.equals(ZIP_MAGIC)) {
-    return fail("That file isn't a valid .dntr plugin archive");
-  }
+  const invalid = await validateDntrArchivePath(path);
+  if (invalid) return invalid;
   return pluginService.installPlugin(path);
 }
 
@@ -205,6 +222,9 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
     return { status: "invalid-url" };
   }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return { status: "invalid-url" };
+  }
+  if (isPrivateOrLoopbackHostname(parsed.hostname)) {
     return { status: "invalid-url" };
   }
 
@@ -252,21 +272,18 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
     const contentLength = response.headers.get("content-length");
     if (contentLength) {
       const declared = Number.parseInt(contentLength, 10);
-      if (Number.isFinite(declared) && declared > PLUGIN_DOWNLOAD_MAX_BYTES) {
+      if (Number.isFinite(declared) && declared > MAX_DNTR_BYTES) {
         return abandon(failed("size_exceeded", "The plugin file is larger than the 30 MB limit."));
       }
     }
 
-    // Accept canonical zip (with or without a `; charset=…` parameter), the
-    // optional x-dntr type, or any 2xx whose URL path ends in `.dntr`
-    // (case-insensitive for pasted URLs). An exact/`;`-prefixed match avoids
-    // `application/zipper` slipping through. response.url is unreliable in
-    // Electron, so the `.dntr` suffix is checked on the original user URL.
-    const contentType = (response.headers.get("content-type") ?? "").toLowerCase().trim();
-    const mimeMatches = (type: string) =>
-      contentType === type || contentType.startsWith(`${type};`);
-    const mimeOk = mimeMatches("application/zip") || mimeMatches("application/x-dntr");
-    const suffixOk = parsed.pathname.toLowerCase().endsWith(".dntr");
+    // Accept any of the shared archive MIME types, or fall back to a 2xx whose
+    // URL path ends in `.dntr` (case-insensitive for pasted URLs). response.url
+    // is unreliable in Electron, so the `.dntr` suffix is checked on the
+    // original user URL. Policy is shared with the update-check path.
+    const contentType = response.headers.get("content-type") ?? "";
+    const mimeOk = acceptedMime(contentType);
+    const suffixOk = dntrSuffixOk(parsed.pathname);
     if (!mimeOk && !suffixOk) {
       return abandon(
         failed("content_type_rejected", "That URL didn't return a plugin archive (.dntr).")
@@ -281,7 +298,7 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
     const counter = new Transform({
       transform(chunk: Buffer, _enc, cb) {
         bytesRead += chunk.length;
-        if (bytesRead > PLUGIN_DOWNLOAD_MAX_BYTES) {
+        if (bytesRead > MAX_DNTR_BYTES) {
           sizeAborted = true;
           sizeController.abort();
           cb(new Error("size_exceeded"));

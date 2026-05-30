@@ -228,7 +228,7 @@ For authors who want to share plugins publicly:
 - **GitHub Releases** is the default recommendation. `.dntr` files are small; releases are free; versioning maps cleanly to git tags.
 - **README with install instructions.** Include the literal URL to paste into Daintree.
 - **Semver your releases.** Daintree uses semver for version comparison and update detection.
-- **Set `engines.daintree` honestly.** Lock to the minor version you've tested against (e.g. `^0.8.0`). Don't set `*` — you'll get bug reports from users on Daintree versions you haven't supported.
+- **Set `engines.daintree` honestly.** Lock to the minor version you've tested against (e.g. `^0.11.0`). Don't set `*` — you'll get bug reports from users on Daintree versions you haven't supported.
 - **Don't commit `.dntr` files to the source repo.** Build them in CI on release-tag.
 - **Pin `@daintreehq/plugin-sdk` tightly.** Pre-1.0, minor versions can break APIs.
 

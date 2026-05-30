@@ -249,6 +249,105 @@ describe("verifyPluginArchive", () => {
     }
   });
 
+  it("rejects an archive whose declared manifest.main file is absent", async () => {
+    const sourceDir = path.join(tmpDir, "source");
+    await createFixture(sourceDir, {
+      "plugin.json": JSON.stringify(validManifest({ main: "dist/index.js" })),
+      "icons/logo.svg": "<svg/>",
+    });
+
+    const archivePath = path.join(tmpDir, "out.dntr");
+    await packPluginArchiveFromFiles(sourceDir, archivePath, ["plugin.json", "icons/logo.svg"]);
+
+    const result = await verifyPluginArchive(archivePath);
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.error).toBe('manifest.main "dist/index.js" is not present in the archive');
+    }
+  });
+
+  it("resolves a ./-prefixed manifest.main against the archive entries", async () => {
+    const sourceDir = path.join(tmpDir, "source");
+    await createFixture(sourceDir, {
+      "plugin.json": JSON.stringify(validManifest({ main: "./dist/index.js" })),
+      "dist/index.js": "ok",
+    });
+
+    const archivePath = path.join(tmpDir, "out.dntr");
+    await packPluginArchive(sourceDir, archivePath);
+
+    const result = await verifyPluginArchive(archivePath);
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.manifest.main).toBe("./dist/index.js");
+    }
+  });
+
+  it("rejects an archive missing a declared view componentPath", async () => {
+    const sourceDir = path.join(tmpDir, "source");
+    await createFixture(sourceDir, {
+      "plugin.json": JSON.stringify(
+        validManifest({
+          main: "dist/index.js",
+          contributes: {
+            experimental_views: [
+              {
+                id: "panel-view",
+                name: "Panel View",
+                componentPath: "dist/PanelView.js",
+                location: "panel",
+              },
+            ],
+          },
+        })
+      ),
+      "dist/index.js": "ok",
+    });
+
+    const archivePath = path.join(tmpDir, "out.dntr");
+    await packPluginArchiveFromFiles(sourceDir, archivePath, ["plugin.json", "dist/index.js"]);
+
+    const result = await verifyPluginArchive(archivePath);
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.error).toBe(
+        'view componentPath "dist/PanelView.js" is not present in the archive'
+      );
+    }
+  });
+
+  it("accepts an archive whose declared main and view componentPath are present", async () => {
+    const sourceDir = path.join(tmpDir, "source");
+    await createFixture(sourceDir, {
+      "plugin.json": JSON.stringify(
+        validManifest({
+          main: "dist/index.js",
+          contributes: {
+            experimental_views: [
+              {
+                id: "panel-view",
+                name: "Panel View",
+                componentPath: "./dist/PanelView.js",
+                location: "panel",
+              },
+            ],
+          },
+        })
+      ),
+      "dist/index.js": "ok",
+      "dist/PanelView.js": "export default () => null;",
+    });
+
+    const archivePath = path.join(tmpDir, "out.dntr");
+    await packPluginArchive(sourceDir, archivePath);
+
+    const result = await verifyPluginArchive(archivePath);
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.entryCount).toBe(3);
+    }
+  });
+
   it("rejects an archive with invalid manifest (missing version)", async () => {
     const sourceDir = path.join(tmpDir, "source");
     await createFixture(sourceDir, {

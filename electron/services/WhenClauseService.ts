@@ -32,12 +32,18 @@ export function trackPluginExpression(pluginId: string, expr: string | undefined
 
 export function unregisterPlugin(pluginId: string): void {
   const exprs = pluginExprs.get(pluginId);
-  if (exprs) {
-    for (const expr of exprs) {
-      astCache.delete(expr);
-    }
-  }
   pluginExprs.delete(pluginId);
+  if (!exprs) return;
+  for (const expr of exprs) {
+    let stillReferenced = false;
+    for (const set of pluginExprs.values()) {
+      if (set.has(expr)) {
+        stillReferenced = true;
+        break;
+      }
+    }
+    if (!stillReferenced) astCache.delete(expr);
+  }
 }
 
 export function clear(): void {

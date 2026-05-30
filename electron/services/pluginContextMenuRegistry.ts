@@ -25,6 +25,7 @@ export function getPluginContextMenuItems(): Array<{
 }
 
 export function unregisterPluginContextMenuItems(pluginId: string): void {
+  if (typeof pluginId !== "string" || pluginId.length === 0) return;
   PLUGIN_CONTEXT_MENUS.delete(pluginId);
 }
 

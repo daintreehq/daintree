@@ -222,6 +222,25 @@ describe("checkForUpdate — guards", () => {
     expect(netMock.fetch).not.toHaveBeenCalled();
     service.dispose();
   });
+
+  it.each([
+    "http://127.0.0.1/plugin.dntr",
+    "https://169.254.169.254/plugin.dntr",
+    "https://192.168.0.42/plugin.dntr",
+    "http://[::1]/plugin.dntr",
+  ])("returns fetch-failed (no fetch) for a private/loopback originalUrl %s", async (url) => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await installUrlPlugin(service, { name: "acme.private", version: "1.0.0" }, url);
+
+    const result = await service.checkForUpdate("acme.private");
+
+    expect(result.status).toBe("fetch-failed");
+    if (result.status === "fetch-failed") {
+      expect(result.message).toContain("private or loopback");
+    }
+    expect(netMock.fetch).not.toHaveBeenCalled();
+    service.dispose();
+  });
 });
 
 describe("checkForUpdate — hash comparison", () => {
@@ -303,9 +322,14 @@ describe("checkForUpdate — fetch failures", () => {
     service.dispose();
   });
 
-  it("returns fetch-failed for an unexpected content type", async () => {
+  it("returns fetch-failed for an unexpected content type with no .dntr suffix", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
-    await installUrlPlugin(service, { name: "acme.html", version: "1.0.0" });
+    // URL has no `.dntr` suffix, so the suffix fallback can't rescue the bad MIME.
+    await installUrlPlugin(
+      service,
+      { name: "acme.html", version: "1.0.0" },
+      "https://example.com/p"
+    );
     netMock.fetch.mockResolvedValueOnce(
       fakeResponse([new Uint8Array([1, 2, 3])], { contentType: "text/html" })
     );
@@ -314,6 +338,45 @@ describe("checkForUpdate — fetch failures", () => {
 
     expect(result.status).toBe("fetch-failed");
     if (result.status === "fetch-failed") expect(result.message).toContain("text/html");
+    service.dispose();
+  });
+
+  // The accepted MIME set is shared with the install flow (T4) so a server that
+  // passes the update check also passes the follow-up reinstall.
+  it.each([
+    "application/octet-stream",
+    "application/zip",
+    "application/zip; charset=utf-8",
+    "application/x-zip",
+    "application/x-dntr",
+  ])("accepts the shared archive content type %s", async (contentType) => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const manifest = { name: "acme.mime", version: "1.0.0" };
+    // Re-fetch the identical archive so the only thing under test is the MIME
+    // gate — the result lands on `up-to-date` rather than a download fault.
+    await installUrlPlugin(service, manifest);
+    const bytes = await readArchiveBytes(manifest);
+    netMock.fetch.mockResolvedValueOnce(fakeResponse([new Uint8Array(bytes)], { contentType }));
+
+    const result = await service.checkForUpdate("acme.mime");
+
+    expect(result).toEqual({ status: "up-to-date" });
+    service.dispose();
+  });
+
+  it("falls back to the .dntr URL suffix when the content type isn't a known archive type", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const manifest = { name: "acme.suffix", version: "1.0.0" };
+    // Default install URL ends in `.dntr`; an unrecognised MIME is rescued by it.
+    await installUrlPlugin(service, manifest);
+    const bytes = await readArchiveBytes(manifest);
+    netMock.fetch.mockResolvedValueOnce(
+      fakeResponse([new Uint8Array(bytes)], { contentType: "text/html" })
+    );
+
+    const result = await service.checkForUpdate("acme.suffix");
+
+    expect(result).toEqual({ status: "up-to-date" });
     service.dispose();
   });
 

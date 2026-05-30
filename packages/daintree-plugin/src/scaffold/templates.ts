@@ -21,7 +21,7 @@ export interface ScaffoldContext {
   template: TemplateKind;
 }
 
-const DAINTREE_ENGINE_RANGE = ">=0.11.0";
+const DAINTREE_ENGINE_RANGE = "^0.11.0";
 
 /** A safely-quoted JS/TS string literal for embedding author text in source. */
 function q(value: string): string {
@@ -126,10 +126,11 @@ function commandEntry(ctx: ScaffoldContext): string {
 
 /**
  * ${c(ctx.displayName)} — command plugin entry. Daintree calls \`activate\` once
- * when the plugin loads; return a disposer to clean up on unload.
+ * when the plugin loads; return a disposer to clean up on unload. Actions are
+ * unregistered automatically on unload, so the disposer here is a no-op.
  */
 export async function activate(host: PluginHostApi): Promise<() => void> {
-  const dispose = host.registerAction(
+  host.registerAction(
     {
       id: "run",
       title: ${title},
@@ -144,9 +145,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
     }
   );
 
-  return () => {
-    dispose();
-  };
+  return () => {};
 }
 `;
 }

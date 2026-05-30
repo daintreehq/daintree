@@ -112,6 +112,45 @@ describe("PluginMcpConsentStore", () => {
     expect(lookup.kind).toBe("first-use");
   });
 
+  it("revokeAllForPlugin purges every pin for the plugin so a reinstall starts fresh", () => {
+    store.pin({ pluginId: "acme", serverId: "main", toolName: "read_file" }, fpA);
+    store.pin({ pluginId: "acme", serverId: "main", toolName: "write_file" }, fpA);
+    store.pin({ pluginId: "other", serverId: "main", toolName: "read_file" }, fpA);
+
+    store.revokeAllForPlugin("acme");
+
+    // Reinstall: a fresh lookup must re-prompt, not auto-approve from a stale pin.
+    expect(
+      store.lookup({ pluginId: "acme", serverId: "main", toolName: "read_file" }, fpA).kind
+    ).toBe("first-use");
+    expect(
+      store.lookup({ pluginId: "acme", serverId: "main", toolName: "write_file" }, fpA).kind
+    ).toBe("first-use");
+    // Other plugins are untouched.
+    expect(
+      store.lookup({ pluginId: "other", serverId: "main", toolName: "read_file" }, fpA).kind
+    ).toBe("approved");
+  });
+
+  it("revokeAllForPlugin leaves no tombstone — purged pins read first-use, not revoked", () => {
+    store.pin(identity, fpA);
+    store.revoke(identity);
+    expect(store.lookup(identity, fpA).kind).toBe("revoked");
+
+    store.revokeAllForPlugin("acme");
+    expect(store.lookup(identity, fpA).kind).toBe("first-use");
+    // The orphaned revoke marker is gone from persistence too.
+    expect(cfg.raw().revoked).toEqual([]);
+  });
+
+  it("revokeAllForPlugin skips the flush when the plugin had no consent state", () => {
+    store.pin({ pluginId: "keep", serverId: "main", toolName: "t" }, fpA);
+    const before = cfg.raw();
+    store.revokeAllForPlugin("absent");
+    // No write occurred for an absent plugin (same snapshot object reference).
+    expect(cfg.raw()).toBe(before);
+  });
+
   it("list() returns newest pins first", () => {
     store.pin({ pluginId: "p1", serverId: "s", toolName: "t1" }, fpA);
     // Tick so approvedAt differs.

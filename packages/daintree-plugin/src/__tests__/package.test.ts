@@ -87,7 +87,7 @@ describe("runPackage", () => {
     await expect(runPackage({ dir: tmpDir, skipBuild: true })).rejects.toThrow(/validation failed/);
   });
 
-  it("keeps the output filename inside the plugin dir for a malicious version", async () => {
+  it("rejects a path-traversal version before any archive is written", async () => {
     await writeFile(
       "plugin.json",
       JSON.stringify({
@@ -98,9 +98,7 @@ describe("runPackage", () => {
       })
     );
     await writeFile("dist/index.js", "export const x = 1;");
-    const result = await runPackage({ dir: tmpDir, skipBuild: true });
-    expect(path.dirname(result.outputPath!)).toBe(tmpDir);
-    expect(result.outputPath!).not.toContain("/..");
+    await expect(runPackage({ dir: tmpDir, skipBuild: true })).rejects.toThrow(/validation failed/);
   });
 
   it("dry run never invokes the Vite build (no vite in fixture)", async () => {

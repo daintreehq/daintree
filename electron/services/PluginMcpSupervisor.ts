@@ -105,6 +105,13 @@ interface SupervisedServerState {
   /** Total stderr lines emitted since last spawn — may exceed the ring cap. */
   stderrTotal: number;
   subprocess: SupervisedSubprocess | null;
+  /**
+   * Monotonic spawn counter, bumped each time a fresh subprocess is registered
+   * onto this key. A delayed Windows tree-kill captures the generation it was
+   * scheduled for and bails if a restart has since registered a newer one —
+   * so a reused PID for the post-restart server is never tree-killed (#9235).
+   */
+  spawnGeneration: number;
   nextRequestId: number;
   pendingCalls: Map<number, PendingCall>;
   /** Resolves when the handshake completes (or rejects on failure). */
@@ -268,6 +275,7 @@ export class PluginMcpSupervisor {
       stderrRing: [],
       stderrTotal: 0,
       subprocess: null,
+      spawnGeneration: 0,
       nextRequestId: 1,
       pendingCalls: new Map(),
       readyPromise: null,
@@ -355,6 +363,10 @@ export class PluginMcpSupervisor {
     const subprocess = handle.subprocess;
     state.subprocess = subprocess;
     state.pid = subprocess.pid ?? null;
+    // Bump the spawn generation so a delayed tree-kill scheduled by a prior
+    // shutdownOne (for this same key) can detect that a newer process now owns
+    // the key and skip the kill — guarding against Windows PID reuse (#9235).
+    state.spawnGeneration++;
     // Execa's subprocess promise rejects with the kill error when the child
     // exits non-zero or is killed. Without a `.catch` attached at spawn time
     // it surfaces as an unhandled rejection, which Electron 37+ utility
@@ -823,6 +835,7 @@ export class PluginMcpSupervisor {
     const subprocess = state.subprocess;
     if (!subprocess) return;
     const pid = state.pid;
+    const killGeneration = state.spawnGeneration;
 
     // Reject in-flight pending calls before we kill the process so callers
     // don't sit on a 30s tool-call timeout while teardown races.
@@ -842,8 +855,12 @@ export class PluginMcpSupervisor {
     if (pid !== null && process.platform === "win32") {
       // Even with execa cleanup:true, a hard SIGKILL from outside (parent
       // crash, watchdog) leaves grandchildren stranded on Windows. Always
-      // shell out after the grace window.
+      // shell out after the grace window — but skip it if a restart has since
+      // registered a newer subprocess on this key, because Windows can reuse
+      // the freed PID and the tree-kill would then take down the fresh server.
       setTimeout(() => {
+        const current = this.states.get(key);
+        if (current && current.spawnGeneration !== killGeneration) return;
         Promise.resolve(this.killTree(pid)).catch(() => {});
       }, SHUTDOWN_GRACE_MS);
     }

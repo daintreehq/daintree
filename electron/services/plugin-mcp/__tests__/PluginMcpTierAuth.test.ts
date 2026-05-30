@@ -73,6 +73,13 @@ describe("PluginMcpTierAuth.deriveDangerTier", () => {
       expect(result).toEqual({ kind: "tier", tier: "D2" });
     });
 
+    it("allows D2 when the plugin declares agent:invoke", () => {
+      // agent:invoke is high-risk (mirrors CONFIRM_TRIGGERING_CAPABILITIES in
+      // PluginService) so a destructiveHint tool reaches D2 rather than denying.
+      const result = deriveDangerTier({ destructiveHint: true }, ["agent:invoke"]);
+      expect(result).toEqual({ kind: "tier", tier: "D2" });
+    });
+
     it("treats an empty capability set as the read-only cap (D1)", () => {
       // Mirrors a plugin manifest that omits `capabilities` entirely.
       const result = deriveDangerTier({ destructiveHint: true }, undefined);

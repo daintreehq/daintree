@@ -7,6 +7,9 @@ release/
 # Dependencies
 node_modules/
 
+# Local tooling / session artifacts (not project source)
+.claude/
+
 # Package manager
 package-lock.json
 pnpm-lock.yaml

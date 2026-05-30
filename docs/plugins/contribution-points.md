@@ -160,10 +160,13 @@ Views are the React components that render inside a panel. A view binds to a pan
 
 **Component contract:**
 
+> The `useWorktree` import below resolves through `@daintreehq/plugin-sdk/react`, which is **Planned (F15/F36)** and ships no exports in v1 — see [Host API → React hooks](./host-api.md#react-hooks). The example shows the intended surface; in a v1 plugin the subpath resolves to an empty module, so read worktree context through `host` instead.
+
 ```tsx
 // src/dashboard.tsx
 import { useEffect } from "react";
 import type { PanelViewProps } from "@daintreehq/plugin-sdk";
+// Planned (F15/F36): @daintreehq/plugin-sdk/react has no exports in v1.
 import { useWorktree } from "@daintreehq/plugin-sdk/react";
 
 export default function Dashboard({ panelId, pluginId, disposeSignal }: PanelViewProps) {
@@ -253,9 +256,7 @@ Menu items add entries to Daintree's application menus.
 | `location` | yes | One of `"terminal"`, `"file"`, `"view"`, `"help"`. Determines which top-level menu the item appears in. |
 | `accelerator` | no | Platform-neutral shortcut, e.g. `"Cmd+Shift+L"` (becomes `Ctrl+Shift+L` on Windows/Linux). |
 
-## Keybindings — _Planned_
-
-> Not yet present in the manifest schema. Documented here as a design preview; the shape is not yet locked.
+## Keybindings — _Shipped_
 
 Keybindings map a key combination to an action.
 
@@ -266,6 +267,7 @@ Keybindings map a key combination to an action.
       {
         "actionId": "acme.linear-planner.plan-from-issue",
         "combo": "Cmd+Shift+P",
+        "scope": "global",
         "when": "panel.focused"
       }
     ]
@@ -279,13 +281,13 @@ Keybindings map a key combination to an action.
 | --- | --- | --- |
 | `actionId` | yes | Fully-qualified action ID, usually one your plugin declared. |
 | `combo` | yes | Normalized key combo string, same format as Daintree's default keybindings. Chords (`"Cmd+K Cmd+S"`) supported. |
-| `when` | no | Context expression. Future; in v1 always-active bindings only. |
+| `scope` | no | One of `"global"`, `"terminal"`, `"modal"`, `"worktreeList"`, `"portal"`, `"worktreeGrid"`. Defaults to `"global"`. An unknown scope is rejected at the manifest gate. |
+| `description` | no | Human-readable description of what the binding does. |
+| `when` | no | Context expression gating when the binding is active. |
 
-Conflicts with user overrides or other plugins' bindings are resolved by Daintree's existing keybinding service — plugin bindings are low-priority and yield to user overrides. See `src/services/KeybindingService.ts:325` for the registration API.
+Bindings register when the plugin loads and unregister on unload. Conflicts with user overrides or other plugins' bindings are resolved by Daintree's existing keybinding service — plugin bindings are low-priority and yield to user overrides. See `src/services/KeybindingService.ts:325` for the registration API.
 
-## Settings schema — _Planned_
-
-> Not yet present in the manifest schema. Documented here as a design preview; the shape is not yet locked.
+## Settings schema — _Shipped_
 
 Declares user-configurable settings for your plugin.
 
@@ -297,14 +299,14 @@ Declares user-configurable settings for your plugin.
         "id": "linear.apiToken",
         "type": "secret",
         "scope": "user",
-        "title": "Linear API Token",
+        "label": "Linear API Token",
         "description": "Personal API token from linear.app/settings/api"
       },
       {
         "id": "linear.defaultTeam",
         "type": "string",
         "scope": "project",
-        "title": "Default team",
+        "label": "Default team",
         "description": "Team slug to use when opening a new planning session",
         "default": ""
       }
@@ -313,7 +315,19 @@ Declares user-configurable settings for your plugin.
 }
 ```
 
-**Field types:** `string`, `number`, `boolean`, `secret`, `enum`, `json`.
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Setting key, used to read/write the value via the host API. |
+| `type` | no | One of `string`, `number`, `boolean`, `enum`, `json`, `secret`. Defaults to `string`. |
+| `label` | no | Field label shown in the generated form. |
+| `description` | no | Help text shown beneath the field. |
+| `default` | no | Default value. |
+| `scope` | no | `user` (global) or `project` (per-project). Defaults to `user`. |
+| `options` | no | Non-empty string array; required when `type` is `enum`. |
+| `min` / `max` | no | Numeric bounds for `number` settings. `min` cannot exceed `max`. |
+| `secret` | no | Legacy boolean; `secret: true` normalizes to `type: "secret"`. Prefer `type: "secret"`. |
 
 **Scopes:** `user` (global, persisted in Daintree config), `project` (per-project, persisted with project state).
 
@@ -325,9 +339,7 @@ const token = await host.settings.get<string>("linear.apiToken");
 
 Changes fire a subscription callback, so you don't need to reactivate to pick them up.
 
-## Context menus — _Planned_
-
-> Not yet present in the manifest schema. Documented here as a design preview; the shape is not yet locked.
+## Context menus — _Shipped_
 
 Adds entries to right-click menus on specific UI elements.
 
