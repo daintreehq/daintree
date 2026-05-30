@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
+import zlib from "zlib";
 import {
   packPluginArchive,
   packPluginArchiveFromFiles,
@@ -9,7 +10,55 @@ import {
   readArchiveManifest,
   verifyPluginArchive,
   isExcludedArchiveEntry,
+  MAX_DNTR_ENTRIES,
 } from "../PluginArchive.js";
+
+// Forge a raw STORE zip with arbitrary entry-name bytes so duplicate names and
+// padded entry counts can be exercised — the bundled writer dedupes and sorts,
+// so it can never emit these shapes itself.
+function buildRawZip(entries: { name: string; content: string }[]): Buffer {
+  const chunks: Buffer[] = [];
+  const central: Buffer[] = [];
+  let offset = 0;
+  for (const e of entries) {
+    const nameBuf = Buffer.from(e.name, "utf-8");
+    const stored = Buffer.from(e.content);
+    const crc = zlib.crc32(stored) >>> 0;
+    const lfh = Buffer.alloc(30);
+    lfh.writeUInt32LE(0x04034b50, 0);
+    lfh.writeUInt16LE(20, 4);
+    lfh.writeUInt32LE(crc, 14);
+    lfh.writeUInt32LE(stored.length, 18);
+    lfh.writeUInt32LE(stored.length, 22);
+    lfh.writeUInt16LE(nameBuf.length, 26);
+    const localOffset = offset;
+    chunks.push(lfh, nameBuf, stored);
+    offset += lfh.length + nameBuf.length + stored.length;
+
+    const cdh = Buffer.alloc(46);
+    cdh.writeUInt32LE(0x02014b50, 0);
+    cdh.writeUInt16LE(20, 4);
+    cdh.writeUInt16LE(20, 6);
+    cdh.writeUInt32LE(crc, 16);
+    cdh.writeUInt32LE(stored.length, 20);
+    cdh.writeUInt32LE(stored.length, 24);
+    cdh.writeUInt16LE(nameBuf.length, 28);
+    cdh.writeUInt32LE(localOffset, 42);
+    central.push(Buffer.concat([cdh, nameBuf]));
+  }
+  const centralBuf = Buffer.concat(central);
+  const centralOffset = offset;
+  chunks.push(centralBuf);
+
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(centralBuf.length, 12);
+  eocd.writeUInt32LE(centralOffset, 16);
+  chunks.push(eocd);
+  return Buffer.concat(chunks);
+}
 
 let tmpDir: string;
 
@@ -346,6 +395,51 @@ describe("verifyPluginArchive", () => {
     if (result.valid) {
       expect(result.entryCount).toBe(3);
     }
+  });
+
+  it("rejects an archive exceeding the entry-count cap", async () => {
+    const entries = [{ name: "plugin.json", content: JSON.stringify(validManifest()) }];
+    for (let i = 0; i < MAX_DNTR_ENTRIES; i++) {
+      entries.push({ name: `f${i}.txt`, content: "" });
+    }
+    const archivePath = path.join(tmpDir, "many.dntr");
+    await fs.writeFile(archivePath, buildRawZip(entries));
+
+    const result = await verifyPluginArchive(archivePath);
+    expect(result.valid).toBe(false);
+    if (!result.valid) expect(result.error).toContain("entry limit");
+  });
+
+  it("rejects an archive with a duplicate normalized entry name", async () => {
+    const archivePath = path.join(tmpDir, "dup.dntr");
+    await fs.writeFile(
+      archivePath,
+      buildRawZip([
+        { name: "plugin.json", content: JSON.stringify(validManifest()) },
+        { name: "dist/index.js", content: "first" },
+        { name: "dist/index.js", content: "second" },
+      ])
+    );
+
+    const result = await verifyPluginArchive(archivePath);
+    expect(result.valid).toBe(false);
+    if (!result.valid) expect(result.error).toContain("Duplicate entry");
+  });
+
+  it("rejects an archive with a second plugin.json", async () => {
+    const archivePath = path.join(tmpDir, "dup-manifest.dntr");
+    await fs.writeFile(
+      archivePath,
+      buildRawZip([
+        { name: "plugin.json", content: JSON.stringify(validManifest()) },
+        { name: "dist/index.js", content: "ok" },
+        { name: "plugin.json", content: JSON.stringify(validManifest()) },
+      ])
+    );
+
+    const result = await verifyPluginArchive(archivePath);
+    expect(result.valid).toBe(false);
+    if (!result.valid) expect(result.error).toContain("Duplicate entry");
   });
 
   it("rejects an archive with invalid manifest (missing version)", async () => {

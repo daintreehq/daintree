@@ -3,7 +3,7 @@ import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import zlib from "zlib";
-import { packPluginArchive, extractPluginArchive } from "../PluginArchive.js";
+import { packPluginArchive, extractPluginArchive, MAX_DNTR_ENTRIES } from "../PluginArchive.js";
 
 let tmpDir: string;
 
@@ -192,6 +192,51 @@ describe("extractPluginArchive", () => {
         .then(() => true)
         .catch(() => false)
     ).toBe(false);
+  });
+
+  it("rejects an archive exceeding the entry-count cap", async () => {
+    const archivePath = path.join(tmpDir, "many.dntr");
+    const entries: RawEntry[] = [{ name: "plugin.json", content: JSON.stringify(validManifest()) }];
+    for (let i = 0; i < MAX_DNTR_ENTRIES; i++) {
+      entries.push({ name: `f${i}.txt`, content: "" });
+    }
+    await fs.writeFile(archivePath, buildRawZip(entries));
+    const dest = path.join(tmpDir, "extracted-many");
+    await fs.mkdir(dest, { recursive: true });
+
+    await expect(extractPluginArchive(archivePath, dest)).rejects.toThrow(/entry limit/);
+  });
+
+  it("rejects an archive with a duplicate normalized entry name", async () => {
+    const archivePath = path.join(tmpDir, "dup.dntr");
+    await fs.writeFile(
+      archivePath,
+      buildRawZip([
+        { name: "plugin.json", content: JSON.stringify(validManifest()) },
+        { name: "dist/index.js", content: "first" },
+        { name: "dist/index.js", content: "second" },
+      ])
+    );
+    const dest = path.join(tmpDir, "extracted-dup");
+    await fs.mkdir(dest, { recursive: true });
+
+    await expect(extractPluginArchive(archivePath, dest)).rejects.toThrow(/Duplicate entry/);
+  });
+
+  it("rejects an archive with a second plugin.json", async () => {
+    const archivePath = path.join(tmpDir, "dup-manifest.dntr");
+    await fs.writeFile(
+      archivePath,
+      buildRawZip([
+        { name: "plugin.json", content: JSON.stringify(validManifest()) },
+        { name: "dist/index.js", content: "ok" },
+        { name: "plugin.json", content: JSON.stringify(validManifest()) },
+      ])
+    );
+    const dest = path.join(tmpDir, "extracted-dup-manifest");
+    await fs.mkdir(dest, { recursive: true });
+
+    await expect(extractPluginArchive(archivePath, dest)).rejects.toThrow(/Duplicate entry/);
   });
 
   it("rejects an oversize archive before extracting", async () => {

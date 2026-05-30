@@ -213,8 +213,10 @@ describe("PluginMcpConsentService", () => {
     expect(second.kind).toBe("approved");
     expect(second.consentDecision).toBeUndefined();
 
-    // Uninstall purges consent; a reinstall's first call must prompt again.
-    service.revokeAllForPlugin(baseInput.identity.pluginId);
+    // Uninstall purges consent; a reinstall's first call must prompt again. The
+    // service surfaces whether the purge durably persisted so the uninstall
+    // caller can retry/escalate on failure.
+    expect(service.revokeAllForPlugin(baseInput.identity.pluginId)).toBe(true);
     bridge.mockClear();
     const reinstall = await service.authorizeToolCall(baseInput);
     expect(reinstall.kind).toBe("approved");

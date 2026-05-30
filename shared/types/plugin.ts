@@ -418,7 +418,7 @@ export interface InstalledPluginRecord {
  * Install-from-URL bounded-fetch failures (F24), produced before the archive
  * reaches `PluginService.installPlugin`:
  * - `fetch_failed` — non-2xx HTTP status or a network/transport error
- * - `fetch_timeout` — the download exceeded the 10s deadline
+ * - `fetch_timeout` — the download exceeded the shared `PLUGIN_DOWNLOAD_TIMEOUT_MS` deadline (30s)
  * - `size_exceeded` — declared `Content-Length` or the streamed bytes exceeded 30 MB
  * - `content_type_rejected` — response wasn't a plugin archive (bad MIME and the URL doesn't end in `.dntr`)
  */
@@ -457,11 +457,14 @@ export interface PluginInstallError {
  * `ForbidIpcEnvelopeKeys` at the handler boundary.
  *
  * `installed`/`failed` are the terminal outcomes of {@link
- * PluginService.installPlugin}. The remaining statuses are produced by the thin
- * install entry points before the atomic flow runs: `cancelled` is a
- * user-dismissed file picker (no message to show), `invalid-url` is a malformed
- * URL, and `not-implemented` is the current state — the install-from-file /
- * install-from-url flow (F21/F23/F24) hasn't landed yet.
+ * PluginService.installPlugin}, reached by both the install-from-path
+ * (drag-and-drop, #9295) and install-from-URL (F24) entry points, which run the
+ * full atomic flow. The remaining statuses are produced by the thin install
+ * entry points before that flow runs: `cancelled` is a user-dismissed file
+ * picker (no message to show), `invalid-url` is a malformed or rejected URL, and
+ * `not-implemented` is returned only by the native-file-picker path
+ * (install-from-file, F21/F23) — the picker is wired but does not yet route the
+ * chosen path into the installer.
  */
 export type PluginInstallResult =
   | { status: "installed"; pluginId: string }

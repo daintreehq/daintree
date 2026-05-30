@@ -45,9 +45,11 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     "fs": { "allowedPaths": ["/Users/me/.acme/data"] },
   },
 
-  // Lazy-activation triggers. Optional. Currently only "onStartupFinished".
-  // Plugin code is imported and run when an event fires (or on first use of a
-  // contribution). Omit to activate on first contribution use.
+  // Activation triggers. Optional. Currently only "onStartupFinished" is
+  // recognised. In v1 every plugin with a `main` entry activates at startup —
+  // omitting this field (or passing an empty array) is treated the same as
+  // ["onStartupFinished"]. Lazy first-use activation is planned but not wired
+  // yet, so there is no way to opt out of startup activation today.
   "activationEvents": ["onStartupFinished"],
 
   // The plugin's UI and functional contributions.
@@ -179,11 +181,20 @@ A misspelled bucket (e.g. `networking`) is rejected as a manifest error rather t
 
 ### `activationEvents`
 
-Lazy-activation triggers. Plugin code is imported and executed only when one of these events fires (or on first use of a contribution). Currently the sole supported value is `"onStartupFinished"`, which activates the plugin once the app finishes starting. Omit the field to activate on first contribution use.
+Activation triggers. The sole supported value is `"onStartupFinished"`, which activates the plugin once the app finishes starting.
+
+In v1, startup activation is the only behavior: any plugin with a `main` entry activates once the app finishes starting. Omitting `activationEvents` (or passing an empty array) is treated identically to `["onStartupFinished"]` — there is no way to opt out of startup activation yet. Lazy first-use triggers (`onCommand:*`, `onView:*`, …) are planned; once they land, a plugin will be able to drop `"onStartupFinished"` from a non-empty list to defer activation until a contribution is first used. Note that contributions (commands, panels, keybindings) are still registered eagerly from the manifest at startup regardless — only the plugin's `main` module import and `activate()` call are governed by activation.
 
 ### `contributes`
 
-Object containing arrays for each contribution type. All fields are optional; unlisted contribution types default to empty arrays. Fields prefixed with `experimental_` are reserved shapes that are validated by the schema but not yet wired to a runtime — the prefix signals that the shape may change before the feature ships. See the full [Contribution points reference](./contribution-points.md) for every type.
+Object containing arrays for each contribution type. All fields are optional; unlisted contribution types default to empty arrays.
+
+Fields prefixed with `experimental_` **do** have runtime behavior — the prefix signals only that their shape may still change before it's locked, not that they're inert:
+
+- `experimental_views` — `location: "panel"` is wired today (the renderer host mounts the contributed component in a grid panel). `location: "sidebar"` logs a warning and is skipped until the sidebar host ships.
+- `experimental_mcpServers` — wired: the declared `command` is lazily spawned as a real subprocess the first time its tools are enumerated, and is supervised (restart-on-crash, killed on exit). Treat a contributed MCP server as trust-gated, not inert.
+
+The non-experimental `forgeProviders` and `fileDecorationProviders` contributions are also live at runtime. See the full [Contribution points reference](./contribution-points.md) for the per-point status of every type.
 
 ## Validation
 

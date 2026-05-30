@@ -35,8 +35,10 @@ const InstallParamsSchema = z
     path: z.string().min(1).optional(),
     url: z.string().min(1).optional(),
   })
-  .refine((p) => Boolean(p.path) || Boolean(p.url), {
-    message: "install requires a 'path' or 'url' parameter",
+  // Exactly one source: both-present silently preferred 'url' before, which
+  // hid a caller bug. Reject the ambiguous frame at the boundary instead.
+  .refine((p) => Boolean(p.path) !== Boolean(p.url), {
+    message: "install requires exactly one of 'path' or 'url'",
   });
 
 const UninstallParamsSchema = z.object({
@@ -243,9 +245,10 @@ export async function startPluginCliServer(): Promise<void> {
     waitForReady: () => pluginService.waitForInit(),
     handlers: {
       install: ({ path: installPath, url }) => {
+        // Schema guarantees exactly one source; these branches are defensive.
         if (url) return handleInstallFromUrl(url);
         if (installPath) return handleInstallFromPath(installPath);
-        return Promise.reject(new Error("install requires a 'path' or 'url' parameter"));
+        return Promise.reject(new Error("install requires exactly one of 'path' or 'url'"));
       },
       uninstall: ({ pluginId, deleteSettings }) => handleUninstall(pluginId, deleteSettings),
     },

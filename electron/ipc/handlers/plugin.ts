@@ -26,6 +26,8 @@ import {
   PLUGIN_DOWNLOAD_TIMEOUT_MS,
   acceptedMime,
   dntrSuffixOk,
+  fetchWithPrivateHostGuard,
+  urlHasCredentials,
 } from "../../utils/pluginDownloadPolicy.js";
 import { isPrivateOrLoopbackHostname, SCOPED_PLUGIN_NAME_PATTERN } from "../../schemas/plugin.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
@@ -141,13 +143,11 @@ async function handleInstall(
   return pluginService.installPlugin(archivePath, opts);
 }
 
-// Install-from-file / install-from-URL are thin callers: this tab owns the
-// entry point (native picker, URL dialog) but the atomic install flow
-// (temp-extract / validate / swap / rollback) is owned by F21/F23/F24 and is
-// not yet landed. The handlers capture the user's input and resolve a
-// structured `not-implemented` status so the renderer can surface a clear "not
-// available yet" notice; the `installed` branch and the real PluginService
-// install call land with those features.
+// Install-from-file owns the native-picker entry point; the selected path runs
+// the SAME trust gate + installer as the drag-and-drop path
+// ({@link handleInstallFromPath}) so both renderer entries validate identically.
+// A dismissed picker resolves `cancelled`; validation failures come back as
+// structured `{ status: "failed" }` data the dialog can render inline.
 async function handleInstallFromFile(ctx: IpcContext): Promise<PluginInstallResult> {
   const win = ctx.senderWindow ?? BrowserWindow.getFocusedWindow();
   const dialogOptions = {
@@ -161,8 +161,7 @@ async function handleInstallFromFile(ctx: IpcContext): Promise<PluginInstallResu
   if (result.canceled || result.filePaths.length === 0) {
     return { status: "cancelled" };
   }
-  // F21/F23 will route result.filePaths[0] through the install flow here.
-  return { status: "not-implemented" };
+  return handleInstallFromPath(result.filePaths[0]!);
 }
 
 // Bounded download limits for install-from-URL (F24). Mirrors the spec in
@@ -202,9 +201,12 @@ export async function handleInstallFromPath(path: string): Promise<PluginInstall
  * Download a `.dntr` archive from a user-supplied URL into a temp file under
  * bounded conditions, then hand the path to the atomic installer (F24).
  *
- * Guards, in order: well-formed URL + http/https scheme, a 10s deadline, a
- * MIME/`.dntr`-suffix allowlist, a `Content-Length` pre-check, and a mid-stream
- * 30 MB byte cap that aborts the in-flight request. All failures resolve as
+ * Guards, in order: well-formed URL + http/https scheme + no embedded
+ * credentials, a private/loopback-host check revalidated on every redirect hop,
+ * the shared download deadline, a MIME/`.dntr`-suffix allowlist, and a
+ * mid-stream 30 MB byte cap that aborts the in-flight request. (Timeout and
+ * MIME/suffix policy live in electron/utils/pluginDownloadPolicy.ts.) All
+ * failures resolve as
  * structured `{ status: "failed", errors }` data so the dialog can render a
  * tailored message; the handler-owned temp file is always removed in `finally`
  * (PluginService extracts into its own temp dir and doesn't take ownership of
@@ -227,6 +229,12 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
   if (isPrivateOrLoopbackHostname(parsed.hostname)) {
     return { status: "invalid-url" };
   }
+  // Reject `https://user:pass@host` outright — the credentials would otherwise
+  // be fetched AND persisted as installer `originalUrl` provenance (re-fetched
+  // on update-check, shown in Settings). Rejecting keeps the failure visible.
+  if (urlHasCredentials(parsed)) {
+    return { status: "invalid-url" };
+  }
 
   const failed = (code: PluginInstallError["code"], message: string): PluginInstallResult => ({
     status: "failed",
@@ -234,10 +242,11 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
   });
 
   const tempPath = path.join(os.tmpdir(), `daintree-plugin-${crypto.randomUUID()}.dntr`);
-  // `redirect: "manual"` rejects immediately in Electron's net.fetch and can't
-  // count hops, so we rely on Chromium's built-in follow (capped at 20, well
-  // above the spec's 5). The size controller and the timeout signal both feed
-  // a single AbortSignal.any().
+  // Redirects are followed MANUALLY so every hop's host is revalidated through
+  // the private/loopback guard — the original-host check alone is bypassable by
+  // a public URL that 30x-redirects to loopback/link-local/RFC1918 (SSRF). The
+  // size controller and the timeout signal both feed a single AbortSignal.any()
+  // that's threaded through every hop.
   const sizeController = new AbortController();
   let sizeAborted = false;
   let wroteTempFile = false;
@@ -250,7 +259,16 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
 
     let response: Response;
     try {
-      response = await net.fetch(trimmed, { signal });
+      const guarded = await fetchWithPrivateHostGuard(net.fetch, trimmed, { signal });
+      if (!guarded.ok) {
+        return failed(
+          "fetch_failed",
+          guarded.reason === "private-redirect"
+            ? "The download redirected to a private or loopback address."
+            : "The download followed too many redirects."
+        );
+      }
+      response = guarded.response;
     } catch (err) {
       if (isAbortLikeError(err)) {
         return failed("fetch_timeout", "The download timed out before it finished.");

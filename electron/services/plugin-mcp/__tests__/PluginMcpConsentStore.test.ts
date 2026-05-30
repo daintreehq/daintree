@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PluginMcpConsentStore } from "../PluginMcpConsentStore.js";
 
 function makeConfig() {
@@ -146,9 +146,31 @@ describe("PluginMcpConsentStore", () => {
   it("revokeAllForPlugin skips the flush when the plugin had no consent state", () => {
     store.pin({ pluginId: "keep", serverId: "main", toolName: "t" }, fpA);
     const before = cfg.raw();
-    store.revokeAllForPlugin("absent");
-    // No write occurred for an absent plugin (same snapshot object reference).
+    const result = store.revokeAllForPlugin("absent");
+    // No write occurred for an absent plugin (same snapshot object reference),
+    // and the no-op purge is reported durable.
     expect(cfg.raw()).toBe(before);
+    expect(result).toBe(true);
+  });
+
+  it("revokeAllForPlugin reports true when the purge persists", () => {
+    store.pin(identity, fpA);
+    expect(store.revokeAllForPlugin("acme")).toBe(true);
+  });
+
+  it("revokeAllForPlugin surfaces a failed flush instead of swallowing it", () => {
+    // A flush failure after the in-memory drop means the persisted snapshot may
+    // still hold the stale pins — they'd rehydrate on restart. The store must
+    // report that so the uninstall caller can retry or escalate.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const throwingStore = new PluginMcpConsentStore(() => {
+      throw new Error("disk full");
+    }, cfg.read);
+    throwingStore.pin(identity, fpA);
+    // The pin() flush also throws but is swallowed; the purge return value is
+    // the contract under test.
+    expect(throwingStore.revokeAllForPlugin("acme")).toBe(false);
+    errSpy.mockRestore();
   });
 
   it("list() returns newest pins first", () => {

@@ -112,8 +112,10 @@ export const CommandContributionSchema = z
   .strict();
 
 /**
- * View contribution. Every entry is registered as a panel kind at plugin
- * load (`PluginService.loadPlugin`). `location: "panel"` sets
+ * View contribution. A view renders into a `contributes.panels` entry with a
+ * matching `id`; at plugin load (`PluginService.loadPlugin`) the panels loop
+ * attaches the view's `componentPath` to that panel kind. A view with no
+ * matching panel entry is ignored. `location: "panel"` sets
  * `showInPalette: true` so the view is spawnable from the panel palette;
  * `location: "sidebar"` registers silently with `showInPalette: false`,
  * reserving the kind for the future sidebar host. The `experimental_` prefix

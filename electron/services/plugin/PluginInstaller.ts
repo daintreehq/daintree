@@ -19,6 +19,7 @@ import {
   PLUGIN_DOWNLOAD_TIMEOUT_MS,
   acceptedMime,
   dntrSuffixOk,
+  fetchWithPrivateHostGuard,
 } from "../../utils/pluginDownloadPolicy.js";
 import { resilientRename } from "../../utils/fs.js";
 import { getPluginMcpSupervisor } from "../PluginMcpSupervisor.js";
@@ -670,11 +671,27 @@ export class PluginInstaller {
       }
       const tmpArchive = path.join(tmpRoot, "plugin.dntr");
 
+      // Follow redirects manually so every hop's host is revalidated through the
+      // private/loopback guard — the original-host check above is bypassable by
+      // a public URL that 30x-redirects to loopback/link-local/RFC1918 (SSRF).
+      // A literal-host guard only; a DNS-rebinding TOCTOU (a public hostname
+      // resolving to a private address at connect time) remains, matching the
+      // residual on the install path and the manifest allowedUrls validator.
       let response: Awaited<ReturnType<typeof net.fetch>>;
       try {
-        response = await net.fetch(url, {
+        const guarded = await fetchWithPrivateHostGuard(net.fetch, url, {
           signal: AbortSignal.timeout(PLUGIN_DOWNLOAD_TIMEOUT_MS),
         });
+        if (!guarded.ok) {
+          return {
+            status: "fetch-failed",
+            message:
+              guarded.reason === "private-redirect"
+                ? "Refusing to follow a redirect to a private or loopback address"
+                : "The update URL followed too many redirects",
+          };
+        }
+        response = guarded.response as Awaited<ReturnType<typeof net.fetch>>;
       } catch (err) {
         return {
           status: "fetch-failed",
@@ -879,10 +896,26 @@ export class PluginInstaller {
       // Purge every TOFU consent pin for the plugin unconditionally — pluginIds
       // are author-controlled, so a reinstall (or rebuild) must re-prompt rather
       // than inherit prior approvals. Decoupled from `wipeSettings`: stale pins
-      // are a consent-bypass risk even when secrets are kept. Guarded so a
-      // consent-store flush failure can't strand the uninstall.
+      // are a consent-bypass risk even when secrets are kept.
+      //
+      // The purge must be DURABLE: if the in-memory drop succeeds but the
+      // persist fails, the stale pins rehydrate on the next launch and a
+      // same-name reinstall silently inherits prior consent (a consent bypass).
+      // `revokeAllForPlugin` returns whether the snapshot persisted; retry once
+      // on a transient failure, then surface it loudly rather than swallowing —
+      // a silent failure is the exact bug we're guarding against. A failed purge
+      // must NOT strand the uninstall: the on-disk deletion below still runs, so
+      // the plugin's code is gone even if its consent pins outlive it (the worst
+      // case is a re-prompt that was skipped, which the user can revoke manually
+      // from the consent settings).
       try {
-        getPluginMcpConsentService().revokeAllForPlugin(pluginId);
+        const consent = getPluginMcpConsentService();
+        const purged = consent.revokeAllForPlugin(pluginId) || consent.revokeAllForPlugin(pluginId);
+        if (!purged) {
+          console.error(
+            `[PluginService] consent purge for "${pluginId}" failed to persist after a retry; stale TOFU pins may rehydrate on restart — revoke them manually from plugin-MCP consent settings`
+          );
+        }
       } catch (err) {
         console.error(
           `[PluginService] consent purge during uninstall of "${pluginId}" threw:`,

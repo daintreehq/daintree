@@ -1923,6 +1923,34 @@ describe("PluginService built-in plugin loading", () => {
       await expect(fs.access(settingsFile)).rejects.toThrow();
     });
 
+    it("never deletes a project-scope settings file, even with deleteSettings", async () => {
+      // Uninstall only ever targets the user-scope settings root; per-repo
+      // `.daintree/plugin-settings/` files are tracked git artifacts and are not
+      // the uninstall's to remove. Drift guard for docs/plugins/distribution.md.
+      const pluginsRoot = path.join(tmpDir, "plugins");
+      await fs.mkdir(path.join(pluginsRoot, "acme.proj"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginsRoot, "acme.proj", "plugin.json"),
+        JSON.stringify({ name: "acme.proj", version: "1.0.0" })
+      );
+      const projectSettingsFile = path.join(
+        tmpDir,
+        "some-project",
+        ".daintree",
+        "plugin-settings",
+        "acme.proj.json"
+      );
+      await fs.mkdir(path.dirname(projectSettingsFile), { recursive: true });
+      await fs.writeFile(projectSettingsFile, JSON.stringify({ team: "platform" }));
+      const service = new PluginService(pluginsRoot, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      await service.uninstallPlugin("acme.proj", true);
+
+      await expect(fs.access(path.join(pluginsRoot, "acme.proj"))).rejects.toThrow();
+      await expect(fs.access(projectSettingsFile)).resolves.toBeUndefined();
+    });
+
     it("clears the launch-time name reservation so a same-session reinstall isn't blocked", async () => {
       // Regression: a disabled-at-launch plugin reserves its name; uninstall
       // must release it or loadPlugin rejects the reinstall as a duplicate.

@@ -160,7 +160,7 @@ Views are the React components that render inside a panel. A view binds to a pan
 
 **Component contract:**
 
-> The `useWorktree` import below resolves through `@daintreehq/plugin-sdk/react`, which is **Planned (F15/F36)** and ships no exports in v1 — see [Host API → React hooks](./host-api.md#react-hooks). The example shows the intended surface; in a v1 plugin the subpath resolves to an empty module, so read worktree context through `host` instead.
+> **Pseudocode — not yet runnable.** The `useWorktree` import below resolves through `@daintreehq/plugin-sdk/react`, which is **Planned (F15/F36)** and ships no exports in v1 — see [Host API → React hooks](./host-api.md#react-hooks). The example shows the intended surface; in a v1 plugin the subpath resolves to an empty module (no `useWorktree`), so read worktree context through the `host` API passed to `activate()` instead.
 
 ```tsx
 // src/dashboard.tsx
@@ -281,7 +281,7 @@ Keybindings map a key combination to an action.
 | --- | --- | --- |
 | `actionId` | yes | Fully-qualified action ID, usually one your plugin declared. |
 | `combo` | yes | Normalized key combo string, same format as Daintree's default keybindings. Chords (`"Cmd+K Cmd+S"`) supported. |
-| `scope` | no | One of `"global"`, `"terminal"`, `"modal"`, `"worktreeList"`, `"portal"`, `"worktreeGrid"`. Defaults to `"global"`. An unknown scope is rejected at the manifest gate. |
+| `scope` | no | One of `"global"`, `"terminal"`, `"modal"`, `"worktreeList"`, `"portal"`, `"worktreeGrid"`, `"dev-preview"`. Defaults to `"global"`. An unknown scope is rejected at the manifest gate. |
 | `description` | no | Human-readable description of what the binding does. |
 | `when` | no | Context expression gating when the binding is active. |
 

@@ -9,6 +9,7 @@ import type {
   MenuItemLocation,
   ViewContribution,
   ViewLocation,
+  PanelViewProps,
   McpServerContribution,
   PluginCapability,
   BuiltInPluginCapability,
@@ -46,6 +47,7 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<MenuItemLocation>().toMatchTypeOf<string>();
       expectTypeOf<ViewContribution>().toMatchTypeOf<object>();
       expectTypeOf<ViewLocation>().toMatchTypeOf<string>();
+      expectTypeOf<PanelViewProps>().toMatchTypeOf<object>();
       expectTypeOf<McpServerContribution>().toMatchTypeOf<object>();
       expectTypeOf<PluginCapability>().toMatchTypeOf<string>();
       expectTypeOf<BuiltInPluginCapability>().toMatchTypeOf<string>();
@@ -105,6 +107,13 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf(host.getActiveWorktree).toEqualTypeOf<
         () => Promise<PluginWorktreeSnapshot | null>
       >();
+    });
+
+    it("PanelViewProps exposes the host-provided view props", () => {
+      const props = {} as PanelViewProps;
+      expectTypeOf(props.panelId).toEqualTypeOf<string>();
+      expectTypeOf(props.pluginId).toEqualTypeOf<string>();
+      expectTypeOf(props.disposeSignal).toEqualTypeOf<AbortSignal>();
     });
 
     it("PluginIpcContext has required fields", () => {

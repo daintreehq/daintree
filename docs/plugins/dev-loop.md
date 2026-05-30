@@ -29,9 +29,9 @@ Creates `./my-plugin/` with:
 
 Templates:
 
-- **`command`** — single command plugin with a filesystem-bound handler
-- **`view`** — panel view + React component
-- **`mcp`** — skeleton MCP server plus manifest wiring
+- **`command`** — single command plugin. `src/index.ts` exports `activate(host)` and registers the command imperatively via `host.registerAction(...)`. (The filesystem-convention handler — `src/{id}.ts` auto-bound on first dispatch — is also supported by the host; the scaffold just shows the imperative path.)
+- **`view`** — panel view + React component (`src/index.ts` + `src/panel.tsx`)
+- **`mcp`** — skeleton MCP server plus manifest wiring (`src/index.ts` + `src/server.ts`)
 - **`full`** — command + view + MCP example (largest, for experimenting)
 
 ### The edit loop (today)

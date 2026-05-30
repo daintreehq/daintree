@@ -120,8 +120,14 @@ export class PluginMcpConsentStore {
    * re-prompt). Unlike {@link revoke}, this leaves NO tombstone — the pins are
    * deleted outright, not converted to revocations. Flushes only when at least
    * one entry was removed.
+   *
+   * Returns whether the purge is durable: `true` if nothing changed (no stale
+   * state to begin with) or the flush persisted; `false` if the flush threw, so
+   * the caller knows the in-memory pins were dropped but the persisted snapshot
+   * may still hold them — they'd rehydrate on the next launch (consent-bypass
+   * for a same-name reinstall) unless the caller retries or escalates.
    */
-  revokeAllForPlugin(pluginId: string): void {
+  revokeAllForPlugin(pluginId: string): boolean {
     this.hydrate();
     let changed = false;
     for (const [key, record] of this.pins) {
@@ -136,7 +142,8 @@ export class PluginMcpConsentStore {
         changed = true;
       }
     }
-    if (changed) this.flush();
+    if (!changed) return true;
+    return this.flush();
   }
 
   private hydrate(): void {
@@ -158,14 +165,16 @@ export class PluginMcpConsentStore {
     this.hydrated = true;
   }
 
-  private flush(): void {
+  private flush(): boolean {
     try {
       this.saveConfig({
         pins: [...this.pins.values()],
         revoked: [...this.revoked],
       });
+      return true;
     } catch (err) {
       console.error("[PluginMcpConsentStore] Failed to flush pins:", err);
+      return false;
     }
   }
 

@@ -120,9 +120,13 @@ export class PluginMcpConsentService {
    * private to this service) so uninstall callers go through the service rather
    * than reaching into the store directly. Used on uninstall so a reinstall
    * re-prompts instead of inheriting stale TOFU approvals.
+   *
+   * Returns whether the purge was durably persisted, so the uninstall caller can
+   * retry or escalate rather than silently leave stale pins that rehydrate on
+   * the next launch.
    */
-  revokeAllForPlugin(pluginId: string): void {
-    this.consentStore.revokeAllForPlugin(pluginId);
+  revokeAllForPlugin(pluginId: string): boolean {
+    return this.consentStore.revokeAllForPlugin(pluginId);
   }
 
   async authorizeToolCall(input: PluginMcpAuthorizeInput): Promise<PluginMcpAuthorizeOutcome> {

@@ -585,6 +585,40 @@ describe("installPlugin — load + provenance edge cases", () => {
     service.dispose();
   });
 
+  it("loads the live plugin, not a parked `<pluginId>.old-<uuid>` copy that carries plugin.json", async () => {
+    await fs.mkdir(pluginsRoot, { recursive: true });
+    // The parked copy carries a valid plugin.json with the SAME name as the
+    // live install — exactly the crash-leftover that could win the duplicate
+    // race and get the live dir reaped if the sweep ran after the scan and the
+    // scan didn't defensively skip the parked name.
+    const realDir = path.join(pluginsRoot, "acme.survivor");
+    await fs.mkdir(realDir, { recursive: true });
+    await fs.writeFile(
+      path.join(realDir, "plugin.json"),
+      JSON.stringify({ name: "acme.survivor", version: "2.0.0" })
+    );
+    const parked = path.join(pluginsRoot, "acme.survivor.old-12345678-1234-4123-8123-1234567890ab");
+    await fs.mkdir(parked, { recursive: true });
+    await fs.writeFile(
+      path.join(parked, "plugin.json"),
+      JSON.stringify({ name: "acme.survivor", version: "1.0.0" })
+    );
+
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await service.initialize();
+
+    // The live dir is loaded (and survives); the parked copy never wins the
+    // duplicate-name race and is reaped.
+    const loaded = service.listPlugins().find((p) => p.manifest.name === "acme.survivor");
+    expect(loaded).toBeDefined();
+    expect(loaded?.dir).toBe(realDir);
+    expect(loaded?.manifest.version).toBe("2.0.0");
+    expect(await exists(realDir)).toBe(true);
+    expect(await exists(parked)).toBe(false);
+
+    service.dispose();
+  });
+
   it("clears archiveHash when an archive install is replaced by a directory install", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
 

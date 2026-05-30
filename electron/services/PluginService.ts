@@ -353,6 +353,32 @@ function buildPluginViewUrl(pluginId: string, componentPath: string): string {
   return `plugin://${pluginId}/${normalized}`;
 }
 
+/**
+ * Suffix match for the installer's parked-old copy (`<pluginId>.old-<uuid>`,
+ * no leading dot — see `PluginInstaller._swapPluginDir` /
+ * `STALE_PARKED_OLD_RE`). A real plugin dir is exactly `publisher.name`, which
+ * can never end with `.old-` + a hyphenated UUID, so this can't exclude a
+ * legitimate install.
+ */
+const PARKED_OLD_DIR_RE = /\.old-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Defence-in-depth guard for {@link PluginService.loadFromDir}: returns true for
+ * any installer staging/parked/leftover dir name that must never be scanned as
+ * a real plugin even if `sweepStalePluginTempDirs` missed it. Covers the parked
+ * `<pluginId>.old-<uuid>` copy (no leading dot — the dot filter alone wouldn't
+ * catch it) plus the dot-prefixed `.install-tmp-*` / `.update-check-*` /
+ * `.old-*` staging names (belt-and-suspenders against the leading-dot filter).
+ */
+function isParkedOrTempDirName(name: string): boolean {
+  return (
+    name.startsWith(".install-tmp-") ||
+    name.startsWith(".update-check-") ||
+    name.startsWith(".old-") ||
+    PARKED_OLD_DIR_RE.test(name)
+  );
+}
+
 type WorkspaceWorktreeEvent = "worktree-update" | "worktree-activated" | "worktree-removed";
 
 export class PluginService {
@@ -652,6 +678,18 @@ export class PluginService {
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
+    // Reap crash-left staging/parked dirs from the user root BEFORE any
+    // user-plugin scan. A parked `<pluginId>.old-<uuid>` dir (no leading dot)
+    // can contain a plugin.json, so if it survived into the scan it could be
+    // loaded as a real plugin and win the duplicate-name race against the live
+    // install — after which this sweep would delete the now-loaded directory.
+    // Sweeping first closes that window; loadFromDir also defensively skips
+    // parked/temp names so a dir the sweep missed is still never loaded.
+    // initialize() runs before any install/update-check/swap can start this
+    // session, so this can't race a live temp dir; it only touches the user
+    // root, never the built-in or sideload roots.
+    await this.installer.sweepStalePluginTempDirs();
+
     // Built-ins load first so user plugins with a colliding manifest.name are
     // rejected by the duplicate guard in loadPlugin() — built-in wins.
     const builtinDir = this.builtinPluginsRoot ?? this.getBuiltinDir();
@@ -678,12 +716,6 @@ export class PluginService {
       // registries.
       this.initialized = true;
     }
-
-    // Reap crash-left staging dirs from the user root only. initialize() runs
-    // before any install/update-check/swap can start this session, so this
-    // can't race a live temp dir; the load scans above already skipped these
-    // dot-prefixed entries.
-    await this.installer.sweepStalePluginTempDirs();
   }
 
   /**
@@ -733,9 +765,12 @@ export class PluginService {
     // segment can never start with a dot, so `.install-tmp-*` staging dirs and
     // leading-dot `.old-*` leftovers are never mistaken for installable plugins.
     // The installer's parked-old copies are named `<pluginId>.old-<uuid>` (no
-    // leading dot) — those don't match here, so the startup
-    // `sweepStalePluginTempDirs` (run before this scan) reaps them first.
-    const pluginDirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith("."));
+    // leading dot); `sweepStalePluginTempDirs` (run before this scan) reaps
+    // them first, but `isParkedOrTempDirName` defensively excludes them here
+    // too so a leaked parked dir is never loaded even if the sweep missed it.
+    const pluginDirs = entries.filter(
+      (e) => e.isDirectory() && !e.name.startsWith(".") && !isParkedOrTempDirName(e.name)
+    );
     // Disabled state applies to built-in and user plugins alike (#9284).
     const disabled = this.records.getDisabledIds();
     const results = await Promise.allSettled(
@@ -1894,7 +1929,7 @@ export class PluginService {
             );
           }
           this.settings.assertSettingSerializable(pluginId, key, value);
-          this.settings.assertSettingDeclared(pluginId, key);
+          this.settings.assertSettingDeclared(pluginId, key, scope);
           const filePath = this.settings.resolveSettingsFilePath(pluginId, scope);
           if (!filePath) {
             throw new Error(
@@ -1921,6 +1956,7 @@ export class PluginService {
               `Plugin "${pluginId}" settings.onDidChange: callback must be a function`
             );
           }
+          this.settings.assertSettingScope(pluginId, key, scope);
           const sub = { key, scope, cb: callback as (value: unknown) => void };
           this.settings.addSubscriber(pluginId, sub);
 

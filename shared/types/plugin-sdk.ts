@@ -37,6 +37,10 @@ export type {
   PluginFsScope,
 } from "./plugin.js";
 
+// ── View component props ────────────────────────────────────────────
+
+export type { PanelViewProps } from "./plugin.js";
+
 // ── Manifest root ───────────────────────────────────────────────────
 
 export type { PluginManifest } from "./plugin.js";

@@ -176,8 +176,8 @@ Preferences → Plugins → Install from URL…
 
 The user pastes a URL pointing to a `.dntr` file. Daintree:
 
-1. Fetches the URL with a 30 MB size cap and a 10 s timeout.
-2. Verifies the content-type is `application/zip` or the URL ends in `.dntr`.
+1. Fetches the URL with a 30 MB size cap and a 30 s timeout (shared with the manual update-check path).
+2. Accepts the response when the content-type is one of `application/zip`, `application/x-zip`, `application/x-dntr`, or `application/octet-stream`, or — when none of those match — when the original URL's path ends in `.dntr`.
 3. Runs the same flow as file install from that point.
 
 **Typical URL patterns:**
@@ -190,8 +190,9 @@ The user pastes a URL pointing to a `.dntr` file. Daintree:
 
 - Daintree does not validate signatures on URL-installed plugins. Trust is on the user.
 - No TLS enforcement beyond what the OS does for HTTPS. Installing from non-HTTPS URLs is allowed but flagged in the dialog.
-- Redirects are followed up to 5 hops. Final-URL content-type determines acceptance.
-- The install dialog shows the original URL, the resolved URL after redirects, and the declared capabilities, so users can spot suspicious mismatches.
+- Redirects are followed by Chromium's net stack (capped at its built-in limit). Acceptance is decided from the final response's content-type; the `.dntr`-suffix fallback is checked against the **original** pasted URL's path, since the resolved URL isn't reliable through Electron's fetch.
+- Private, loopback, and link-local hosts are rejected before the fetch runs (SSRF guard).
+- The install dialog shows the original URL and the declared capabilities, so users can spot suspicious mismatches.
 
 Install only from URLs you trust.
 
@@ -216,8 +217,13 @@ Daintree:
 
 1. Unloads the plugin (disposer cascade runs).
 2. Terminates any MCP subprocesses the plugin had spawned.
-3. Deletes `~/.daintree/plugins/{publisher}.{name}/`.
-4. Removes plugin-scoped settings from project/user config. **Secrets persist** unless the user explicitly checks "also remove stored secrets" — this is to prevent accidental loss of an API token the user might re-enter for a reinstall.
+3. Revokes every TOFU consent pin for the plugin (always, regardless of the settings choice) so a reinstall re-prompts rather than inheriting prior approvals.
+4. Deletes `~/.daintree/plugins/{publisher}.{name}/`.
+5. By default, **keeps** the plugin's user-scope settings file (`~/.daintree/plugin-settings/{publisher}.{name}.json`) so an API token survives a reinstall. The CLI's `--delete-settings` flag (or the UI's "also remove stored settings" checkbox) deletes that file instead.
+
+Secrets are **not** stored separately — they live as plaintext JSON in the same user-scope settings file (`type: "secret"` only affects how the UI renders the value; there's no OS keychain). So "keep settings" keeps the secrets too, and `--delete-settings` removes them.
+
+Project-scope settings (`<projectRoot>/.daintree/plugin-settings/{publisher}.{name}.json`) are **never** touched by uninstall — they're tracked per-repo and removing them is the project's concern.
 
 Uninstall is reversible only from a backup — Daintree doesn't maintain a trash bin for plugins.
 

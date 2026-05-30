@@ -142,6 +142,18 @@ function fakeResponse(
   };
 }
 
+/** A 3xx redirect response carrying a `Location` header (manual-follow path). */
+function redirectResponse(location: string, status = 302) {
+  return {
+    ok: false,
+    status,
+    headers: {
+      get: (k: string) => (k.toLowerCase() === "location" ? location : null),
+    },
+    body: { cancel: () => Promise.resolve() },
+  };
+}
+
 /** Install a URL-sourced plugin and return its recorded archive hash. */
 async function installUrlPlugin(
   service: PluginService,
@@ -239,6 +251,51 @@ describe("checkForUpdate — guards", () => {
       expect(result.message).toContain("private or loopback");
     }
     expect(netMock.fetch).not.toHaveBeenCalled();
+    service.dispose();
+  });
+});
+
+describe("checkForUpdate — redirect SSRF guard", () => {
+  it.each([
+    "http://127.0.0.1/plugin.dntr",
+    "https://169.254.169.254/plugin.dntr",
+    "https://192.168.0.42/plugin.dntr",
+    "http://[::1]/plugin.dntr",
+  ])(
+    "rejects a redirect to a private host %s after a public original URL",
+    async (privateTarget) => {
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      const manifest = { name: "acme.redir", version: "1.0.0" };
+      await installUrlPlugin(service, manifest);
+      // The public original URL passes the entry guard, then 302s to a private host.
+      netMock.fetch.mockResolvedValueOnce(redirectResponse(privateTarget));
+
+      const result = await service.checkForUpdate("acme.redir");
+
+      expect(result.status).toBe("fetch-failed");
+      if (result.status === "fetch-failed") {
+        expect(result.message).toContain("private or loopback");
+      }
+      // The first hop was fetched; the private target never was.
+      expect(netMock.fetch).toHaveBeenCalledTimes(1);
+      expect(await leftoverTempDirs()).toHaveLength(0);
+      service.dispose();
+    }
+  );
+
+  it("follows a public→public redirect and compares the final archive", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const manifest = { name: "acme.redirok", version: "1.0.0" };
+    await installUrlPlugin(service, manifest);
+    const bytes = await readArchiveBytes(manifest);
+    netMock.fetch
+      .mockResolvedValueOnce(redirectResponse("https://cdn.example.net/plugin.dntr"))
+      .mockResolvedValueOnce(fakeResponse([new Uint8Array(bytes)]));
+
+    const result = await service.checkForUpdate("acme.redirok");
+
+    expect(result).toEqual({ status: "up-to-date" });
+    expect(netMock.fetch).toHaveBeenCalledTimes(2);
     service.dispose();
   });
 });
