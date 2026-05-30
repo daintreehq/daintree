@@ -200,4 +200,16 @@ describe("TerminalProcess onExit — master fd release (#9539)", () => {
 
     expect(pty.destroy).toHaveBeenCalledTimes(1);
   });
+
+  it("releases the master fd even when an agent terminal is preserved on exit", () => {
+    const pty = createControllablePty();
+
+    // launchAgentId + exitCode 0 → shouldPreserveOnExit() returns true, so the
+    // onExit handler takes the preserve early-return. teardown() runs before
+    // that return, so the fd is still released.
+    createTerminal(pty, { kind: "terminal", launchAgentId: "claude" });
+    pty.emitExit(0);
+
+    expect(pty.destroy).toHaveBeenCalledTimes(1);
+  });
 });
