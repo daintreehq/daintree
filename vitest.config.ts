@@ -22,7 +22,9 @@ export default defineConfig({
       "src/**/*.{test,spec}.{js,ts,jsx,tsx}",
       "shared/**/*.{test,spec}.{js,ts}",
       "scripts/**/*.{test,spec}.{js,ts,mjs}",
+      "e2e/helpers/__tests__/*.{test,spec}.{js,ts}",
       "plugins/**/*.{test,spec}.{js,ts,jsx,tsx}",
+      "packages/**/*.{test,spec}.{js,ts,jsx,tsx}",
     ],
     exclude: [
       "node_modules",

@@ -42,6 +42,7 @@ import {
   PanelBottomClose,
   Pause,
   SquareTerminal,
+  Square,
   Trash2,
   Undo2,
   Zap,
@@ -139,6 +140,8 @@ export interface WorktreeMenuItemsProps {
   onResourceConnect?: () => void;
   onResourceStatus?: () => void;
   onResourceTeardown?: () => void;
+  onStopDevServer?: (worktreeId: string) => void;
+  onRestartDevServer?: (worktreeId: string) => void;
 }
 
 export function WorktreeMenuItems({
@@ -193,6 +196,8 @@ export function WorktreeMenuItems({
   onResourceConnect,
   onResourceStatus,
   onResourceTeardown,
+  onStopDevServer,
+  onRestartDevServer,
 }: WorktreeMenuItemsProps) {
   const hasIssueItem = Boolean(worktree.issueNumber && onOpenIssueExternal);
   const hasPRItem = Boolean(worktree.linked?.pr && onOpenPRExternal);
@@ -319,6 +324,24 @@ export function WorktreeMenuItems({
       </C.Sub>
 
       <C.Separator />
+
+      {(onStopDevServer || onRestartDevServer) && (
+        <>
+          {onStopDevServer && (
+            <C.Item onSelect={() => onStopDevServer(worktree.id)}>
+              <Square className="w-3.5 h-3.5 mr-2" />
+              Stop Dev Server
+            </C.Item>
+          )}
+          {onRestartDevServer && (
+            <C.Item onSelect={() => onRestartDevServer(worktree.id)}>
+              <RefreshCw className="w-3.5 h-3.5 mr-2" />
+              Restart Dev Server
+            </C.Item>
+          )}
+          <C.Separator />
+        </>
+      )}
 
       {/* Resource */}
       {hasResourceConfig && (

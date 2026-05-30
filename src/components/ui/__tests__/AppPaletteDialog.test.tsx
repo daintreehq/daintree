@@ -198,3 +198,27 @@ describe("AppPaletteDialog focus restore", () => {
     document.body.removeChild(trigger);
   });
 });
+
+// VoiceOver suppresses `aria-live` updates outside the focused `aria-modal`
+// subtree (Chromium 354736464). Daintree co-locates a live-region inside
+// AppPaletteDialog so the DOM-mutation fallback path survives that bug.
+describe("AppPaletteDialog co-located live region", () => {
+  beforeEach(() => {
+    _resetForTests();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+    usePaletteStore.setState({ activePaletteId: null });
+  });
+
+  afterEach(() => {
+    _resetForTests();
+  });
+
+  it("renders an aria-live region inside the aria-modal subtree", () => {
+    renderPalette({ isOpen: true });
+    const dialog = screen.getByRole("dialog", { name: "Test palette" });
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    const liveRegions = dialog.querySelectorAll("[aria-live]");
+    expect(liveRegions.length).toBeGreaterThan(0);
+  });
+});

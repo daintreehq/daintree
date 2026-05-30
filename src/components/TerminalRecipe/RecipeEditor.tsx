@@ -7,6 +7,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { RecipeVariablePreview } from "@/components/TerminalRecipe/RecipeVariablePreview";
 
 function cloneTerminal(t: RecipeTerminal): RecipeTerminal {
   return { ...t, env: t.env ? { ...t.env } : {} };
@@ -108,9 +109,7 @@ export function RecipeEditor({
       setTerminals(nextTerminals);
       setShowInEmptyState(nextShowInEmptyState);
       setAutoAssign(nextAutoAssign);
-      setScope(
-        isInRepoRecipeId(recipe.id) || recipe.projectId !== undefined ? "project" : "global"
-      );
+      setScope(isInRepoRecipeId(recipe) || recipe.projectId !== undefined ? "project" : "global");
       initialStateRef.current = serializeEditorState(
         recipe.name,
         nextTerminals,
@@ -288,7 +287,7 @@ export function RecipeEditor({
           </label>
           {recipe ? (
             <div className="px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text text-sm opacity-75">
-              {isInRepoRecipeId(recipe.id) || recipe.projectId !== undefined
+              {isInRepoRecipeId(recipe) || recipe.projectId !== undefined
                 ? "Project"
                 : "Global (all projects)"}
             </div>
@@ -541,11 +540,15 @@ export function RecipeEditor({
                         aria-describedby={`terminal-initial-prompt-help-${index}`}
                         className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text resize-y min-h-[60px]"
                       />
+                      <RecipeVariablePreview
+                        initialPrompt={terminal.initialPrompt || ""}
+                        worktreeId={worktreeId ?? recipe?.worktreeId}
+                      />
                       <p
                         id={`terminal-initial-prompt-help-${index}`}
                         className="text-xs text-text-muted mt-1 select-text"
                       >
-                        This prompt will be sent to the agent when it starts. Variables:{" "}
+                        Variables:{" "}
                         <code className="text-daintree-text/70">{"{{issue_number}}"}</code>,{" "}
                         <code className="text-daintree-text/70">{"{{pr_number}}"}</code>,{" "}
                         <code className="text-daintree-text/70">{"{{number}}"}</code>,{" "}

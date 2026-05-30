@@ -1,5 +1,6 @@
-import { Menu, dialog, BrowserWindow, shell, app, webContents } from "electron";
+import { Menu, dialog, BrowserWindow, app, webContents } from "electron";
 import { projectStore } from "./services/ProjectStore.js";
+import { openExternalUrl } from "./utils/openExternal.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { broadcastProjectSwitchUpdates } from "./ipc/projectSwitchBroadcast.js";
 import { getEffectiveRegistry } from "../shared/config/agentRegistry.js";
@@ -16,6 +17,7 @@ import { distributePortsToView } from "./window/portDistribution.js";
 import { autoUpdaterService } from "./services/AutoUpdaterService.js";
 import type { UpdateMenuState } from "./services/AutoUpdaterService.js";
 import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
+import { evaluateWhen } from "./services/WhenClauseService.js";
 import { getAppWebContents } from "./window/webContentsRegistry.js";
 import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
@@ -131,6 +133,7 @@ export function createApplicationMenu(
     const items: Electron.MenuItemConstructorOptions[] = [];
     for (const { item } of getPluginMenuItems()) {
       if (item.location !== location) continue;
+      if (!evaluateWhen(item.when, {})) continue;
       items.push({
         label: item.label,
         accelerator: item.accelerator ? convertShortcutToAccelerator(item.accelerator) : undefined,
@@ -476,7 +479,7 @@ export function createApplicationMenu(
         {
           label: "Learn More",
           click: async () => {
-            await shell.openExternal("https://github.com/daintreehq/daintree");
+            await openExternalUrl("https://github.com/daintreehq/daintree");
           },
         },
         ...(process.platform !== "darwin" && app.isPackaged && !isWindowsStoreBuild()

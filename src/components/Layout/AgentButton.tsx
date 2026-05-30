@@ -2,7 +2,6 @@ import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -388,7 +387,6 @@ export function AgentButton({
                   aria-keyshortcuts={ariaShortcut}
                 >
                   {iconElement}
-                  <ShortcutRevealChip actionId={`agent.${type}`} />
                 </Button>
               </span>
             </TooltipTrigger>
@@ -473,7 +471,6 @@ export function AgentButton({
                 aria-keyshortcuts={ariaShortcut}
               >
                 {iconElement}
-                <ShortcutRevealChip actionId={`agent.${type}`} />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">

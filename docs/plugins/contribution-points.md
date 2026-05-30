@@ -12,19 +12,19 @@ Each section below documents a contribution point, its schema, an example, and c
 
 ## Commands — _Shipped_
 
-Commands are callable actions that appear in the command palette and can be bound to keybindings, toolbar buttons, or menu items.
+Commands are callable actions that appear in the command palette and can be bound to keybindings, toolbar buttons, or menu items. Declare them in `plugin.json` so the command shows up in the palette before your plugin activates, or register them at runtime via `host.registerAction()` for dynamic cases. See [Host API → registerAction](./host-api.md#registeraction) for the full signature.
 
 ```json
 {
   "contributes": {
     "commands": [
       {
-        "name": "plan-from-issue",
+        "id": "plan-from-issue",
         "title": "Plan From Issue",
         "description": "Turn a Linear issue into a branch and agent session.",
         "category": "Linear Planner",
-        "danger": "confirm",
-        "keywords": ["linear", "plan", "issue"]
+        "kind": "command",
+        "danger": "confirm"
       }
     ]
   }
@@ -35,27 +35,23 @@ Commands are callable actions that appear in the command palette and can be boun
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `name` | yes | Matches `/^[a-z0-9][a-z0-9-]*$/`. Namespaced at runtime as `{pluginId}.{name}`. Also determines the handler file path — see below. |
-| `title` | yes | Palette label. |
-| `description` | yes | Subtitle in the palette and command detail views. |
-| `category` | yes | Grouping label; keep consistent across commands in the same plugin. |
-| `kind` | no | `"command"` (default) or `"query"`. Queries are expected to be read-only and idempotent. |
-| `danger` | no | `"safe"` (default) or `"confirm"`. A `confirm` command requires `{ confirmed: true }` when invoked by an agent. See [action-system](../architecture/action-system.md) for how danger works across the IDE. |
+| `id` | yes | Bare command id. Daintree namespaces it as `{pluginId}.{id}` at runtime — matching every other contribution surface. |
+| `title` | yes | Palette entry label. |
+| `description` | yes | One-line summary surfaced in the palette description. |
+| `category` | yes | Grouping label in the palette. Free-form; mirror your plugin's display name. |
+| `kind` | yes | `"command"` or `"query"`. |
+| `danger` | yes | `"safe"` or `"confirm"`. `"restricted"` is rejected — plugins cannot self-register restricted actions. The host raises `"safe"` to `"confirm"` automatically when the plugin holds a high-risk capability. |
 | `keywords` | no | Extra search terms for the palette. |
+| `inputSchema` | no | JSON schema validated against the dispatched `args` payload. |
 
-**Handler binding** — two ways:
+**Handler binding — two ways:**
 
-_Filesystem convention (simple case):_ a command named `plan-from-issue` looks for `src/plan-from-issue.ts` (or `.tsx`). Its default export is the handler.
+_Filesystem convention (manifest-declared, lazy import):_ a command with id `plan-from-issue` looks for `src/plan-from-issue.{ts,tsx,js,mjs}` (probed in that order) under your plugin directory. Its default export is the handler. The module is **not** imported until the command is first dispatched — twenty manifest commands cost zero activation time.
 
 ```ts
 // src/plan-from-issue.ts
-import type { CommandContext } from "@daintreehq/plugin-sdk";
-
-export default async function planFromIssue(ctx: CommandContext) {
-  // ctx.args — validated args if the command declares argsSchema
-  // ctx.dispatch — call other actions
-  // ctx.host — full host API
-  await ctx.showToast({ title: "Planning…" });
+export default async function planFromIssue(args: { issue: number }) {
+  // handler body
 }
 ```
 
@@ -82,9 +78,9 @@ export async function activate(host: PluginHostApi) {
 }
 ```
 
-If a command is declared in the manifest but no handler is bound — neither a filesystem file nor an imperative registration — running it produces a user-visible toast: `Command "{pluginId}.{name}" has no handler`. If an imperative registration references a name not in the manifest, it's allowed but the command doesn't appear in the palette or menus until you add it to the manifest.
+If a manifest-declared command has no matching `src/{id}.{ext}` file and no imperative `registerAction` override, running it produces a user-visible toast: `Command "{pluginId}.{id}" has no handler`. The manifest entry alone is enough to make the command appear in the palette so authors can wire it up incrementally.
 
-See the [Host API](./host-api.md#registeraction) reference for the full signature.
+**Collision rule:** a command whose resolved `{pluginId}.{id}` matches a built-in Daintree action id is rejected at load with a provenance `loadError` — the command does not register. Pick a different id.
 
 ## Panels — _Shipped_
 
@@ -124,14 +120,17 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 
 **Component registration** is covered by the **views** contribution point below — panels declare the slot, views provide the component.
 
-## Views — _Planned_
+## Views — _Shipped (panel surface; sidebar surface pending)_
 
-Views are the React components that render inside a panel. They depend on Daintree's renderer plugin host, which is in active development. The manifest shape is locked and stable; the runtime wiring is landing in the next phase.
+Views are the React components that render inside a panel. A view binds to a panel slot declared in `contributes.panels` by matching its bare `id`; at plugin load the matching panel kind gains a `componentPath` resolved to a `plugin://` URL. The renderer host (`PluginViewHost`) lazy-imports the module over Daintree's `plugin://` protocol and mounts it under an `ErrorBoundary` + `Suspense`. `location: "panel"` is wired today; `location: "sidebar"` logs a warning and is skipped until the future sidebar host ships. The contribution key keeps the `experimental_` prefix until the props contract has lived through a release; the shape below is the contract today.
 
 ```json
 {
   "contributes": {
-    "views": [
+    "panels": [
+      { "id": "dashboard", "name": "Cost Dashboard", "iconId": "gauge", "color": "#5b8def" }
+    ],
+    "experimental_views": [
       {
         "id": "dashboard",
         "name": "Cost Dashboard",
@@ -144,14 +143,16 @@ Views are the React components that render inside a panel. They depend on Daintr
 }
 ```
 
+**Pairing with `contributes.panels`** — a view binds to a panel by matching its bare `id` (pre-namespace) to a panel `id`. A view with no matching panel logs a warning and is skipped. A view targeting a panel with `hasPty: true` is also skipped — PTY panels render through `TerminalPane` and cannot host a plugin module.
+
 **Fields:**
 
 | Field | Required | Notes |
 | --- | --- | --- |
 | `id` | yes | Matches the panel `id` it provides a component for. Namespaced at runtime as `{pluginId}.{id}`. |
-| `name` | yes | Display label. |
-| `componentPath` | yes | Relative path to an ESM module inside the plugin. The module's default export is a React component. |
-| `location` | yes | `"panel"` (docked in the grid) or `"sidebar"` (sidebar contribution — future). |
+| `name` | yes | Display label, also used in the loading skeleton's accessible label. |
+| `componentPath` | yes | POSIX-relative path to an ESM module inside the plugin. The module's default export is a React component. Absolute paths and `..` segments are rejected at load time. |
+| `location` | yes | `"panel"` (docked in the grid — wired today) or `"sidebar"` (reserved for a future sidebar host; currently logs a warning and is skipped). |
 | `iconId` | no | Override the panel's icon for this view. |
 | `description` | no | Surface text for palette/preferences. |
 
@@ -159,18 +160,43 @@ Views are the React components that render inside a panel. They depend on Daintr
 
 **Component contract:**
 
+> **Pseudocode — not yet runnable.** The `useWorktree` import below resolves through `@daintreehq/plugin-sdk/react`, which is **Planned (F15/F36)** and ships no exports in v1 — see [Host API → React hooks](./host-api.md#react-hooks). The example shows the intended surface; in a v1 plugin the subpath resolves to an empty module (no `useWorktree`), so read worktree context through the `host` API passed to `activate()` instead.
+
 ```tsx
 // src/dashboard.tsx
+import { useEffect } from "react";
 import type { PanelViewProps } from "@daintreehq/plugin-sdk";
+// Planned (F15/F36): @daintreehq/plugin-sdk/react has no exports in v1.
 import { useWorktree } from "@daintreehq/plugin-sdk/react";
 
-export default function Dashboard({ panelId, disposeSignal }: PanelViewProps) {
+export default function Dashboard({ panelId, pluginId, disposeSignal }: PanelViewProps) {
   const worktree = useWorktree();
-  return <div>Dashboard for {worktree?.name ?? "no worktree"}</div>;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    // Chain the host signal so the fetch aborts on unmount AND when the
+    // host receives a `plugin:panel-kinds-changed` push that no longer
+    // contains this kind — before main tears down plugin IPC handlers.
+    const onAbort = (): void => controller.abort();
+    disposeSignal.addEventListener("abort", onAbort);
+    void fetch(`plugin://${pluginId}/api/cost-summary`, { signal: controller.signal });
+    return () => {
+      disposeSignal.removeEventListener("abort", onAbort);
+      controller.abort();
+    };
+  }, [pluginId, disposeSignal]);
+
+  return <div data-panel-id={panelId}>Dashboard for {worktree?.name ?? "no worktree"}</div>;
 }
 ```
 
-The view is wrapped in an error boundary by the host. An unhandled render error shows an inline fallback with the plugin name and a "Reload" button — it does not crash the rest of Daintree.
+| Prop | Type | Notes |
+| --- | --- | --- |
+| `panelId` | `string` | Opaque runtime id of the panel instance. Useful as a key for plugin-local panel-scoped state. |
+| `pluginId` | `string` | The plugin's manifest `name`. Stable for the lifetime of the host — useful for namespacing storage keys and log lines. |
+| `disposeSignal` | `AbortSignal` | Aborts on unmount and when the host receives a `plugin:panel-kinds-changed` push that omits this kind. The broadcast fires before main tears down plugin IPC handlers, so signal-driven cleanup runs while host APIs are still live. |
+
+The view is wrapped in an error boundary by the host. An unhandled render error shows an inline "Try again" affordance; clicking it produces a fresh `lazy()` reference so the dynamic import is re-evaluated rather than returning the cached failed promise.
 
 ## Toolbar buttons — _Shipped_
 
@@ -196,7 +222,7 @@ Toolbar buttons dispatch an existing action from the main toolbar.
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | Namespaced at runtime as `plugin.{pluginId}.{id}`. |
+| `id` | yes | Namespaced at runtime as `{pluginId}.{id}` — matches the convention used by every other contribution surface. |
 | `label` | yes | Hover tooltip. |
 | `iconId` | yes | Registered icon ID. |
 | `actionId` | yes | Fully-qualified action ID, including plugin namespace. Built-in actions (e.g. `terminal.new`) also work. |
@@ -230,7 +256,7 @@ Menu items add entries to Daintree's application menus.
 | `location` | yes | One of `"terminal"`, `"file"`, `"view"`, `"help"`. Determines which top-level menu the item appears in. |
 | `accelerator` | no | Platform-neutral shortcut, e.g. `"Cmd+Shift+L"` (becomes `Ctrl+Shift+L` on Windows/Linux). |
 
-## Keybindings — _Planned_
+## Keybindings — _Shipped_
 
 Keybindings map a key combination to an action.
 
@@ -241,6 +267,7 @@ Keybindings map a key combination to an action.
       {
         "actionId": "acme.linear-planner.plan-from-issue",
         "combo": "Cmd+Shift+P",
+        "scope": "global",
         "when": "panel.focused"
       }
     ]
@@ -254,11 +281,13 @@ Keybindings map a key combination to an action.
 | --- | --- | --- |
 | `actionId` | yes | Fully-qualified action ID, usually one your plugin declared. |
 | `combo` | yes | Normalized key combo string, same format as Daintree's default keybindings. Chords (`"Cmd+K Cmd+S"`) supported. |
-| `when` | no | Context expression. Future; in v1 always-active bindings only. |
+| `scope` | no | One of `"global"`, `"terminal"`, `"modal"`, `"worktreeList"`, `"portal"`, `"worktreeGrid"`, `"dev-preview"`. Defaults to `"global"`. An unknown scope is rejected at the manifest gate. |
+| `description` | no | Human-readable description of what the binding does. |
+| `when` | no | Context expression gating when the binding is active. |
 
-Conflicts with user overrides or other plugins' bindings are resolved by Daintree's existing keybinding service — plugin bindings are low-priority and yield to user overrides. See `src/services/KeybindingService.ts:325` for the registration API.
+Bindings register when the plugin loads and unregister on unload. Conflicts with user overrides or other plugins' bindings are resolved by Daintree's existing keybinding service — plugin bindings are low-priority and yield to user overrides. See `src/services/KeybindingService.ts:325` for the registration API.
 
-## Settings schema — _Planned_
+## Settings schema — _Shipped_
 
 Declares user-configurable settings for your plugin.
 
@@ -270,14 +299,14 @@ Declares user-configurable settings for your plugin.
         "id": "linear.apiToken",
         "type": "secret",
         "scope": "user",
-        "title": "Linear API Token",
+        "label": "Linear API Token",
         "description": "Personal API token from linear.app/settings/api"
       },
       {
         "id": "linear.defaultTeam",
         "type": "string",
         "scope": "project",
-        "title": "Default team",
+        "label": "Default team",
         "description": "Team slug to use when opening a new planning session",
         "default": ""
       }
@@ -286,7 +315,19 @@ Declares user-configurable settings for your plugin.
 }
 ```
 
-**Field types:** `string`, `number`, `boolean`, `secret`, `enum`, `json`.
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Setting key, used to read/write the value via the host API. |
+| `type` | no | One of `string`, `number`, `boolean`, `enum`, `json`, `secret`. Defaults to `string`. |
+| `label` | no | Field label shown in the generated form. |
+| `description` | no | Help text shown beneath the field. |
+| `default` | no | Default value. |
+| `scope` | no | `user` (global) or `project` (per-project). Defaults to `user`. |
+| `options` | no | Non-empty string array; required when `type` is `enum`. |
+| `min` / `max` | no | Numeric bounds for `number` settings. `min` cannot exceed `max`. |
+| `secret` | no | Legacy boolean; `secret: true` normalizes to `type: "secret"`. Prefer `type: "secret"`. |
 
 **Scopes:** `user` (global, persisted in Daintree config), `project` (per-project, persisted with project state).
 
@@ -298,7 +339,7 @@ const token = await host.settings.get<string>("linear.apiToken");
 
 Changes fire a subscription callback, so you don't need to reactivate to pick them up.
 
-## Context menus — _Planned_
+## Context menus — _Shipped_
 
 Adds entries to right-click menus on specific UI elements.
 
@@ -323,12 +364,12 @@ Context menus follow the same `actionId` dispatch pattern as menu items.
 
 ## MCP servers — _Planned_
 
-Declares Model Context Protocol servers the plugin ships. See [Agent extensions → MCP servers](./agent-extensions.md#mcp-servers) for the full story.
+Declares Model Context Protocol servers the plugin ships. The manifest shape is validated but the `experimental_` prefix signals that it may change before the feature ships — use with awareness that the contract is not yet locked. See [Agent extensions → MCP servers](./agent-extensions.md#mcp-servers) for the full story.
 
 ```json
 {
   "contributes": {
-    "mcpServers": [
+    "experimental_mcpServers": [
       {
         "id": "linear",
         "name": "Linear MCP",
@@ -356,6 +397,8 @@ Daintree supervises the process: lazy spawn on first tool use, hard kill on Dain
 **Intentionally excluded:** remote MCP transports (`url`), explicit transport types, per-server working directories, restart policies. These are deferred until use cases concretely require them.
 
 ## Skills — _Planned_
+
+> Not yet present in the manifest schema. Documented here as a design preview; the shape is not yet locked.
 
 Markdown-defined capability snippets that extend Daintree's built-in MCP server. Agents running in Daintree gain access to them through Daintree's MCP connection.
 

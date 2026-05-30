@@ -1,3 +1,16 @@
+/**
+ * Electron stability soak — NOT the Playwright e2e smoke suite.
+ *
+ * This script launches the built Electron app in --smoke-test mode and
+ * validates stability markers (node-pty, renderer load, IPC bridge, terminal
+ * stress, project persistence). It runs on push in CI (Linux, xvfb) via
+ * `npm run test:smoke`, gated by `.github/workflows/ci.yml`.
+ *
+ * The Playwright release-gate smoke suite lives in `e2e/core/` and runs via
+ * `npm run test:e2e:core`. See `docs/e2e-testing.md` for the distinction
+ * and the smoke audit cadence.
+ */
+
 import { spawn } from "child_process";
 import { constants as fsConstants } from "fs";
 import { access, mkdtemp, rm } from "fs/promises";
@@ -20,6 +33,7 @@ const BUILD_ARTIFACTS = [
 
 const REQUIRED_MARKERS = [
   "[SMOKE] CHECK: node-pty native module",
+  "[SMOKE] CHECK: better-sqlite3 native module",
   "[SMOKE] CHECK: Renderer did-finish-load",
   "[SMOKE] CHECK: Renderer + IPC bridge",
   "[SMOKE] CHECK: Terminal stress rounds",

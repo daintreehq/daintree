@@ -28,6 +28,10 @@ const soundServiceMock = vi.hoisted(() => ({
   getVariantCount: vi.fn(() => 1),
 }));
 
+const osDndServiceMock = vi.hoisted(() => ({
+  getState: vi.fn<() => boolean | undefined>(() => undefined),
+}));
+
 vi.mock("../../store.js", () => ({
   store: storeMock,
 }));
@@ -42,6 +46,10 @@ vi.mock("../NotificationService.js", () => ({
 
 vi.mock("../SoundService.js", () => ({
   soundService: soundServiceMock,
+}));
+
+vi.mock("../OsDndService.js", () => ({
+  getOsDndService: () => osDndServiceMock,
 }));
 
 import { events } from "../events.js";
@@ -110,6 +118,7 @@ describe("AgentNotificationService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    osDndServiceMock.getState.mockReturnValue(undefined);
     agentNotificationService.initialize();
     // Register the test terminal as watched so gate passes by default
     agentNotificationService.syncWatchedPanels(["term-1"]);
@@ -910,6 +919,74 @@ describe("AgentNotificationService", () => {
       // Should continue existing pulse, not restart
       vi.advanceTimersByTime(10_000);
       expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips pulse audio while OS DND is active but keeps the loop alive", () => {
+      mockStore({ soundEnabled: true, workingPulseEnabled: true });
+      osDndServiceMock.getState.mockReturnValue(true);
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).not.toHaveBeenCalled();
+
+      // OS DND turns off mid-loop — next tick must fire normally without a
+      // new spawn event, proving the interval timer is still armed.
+      osDndServiceMock.getState.mockReturnValue(false);
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not gate the pulse when OS DND state is undefined", () => {
+      mockStore({ soundEnabled: true, workingPulseEnabled: true });
+      osDndServiceMock.getState.mockReturnValue(undefined);
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(10_000);
+
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not gate the pulse when OS DND is explicitly off", () => {
+      mockStore({ soundEnabled: true, workingPulseEnabled: true });
+      osDndServiceMock.getState.mockReturnValue(false);
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(10_000);
+
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("OS DND hard constraint — never suppresses in-app toasts", () => {
+    // The issue explicitly forbids `osDndActive` from suppressing in-app
+    // notifications. The OS already silences its own native banners; double-
+    // gating would hide signals the user cannot observe.
+
+    it("completion notifications still fire when OS DND is active", () => {
+      mockStore({ completedEnabled: true, soundEnabled: true });
+      osDndServiceMock.getState.mockReturnValue(true);
+
+      events.emit("agent:state-changed", makePayload("completed", "working"));
+      vi.advanceTimersByTime(2001); // past completion debounce + flush
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.any(Object),
+        "notification:watch-navigate",
+        true
+      );
+    });
+
+    it("waiting notifications still fire when OS DND is active", () => {
+      mockStore({ waitingEnabled: true, soundEnabled: true });
+      osDndServiceMock.getState.mockReturnValue(true);
+
+      events.emit("agent:state-changed", makePayload("waiting", "working"));
+      vi.advanceTimersByTime(200); // past the burst window
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
     });
   });
 

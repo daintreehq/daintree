@@ -28,4 +28,75 @@ describe("Daintree app CSP", () => {
     expect(getDaintreeAppCSP(true)).toBe(getDaintreeAppDevCSP());
     expect(getDaintreeAppCSP(false)).toBe(getDaintreeAppProdCSP());
   });
+
+  describe("scriptSrcHashes option", () => {
+    it("appends a single hash to script-src in production", () => {
+      const csp = getDaintreeAppProdCSP({ scriptSrcHashes: ["'sha256-abc123'"] });
+      expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval' plugin: 'sha256-abc123'");
+    });
+
+    it("appends multiple hashes space-separated in production", () => {
+      const csp = getDaintreeAppProdCSP({
+        scriptSrcHashes: ["'sha256-aaa'", "'sha256-bbb'"],
+      });
+      expect(csp).toContain(
+        "script-src 'self' 'wasm-unsafe-eval' plugin: 'sha256-aaa' 'sha256-bbb'"
+      );
+    });
+
+    it("omits the hash list when scriptSrcHashes is empty", () => {
+      const csp = getDaintreeAppProdCSP({ scriptSrcHashes: [] });
+      expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval' plugin:;");
+      expect(csp).not.toMatch(/'sha256-/);
+    });
+
+    it("omits the hash list when options is undefined", () => {
+      expect(getDaintreeAppProdCSP()).toBe(getDaintreeAppProdCSP({ scriptSrcHashes: [] }));
+    });
+
+    it("does not modify the dev CSP even when hashes are provided", () => {
+      const csp = getDaintreeAppCSP(true, { scriptSrcHashes: ["'sha256-abc'"] });
+      expect(csp).toBe(getDaintreeAppDevCSP());
+      expect(csp).not.toMatch(/'sha256-/);
+    });
+
+    it("threads scriptSrcHashes through getDaintreeAppCSP to the prod variant", () => {
+      const csp = getDaintreeAppCSP(false, { scriptSrcHashes: ["'sha256-xyz'"] });
+      expect(csp).toContain("'sha256-xyz'");
+    });
+  });
+
+  describe("plugin: scheme allowance", () => {
+    // `React.lazy(() => import("plugin://..."))` in
+    // `src/components/Panel/PluginViewHost.tsx` is governed by `script-src`;
+    // `connect-src` covers any `fetch("plugin://...")` plugin authors layer on
+    // top. Both must include `plugin:` for non-PTY plugin panels to render in
+    // production. Past lesson #3757 forbids `bypassCSP: true` — this narrow
+    // directive expansion is the load-bearing alternative.
+    it("allows plugin: in script-src in production for dynamic plugin imports", () => {
+      const csp = getDaintreeAppProdCSP();
+      const scriptSrcMatch = csp.match(/script-src ([^;]*);/);
+      expect(scriptSrcMatch).not.toBeNull();
+      expect(scriptSrcMatch?.[1]).toContain("plugin:");
+    });
+
+    it("allows plugin: in connect-src in production for plugin-served fetches", () => {
+      const csp = getDaintreeAppProdCSP();
+      const connectSrcMatch = csp.match(/connect-src ([^;]*);/);
+      expect(connectSrcMatch).not.toBeNull();
+      expect(connectSrcMatch?.[1]).toContain("plugin:");
+    });
+
+    it("allows plugin: in script-src in development", () => {
+      const csp = getDaintreeAppDevCSP();
+      const scriptSrcMatch = csp.match(/script-src ([^;]*);/);
+      expect(scriptSrcMatch?.[1]).toContain("plugin:");
+    });
+
+    it("allows plugin: in connect-src in development", () => {
+      const csp = getDaintreeAppDevCSP();
+      const connectSrcMatch = csp.match(/connect-src ([^;]*);/);
+      expect(connectSrcMatch?.[1]).toContain("plugin:");
+    });
+  });
 });

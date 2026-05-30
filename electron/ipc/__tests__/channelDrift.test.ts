@@ -58,6 +58,7 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   "app-agent:dispatch-action-response",
   "mcp:dispatch-action-response",
   "mcp:get-manifest-response",
+  "plugin:dispatch-action-response",
 
   // fire-and-forget — main→renderer broadcast for in-app demo command
   // forwarding (`sendCommandAndAwait` in handlers/demo.ts). The renderer

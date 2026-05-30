@@ -10,7 +10,7 @@ import {
   openTerminal,
 } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
-import { waitForTerminalText } from "../../helpers/terminal";
+import { waitForTerminalTextIgnoringLineBreaks } from "../../helpers/terminal";
 import { T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
 let ctx: AppContext;
@@ -140,6 +140,6 @@ test.describe.serial("Core: Context Injection", () => {
     expect(injectResult?.error).toBeFalsy();
 
     // Verify injected content appears in terminal buffer
-    await waitForTerminalText(panel, "index.ts", T_LONG);
+    await waitForTerminalTextIgnoringLineBreaks(panel, "index.ts", T_LONG);
   });
 });

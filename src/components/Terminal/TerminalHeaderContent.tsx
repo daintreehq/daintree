@@ -344,9 +344,12 @@ export function TerminalHeaderContent({
         </Tooltip>
       )}
 
-      {/* Exit code badge */}
+      {/* Exit code badge — aria-live="off" overrides role="status"'s implicit
+          polite live region. The global announcer in useAccessibilityAnnouncements
+          routes the transition once with a pane-title prefix, avoiding competing
+          live regions across a multi-pane fleet (#9204). */}
       {isExited && (
-        <span className="text-xs font-mono text-status-error ml-1" role="status" aria-live="polite">
+        <span className="text-xs font-mono text-status-error ml-1" role="status" aria-live="off">
           [exit {exitCode}]
         </span>
       )}
@@ -358,7 +361,7 @@ export function TerminalHeaderContent({
             <div
               className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-medium text-daintree-text px-1.5 py-0.5 rounded ml-1"
               role="status"
-              aria-live="polite"
+              aria-live="off"
             >
               <span className="font-mono tabular-nums">{queueCount}</span>
               <span>queued</span>
@@ -377,7 +380,7 @@ export function TerminalHeaderContent({
             <div
               className="flex items-center gap-1 text-xs font-sans bg-status-warning/15 text-status-warning px-1.5 py-0.5 rounded ml-1"
               role="status"
-              aria-live="polite"
+              aria-live="off"
             >
               <Pause className="w-3 h-3" aria-hidden="true" />
               Paused
@@ -399,7 +402,7 @@ export function TerminalHeaderContent({
             <div
               className="flex items-center gap-1 text-xs font-sans bg-status-warning/15 text-status-warning px-1.5 py-0.5 rounded ml-1"
               role="status"
-              aria-live="polite"
+              aria-live="off"
             >
               <Pause className="w-3 h-3" aria-hidden="true" />
               Paused (memory)
@@ -421,7 +424,7 @@ export function TerminalHeaderContent({
             <div
               className="flex items-center gap-1 text-xs font-sans bg-status-warning/15 text-status-warning px-1.5 py-0.5 rounded ml-1"
               role="status"
-              aria-live="polite"
+              aria-live="off"
             >
               <Pause className="w-3 h-3" aria-hidden="true" />
               Suspended
@@ -446,7 +449,7 @@ export function TerminalHeaderContent({
             <div
               className="flex items-center gap-1 text-xs font-sans bg-overlay-soft text-daintree-text/60 px-1.5 py-0.5 rounded ml-1 border border-divider"
               role="status"
-              aria-live="polite"
+              aria-live="off"
               data-testid="terminal-hibernated-badge"
             >
               <Moon className="w-3 h-3" aria-hidden="true" />

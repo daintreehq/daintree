@@ -14,6 +14,9 @@ import { DEFAULT_KEYBINDINGS } from "./defaultKeybindings";
 import { isMac } from "@/lib/platform";
 import { BUILT_IN_ACTION_IDS } from "@shared/config/actionIds";
 import { KEY_ACTION_VALUES } from "@shared/types/keymap";
+import { evaluate } from "@shared/utils/whenClause/evaluator";
+import { parse } from "@shared/utils/whenClause/parser";
+import type { WhenClauseContext } from "@shared/utils/whenClause/types";
 
 export * from "./keybindingUtils";
 export * from "./defaultKeybindings";
@@ -27,6 +30,21 @@ const builtInActionIdSet: ReadonlySet<string> = new Set([
   ...KEY_ACTION_VALUES,
 ]);
 
+const whenAstCache = new Map<string, ReturnType<typeof parse>>();
+
+function evaluateWhenClause(when: string, ctx: WhenClauseContext): boolean {
+  try {
+    let ast = whenAstCache.get(when);
+    if (!ast) {
+      ast = parse(when);
+      whenAstCache.set(when, ast);
+    }
+    return evaluate(ast, ctx);
+  } catch {
+    return false;
+  }
+}
+
 class KeybindingService {
   private bindings: Map<string, RegisteredKeybindingConfig[]> = new Map();
   private overrides: Map<string, string[]> = new Map();
@@ -36,6 +54,7 @@ class KeybindingService {
   private lastInvalidKey: string | null = null;
   private chordTimeout: NodeJS.Timeout | null = null;
   private listeners = new Set<() => void>();
+  private whenContext: WhenClauseContext = {};
 
   constructor() {
     DEFAULT_KEYBINDINGS.forEach((binding) => {
@@ -221,6 +240,10 @@ class KeybindingService {
     }
   }
 
+  setWhenContext(ctx: WhenClauseContext): void {
+    this.whenContext = ctx;
+  }
+
   getScope(): KeyScope {
     return this.currentScope;
   }
@@ -365,6 +388,7 @@ class KeybindingService {
     for (const arr of this.bindings.values()) {
       for (const binding of arr) {
         if (!this.scopeAllows(binding.scope)) continue;
+        if (binding.when && !evaluateWhenClause(binding.when, this.whenContext)) continue;
 
         const hasOverride = this.overrides.has(binding.actionId);
         const effectiveCombo = hasOverride
@@ -463,8 +487,14 @@ class KeybindingService {
       for (const arr of this.bindings.values()) {
         for (const existing of arr) {
           if (existing.actionId === config.actionId) continue;
-          if (!existing.combo) continue;
-          if (!combosFieldsEqual(existing.combo, config.combo)) continue;
+          // Compare against the EFFECTIVE combo — a user override remaps where a
+          // built-in actually fires, so a plugin binding at the overridden combo
+          // would otherwise slip past this guard and then win at resolution
+          // (PLUGIN priority > DEFAULT). Fall back to the stored combo when no
+          // override exists.
+          const effectiveCombo = this.getEffectiveCombo(existing.actionId) ?? existing.combo;
+          if (!effectiveCombo) continue;
+          if (!combosFieldsEqual(effectiveCombo, config.combo)) continue;
           if (!scopesConflict(existing.scope, config.scope)) continue;
           console.warn(
             `[KeybindingService] Skipping binding for "${config.actionId}" (${config.combo}, scope=${config.scope}) — combo already registered to "${existing.actionId}" (scope=${existing.scope}). Use setOverride() to rebind.`
@@ -475,17 +505,44 @@ class KeybindingService {
     }
     const arr = this.bindings.get(config.actionId);
     if (arr) {
-      // Replace a same-actionId entry with the same combo (self-update), otherwise push.
+      // Replace only on a true self-update: the existing same-combo entry must
+      // share this config's owner (both built-in/user with no pluginId, or the
+      // same pluginId). Replacing a differently-owned entry would let a plugin
+      // clobber a built-in binding for the same action+combo — and destroy it on
+      // unload, since removePluginBindings() filters by pluginId. Push instead so
+      // both coexist; resolution picks by priority and unload only drops the plugin's.
       const existingIdx = arr.findIndex(
         (b) => b.combo?.trim().toLowerCase() === config.combo?.trim().toLowerCase()
       );
-      if (existingIdx !== -1) {
+      if (existingIdx !== -1 && arr[existingIdx]!.pluginId === config.pluginId) {
         arr[existingIdx] = config;
       } else {
         arr.push(config);
       }
     } else {
       this.bindings.set(config.actionId, [config]);
+    }
+    // Dynamic registrations (plugin load) must flush to subscribers — the
+    // shortcuts reference, settings tab, and hint hovers read from this snapshot.
+    this.notifyListeners();
+  }
+
+  removePluginBindings(pluginId: string): void {
+    let changed = false;
+    for (const [actionId, bindings] of this.bindings.entries()) {
+      const filtered = bindings.filter((b) => b.pluginId !== pluginId);
+      if (filtered.length === bindings.length) {
+        continue;
+      }
+      changed = true;
+      if (filtered.length === 0) {
+        this.bindings.delete(actionId);
+      } else {
+        this.bindings.set(actionId, filtered);
+      }
+    }
+    if (changed) {
+      this.notifyListeners();
     }
   }
 

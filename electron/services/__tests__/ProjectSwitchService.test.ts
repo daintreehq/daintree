@@ -174,13 +174,16 @@ describe("ProjectSwitchService", () => {
 
     expect(result.id).toBe("project-new");
     expect(projectStoreMock.setCurrentProject).toHaveBeenCalledWith("project-new");
-    expect(projectStoreMock.saveProjectState).toHaveBeenCalledWith(
-      "project-old",
-      expect.objectContaining({
-        projectId: "project-old",
-        activeWorktreeId: "wt-old",
-      })
+    // The outgoing save preserves the per-project state and must NOT copy the
+    // main-process store's activeWorktreeId ("wt-old"), which lags the renderer
+    // and could be a stale/incidental worktree (#9512). The persisted state here
+    // has no activeWorktreeId, so the saved value is left undefined.
+    const outgoingSave = projectStoreMock.saveProjectState.mock.calls.find(
+      (c) => c[0] === "project-old"
     );
+    expect(outgoingSave).toBeDefined();
+    expect((outgoingSave![1] as { projectId?: string }).projectId).toBe("project-old");
+    expect((outgoingSave![1] as { activeWorktreeId?: string }).activeWorktreeId).toBeUndefined();
     expect(ptyClient.onProjectSwitch).toHaveBeenCalledWith(
       MOCK_WINDOW_ID,
       "project-new",
@@ -199,10 +202,14 @@ describe("ProjectSwitchService", () => {
     );
   });
 
-  it("skips outgoing project state persist when active worktree did not change", async () => {
+  it("preserves the persisted activeWorktreeId instead of the lagging main-store value (#9512)", async () => {
+    // The main-process store holds "wt-old" (a stale or incidental selection),
+    // while the per-project state already carries the correct selection,
+    // persisted by the renderer via persistOutgoingProjectState. The outgoing
+    // save must preserve "wt-root" and never resurrect the main-store value.
     projectStoreMock.getProjectState.mockResolvedValue({
       projectId: "project-old",
-      activeWorktreeId: "wt-old",
+      activeWorktreeId: "wt-root",
       sidebarWidth: 350,
       terminals: [],
     });
@@ -210,7 +217,11 @@ describe("ProjectSwitchService", () => {
     const { service } = createService();
     await service.switchProject("project-new");
 
-    expect(projectStoreMock.saveProjectState).not.toHaveBeenCalled();
+    const outgoingSave = projectStoreMock.saveProjectState.mock.calls.find(
+      (c) => c[0] === "project-old"
+    );
+    expect(outgoingSave).toBeDefined();
+    expect((outgoingSave![1] as { activeWorktreeId?: string }).activeWorktreeId).toBe("wt-root");
   });
 
   it("continues switch even when cleanup services throw synchronously", async () => {

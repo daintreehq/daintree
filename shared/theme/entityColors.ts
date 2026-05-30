@@ -4,6 +4,7 @@ export const PANEL_KIND_BRAND_COLORS = {
   browser: "var(--theme-category-blue)",
   "dev-preview": "var(--theme-category-teal)",
   review: "var(--theme-category-violet)",
+  plugin: "var(--theme-category-orange)",
 } as const;
 
 export const BRANCH_TYPE_COLOR_CLASSES = {

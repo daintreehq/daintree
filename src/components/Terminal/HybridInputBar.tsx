@@ -187,8 +187,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     );
     const isVoiceRecording = activeVoicePanelId === terminalId && voiceStatus === "recording";
     const isVoiceConnecting = activeVoicePanelId === terminalId && voiceStatus === "connecting";
+    const isVoiceReconnecting = activeVoicePanelId === terminalId && voiceStatus === "reconnecting";
     const isVoiceFinishing = activeVoicePanelId === terminalId && voiceStatus === "finishing";
-    const isVoiceActiveForPanel = isVoiceRecording || isVoiceConnecting || isVoiceFinishing;
+    const isVoicePaused = activeVoicePanelId === terminalId && voiceStatus === "paused";
+    const isVoiceActiveForPanel =
+      isVoiceRecording ||
+      isVoiceConnecting ||
+      isVoiceReconnecting ||
+      isVoiceFinishing ||
+      isVoicePaused;
     const isVoiceSubmitting = useTerminalInputStore((s) => s.voiceSubmittingPanels.has(terminalId));
 
     const commandContext = { terminalId, cwd, projectId };
@@ -278,6 +285,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     });
 
     const placeholder = (() => {
+      if (isVoicePaused) return "Paused · Resume to continue.";
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
       return agentName ? `Ask ${agentName}` : "Ask anything";
     })();
@@ -446,7 +454,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       }
     }, [voiceDraftRevision, terminalId, currentProject?.id]);
 
-    useVoiceDecorations({ terminalId, editorViewRef, voiceDraftRevision });
+    useVoiceDecorations({ terminalId, editorViewRef });
 
     const resetEditorDoc = () => {
       applyEditorValue("", {
@@ -738,6 +746,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               ],
               disabled && "opacity-60"
             )}
+            data-voice-active={isVoiceActiveForPanel ? "true" : undefined}
             style={specialStyle}
             onDragEnter={handleDragEnter}
             onDragOver={handleDragOver}

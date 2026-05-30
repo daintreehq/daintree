@@ -241,6 +241,34 @@ export interface TerminalRecipe {
   usageHistory?: number[];
   /** Controls whether the linked GitHub issue is auto-assigned during quick worktree creation */
   autoAssign?: "always" | "never" | "prompt";
+  /** Set at merge time when this recipe is shadowed by a higher-tier recipe with the same name */
+  shadowedBy?: string;
+  /**
+   * Marks a recipe as living in `.daintree/recipes/`. Set at load time and on
+   * creation of in-repo recipes. Decouples scope detection from the recipe id,
+   * which is now an opaque UUID for in-repo recipes rather than a name-derived
+   * `inrepo-<slug>` string (legacy ids still carry the prefix). See
+   * {@link isInRepoRecipeId}.
+   */
+  scope?: "inrepo";
+}
+
+/**
+ * Describes a `.daintree/recipes/` filename collision discovered during
+ * reconciliation: two distinct recipes whose names slugify to the same
+ * filename. Only one can own the file, so the other cannot be promoted to the
+ * shared in-repo store. Surfaced to the renderer (instead of a silent
+ * `console.error`) so the user can rename one to resolve it.
+ */
+export interface RecipeNameCollision {
+  /** The filename slug both recipes resolve to. */
+  filename: string;
+  /** Id of the recipe that owns the filename. */
+  keptId: string;
+  /** Id of the recipe that could not be promoted. */
+  droppedId: string;
+  /** Display name of the recipe that could not be promoted. */
+  droppedName: string;
 }
 
 /** Returns the effective autoAssign mode for a recipe, defaulting to "always" for legacy recipes */
@@ -264,6 +292,11 @@ export interface RunCommand {
   preferredLocation?: "dock" | "grid";
   /** Whether to auto-restart the command on exit */
   preferredAutoRestart?: boolean;
+  /** True when the detector identified this script as the canonical dev script
+   * for a known framework signature (e.g. `start` for Create React App). Lets
+   * the renderer trust the upstream framework-aware ordering instead of
+   * re-imposing name-only priority. */
+  isFrameworkDefault?: boolean;
 }
 
 /** CopyTree context generation settings */

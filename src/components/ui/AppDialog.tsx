@@ -14,6 +14,7 @@ import {
 } from "@/lib/dialogEscapeBackstop";
 import { usePortalStore } from "@/store";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import {
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
@@ -375,6 +376,10 @@ export function AppDialog({
           onClick={(e) => e.stopPropagation()}
         >
           {children}
+          {/* Co-located live region: VoiceOver suppresses announcements made
+              from `aria-live` regions outside the focused `aria-modal` subtree
+              when `document.ariaNotify` is unavailable (Chromium 354736464). */}
+          <AccessibilityAnnouncer />
         </div>
       </div>
     </AppDialogContext.Provider>,

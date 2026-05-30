@@ -1,12 +1,24 @@
 import { useEffect, useRef, useState, type Ref } from "react";
-import { CheckCircle2, XCircle, Info, AlertTriangle, MoreHorizontal, X } from "lucide-react";
+import {
+  CheckCircle2,
+  XCircle,
+  Info,
+  AlertTriangle,
+  Clock,
+  MoreHorizontal,
+  X,
+  Copy,
+  Bug,
+  ArrowRight,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { actionService } from "@/services/ActionService";
-import { EVENT_KIND_LABEL, isNotificationEventKind } from "@/lib/notify";
+import { EVENT_KIND_LABEL, isNotificationEventKind, notify } from "@/lib/notify";
 import type { ActionId } from "@shared/types/actions";
 import type { NotificationType } from "@/store/notificationStore";
 import { DURATION_250 } from "@/lib/animationUtils";
+import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import {
   formatNotificationCountAriaLabel,
   formatNotificationCountGlyph,
@@ -15,8 +27,28 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  SNOOZE_DURATION_OPTIONS,
+  SNOOZE_LABEL,
+  type SnoozeDurationOption,
+} from "@shared/utils/snoozeTimestamps";
+
+const snoozedUntilFormatter = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+function formatSnoozedUntil(snoozedUntil: number): string {
+  const target = new Date(snoozedUntil);
+  return snoozedUntilFormatter.format(target);
+}
 
 const TYPE_CONFIG = {
   success: { icon: CheckCircle2, className: "text-status-success" },
@@ -84,6 +116,18 @@ interface NotificationCenterEntryProps {
   role?: string;
   onFocus?: () => void;
   onDropdownOpenChange?: (open: boolean) => void;
+  /**
+   * When true, the parent (NotificationCenter) is requesting that the snooze
+   * picker open programmatically for this row — set by the `h` keybinding.
+   * The row consumes the request via `onConsumeSnoozePending` after opening
+   * so the same flag doesn't reopen the menu on subsequent renders.
+   */
+  isSnoozePending?: boolean;
+  isSnoozed?: boolean;
+  snoozedUntil?: number;
+  onConsumeSnoozePending?: () => void;
+  onSnooze?: (option: SnoozeDurationOption) => void;
+  onUnsnooze?: () => void;
 }
 
 export function NotificationCenterEntry({
@@ -97,6 +141,12 @@ export function NotificationCenterEntry({
   role,
   onFocus,
   onDropdownOpenChange,
+  isSnoozePending = false,
+  isSnoozed = false,
+  snoozedUntil,
+  onConsumeSnoozePending,
+  onSnooze,
+  onUnsnooze,
 }: NotificationCenterEntryProps) {
   const config = TYPE_CONFIG[displayType ?? entry.type];
   const Icon = config.icon;
@@ -234,54 +284,26 @@ export function NotificationCenterEntry({
             </span>
           );
         })()}
-        {(entry.context?.projectId || entry.context?.eventKind) &&
-          (() => {
-            const eventKind = entry.context?.eventKind;
-            return (
-              <DropdownMenu onOpenChange={onDropdownOpenChange}>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label="Notification options"
-                    onClick={(e) => e.stopPropagation()}
-                    className="opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 group-has-[:focus-visible]:opacity-100 focus:opacity-100 data-[state=open]:opacity-100 h-4 w-4 flex items-center justify-center rounded text-daintree-text/40 hover:text-daintree-text/70 transition-opacity"
-                  >
-                    <MoreHorizontal className="h-3 w-3" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" sideOffset={4}>
-                  {isNotificationEventKind(eventKind) && (
-                    <DropdownMenuItem
-                      onSelect={() => {
-                        const projectId = entry.context?.projectId;
-                        if (!isNotificationEventKind(eventKind)) return;
-                        void actionService.dispatch("project.silenceNotificationKind", {
-                          kind: eventKind,
-                          projectId,
-                        });
-                      }}
-                    >
-                      Silence {EVENT_KIND_LABEL[eventKind]}
-                      {entry.context?.projectId && eventKind !== "uiFeedback"
-                        ? " from this project"
-                        : ""}
-                    </DropdownMenuItem>
-                  )}
-                  {entry.context?.projectId && (
-                    <DropdownMenuItem
-                      onSelect={() => {
-                        const projectId = entry.context?.projectId;
-                        if (!projectId) return;
-                        void actionService.dispatch("project.muteNotifications", { projectId });
-                      }}
-                    >
-                      Mute project notifications
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            );
-          })()}
+        <RowOptionsMenu
+          entry={entry}
+          onDropdownOpenChange={onDropdownOpenChange}
+          isSnoozePending={isSnoozePending}
+          isSnoozed={isSnoozed}
+          snoozedUntil={snoozedUntil}
+          onConsumeSnoozePending={onConsumeSnoozePending}
+          onSnooze={onSnooze}
+          onUnsnooze={onUnsnooze}
+        />
+        {isSnoozed && snoozedUntil !== undefined && (
+          <span
+            data-testid="notification-snoozed-indicator"
+            title={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
+            aria-label={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
+            className="inline-flex h-4 w-4 items-center justify-center text-daintree-text/40"
+          >
+            <Clock className="h-3 w-3" aria-hidden="true" />
+          </span>
+        )}
         {onDismiss && (
           <button
             type="button"
@@ -297,5 +319,274 @@ export function NotificationCenterEntry({
         )}
       </div>
     </div>
+  );
+}
+
+interface RowOptionsMenuProps {
+  entry: NotificationHistoryEntry;
+  onDropdownOpenChange?: (open: boolean) => void;
+  isSnoozePending: boolean;
+  isSnoozed: boolean;
+  snoozedUntil: number | undefined;
+  onConsumeSnoozePending?: () => void;
+  onSnooze?: (option: SnoozeDurationOption) => void;
+  onUnsnooze?: () => void;
+}
+
+function RowOptionsMenu({
+  entry,
+  onDropdownOpenChange,
+  isSnoozePending,
+  isSnoozed,
+  snoozedUntil,
+  onConsumeSnoozePending,
+  onSnooze,
+  onUnsnooze,
+}: RowOptionsMenuProps) {
+  const eventKind = entry.context?.eventKind;
+  const hasContextActions = isNotificationEventKind(eventKind) || !!entry.context?.projectId;
+  const supportsSnooze = !!entry.correlationId && !!onSnooze;
+  const messageString = typeof entry.message === "string" ? entry.message : "";
+  // Diagnostics affordances. "Report on GitHub" is restricted to error/warning
+  // entries so the inbox isn't a vector for filing noise issues on success
+  // toasts; correlation ID is still required so reviewers have a join key.
+  const supportsCopyCorrelationId = !!entry.correlationId;
+  const supportsReportOnGitHub =
+    !!entry.correlationId && (entry.type === "error" || entry.type === "warning");
+  const supportsGoToSource = !!entry.context?.panelId;
+  const hasDiagnosticsActions =
+    supportsCopyCorrelationId || supportsReportOnGitHub || supportsGoToSource;
+  const hasActions = hasContextActions || supportsSnooze || hasDiagnosticsActions;
+  const [open, setOpen] = useState(false);
+  const { copy: copyCorrelationId } = useCopyWithFeedback({
+    announcement: "Correlation ID copied",
+  });
+  const [reportInFlight, setReportInFlight] = useState(false);
+
+  // Programmatic open from the parent's `h` keybinding. Open exactly once
+  // per pending request and consume the flag in the same effect so the menu
+  // doesn't re-open on subsequent renders.
+  useEffect(() => {
+    if (!isSnoozePending) return;
+    if (!supportsSnooze) {
+      onConsumeSnoozePending?.();
+      return;
+    }
+    setOpen(true);
+    onConsumeSnoozePending?.();
+  }, [isSnoozePending, supportsSnooze, onConsumeSnoozePending]);
+
+  if (!hasActions) return null;
+
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    onDropdownOpenChange?.(next);
+  };
+
+  const handleCopyCorrelationId = () => {
+    if (!entry.correlationId) return;
+    void copyCorrelationId(entry.correlationId);
+  };
+
+  const handleGoToSource = () => {
+    const panelId = entry.context?.panelId;
+    if (!panelId) return;
+    // panel.focus throws "Terminal panel no longer exists" for evicted panels.
+    // Swallow silently — the inbox keeps stale rows after the source goes
+    // away and forcing a toast on every dead-link click would be noise.
+    void actionService.dispatch("panel.focus", { panelId }).catch(() => undefined);
+  };
+
+  const handleReportOnGitHub = async () => {
+    if (reportInFlight) return;
+    if (!entry.correlationId) return;
+    if (entry.type !== "error" && entry.type !== "warning") return;
+    setReportInFlight(true);
+    try {
+      // Lazy-load the report-flow dependencies so they stay off the boot
+      // path — appClient + buildNotificationReportUrl + logger together push
+      // the renderer eager-import count past budget when imported statically.
+      const [{ appClient }, { buildNotificationReportUrl }, { logError }] = await Promise.all([
+        import("@/clients/appClient"),
+        import("@/components/ErrorBoundary/buildReportIssueUrl"),
+        import("@/utils/logger"),
+      ]);
+      let envInfo: Awaited<ReturnType<typeof appClient.getVersionInfo>>;
+      try {
+        envInfo = await appClient.getVersionInfo();
+      } catch (envError) {
+        logError("Failed to load version info for inbox report", envError);
+        envInfo = { appVersion: "unknown", electron: "unknown", chrome: "unknown", os: "unknown" };
+      }
+
+      const reportMessage =
+        entry.title && messageString
+          ? `${entry.title} — ${messageString}`
+          : entry.title || messageString || "Notification";
+
+      const { url, fullBody, usedClipboardFallback } = buildNotificationReportUrl({
+        correlationId: entry.correlationId,
+        message: reportMessage,
+        notificationType: entry.type,
+        context: entry.context,
+        envInfo,
+      });
+
+      if (usedClipboardFallback) {
+        const writeText = window.electron?.clipboard?.writeText;
+        let clipboardOk = false;
+        if (writeText) {
+          try {
+            await writeText(fullBody);
+            clipboardOk = true;
+          } catch (clipboardError) {
+            logError("Failed to copy notification report to clipboard", clipboardError);
+          }
+        }
+        if (clipboardOk) {
+          notify({
+            type: "info",
+            title: "Report details copied",
+            message:
+              "The full notification report was copied to your clipboard — paste it into the issue body.",
+            transient: true,
+            context: { eventKind: "uiFeedback" },
+          });
+        } else {
+          notify({
+            type: "info",
+            title: "Report too long to send",
+            message:
+              "Couldn't copy the full report. Quote the correlation ID when filing the issue.",
+            inboxMessage: "Couldn't copy notification report to clipboard.",
+            context: { eventKind: "uiFeedback" },
+          });
+        }
+      }
+
+      if (!window.electron?.system?.openExternal) return;
+      try {
+        const result = await actionService.dispatch(
+          "system.openExternal",
+          { url },
+          { source: "user" }
+        );
+        if (!result.ok) {
+          await window.electron.system.openExternal(url);
+        }
+      } catch (dispatchError) {
+        logError("Failed to open notification report URL", dispatchError);
+      }
+    } catch (reportError) {
+      // buildNotificationReportUrl can surface URIError (lone surrogates in
+      // title/message) and JSON.stringify can surface TypeError (circular
+      // refs / BigInt in context). Without this catch the rejection escapes
+      // the `void handleReportOnGitHub()` site as an unhandled promise.
+
+      console.warn("Failed to build notification report", reportError);
+    } finally {
+      setReportInFlight(false);
+    }
+  };
+
+  return (
+    <DropdownMenu open={open} onOpenChange={handleOpenChange}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="Notification options"
+          onClick={(e) => e.stopPropagation()}
+          className="opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 group-has-[:focus-visible]:opacity-100 focus:opacity-100 data-[state=open]:opacity-100 h-4 w-4 flex items-center justify-center rounded text-daintree-text/40 hover:text-daintree-text/70 transition-opacity"
+        >
+          <MoreHorizontal className="h-3 w-3" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" sideOffset={4}>
+        {supportsSnooze &&
+          (isSnoozed ? (
+            <DropdownMenuItem
+              onSelect={() => {
+                onUnsnooze?.();
+              }}
+            >
+              <Clock className="mr-2 h-3 w-3" aria-hidden="true" />
+              {snoozedUntil !== undefined
+                ? `Snoozed until ${formatSnoozedUntil(snoozedUntil)} · Unsnooze`
+                : "Unsnooze"}
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Clock className="mr-2 h-3 w-3" aria-hidden="true" />
+                Snooze
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {SNOOZE_DURATION_OPTIONS.map((option) => (
+                  <DropdownMenuItem
+                    key={option}
+                    onSelect={() => {
+                      onSnooze?.(option);
+                    }}
+                  >
+                    {SNOOZE_LABEL[option]}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          ))}
+        {supportsSnooze && hasDiagnosticsActions && <DropdownMenuSeparator />}
+        {supportsCopyCorrelationId && (
+          <DropdownMenuItem onSelect={handleCopyCorrelationId}>
+            <Copy className="mr-2 h-3 w-3" aria-hidden="true" />
+            Copy correlation ID
+          </DropdownMenuItem>
+        )}
+        {supportsGoToSource && (
+          <DropdownMenuItem onSelect={handleGoToSource}>
+            <ArrowRight className="mr-2 h-3 w-3" aria-hidden="true" />
+            Go to source
+          </DropdownMenuItem>
+        )}
+        {supportsReportOnGitHub && (
+          <DropdownMenuItem
+            disabled={reportInFlight}
+            onSelect={() => {
+              void handleReportOnGitHub();
+            }}
+          >
+            <Bug className="mr-2 h-3 w-3" aria-hidden="true" />
+            Report on GitHub
+          </DropdownMenuItem>
+        )}
+        {hasDiagnosticsActions && hasContextActions && <DropdownMenuSeparator />}
+        {!hasDiagnosticsActions && supportsSnooze && hasContextActions && <DropdownMenuSeparator />}
+        {isNotificationEventKind(eventKind) && (
+          <DropdownMenuItem
+            onSelect={() => {
+              const projectId = entry.context?.projectId;
+              if (!isNotificationEventKind(eventKind)) return;
+              void actionService.dispatch("project.silenceNotificationKind", {
+                kind: eventKind,
+                projectId,
+              });
+            }}
+          >
+            Silence {EVENT_KIND_LABEL[eventKind]}
+            {entry.context?.projectId && eventKind !== "uiFeedback" ? " from this project" : ""}
+          </DropdownMenuItem>
+        )}
+        {entry.context?.projectId && (
+          <DropdownMenuItem
+            onSelect={() => {
+              const projectId = entry.context?.projectId;
+              if (!projectId) return;
+              void actionService.dispatch("project.muteNotifications", { projectId });
+            }}
+          >
+            Mute project notifications
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

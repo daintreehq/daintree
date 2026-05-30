@@ -91,6 +91,20 @@ export const MCP_TIER_ELEVATION_TTL_MS = 30 * 60 * 1000;
 export const MCP_GRANT_TTL_MS = 15 * 60 * 1000;
 
 /**
+ * Hard wall-clock ceiling on a grant's total lifetime, measured from its
+ * immutable `issuedAt`. The sliding {@link MCP_GRANT_TTL_MS} window means a
+ * model that calls a granted tool more often than once per TTL could
+ * otherwise hold the grant indefinitely; this caps the total refreshable
+ * lifetime so `refresh()` is blocked and the grant is forcibly revoked once
+ * the ceiling elapses, mirroring `sudo`'s max-lifetime enforcement — the
+ * next out-of-baseline call then re-triggers the tier-mismatch banner and
+ * the user must re-approve (#9161). Intentionally equal to
+ * {@link MCP_SSE_IDLE_TIMEOUT_MS} and {@link MCP_TIER_ELEVATION_TTL_MS} so a
+ * grant can never outlive its SSE session.
+ */
+export const MCP_GRANT_MAX_LIFETIME_MS = 30 * 60 * 1000;
+
+/**
  * Periodic sweep cadence for the grant cache's lazy-expiry map. Lazy
  * eviction on read is the source of truth; the sweep is a memory-hygiene
  * pass that keeps idle sessions' expired entries from accumulating between
@@ -367,7 +381,10 @@ export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
  * `worktree.createWithRecipe`, `agent.launch`, `recipe.run`) is widened
  * to the git/forge mutations (`git.commit`, `git.push`, `forge.openIssue`,
  * `github.openPR`) now that the args-hash collision guard (#8429) is in
- * place to make the widening safe.
+ * place to make the widening safe. Widened further (#9156) to the remaining
+ * destructive mutations — `worktree.delete`, `git.snapshotRevert`,
+ * `git.snapshotDelete`, `forge.assignIssue` — so every side-effecting tool
+ * that an LLM might retry is covered.
  *
  * Deliberately bounded: blanket-applying dedup to all mutations would mask
  * legitimate "do it again" cases (re-running the same git command, etc.).
@@ -381,6 +398,10 @@ export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set([
   "git.push",
   "forge.openIssue",
   "github.openPR",
+  "worktree.delete",
+  "git.snapshotRevert",
+  "git.snapshotDelete",
+  "forge.assignIssue",
 ]);
 
 /**
@@ -435,7 +456,7 @@ export const RATE_LIMIT_TIERS = {
 /**
  * Per-tool tier overrides. Tools absent from this map fall back to
  * {@link RATE_LIMIT_TIERS.standard}. Keep the mutation cohort aligned with
- * {@link MCP_DEDUP_ALLOWLIST}'s git/forge entries.
+ * {@link MCP_DEDUP_ALLOWLIST}'s destructive mutation entries.
  */
 export const RATE_LIMIT_TOOL_MAP: ReadonlyMap<string, RateLimitConfig> = new Map([
   ["terminal.getOutput", RATE_LIMIT_TIERS.highFreqRead],
@@ -445,6 +466,10 @@ export const RATE_LIMIT_TOOL_MAP: ReadonlyMap<string, RateLimitConfig> = new Map
   ["git.push", RATE_LIMIT_TIERS.mutation],
   ["forge.openIssue", RATE_LIMIT_TIERS.mutation],
   ["github.openPR", RATE_LIMIT_TIERS.mutation],
+  ["worktree.delete", RATE_LIMIT_TIERS.mutation],
+  ["git.snapshotRevert", RATE_LIMIT_TIERS.mutation],
+  ["git.snapshotDelete", RATE_LIMIT_TIERS.mutation],
+  ["forge.assignIssue", RATE_LIMIT_TIERS.mutation],
 ] as Array<[string, RateLimitConfig]>);
 
 /**

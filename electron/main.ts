@@ -21,6 +21,7 @@ import { enforceIpcSenderValidation, setupPermissionLockdown } from "./setup/sec
 import {
   registerAppProtocol,
   registerDaintreeFileProtocol,
+  registerPluginProtocol,
   setupWebviewCSP,
 } from "./setup/protocols.js";
 import {
@@ -71,6 +72,7 @@ import { getProjectStatsService } from "./ipc/handlers/projectCrud/index.js";
 import { getIdleTerminalNotificationService } from "./services/IdleTerminalNotificationService.js";
 import { preAgentSnapshotService } from "./services/PreAgentSnapshotService.js";
 import { isSmokeTest, kickOffEarlyPathRefresh } from "./setup/environment.js";
+import { activateOpenFileInstaller } from "./setup/openFileInstall.js";
 import { store } from "./store.js";
 import { initializeLogger, registerLoggerTransport, setLogLevelOverrides } from "./utils/logger.js";
 import { broadcastToRenderer } from "./ipc/utils.js";
@@ -114,6 +116,20 @@ protocol.registerSchemesAsPrivileged([
     privileges: {
       secure: true,
       supportFetchAPI: true,
+    },
+  },
+  {
+    // standard:true makes new URL("plugin://id/path") parse the host segment
+    // as `id`. codeCache enables V8 bytecode persistence for JS bundles (same
+    // rationale as app://). bypassCSP intentionally omitted — defaults to false
+    // (#3757: never opt back in; add `plugin:` to source directives if needed).
+    scheme: "plugin",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      codeCache: true,
     },
   },
 ]);
@@ -275,13 +291,26 @@ if (!gotTheLock) {
           console.error("[main] closePortsForView failed during cache:", err);
         }
       },
-      onViewCrashed: () => {
+      onViewCrashed: (wc) => {
         // Tear down the per-window PTY MessagePort on renderer crash so the
         // pty-host's PortQueueManager can drop stale queue accounting before
         // reload re-issues a fresh port. Without this, a stale port keeps the
         // safety-timeout pause loop wedged for the entire reload window (#6244).
         if (win.isDestroyed()) return;
         getPtyClient()?.disconnectMessagePort(win.id);
+        // Revoke help-session tokens pinned to the crashed WebContents (#9151).
+        // The renderer comes back with a brand-new (monotonic) WebContents id,
+        // so the old pin is now a tombstone — every CallTool would return
+        // SESSION_BINDING_GONE and the targeted tier-mismatch / revoked IPCs
+        // would silently no-op against the dead id. Mirrors the synchronous
+        // eviction-hook revoke (lesson #5009); `wc.id` is the dead id the
+        // session pinned at provision time.
+        const crashedWcId = wc.id;
+        import("./services/HelpSessionService.js")
+          .then(({ helpSessionService }) => helpSessionService.revokeByWebContentsId(crashedWcId))
+          .catch((err) => {
+            console.warn("[main] revokeByWebContentsId failed during crash:", err);
+          });
       },
       onViewReady: (wc) => {
         // Re-distribute PTY MessagePort on every view load/reload.
@@ -311,6 +340,20 @@ if (!gotTheLock) {
             }
           }
         }
+
+        // Replay the plugin contributions snapshot to a freshly-loaded view
+        // (cold start, LRU restore, crash reload, DevTools refresh) so its
+        // renderer registry is current even if every push was emitted while
+        // the previous V8 context was alive. The renderer's pull-on-mount is
+        // a separate path; this is the push path that lets the existing
+        // persistent listeners overtake a slow IPC pull. Dynamically imported
+        // to avoid pulling PluginService into main.ts's static graph (#9285).
+        const wcId = wc.id;
+        import("./services/PluginService.js")
+          .then(({ pluginService }) => pluginService.pushSnapshotTo(wc))
+          .catch((err) => {
+            console.warn(`[main] pushSnapshotTo failed for wc ${wcId}:`, err);
+          });
       },
     });
     setProjectViewManager(pvm);
@@ -407,6 +450,13 @@ if (!gotTheLock) {
       setupPermissionLockdown();
       registerAppProtocol(distPath);
       registerDaintreeFileProtocol();
+      const { pluginService } = await import("./services/PluginService.js");
+      registerPluginProtocol((pluginId) => pluginService.getPluginDir(pluginId));
+      // macOS: drain any `.dntr` paths queued during cold launch (Finder
+      // double-click / "Open With") and take over live open-file events now
+      // that PluginService can install them. Fire-and-forget — install runs
+      // concurrently with the rest of startup. #9293
+      void activateOpenFileInstaller(pluginService);
       setupWebviewCSP();
       // Prime the hydrate prefetch cache for the last-active project so the
       // renderer's first `app:boot` invoke resolves as a cache hit instead of

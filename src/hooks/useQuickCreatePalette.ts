@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { TerminalRecipe } from "@/types";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useProjectStore } from "@/store/projectStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { actionService } from "@/services/ActionService";
 import { getAutoAssign } from "@shared/types/project";
@@ -10,6 +11,7 @@ import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/br
 import { generateBranchSlug } from "@/utils/textParsing";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logError } from "@/utils/logger";
 
 export type QuickCreateItem =
   | (TerminalRecipe & { _kind: "recipe" })
@@ -41,10 +43,11 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
   const [assignToSelf, setAssignToSelf] = useState(true);
   const comboCountRef = useRef(0);
 
-  const hasRecipes = recipes.length > 0;
+  const visibleRecipes = recipes.filter((r) => !r.shadowedBy);
+  const hasRecipes = visibleRecipes.length > 0;
   const items: QuickCreateItem[] = hasRecipes
     ? [
-        ...recipes.map((r): QuickCreateItem => ({ ...r, _kind: "recipe" })),
+        ...visibleRecipes.map((r): QuickCreateItem => ({ ...r, _kind: "recipe" })),
         { _kind: "customize", id: "__customize__", name: "Customize…" },
       ]
     : [];
@@ -152,12 +155,16 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
               worktreeId: createdWorktreeId,
               branch,
               assignedToSelf: wasAssigned,
+              assignedUsername,
+              assignmentError,
             } = result.result as {
               worktreeId: string;
               worktreePath: string;
               branch: string;
               recipeLaunched: boolean;
               assignedToSelf: boolean;
+              assignedUsername: string | null;
+              assignmentError: string | null;
             };
 
             useWorktreeSelectionStore.getState().setPendingWorktree(createdWorktreeId);
@@ -174,6 +181,58 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
             const tierIndex = Math.min(comboCountRef.current - 1, tiers.length - 1);
             const tieredMessage = tiers[tierIndex];
 
+            // Snapshot rootPath at creation time so a later project switch
+            // doesn't redirect the un-assign DELETE at a different repo.
+            const snapRootPath = useProjectStore.getState().currentProject?.path ?? null;
+
+            // Sticky toast surface lets users click Undo more than once before
+            // the first invocation resolves; guard so worktree.delete and the
+            // un-assign each fire at most once per success toast.
+            const undoFiredRef = { current: false };
+            const undoOnClick = (): void => {
+              if (undoFiredRef.current) return;
+              undoFiredRef.current = true;
+              void (async () => {
+                try {
+                  await actionService.dispatch(
+                    "worktree.delete",
+                    { worktreeId: createdWorktreeId, force: true },
+                    { source: "user" }
+                  );
+                } catch (err) {
+                  // Half-rollback guard: if delete failed the worktree is still
+                  // live, so don't strip the assignment too — that leaves the
+                  // user with a worktree on an unassigned issue.
+                  logError("Undo: failed to delete worktree", err);
+                  return;
+                }
+                if (wasAssigned && issueNumber && assignedUsername && snapRootPath) {
+                  const unassignResult = await actionService.dispatch(
+                    "forge.unassignIssue",
+                    { cwd: snapRootPath, issueNumber, username: assignedUsername },
+                    { source: "user" }
+                  );
+                  if (!unassignResult.ok) {
+                    // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+                    notify({
+                      type: "warning",
+                      title: "Couldn't undo assignment",
+                      message: `${formatErrorMessage(unassignResult.error, "Failed to unassign issue")} — you can unassign manually on GitHub`,
+                    });
+                  }
+                }
+              })();
+            };
+
+            if (assignmentError) {
+              notify({
+                type: "warning",
+                title: "Could not assign issue",
+                message: `${assignmentError} — you can assign it manually on GitHub`,
+                context: { eventKind: "uiFeedback" },
+              });
+            }
+
             notify({
               type: "success",
               title: "Worktree created",
@@ -187,7 +246,12 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
               correlationId: createdWorktreeId,
               action: {
                 label: "Undo",
-                onClick: () => {},
+                onClick: undoOnClick,
+                // The toast surface fires `onClick` (full delete + un-assign);
+                // the inbox-row fallback at NotificationCenterEntry.tsx only
+                // dispatches `actionId`, so it stays delete-only — matching
+                // pre-fix behavior rather than a silent regression. The toast
+                // is the primary undo surface (sticky during the action stack).
                 actionId: "worktree.delete",
                 actionArgs: { worktreeId: createdWorktreeId, force: true },
               },

@@ -101,7 +101,16 @@ async function bootProject(
   ctx.window = page;
 
   // Inject anti-flake CSS once per scene.
-  await page.addStyleTag({ content: POLISH_CSS });
+  try {
+    await page.addStyleTag({ content: POLISH_CSS });
+  } catch (error) {
+    if (!String(error).includes("Target page, context or browser has been closed")) {
+      throw error;
+    }
+    page = await refreshActiveWindow(ctx.app, page);
+    ctx.window = page;
+    await page.addStyleTag({ content: POLISH_CSS });
+  }
 
   // Configure Claude auth if available, even for scenes that don't launch
   // agents — keeps the env consistent and lets us iterate by extending a
@@ -284,6 +293,11 @@ async function waitForAgentResponse(
 
 test.describe.serial("Marketing Screenshots — Daintree Store Reel", () => {
   test("scene-1-hero-surge-checkout", async () => {
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "ANTHROPIC_API_KEY is required for the agent scenes",
+    });
+
     test.skip(!hasClaudeApiKey(), "ANTHROPIC_API_KEY is required for the agent scenes");
 
     const repo = createSurgeCheckoutRepo();
@@ -469,6 +483,11 @@ test.describe.serial("Marketing Screenshots — Daintree Store Reel", () => {
   // Scene 5 — 🛰️ orbital-sync : Multi-agent (Claude + OpenCode)
   // -------------------------------------------------------------------------
   test("scene-5-multi-agent-orbital-sync", async () => {
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "ANTHROPIC_API_KEY is required for the multi-agent scene",
+    });
+
     test.skip(!hasClaudeApiKey(), "ANTHROPIC_API_KEY is required for the multi-agent scene");
 
     const repo = createOrbitalSyncRepo();

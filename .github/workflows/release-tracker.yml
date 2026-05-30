@@ -1,0 +1,255 @@
+name: Release Tracker
+
+# After per-OS release workflows replaced the matrix rollup view (#8052), there
+# is no single signal for whether a release is fully published. This workflow
+# triggers on the same `v*` tag, polls the three sibling workflows every ~10
+# minutes (90-minute ceiling), and emits green/red/amber status.
+#
+# Notification surface: GitHub Issue with `release-failure` label, following the
+# `nightly.yml` `nightly-failure` precedent. The website webhook is already
+# called per-OS on success by each `publish-daintree` job; an issue is durable,
+# deduplicatable, and visible in the repo.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+concurrency:
+  group: release-tracker-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  track:
+    name: Track release
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Poll sibling release workflows
+        id: poll
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          TARGET_WORKFLOWS='["Release (macOS)","Release (Linux)","Release (Windows)"]'
+          POLL_INTERVAL=600
+          MAX_ELAPSED=5100   # 85 minutes, leaving 5 for notification steps
+          TAG_NAME="${GITHUB_REF_NAME}"
+          COMMIT_SHA="$GITHUB_SHA"
+
+          echo "Tracker: tag=${TAG_NAME} commit=${COMMIT_SHA} run_id=${GITHUB_RUN_ID}"
+          echo "Polling every ${POLL_INTERVAL}s, ceiling ${MAX_ELAPSED}s"
+
+          started_at=$(date +%s)
+
+          while true; do
+            now=$(date +%s)
+            elapsed=$(( now - started_at ))
+
+            if (( elapsed >= MAX_ELAPSED )); then
+              echo "Ceiling reached (${elapsed}s) — breaking with amber"
+              {
+                echo "result=amber"
+                echo "summary=Timed out after ${elapsed}s with stragglers still in progress."
+              } >> "$GITHUB_OUTPUT"
+              break
+            fi
+
+            echo "=== Poll iteration at +${elapsed}s ==="
+
+            runs_json=$(gh run list \
+              --commit "$COMMIT_SHA" \
+              --limit 100 \
+              --json databaseId,workflowName,status,conclusion,url,event 2>&1)
+
+            # gh run list exits 0 even on empty results; check whether we got
+            # parseable JSON (a connection/auth error would be plain text).
+            if ! echo "$runs_json" | jq -e '. | type == "array"' > /dev/null 2>&1; then
+              echo "::warning::gh run list returned non-JSON — retrying next cycle"
+              echo "gh output: ${runs_json:0:500}"
+              sleep "$POLL_INTERVAL"
+              continue
+            fi
+
+            # Filter to the three release workflows, exclude tracker's own run,
+            # restrict to tag-push runs (event=="push") so a manual dry-run
+            # dispatch on the same commit can't displace the real release run,
+            # then group by workflowName taking the latest run (max databaseId).
+            filtered=$(echo "$runs_json" | jq --argjson names "$TARGET_WORKFLOWS" --arg ownId "$GITHUB_RUN_ID" '
+              [.[]
+                | select(.databaseId != ($ownId | tonumber))
+                | select(.workflowName as $w | $names | index($w))
+                | select(.event == "push")
+              ]
+              | group_by(.workflowName)
+              | map(max_by(.databaseId))
+            ')
+
+            tracked_count=$(echo "$filtered" | jq 'length')
+            echo "Found ${tracked_count}/3 release workflows"
+
+            # Build summary and classify
+            red_count=$(echo "$filtered" | jq '[.[] | select(.status == "completed" and (.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "startup_failure" or .conclusion == "stale"))] | length')
+            green_count=$(echo "$filtered" | jq '[.[] | select(.status == "completed" and (.conclusion == "success" or .conclusion == "skipped" or .conclusion == "neutral"))] | length')
+            pending_count=$(echo "$filtered" | jq '[.[] | select(.status != "completed")] | length')
+
+            echo "  red=${red_count} green=${green_count} pending=${pending_count}"
+
+            # --- Red: any run has a terminal failure ---
+            if (( red_count > 0 )); then
+              failed=$(echo "$filtered" | jq -r '[.[] | select(.status == "completed" and (.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "startup_failure" or .conclusion == "stale"))] | .[0]')
+              failed_name=$(echo "$failed" | jq -r '.workflowName')
+              failed_url=$(echo "$failed" | jq -r '.url')
+              failed_conclusion=$(echo "$failed" | jq -r '.conclusion')
+
+              summary="**${failed_name}** concluded **${failed_conclusion}**"
+              {
+                echo "result=red"
+                echo "summary=${summary}"
+                echo "failed_workflow=${failed_name}"
+                echo "failed_url=${failed_url}"
+              } >> "$GITHUB_OUTPUT"
+
+              echo "Red — breaking: ${summary}"
+              break
+            fi
+
+            # --- Green: all three present and successful ---
+            if (( tracked_count >= 3 && green_count == 3 )); then
+              # Stabilisation re-check: wait 60s and re-query to guard against
+              # API propagation delay.
+              echo "All three green — stabilisation re-check in 60s"
+              sleep 60
+
+              recheck_json=$(gh run list \
+                --commit "$COMMIT_SHA" \
+                --limit 100 \
+                --json databaseId,workflowName,status,conclusion,url,event 2>&1)
+              if ! echo "$recheck_json" | jq -e '. | type == "array"' > /dev/null 2>&1; then
+                echo "::warning::Re-check gh run list returned non-JSON — retrying next cycle"
+                sleep 60
+                continue
+              fi
+              recheck_filtered=$(echo "$recheck_json" | jq --argjson names "$TARGET_WORKFLOWS" --arg ownId "$GITHUB_RUN_ID" '
+                [.[]
+                  | select(.databaseId != ($ownId | tonumber))
+                  | select(.workflowName as $w | $names | index($w))
+                  | select(.event == "push")
+                ]
+                | group_by(.workflowName)
+                | map(max_by(.databaseId))
+              ')
+              recheck_green=$(echo "$recheck_filtered" | jq '[.[] | select(.status == "completed" and (.conclusion == "success" or .conclusion == "skipped" or .conclusion == "neutral"))] | length')
+              recheck_bad=$(echo "$recheck_filtered" | jq '[.[] | select(.status == "completed" and (.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "startup_failure" or .conclusion == "stale"))] | length')
+
+              if (( recheck_green == 3 && recheck_bad == 0 )); then
+                {
+                  echo "result=green"
+                  echo "summary=All three OS workflows published successfully."
+                } >> "$GITHUB_OUTPUT"
+                echo "Green — breaking"
+                break
+              else
+                echo "Re-check mismatch (green=${recheck_green} bad=${recheck_bad}) — continuing"
+              fi
+            fi
+
+            # Log current state for diagnostics
+            while IFS= read -r line; do
+              echo "  ${line}"
+            done < <(echo "$filtered" | jq -r '.[] | "\(.workflowName): status=\(.status) conclusion=\(.conclusion // "null")"')
+
+            # Cap sleep to the remaining ceiling so the runner's 90-min timeout
+            # never kills the job before the amber check at loop top fires.
+            remaining=$(( MAX_ELAPSED - $(date +%s) + started_at ))
+            if (( remaining <= 0 )); then
+              continue  # loop-top amber check fires on next iteration
+            fi
+            sleep $(( POLL_INTERVAL < remaining ? POLL_INTERVAL : remaining ))
+          done
+
+      - name: Notify release status
+        uses: actions/github-script@v8
+        if: always()
+        with:
+          script: |
+            const result = "${{ steps.poll.outputs.result }}";
+            const summary = "${{ steps.poll.outputs.summary }}";
+            const tagName = "${{ github.ref_name }}";
+            const trackerUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const label = "release-failure";
+
+            const title = `Release ${tagName} incomplete`;
+            const issueSearch = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: label,
+              state: "open",
+              per_page: 10,
+            });
+
+            // Exact title match — a substring test would let v1.2.3 collide
+            // with an open "Release v1.2.30 incomplete" issue.
+            const existingIssue = issueSearch.data.find(i => i.title === title);
+
+            const statusIcon = result === "green" ? "✅" : result === "red" ? "❌" : "🟡";
+            const body = [
+              `## Release Tracker: \`${tagName}\``,
+              ``,
+              `**Status:** ${statusIcon} ${result.toUpperCase()}`,
+              `**Summary:** ${summary}`,
+              ``,
+              `**Tracker run:** ${trackerUrl}`,
+              ``,
+              result === "red" ? `**Failing workflow:** ${{ steps.poll.outputs.failed_workflow }}` : "",
+              result === "red" ? `**Run URL:** ${{ steps.poll.outputs.failed_url }}` : "",
+            ].filter(Boolean).join("\n");
+
+            if (result === "green") {
+              if (existingIssue) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existingIssue.number,
+                  body: `✅ All three OS workflows are now green. Closing.`,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existingIssue.number,
+                  state: "closed",
+                });
+              }
+            } else {
+              // Red or amber — create or update issue
+              if (existingIssue) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existingIssue.number,
+                  body: body,
+                });
+              } else {
+                await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title,
+                  body,
+                  labels: [label],
+                });
+              }
+              // Signal job failure so the workflow run shows red
+              if (result === "red") {
+                core.setFailed(`Release incomplete: ${summary}`);
+              }
+            }

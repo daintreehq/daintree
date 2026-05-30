@@ -3,6 +3,18 @@ import { getDevServerOrigins, getDevServerWebSocketOrigins } from "./devServer.j
 // Custom protocol scheme the renderer fetches/loads from.
 const FILE_SCHEMES = "daintree-file:";
 
+// Plugin-served renderer modules. `plugin:` is a hardened first-party scheme
+// (`standard: true, secure: true`, no `bypassCSP`) — see
+// `electron/main.ts:120-130` — that resolves to the plugin's installed-on-disk
+// root via the handler in `electron/setup/protocols.ts`. Non-PTY plugin panel
+// views are lazy-loaded via `React.lazy(() => import("plugin://..."))` (see
+// `src/components/Panel/PluginViewHost.tsx`), so `plugin:` must appear in
+// `script-src` for the dynamic module load to clear CSP in production. Per
+// past lesson #3757, the alternative — `bypassCSP: true` — is the nuclear
+// option and is explicitly rejected; this narrow directive expansion is the
+// minimum surface to make the feature work without weakening defense-in-depth.
+const PLUGIN_SCHEME = "plugin:";
+
 // Localhost origins allowed for embedded <webview> guests in BrowserPane and
 // DevPreviewPane. Without these in frame-src the host page cannot mount its
 // webview elements at all.
@@ -20,6 +32,30 @@ const GRAVATAR = "https://www.gravatar.com";
 // 'allow-duplicates' is required so Vite HMR can re-evaluate the policy module
 // on hot reload without throwing 'Policy with name "<x>" already exists'.
 export const TRUSTED_TYPES_POLICY_NAME = "daintree-svg";
+
+/**
+ * Optional CSP customization knobs.
+ *
+ * `scriptSrcHashes` carries SHA-256 hashes (formatted as `'sha256-<base64>'`)
+ * for any inline `<script>` elements injected into the production document
+ * — primarily the host import map (`<script type="importmap">`) emitted by
+ * the build. Without the hash entry the strict `script-src 'self'` directive
+ * silently discards the inline element, and bare `react` / `react-dom`
+ * specifiers from externalized plugin bundles fail to resolve at runtime.
+ *
+ * The hash MUST be computed over the exact byte sequence of the inline
+ * children, including whitespace. The build emits both halves (meta tag and
+ * sidecar `dist/importmap-meta.json`) from the same serialized JSON to keep
+ * them aligned.
+ */
+export interface DaintreeCspOptions {
+  readonly scriptSrcHashes?: readonly string[];
+}
+
+function buildScriptSrc(base: string, scriptSrcHashes?: readonly string[]): string {
+  if (!scriptSrcHashes || scriptSrcHashes.length === 0) return base;
+  return `${base} ${scriptSrcHashes.join(" ")}`;
+}
 
 /**
  * Production CSP for the trusted Daintree renderer (`persist:daintree`).
@@ -44,12 +80,15 @@ export const TRUSTED_TYPES_POLICY_NAME = "daintree-svg";
  * honored in meta but its endpoint mapping requires the `Reporting-Endpoints`
  * HTTP response header, so it is also effectively header-only.
  */
-export function getDaintreeAppProdCSP(): string {
+export function getDaintreeAppProdCSP(options?: DaintreeCspOptions): string {
   return [
     "default-src 'self'",
-    "script-src 'self' 'wasm-unsafe-eval'",
+    buildScriptSrc(
+      `script-src 'self' 'wasm-unsafe-eval' ${PLUGIN_SCHEME}`,
+      options?.scriptSrcHashes
+    ),
     "style-src 'self' 'unsafe-inline'",
-    `connect-src 'self' ${FILE_SCHEMES}`,
+    `connect-src 'self' ${FILE_SCHEMES} ${PLUGIN_SCHEME}`,
     `img-src 'self' ${GITHUB_AVATARS} ${GRAVATAR} ${FILE_SCHEMES} data: blob:`,
     "font-src 'self' data:",
     "media-src 'self'",
@@ -81,9 +120,9 @@ export function getDaintreeAppDevCSP(): string {
 
   return [
     `default-src 'self' ${origins} ${wsOrigins}`,
-    `script-src 'self' ${origins} 'unsafe-inline' 'unsafe-eval'`,
+    `script-src 'self' ${origins} 'unsafe-inline' 'unsafe-eval' ${PLUGIN_SCHEME}`,
     `style-src 'self' ${origins} 'unsafe-inline'`,
-    `connect-src 'self' ${origins} ${wsOrigins} ${FILE_SCHEMES}`,
+    `connect-src 'self' ${origins} ${wsOrigins} ${FILE_SCHEMES} ${PLUGIN_SCHEME}`,
     `img-src 'self' ${origins} ${GITHUB_AVATARS} ${GRAVATAR} ${FILE_SCHEMES} data: blob:`,
     `font-src 'self' ${origins} data:`,
     "media-src 'self'",
@@ -100,7 +139,11 @@ export function getDaintreeAppDevCSP(): string {
 /**
  * Returns the appropriate CSP for the trusted Daintree renderer based on
  * whether the process is running in development mode.
+ *
+ * `options.scriptSrcHashes` only takes effect in production — the dev CSP
+ * already permits inline scripts via `'unsafe-inline'`, so any hash entries
+ * would be ignored by the browser.
  */
-export function getDaintreeAppCSP(isDev: boolean): string {
-  return isDev ? getDaintreeAppDevCSP() : getDaintreeAppProdCSP();
+export function getDaintreeAppCSP(isDev: boolean, options?: DaintreeCspOptions): string {
+  return isDev ? getDaintreeAppDevCSP() : getDaintreeAppProdCSP(options);
 }

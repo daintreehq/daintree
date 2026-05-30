@@ -3,6 +3,7 @@ import { EditorView } from "@codemirror/view";
 import type { Compartment } from "@codemirror/state";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore } from "@/store";
+import { useProjectStore } from "@/store/projectStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 
 interface UseVoiceWaitSubmitParams {
@@ -43,6 +44,8 @@ export function useVoiceWaitSubmit({
           voiceState.activeTarget?.panelId === terminalId &&
           (voiceState.status === "recording" ||
             voiceState.status === "connecting" ||
+            voiceState.status === "paused" ||
+            voiceState.status === "reconnecting" ||
             voiceState.status === "finishing");
 
         if (isSessionActive) {
@@ -53,6 +56,24 @@ export function useVoiceWaitSubmit({
         }
 
         if (!useTerminalInputStore.getState().isVoiceSubmitting(terminalId)) return;
+
+        // `stop()` bumps voiceDraftRevision after writing the final transcript
+        // to the input store, but HybridInputBar's sync useEffect doesn't fire
+        // until the next React render — which is AFTER this microtask. Sync
+        // the editor here so sendFromEditor reads the final dictated text and
+        // not the pre-stop doc (#9172).
+        const projectId = useProjectStore.getState().currentProject?.id;
+        const draft = useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
+        const finalView = editorViewRef.current;
+        if (finalView) {
+          const current = finalView.state.doc.toString();
+          if (draft !== current) {
+            finalView.dispatch({
+              changes: { from: 0, to: current.length, insert: draft },
+              selection: { anchor: draft.length },
+            });
+          }
+        }
 
         sendFromEditorRef.current();
       } finally {

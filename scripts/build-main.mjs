@@ -17,7 +17,10 @@ const external = [
   "node-pty", // Native module
   "better-sqlite3", // Native module
   "win-job-object", // Native module — Windows-only help-session Job Object (#7526)
+  "posix-pty-reaper", // Native module — macOS/Linux help-session PTY supervisor (#8769)
   "copytree", // Externalize to preserve file structure (config files)
+  "onnxruntime-node", // Native module — ONNX runtime for Silero VAD (#9177)
+  "avr-vad", // Silero VAD wrapper; loads its bundled .onnx via fs from its own dir (#9177)
 ];
 
 const common = {
@@ -32,6 +35,25 @@ const common = {
   pure: isProd ? ["console.log", "console.info", "console.warn", "console.debug"] : [],
   define: {
     "process.env.SENTRY_DSN": JSON.stringify(process.env.SENTRY_DSN || ""),
+    // Strip E2E test backdoors from production builds (#9148). Replacing these
+    // env-var reads with "" lets esbuild constant-fold the `=== "1"` checks to
+    // false and dead-code-eliminate the `contextBridge.exposeInMainWorld` blocks
+    // in preload.cts (plus the matching main-process test guards). Conditional
+    // spread, not a ternary value — esbuild stringifies a bare `undefined` define
+    // as the literal "undefined", so dev/test builds must omit these keys entirely
+    // to keep the branches intact for the E2E harness.
+    ...(isProd
+      ? {
+          "process.env.DAINTREE_E2E_FAULT_MODE": JSON.stringify(""),
+          "process.env.DAINTREE_E2E_MODE": JSON.stringify(""),
+          "process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS": JSON.stringify(""),
+          // The plugin host-contract harness (#9286) reads this to point
+          // PluginService at the compiled sample plugin during e2e. A
+          // non-empty value in prod would silently redirect the user-plugin
+          // root, so it MUST be stripped alongside the other E2E flags.
+          "process.env.DAINTREE_E2E_SIDELOAD_PLUGIN_DIR": JSON.stringify(""),
+        }
+      : {}),
   },
 };
 
@@ -95,6 +117,27 @@ function copyBuiltInPluginManifests() {
   }
 }
 
+/**
+ * Mirror `plugin.json` manifests for `plugins/sample/*` alongside their
+ * compiled main entries. Sample plugins are not loaded at runtime by default —
+ * the host-contract e2e harness (#9286) sideloads them via
+ * `DAINTREE_E2E_SIDELOAD_PLUGIN_DIR` pointing at `dist-electron/plugins/sample`.
+ */
+function copySamplePluginManifests() {
+  const pluginsRoot = path.join(root, "plugins/sample");
+  if (!fs.existsSync(pluginsRoot)) return;
+  const entries = fs.readdirSync(pluginsRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const manifestSrc = path.join(pluginsRoot, entry.name, "plugin.json");
+    if (!fs.existsSync(manifestSrc)) continue;
+    const manifestDest = path.join(root, "dist-electron/plugins/sample", entry.name, "plugin.json");
+    fs.mkdirSync(path.dirname(manifestDest), { recursive: true });
+    fs.copyFileSync(manifestSrc, manifestDest);
+    console.log(`[Build] Copied sample plugin manifest: ${entry.name}`);
+  }
+}
+
 function createReadyMarkerPlugin() {
   return {
     name: "build-ready-marker",
@@ -140,7 +183,15 @@ async function run() {
       "electron/workspace-host-bootstrap.ts",
       "electron/watchdog-host.ts",
       "electron/watchdog-host-bootstrap.ts",
+      // VAD side-chain worker for OpenAI transcription (#9177). Loaded via
+      // `new Worker()` from OpenAITranscriptionProvider; needs its own entry so
+      // esbuild emits a standalone bundle at the resolved worker path.
+      "electron/services/voice/openaiVadWorker.ts",
       "plugins/builtin/github/main/index.ts",
+      // Sample plugin compiled for the host-contract e2e harness (#9286).
+      // Sideloaded via `DAINTREE_E2E_SIDELOAD_PLUGIN_DIR`; absent in prod
+      // because no `pluginsRoot` defaults to this directory.
+      "plugins/sample/hello-daintree/main/index.ts",
     ],
     outdir: "dist-electron",
     outbase: ".",
@@ -171,11 +222,13 @@ async function run() {
       await Promise.all([ctxEsm.watch(), ctxCjs.watch()]);
       copyBuiltInWorkflows();
       copyBuiltInPluginManifests();
+      copySamplePluginManifests();
       console.log("[Build] Watching for changes...");
     } else {
       await Promise.all([build(esmConfig), build(cjsConfig)]);
       copyBuiltInWorkflows();
       copyBuiltInPluginManifests();
+      copySamplePluginManifests();
       writeBuildReadyMarker();
       console.log("[Build] Complete.");
     }

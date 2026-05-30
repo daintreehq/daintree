@@ -9,6 +9,8 @@ import type {
   ForgeProviderImpl,
   Issue,
   PR,
+  PRListProbeResult,
+  PRSnapshot,
   RateLimitInfo,
   RepoRef,
 } from "../../shared/types/forge.js";
@@ -16,6 +18,21 @@ import { makeForgeProviderId } from "../../shared/utils/forgeProviderIds.js";
 import { getForgeProviderImpl } from "./forgeProviderRegistry.js";
 import { resolveForgeProvider } from "./forgeProviderResolver.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+
+// PluginService is loaded lazily so importing this file (e.g. from
+// `WorkspaceHostProcess` in tests that mock electron's `app` without
+// `getVersion()`) doesn't trigger the PluginService singleton constructor
+// at module-load time. The first forge RPC dispatch performs the import.
+type PluginServiceShape = {
+  activatePluginForForgeProvider(namespacedId: string): Promise<void>;
+};
+let pluginServicePromise: Promise<PluginServiceShape> | null = null;
+function getPluginService(): Promise<PluginServiceShape> {
+  if (!pluginServicePromise) {
+    pluginServicePromise = import("./PluginService.js").then((mod) => mod.pluginService);
+  }
+  return pluginServicePromise;
+}
 
 // Deterministic stringify so two windows calling the same method with the same
 // arg shape coalesce regardless of property order. Mirrors the bridge-side
@@ -179,6 +196,11 @@ async function invoke(req: ForgeRpcRequest): Promise<unknown> {
   if (!req.namespacedId) {
     throw new Error(`Forge RPC ${req.method} requires a namespacedId`);
   }
+  // Implicit activation: force the owning plugin's `activate()` to run before
+  // we try to resolve its impl, so a plugin that only binds during activate()
+  // is reachable on first use without a startup activation gate.
+  const pluginService = await getPluginService();
+  await pluginService.activatePluginForForgeProvider(req.namespacedId);
   const impl = getForgeProviderImpl(req.namespacedId);
   if (!impl) {
     throw new Error(`Forge provider "${req.namespacedId}" not registered`);
@@ -199,6 +221,8 @@ async function invoke(req: ForgeRpcRequest): Promise<unknown> {
       return invokeGetCIStatus(impl, req.args);
     case "getCIStatuses":
       return invokeGetCIStatuses(impl, req.args);
+    case "probeOpenPRList":
+      return invokeProbeOpenPRList(impl, req.args);
     case "getRateLimit":
       return invokeGetRateLimit(impl);
     case "clearPullRequestCaches":
@@ -210,7 +234,7 @@ async function invoke(req: ForgeRpcRequest): Promise<unknown> {
   }
 }
 
-function invokeResolveProvider(args: unknown[]): ForgeResolveProviderResult | null {
+async function invokeResolveProvider(args: unknown[]): Promise<ForgeResolveProviderResult | null> {
   const [opts] = args as [
     {
       remoteUrl: string | null;
@@ -227,6 +251,9 @@ function invokeResolveProvider(args: unknown[]): ForgeResolveProviderResult | nu
 
   const { pluginId, contribution } = resolved.entry;
   const namespacedId = makeForgeProviderId(pluginId, contribution.id);
+  // Implicit activation before impl lookup — see `invoke` above for rationale.
+  const pluginService = await getPluginService();
+  await pluginService.activatePluginForForgeProvider(namespacedId);
   const impl = getForgeProviderImpl(namespacedId);
   if (!impl) return null;
   if (!opts.remoteUrl) return null;
@@ -282,6 +309,15 @@ async function invokeGetCIStatuses(
   const [repo, prNumbers] = args as [RepoRef, number[]];
   if (!impl.batchLookups?.getCIStatuses) return null;
   return impl.batchLookups.getCIStatuses(repo, prNumbers);
+}
+
+async function invokeProbeOpenPRList(
+  impl: ForgeProviderImpl,
+  args: unknown[]
+): Promise<PRListProbeResult | null> {
+  const [repo, tracked] = args as [RepoRef, PRSnapshot[]];
+  if (!impl.batchLookups?.probeOpenPRList) return null;
+  return impl.batchLookups.probeOpenPRList(repo, tracked);
 }
 
 async function invokeGetRateLimit(impl: ForgeProviderImpl): Promise<RateLimitInfo | null> {

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import path from "node:path";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -50,7 +51,9 @@ const archiverMock = vi.hoisted(() => {
     append: vi.fn(),
     finalize: vi.fn(() => Promise.resolve()),
   };
-  return vi.fn(() => archive);
+  return vi.fn(function () {
+    return archive;
+  });
 });
 
 const resilientAtomicWriteFileMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
@@ -95,19 +98,36 @@ vi.mock("electron", () => ({
   },
 }));
 
-const chmodMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+const chmodMock = vi.hoisted(() =>
+  vi.fn<(path: string, mode: number) => Promise<void>>(() => Promise.resolve())
+);
+const readFileMock = vi.hoisted(() =>
+  vi.fn<(path: string) => Promise<string>>(() => Promise.resolve("log line"))
+);
+const statMock = vi.hoisted(() =>
+  vi.fn<(path: string) => Promise<{ mtimeMs: number }>>(() =>
+    Promise.resolve({ mtimeMs: Date.now() })
+  )
+);
+const existsSyncMock = vi.hoisted(() => vi.fn<(path: string) => boolean>(() => false));
 
 vi.mock("node:fs", () => ({
   promises: {
-    readFile: vi.fn(() => Promise.resolve("")),
+    readFile: readFileMock,
     chmod: chmodMock,
+    stat: statMock,
   },
   createWriteStream: createWriteStreamMock,
-  existsSync: vi.fn(() => false),
+  existsSync: existsSyncMock,
+}));
+
+vi.mock("../../../utils/logger.js", () => ({
+  getLogFilePath: () => "/logs/daintree.log",
+  getLogDirectory: () => "/logs",
 }));
 
 vi.mock("archiver", () => ({
-  default: archiverMock,
+  ZipArchive: archiverMock,
 }));
 
 vi.mock("../../../utils/fs.js", () => ({
@@ -163,6 +183,11 @@ describe("registerDiagnosticsHandlers", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks resets call data but not implementations, so restore the
+    // defaults each test to keep the rotated-log tests isolated.
+    existsSyncMock.mockReturnValue(false);
+    statMock.mockResolvedValue({ mtimeMs: Date.now() });
+    readFileMock.mockResolvedValue("log line");
   });
 
   it("registers all expected IPC handlers", () => {
@@ -176,6 +201,7 @@ describe("registerDiagnosticsHandlers", () => {
     expect(channels).toContain("system:download-diagnostics");
     expect(channels).toContain("system:report-blink-memory");
     expect(channels).toContain("system:report-renderer-elu");
+    expect(channels).toContain("system:get-report-enrichment");
     cleanup();
   });
 
@@ -256,6 +282,122 @@ describe("registerDiagnosticsHandlers", () => {
 
       expect(result.uptimeSeconds).toBeGreaterThanOrEqual(0);
       expect(result.eventLoopP99Ms).toBe(12);
+    });
+  });
+
+  describe("handleCollectDiagnosticsForReview", () => {
+    it("includes a positive appLaunchTimestamp in the review payload", async () => {
+      registerDiagnosticsHandlers(deps);
+      const handler = getHandlerFn("system:collect-diagnostics-for-review");
+      const result = (await handler()) as {
+        appLaunchTimestamp: number;
+        sectionKeys: string[];
+      };
+
+      expect(typeof result.appLaunchTimestamp).toBe("number");
+      expect(result.appLaunchTimestamp).toBeGreaterThan(0);
+      expect(result.appLaunchTimestamp).toBeLessThanOrEqual(Date.now());
+      expect(result.sectionKeys).toEqual(["metadata"]);
+    });
+  });
+
+  describe("save-bundle time window", () => {
+    const logPath = (file: string) => path.normalize(path.join("/logs", file));
+    const readPaths = () =>
+      readFileMock.mock.calls.map((c: unknown[]) => path.normalize(c[0] as string));
+
+    it("skips rotated logs whose mtime predates the window, keeps recent ones", async () => {
+      existsSyncMock.mockImplementation(
+        (p: string): boolean =>
+          path.normalize(p) === logPath("daintree.log") ||
+          path.normalize(p) === logPath("daintree.log.1") ||
+          path.normalize(p) === logPath("daintree.log.2")
+      );
+      // Window cutoff = 5000ms. .1 is older (skip), .2 is newer (keep).
+      statMock.mockImplementation(
+        (p: string): Promise<{ mtimeMs: number }> =>
+          Promise.resolve({
+            mtimeMs: path.normalize(p) === logPath("daintree.log.1") ? 4000 : 6000,
+          })
+      );
+      dialogMock.showSaveDialog.mockResolvedValueOnce({
+        filePath: "/tmp/diagnostics.zip",
+        canceled: false,
+      });
+
+      registerDiagnosticsHandlers(deps);
+      const handler = getHandlerFn("system:save-diagnostics-bundle");
+      await handler(
+        {},
+        {
+          payload: { metadata: {} },
+          enabledSections: { metadata: true, logs: true },
+          replacements: [],
+          timeWindowStartMs: 5000,
+        }
+      );
+
+      const paths = readPaths();
+      expect(paths).toContain(logPath("daintree.log"));
+      expect(paths).toContain(logPath("daintree.log.2"));
+      expect(paths).not.toContain(logPath("daintree.log.1"));
+    });
+
+    it("includes all rotated logs and never stats them when the window is full history", async () => {
+      existsSyncMock.mockImplementation(
+        (p: string): boolean =>
+          path.normalize(p) === logPath("daintree.log") ||
+          path.normalize(p) === logPath("daintree.log.1") ||
+          path.normalize(p) === logPath("daintree.log.2")
+      );
+      dialogMock.showSaveDialog.mockResolvedValueOnce({
+        filePath: "/tmp/diagnostics.zip",
+        canceled: false,
+      });
+
+      registerDiagnosticsHandlers(deps);
+      const handler = getHandlerFn("system:save-diagnostics-bundle");
+      await handler(
+        {},
+        {
+          payload: { metadata: {} },
+          enabledSections: { metadata: true, logs: true },
+          replacements: [],
+          timeWindowStartMs: null,
+        }
+      );
+
+      const paths = readPaths();
+      expect(paths).toContain(logPath("daintree.log.1"));
+      expect(paths).toContain(logPath("daintree.log.2"));
+      expect(statMock).not.toHaveBeenCalled();
+    });
+
+    it("includes a rotated log when its stat fails rather than dropping it", async () => {
+      existsSyncMock.mockImplementation(
+        (p: string): boolean =>
+          path.normalize(p) === logPath("daintree.log") ||
+          path.normalize(p) === logPath("daintree.log.1")
+      );
+      statMock.mockRejectedValue(new Error("stat failed"));
+      dialogMock.showSaveDialog.mockResolvedValueOnce({
+        filePath: "/tmp/diagnostics.zip",
+        canceled: false,
+      });
+
+      registerDiagnosticsHandlers(deps);
+      const handler = getHandlerFn("system:save-diagnostics-bundle");
+      await handler(
+        {},
+        {
+          payload: { metadata: {} },
+          enabledSections: { metadata: true, logs: true },
+          replacements: [],
+          timeWindowStartMs: 5000,
+        }
+      );
+
+      expect(readPaths()).toContain(logPath("daintree.log.1"));
     });
   });
 

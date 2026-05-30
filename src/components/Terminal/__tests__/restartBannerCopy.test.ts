@@ -6,6 +6,10 @@ describe("RESTART_BANNER_COPY", () => {
     expect(RESTART_BANNER_COPY["auto-restarting"].title).toBe("Auto-restarting…");
   });
 
+  it("renders the restarting title with a Unicode ellipsis", () => {
+    expect(RESTART_BANNER_COPY["restarting"].title).toBe("Restarting…");
+  });
+
   it("interpolates exitCode into the exit-error title", () => {
     expect(RESTART_BANNER_COPY["exit-error"]({ exitCode: 1 }).title).toBe(
       "Session exited with code 1"

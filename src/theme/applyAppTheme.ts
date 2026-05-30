@@ -1,52 +1,18 @@
-import { getAppThemeCssVariables, resolveAppTheme, type AppColorScheme } from "@shared/theme";
+import {
+  getAppThemeById,
+  getAppThemeCssVariables,
+  resolveAppTheme,
+  type AppColorScheme,
+} from "@shared/theme";
+import {
+  RED_GREEN_OVERRIDES,
+  BLUE_YELLOW_OVERRIDES,
+  ALL_CVD_TOKENS,
+} from "@shared/theme/colorVisionOverrides.js";
 import type { ColorVisionMode } from "@shared/types";
 
-const RED_GREEN_OVERRIDES: Record<string, string> = {
-  "--theme-status-success": "#009e73",
-  "--theme-status-danger": "#fe6100",
-  "--theme-activity-active": "#648fff",
-  "--theme-activity-working": "#648fff",
-  "--theme-pr-open": "#648fff",
-  "--theme-pr-closed": "#fe6100",
-  "--theme-terminal-selection": "#1a1f2e",
-  "--theme-terminal-red": "#d55e00",
-  "--theme-terminal-green": "#009e73",
-  "--theme-terminal-bright-red": "#fe6100",
-  "--theme-terminal-bright-green": "#48c9a0",
-  "--theme-terminal-magenta": "#cc79a7",
-  "--theme-terminal-bright-magenta": "#d98fc4",
-  "--theme-category-blue": "#0072b2",
-  "--theme-category-orange": "#e69f00",
-  "--theme-category-teal": "#009e73",
-  "--theme-category-pink": "#cc79a7",
-  "--theme-category-amber": "#d55e00",
-  "--theme-category-violet": "#785ef0",
-  "--theme-category-indigo": "#648fff",
-  "--theme-category-cyan": "#56b4e9",
-};
-
-const BLUE_YELLOW_OVERRIDES: Record<string, string> = {
-  "--theme-status-warning": "#94a3b8",
-  "--theme-activity-waiting": "#94a3b8",
-  "--theme-pr-merged": "#f97316",
-  "--theme-terminal-yellow": "#cc79a7",
-  "--theme-terminal-blue": "#0072b2",
-  "--theme-terminal-bright-yellow": "#d98fc4",
-  "--theme-terminal-bright-blue": "#56b4e9",
-  "--theme-category-blue": "#dc267f",
-  "--theme-category-orange": "#fe6100",
-  "--theme-category-teal": "#009e73",
-  "--theme-category-pink": "#d55e00",
-  "--theme-category-amber": "#ffb000",
-  "--theme-category-violet": "#785ef0",
-  "--theme-category-indigo": "#648fff",
-  "--theme-category-cyan": "#228833",
-};
-
-const ALL_CVD_TOKENS = new Set([
-  ...Object.keys(RED_GREEN_OVERRIDES),
-  ...Object.keys(BLUE_YELLOW_OVERRIDES),
-]);
+// Re-export for consumers that haven't migrated to @shared/theme
+export { RED_GREEN_OVERRIDES, BLUE_YELLOW_OVERRIDES, ALL_CVD_TOKENS };
 
 const CVD_OVERRIDES: Record<string, Record<string, string>> = {
   "red-green": RED_GREEN_OVERRIDES,
@@ -101,6 +67,19 @@ export function applyColorVisionMode(root: HTMLElement, mode: ColorVisionMode): 
 }
 
 export function applyDefaultAppTheme(root: HTMLElement): AppColorScheme {
+  // Prefer the persisted scheme seeded by the main process (via preload) so the
+  // first paint matches the saved theme instead of flashing a
+  // prefers-color-scheme default before the async theme config resolves (#9169).
+  // Only built-in ids resolve synchronously here — custom schemes load during
+  // the async useAppThemeConfig phase, so an unknown id falls through to the
+  // prefers-color-scheme default rather than painting the wrong built-in theme.
+  const seededId = window.__DAINTREE_INITIAL_THEME__?.colorSchemeId;
+  const seededScheme = seededId ? getAppThemeById(seededId) : undefined;
+  if (seededScheme) {
+    applyAppThemeToRoot(root, seededScheme);
+    return seededScheme;
+  }
+
   const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   const schemeId = prefersDark ? "daintree" : "bondi";
   const scheme = resolveAppTheme(schemeId);

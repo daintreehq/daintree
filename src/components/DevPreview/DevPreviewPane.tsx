@@ -2,12 +2,14 @@ import { useState, useCallback, useRef, useEffect, useMemo, useReducer } from "r
 import { useBrowserActionListeners } from "@/hooks/useBrowserActionListeners";
 import {
   AlertTriangle,
-  RotateCw,
+  Check,
   ChevronDown,
+  Copy,
   ExternalLink,
-  Settings,
   OctagonAlert,
   Play,
+  RotateCw,
+  Settings,
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -27,6 +29,7 @@ import type { BrowserHistory } from "@shared/types/browser";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "../Browser/BrowserToolbar";
 import { InlineStatusBanner, type BannerAction } from "../Terminal/InlineStatusBanner";
+import { BannerOverflowMenu } from "../Terminal/BannerOverflowMenu";
 import { normalizeBrowserUrl } from "../Browser/browserUtils";
 import {
   goBackBrowserHistory,
@@ -55,6 +58,7 @@ import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { WebviewDialog } from "../Browser/WebviewDialog";
 import { FindBar } from "../Browser/FindBar";
 import { useFindInPage } from "@/hooks/useFindInPage";
+import { useKeybindingScope } from "@/hooks/useKeybinding";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
   getViewportPreset,
@@ -65,11 +69,14 @@ import { isDevPreviewPanel, type ViewportPresetId } from "@shared/types/panel";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { getDevPreviewWebContents, buildEmulationParams } from "./viewportEmulation";
 import { logError } from "@/utils/logger";
+import { notify } from "@/lib/notify";
 import { loadWebviewUrl } from "./loadWebviewUrl";
 import { useDevPreviewLoadLifecycle, type SessionStorageEntry } from "./useDevPreviewLoadLifecycle";
 
 import { BlockedNavBanner, blockedNavReducer } from "./BlockedNavBanner";
 import { looksLikeOAuthUrl } from "@shared/utils/urlUtils";
+import { buildDevPreviewProxyOrigin } from "@shared/utils/devPreviewProxy";
+import { buildDevPreviewPartition } from "@shared/utils/partitionUtils";
 
 async function captureWebviewSessionStorage(
   webviewElement: Electron.WebviewTag | null
@@ -174,20 +181,21 @@ function DevPreviewStuckBanner({
 
   const remedyId = error?.recommendedActionId;
   const remedyLabel = remedyId ? STUCK_REMEDY_LABELS[remedyId] : undefined;
-  const actions: BannerAction[] =
-    remedyId && remedyLabel
-      ? [
-          {
-            id: `dev-preview-stuck-remedy-${remedyId}`,
-            label: remedyLabel,
-            icon: RotateCw,
-            variant: "primary",
-            disabled: isRestarting,
-            onClick: () => onRemedy(remedyId),
-          },
-          restartAction,
-        ]
-      : [restartAction];
+  // When a specific remedy is recommended it's the single primary action and
+  // the generic restart drops into the overflow menu; otherwise restart is the
+  // lone action. Keeps this error banner to one inline action.
+  const hasRemedy = !!(remedyId && remedyLabel);
+  const primaryAction: BannerAction = hasRemedy
+    ? {
+        id: `dev-preview-stuck-remedy-${remedyId}`,
+        label: remedyLabel,
+        icon: RotateCw,
+        variant: "primary",
+        disabled: isRestarting,
+        onClick: () => onRemedy(remedyId),
+      }
+    : restartAction;
+  const overflowActions: BannerAction[] = hasRemedy ? [restartAction] : [];
 
   const isLongCompile = phaseLabel === "Compiling" && !error?.message;
   const title = isLongCompile
@@ -207,15 +215,14 @@ function DevPreviewStuckBanner({
       description={description}
       role="alert"
       ariaLive="assertive"
-      actions={actions}
+      action={primaryAction}
+      trailingSlot={
+        overflowActions.length > 0 ? (
+          <BannerOverflowMenu actions={overflowActions} ariaLabel="More dev server options" />
+        ) : undefined
+      }
     />
   );
-}
-
-function sanitizePartitionToken(value: string | undefined): string {
-  const token = (value ?? "default").trim().toLowerCase();
-  const sanitized = token.replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-");
-  return sanitized || "default";
 }
 
 export function DevPreviewPane({
@@ -277,6 +284,7 @@ export function DevPreviewPane({
     isRestarting,
     stuckTier,
     forceKilled,
+    crashLoopStopped,
   } = useDevServer({
     panelId: id,
     devCommand,
@@ -286,12 +294,41 @@ export function DevPreviewPane({
     turbopackEnabled: projectSettings?.turbopackEnabled ?? true,
   });
 
-  const webviewPartition = useMemo(() => {
-    const projectToken = sanitizePartitionToken(currentProjectId);
-    const worktreeToken = sanitizePartitionToken(worktreeId ?? "main");
-    const panelToken = sanitizePartitionToken(id);
-    return `persist:dev-preview-${projectToken}-${worktreeToken}-${panelToken}`;
-  }, [currentProjectId, worktreeId, id]);
+  const webviewPartition = useMemo(
+    () => buildDevPreviewPartition(currentProjectId, worktreeId, id),
+    [currentProjectId, worktreeId, id]
+  );
+
+  // Resolve the dev-preview reverse proxy port once, then derive the stable origin this
+  // panel's webview loads (#9100). `undefined` = still fetching (hold navigation until it
+  // settles so we don't flash the unstable direct-localhost origin); `null` = proxy
+  // unavailable, fall back to the legacy direct-localhost behavior.
+  const [proxyPort, setProxyPort] = useState<number | null | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    // Tolerate a bridge that predates the proxy IPC (older preload, partial test mock): degrade
+    // to null = legacy direct-localhost mode rather than crashing or hanging in the loading gate.
+    const getProxyPort = window.electron?.devPreview?.getProxyPort;
+    if (typeof getProxyPort !== "function") {
+      setProxyPort(null);
+      return;
+    }
+    getProxyPort()
+      .then(({ port }) => {
+        if (!cancelled) setProxyPort(port);
+      })
+      .catch(() => {
+        if (!cancelled) setProxyPort(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const proxyOrigin = useMemo<string | null | undefined>(() => {
+    if (proxyPort === undefined) return undefined;
+    if (proxyPort === null || !currentProjectId) return null;
+    return buildDevPreviewProxyOrigin(proxyPort, currentProjectId, id);
+  }, [proxyPort, currentProjectId, id]);
 
   const [forceKillBannerDismissed, setForceKillBannerDismissed] = useState(false);
 
@@ -300,6 +337,14 @@ export function DevPreviewPane({
       setForceKillBannerDismissed(false);
     }
   }, [forceKilled]);
+
+  const [crashLoopBannerDismissed, setCrashLoopBannerDismissed] = useState(false);
+
+  useEffect(() => {
+    if (crashLoopStopped) {
+      setCrashLoopBannerDismissed(false);
+    }
+  }, [crashLoopStopped]);
 
   const [history, setHistory] = useState<BrowserHistory>(() => {
     const saved = terminal?.browserHistory;
@@ -320,6 +365,24 @@ export function DevPreviewPane({
   const crashTimestampsRef = useRef<number[]>([]);
   const crashReloadRef = useRef<() => void>(() => {});
   const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const CLIPBOARD_FEEDBACK_MS = 2000;
+  const [certCopied, setCertCopied] = useState(false);
+  const certCopyTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const handleCopyMkcert = useCallback(async () => {
+    try {
+      await window.electron.clipboard.writeText("mkcert -install");
+      setCertCopied(true);
+      if (certCopyTimerRef.current) clearTimeout(certCopyTimerRef.current);
+      certCopyTimerRef.current = setTimeout(() => setCertCopied(false), CLIPBOARD_FEEDBACK_MS);
+    } catch {
+      // clipboard unavailable — silently ignore
+    }
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (certCopyTimerRef.current) clearTimeout(certCopyTimerRef.current);
+    };
+  }, []);
   const lastSetUrlRef = useRef<string>("");
   const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
   // Generation token to invalidate in-flight async scroll captures when the
@@ -342,6 +405,8 @@ export function DevPreviewPane({
     [allDetectedRunners, projectSettings?.turbopackEnabled]
   );
   const primaryCandidate = candidates[0];
+  const activeCandidate = candidates.find((c) => c.command.trim() === devCommand.trim());
+  const headerLabel = activeCandidate?.name || devCommand;
 
   const [commandInput, setCommandInput] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -360,6 +425,17 @@ export function DevPreviewPane({
   const canGoForward = history.future.length > 0;
   const isUnconfigured =
     Boolean(currentProjectId) && !isSettingsLoading && projectSettings !== null && !devCommand;
+
+  // Hold the webview (show the loading state) while the dev server is running but the pane
+  // hasn't settled onto the stable proxy origin yet (#9100). Covers two cases: the proxy port
+  // is still being fetched (proxyOrigin === undefined), and an upgraded session whose persisted
+  // history is a raw localhost URL that the navigation effect is about to migrate. Without this
+  // the webview would briefly load the unstable origin. Legacy mode (proxyOrigin === null) opts
+  // out entirely.
+  const isProxyUrlPending =
+    status === "running" &&
+    (proxyOrigin === undefined ||
+      (typeof proxyOrigin === "string" && !!currentUrl && !currentUrl.startsWith(proxyOrigin)));
 
   const { isEvicted, evictingRef } = useWebviewEviction(id, location);
 
@@ -443,19 +519,34 @@ export function DevPreviewPane({
     return () => clearTimeout(timer);
   }, [status, url, phaseLabel, id, setDevPreviewConsoleOpen]);
 
-  const handleRenderProcessGone = useCallback((details: { reason: string; exitCode: number }) => {
-    const now = Date.now();
-    const timestamps = crashTimestampsRef.current.filter((ts) => now - ts < 60_000);
-    timestamps.push(now);
-    crashTimestampsRef.current = timestamps;
+  const handleRenderProcessGone = useCallback(
+    (details: { reason: string; exitCode: number }) => {
+      const now = Date.now();
+      const timestamps = crashTimestampsRef.current.filter((ts) => now - ts < 60_000);
+      timestamps.push(now);
+      crashTimestampsRef.current = timestamps;
 
-    setCrashDetails(details);
-    setCrashState("crashed");
+      setCrashDetails(details);
+      setCrashState("crashed");
 
-    if (timestamps.length < 2) {
-      crashReloadRef.current();
-    }
-  }, []);
+      if (timestamps.length < 2) {
+        crashReloadRef.current();
+      } else {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Preview process crashed repeatedly",
+          message: `The dev preview crashed (${details.reason}) twice within 60 seconds. Auto-recovery stopped. Use Reload or Hard restart to recover.`,
+          priority: "high",
+          duration: 0,
+          context: { eventKind: "recovery", panelId: id },
+          supersedeKey: `dev-preview-crash-loop:${id}`,
+          correlationId: id,
+        });
+      }
+    },
+    [id]
+  );
 
   const {
     isWebviewReady,
@@ -573,12 +664,15 @@ export function DevPreviewPane({
 
   useEffect(() => {
     if (isUnconfigured) return;
-    const nextUrl = url ? computeDevServerUrl(url, currentUrl) : false;
+    // Hold navigation until the proxy port resolution settles, otherwise the pane would
+    // briefly adopt the unstable direct-localhost origin before the proxy origin is known (#9100).
+    if (proxyOrigin === undefined) return;
+    const nextUrl = url ? computeDevServerUrl(url, currentUrl, proxyOrigin) : false;
     if (nextUrl !== false) {
       setHistory((prev) => pushBrowserHistory(prev, nextUrl));
       lastSetUrlRef.current = nextUrl;
     }
-  }, [url, currentUrl, isUnconfigured]);
+  }, [url, currentUrl, isUnconfigured, proxyOrigin]);
 
   useEffect(() => {
     if (isUnconfigured) return;
@@ -711,12 +805,57 @@ export function DevPreviewPane({
   }, [performReload]);
 
   const handleOpenExternal = useCallback(() => {
-    if (currentUrl) {
-      safeFireAndForget(window.electron.system.openExternal(currentUrl), {
-        context: "Opening dev preview URL externally",
-      });
+    if (!currentUrl) return;
+
+    // In proxy mode (#9101), hand the system browser a short-lived signed
+    // bootstrap URL on the stable origin instead of the raw dev-server URL: it
+    // lands with a session cookie and survives dev-server restarts that reshuffle
+    // the upstream port. Fall back to the raw URL in legacy mode or if minting
+    // fails, so the button always opens *something*.
+    if (typeof proxyOrigin === "string" && currentProjectId && currentUrl.startsWith(proxyOrigin)) {
+      // Preserve the hash too — hash-router SPAs keep their route in the fragment.
+      const { pathname, search, hash } = new URL(currentUrl);
+      safeFireAndForget(
+        (async () => {
+          try {
+            const { bootstrapUrl } = await window.electron.devPreview.mintBrowserToken({
+              panelId: id,
+              projectId: currentProjectId,
+              redirectPath: `${pathname}${search}${hash}`,
+            });
+            await window.electron.system.openExternal(bootstrapUrl);
+          } catch (err) {
+            logError("[DevPreviewPane] Browser handoff token failed; opening raw URL", err);
+            await window.electron.system.openExternal(currentUrl);
+          }
+        })(),
+        { context: "Opening dev preview URL externally" }
+      );
+      return;
     }
-  }, [currentUrl]);
+
+    safeFireAndForget(window.electron.system.openExternal(currentUrl), {
+      context: "Opening dev preview URL externally",
+    });
+  }, [currentUrl, proxyOrigin, currentProjectId, id]);
+
+  const isPromotingRef = useRef(false);
+  const handlePromoteToPortal = useCallback(() => {
+    if (isPromotingRef.current) return;
+    isPromotingRef.current = true;
+    if (currentUrl) {
+      setBrowserUrl(id, currentUrl);
+    }
+    void actionService
+      .dispatch(
+        "devPreview.promoteToPortal",
+        { panelId: id, projectId: currentProjectId },
+        { source: "user" }
+      )
+      .finally(() => {
+        isPromotingRef.current = false;
+      });
+  }, [currentProjectId, currentUrl, id, setBrowserUrl]);
 
   const handleZoomChange = useCallback((newZoom: number) => {
     const clamped = Math.max(0.25, Math.min(2.0, newZoom));
@@ -771,6 +910,14 @@ export function DevPreviewPane({
     resetPreviewWebviewState();
     void restart();
   }, [resetPreviewWebviewState, restart]);
+
+  // A "restored-stopped" panel has no live backend session (the process was
+  // not reattached across relaunch), so start()/ensure() — not restart() — is
+  // what re-issues the prior command. #9094.
+  const handleStartFromRestored = useCallback(() => {
+    resetPreviewWebviewState();
+    void start();
+  }, [resetPreviewWebviewState, start]);
 
   const confirmRestartInFlightRef = useRef(false);
   const [pendingRestartTier, setPendingRestartTier] = useState<
@@ -829,14 +976,14 @@ export function DevPreviewPane({
   }, []);
 
   const handleAutoDetect = useCallback(
-    async (candidateCommand?: string) => {
-      if (!currentProjectId || autoDetectRef.current) return;
+    async (candidateCommand?: string): Promise<boolean> => {
+      if (!currentProjectId || autoDetectRef.current) return false;
 
       autoDetectRef.current = true;
       setIsAutoDetecting(true);
       try {
         const latestSettings = await projectClient.getSettings(currentProjectId);
-        if (!latestSettings) return;
+        if (!latestSettings) return false;
 
         let command = candidateCommand;
         if (!command) {
@@ -847,7 +994,7 @@ export function DevPreviewPane({
           )?.command;
         }
 
-        if (!command) return;
+        if (!command) return false;
 
         await saveSettings({
           ...latestSettings,
@@ -855,8 +1002,11 @@ export function DevPreviewPane({
           devServerAutoDetected: true,
           devServerDismissed: false,
         });
+
+        return true;
       } catch (err) {
         logError("Failed to auto-detect dev server", err);
+        return false;
       } finally {
         autoDetectRef.current = false;
         if (isMountedRef.current) {
@@ -872,6 +1022,15 @@ export function DevPreviewPane({
       void handleAutoDetect(candidate.command);
     },
     [handleAutoDetect]
+  );
+
+  const handleHeaderPickCandidate = useCallback(
+    async (candidate: { command: string }) => {
+      if (candidate.command.trim() === devCommand.trim()) return;
+      const saved = await handleAutoDetect(candidate.command);
+      if (saved) stop();
+    },
+    [devCommand, handleAutoDetect, stop]
   );
 
   const handleSaveCommand = useCallback(async () => {
@@ -896,6 +1055,48 @@ export function DevPreviewPane({
       savingRef.current = false;
     }
   }, [currentProjectId, commandInput, saveSettings]);
+
+  const headerContent = useMemo(() => {
+    if (isUnconfigured || candidates.length === 0) return null;
+
+    return (
+      <DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="flex items-center gap-1 p-1.5 hover:bg-daintree-text/10 text-daintree-text/60 hover:text-daintree-text transition-colors max-w-[180px]"
+                aria-label="Switch dev script"
+              >
+                <span className="text-xs truncate">{headerLabel}</span>
+                <ChevronDown className="h-3 w-3 shrink-0" />
+              </button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Switch dev script</TooltipContent>
+        </Tooltip>
+        <DropdownMenuContent align="end" sideOffset={4} className="w-72 p-1">
+          {candidates.map((c) => {
+            const isActive = c.command.trim() === devCommand.trim();
+            return (
+              <DropdownMenuItem
+                key={c.id}
+                onSelect={() => void handleHeaderPickCandidate(c)}
+                className={isActive ? "bg-overlay-subtle" : ""}
+                aria-current={isActive ? "true" : undefined}
+              >
+                <span className="text-xs font-medium">{c.name}</span>
+                <code className="text-[11px] text-daintree-text/50 truncate ml-auto">
+                  {c.command}
+                </code>
+              </DropdownMenuItem>
+            );
+          })}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }, [isUnconfigured, candidates, devCommand, headerLabel, handleHeaderPickCandidate]);
 
   const commandInputError = useMemo(() => getInvalidCommandMessage(commandInput), [commandInput]);
 
@@ -1075,7 +1276,8 @@ export function DevPreviewPane({
   const { currentDialog, handleDialogRespond } = useWebviewDialog(
     id,
     isEvicted ? null : webviewElement,
-    isWebviewReady && !isEvicted
+    isWebviewReady && !isEvicted,
+    "dev-preview"
   );
 
   // Consolidated emulation effect above handles all preset/rotation/DPR changes.
@@ -1087,6 +1289,11 @@ export function DevPreviewPane({
     isWebviewReady && !isEvicted,
     isFocused
   );
+
+  // Activate the dev-preview keybinding scope while focused so Cmd/Ctrl+R maps
+  // to devPreview.reloadPreview when the panel chrome (toolbar/header) has focus.
+  // The guest-focused case is covered separately by onReloadShortcut below.
+  useKeybindingScope("dev-preview", isFocused);
 
   // Listen for blocked navigation events from main process.
   // 150ms debounce: latest URL wins — repeated blocks within the window
@@ -1158,6 +1365,17 @@ export function DevPreviewPane({
     }
   }, [currentUrl, crashState]);
 
+  // Listen for the reload shortcut (Cmd/Ctrl+R) forwarded from the focused
+  // webview guest. When the guest has focus, the outer renderer's keybinding
+  // handler never fires, so the main process intercepts the key and forwards it.
+  useEffect(() => {
+    const cleanup = window.electron.webview.onReloadShortcut((payload) => {
+      if (payload.panelId !== id) return;
+      handleHardReload();
+    });
+    return cleanup;
+  }, [id, handleHardReload]);
+
   // Listen for action-driven hard-reload events
   useEffect(() => {
     const handleHardReloadEvent = (e: Event) => {
@@ -1191,7 +1409,14 @@ export function DevPreviewPane({
       onRestore={onRestore}
       isMultiPanelGrid={isMultiPanelGrid}
       kind="dev-preview"
-      className={stuckTier >= 1 ? "panel-state-working" : undefined}
+      headerContent={headerContent}
+      className={
+        phaseLabel === "Compiling"
+          ? "panel-state-compiling"
+          : stuckTier >= 1
+            ? "panel-state-working"
+            : undefined
+      }
     >
       <div className="flex flex-col h-full">
         <BrowserToolbar
@@ -1214,6 +1439,7 @@ export function DevPreviewPane({
           onReload={handleReload}
           onHardReload={handleHardReload}
           onOpenExternal={handleOpenExternal}
+          onPromoteToPortal={currentUrl ? handlePromoteToPortal : undefined}
           onZoomChange={handleZoomChange}
           onCaptureScreenshot={handleCaptureScreenshot}
           onToggleDevTools={handleToggleDevTools}
@@ -1248,7 +1474,7 @@ export function DevPreviewPane({
               {viewportFit && fitScale < 1 && ` · ${Math.round(fitScale * 100)}%`}
             </div>
           )}
-          {isRestarting || status === "starting" || status === "installing" ? (
+          {isRestarting || status === "starting" || status === "installing" || isProxyUrlPending ? (
             <DevPreviewLoadingState
               variant="full"
               isLoading={true}
@@ -1434,6 +1660,30 @@ export function DevPreviewPane({
                     </>
                   )}
                 </div>
+              ) : status === "restored-stopped" ? (
+                <div className="flex flex-col items-center text-center max-w-md">
+                  <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
+                    Dev server was running
+                  </h3>
+                  <p className="text-xs text-daintree-text/50 mb-3 leading-relaxed">
+                    Daintree closed while this dev server was active. It wasn't reattached — restart
+                    to run it again.
+                  </p>
+                  {devCommand && (
+                    <div className="mb-3 px-3 py-1.5 rounded bg-overlay-subtle border border-overlay/30 inline-flex items-center gap-2">
+                      <code className="text-xs text-daintree-text/70 font-mono">{devCommand}</code>
+                    </div>
+                  )}
+                  <Button
+                    onClick={handleStartFromRestored}
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 px-2.5 py-1.5 group text-accent-primary"
+                  >
+                    <RotateCw className="h-3.5 w-3.5" />
+                    <span className="text-xs">Restart dev server</span>
+                  </Button>
+                </div>
               ) : (
                 <div className="flex flex-col items-center text-center max-w-md">
                   <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
@@ -1511,12 +1761,32 @@ export function DevPreviewPane({
                                 ? "Couldn't resolve address"
                                 : webviewLoadError.code === "internet_disconnected"
                                   ? "No internet connection"
-                                  : "Page load failed"}
+                                  : webviewLoadError.code === "cert" ||
+                                      webviewLoadError.code === "ssl_protocol"
+                                    ? "Certificate Error"
+                                    : "Page load failed"}
                       </h3>
                       <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">
                         {webviewLoadError.message}
                       </p>
                       <div className="flex items-center gap-1">
+                        {webviewLoadError.code === "cert" && (
+                          <Button
+                            onClick={handleCopyMkcert}
+                            variant="ghost"
+                            size="sm"
+                            className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
+                          >
+                            {certCopied ? (
+                              <Check className="h-3.5 w-3.5" />
+                            ) : (
+                              <Copy className="h-3.5 w-3.5" />
+                            )}
+                            <span className="text-xs">
+                              {certCopied ? "Copied" : "Copy `mkcert -install`"}
+                            </span>
+                          </Button>
+                        )}
                         {webviewLoadError.code === "connection_refused" ? (
                           <>
                             <Tooltip>
@@ -1616,24 +1886,29 @@ export function DevPreviewPane({
                       }
                       severity="error"
                       animated={false}
-                      actions={[
-                        {
-                          id: "reload",
-                          label: "Reload",
-                          icon: RotateCw,
-                          variant: "dangerFilled",
-                          onClick: handleHardReload,
-                          ariaLabel: "Reload preview page",
-                        },
-                        {
-                          id: "hard-restart",
-                          label: "Hard restart",
-                          icon: RotateCw,
-                          variant: "danger",
-                          onClick: handleRestartDevServer,
-                          ariaLabel: "Hard restart preview",
-                        },
-                      ]}
+                      action={{
+                        id: "reload",
+                        label: "Reload",
+                        icon: RotateCw,
+                        variant: "dangerFilled",
+                        onClick: handleHardReload,
+                        ariaLabel: "Reload preview page",
+                      }}
+                      trailingSlot={
+                        <BannerOverflowMenu
+                          ariaLabel="More preview recovery options"
+                          actions={[
+                            {
+                              id: "hard-restart",
+                              label: "Hard restart",
+                              icon: RotateCw,
+                              variant: "danger",
+                              onClick: handleRestartDevServer,
+                              ariaLabel: "Hard restart preview",
+                            },
+                          ]}
+                        />
+                      }
                       onClose={() => {
                         setCrashState("none");
                         setCrashDetails(null);
@@ -1724,6 +1999,25 @@ export function DevPreviewPane({
             severity="warning"
             onClose={() => setForceKillBannerDismissed(true)}
             actions={[]}
+          />
+        )}
+        {crashLoopStopped && status === "stopped" && !crashLoopBannerDismissed && (
+          <InlineStatusBanner
+            icon={OctagonAlert}
+            title="Dev server stopped"
+            description="The server crashed and restarted several times in a row. Check your dev server config, then restart once it's fixed."
+            severity="warning"
+            onClose={() => setCrashLoopBannerDismissed(true)}
+            actions={[
+              {
+                id: "crash-loop-restart",
+                label: "Restart dev server",
+                icon: RotateCw,
+                variant: "danger",
+                onClick: handleRestartDevServer,
+                ariaLabel: "Restart dev server",
+              },
+            ]}
           />
         )}
         {consoleTerminalId && (

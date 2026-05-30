@@ -176,7 +176,7 @@ export interface PtyHostTerminalSnapshot {
  */
 export type PtyHostEvent =
   | { type: "data"; id: string; data: string }
-  | { type: "exit"; id: string; exitCode: number }
+  | { type: "exit"; id: string; exitCode: number; signal?: number }
   | { type: "error"; id: string; error: string }
   | { type: "spawn-result"; id: string; result: SpawnResult }
   | {

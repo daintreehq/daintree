@@ -1,7 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { MessageSquareMore } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { usePortalStore } from "@/store";
@@ -34,7 +33,6 @@ export function ToolbarPortalButton({
           aria-keyshortcuts={portalAriaShortcut}
         >
           <MessageSquareMore aria-hidden="true" />
-          <ShortcutRevealChip actionId="panel.togglePortal" />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="bottom">

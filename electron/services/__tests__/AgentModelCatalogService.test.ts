@@ -81,6 +81,32 @@ async function cleanup(cachePath: string): Promise<void> {
   }
 }
 
+interface PersistedCachePayload {
+  fetchedAt?: unknown;
+  raw: {
+    anthropic?: {
+      models?: Record<string, unknown>;
+    };
+  };
+}
+
+async function readPersistedCache(cachePath: string): Promise<PersistedCachePayload> {
+  const deadline = Date.now() + 1_000;
+  let lastError: unknown;
+
+  while (Date.now() < deadline) {
+    try {
+      const text = await fs.readFile(cachePath, "utf-8");
+      return JSON.parse(text) as PersistedCachePayload;
+    } catch (error) {
+      lastError = error;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Timed out waiting for persisted cache");
+}
+
 describe("AgentModelCatalogService", () => {
   let cachePath: string;
 
@@ -206,12 +232,9 @@ describe("AgentModelCatalogService", () => {
     const service = new AgentModelCatalogService({ cachePath, fetchImpl });
 
     await service.getResolvedModels("claude");
-    // Allow the background disk write to flush.
-    await new Promise((r) => setTimeout(r, 10));
 
-    const text = await fs.readFile(cachePath, "utf-8");
-    const payload = JSON.parse(text);
-    expect(payload.raw.anthropic.models["claude-sonnet-4-6"]).toBeDefined();
+    const payload = await readPersistedCache(cachePath);
+    expect(payload.raw.anthropic?.models?.["claude-sonnet-4-6"]).toBeDefined();
     expect(typeof payload.fetchedAt).toBe("number");
   });
 
@@ -221,7 +244,7 @@ describe("AgentModelCatalogService", () => {
       fetchImpl: mockFetch(makeCatalog()),
     });
     await populator.getResolvedModels("claude");
-    await new Promise((r) => setTimeout(r, 10));
+    await readPersistedCache(cachePath);
 
     const offline = new AgentModelCatalogService({
       cachePath,

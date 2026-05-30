@@ -4,6 +4,12 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { DevPreviewPaneProps } from "../DevPreviewPane";
 import { DevPreviewPane } from "../DevPreviewPane";
 
+const notifyMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/notify", () => ({
+  notify: (args: unknown) => notifyMock(args),
+}));
+
 type MockWebContents = {
   setUserAgent: ReturnType<typeof vi.fn>;
   getUserAgent: ReturnType<typeof vi.fn>;
@@ -75,6 +81,7 @@ type DevServerState = {
     module?: string;
   } | null;
   start: ReturnType<typeof vi.fn>;
+  stop: ReturnType<typeof vi.fn>;
   restart: ReturnType<typeof vi.fn>;
   isRestarting: boolean;
 };
@@ -148,6 +155,7 @@ const {
       terminalId: "dev-terminal-1",
       error: null,
       start: vi.fn(),
+      stop: vi.fn(),
       restart: vi.fn().mockResolvedValue(undefined),
       isRestarting: false,
     },
@@ -185,6 +193,38 @@ vi.mock("@/hooks/useDevServer", () => ({
   useDevServer: useDevServerMock,
 }));
 
+const { saveSettingsMock, projectClientGetSettingsMock } = vi.hoisted(() => {
+  const saveSettingsMock = vi.fn().mockResolvedValue(undefined);
+  const projectClientGetSettingsMock = vi.fn().mockResolvedValue({
+    devServerCommand: "npm run dev",
+    devServerAutoDetected: true,
+    devServerDismissed: false,
+    turbopackEnabled: true,
+  });
+  return { saveSettingsMock, projectClientGetSettingsMock };
+});
+
+vi.mock("@/hooks/useProjectSettings", () => ({
+  useProjectSettings: () => ({
+    saveSettings: saveSettingsMock,
+    settings: null,
+    detectedRunners: [],
+    allDetectedRunners: [],
+    isLoading: false,
+    error: null,
+    promoteToSaved: vi.fn().mockResolvedValue(undefined),
+    removeFromSaved: vi.fn().mockResolvedValue(undefined),
+    refresh: vi.fn().mockResolvedValue(undefined),
+  }),
+}));
+
+vi.mock("@/clients", () => ({
+  projectClient: {
+    getSettings: projectClientGetSettingsMock,
+    detectRunners: vi.fn().mockResolvedValue([]),
+  },
+}));
+
 vi.mock("@/components/DragDrop", () => ({
   useIsDragging: useIsDraggingMock,
 }));
@@ -214,8 +254,17 @@ vi.mock("@/components/Browser/BrowserToolbar", () => ({
 }));
 
 vi.mock("@/components/Panel", () => ({
-  ContentPanel: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="content-panel">{children}</div>
+  ContentPanel: ({
+    children,
+    headerContent,
+  }: {
+    children: React.ReactNode;
+    headerContent?: React.ReactNode;
+  }) => (
+    <div data-testid="content-panel">
+      {headerContent && <div data-testid="panel-header-content">{headerContent}</div>}
+      {children}
+    </div>
   ),
 }));
 
@@ -284,6 +333,16 @@ describe("DevPreviewPane webview lifecycle regression", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
     scrollPositionRef.current = undefined;
     originalCreateElement = document.createElement.bind(document);
     document.createElement = ((tagName: string, options?: ElementCreationOptions) => {
@@ -312,6 +371,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       terminalId: "dev-terminal-1",
       error: null,
       start: vi.fn(),
+      stop: vi.fn(),
       restart: vi.fn().mockResolvedValue(undefined),
       isRestarting: false,
     };
@@ -323,10 +383,14 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       window: {
         onDestroyHiddenWebviews: vi.fn(() => vi.fn()),
       },
+      clipboard: {
+        writeText: vi.fn().mockResolvedValue(undefined),
+      },
       webview: {
         registerPanel: vi.fn(() => Promise.resolve()),
         onDialogRequest: vi.fn(() => vi.fn()),
         onFindShortcut: vi.fn(() => vi.fn()),
+        onReloadShortcut: vi.fn(() => vi.fn()),
         onNavigationBlocked: vi.fn(() => vi.fn()),
         onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
         setLifecycleState: vi.fn().mockResolvedValue(undefined),
@@ -372,6 +436,49 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     expect(webview.setZoomFactor).toHaveBeenCalledWith(1.4);
   });
 
+  it("hard-reloads the focused webview guest when onReloadShortcut fires for this panel (#9497)", async () => {
+    let reloadCb: ((payload: { panelId: string }) => void) | undefined;
+    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
+      .electron;
+    electron.webview.onReloadShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
+      reloadCb = cb;
+      return vi.fn();
+    });
+    const reloadIgnoringCache = electron.webview.reloadIgnoringCache as ReturnType<typeof vi.fn>;
+
+    const { container } = render(<DevPreviewPane {...baseProps} />);
+    getWebviewElement(container);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(reloadCb).toBeDefined();
+
+    // A shortcut targeting a different panel must not reload this one
+    act(() => {
+      reloadCb?.({ panelId: "some-other-panel" });
+    });
+    expect(reloadIgnoringCache).not.toHaveBeenCalled();
+
+    // A shortcut targeting this panel triggers a cache-ignoring reload
+    act(() => {
+      reloadCb?.({ panelId: "dev-preview-panel-1" });
+    });
+    expect(reloadIgnoringCache).toHaveBeenCalledWith(42, "dev-preview-panel-1");
+  });
+
+  it("unsubscribes from onReloadShortcut on unmount (#9497)", () => {
+    const unsubscribe = vi.fn();
+    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
+      .electron;
+    electron.webview.onReloadShortcut = vi.fn(() => unsubscribe);
+
+    const { unmount } = render(<DevPreviewPane {...baseProps} />);
+    expect(electron.webview.onReloadShortcut).toHaveBeenCalled();
+    unmount();
+    expect(unsubscribe).toHaveBeenCalled();
+  });
+
   it("binds loading listeners when webview mounts after initial waiting state", async () => {
     terminalStoreState.getTerminal.mockImplementation(() => ({
       kind: "dev-preview",
@@ -391,6 +498,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       terminalId: "dev-terminal-1",
       error: null,
       start: vi.fn(),
+      stop: vi.fn(),
       restart: vi.fn().mockResolvedValue(undefined),
       isRestarting: false,
     };
@@ -760,6 +868,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         registerPanel: vi.fn(() => Promise.resolve()),
         onDialogRequest: vi.fn(() => vi.fn()),
         onFindShortcut: vi.fn(() => vi.fn()),
+        onReloadShortcut: vi.fn(() => vi.fn()),
         onNavigationBlocked: vi.fn(() => vi.fn()),
         onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
         onUnresponsive: vi.fn(() => vi.fn()),
@@ -818,6 +927,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         registerPanel: vi.fn(() => Promise.resolve()),
         onDialogRequest: vi.fn(() => vi.fn()),
         onFindShortcut: vi.fn(() => vi.fn()),
+        onReloadShortcut: vi.fn(() => vi.fn()),
         onNavigationBlocked: vi.fn(() => vi.fn()),
         onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
         onUnresponsive: vi.fn(() => vi.fn()),
@@ -866,6 +976,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         registerPanel: vi.fn(() => Promise.resolve()),
         onDialogRequest: vi.fn(() => vi.fn()),
         onFindShortcut: vi.fn(() => vi.fn()),
+        onReloadShortcut: vi.fn(() => vi.fn()),
         onNavigationBlocked: vi.fn(() => vi.fn()),
         onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
         onUnresponsive: vi.fn(() => vi.fn()),
@@ -1405,6 +1516,199 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("localhost:5173");
     });
 
+    it("shows certificate error overlay for ERR_CERT_AUTHORITY_INVALID (-202)", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -202,
+          errorDescription: "ERR_CERT_AUTHORITY_INVALID",
+          isMainFrame: true,
+          validatedURL: "https://localhost:8443/",
+        });
+      });
+
+      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("certificate couldn't be verified");
+      expect(container.textContent).toContain("mkcert -install");
+      expect(container.textContent).toContain("localhost:8443");
+      // Should NOT enter the connection-refused retry loop
+      expect(container.textContent).not.toContain("Reconnecting");
+    });
+
+    it("copy button calls clipboard.writeText for cert errors", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -202,
+          errorDescription: "ERR_CERT_AUTHORITY_INVALID",
+          isMainFrame: true,
+          validatedURL: "https://localhost:8443/",
+        });
+      });
+
+      // Find the copy button by its text content
+      const buttons = Array.from(container.querySelectorAll("button"));
+      const mkcertButton = buttons.find((btn) => btn.textContent?.includes("mkcert -install"));
+      expect(mkcertButton).toBeTruthy();
+
+      act(() => {
+        mkcertButton!.click();
+      });
+
+      const electron = (window as unknown as { electron: Record<string, unknown> }).electron;
+      const clipboard = electron.clipboard as { writeText: ReturnType<typeof vi.fn> };
+      expect(clipboard.writeText).toHaveBeenCalledWith("mkcert -install");
+    });
+
+    it("shows SSL/TLS handshake message for ERR_SSL_PROTOCOL_ERROR (-107)", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -107,
+          errorDescription: "ERR_SSL_PROTOCOL_ERROR",
+          isMainFrame: true,
+          validatedURL: "https://localhost:8443/",
+        });
+      });
+
+      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("SSL/TLS handshake failed");
+      // -107 is also raised on protocol mismatch — the mkcert hint is wrong here
+      expect(container.textContent).not.toContain("mkcert");
+      // Should NOT enter the connection-refused retry loop
+      expect(container.textContent).not.toContain("Reconnecting");
+    });
+
+    it("classifies -200 (cert range boundary) as cert error", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -200,
+          errorDescription: "ERR_CERT_COMMON_NAME_INVALID",
+          isMainFrame: true,
+          validatedURL: "https://example.com/",
+        });
+      });
+
+      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("mkcert -install");
+    });
+
+    it("cancels pending connection-refused retry when cert error arrives", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      // Fire a connection-refused to schedule a retry at 500ms
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -102,
+          errorDescription: "ERR_CONNECTION_REFUSED",
+          isMainFrame: true,
+          validatedURL: "http://localhost:5173/",
+        });
+      });
+
+      // Before the retry fires, a cert error arrives
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -202,
+          errorDescription: "ERR_CERT_AUTHORITY_INVALID",
+          isMainFrame: true,
+          validatedURL: "https://localhost:8443/",
+        });
+      });
+
+      // Advance past the retry timeout
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      // The stale retry must NOT have called loadURL
+      expect(webview.loadURL).not.toHaveBeenCalled();
+      // Cert error overlay must be visible
+      expect(container.textContent).toContain("Certificate Error");
+    });
+
+    it("classifies -299 (cert range lower bound) as cert, -199 and -300 fall through", () => {
+      const { container: c1 } = render(<DevPreviewPane {...baseProps} />);
+      const w1 = getWebviewElement(c1);
+      act(() => {
+        emitWebviewEvent(w1, "did-fail-load", {
+          errorCode: -299,
+          errorDescription: "ERR_CERT_VALIDITY_TOO_LONG",
+          isMainFrame: true,
+          validatedURL: "https://example.com/",
+        });
+      });
+      expect(c1.textContent).toContain("Certificate Error");
+
+      const { container: c2 } = render(<DevPreviewPane {...baseProps} />);
+      const w2 = getWebviewElement(c2);
+      act(() => {
+        emitWebviewEvent(w2, "did-fail-load", {
+          errorCode: -199,
+          errorDescription: "ERR_CERT_END",
+          isMainFrame: true,
+          validatedURL: "https://example.com/",
+        });
+      });
+      expect(c2.textContent).toContain("Page load failed");
+      expect(c2.textContent).not.toContain("mkcert");
+
+      const { container: c3 } = render(<DevPreviewPane {...baseProps} />);
+      const w3 = getWebviewElement(c3);
+      act(() => {
+        emitWebviewEvent(w3, "did-fail-load", {
+          errorCode: -300,
+          errorDescription: "ERR_CERT_START",
+          isMainFrame: true,
+          validatedURL: "https://example.com/",
+        });
+      });
+      expect(c3.textContent).toContain("Page load failed");
+      expect(c3.textContent).not.toContain("mkcert");
+    });
+
+    it("shows Copied feedback on mkcert copy button click", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -202,
+          errorDescription: "ERR_CERT_AUTHORITY_INVALID",
+          isMainFrame: true,
+          validatedURL: "https://localhost:8443/",
+        });
+      });
+
+      const buttons = Array.from(container.querySelectorAll("button"));
+      const mkcertButton = buttons.find((btn) => btn.textContent?.includes("mkcert -install"));
+      expect(mkcertButton).toBeTruthy();
+
+      await act(async () => {
+        mkcertButton!.click();
+        // Flush the microtask from the async clipboard handler
+        await Promise.resolve();
+      });
+
+      expect(mkcertButton!.textContent).toContain("Copied");
+
+      act(() => {
+        vi.advanceTimersByTime(2500);
+      });
+
+      expect(mkcertButton!.textContent).toContain("mkcert -install");
+    });
+
     it("cleans slow timer on unmount", () => {
       const { container, unmount } = render(<DevPreviewPane {...baseProps} />);
       const webview = getWebviewElement(container);
@@ -1421,6 +1725,220 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
 
       expect(container.textContent).not.toContain("Taking longer than usual");
+    });
+  });
+
+  describe("crash-loop notification", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      notifyMock.mockClear();
+    });
+
+    it("does not notify on the first crash", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("notifies on the second crash within 60 seconds", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          title: "Preview process crashed repeatedly",
+          priority: "high",
+          duration: 0,
+          supersedeKey: "dev-preview-crash-loop:dev-preview-panel-1",
+          correlationId: "dev-preview-panel-1",
+          context: expect.objectContaining({
+            eventKind: "recovery",
+            panelId: "dev-preview-panel-1",
+          }),
+        })
+      );
+    });
+
+    it("does not notify on second crash when outside 60-second window", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(61_000);
+      });
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("notifies on third and subsequent crashes with the same supersedeKey", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      expect(notifyMock).toHaveBeenCalledTimes(2);
+      expect(notifyMock.mock.calls[0]![0]!.supersedeKey).toBe(
+        "dev-preview-crash-loop:dev-preview-panel-1"
+      );
+      expect(notifyMock.mock.calls[1]![0]!.supersedeKey).toBe(
+        "dev-preview-crash-loop:dev-preview-panel-1"
+      );
+    });
+
+    it("filters clean-exit events", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "clean-exit", exitCode: 0 },
+        });
+      });
+
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("header script picker", () => {
+    beforeEach(() => {
+      projectClientGetSettingsMock.mockResolvedValue({
+        devServerCommand: "npm run dev",
+        devServerAutoDetected: true,
+        devServerDismissed: false,
+        turbopackEnabled: true,
+      });
+      saveSettingsMock.mockResolvedValue(undefined);
+      devServerStateRef.current.stop = vi.fn();
+    });
+
+    it("hidden when unconfigured (no devCommand)", () => {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [], present: "", future: [] },
+        browserZoom: 1.0,
+        devPreviewConsoleOpen: false,
+      }));
+      render(<DevPreviewPane {...baseProps} />);
+      expect(screen.queryByTestId("panel-header-content")).toBeNull();
+    });
+
+    it("hidden when no candidates available", () => {
+      render(<DevPreviewPane {...baseProps} />);
+      expect(screen.queryByTestId("panel-header-content")).toBeNull();
+    });
+
+    it("visible when configured with candidates", () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      useProjectSettingsStoreMock.mockImplementation((selector: (state: any) => unknown) => {
+        const state = {
+          projectId: "project-1",
+          settings: {
+            devServerCommand: "npm run dev",
+            environmentVariables: { API_URL: "http://localhost:9000" },
+            runCommands: [],
+          },
+          detectedRunners: [],
+          allDetectedRunners: [
+            { id: "r1", name: "Dev", command: "npm run dev", source: "package.json" as const },
+            { id: "r2", name: "Start", command: "npm start", source: "package.json" as const },
+          ],
+          isLoading: false,
+          error: null,
+          loadSettings: vi.fn(),
+          setSettings: vi.fn(),
+        };
+        return selector(state);
+      });
+
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      expect(screen.getByTestId("panel-header-content")).toBeTruthy();
+      expect(container.textContent).toContain("Dev");
+    });
+
+    it("shows raw command when no candidate matches", () => {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [], present: "", future: [] },
+        browserZoom: 1.0,
+        devPreviewConsoleOpen: false,
+        devCommand: "npm run custom",
+        devPreviewScrollPosition: scrollPositionRef.current,
+      }));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      useProjectSettingsStoreMock.mockImplementation((selector: (state: any) => unknown) => {
+        const state = {
+          projectId: "project-1",
+          settings: {
+            devServerCommand: "npm run custom",
+            environmentVariables: {},
+            runCommands: [],
+          },
+          detectedRunners: [],
+          allDetectedRunners: [
+            { id: "r1", name: "Dev", command: "npm run dev", source: "package.json" as const },
+          ],
+          isLoading: false,
+          error: null,
+          loadSettings: vi.fn(),
+          setSettings: vi.fn(),
+        };
+        return selector(state);
+      });
+
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      expect(screen.getByTestId("panel-header-content")).toBeTruthy();
+      expect(container.textContent).toContain("npm run custom");
     });
   });
 });

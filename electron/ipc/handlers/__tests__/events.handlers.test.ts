@@ -152,6 +152,55 @@ describe("events IPC handler — action:dispatched", () => {
     cleanup();
   });
 
+  it("forwards a valid pluginId and 64-char hex argsHash", () => {
+    const { emit, cleanup } = setup();
+    const hash = "a".repeat(64);
+    ipcMainMock._invoke("events:emit", "action:dispatched", {
+      ...base,
+      pluginId: "acme.plugin",
+      argsHash: hash,
+    });
+
+    const normalized = emit.mock.calls[0]![1] as Record<string, unknown>;
+    expect(normalized.pluginId).toBe("acme.plugin");
+    expect(normalized.argsHash).toBe(hash);
+    cleanup();
+  });
+
+  it("drops a malformed argsHash and over-long pluginId", () => {
+    const { emit, cleanup } = setup();
+    ipcMainMock._invoke("events:emit", "action:dispatched", {
+      ...base,
+      pluginId: "x".repeat(200),
+      argsHash: "not-hex",
+    });
+
+    const normalized = emit.mock.calls[0]![1] as Record<string, unknown>;
+    expect(normalized.pluginId).toBeUndefined();
+    expect(normalized.argsHash).toBeUndefined();
+    cleanup();
+  });
+
+  it("rejects uppercase or wrong-length argsHash (strict lowercase 64-hex)", () => {
+    const { emit, cleanup } = setup();
+    ipcMainMock._invoke("events:emit", "action:dispatched", {
+      ...base,
+      pluginId: "acme.plugin",
+      argsHash: "A".repeat(64), // uppercase — rejected
+    });
+    ipcMainMock._invoke("events:emit", "action:dispatched", {
+      ...base,
+      pluginId: "acme.plugin",
+      argsHash: "a".repeat(63), // too short — rejected
+    });
+
+    expect((emit.mock.calls[0]![1] as Record<string, unknown>).argsHash).toBeUndefined();
+    expect((emit.mock.calls[1]![1] as Record<string, unknown>).argsHash).toBeUndefined();
+    // pluginId is still forwarded even when argsHash is dropped.
+    expect((emit.mock.calls[0]![1] as Record<string, unknown>).pluginId).toBe("acme.plugin");
+    cleanup();
+  });
+
   it("rejects invalid action payloads (non-string actionId)", () => {
     const { emit, cleanup } = setup();
     ipcMainMock._invoke("events:emit", "action:dispatched", { ...base, actionId: 123 });

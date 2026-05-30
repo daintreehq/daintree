@@ -11,6 +11,6 @@
     "linux"
   ],
   "dependencies": {
-    "node-addon-api": "^7.1.0"
+    "node-addon-api": "^8.8.0"
   }
 }

@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import { VoiceInputButton } from "../VoiceInputButton";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { voiceRecordingService } from "@/services/VoiceRecordingService";
 
 function createVoiceInputApi() {
   return {
@@ -30,7 +31,7 @@ describe("VoiceInputButton", () => {
     useVoiceRecordingStore.setState({
       isConfigured: false,
       status: "idle",
-      errorMessage: null,
+      lastError: null,
       activeTarget: null,
       elapsedSeconds: 0,
       panelBuffers: {},
@@ -70,5 +71,40 @@ describe("VoiceInputButton", () => {
     );
 
     expect(container.innerHTML).not.toBe("");
+  });
+
+  it("renders a resume affordance when this panel is paused", () => {
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      status: "paused",
+      activeTarget: { panelId: "panel-1" } as never,
+    });
+    const { getByRole } = render(
+      <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Daintree" />
+    );
+    const button = getByRole("button");
+    expect(button.getAttribute("aria-label")).toBe("Resume voice recording");
+    expect(button.getAttribute("title")).toContain("Paused");
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("clicking while paused calls togglePause instead of toggle", () => {
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      status: "paused",
+      activeTarget: { panelId: "panel-1" } as never,
+    });
+    const togglePauseSpy = vi
+      .spyOn(voiceRecordingService, "togglePause")
+      .mockImplementation(() => undefined);
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+
+    const { getByRole } = render(
+      <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Daintree" />
+    );
+    fireEvent.click(getByRole("button"));
+
+    expect(togglePauseSpy).toHaveBeenCalledTimes(1);
+    expect(toggleSpy).not.toHaveBeenCalled();
   });
 });

@@ -21,6 +21,7 @@ import { useDockBlockedState } from "@/components/Layout/useDockBlockedState";
 import { usePreferencesStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { useWorktreeColorMap } from "@/hooks/useWorktreeColorMap";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -120,6 +121,13 @@ export interface ContentPanelProps extends BasePanelProps {
   // and the Moon icon in the header.
   isHibernated?: boolean;
 
+  // True when voice dictation is in its pre-audio arming window targeting
+  // this pane. Drives the panel-state-arming border cue (single load-bearing
+  // signal during the ~200ms before the mic opens and recording chrome takes
+  // over). Outranks waiting/working/hibernated because it is user-initiated
+  // and time-bounded.
+  isVoiceArming?: boolean;
+
   // Tab support
   tabs?: TabInfo[];
   groupId?: string;
@@ -183,6 +191,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     isSelected = false,
     isFleetFollower = false,
     isHibernated = false,
+    isVoiceArming = false,
     tabs,
     groupId,
     onTabClick,
@@ -261,6 +270,11 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // releases. Ambient agent-state borders (`panel-state-*`) still render.
   const isAssistantActive = useMacroFocusStore((s) => s.focusedRegion === "assistant");
   const showSelectedChrome = (isFocused || isSelected) && !isAssistantActive;
+  // Voice-dictation lock indicator: persistent amber border on the pinned
+  // target. Selector returns a boolean for stable equality across unrelated
+  // store updates (transcript deltas, audio levels). Renders independently of
+  // panel-state-* so a locked working/waiting panel shows both signals.
+  const isVoiceDictationLocked = useVoiceRecordingStore((s) => s.lockedTarget?.panelId === id);
 
   // Per-worktree color identity
   const worktreeColorMap = useWorktreeColorMap();
@@ -451,17 +465,26 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             "rounded border shadow-[var(--theme-shadow-ambient)] transition-colors duration-300",
           location === "grid" &&
             !isMaximized &&
-            (showSelectedChrome && showGridAttention
-              ? "terminal-selected"
-              : showGridAttention && showGridAgentHighlights && blockedState === "waiting"
-                ? "panel-state-waiting"
-                : showGridAttention && showGridAgentHighlights && isWorkingState
-                  ? "panel-state-working"
-                  : showGridAttention && isHibernated
-                    ? "panel-state-hibernated"
-                    : "border-overlay hover:border-tint/[0.08]"),
+            (showGridAttention && isVoiceArming
+              ? "panel-state-arming"
+              : showSelectedChrome && showGridAttention
+                ? "terminal-selected"
+                : showGridAttention && showGridAgentHighlights && blockedState === "waiting"
+                  ? "panel-state-waiting"
+                  : showGridAttention && showGridAgentHighlights && isWorkingState
+                    ? "panel-state-working"
+                    : showGridAttention && isHibernated
+                      ? "panel-state-hibernated"
+                      : "border-overlay hover:border-tint/[0.08]"),
           location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
           worktreeAccentColor && location === "grid" && !isMaximized && "panel-worktree-identity",
+          // Voice-dictation lock border overrides ambient state colours so the
+          // pinned target stays unambiguously visible. Applied after the state
+          // ternary so its border-color/box-shadow wins by source order.
+          location === "grid" &&
+            !isMaximized &&
+            isVoiceDictationLocked &&
+            "panel-voice-dictation-locked",
           isFleetDimmed && "fleet-pane-dimmed",
           className
         )}

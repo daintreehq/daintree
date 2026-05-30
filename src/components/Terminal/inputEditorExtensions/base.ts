@@ -1,4 +1,4 @@
-import { EditorView, Decoration, keymap, placeholder } from "@codemirror/view";
+import { EditorView, Decoration, WidgetType, keymap, placeholder } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 import { StateField, StateEffect, Prec } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
@@ -178,6 +178,12 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         textUnderlineOffset: "3px",
         transition: "text-decoration-color 150ms ease-out",
       },
+      '[data-voice-active="true"] & .cm-content': {
+        caretColor: c.voiceCursor,
+      },
+      '[data-voice-active="true"] &.cm-focused .cm-cursor': {
+        borderLeft: `2px solid ${c.voiceCursor}`,
+      },
     },
     { dark: true }
   );
@@ -214,32 +220,50 @@ export const chipEntranceTheme: Extension = EditorView.baseTheme({
   ),
 });
 
-const interimMark = Decoration.mark({ class: "cm-voice-interim" });
+class InterimGhostWidget extends WidgetType {
+  constructor(readonly text: string) {
+    super();
+  }
+  eq(other: InterimGhostWidget): boolean {
+    return other.text === this.text;
+  }
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "cm-voice-interim";
+    span.textContent = this.text;
+    span.style.userSelect = "none";
+    span.style.pointerEvents = "none";
+    return span;
+  }
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
 
-export const setInterimRange = StateEffect.define<{ from: number; to: number } | null>();
+export const setInterimText = StateEffect.define<string>();
 
-export const interimMarkField = StateField.define({
+export const interimWidgetField = StateField.define<string>({
   create() {
-    return Decoration.none;
+    return "";
   },
   update(value, tr) {
-    if (tr.docChanged) {
-      value = value.map(tr.changes);
-    }
     for (const effect of tr.effects) {
-      if (effect.is(setInterimRange)) {
-        const range = effect.value;
-        if (!range) return Decoration.none;
-        const docLen = tr.state.doc.length;
-        if (range.from >= 0 && range.to <= docLen && range.from < range.to) {
-          return Decoration.set([interimMark.range(range.from, range.to)]);
-        }
-        return Decoration.none;
+      if (effect.is(setInterimText)) {
+        return effect.value;
       }
     }
     return value;
   },
-  provide: (f) => EditorView.decorations.from(f),
+  provide: (f) =>
+    EditorView.decorations.from(f, (text) => (view) => {
+      // Suppress the ghost during IME composition so it can't displace the
+      // composition overlay (mirrors the xterm guard added for #4379).
+      if (!text || view.composing) return Decoration.none;
+      const pos = view.state.doc.length;
+      return Decoration.set([
+        Decoration.widget({ widget: new InterimGhostWidget(text), side: 1 }).range(pos),
+      ]);
+    }),
 });
 
 const pendingAIMark = Decoration.mark({ class: "cm-voice-pending-ai" });

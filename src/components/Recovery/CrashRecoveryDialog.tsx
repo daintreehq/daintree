@@ -1,9 +1,10 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import {
   AlertTriangle,
   ChevronDown,
   ChevronRight,
   Copy,
+  Download,
   ExternalLink,
   FileText,
   SquareTerminal,
@@ -15,26 +16,31 @@ import { Plug } from "@/components/icons";
 import { AppDialog } from "../ui/AppDialog";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
-import { AnimatedLabel } from "../ui/AnimatedLabel";
 import { SettingsSwitch } from "../Settings/SettingsSwitch";
 import { InlineStatusBanner } from "../Terminal/InlineStatusBanner";
 import {
   getSuspectPanelBannerTitle,
+  getPanelSuspectReasonTitle,
   SUSPECT_PANEL_BANNER_DESCRIPTION_DESELECTED,
   SUSPECT_PANEL_BANNER_DESCRIPTION_SELECTED,
 } from "./recoveryCopy";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
+import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { scrubReportText } from "@shared/utils/reportScrubbers";
+import {
+  buildCrashReportUrl,
+  buildCrashReportUrlFromBody,
+} from "@shared/utils/buildCrashReportUrl";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import type {
   PendingCrash,
   PanelSummary,
+  ActionBreadcrumb,
   CrashRecoveryAction,
   CrashRecoveryConfig,
 } from "@shared/types/ipc";
-
-const ISSUES_URL = "https://github.com/daintreehq/daintree/issues/new";
 
 interface CrashRecoveryDialogProps {
   crash: PendingCrash;
@@ -73,11 +79,35 @@ export function CrashRecoveryDialog({
     () => new Set(panels.filter((p) => !(shouldDeselectSuspects && p.isSuspect)).map((p) => p.id))
   );
   const [resolving, setResolving] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [privacyWarningShown, setPrivacyWarningShown] = useState(false);
+  const [showReportPreview, setShowReportPreview] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [showFreshConfirm, setShowFreshConfirm] = useState(false);
-  const { copied, copy } = useCopyWithFeedback();
+  const { copy: copyReport } = useCopyWithFeedback();
   const { copied: stackCopied, copy: copyStack } = useCopyWithFeedback();
+  const reportTextRef = useRef<HTMLTextAreaElement>(null);
+
+  const recentActions = useMemo(() => crash.entry.recentActions ?? [], [crash.entry.recentActions]);
+  // The ring buffer is chronological; show newest-first so the most relevant
+  // pre-crash context is at the top.
+  const actionsNewestFirst = useMemo(() => [...recentActions].reverse(), [recentActions]);
+  const reportResult = useMemo(() => buildCrashReportUrl(crash.entry), [crash.entry]);
+
+  // Whether the (possibly edited) report exceeds the URL budget and must travel
+  // via the clipboard. Tracks the textarea so the note stays accurate as the user
+  // trims or pads the report.
+  const [clipboardFallback, setClipboardFallback] = useState(reportResult.usedClipboardFallback);
+
+  // Reset the preview when a different crash is loaded into the dialog. The
+  // textarea content resets for free via key={crash.entry.id}; this only clears
+  // the surrounding open/error state (single effect, not a split init/reset).
+  useEffect(() => {
+    setShowReportPreview(false);
+    setReportError(null);
+    setClipboardFallback(reportResult.usedClipboardFallback);
+  }, [crash.entry.id, reportResult.usedClipboardFallback]);
 
   const selectedCount = selectedIds.size;
   const allSelected = selectedCount === panels.length;
@@ -86,22 +116,29 @@ export function CrashRecoveryDialog({
     async (action: CrashRecoveryAction) => {
       if (resolving) return;
       setResolving(true);
+      setRecoveryError(null);
       try {
         await onResolve(action);
       } catch (err) {
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "error",
-          title: "Recovery failed",
-          message: formatErrorMessage(err, "Couldn't complete recovery action"),
-          duration: 6000,
-        });
+        // notify() is dead in the crash-pending branch (Toaster isn't mounted
+        // yet — the main app tree only renders after the user resolves the
+        // dialog). Surface the failure inline alongside the recovery buttons
+        // so the diagnostics action is reachable in the failure path.
+        setRecoveryError(formatErrorMessage(err, "Couldn't complete recovery action"));
       } finally {
         setResolving(false);
       }
     },
     [resolving, onResolve]
   );
+
+  const handleSendDiagnostics = useCallback(() => {
+    void actionService.dispatch(
+      "diagnostics.openReview",
+      { scope: { source: "recovery.crashRecoveryFailed" } },
+      { source: "user" }
+    );
+  }, []);
 
   const handleRestoreSelected = useCallback(() => {
     handleResolve({ kind: "restore", panelIds: [...selectedIds] });
@@ -153,17 +190,34 @@ export function CrashRecoveryDialog({
     });
   }, [crash.logPath]);
 
-  const handleReport = useCallback(async () => {
-    if (!privacyWarningShown) {
-      setPrivacyWarningShown(true);
-      return;
+  const handleSubmitReport = useCallback(async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    setReportError(null);
+    try {
+      const edited = reportTextRef.current?.value ?? reportResult.fullBody;
+      const result = buildCrashReportUrlFromBody(crash.entry, edited);
+      // When the edited report exceeds the URL budget the full content can only
+      // travel via the clipboard. If that copy fails, keep the preview open and
+      // surface the error rather than opening GitHub with a truncated stub.
+      if (result.usedClipboardFallback) {
+        const ok = await copyReport(edited);
+        if (!ok) {
+          setReportError(
+            "Couldn't copy the report to the clipboard. Copy it manually, then open GitHub."
+          );
+          return;
+        }
+      }
+      await window.electron.system.openExternal(result.url);
+      setShowReportPreview(false);
+    } catch (err) {
+      logError("Failed to open issues URL", err);
+      setReportError("Couldn't open GitHub. Copy the report above and open an issue manually.");
+    } finally {
+      setSubmitting(false);
     }
-    const ok = await copy(buildClipboardText(crash));
-    if (!ok) return;
-    window.electron.system
-      .openExternal(ISSUES_URL)
-      .catch((err) => logError("Failed to open issues URL", err));
-  }, [privacyWarningShown, crash, copy]);
+  }, [submitting, crash.entry, reportResult.fullBody, copyReport]);
 
   const handleAutoRestore = useCallback(
     async (checked: boolean) => {
@@ -321,6 +375,26 @@ export function CrashRecoveryDialog({
             </div>
           )}
 
+          {recoveryError && (
+            <div className="rounded-md overflow-hidden" data-testid="recovery-error">
+              <InlineStatusBanner
+                severity="error"
+                icon={AlertTriangle}
+                title="Recovery failed"
+                description={recoveryError}
+                animated={false}
+                action={{
+                  id: "send-diagnostics",
+                  label: "Send diagnostics",
+                  icon: Download,
+                  onClick: handleSendDiagnostics,
+                }}
+                onClose={() => setRecoveryError(null)}
+                closeAriaLabel="Dismiss recovery error"
+              />
+            </div>
+          )}
+
           <div className="border border-daintree-border rounded-lg overflow-hidden">
             <button
               type="button"
@@ -414,32 +488,89 @@ export function CrashRecoveryDialog({
                     size="sm"
                     variant="ghost"
                     className="text-xs h-7"
-                    onClick={() => void handleReport()}
+                    onClick={() => setShowReportPreview((o) => !o)}
                     data-testid="report-button"
                   >
                     <ExternalLink className="h-3 w-3 mr-1" />
-                    <AnimatedLabel
-                      label={
-                        copied
-                          ? "Copied!"
-                          : privacyWarningShown
-                            ? "Copy & report on GitHub"
-                            : "Report this crash"
-                      }
-                      animateKey={copied ? "copied" : privacyWarningShown ? "warn" : "default"}
-                    />
+                    Report this crash
                   </Button>
                 </div>
 
-                {privacyWarningShown && !copied && (
-                  <p
-                    className="text-xs text-status-warning/90 bg-status-warning/10 rounded px-2 py-1.5"
-                    data-testid="privacy-warning"
-                  >
-                    Opens GitHub Issues in your browser. The report includes platform info, app
-                    version, panel kinds, file paths, error message, and stack trace — and will be
-                    publicly visible. Review before pasting.
-                  </p>
+                {recentActions.length > 0 && (
+                  <div data-testid="actions-section" className="pt-1">
+                    <div className="text-xs text-daintree-text/50 mb-1">
+                      Recent actions ({recentActions.length})
+                    </div>
+                    <div
+                      className="max-h-32 overflow-y-auto rounded bg-overlay-soft divide-y divide-daintree-border/40"
+                      data-testid="actions-list"
+                    >
+                      {actionsNewestFirst.map((action) => (
+                        <ActionTrailRow key={action.id} action={action} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {showReportPreview && (
+                  <div className="pt-1 space-y-2" data-testid="report-preview">
+                    <p className="text-xs text-daintree-text/60">
+                      Review and edit before submitting. The report is redacted and will be publicly
+                      visible on GitHub.
+                    </p>
+                    <textarea
+                      key={crash.entry.id}
+                      ref={reportTextRef}
+                      defaultValue={reportResult.fullBody}
+                      spellCheck={false}
+                      onChange={(e) =>
+                        setClipboardFallback(
+                          buildCrashReportUrlFromBody(crash.entry, e.target.value)
+                            .usedClipboardFallback
+                        )
+                      }
+                      className="w-full max-h-48 min-h-32 h-48 resize-y rounded border border-daintree-border bg-overlay-soft p-2 font-mono text-xs text-daintree-text/80 select-text"
+                      data-testid="report-textarea"
+                    />
+                    {clipboardFallback && (
+                      <p
+                        className="text-xs text-daintree-text/60"
+                        data-testid="report-clipboard-note"
+                      >
+                        This report is too long for a GitHub URL — it'll be copied to your clipboard
+                        so you can paste it into the issue.
+                      </p>
+                    )}
+                    {reportError && (
+                      <p
+                        className="text-xs text-status-danger bg-status-danger/10 rounded px-2 py-1.5"
+                        data-testid="report-error"
+                      >
+                        {reportError}
+                      </p>
+                    )}
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        className="text-xs h-7"
+                        onClick={() => void handleSubmitReport()}
+                        disabled={submitting}
+                        data-testid="submit-report-button"
+                      >
+                        <ExternalLink className="h-3 w-3 mr-1" />
+                        Submit on GitHub
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-xs h-7"
+                        onClick={() => setShowReportPreview(false)}
+                        data-testid="cancel-report-button"
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
                 )}
               </div>
             )}
@@ -542,7 +673,7 @@ function PanelRow({
         {panel.isSuspect && (
           <span
             className="text-status-warning"
-            title="Created shortly before crash"
+            title={getPanelSuspectReasonTitle(panel.suspectReason)}
             data-testid={`suspect-badge-${panel.id}`}
           >
             <AlertTriangle className="h-3.5 w-3.5" />
@@ -579,89 +710,44 @@ function formatBytesCompact(bytes: number): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
 }
 
-function buildClipboardText(crash: PendingCrash): string {
-  const e = crash.entry;
-  const lines: string[] = [
-    `## Crash Report`,
-    ``,
-    `**Daintree ${e.appVersion}** on ${e.platform} ${e.arch}`,
-    `- **OS**: ${e.osVersion}`,
-  ];
-
-  const versionParts: string[] = [];
-  if (e.electronVersion) versionParts.push(`**Electron**: ${e.electronVersion}`);
-  if (e.nodeVersion) versionParts.push(`**Node**: ${e.nodeVersion}`);
-  if (e.chromeVersion) versionParts.push(`**Chrome**: ${e.chromeVersion}`);
-  if (versionParts.length > 0) lines.push(`- ${versionParts.join(" | ")}`);
-
-  const sessionParts: string[] = [];
-  if (e.sessionDurationMs !== undefined)
-    sessionParts.push(`**Session**: ${formatDuration(e.sessionDurationMs)}`);
-  if (e.isPackaged !== undefined) sessionParts.push(`**Packaged**: ${e.isPackaged ? "Yes" : "No"}`);
-  if (sessionParts.length > 0) lines.push(`- ${sessionParts.join(" | ")}`);
-
-  if (e.totalMemory !== undefined) {
-    lines.push(
-      `- **Memory (Free/Total)**: ${formatBytesCompact(e.freeMemory ?? 0)} / ${formatBytesCompact(e.totalMemory)}`
-    );
+function formatActionArgs(args: Record<string, unknown> | undefined): string | null {
+  if (!args || Object.keys(args).length === 0) return null;
+  let raw: string;
+  try {
+    raw = JSON.stringify(args);
+  } catch {
+    return null;
   }
-  if (e.rss !== undefined || e.heapUsed !== undefined) {
-    const parts: string[] = [];
-    if (e.rss !== undefined) parts.push(`RSS ${formatBytesCompact(e.rss)}`);
-    if (e.heapUsed !== undefined && e.heapTotal !== undefined)
-      parts.push(`Heap ${formatBytesCompact(e.heapUsed)}/${formatBytesCompact(e.heapTotal)}`);
-    lines.push(`- **Process Memory**: ${parts.join(", ")}`);
-  }
+  return scrubReportText(raw);
+}
 
-  const infoParts: string[] = [];
-  if (e.panelCount !== undefined) {
-    let panelStr = String(e.panelCount);
-    if (e.panelKinds && Object.keys(e.panelKinds).length > 0) {
-      panelStr += ` (${Object.entries(e.panelKinds)
-        .map(([k, v]) => `${k}: ${v}`)
-        .join(", ")})`;
-    }
-    infoParts.push(`**Panels**: ${panelStr}`);
-  }
-  if (e.windowCount !== undefined) infoParts.push(`**Windows**: ${e.windowCount}`);
-  if (infoParts.length > 0) lines.push(`- ${infoParts.join(" | ")}`);
-
-  if (e.cpuCount !== undefined) lines.push(`- **CPUs**: ${e.cpuCount}`);
-  if (e.gpuAccelerationDisabled !== undefined)
-    lines.push(`- **GPU Acceleration**: ${e.gpuAccelerationDisabled ? "Disabled" : "Enabled"}`);
-
-  lines.push(`- **Crashed at**: ${new Date(e.timestamp).toISOString()}`);
-
-  if (e.cause === "watchdog-deadlock") {
-    const causeParts: string[] = [`**Cause**: Watchdog deadlock (SIGKILL)`];
-    if (e.watchdogMissedBeats !== undefined) {
-      causeParts.push(`${e.watchdogMissedBeats} missed heartbeats`);
-    }
-    if (e.watchdogKilledAt !== undefined) {
-      causeParts.push(`killed at ${new Date(e.watchdogKilledAt).toISOString()}`);
-    }
-    if (e.watchdogMainPid !== undefined) {
-      causeParts.push(`main PID ${e.watchdogMainPid}`);
-    }
-    lines.push(`- ${causeParts.join(" — ")}`);
-  }
-
-  if (e.errorMessage) {
-    lines.push(``, `**Error:** ${e.errorMessage}`);
-  }
-  if (e.errorStack) {
-    lines.push(
-      ``,
-      `<details>`,
-      `<summary>Stack trace</summary>`,
-      ``,
-      "```",
-      e.errorStack,
-      "```",
-      ``,
-      `</details>`
-    );
-  }
-
-  return lines.join("\n");
+function ActionTrailRow({ action }: { action: ActionBreadcrumb }) {
+  const time = new Date(action.timestamp).toLocaleTimeString();
+  const args = formatActionArgs(action.args);
+  return (
+    <div
+      className="flex items-baseline gap-2 px-2 py-1 text-xs"
+      data-testid={`action-row-${action.id}`}
+    >
+      <span className="text-daintree-text/40 tabular-nums shrink-0">{time}</span>
+      <span className="font-mono text-daintree-text/80 truncate">{action.actionId}</span>
+      {action.count > 1 && (
+        <span className="text-daintree-text/50 tabular-nums shrink-0">×{action.count}</span>
+      )}
+      <span className="text-daintree-text/40 shrink-0">{action.source}</span>
+      {action.danger !== "safe" && (
+        <span className="text-daintree-text/50 shrink-0">{action.danger}</span>
+      )}
+      {action.confirmed && (
+        <span className="text-status-warning shrink-0" title="Confirmed destructive action">
+          confirmed
+        </span>
+      )}
+      {args && (
+        <span className="text-daintree-text/40 truncate font-mono" title={args}>
+          {args}
+        </span>
+      )}
+    </div>
+  );
 }

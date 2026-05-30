@@ -1,8 +1,9 @@
-import { shell } from "electron";
 import fs from "fs/promises";
 import path from "path";
 import { CHANNELS } from "../channels.js";
+import { openExternalUrl } from "../../utils/openExternal.js";
 import { broadcastToRenderer, checkRateLimit, typedHandle } from "../utils.js";
+import { defineIpcNamespace, op } from "../define.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
   RepositoryStats,
@@ -50,6 +51,43 @@ function toRateLimitInfo(payload: GitHubRateLimitPayload): RateLimitInfo {
     throttleMultiplier: payload.throttleMultiplier,
   };
 }
+
+async function handleGitHubUnassignIssue(payload: {
+  cwd: string;
+  issueNumber: number;
+  username: string;
+}): Promise<void> {
+  checkRateLimit(CHANNELS.GITHUB_UNASSIGN_ISSUE, 5, 10_000);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+  if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+    throw new Error("Invalid working directory");
+  }
+  if (!path.isAbsolute(payload.cwd)) {
+    throw new Error("Working directory must be an absolute path");
+  }
+  if (
+    typeof payload.issueNumber !== "number" ||
+    !Number.isInteger(payload.issueNumber) ||
+    payload.issueNumber <= 0
+  ) {
+    throw new Error("Invalid issue number");
+  }
+  const trimmedUsername = payload.username?.trim();
+  if (typeof payload.username !== "string" || !trimmedUsername) {
+    throw new Error("Invalid username");
+  }
+  const { unassignIssue } = await import("../../services/github/index.js");
+  await unassignIssue(payload.cwd.trim(), payload.issueNumber, trimmedUsername);
+}
+
+export const githubUnassignIssueNamespace = defineIpcNamespace({
+  name: "githubUnassignIssue",
+  ops: {
+    unassignIssue: op(CHANNELS.GITHUB_UNASSIGN_ISSUE, handleGitHubUnassignIssue),
+  },
+});
 
 export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -189,7 +227,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     }
     const q = buildGitHubSearchQuery(query, state, "issue");
     const url = q ? `${repoUrl}/issues?q=${encodeURIComponent(q)}` : `${repoUrl}/issues`;
-    await shell.openExternal(url);
+    await openExternalUrl(url);
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_OPEN_ISSUES, handleGitHubOpenIssues));
 
@@ -208,7 +246,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     }
     const q = buildGitHubSearchQuery(query, state, "pr");
     const url = q ? `${repoUrl}/pulls?q=${encodeURIComponent(q)}` : `${repoUrl}/pulls`;
-    await shell.openExternal(url);
+    await openExternalUrl(url);
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_OPEN_PRS, handleGitHubOpenPRs));
 
@@ -229,7 +267,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       throw new Error("Not a GitHub repository");
     }
     const url = branch ? `${repoUrl}/commits/${encodeURIComponent(branch)}` : `${repoUrl}/commits`;
-    await shell.openExternal(url);
+    await openExternalUrl(url);
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_OPEN_COMMITS, handleGitHubOpenCommits));
 
@@ -256,7 +294,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     if (!issueUrl) {
       throw new Error("Not a GitHub repository");
     }
-    await shell.openExternal(issueUrl);
+    await openExternalUrl(issueUrl);
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_OPEN_ISSUE, handleGitHubOpenIssue));
 
@@ -277,7 +315,9 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     } catch (error) {
       throw new Error(formatErrorMessage(error, "Invalid PR URL"), { cause: error });
     }
-    await shell.openExternal(prUrl);
+    // The hostname/protocol gate above is the narrower second layer; the funnel
+    // through `openExternalUrl` keeps the global protocol allowlist authoritative.
+    await openExternalUrl(prUrl);
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_OPEN_PR, handleGitHubOpenPR));
 
@@ -393,6 +433,8 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     await assignIssue(payload.cwd.trim(), payload.issueNumber, trimmedUsername);
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_ASSIGN_ISSUE, handleGitHubAssignIssue));
+
+  handlers.push(githubUnassignIssueNamespace.register());
 
   const handleGitHubGetIssueTooltip = async (payload: { cwd: string; issueNumber: number }) => {
     checkRateLimit(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP, 20, 10_000);

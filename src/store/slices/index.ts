@@ -2,6 +2,7 @@ export {
   createPanelRegistrySlice,
   flushPanelPersistence,
   isHydrationBatchActive,
+  resetBatchState,
   selectOrderedTerminals,
   type PanelRegistrySlice,
   type TerminalInstance,

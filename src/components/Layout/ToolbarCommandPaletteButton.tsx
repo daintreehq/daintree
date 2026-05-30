@@ -2,7 +2,6 @@ import { useCallback, useRef, useState } from "react";
 import { SquareMenu, Unplug } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -101,7 +100,6 @@ export function ToolbarCommandPaletteButton({
               aria-keyshortcuts={ariaShortcut}
             >
               <SquareMenu />
-              <ShortcutRevealChip actionId={PALETTE_ACTION_ID} />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">

@@ -1,8 +1,38 @@
-import { ipcMain } from "electron";
+import { ipcMain, dialog, BrowserWindow, net } from "electron";
+import { open, writeFile, rm } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import os from "node:os";
+import path, { extname, isAbsolute } from "node:path";
+import crypto from "node:crypto";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
+import {
+  getPluginActionAuditService,
+  type PluginActionAuditService,
+} from "../../services/PluginActionAuditService.js";
+import {
+  PLUGIN_AUDIT_MAX_RECORDS,
+  PLUGIN_AUDIT_MIN_RECORDS,
+  type PluginActionAuditRecord,
+  type PluginAuditConfig,
+} from "../../../shared/types/ipc/pluginAudit.js";
+import type { PluginDiagnosticsSnapshot } from "../../../shared/types/ipc/pluginDiagnostics.js";
 import { PLUGIN_METHOD_CHANNELS } from "./plugin.preload.js";
 import { pluginService } from "../../services/PluginService.js";
+import { MAX_DNTR_BYTES } from "../../services/PluginArchive.js";
+import {
+  PLUGIN_DOWNLOAD_TIMEOUT_MS,
+  acceptedMime,
+  dntrSuffixOk,
+  fetchWithPrivateHostGuard,
+  urlHasCredentials,
+} from "../../utils/pluginDownloadPolicy.js";
+import { isPrivateOrLoopbackHostname, SCOPED_PLUGIN_NAME_PATTERN } from "../../schemas/plugin.js";
+import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
+import { stableArgsSha256 } from "../../utils/pluginMcpHash.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   getPluginToolbarButtonIds,
   getToolbarButtonConfig,
@@ -12,6 +42,8 @@ import {
   type PanelKindConfig,
 } from "../../../shared/config/panelKindRegistry.js";
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
+import { getPluginKeybindings } from "../../services/pluginKeybindingRegistry.js";
+import { getPluginContextMenuItems } from "../../services/pluginContextMenuRegistry.js";
 import {
   getRegisteredForgeProviders,
   type RegisteredForgeProvider,
@@ -25,7 +57,14 @@ import type {
   PluginIpcContext,
   PluginActionContribution,
   PluginActionDescriptor,
+  PluginInstallOptions,
+  PluginInstallError,
+  PluginInstallResult,
+  PluginCheckUpdateResult,
+  PluginSettingsScope,
+  PluginSettingsUiValues,
 } from "../../../shared/types/plugin.js";
+import type { IpcContext } from "../types.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { assertIpcSecurityReady } from "../ipcGuard.js";
 
@@ -33,14 +72,341 @@ async function handleList(): Promise<LoadedPluginInfo[]> {
   return pluginService.listPlugins();
 }
 
+async function handleSetEnabled(pluginId: string, enabled: boolean): Promise<void> {
+  pluginService.setEnabled(pluginId, enabled);
+}
+
+// Local-file-header signature that prefixes every ZIP (and therefore every
+// `.dntr`) archive. Cheap structural gate before the path reaches #9292's
+// atomic install flow.
+const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+
+/**
+ * Trust gate shared by every renderer/CLI entry point that hands a filesystem
+ * path to the installer: require a non-empty absolute `.dntr` path whose first
+ * four bytes are the ZIP magic. Segment-aware guards only — never a `..`
+ * substring match (#4702). Only the header is read (never the whole archive)
+ * so a hostile multi-GB file can't be slurped into memory. Returns a
+ * structured `{ status: "failed" }` on rejection so callers can surface an
+ * inline message without a throw crossing the IPC boundary; returns `null` on
+ * success. PluginService.installPlugin keeps its own defense-in-depth stat.
+ */
+async function validateDntrArchivePath(archivePath: string): Promise<PluginInstallResult | null> {
+  const fail = (message: string): PluginInstallResult => ({
+    status: "failed",
+    errors: [{ code: "archive_invalid", message }],
+  });
+  if (typeof archivePath !== "string" || archivePath.length === 0) {
+    return fail("Couldn't resolve the dropped file's path");
+  }
+  if (!isAbsolute(archivePath)) {
+    return fail("Install path must be an absolute filesystem path");
+  }
+  if (extname(archivePath).toLowerCase() !== ".dntr") {
+    return fail("Only .dntr files can be installed");
+  }
+  let header: Buffer;
+  try {
+    const fh = await open(archivePath, "r");
+    try {
+      const buf = Buffer.alloc(4);
+      const { bytesRead } = await fh.read(buf, 0, 4, 0);
+      header = buf.subarray(0, bytesRead);
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return fail("Couldn't read the dropped file");
+  }
+  if (header.length < 4 || !header.equals(ZIP_MAGIC)) {
+    return fail("That file isn't a valid .dntr plugin archive");
+  }
+  return null;
+}
+
+/**
+ * Install a plugin from a `.dntr` archive path. Runs the same trust gate as
+ * {@link handleInstallFromPath} (absolute + `.dntr` + ZIP-magic header sniff)
+ * before touching the installer — both renderer entry points must validate
+ * identically (#3769). Structured validation failures come back as
+ * `{ status: "failed", errors }` data — never thrown — so the install dialog
+ * can render per-field messages intact across the IPC boundary. Only
+ * unexpected infrastructure faults (a lock subsystem crash) propagate as a
+ * thrown Error.
+ */
+async function handleInstall(
+  archivePath: string,
+  opts?: PluginInstallOptions
+): Promise<PluginInstallResult> {
+  const invalid = await validateDntrArchivePath(archivePath);
+  if (invalid) return invalid;
+  return pluginService.installPlugin(archivePath, opts);
+}
+
+// Install-from-file owns the native-picker entry point; the selected path runs
+// the SAME trust gate + installer as the drag-and-drop path
+// ({@link handleInstallFromPath}) so both renderer entries validate identically.
+// A dismissed picker resolves `cancelled`; validation failures come back as
+// structured `{ status: "failed" }` data the dialog can render inline.
+async function handleInstallFromFile(ctx: IpcContext): Promise<PluginInstallResult> {
+  const win = ctx.senderWindow ?? BrowserWindow.getFocusedWindow();
+  const dialogOptions = {
+    title: "Install plugin",
+    filters: [{ name: "Daintree plugins", extensions: ["dntr"] }],
+    properties: ["openFile" as const],
+  };
+  const result = win
+    ? await dialog.showOpenDialog(win, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+  if (result.canceled || result.filePaths.length === 0) {
+    return { status: "cancelled" };
+  }
+  return handleInstallFromPath(result.filePaths[0]!);
+}
+
+// Bounded download limits for install-from-URL (F24). Mirrors the spec in
+// docs/plugins/distribution.md: a 30 MB hard cap aborted mid-stream, a shared
+// deadline, and a MIME/suffix allowlist so a stray HTML error page never
+// reaches the installer. The timeout and MIME/suffix policy are shared with the
+// update-check path via electron/utils/pluginDownloadPolicy.ts so a server that
+// passes one path's gate passes the other's too.
+
+function isAbortLikeError(err: unknown): boolean {
+  // AbortSignal.timeout() rejects as "AbortError" (not "TimeoutError") under
+  // Chromium 146, and the size-cap controller.abort() also surfaces as
+  // "AbortError" — so both names are treated as abort-like and disambiguated
+  // by the caller's `sizeAborted` flag. These rejections are DOMExceptions,
+  // which are NOT `Error` instances in Node, so duck-type the `name`.
+  if (typeof err !== "object" || err === null) return false;
+  const name = (err as { name?: unknown }).name;
+  return name === "AbortError" || name === "TimeoutError";
+}
+
+/**
+ * Install a plugin from a path produced by a drag-and-drop onto the Plugin
+ * settings tab (#9295). The renderer resolves the native path via the
+ * plugin-scoped `getDroppedFilePath` bridge and hands it here; main owns every
+ * trust gate via {@link validateDntrArchivePath} because the renderer can't be
+ * trusted to validate before #9292 runs. All failures come back as structured
+ * `{ status: "failed" }` data (never thrown) so the tab can render an inline
+ * message.
+ */
+export async function handleInstallFromPath(path: string): Promise<PluginInstallResult> {
+  const invalid = await validateDntrArchivePath(path);
+  if (invalid) return invalid;
+  return pluginService.installPlugin(path);
+}
+
+/**
+ * Download a `.dntr` archive from a user-supplied URL into a temp file under
+ * bounded conditions, then hand the path to the atomic installer (F24).
+ *
+ * Guards, in order: well-formed URL + http/https scheme + no embedded
+ * credentials, a private/loopback-host check revalidated on every redirect hop,
+ * the shared download deadline, a MIME/`.dntr`-suffix allowlist, and a
+ * mid-stream 30 MB byte cap that aborts the in-flight request. (Timeout and
+ * MIME/suffix policy live in electron/utils/pluginDownloadPolicy.ts.) All
+ * failures resolve as
+ * structured `{ status: "failed", errors }` data so the dialog can render a
+ * tailored message; the handler-owned temp file is always removed in `finally`
+ * (PluginService extracts into its own temp dir and doesn't take ownership of
+ * the download artifact).
+ */
+export async function handleInstallFromUrl(url: string): Promise<PluginInstallResult> {
+  if (typeof url !== "string" || url.trim().length === 0) {
+    return { status: "invalid-url" };
+  }
+  const trimmed = url.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return { status: "invalid-url" };
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return { status: "invalid-url" };
+  }
+  if (isPrivateOrLoopbackHostname(parsed.hostname)) {
+    return { status: "invalid-url" };
+  }
+  // Reject `https://user:pass@host` outright — the credentials would otherwise
+  // be fetched AND persisted as installer `originalUrl` provenance (re-fetched
+  // on update-check, shown in Settings). Rejecting keeps the failure visible.
+  if (urlHasCredentials(parsed)) {
+    return { status: "invalid-url" };
+  }
+
+  const failed = (code: PluginInstallError["code"], message: string): PluginInstallResult => ({
+    status: "failed",
+    errors: [{ code, message }],
+  });
+
+  const tempPath = path.join(os.tmpdir(), `daintree-plugin-${crypto.randomUUID()}.dntr`);
+  // Redirects are followed MANUALLY so every hop's host is revalidated through
+  // the private/loopback guard — the original-host check alone is bypassable by
+  // a public URL that 30x-redirects to loopback/link-local/RFC1918 (SSRF). The
+  // size controller and the timeout signal both feed a single AbortSignal.any()
+  // that's threaded through every hop.
+  const sizeController = new AbortController();
+  let sizeAborted = false;
+  let wroteTempFile = false;
+
+  try {
+    const signal = AbortSignal.any([
+      sizeController.signal,
+      AbortSignal.timeout(PLUGIN_DOWNLOAD_TIMEOUT_MS),
+    ]);
+
+    let response: Response;
+    try {
+      const guarded = await fetchWithPrivateHostGuard(net.fetch, trimmed, { signal });
+      if (!guarded.ok) {
+        return failed(
+          "fetch_failed",
+          guarded.reason === "private-redirect"
+            ? "The download redirected to a private or loopback address."
+            : "The download followed too many redirects."
+        );
+      }
+      response = guarded.response;
+    } catch (err) {
+      if (isAbortLikeError(err)) {
+        return failed("fetch_timeout", "The download timed out before it finished.");
+      }
+      return failed("fetch_failed", "Couldn't download the plugin from that URL.");
+    }
+
+    // Drop the open connection on any early return so the socket isn't held
+    // until GC; the body is never consumed on these paths.
+    const abandon = async (result: PluginInstallResult): Promise<PluginInstallResult> => {
+      await response.body?.cancel().catch(() => {});
+      return result;
+    };
+
+    if (!response.ok) {
+      return abandon(failed("fetch_failed", `The server returned HTTP ${response.status}.`));
+    }
+
+    const contentLength = response.headers.get("content-length");
+    if (contentLength) {
+      const declared = Number.parseInt(contentLength, 10);
+      if (Number.isFinite(declared) && declared > MAX_DNTR_BYTES) {
+        return abandon(failed("size_exceeded", "The plugin file is larger than the 30 MB limit."));
+      }
+    }
+
+    // Accept any of the shared archive MIME types, or fall back to a 2xx whose
+    // URL path ends in `.dntr` (case-insensitive for pasted URLs). response.url
+    // is unreliable in Electron, so the `.dntr` suffix is checked on the
+    // original user URL. Policy is shared with the update-check path.
+    const contentType = response.headers.get("content-type") ?? "";
+    const mimeOk = acceptedMime(contentType);
+    const suffixOk = dntrSuffixOk(parsed.pathname);
+    if (!mimeOk && !suffixOk) {
+      return abandon(
+        failed("content_type_rejected", "That URL didn't return a plugin archive (.dntr).")
+      );
+    }
+
+    if (!response.body) {
+      return failed("fetch_failed", "The server returned an empty response.");
+    }
+
+    let bytesRead = 0;
+    const counter = new Transform({
+      transform(chunk: Buffer, _enc, cb) {
+        bytesRead += chunk.length;
+        if (bytesRead > MAX_DNTR_BYTES) {
+          sizeAborted = true;
+          sizeController.abort();
+          cb(new Error("size_exceeded"));
+          return;
+        }
+        cb(null, chunk);
+      },
+    });
+
+    wroteTempFile = true;
+    try {
+      await pipeline(
+        Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]),
+        counter,
+        createWriteStream(tempPath)
+      );
+    } catch (err) {
+      if (sizeAborted) {
+        return failed("size_exceeded", "The plugin file is larger than the 30 MB limit.");
+      }
+      if (isAbortLikeError(err)) {
+        return failed("fetch_timeout", "The download timed out before it finished.");
+      }
+      return failed("fetch_failed", "Couldn't download the plugin from that URL.");
+    }
+
+    return pluginService.installPlugin(tempPath, { source: "url", originalUrl: trimmed });
+  } finally {
+    if (wroteTempFile) {
+      await rm(tempPath, { force: true }).catch(() => {});
+    }
+  }
+}
+
+export async function handleUninstall(pluginId: string, deleteSettings?: boolean): Promise<void> {
+  if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
+    throw new Error("uninstall: pluginId must be a non-empty string");
+  }
+  // Validate against the scoped-name format before the service touches the
+  // filesystem — uninstall feeds pluginId straight into `fs.rm(<root>/<id>)`,
+  // so a compromised renderer passing `"../.."` must be rejected at the trust
+  // boundary, not just defended in depth in the service.
+  if (!SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+    throw new Error("uninstall: pluginId must be a scoped plugin name (publisher.name)");
+  }
+  if (deleteSettings !== undefined && typeof deleteSettings !== "boolean") {
+    throw new Error("uninstall: deleteSettings must be a boolean");
+  }
+  await pluginService.uninstallPlugin(pluginId, deleteSettings);
+}
+
+async function handleCheckForUpdate(pluginId: string): Promise<PluginCheckUpdateResult> {
+  if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
+    return { status: "invalid-id" };
+  }
+  // The service owns the bounded download + hash compare and returns a
+  // structured result for every domain outcome (#9297).
+  return pluginService.checkForUpdate(pluginId);
+}
+
 async function handleToolbarButtons(): Promise<ToolbarButtonConfig[]> {
+  // Block the renderer's mount-time pull until startup activation has settled,
+  // otherwise a fast renderer can read an empty registry before any plugin's
+  // activate() runs — leaving plugin toolbar buttons missing until the next
+  // mutation pushes a fresh broadcast (#9285).
+  await pluginService.waitForInit();
   return getPluginToolbarButtonIds()
     .map((id) => getToolbarButtonConfig(id))
     .filter((c): c is ToolbarButtonConfig => c !== undefined);
 }
 
 async function handleMenuItems() {
+  // Same init-race guard as `handleToolbarButtons` — block until startup
+  // activation settles so the renderer's mount-time pull can't observe an
+  // empty registry before plugins finish registering (#9285).
+  await pluginService.waitForInit();
   return getPluginMenuItems();
+}
+
+async function handleKeybindings() {
+  await pluginService.waitForInit();
+  return getPluginKeybindings();
+}
+
+async function handleContextMenuItems() {
+  // Same init-race guard as `handleMenuItems` — block until startup activation
+  // settles so the renderer's mount-time pull can't observe an empty registry
+  // before plugins finish registering (#9285).
+  await pluginService.waitForInit();
+  return getPluginContextMenuItems();
 }
 
 async function handleValidateActionIds(actionIds: string[]): Promise<void> {
@@ -84,6 +450,7 @@ async function handleValidateActionIds(actionIds: string[]): Promise<void> {
 // gives it direct access to event.senderFrame — the typed path here does
 // not and doesn't need it.
 async function handleActionsGet(): Promise<PluginActionDescriptor[]> {
+  await pluginService.waitForInit();
   return pluginService.listPluginActions();
 }
 
@@ -99,6 +466,7 @@ async function handleActionsUnregister(pluginId: string, actionId: string): Prom
 }
 
 async function handlePanelKindsGet(): Promise<PanelKindConfig[]> {
+  await pluginService.waitForInit();
   return getPluginPanelKinds();
 }
 
@@ -117,6 +485,29 @@ async function handleForgeProvidersGet(): Promise<RegisteredForgeProvider[]> {
 const DECORATION_PROVIDER_TIMEOUT_MS = 3000;
 
 const DECORATION_TIMEOUT = Symbol("decoration-timeout");
+
+/**
+ * Append an audit record without ever surfacing an audit failure to the
+ * caller. Mirrors `forgeAuditService.safeAppend` — a throw from `append()`
+ * (corrupt store, disk error) must never swallow the handler's return value
+ * or replace the original error. Audit is strictly a side channel; the
+ * `#8442` doctrine is that the record is best-effort, not load-bearing.
+ */
+function safeAppend(input: Parameters<PluginActionAuditService["append"]>[0]): void {
+  try {
+    getPluginActionAuditService().append(input);
+  } catch (err) {
+    console.error("[PluginAudit] Failed to append audit record:", err);
+  }
+}
+
+/**
+ * Cap on attacker-controlled URL strings before they're embedded into an
+ * audit `errorMessage`. The origin and path prefix are forensically useful;
+ * the rest is log pollution and a vector for stuffing secret-like values
+ * into the persistent ring buffer.
+ */
+const UNTRUSTED_URL_MAX_CHARS = 200;
 
 /**
  * A non-empty string is "present" for merge purposes. Empty string counts as
@@ -149,35 +540,82 @@ async function handleFileDecorationsGet(
   if (cleanPaths.length === 0) return {};
   const requested = new Set(cleanPaths);
 
+  // Implicit activation: any plugin that declares a provider for this scope is
+  // forced to `activate()` before the impl lookup, so providers bound during
+  // activate() are queryable on the first pull. No-op once already activated.
+  await pluginService.activatePluginsForFileDecorationScope(scope);
+
   const impls = getFileDecorationImpls(scope);
   if (impls.length === 0) return {};
 
   const merged: Record<string, FileDecoration> = {};
+  // Per-provider start/end timestamps so audit records carry the true elapsed
+  // time of *each* provider, not the wall-clock of the slowest one. `ends[i]`
+  // is captured inside the race chain at the moment that provider settles,
+  // before `Promise.allSettled` returns — measuring `Date.now()` in the
+  // post-allSettled loop would assign every provider the same wall-clock.
+  const starts: number[] = new Array(impls.length);
+  const ends: number[] = new Array(impls.length);
   const results = await Promise.allSettled(
-    impls.map(({ impl }) =>
-      Promise.race([
+    impls.map(({ impl }, i) => {
+      starts[i] = Date.now();
+      return Promise.race([
         impl.provideDecorations(scope, cleanPaths),
         new Promise<typeof DECORATION_TIMEOUT>((resolve) =>
           setTimeout(() => resolve(DECORATION_TIMEOUT), DECORATION_PROVIDER_TIMEOUT_MS)
         ),
-      ])
-    )
+      ]).then(
+        (v) => {
+          ends[i] = Date.now();
+          return v;
+        },
+        (err: unknown) => {
+          ends[i] = Date.now();
+          throw err;
+        }
+      );
+    })
   );
 
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
     const { pluginId, contributionId } = impls[i];
+    const durationMs = ends[i] - starts[i];
     if (r.status === "rejected") {
       console.warn(
         `[Plugin] fileDecorationProvider "${pluginId}.${contributionId}" failed for scope "${scope}":`,
         r.reason
       );
+      safeAppend({
+        pluginId,
+        actionId: contributionId,
+        recordType: "decoration-failure",
+        result: "error",
+        failureMode: "rejected",
+        scope,
+        contributionId,
+        errorMessage: formatErrorMessage(r.reason, "decoration provider rejected"),
+        argsHash: "",
+        durationMs,
+      });
       continue;
     }
     if (r.value === DECORATION_TIMEOUT) {
       console.warn(
         `[Plugin] fileDecorationProvider "${pluginId}.${contributionId}" timed out after ${DECORATION_PROVIDER_TIMEOUT_MS}ms for scope "${scope}"`
       );
+      safeAppend({
+        pluginId,
+        actionId: contributionId,
+        recordType: "decoration-failure",
+        result: "error",
+        failureMode: "timeout",
+        scope,
+        contributionId,
+        errorMessage: `timed out after ${DECORATION_PROVIDER_TIMEOUT_MS}ms`,
+        argsHash: "",
+        durationMs,
+      });
       continue;
     }
     if (!r.value || typeof r.value !== "object") continue;
@@ -217,12 +655,117 @@ async function handleFileDecorationsGet(
   return merged;
 }
 
+// ── Plugin-action audit log ───────────────────────────────────────────────
+
+async function handleGetAuditRecords(): Promise<PluginActionAuditRecord[]> {
+  return getPluginActionAuditService().getRecords();
+}
+
+async function handleGetAuditConfig(): Promise<PluginAuditConfig> {
+  return getPluginActionAuditService().getConfig();
+}
+
+async function handleClearAuditLog(): Promise<void> {
+  getPluginActionAuditService().clear();
+}
+
+async function handleSetAuditEnabled(enabled: boolean): Promise<PluginAuditConfig> {
+  if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean");
+  return getPluginActionAuditService().setEnabled(enabled);
+}
+
+async function handleSetAuditMaxRecords(max: number): Promise<PluginAuditConfig> {
+  if (typeof max !== "number" || !Number.isFinite(max) || !Number.isInteger(max)) {
+    throw new Error("max must be a finite integer");
+  }
+  if (max < PLUGIN_AUDIT_MIN_RECORDS || max > PLUGIN_AUDIT_MAX_RECORDS) {
+    throw new Error(
+      `max must be between ${PLUGIN_AUDIT_MIN_RECORDS} and ${PLUGIN_AUDIT_MAX_RECORDS}`
+    );
+  }
+  return getPluginActionAuditService().setMaxRecords(max);
+}
+
+async function handleExportAuditLog(records: PluginActionAuditRecord[]): Promise<boolean> {
+  if (!Array.isArray(records)) throw new Error("records must be an array");
+  const ndjsonContent = getPluginActionAuditService().exportRecords(records) + "\n";
+  const now = Date.now();
+  const defaultFilename = `plugin-audit-log-${new Date(now).toISOString().replace(/[:.]/g, "-")}.ndjson`;
+  const { filePath, canceled } = await dialog.showSaveDialog({
+    title: "Export plugin audit log",
+    defaultPath: defaultFilename,
+    filters: [{ name: "NDJSON Files", extensions: ["ndjson"] }],
+  });
+  if (canceled || !filePath) return false;
+  await writeFile(filePath, ndjsonContent, "utf-8");
+  return true;
+}
+
+// ── Plugin diagnostics snapshot ───────────────────────────────────────────
+
+async function handleGetDiagnosticsSnapshot(): Promise<PluginDiagnosticsSnapshot> {
+  // Block until startup activation settles so the snapshot is post-activation
+  // (mirrors handleToolbarButtons) — otherwise a fast renderer could read an
+  // empty plugin set before any activate() runs.
+  await pluginService.waitForInit();
+  return pluginService.getDiagnosticsSnapshot();
+}
+
+// ── Plugin settings UI bridge (#9301) ─────────────────────────────────────
+
+async function handleSettingsGetValues(
+  pluginId: string,
+  scope: PluginSettingsScope,
+  projectId: string | null
+): Promise<PluginSettingsUiValues> {
+  return pluginService.getSettingValuesForUi(pluginId, scope, projectId);
+}
+
+async function handleSettingsSetValue(
+  pluginId: string,
+  key: string,
+  value: unknown,
+  scope: PluginSettingsScope,
+  projectId: string | null
+): Promise<void> {
+  await pluginService.setSettingValueFromUi(pluginId, key, value, scope, projectId);
+}
+
+async function handleSettingsDeleteValue(
+  pluginId: string,
+  key: string,
+  scope: PluginSettingsScope,
+  projectId: string | null
+): Promise<void> {
+  await pluginService.deleteSettingValueFromUi(pluginId, key, scope, projectId);
+}
+
+async function handleSettingsRevealSecret(
+  pluginId: string,
+  key: string,
+  scope: PluginSettingsScope,
+  projectId: string | null
+): Promise<string | null> {
+  return pluginService.revealSecretSettingForUi(pluginId, key, scope, projectId);
+}
+
 export const pluginNamespace = defineIpcNamespace({
   name: "plugin",
   ops: {
     list: op(PLUGIN_METHOD_CHANNELS.list, handleList),
+    install: op(PLUGIN_METHOD_CHANNELS.install, handleInstall),
+    setEnabled: op(PLUGIN_METHOD_CHANNELS.setEnabled, handleSetEnabled),
+    installFromFile: op(PLUGIN_METHOD_CHANNELS.installFromFile, handleInstallFromFile, {
+      withContext: true,
+    }),
+    installFromPath: op(PLUGIN_METHOD_CHANNELS.installFromPath, handleInstallFromPath),
+    installFromUrl: op(PLUGIN_METHOD_CHANNELS.installFromUrl, handleInstallFromUrl),
+    uninstall: op(PLUGIN_METHOD_CHANNELS.uninstall, handleUninstall),
+    checkForUpdate: op(PLUGIN_METHOD_CHANNELS.checkForUpdate, handleCheckForUpdate),
     toolbarButtons: op(PLUGIN_METHOD_CHANNELS.toolbarButtons, handleToolbarButtons),
     menuItems: op(PLUGIN_METHOD_CHANNELS.menuItems, handleMenuItems),
+    keybindings: op(PLUGIN_METHOD_CHANNELS.keybindings, handleKeybindings),
+    contextMenuItems: op(PLUGIN_METHOD_CHANNELS.contextMenuItems, handleContextMenuItems),
     validateActionIds: op(PLUGIN_METHOD_CHANNELS.validateActionIds, handleValidateActionIds),
     getActions: op(PLUGIN_METHOD_CHANNELS.getActions, handleActionsGet),
     registerAction: op(PLUGIN_METHOD_CHANNELS.registerAction, handleActionsRegister),
@@ -230,6 +773,20 @@ export const pluginNamespace = defineIpcNamespace({
     getPanelKinds: op(PLUGIN_METHOD_CHANNELS.getPanelKinds, handlePanelKindsGet),
     getForgeProviders: op(PLUGIN_METHOD_CHANNELS.getForgeProviders, handleForgeProvidersGet),
     getDecorations: op(PLUGIN_METHOD_CHANNELS.getDecorations, handleFileDecorationsGet),
+    getAuditRecords: op(PLUGIN_METHOD_CHANNELS.getAuditRecords, handleGetAuditRecords),
+    getAuditConfig: op(PLUGIN_METHOD_CHANNELS.getAuditConfig, handleGetAuditConfig),
+    clearAuditLog: op(PLUGIN_METHOD_CHANNELS.clearAuditLog, handleClearAuditLog),
+    setAuditEnabled: op(PLUGIN_METHOD_CHANNELS.setAuditEnabled, handleSetAuditEnabled),
+    setAuditMaxRecords: op(PLUGIN_METHOD_CHANNELS.setAuditMaxRecords, handleSetAuditMaxRecords),
+    exportAuditLog: op(PLUGIN_METHOD_CHANNELS.exportAuditLog, handleExportAuditLog),
+    getDiagnosticsSnapshot: op(
+      PLUGIN_METHOD_CHANNELS.getDiagnosticsSnapshot,
+      handleGetDiagnosticsSnapshot
+    ),
+    getSettingValues: op(PLUGIN_METHOD_CHANNELS.getSettingValues, handleSettingsGetValues),
+    setSettingValue: op(PLUGIN_METHOD_CHANNELS.setSettingValue, handleSettingsSetValue),
+    deleteSettingValue: op(PLUGIN_METHOD_CHANNELS.deleteSettingValue, handleSettingsDeleteValue),
+    revealSecretSetting: op(PLUGIN_METHOD_CHANNELS.revealSecretSetting, handleSettingsRevealSecret),
   },
 });
 
@@ -244,8 +801,28 @@ export function registerPluginHandlers(): () => void {
   ipcMain.handle(
     CHANNELS.PLUGIN_INVOKE,
     async (event, pluginId: string, channel: string, ...args: unknown[]) => {
+      const start = Date.now();
       const senderUrl = event.senderFrame?.url;
       if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
+        // Trust check rejected — args are attacker-controlled and unvalidated,
+        // so we record the rejection without hashing the payload (#8442:
+        // audit-even-when-silenced; the security-relevant signal is "an
+        // untrusted frame attempted to invoke this plugin"). Cap the URL
+        // before it lands in the persistent log so a hostile frame can't
+        // stuff arbitrary content into the audit by sending a giant URL.
+        const safeUrl = senderUrl
+          ? scrubSecrets(senderUrl.slice(0, UNTRUSTED_URL_MAX_CHARS))
+          : "unknown";
+        safeAppend({
+          pluginId,
+          actionId: channel,
+          recordType: "ipc-invoke",
+          channel: CHANNELS.PLUGIN_INVOKE,
+          result: "restricted",
+          errorMessage: `untrusted sender (url=${safeUrl})`,
+          argsHash: "",
+          durationMs: Date.now() - start,
+        });
         throw new Error(`plugin:invoke rejected: untrusted sender (url=${senderUrl ?? "unknown"})`);
       }
       const ctx: PluginIpcContext = {
@@ -254,7 +831,33 @@ export function registerPluginHandlers(): () => void {
         webContentsId: event.sender.id,
         pluginId,
       };
-      return await pluginService.dispatchHandler(pluginId, channel, ctx, args);
+      try {
+        return await pluginService.dispatchHandler(pluginId, channel, ctx, args);
+      } catch (err) {
+        // `stableArgsSha256` content-discriminates without persisting any
+        // arg bytes — two structurally identical failed invokes hash the
+        // same, but distinct args produce distinct hashes. (A summary-based
+        // hash via `summarizeMcpArgs` collapses arrays to a constant, which
+        // would defeat forensic grouping.)
+        let argsHash = "";
+        try {
+          argsHash = stableArgsSha256(args);
+        } catch {
+          // Hashing is best-effort — a serialization throw here must not
+          // mask the original handler error.
+        }
+        safeAppend({
+          pluginId,
+          actionId: channel,
+          recordType: "ipc-invoke",
+          channel: CHANNELS.PLUGIN_INVOKE,
+          result: "error",
+          errorMessage: formatErrorMessage(err, "plugin:invoke dispatch failed"),
+          argsHash,
+          durationMs: Date.now() - start,
+        });
+        throw err;
+      }
     }
   );
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.PLUGIN_INVOKE));

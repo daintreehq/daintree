@@ -383,6 +383,20 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
     },
   }));
 
+  actions.set("portal.toggleDevDashboard", () => ({
+    id: "portal.toggleDevDashboard",
+    title: "Toggle Dev Server Dashboard",
+    description: "Show or hide the cross-worktree dev-server dashboard in the portal",
+    category: "portal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["dev", "server", "dashboard", "preview", "worktree", "ports"],
+    run: async () => {
+      usePortalStore.getState().toggleDevDashboard();
+    },
+  }));
+
   actions.set("portal.setDefaultNewTab", () => ({
     id: "portal.setDefaultNewTab",
     title: "Set Default New Tab",

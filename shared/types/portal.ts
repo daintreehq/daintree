@@ -53,6 +53,13 @@ export interface PortalTab {
   title: string;
   favicon?: string;
   icon?: string;
+  /**
+   * Optional Chromium session partition this tab's `WebContentsView` runs on.
+   * Set when the tab was promoted from a dev preview so the shared session
+   * (cookies, localStorage, IndexedDB) survives LRU eviction and restart — the
+   * restore paths re-create the view on the same partition.
+   */
+  partition?: string;
 }
 
 export interface PortalBounds {
@@ -71,6 +78,14 @@ export interface PortalNavEvent {
 export interface PortalCreatePayload {
   tabId: string;
   url: string;
+  /**
+   * Optional Chromium session partition override. When a valid
+   * `persist:dev-preview-*` partition is supplied (promoting a dev preview into
+   * a Portal tab), the new `WebContentsView` shares that session — cookies,
+   * localStorage, and IndexedDB carry over. Invalid values are ignored and the
+   * default `persist:portal` partition is used.
+   */
+  partition?: string;
 }
 
 export interface PortalShowPayload {
@@ -118,3 +133,7 @@ export const DEFAULT_PORTAL_TABS: PortalTab[] = [];
 export const PORTAL_MIN_WIDTH = 320;
 export const PORTAL_MAX_WIDTH = 1200;
 export const PORTAL_DEFAULT_WIDTH = 480;
+// Minimum editor canvas width preserved when restoring a persisted portal
+// width on launch. If the saved width would shrink the editor below this on
+// the current viewport, the portal falls back to a viewport-safe size.
+export const PORTAL_MIN_EDITOR_WIDTH = 400;

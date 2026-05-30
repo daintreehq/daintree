@@ -629,6 +629,14 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Panels",
   },
   {
+    actionId: "notifications.toggle",
+    combo: "Cmd+Shift+N",
+    scope: "global",
+    priority: 0,
+    description: "Toggle notification inbox",
+    category: "Panels",
+  },
+  {
     actionId: "panel.togglePortal",
     combo: "Cmd+\\",
     scope: "global",
@@ -667,6 +675,14 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     priority: 20,
     description: "New portal tab",
     category: "Portal",
+  },
+  {
+    actionId: "devPreview.reloadPreview",
+    combo: "Cmd+R",
+    scope: "dev-preview",
+    priority: 20,
+    description: "Reload dev preview",
+    category: "Dev Preview",
   },
   {
     actionId: "nav.toggleSidebar",
@@ -893,6 +909,14 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Voice",
   },
   {
+    actionId: "voiceInput.togglePause",
+    combo: "Ctrl+Shift+Space",
+    scope: "global",
+    priority: 0,
+    description: "Pause or resume voice dictation",
+    category: "Voice",
+  },
+  {
     actionId: "find.inFocusedPanel",
     combo: "Cmd+F",
     scope: "global",
@@ -1115,3 +1139,10 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
   ...CORE_KEYBINDINGS,
   ...WINDOWS_KEYBINDINGS,
 ];
+
+export const KEYBINDING_PRIORITY = {
+  DEFAULT: 0,
+  PLUGIN: 1,
+  ELEVATED: 5,
+  OVERRIDE: 10,
+} as const;

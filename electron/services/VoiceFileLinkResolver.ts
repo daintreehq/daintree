@@ -1,6 +1,7 @@
 import { logDebug, logWarn } from "../utils/logger.js";
 import { fileSearchService } from "./FileSearchService.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
 
 const P = "[VoiceFileLinkResolver]";
 const NL_CONFIDENCE_THRESHOLD = 0.67;
@@ -23,9 +24,11 @@ export class VoiceFileLinkResolver {
     cwd: string;
     description: string;
     apiKey: string;
+    organizationId?: string;
+    projectId?: string;
     signal?: AbortSignal;
   }): Promise<string | null> {
-    const { cwd, description, apiKey } = payload;
+    const { cwd, description, apiKey, organizationId, projectId } = payload;
     if (!cwd || !description.trim()) return null;
 
     try {
@@ -51,7 +54,14 @@ export class VoiceFileLinkResolver {
         return candidates[0];
       }
 
-      return await this.aiRerank(description, candidates, apiKey, payload.signal);
+      return await this.aiRerank(
+        description,
+        candidates,
+        apiKey,
+        organizationId,
+        projectId,
+        payload.signal
+      );
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return null;
       const msg = formatErrorMessage(error, "Voice file link resolution failed");
@@ -125,6 +135,8 @@ export class VoiceFileLinkResolver {
     description: string,
     candidates: string[],
     apiKey: string,
+    organizationId?: string,
+    projectId?: string,
     signal?: AbortSignal
   ): Promise<string | null> {
     logDebug(`${P} AI reranking ${candidates.length} candidates for "${description}"`);
@@ -134,7 +146,7 @@ export class VoiceFileLinkResolver {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
+          ...buildOpenAIHeaders(apiKey, organizationId, projectId),
         },
         signal: signal
           ? AbortSignal.any([signal, AbortSignal.timeout(AI_RERANK_TIMEOUT_MS)])

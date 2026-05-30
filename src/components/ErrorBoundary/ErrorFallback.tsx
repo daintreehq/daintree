@@ -3,6 +3,8 @@ import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
+import { scrubReportText } from "@shared/utils/reportScrubbers";
 import { TriangleAlert } from "lucide-react";
 
 export interface ErrorFallbackProps {
@@ -186,19 +188,33 @@ export function ErrorFallback({
           )}
         </div>
 
-        {import.meta.env.DEV && errorInfo?.componentStack && variant !== "component" && (
+        {(error.stack || errorInfo?.componentStack) && variant !== "component" && (
           <details className="w-full mt-4">
             <summary className="cursor-pointer text-xs text-daintree-text/60 hover:text-daintree-text/80">
               Technical details
             </summary>
+            {/* Production stacks are scrubbed before display so crash reporters
+                never expose user paths or secrets; dev keeps the raw stack. */}
             <pre className="mt-2 p-3 bg-scrim-soft rounded text-xs text-status-error/80 overflow-auto max-h-48 select-text">
-              {error.stack || "No stack trace available"}
-              {"\n\nComponent Stack:\n"}
-              {errorInfo.componentStack}
+              {import.meta.env.DEV
+                ? error.stack || "No stack trace available"
+                : scrubReportText(error.stack || "No stack trace available")}
+              {errorInfo?.componentStack && (
+                <>
+                  {"\n\nComponent Stack:\n"}
+                  {import.meta.env.DEV
+                    ? errorInfo.componentStack
+                    : scrubReportText(errorInfo.componentStack)}
+                </>
+              )}
             </pre>
           </details>
         )}
       </div>
+      {/* Co-located live region: fullscreen variant carries `aria-modal`, so
+          VoiceOver suppresses external `aria-live` regions when
+          `document.ariaNotify` is unavailable (Chromium 354736464). */}
+      {isFullscreen && <AccessibilityAnnouncer />}
     </div>
   );
 }

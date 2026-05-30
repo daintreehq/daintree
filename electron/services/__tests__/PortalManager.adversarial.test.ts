@@ -28,6 +28,7 @@ vi.mock("electron", () => {
   class MockWebContentsView {
     webContents = createMockWebContents();
     setBounds = vi.fn();
+    setBackgroundColor = vi.fn();
 
     constructor() {
       createdWebContents.push(this.webContents);

@@ -29,6 +29,7 @@ const external = [
   "node-pty",
   "better-sqlite3",
   "win-job-object",
+  "posix-pty-reaper",
   "copytree",
 ];
 

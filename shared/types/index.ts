@@ -89,6 +89,7 @@ export type {
   RecipeTerminalType,
   RecipeTerminal,
   TerminalRecipe,
+  RecipeNameCollision,
   RunCommand,
   ProjectSettings,
   ProjectTerminalSettings,
@@ -245,8 +246,10 @@ export type {
   VoiceInputSettings,
   VoiceInputStatus,
   VoiceTranscriptionModel,
+  VoiceTranscriptionProvider,
   VoiceCorrectionModel,
   VoiceParagraphingStrategy,
+  VoiceRecordingMode,
   HelpAssistantSettings,
   HelpAssistantAuditRetention,
   HelpAssistantIdleHibernateMinutes,
@@ -353,6 +356,17 @@ export {
   MCP_AUDIT_MAX_RECORDS,
   MCP_AUDIT_DEFAULT_MAX_RECORDS,
 } from "./ipc/mcpServer.js";
+export type {
+  PluginActionAuditRecord,
+  PluginActionAuditResult,
+  PluginAuditConfig,
+} from "./ipc/pluginAudit.js";
+export {
+  PLUGIN_AUDIT_SCHEMA_VERSION,
+  PLUGIN_AUDIT_MIN_RECORDS,
+  PLUGIN_AUDIT_MAX_RECORDS,
+  PLUGIN_AUDIT_DEFAULT_MAX_RECORDS,
+} from "./ipc/pluginAudit.js";
 
 // Event types - event context for correlation
 export type { EventContext } from "./events.js";
@@ -414,10 +428,11 @@ export {
   PORTAL_MIN_WIDTH,
   PORTAL_MAX_WIDTH,
   PORTAL_DEFAULT_WIDTH,
+  PORTAL_MIN_EDITOR_WIDTH,
 } from "./portal.js";
 
 // Voice types - canonical phase model for voice session and transcript lifecycle
-export type { VoiceTranscriptPhase } from "./voice.js";
+export type { VoiceInputError, VoiceInputErrorSeverity, VoiceTranscriptPhase } from "./voice.js";
 export { isActiveVoiceSession } from "./voice.js";
 
 // Workspace Host types - IPC protocol for workspace management

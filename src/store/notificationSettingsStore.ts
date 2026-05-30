@@ -3,6 +3,14 @@ import { create } from "zustand";
 interface NotificationSettingsState {
   enabled: boolean;
   hydrated: boolean;
+  // Per-kind toggles, mirrored from IPC settings so the notification center can
+  // compute a "what will fire right now" summary without a per-open IPC round
+  // trip. These gate the main-process completion/waiting notifications and the
+  // working-pulse / UI-feedback sounds — they are display-only here.
+  completedEnabled: boolean;
+  waitingEnabled: boolean;
+  workingPulseEnabled: boolean;
+  uiFeedbackSoundEnabled: boolean;
   quietHoursEnabled: boolean;
   quietHoursStartMin: number;
   quietHoursEndMin: number;
@@ -11,6 +19,11 @@ interface NotificationSettingsState {
   // Reactive mirror of session-mute timestamp (epoch ms). Drives toolbar
   // DND indicator. In-memory only — meaningless across restarts.
   quietUntil: number;
+  // OS-level Do-Not-Disturb / Focus state mirrored from the main-process
+  // OsDndService. `undefined` = unknown (unsupported platform / detection
+  // failed); consumers must treat it as "do not gate". Display-only here —
+  // never a toast-suppression gate (the OS already silences native banners).
+  osDndActive: boolean | undefined;
   hydrate(): Promise<void>;
   setEnabled(value: boolean): void;
   setQuietHoursEnabled(value: boolean): void;
@@ -19,17 +32,26 @@ interface NotificationSettingsState {
   setQuietHoursWeekdays(value: number[]): void;
   setGroupByContext(value: boolean): void;
   setQuietUntil(ts: number): void;
+  setOsDndActive(value: boolean | undefined): void;
 }
 
 export const useNotificationSettingsStore = create<NotificationSettingsState>((set, get) => ({
   enabled: true,
   hydrated: false,
+  // Pre-hydration defaults mirror the main-process persisted defaults
+  // (electron/store.ts) so the summary doesn't flash a wrong state before
+  // hydrate() settles.
+  completedEnabled: false,
+  waitingEnabled: true,
+  workingPulseEnabled: false,
+  uiFeedbackSoundEnabled: false,
   quietHoursEnabled: false,
   quietHoursStartMin: 22 * 60,
   quietHoursEndMin: 8 * 60,
   quietHoursWeekdays: [],
   groupByContext: false,
   quietUntil: 0,
+  osDndActive: undefined,
 
   async hydrate() {
     if (get().hydrated) return;
@@ -38,6 +60,10 @@ export const useNotificationSettingsStore = create<NotificationSettingsState>((s
       if (settings) {
         set({
           enabled: settings.enabled !== false,
+          completedEnabled: settings.completedEnabled === true,
+          waitingEnabled: settings.waitingEnabled !== false,
+          workingPulseEnabled: settings.workingPulseEnabled === true,
+          uiFeedbackSoundEnabled: settings.uiFeedbackSoundEnabled === true,
           quietHoursEnabled: settings.quietHoursEnabled === true,
           quietHoursStartMin:
             typeof settings.quietHoursStartMin === "number" ? settings.quietHoursStartMin : 22 * 60,
@@ -48,6 +74,18 @@ export const useNotificationSettingsStore = create<NotificationSettingsState>((s
             : [],
           groupByContext: settings.groupByContext === true,
         });
+      }
+      // Hydrate the OS DND signal alongside notification settings. A push
+      // event may have already arrived (subscription is set up earlier in
+      // App startup); only adopt the IPC snapshot when the live store value
+      // is still its `undefined` default so we don't clobber a fresher push.
+      try {
+        const initialOsDnd = await window.electron?.osDnd?.getState();
+        if (get().osDndActive === undefined) {
+          set({ osDndActive: initialOsDnd });
+        }
+      } catch {
+        // Leave osDndActive at its current value on IPC failure.
       }
     } catch {
       // fall through — always mark hydrated below so retries don't thrash IPC
@@ -111,5 +149,9 @@ export const useNotificationSettingsStore = create<NotificationSettingsState>((s
 
   setQuietUntil(ts: number) {
     set({ quietUntil: Number.isFinite(ts) ? ts : 0 });
+  },
+
+  setOsDndActive(value: boolean | undefined) {
+    set({ osDndActive: value });
   },
 }));

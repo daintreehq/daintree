@@ -45,9 +45,87 @@ Produces `{pluginId}-{version}.dntr` in the project root. Runs through:
 3. Copies the build output + referenced assets + manifest into a zip.
 4. Excludes `node_modules/`, source files, source maps (unless `--sourcemaps`), and anything in `.gitignore`.
 
-The output is deterministic — the same source tree + `daintree-plugin` version produces a byte-identical `.dntr` file. This matters if you're signing releases or publishing reproducible artifacts.
+The output is deterministic — the same source tree + `daintree-plugin` version produces a byte-identical `.dntr` file on the same OS. This matters if you're signing releases or publishing reproducible artifacts.
 
 Use `--verbose` to see what's included. Use `--dry-run` to preview without writing the archive.
+
+## Archive format
+
+This section is normative. Every tool that produces or consumes `.dntr` files (the `daintree-plugin` CLI, Daintree's installer, third-party packagers) must conform to this spec. The CI round-trip fixture in `electron/services/__tests__/PluginArchive.integration.test.ts` is the contract — if it breaks, the format changed and that is a breaking release.
+
+### Wire format
+
+A `.dntr` file is a standard ZIP archive (PKZIP 2.0, no ZIP64 unless the archive exceeds 4 GB — Daintree rejects archives larger than 30 MB at install time per the URL cap). The file extension is `.dntr` but the container is unmodified ZIP; any ZIP tool can inspect or extract it.
+
+| Parameter | Value |
+| --- | --- |
+| **ZIP specification** | PKZIP 2.0 (APPNOTE 4.5) |
+| **Compression method** | DEFLATE (method 8) |
+| **Compression level** | 9 (maximum) |
+| **ZIP64** | Prohibited for archives ≤ 30 MB. Daintree rejects any archive over 30 MB. |
+| **Encryption** | Not supported. Daintree rejects encrypted entries. |
+| **Entry timestamps** | Fixed at `1980-01-01T00:00:00Z` (MS-DOS epoch). No filesystem timestamps leak in. |
+
+### Entry ordering
+
+Entries must be written in lexicographic order by path, with one exception: `plugin.json` is always the first entry regardless of sort order. The installer reads `plugin.json` by scanning the central directory for the first entry — it does not extract the archive to find it.
+
+```
+Index 0: plugin.json
+Index 1: dist/index.js
+Index 2: dist/index.js.map       (only with --sourcemaps)
+Index 3: icons/logo.svg
+...
+```
+
+Lexicographic sort uses byte-level comparison of UTF-8 path strings (`String.localeCompare` is not deterministic across Node versions; use `Array.sort()` on the raw strings).
+
+### Path rules
+
+- Path separators are always forward slash (`/`), regardless of host OS.
+- No absolute paths (leading `/` is rejected).
+- No drive letters (Windows `C:\` is rejected).
+- No `..` segments (path traversal is rejected at verification time).
+- No backslash characters anywhere in the path.
+- Directory entries (paths ending in `/`) are not emitted. The installer creates directories on extraction from file paths.
+
+### `plugin.json` as first entry
+
+`plugin.json` must be at the archive root (no path prefix). It must be the first entry in the central directory so the installer can locate it by reading the first file header without extracting the full archive.
+
+### Exclusion patterns
+
+The following are never included in a `.dntr` archive:
+
+- `node_modules/` — dependency trees
+- `.git/` — repository metadata
+- `.gitignore`'d entries — matched at pack time by the CLI packager
+- Source files (`*.ts`, `*.tsx`) — the archive ships compiled output
+- Source maps (`*.js.map`, `*.mjs.map`) — excluded by default, included only when `--sourcemaps` is passed to the packager
+
+The reference implementation in `PluginArchive.ts` applies the explicit exclusion list. Full `.gitignore` matching is the CLI packager's responsibility (F32) since it requires a git working tree.
+
+### SHA-256 archive hash
+
+The installer computes a SHA-256 hash of the full archive bytes at install time before extraction:
+
+```
+archiveHash = SHA-256(archive bytes)
+```
+
+This hash is persisted in the plugin's provenance record (`LoadedPluginInfo.archiveHash`) and used for:
+
+- **Update detection**: re-fetching the same URL and comparing hashes tells the user whether a new version is available.
+- **Deferred signing** (post-1.15): a signature over the hash is a signature over the archive.
+- **Audit trail**: the provenance record ties the installed plugin to a specific byte sequence.
+
+The hash covers the raw ZIP bytes as received — same-OS determinism guarantees the hash is stable for a given source tree and tool version. Cross-platform byte identity is not yet guaranteed (the ZIP "made by" header varies per OS); the hash reflects the bytes as produced by the current platform.
+
+### Cross-platform determinism
+
+Same-OS determinism is guaranteed and tested in CI. Cross-platform byte identity (bitwise identical `.dntr` from macOS, Linux, and Windows builds of the same source) is a known limitation. The ZIP "made by" field in local file headers reflects `process.platform` at build time, so macOS-built and Linux-built archives differ even with identical content, compression, and ordering.
+
+For release signing, build the `.dntr` in a canonical Linux environment (CI). For local development, same-OS determinism is sufficient — the hash is stable across repeated builds on the same machine.
 
 ## Sideload
 
@@ -98,8 +176,8 @@ Preferences → Plugins → Install from URL…
 
 The user pastes a URL pointing to a `.dntr` file. Daintree:
 
-1. Fetches the URL with a 30 MB size cap and a 10 s timeout.
-2. Verifies the content-type is `application/zip` or the URL ends in `.dntr`.
+1. Fetches the URL with a 30 MB size cap and a 30 s timeout (shared with the manual update-check path).
+2. Accepts the response when the content-type is one of `application/zip`, `application/x-zip`, `application/x-dntr`, or `application/octet-stream`, or — when none of those match — when the original URL's path ends in `.dntr`.
 3. Runs the same flow as file install from that point.
 
 **Typical URL patterns:**
@@ -112,8 +190,9 @@ The user pastes a URL pointing to a `.dntr` file. Daintree:
 
 - Daintree does not validate signatures on URL-installed plugins. Trust is on the user.
 - No TLS enforcement beyond what the OS does for HTTPS. Installing from non-HTTPS URLs is allowed but flagged in the dialog.
-- Redirects are followed up to 5 hops. Final-URL content-type determines acceptance.
-- The install dialog shows the original URL, the resolved URL after redirects, and the declared capabilities, so users can spot suspicious mismatches.
+- Redirects are followed by Chromium's net stack (capped at its built-in limit). Acceptance is decided from the final response's content-type; the `.dntr`-suffix fallback is checked against the **original** pasted URL's path, since the resolved URL isn't reliable through Electron's fetch.
+- Private, loopback, and link-local hosts are rejected before the fetch runs (SSRF guard).
+- The install dialog shows the original URL and the declared capabilities, so users can spot suspicious mismatches.
 
 Install only from URLs you trust.
 
@@ -138,8 +217,13 @@ Daintree:
 
 1. Unloads the plugin (disposer cascade runs).
 2. Terminates any MCP subprocesses the plugin had spawned.
-3. Deletes `~/.daintree/plugins/{publisher}.{name}/`.
-4. Removes plugin-scoped settings from project/user config. **Secrets persist** unless the user explicitly checks "also remove stored secrets" — this is to prevent accidental loss of an API token the user might re-enter for a reinstall.
+3. Revokes every TOFU consent pin for the plugin (always, regardless of the settings choice) so a reinstall re-prompts rather than inheriting prior approvals.
+4. Deletes `~/.daintree/plugins/{publisher}.{name}/`.
+5. By default, **keeps** the plugin's user-scope settings file (`~/.daintree/plugin-settings/{publisher}.{name}.json`) so an API token survives a reinstall. The CLI's `--delete-settings` flag (or the UI's "also remove stored settings" checkbox) deletes that file instead.
+
+Secrets are **not** stored separately — they live as plaintext JSON in the same user-scope settings file (`type: "secret"` only affects how the UI renders the value; there's no OS keychain). So "keep settings" keeps the secrets too, and `--delete-settings` removes them.
+
+Project-scope settings (`<projectRoot>/.daintree/plugin-settings/{publisher}.{name}.json`) are **never** touched by uninstall — they're tracked per-repo and removing them is the project's concern.
 
 Uninstall is reversible only from a backup — Daintree doesn't maintain a trash bin for plugins.
 
@@ -150,7 +234,7 @@ For authors who want to share plugins publicly:
 - **GitHub Releases** is the default recommendation. `.dntr` files are small; releases are free; versioning maps cleanly to git tags.
 - **README with install instructions.** Include the literal URL to paste into Daintree.
 - **Semver your releases.** Daintree uses semver for version comparison and update detection.
-- **Set `engines.daintree` honestly.** Lock to the minor version you've tested against (e.g. `^0.8.0`). Don't set `*` — you'll get bug reports from users on Daintree versions you haven't supported.
+- **Set `engines.daintree` honestly.** Lock to the minor version you've tested against (e.g. `^0.11.0`). Don't set `*` — you'll get bug reports from users on Daintree versions you haven't supported.
 - **Don't commit `.dntr` files to the source repo.** Build them in CI on release-tag.
 - **Pin `@daintreehq/plugin-sdk` tightly.** Pre-1.0, minor versions can break APIs.
 

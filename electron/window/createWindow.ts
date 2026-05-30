@@ -1,13 +1,5 @@
 // eager-import-allow: reads persisted window state via store.get synchronously when creating the window
-import {
-  app,
-  BrowserWindow,
-  WebContentsView,
-  dialog,
-  ipcMain,
-  session,
-  nativeTheme,
-} from "electron";
+import { app, BrowserWindow, WebContentsView, dialog, ipcMain, session } from "electron";
 import {
   getWindowForWebContents,
   registerWebContents,
@@ -27,14 +19,18 @@ import {
 
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
-import { isLocalhostUrl } from "../../shared/utils/urlUtils.js";
+import { isLocalhostUrl, isDevPreviewProxyUrl } from "../../shared/utils/urlUtils.js";
 import { getDevServerUrl } from "../../shared/config/devServer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
-import { injectSkeletonCss } from "./skeletonCss.js";
+import {
+  injectSkeletonCss,
+  resolveInitialColorSchemeId,
+  INITIAL_COLOR_SCHEME_ARG,
+} from "./skeletonCss.js";
 import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import { markPerformance } from "../utils/performance.js";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
@@ -144,25 +140,10 @@ export function setupBrowserWindow(
   // Resolve the saved theme to set the correct background color at construction time,
   // avoiding a dark flash when a light theme is active.
   const themeConfig = store.get("appTheme");
-  let colorSchemeId: string;
-  if (
-    themeConfig &&
-    typeof themeConfig === "object" &&
-    !Array.isArray(themeConfig) &&
-    "colorSchemeId" in themeConfig &&
-    typeof themeConfig.colorSchemeId === "string" &&
-    themeConfig.colorSchemeId
-  ) {
-    colorSchemeId = themeConfig.colorSchemeId.trim();
-  } else {
-    // Daintree always defaults to its dark theme on first run, regardless of
-    // the OS color-scheme preference. Users who want light or system-following
-    // behavior can opt in via Settings → Appearance.
-    colorSchemeId =
-      process.env.DAINTREE_SCREENSHOT_SCALE || nativeTheme.shouldUseDarkColors
-        ? "daintree"
-        : "bondi";
-  }
+  // Daintree always defaults to its dark theme on first run, regardless of the
+  // OS color-scheme preference. Users who want light or system-following
+  // behavior can opt in via Settings → Appearance.
+  const colorSchemeId = resolveInitialColorSchemeId();
 
   // Apply lazy migration for legacy string-encoded customSchemes
   let customSchemes: AppColorScheme[] = [];
@@ -259,6 +240,9 @@ export function setupBrowserWindow(
       webviewTag: true,
       navigateOnDragDrop: false,
       v8CacheOptions: "code",
+      // Seed the renderer with the persisted theme so first paint applies the
+      // saved scheme instead of a prefers-color-scheme default (#9169).
+      additionalArguments: [`${INITIAL_COLOR_SCHEME_ARG}=${colorSchemeId}`],
     },
   });
 
@@ -333,6 +317,7 @@ export function setupBrowserWindow(
   }
 
   let rendererLoadRequested = false;
+  const SHOW_FALLBACK_MS = 5_000;
   const loadRenderer = (reason: string, projectId?: string): void => {
     if (!win || win.isDestroyed() || rendererLoadRequested) return;
     rendererLoadRequested = true;
@@ -345,6 +330,38 @@ export function setupBrowserWindow(
       injectSkeletonCss(appWebContents);
     });
 
+    // Gate win.show() on the WebContentsView's first dom-ready so the HTML
+    // skeleton is parsed before the OS maps the window — eliminates the
+    // blank-window flash. `ready-to-show` on BrowserWindow does NOT cover
+    // child WebContentsView paint, and fires immediately for the sentinel
+    // data: page; dom-ready on appWebContents is the correct signal.
+    // 5s timeout fallback ensures a hung renderer doesn't leave the window
+    // permanently hidden — strictly worse than a brief blank.
+    let shown = false;
+    const showOnce = (): void => {
+      if (shown) return;
+      shown = true;
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+      if (!win.isDestroyed()) win.show();
+    };
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      fallbackTimer = null;
+      console.warn(
+        `[MAIN] dom-ready not received after ${SHOW_FALLBACK_MS}ms — showing window anyway`
+      );
+      showOnce();
+    }, SHOW_FALLBACK_MS);
+    appWebContents.once("dom-ready", showOnce);
+    win.once("closed", () => {
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+    });
+
     const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
     console.log(`[MAIN] Loading renderer (${reason})...`);
     if (process.env.NODE_ENV === "development") {
@@ -355,11 +372,6 @@ export function setupBrowserWindow(
       console.log("[MAIN] Loading production build via app:// protocol");
       appWebContents.loadURL(`app://daintree/index.html${qs}`);
     }
-
-    // Show the window as soon as the navigation is in flight so the HTML
-    // skeleton in index.html paints during bundle parse instead of leaving
-    // the user with a blank background while JS loads.
-    if (!win.isDestroyed()) win.show();
   };
 
   // Window open handler — on the app view's webContents
@@ -402,7 +414,9 @@ export function setupBrowserWindow(
   // Harden webview security — on the app view's webContents
   appWebContents.on("will-attach-webview", (event, webPreferences, params) => {
     const allowedPartitions = ["persist:browser", "persist:dev-preview"];
-    const isAllowedLocalhostUrl = isLocalhostUrl(params.src);
+    // Dev-preview webviews now load the stable proxy origin (dp-*.localhost), which
+    // isLocalhostUrl rejects — accept it explicitly (#9100).
+    const isAllowedLocalhostUrl = isLocalhostUrl(params.src) || isDevPreviewProxyUrl(params.src);
     const isValidPartition =
       allowedPartitions.includes(params.partition || "") ||
       (params.partition?.startsWith("persist:dev-preview-") ?? false);

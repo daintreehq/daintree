@@ -1,0 +1,45 @@
+name: Setup Node.js and install dependencies
+description: Set up Node.js with npm cache, then install via npm-ci-retry.mjs
+
+inputs:
+  node_version:
+    description: Node.js version
+    required: true
+  install_args:
+    description: Extra arguments to pass to npm-ci-retry.mjs (e.g. --ignore-scripts)
+    required: false
+    default: ""
+  msvs_version:
+    description: MSVS version for Windows native module builds (sets npm_config_msvs_version)
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v6
+      with:
+        node-version: ${{ inputs.node_version }}
+
+    - name: Resolve npm cache path
+      id: npm-cache-dir
+      shell: bash
+      run: echo "dir=$(npm config get cache)" >> "$GITHUB_OUTPUT"
+
+    - name: Cache npm
+      id: cache-npm
+      continue-on-error: true
+      uses: actions/cache@v5
+      with:
+        path: ${{ steps.npm-cache-dir.outputs.dir }}
+        key: node-cache-${{ runner.os }}-${{ runner.arch }}-npm-${{ hashFiles('package-lock.json') }}
+
+    - name: Install dependencies
+      shell: bash
+      env:
+        npm_config_msvs_version: ${{ inputs.msvs_version }}
+      run: |
+        ELECTRON_VERSION=$(node scripts/ci/resolve-electron-version.mjs) || exit 1
+        export npm_config_runtime=electron
+        export npm_config_target=$ELECTRON_VERSION
+        node scripts/ci/npm-ci-retry.mjs ${{ inputs.install_args }}

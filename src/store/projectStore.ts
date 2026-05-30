@@ -19,6 +19,7 @@ import {
   clearFleetArmingThroughAccessor,
   getPanelStoreSnapshot,
   getWorktreeSelectionSnapshot,
+  getWorktreeIdSet,
 } from "./storeAccessors";
 import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
@@ -41,7 +42,18 @@ function shouldPersistTerminal(t: NonNullable<CarrierPanel>): boolean {
 
 function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   const draftInputs = useTerminalInputStore.getState().getProjectDraftInputs(projectId);
-  const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? undefined;
+  // Persist the *durable* selection, not whatever is incidentally active. A
+  // focus promotion (e.g. a temporary PR worktree spun up by a batch merge)
+  // leaves `restoreWorktreeId` pointing at the last deliberate selection, so it
+  // round-trips correctly on switch-back (#9512). Validate it against the
+  // current view's worktrees: if it was removed before the switch, send
+  // `undefined` so hydration falls back to the main worktree instead of
+  // resurrecting a stale id. When no view store is mounted (`null`), skip
+  // validation and preserve the candidate.
+  const restoreId = getWorktreeSelectionSnapshot()?.restoreWorktreeId ?? undefined;
+  const knownIds = getWorktreeIdSet();
+  const activeWorktreeId =
+    restoreId && (knownIds === null || knownIds.has(restoreId)) ? restoreId : undefined;
 
   // Synchronously snapshot terminal state from the Zustand store before the
   // renderer gets detached.  This captures browser/dev-preview panel state
@@ -165,6 +177,13 @@ function cancelProjectReadRequests(): void {
 
 function getLocationProjectId(): string | null {
   if (typeof window === "undefined") return null;
+
+  // Prefer the id seeded by preload via additionalArguments (#9162). The
+  // `?projectId=` query string fallback covers the initial-window load
+  // (createWindow.ts still passes it) and any test/shell view without the
+  // bootstrap global.
+  const seeded = window.__DAINTREE_INITIAL_PROJECT__?.id;
+  if (seeded) return seeded;
 
   try {
     return new URL(window.location.href).searchParams.get("projectId");

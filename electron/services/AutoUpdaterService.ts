@@ -9,6 +9,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { getCrashRecoveryService } from "./CrashRecoveryService.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
+import { trackEvent } from "./TelemetryService.js";
 import { store } from "../store.js";
 import { PRODUCT_NAME } from "../utils/productBranding.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
@@ -88,6 +89,15 @@ const { autoUpdater } = electronUpdater;
 
 const RESUME_CHECK_DELAY_MS = 7_000;
 
+// macOS-only watchdog after `autoUpdater.quitAndInstall()`: if the process is
+// still alive after 5s, Squirrel.Mac's ShipIt likely failed to acquire its
+// staging lock (electron-builder #8997) and the in-flight `app.quit()` will
+// never fire. `app.exit(0)` force-terminates so ShipIt has a clean shot on the
+// next launch. 5s is the community-recommended floor — 3s is too tight under
+// memory pressure or slow disk. Windows/Linux keep the original setImmediate
+// timing (no force-exit) because their installer paths don't share this mode.
+const QUIT_AND_INSTALL_WATCHDOG_MS = 5_000;
+
 // 400ms Doherty threshold gates the "Checking…" menu label so a fast CDN
 // round-trip (sub-threshold) never flickers a transient label change.
 const CHECKING_MENU_DELAY_MS = 400;
@@ -99,6 +109,7 @@ class AutoUpdaterService {
   private startupJitterTimeout: NodeJS.Timeout | null = null;
   private retryTimeout: NodeJS.Timeout | null = null;
   private resumeTimeout: NodeJS.Timeout | null = null;
+  private watchdogTimeout: NodeJS.Timeout | null = null;
   private removeSuspendListener: (() => void) | null = null;
   private removeWakeListener: (() => void) | null = null;
   private retryCount = 0;
@@ -169,6 +180,60 @@ class AutoUpdaterService {
     };
   }
 
+  // Shared install-trigger for `quitAndInstallIfReady()` and the
+  // UPDATE_QUIT_AND_INSTALL IPC handler. Both call sites need identical
+  // behavior: defer past the menu-close frame via `setImmediate` (Windows
+  // animation timing), then arm a macOS-only watchdog that force-exits if
+  // ShipIt fails to land its `app.quit()`. `quitAndInstall()` is wrapped so
+  // a thrown exception still arms the watchdog (force-exit is still the
+  // right move — ShipIt has its best chance on the next launch), and the
+  // `app.exit(0)` inside the watchdog is wrapped so a shutdown-time throw
+  // doesn't become an unhandled rejection.
+  private executeQuitAndInstall(): void {
+    setImmediate(() => {
+      try {
+        autoUpdater.quitAndInstall();
+      } catch (err) {
+        console.error("[MAIN] autoUpdater.quitAndInstall() threw:", err);
+      }
+      if (process.platform !== "darwin") return;
+      this.watchdogTimeout = setTimeout(() => {
+        this.watchdogTimeout = null;
+        try {
+          app.exit(0);
+        } catch (err) {
+          console.error("[MAIN] Quit-and-install watchdog app.exit(0) failed:", err);
+        }
+      }, QUIT_AND_INSTALL_WATCHDOG_MS);
+    });
+  }
+
+  private checkPendingUpdateInstallVersion(): void {
+    // Read+delete synchronously before any await so a crash between the two
+    // doesn't re-fire on every subsequent boot. Mirrors the crash-counter
+    // clear-on-read pattern in CrashRecoveryService.
+    const raw = store.get("pendingUpdateVersion");
+    try {
+      store.delete("pendingUpdateVersion");
+    } catch (err) {
+      console.error("[MAIN] Failed to clear pendingUpdateVersion:", err);
+    }
+    if (typeof raw !== "string") return;
+    const expected = raw.trim();
+    if (expected.length === 0 || !semver.valid(expected)) return;
+    const actual = app.getVersion();
+    if (expected === actual) return;
+    try {
+      trackEvent("auto_update_install_version_mismatch", {
+        expectedVersion: expected,
+        actualVersion: actual,
+        platform: process.platform,
+      });
+    } catch (err) {
+      console.error("[MAIN] Failed to track auto_update_install_version_mismatch:", err);
+    }
+  }
+
   quitAndInstallIfReady(): boolean {
     if (isWindowsStoreBuild()) return false;
     if (this.menuState !== "ready" || !this.updateDownloaded) return false;
@@ -186,9 +251,7 @@ class AutoUpdaterService {
     // Disarm the before-quit listener so the explicit quitAndInstall() path
     // and the autoInstallOnAppQuit path don't race the installer subprocess.
     autoUpdater.autoInstallOnAppQuit = false;
-    // setImmediate defers past the menu-close animation frame so the OS doesn't
-    // tear the click target while we're walking away (Windows-sensitive).
-    setImmediate(() => autoUpdater.quitAndInstall());
+    this.executeQuitAndInstall();
     return true;
   }
 
@@ -420,6 +483,14 @@ class AutoUpdaterService {
         this.resetRetryState();
         this.clearCheckingMenuTimeout();
         this.setMenuState("idle");
+        // Drop the pending-install marker for the prior channel so the next
+        // boot doesn't fire a false-positive mismatch (issue #9261). The new
+        // channel's download will re-arm it via update-downloaded.
+        try {
+          store.delete("pendingUpdateVersion");
+        } catch (err) {
+          console.error("[MAIN] Failed to clear pendingUpdateVersion on channel switch:", err);
+        }
         // Transition to Idle done; now discard the staged installer on disk
         // and reconfigure the feed. Re-arm happens in the update-downloaded
         // handler when the new channel's download completes.
@@ -462,8 +533,27 @@ class AutoUpdaterService {
       return;
     }
 
+    // Boot-time install verification (issue #9261). Runs on every packaged
+    // platform — the Windows-Store / Linux guards below cause early returns
+    // before electron-updater is wired up, but a prior install could still
+    // have left `pendingUpdateVersion` on disk (e.g. user switched packaging
+    // mode between launches). Run before those guards so the marker is always
+    // consumed exactly once. Cross-platform because NSIS empty-directory
+    // races (electron-builder #9181) produce the same observable symptom.
+    this.checkPendingUpdateInstallVersion();
+
     if (isWindowsStoreBuild()) {
       console.log("[MAIN] Auto-updater disabled for Windows Store builds");
+      return;
+    }
+
+    if (process.platform === "linux" && process.env.FLATPAK_ID) {
+      console.log("[MAIN] Auto-updater disabled: Linux Flatpak sandbox detected");
+      return;
+    }
+
+    if (process.platform === "linux" && process.env.SNAP) {
+      console.log("[MAIN] Auto-updater disabled: Linux Snap sandbox detected");
       return;
     }
 
@@ -589,6 +679,25 @@ class AutoUpdaterService {
         if (this.channelGeneration !== this.downloadGeneration) return;
         this.updateDownloaded = true;
         autoUpdater.autoInstallOnAppQuit = true;
+        // Persist the staged version so the next boot can detect a silent
+        // install failure (issue #9261). Write before broadcasting so a crash
+        // between event delivery and the IPC frame still leaves the marker on
+        // disk. `semver.valid` defends against a malformed payload from a
+        // future electron-updater revision.
+        if (typeof info.version === "string") {
+          const trimmed = info.version.trim();
+          // Persist the canonical semver form (no leading `v`, no `=` prefix)
+          // so the boot comparison round-trips cleanly against
+          // `app.getVersion()`, which already emits canonical form.
+          const canonical = trimmed.length > 0 ? semver.valid(trimmed) : null;
+          if (canonical) {
+            try {
+              store.set("pendingUpdateVersion", canonical);
+            } catch (err) {
+              console.error("[MAIN] Failed to persist pendingUpdateVersion:", err);
+            }
+          }
+        }
         this.setMenuState("ready");
         broadcastToRenderer(CHANNELS.UPDATE_DOWNLOADED, { version: info.version });
       };
@@ -612,7 +721,7 @@ class AutoUpdaterService {
           console.error("[MAIN] Crash recovery cleanup before quit-and-install failed:", err);
         }
         autoUpdater.autoInstallOnAppQuit = false;
-        setImmediate(() => autoUpdater.quitAndInstall());
+        this.executeQuitAndInstall();
       });
 
       // Handle manual check-for-updates request from renderer
@@ -689,6 +798,10 @@ class AutoUpdaterService {
     if (this.resumeTimeout) {
       clearTimeout(this.resumeTimeout);
       this.resumeTimeout = null;
+    }
+    if (this.watchdogTimeout) {
+      clearTimeout(this.watchdogTimeout);
+      this.watchdogTimeout = null;
     }
     this.retryCount = 0;
 

@@ -10,7 +10,7 @@ import type { AgentId } from "../../shared/types/agent.js";
 import { CliAvailabilityService } from "./CliAvailabilityService.js";
 import { isAgentInstalled } from "../../shared/utils/agentAvailability.js";
 import { buildProbeEnv } from "../utils/spawnEnv.js";
-import { scrubSecrets } from "../utils/secretScrubber.js";
+import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 
 const execFileAsync = promisify(execFile);
 

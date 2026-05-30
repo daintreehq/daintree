@@ -8,7 +8,7 @@ A plugin's life has five phases:
 
 1. **Discovery** — startup scan of `~/.daintree/plugins/`
 2. **Manifest validation** — `plugin.json` parsed, validated against the Zod schema
-3. **Registration** — eager contribution points (panels, toolbar buttons, menu items, manifest-declared commands) registered in the respective registries
+3. **Registration** — eager contribution points (panels, toolbar buttons, menu items) registered in the respective registries
 4. **Activation** — plugin's `main` module imported, `activate(host)` called (lazy — triggered by first use)
 5. **Disposal** — on unload, the cleanup cascade runs in reverse
 
@@ -22,7 +22,7 @@ The `plugins` root is configurable for testing via the `PluginService` construct
 
 ### Manifest validation
 
-Validation is strict. The manifest is parsed by `PluginManifestSchema` (Zod) in strict mode, which rejects unknown top-level keys and unknown keys inside `contributes`. The reason is conservative: unknown keys are almost always typos, and silently dropping typo'd contributions is a bad debugging experience.
+Validation is strict. The manifest is parsed by `PluginManifestSchema` (Zod) in strict mode, which rejects unknown top-level keys and unknown keys inside `contributes` (both the inner object itself and contributions whose individual entry schemas opt into `.strict()`). The reason is conservative: unknown keys are almost always typos, and silently dropping typo'd contributions is a bad debugging experience.
 
 The `engines.daintree` semver range is validated and compared against the running Daintree version. A mismatch produces a user-visible toast and the plugin is skipped.
 
@@ -33,18 +33,17 @@ Most contributions register eagerly at plugin-load time so the UI reflects them 
 - `panels` → `registerPanelKind()` in `shared/config/panelKindRegistry.ts`
 - `toolbarButtons` → `registerToolbarButton()` in `shared/config/toolbarButtonRegistry.ts`
 - `menuItems` → `registerPluginMenuItem()` in `electron/services/pluginMenuRegistry.ts`
-- `commands` → registered as synthetic action definitions in the `ActionService`; handler is resolved lazily
 
-Contributions that require code (e.g., a command handler, a view component, an MCP server's runtime) are registered as **resolvers** — thunks that import the actual code when first needed.
+Commands have two registration paths. They MAY be declared in `contributes.commands` — these are registered eagerly at load as `PluginActionDescriptor`s so they appear in the palette before any plugin code runs, with their handler lazily bound to `src/{id}.{ext}` on first dispatch. Or they register imperatively via `host.registerAction()` during `activate()`. The manifest stays a static shape contract; the action system resolves handlers at runtime.
+
+Contributions that require code (e.g., a view component, an MCP server's runtime) are registered as **resolvers** — thunks that import the actual code when first needed.
 
 ### Activation
 
 A plugin's `activate(host)` function runs when something first needs the plugin's code. Triggers:
 
-- User runs a manifest-declared command
+- User runs a plugin-registered command
 - User opens a plugin-contributed panel
-- An agent calls a tool from a plugin-shipped MCP server (MCP servers themselves are supervised separately — see below)
-- `onStartupFinished` activation event (only explicit event supported)
 
 When triggered, Daintree:
 
@@ -89,13 +88,17 @@ Plugin views render inside Daintree's existing panel system. They must share Dai
 
 **Import maps + Vite externals.**
 
-- Plugin bundles declare `external: ["react", "react-dom", "react/jsx-runtime"]`. This strips these modules from the bundle.
-- Daintree's `index.html` injects `<script type="importmap">` mapping the bare specifiers to vendor chunks shipped with Daintree.
-- When the plugin bundle executes in Daintree's renderer, those imports resolve to Daintree's copy.
+- Plugin bundles externalize React via the `@daintreehq/plugin-vite` preset, which sets `build.rollupOptions.external` to `[/^react($|\/)/, /^react-dom($|\/)/]`. The regex form covers every subpath; `external: ["react"]` matches only the literal string `"react"` and silently bundles `react/jsx-runtime` into plugin output.
+- Daintree's `index.html` injects a `<script type="importmap">` at build time, mapping `react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, and `react-dom/client` to the host's `vendor-react` chunk.
+- When the plugin bundle executes in Daintree's renderer, those imports resolve to the host's single React instance.
 
 Chromium (Electron 41) supports import maps natively — no polyfill required.
 
-**`react/jsx-runtime` is not optional.** JSX compiled with the new transform (`jsx: "react-jsx"` in tsconfig) desugars to `jsx()` / `jsxs()` calls imported from `react/jsx-runtime`. If the plugin bundles its own copy of that module, every JSX element creates a React element tied to a different React instance, and hooks inside the plugin view throw at runtime. The `@daintreehq/plugin-vite` config enforces this externalization automatically — plugin authors don't configure it manually.
+**`react/jsx-runtime` is not optional.** JSX compiled with the new transform (`jsx: "react-jsx"` in tsconfig) desugars to `jsx()` / `jsxs()` calls imported from `react/jsx-runtime`. If the plugin bundles its own copy of that module, every JSX element creates a React element tied to a different React instance, and hooks inside the plugin view throw at runtime. The `@daintreehq/plugin-vite` preset enforces this externalization automatically — plugin authors don't configure it manually.
+
+**Inline-script CSP gate.** The host CSP forbids `'unsafe-inline'` for `script-src`, so the inline `<script type="importmap">` is gated by an explicit SHA-256 hash. The build emits the hash both into the `<meta http-equiv="Content-Security-Policy">` tag and into a `dist/importmap-meta.json` sidecar that the Electron main process reads at startup to mirror the hash into the HTTP `Content-Security-Policy` header. The hash MUST stay aligned across both layers — Chromium intersects header and meta, and a divergence silently drops the importmap, leaving plugins with unresolvable bare `react` specifiers.
+
+**Integrity attribute is forbidden on the importmap tag** per the HTML spec. Subresource integrity for the importmap's target chunks (when needed) lives as a top-level `"integrity"` block inside the JSON payload, supported in Chromium 127+.
 
 **Why not Module Federation?** Module Federation handles version negotiation between host and plugin, but adds ~30 KB of runtime and significant build complexity. Daintree controls both the host React version and the plugin template, so negotiation isn't needed.
 
@@ -105,9 +108,27 @@ Chromium (Electron 41) supports import maps natively — no polyfill required.
 
 Plugins declare a `react` peer dependency in their own `package.json`. The host version is canonical. If Daintree bumps React's major version, the plugin template's published peer range is updated and installed plugins are revalidated against the new range as part of the `engines.daintree` compatibility gate.
 
+### Import URL flow
+
+Plugin view modules are loaded via Daintree's `plugin://` privileged protocol. When `PluginService.loadPlugin` matches a `contributes.experimental_views` entry to a panel by bare id, it stores the resolved URL — `plugin://{pluginId}/{componentPath}` — on the `PanelKindConfig` and broadcasts it through `plugin:panel-kinds-changed`. The renderer's `PluginViewHost` calls `React.lazy(() => import(componentPath))` against that URL; Chromium 146 resolves the protocol, the response carries the `plugin://` security headers, and the bare `react` / `react/jsx-runtime` specifiers in the bundle resolve through the host import map to Daintree's single React instance.
+
+The resolved URL travels through the renderer over the existing panel-kinds IPC broadcast — no separate channel is required. A view that targets a panel id with no matching `contributes.panels` entry, or `location: "sidebar"` (reserved), or an unsafe `componentPath` (absolute paths, `..` segments) logs a `[PluginService]` warning at load time and is skipped.
+
+### Hot reload — dev only
+
+In dev, the host can re-evaluate a plugin view's module after the source changes. There is no production hot-reload path. V8 caches ESM module records by URL string and Chromium offers no eviction API (Vite #14438 / Chromium #350426234, unresolved as of 2026). Every cache-busting query string permanently expands the renderer's module map; iterating against a long-lived production renderer would leak memory indefinitely. Treat hot reload as a dev affordance and assume production users reach a clean state by closing and reopening the panel.
+
+### Renderer-first teardown
+
+The renderer is the first surface to know that a plugin's panel kind has been removed: `PluginService.unloadPlugin` fires `plugin:panel-kinds-changed` before it deletes the in-memory plugin entry, so the broadcast crosses the IPC boundary while host APIs are still live. `PluginViewHost` subscribes to that push and aborts its `disposeSignal` synchronously when its kind disappears from the payload — _before_ React unmounts the subtree. Plugin `useEffect` cleanups that listen on `disposeSignal` (fetch aborts, subscription teardown, MessagePort closes) therefore run while the plugin's IPC handlers and host APIs are still answering, instead of racing against the main-side teardown.
+
 ### Error boundaries
 
-Every plugin view is wrapped in an error boundary by the host. A crash renders a fallback with the plugin name, error message, and a Reload button. The rest of Daintree is unaffected — the panel grid keeps working, other plugins keep running, the user can close the failing panel normally.
+Every plugin view is wrapped in an error boundary by the host. A crash renders the component-variant fallback with a "Try again" button; the host wires `onReset` to bump a retry counter that produces a fresh `lazy()` reference, so `import()` is re-evaluated rather than returning the cached failed promise. The rest of Daintree is unaffected — the panel grid keeps working, other plugins keep running, the user can close the failing panel normally.
+
+### Trusted-inline → iframe contract
+
+Today's inline host is the right trade for curated trust. The `PluginViewHost` API surface — the `PanelViewProps` shape (`panelId`, `pluginId`, `disposeSignal`) and the broadcast-driven teardown ordering — is intentionally chosen to survive a future cutover to a trusted iframe model. `componentPath` would resolve to a sandboxed frame URL instead of a direct ESM import; the props would marshal over `postMessage`; `disposeSignal` would still abort on the same `panel-kinds-changed` removal event. No manifest change would be required on the plugin author's side.
 
 ### Inline, not iframe
 
@@ -117,7 +138,7 @@ An iframe model would isolate plugins behind a `postMessage` bridge at the cost 
 
 ## MCP supervisor
 
-`PluginMcpSupervisor` (planned — lives in the same area as existing MCP infrastructure in `electron/services/`) manages plugin-shipped MCP servers.
+`PluginMcpSupervisor` (`electron/services/PluginMcpSupervisor.ts`) manages plugin-shipped MCP servers.
 
 ### Spawn timing
 
@@ -147,7 +168,7 @@ Plugin manifest `env` values support `${settings:settingId}` syntax. Substitutio
 
 MCP subprocesses run with the full privileges of the Daintree process. There's no sandboxing. The curation model (review by human, trusted source, signed distribution) is the primary defense.
 
-An MCP server can do anything the plugin could do: make network requests, read and write files, spawn further processes. The manifest's `capabilities` array is disclosed to the user at install — if a plugin declares `network:fetch` because its MCP server calls Linear's API, the user sees that during install and decides whether to trust it.
+An MCP server can do anything the plugin could do: make network requests, read and write files, spawn further processes. The manifest's declared `capabilities` are disclosed to the user at install — if a plugin declares `network:fetch` because its MCP server calls Linear's API, the user sees that during install and decides whether to trust it.
 
 ## Worktree observability
 
@@ -177,7 +198,7 @@ Plugins consuming worktree events during `activate()` — before the WorkspaceCl
 
 ## Capability disclosure
 
-The `capabilities` field in the manifest is a **disclosure mechanism**, not a runtime sandbox. Daintree does not prevent a plugin from doing anything — a plugin declaring `capabilities: []` can still make network requests and write files.
+Capabilities are **disclosure-first with host-side policy effects** — a hybrid model. The host does not sandbox plugin code: a plugin declaring `capabilities: []` can still make network requests and write files via raw Node APIs. But declared capabilities are not purely advisory either. They drive host-side policy, most concretely danger classification on plugin-registered actions. See the [trust model](./trust-model.md) for the full decision record, decision matrix, and forthcoming schema.
 
 What disclosure does:
 
@@ -185,9 +206,50 @@ What disclosure does:
 - Installed plugins' detail views show the same list.
 - The install dialog shows the list in large, clear text before the user confirms.
 
-The purpose is to let users judge plugins by what they claim to need. A simple theme-packager plugin declaring `shell:exec` looks suspicious; a Linear integration declaring `network:fetch` looks expected. This is the same reasoning Chrome extension permissions use — informational, pre-install, not post-install runtime gates.
+What the host derives from declared capabilities:
 
-Declaring honestly matters. A plugin that silently makes network requests without declaring `network:fetch` erodes the ecosystem's trust model, even though nothing blocks the call at runtime.
+- **Danger classification (live today).** When a manifest holds any high-risk token in `CONFIRM_TRIGGERING_CAPABILITIES` (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`), every action that plugin registers is raised to `effectiveDanger: "confirm"` — gating the renderer's confirm dialog, MRU-rail eligibility, and `repeatLast`. The host may only raise danger, never lower it. This is host-side UX policy on Daintree's own action system; it does **not** block the plugin from executing code or calling IPC directly.
+- A compound-capability lattice, scope attenuation, and MCP advertisement gates are forthcoming (#9247, #9234). See the trust model for the complete list.
+
+The purpose is to let users judge plugins by what they claim to need and to apply proportional friction at high-risk intent surfaces. A simple theme-packager plugin declaring `shell:exec` looks suspicious; a Linear integration declaring `network:fetch` looks expected. Declaring honestly matters: a plugin that silently makes network requests without declaring `network:fetch` erodes the ecosystem's trust model, even though nothing blocks the call at runtime.
+
+## Host-derived classification
+
+The host is the sole authority on action danger classification. A plugin's self-reported `danger` in `registerPluginAction()` is advisory only — the host computes `effectiveDanger` and the renderer reads only that field for classification decisions.
+
+### Why host-derived
+
+Prior to #8321, the renderer trusted the plugin's self-reported `danger` field. A plugin could declare `danger: "safe"` on a destructive action and bypass the confirm dialog, MRU-rail exclusion, and `repeatLast` eligibility. The host now computes an authoritative `effectiveDanger` so a plugin cannot misclassify.
+
+### Mechanism
+
+`PluginService.registerPluginAction()` consults the set `CONFIRM_TRIGGERING_PERMISSIONS` (defined in `PluginService.ts`):
+
+| Permission           | Effect            |
+| -------------------- | ----------------- |
+| `shell:exec`         | Raises to confirm |
+| `git:write`          | Raises to confirm |
+| `fs:project-write`   | Raises to confirm |
+| `fs:user-data-write` | Raises to confirm |
+| `agent:invoke`       | Raises to confirm |
+
+When a plugin's declared manifest `permissions` includes any of these tokens, every action that plugin registers gets `effectiveDanger: "confirm"` regardless of the self-reported value.
+
+The rule is one-way: the host **may only raise danger, never lower it**. A plugin that declares `danger: "confirm"` keeps confirm regardless of permissions; a plugin that declares `danger: "safe"` is raised if it holds a high-risk permission.
+
+### Renderer contract
+
+The renderer reads `PluginActionDescriptor.effectiveDanger` (not `danger`) for:
+
+- Whether the confirm dialog gates agent-initiated dispatches
+- MRU-rail eligibility in the action palette
+- `ActionService.repeatLast` eligibility
+
+If `effectiveDanger` is absent (e.g. a stale descriptor from a pre-migration cache), the renderer must fail safe to `"confirm"`.
+
+### Scope
+
+This classification is host-side UX policy on Daintree's own action system. It does not block the plugin from executing code, calling IPC directly, or making network requests — those are gated by the curation trust model, not by runtime enforcement (see [Capability disclosure](#capability-disclosure)).
 
 ## Signing and kill-switch
 
@@ -209,9 +271,106 @@ A short rationale for the decisions most likely to feel arbitrary:
 
 **Why dual-path action binding (filesystem convention + imperative)?** The filesystem convention (Raycast-style: `commands[].name` → `src/{name}.ts` default export) is delightful for simple cases — zero boilerplate, co-located with declaration. Imperative registration via `host.registerAction` is needed for truly dynamic commands and matches the existing imperative pattern Daintree uses for its own ~258 built-in actions. Supporting both is cheap and handles both ends of the complexity spectrum.
 
-**Why no runtime permission enforcement?** The audience is power users who write their own plugins and trusted Daintree-authored plugins. Enforcing runtime permissions requires either Wasm sandboxing (Zed's approach — great DX cost) or iframe isolation (worse DX, breaks React integration) or permission prompts for every Node API call (unusable). For a curated-trust model, disclosure is the right fidelity.
+**Why no runtime permission enforcement?** There is no Node sandbox and there can't be one — plugins share the host's V8 + Node process, so a plugin bypasses any custom-API gate by calling `require("fs")` or `child_process.spawn` directly. Full enforcement would require Wasm sandboxing (Zed's approach — great DX cost), iframe isolation (worse DX, breaks React integration), or a prompt on every Node call (unusable). Instead of claiming enforcement we can't deliver, declared capabilities drive host-side policy effects (danger derivation today; the compound lattice and MCP consent forthcoming) while the model stays honest that it does not sandbox arbitrary code. See the [trust model](./trust-model.md).
 
 **Why no separate hooks contribution point (PreToolUse/PostToolUse)?** An MCP server can act as a proxy in front of other tools, intercepting and modifying tool calls. This uses the ecosystem we're already committed to (MCP) rather than inventing a parallel API. Plugins that genuinely need this can build it cleanly.
+
+## SDK Surface
+
+The `@daintreehq/plugin-sdk` public type surface is defined in `shared/types/plugin-sdk.ts`. This module is the single source of truth — every symbol re-exported there is a frozen contract. Additions are non-breaking; removals are breaking.
+
+Two entry points:
+
+- `@daintreehq/plugin-sdk` — core types (manifest authoring, host API, forge providers, worktree projections)
+- `@daintreehq/plugin-sdk/react` — reserved for React hooks (F15/F36); no exports in v1
+
+### Manifest authoring
+
+Types a plugin author uses to write `plugin.json`:
+
+| Export | Source | Notes |
+| --- | --- | --- |
+| `PluginManifest` | `plugin.ts` | Root manifest shape |
+| `PanelContribution` | `plugin.ts` |  |
+| `ToolbarButtonContribution` | `plugin.ts` |  |
+| `MenuItemContribution` | `plugin.ts` |  |
+| `MenuItemLocation` | `plugin.ts` | `"terminal" \| "file" \| "view" \| "help"` |
+| `ViewContribution` | `plugin.ts` | Panel location wired; sidebar reserved |
+| `ViewLocation` | `plugin.ts` | `"panel" \| "sidebar"` |
+| `McpServerContribution` | `plugin.ts` | Wired via `PluginMcpSupervisor` (`experimental_` prefix retained) |
+| `PluginCapability` | `plugin.ts` |  |
+| `BuiltInPluginCapability` | `plugin.ts` |  |
+| `PluginActionContribution` | `plugin.ts` | Shape for `host.registerAction` (F11) |
+
+### Host API
+
+Types a plugin consumes at runtime via `activate(host)`:
+
+| Export             | Source      | Notes                                        |
+| ------------------ | ----------- | -------------------------------------------- |
+| `PluginActivate`   | `plugin.ts` | Activation entry point signature             |
+| `PluginHostApi`    | `plugin.ts` | Host API surface passed to `activate`        |
+| `PluginIpcContext` | `plugin.ts` | Context passed to IPC handlers               |
+| `PluginIpcHandler` | `plugin.ts` | Handler signature for `host.registerHandler` |
+
+### Worktree projections
+
+Read-only, frozen snapshots exposed to plugins:
+
+| Export                      | Source      | Notes                             |
+| --------------------------- | ----------- | --------------------------------- |
+| `PluginWorktreeSnapshot`    | `plugin.ts` | Explicit allowlist — no spreading |
+| `PluginWorktreeLinked`      | `plugin.ts` | Provider-agnostic forge linkage   |
+| `PluginWorktreeLinkedIssue` | `plugin.ts` |                                   |
+| `PluginWorktreeLinkedPR`    | `plugin.ts` |                                   |
+
+### Forge provider contract
+
+Types a forge plugin implements and registers:
+
+| Export                      | Source     | Notes                                       |
+| --------------------------- | ---------- | ------------------------------------------- |
+| `ForgeProviderImpl`         | `forge.ts` | Runtime contract (~397-line interface)      |
+| `ForgeProviderDescriptor`   | `forge.ts` | Passed to `host.registerForgeProvider`      |
+| `ForgeProviderContribution` | `forge.ts` | Manifest `contributes.forgeProviders` entry |
+
+### File decoration provider contract
+
+Types a decoration plugin implements and registers:
+
+| Export | Source | Notes |
+| --- | --- | --- |
+| `FileDecorationProviderImpl` | `forge.ts` | Runtime contract |
+| `FileDecorationProviderDescriptor` | `forge.ts` | Passed to `host.registerFileDecorationProvider` |
+| `FileDecorationContribution` | `forge.ts` | Manifest `contributes.fileDecorationProviders` entry |
+
+### Forge projection types
+
+Types appearing in worktree-linked and CI-status projections:
+
+| Export              | Source     | Notes                                          |
+| ------------------- | ---------- | ---------------------------------------------- |
+| `NormalizedPRState` | `forge.ts` | `"open" \| "merged" \| "closed" \| "declined"` |
+| `ResourceRef`       | `forge.ts` | Provider-agnostic reference to an issue or PR  |
+| `CIStatus`          | `forge.ts` | CI roll-up used by `PluginWorktreeLinkedPR`    |
+
+### Host-internal (NOT exported from SDK)
+
+These types exist in `shared/types/plugin.ts` but are intentionally excluded from the SDK. Plugin authors should never reference them:
+
+| Symbol | Why internal |
+| --- | --- |
+| `BUILT_IN_PLUGIN_PERMISSIONS` | Runtime `const` array; host schema only |
+| `LoadedPluginInfo` | Host loading lifecycle; `isBuiltin` is host-private |
+| `PluginActionDescriptor` | Host-computed fields (`pluginId`, `effectiveDanger`); plugin never constructs one |
+
+### Adding a new export
+
+1. Add the type to `shared/types/plugin.ts` or `shared/types/forge.ts` as appropriate
+2. Classify it as SDK-public, SDK-react-public, or host-internal
+3. If SDK-public, re-export it from `shared/types/plugin-sdk.ts` and add a row to the table above
+4. If it's a new forge.js import in `plugin.ts`, the ESLint guard warns — the re-export in `plugin-sdk.ts` serves as the classification record
+5. Update `shared/types/__tests__/plugin-sdk.test.ts` with a type-level assertion
 
 ## Reference
 

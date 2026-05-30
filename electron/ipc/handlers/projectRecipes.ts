@@ -3,28 +3,31 @@ import fs from "fs/promises";
 import { CHANNELS } from "../channels.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { safeRecipeFilename } from "../../utils/recipeFilename.js";
-import { stableInRepoId } from "../../../shared/utils/recipeFilename.js";
 import type { HandlerDependencies } from "../types.js";
-import type { TerminalRecipe } from "../../types/index.js";
+import type { TerminalRecipe, RecipeNameCollision } from "../../types/index.js";
 import { typedHandle, typedHandleWithContext } from "../utils.js";
-import { assertRecipeUsageFields } from "./recipeValidation.js";
+import { assertNoSecretEnvValues, assertRecipeUsageFields } from "./recipeValidation.js";
 
 export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleProjectGetRecipes = async (projectId: string): Promise<TerminalRecipe[]> => {
+  const handleProjectGetRecipes = async (
+    projectId: string
+  ): Promise<{ recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] }> => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
     const project = projectStore.getProjectById(projectId);
+    let collisions: RecipeNameCollision[] = [];
     if (project) {
       try {
-        await projectStore.reconcileProjectRecipes(project.path, projectId);
+        collisions = await projectStore.reconcileProjectRecipes(project.path, projectId);
       } catch (error) {
         console.error(`[projectRecipes] Reconciliation failed for ${projectId}:`, error);
       }
     }
-    return projectStore.getRecipes(projectId);
+    const recipes = await projectStore.getRecipes(projectId);
+    return { recipes, collisions };
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_GET_RECIPES, handleProjectGetRecipes));
 
@@ -41,6 +44,11 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
     }
     if (!Array.isArray(recipes)) {
       throw new Error("Invalid recipes array");
+    }
+    for (const recipe of recipes) {
+      if (Array.isArray(recipe?.terminals)) {
+        assertNoSecretEnvValues(recipe.terminals);
+      }
     }
     return projectStore.saveRecipes(projectId, recipes);
   };
@@ -76,6 +84,7 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
       throw new Error("Recipe createdAt must be a finite number");
     }
     assertRecipeUsageFields(recipe);
+    assertNoSecretEnvValues(recipe.terminals);
     return projectStore.addRecipe(projectId, recipe);
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_ADD_RECIPE, handleProjectAddRecipe));
@@ -109,6 +118,9 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
       throw new Error("Invalid updates: terminals must be an array");
     }
     assertRecipeUsageFields(patch);
+    if (Array.isArray(patch.terminals)) {
+      assertNoSecretEnvValues(patch.terminals as TerminalRecipe["terminals"]);
+    }
     return projectStore.updateRecipe(projectId, recipeId, updates);
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_UPDATE_RECIPE, handleProjectUpdateRecipe));
@@ -217,6 +229,11 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
       throw new Error(`Project not found: ${projectId}`);
     }
     for (const recipe of recipes) {
+      if (Array.isArray(recipe?.terminals)) {
+        assertNoSecretEnvValues(recipe.terminals);
+      }
+    }
+    for (const recipe of recipes) {
       await projectStore.writeInRepoRecipe(project.path, recipe);
     }
   };
@@ -226,11 +243,12 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
     projectId: string;
     recipe: TerminalRecipe;
     previousName?: string;
+    force?: boolean;
   }): Promise<void> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
-    const { projectId, recipe, previousName } = payload;
+    const { projectId, recipe, previousName, force } = payload;
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
@@ -241,12 +259,20 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
     if (!project) {
       throw new Error(`Project not found: ${projectId}`);
     }
-    await projectStore.writeInRepoRecipe(project.path, recipe);
+    assertNoSecretEnvValues(recipe.terminals);
+    await projectStore.writeInRepoRecipeChecked(project.path, recipe, {
+      force: force === true,
+      previousName: typeof previousName === "string" ? previousName : undefined,
+    });
     if (
       previousName &&
       typeof previousName === "string" &&
       safeRecipeFilename(previousName) !== safeRecipeFilename(recipe.name)
     ) {
+      // Delete the old-name file. The staleness of the old file is checked
+      // inside writeInRepoRecipeChecked before the new write runs, so by the
+      // time we reach here the rename has been authorized. The cache entry
+      // for the old recipe id self-heals on the next loadRecipes.
       await projectStore.deleteInRepoRecipe(project.path, previousName);
     }
   };
@@ -278,14 +304,16 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
       const match = inRepoRecipes.find((r) => r.name === recipeName);
       if (match) recipeId = match.id;
     } catch {
-      // If we can't read in-repo, fall back to the computed ID
+      // If we can't read in-repo, the ProjectFileStore mirror is cleaned up by
+      // reconciliation on next load (case 4: in-repo scope, no backing file).
     }
     await projectStore.deleteInRepoRecipe(project.path, recipeName);
-    try {
-      const targetId = recipeId ?? stableInRepoId(recipeName);
-      await projectStore.deleteRecipe(projectId, targetId);
-    } catch {
-      // Best-effort: reconciliation on next load will catch any misses
+    if (recipeId !== null) {
+      try {
+        await projectStore.deleteRecipe(projectId, recipeId);
+      } catch {
+        // Best-effort: reconciliation on next load will catch any misses.
+      }
     }
   };
   handlers.push(

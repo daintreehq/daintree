@@ -5,11 +5,12 @@ import { useWebviewEviction } from "@/hooks/useWebviewEviction";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { useWebviewEvents } from "@/hooks/useWebviewEvents";
 import { useBrowserActionListeners } from "@/hooks/useBrowserActionListeners";
-import { AlertTriangle, ExternalLink, RotateCw, Square } from "lucide-react";
+import { AlertTriangle, ExternalLink, RotateCw, Square, XCircle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/button";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { usePanelStore } from "@/store";
-import type { BrowserHistory } from "@shared/types/browser";
+import type { BrowserHistory, BrowserNavigationHistorySnapshot } from "@shared/types/browser";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "./BrowserToolbar";
 import {
@@ -20,12 +21,7 @@ import {
   clampZoom,
   type LoadError,
 } from "./browserUtils";
-import {
-  goBackBrowserHistory,
-  goForwardBrowserHistory,
-  initializeBrowserHistory,
-  pushBrowserHistory,
-} from "./historyUtils";
+import { initializeBrowserHistory } from "./historyUtils";
 import { actionService } from "@/services/ActionService";
 import { WebviewDialog } from "./WebviewDialog";
 import { FindBar } from "./FindBar";
@@ -135,6 +131,8 @@ export function BrowserPane({
     return initializeBrowserHistory(initialHistory ?? null, fallbackPresent);
   });
 
+  const [navSnapshot, setNavSnapshot] = useState<BrowserNavigationHistorySnapshot | null>(null);
+
   // Track whether the current load is the initial session-restored load (not a fresh panel)
   const isInitialRestoredLoadRef = useRef(Boolean(initialHistory?.present));
 
@@ -146,6 +144,20 @@ export function BrowserPane({
   // Doherty 400ms gate: skip loading affordances on fast loads to prevent flicker.
   const showLoadingOverlay = useDohertyGate(isLoading);
   const [loadError, setLoadError] = useState<LoadError | null>(null);
+  // Webview crash / unresponsive state. `crashed` covers render-process-gone
+  // with a recoverable reason (not memory-eviction or clean-exit); `unresponsive`
+  // is driven by the main-process unresponsive/responsive WebContents events,
+  // which auto-clear without user action. Mutually exclusive states mirror
+  // DevPreview's pattern. crashTimestampsRef bounds the auto-reload silently to
+  // the first crash within a 60s window; a second crash within the window
+  // surfaces the banner to break the loop.
+  const [crashState, setCrashState] = useState<"none" | "crashed" | "unresponsive">("none");
+  const [crashDetails, setCrashDetails] = useState<{
+    reason: string;
+    exitCode: number;
+  } | null>(null);
+  const crashTimestampsRef = useRef<number[]>([]);
+  const crashReloadRef = useRef<() => void>(() => {});
   const [blockedNav, setBlockedNav] = useState<{
     url: string;
     canOpenExternal: boolean;
@@ -153,12 +165,26 @@ export function BrowserPane({
   const [pendingApproval, setPendingApproval] = useState<{
     url: string;
     hostname: string;
+    historyIndex?: number;
   } | null>(null);
   const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
   // Track the last URL we set on the webview to detect in-webview navigation
   const lastSetUrlRef = useRef<string>(history.present);
   // Track if webview has been mounted and is ready
   const [isWebviewReady, setIsWebviewReady] = useState(false);
+
+  const refreshNavigationHistory = useCallback(async () => {
+    const webview = webviewRef.current;
+    if (!webview || !isWebviewReady) return;
+    try {
+      const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
+      const snapshot = await window.electron.webview.getNavigationHistory(wcId);
+      setNavSnapshot(snapshot);
+    } catch {
+      // Webview may have been destroyed between the guard and the IPC call
+    }
+  }, [isWebviewReady]);
+
   const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isSlowLoad, setIsSlowLoad] = useState(false);
   const slowLoadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -166,8 +192,18 @@ export function BrowserPane({
   const hasBeenVisible = useHasBeenVisible(id, location);
 
   const currentUrl = history.present;
-  const canGoBack = history.past.length > 0;
-  const canGoForward = history.future.length > 0;
+  const canGoBack = navSnapshot?.canGoBack ?? history.past.length > 0;
+  const canGoForward = navSnapshot?.canGoForward ?? history.future.length > 0;
+  const backEntry = navSnapshot
+    ? (navSnapshot.entries
+        .filter((e) => e.index < navSnapshot.activeIndex)
+        .sort((a, b) => b.index - a.index)[0] ?? null)
+    : null;
+  const forwardEntry = navSnapshot
+    ? (navSnapshot.entries
+        .filter((e) => e.index > navSnapshot.activeIndex)
+        .sort((a, b) => a.index - b.index)[0] ?? null)
+    : null;
   const hasValidUrl = isValidBrowserUrl(currentUrl);
 
   const { isEvicted, evictingRef } = useWebviewEviction(id, location);
@@ -227,6 +263,26 @@ export function BrowserPane({
     return () => clearTimeout(timer);
   }, [blockedNav]);
 
+  const handleRenderProcessGone = useCallback((details: { reason: string; exitCode: number }) => {
+    const now = Date.now();
+    const timestamps = crashTimestampsRef.current.filter((ts) => now - ts < 60_000);
+    timestamps.push(now);
+    crashTimestampsRef.current = timestamps;
+
+    // Clear any stale load-error overlay (z-30, absolute inset-0) — without
+    // this it would occlude the crash banner, which is an in-flow element.
+    setLoadError(null);
+    setCrashDetails(details);
+    setCrashState("crashed");
+
+    // Auto-reload silently on the first crash within the 60s window so a
+    // one-off renderer fault recovers transparently. A second crash within
+    // the window leaves the banner up so the user can act.
+    if (timestamps.length < 2) {
+      crashReloadRef.current();
+    }
+  }, []);
+
   useWebviewEvents({
     webviewElement,
     isInitialRestoredLoadRef,
@@ -243,6 +299,7 @@ export function BrowserPane({
     setIsSlowLoad,
     setBlockedNav,
     setHistory,
+    onRenderProcessGone: handleRenderProcessGone,
   });
 
   const commitNavigation = useCallback(
@@ -250,19 +307,13 @@ export function BrowserPane({
       isInitialRestoredLoadRef.current = false;
       setBlockedNav(null);
       setPendingApproval(null);
-      setHistory((prev) => pushBrowserHistory(prev, url));
+      setHistory((prev) => ({ ...prev, present: url }));
       setIsLoading(true);
       setLoadError(null);
       lastSetUrlRef.current = url;
 
       const webview = webviewRef.current;
       if (webview && isWebviewReady) {
-        // ERR_ABORTED (-3) is benign: emitted when a pending load is superseded
-        // by a fresh navigation (typing a new URL while the previous one is
-        // still loading). The did-fail-load handler already filters -3 — we
-        // mirror that here on the loadURL Promise so the rejection doesn't
-        // bubble to the global unhandled-rejection handler. Any genuine load
-        // failure will surface through did-fail-load with a non-(-3) code.
         loadWebviewUrl(webview, url);
       }
     },
@@ -304,8 +355,30 @@ export function BrowserPane({
       logError("[BrowserPane] Failed to save approved host", err);
       return;
     }
+    if (pendingApproval.historyIndex !== undefined) {
+      const webview = webviewRef.current;
+      if (webview && isWebviewReady) {
+        try {
+          const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
+          await window.electron.webview.goToHistoryIndex(wcId, pendingApproval.historyIndex);
+          setPendingApproval(null);
+          void refreshNavigationHistory();
+          return;
+        } catch {
+          // Fall through to loadURL if goToHistoryIndex fails
+        }
+      }
+    }
     commitNavigation(url);
-  }, [pendingApproval, projectId, projectSettings, saveProjectSettings, commitNavigation]);
+  }, [
+    pendingApproval,
+    projectId,
+    projectSettings,
+    saveProjectSettings,
+    commitNavigation,
+    isWebviewReady,
+    refreshNavigationHistory,
+  ]);
 
   const handleDismissApproval = useCallback(() => {
     setPendingApproval(null);
@@ -314,46 +387,23 @@ export function BrowserPane({
   const handleBack = useCallback(() => {
     isInitialRestoredLoadRef.current = false;
     setBlockedNav(null);
-    setHistory((prev) => {
-      const next = goBackBrowserHistory(prev);
-      if (next === prev) return prev;
-      const previousUrl = next.present;
-      lastSetUrlRef.current = previousUrl;
-
-      // Navigate webview back. Swallow ERR_ABORTED-class rejections — see
-      // commitNavigation comment above; did-fail-load is the source of truth
-      // for genuine failures.
-      const webview = webviewRef.current;
-      if (webview && isWebviewReady) {
-        loadWebviewUrl(webview, previousUrl);
-      }
-
-      return next;
-    });
     setIsLoading(true);
     setLoadError(null);
+    const webview = webviewRef.current;
+    if (webview && isWebviewReady && webview.canGoBack()) {
+      webview.goBack();
+    }
   }, [isWebviewReady]);
 
   const handleForward = useCallback(() => {
     isInitialRestoredLoadRef.current = false;
     setBlockedNav(null);
-    setHistory((prev) => {
-      const next = goForwardBrowserHistory(prev);
-      if (next === prev) return prev;
-      const nextUrl = next.present;
-      lastSetUrlRef.current = nextUrl;
-
-      // Navigate webview forward. Swallow ERR_ABORTED-class rejections —
-      // see commitNavigation comment.
-      const webview = webviewRef.current;
-      if (webview && isWebviewReady) {
-        loadWebviewUrl(webview, nextUrl);
-      }
-
-      return next;
-    });
     setIsLoading(true);
     setLoadError(null);
+    const webview = webviewRef.current;
+    if (webview && isWebviewReady && webview.canGoForward()) {
+      webview.goForward();
+    }
   }, [isWebviewReady]);
 
   const handleReload = useCallback(() => {
@@ -361,8 +411,80 @@ export function BrowserPane({
     setIsLoading(true);
     setLoadError(null);
     setIsSlowLoad(false);
+    setCrashState("none");
+    setCrashDetails(null);
+    crashTimestampsRef.current = [];
     webviewRef.current?.reload();
   }, []);
+
+  // Auto-reload uses a raw webview.reload() — explicitly NOT going through
+  // handleReload, which clears crashTimestampsRef and would break the second-
+  // crash loop detector. Only user-initiated reload/dismiss should reset the
+  // crash window.
+  useEffect(() => {
+    crashReloadRef.current = () => {
+      setIsLoading(true);
+      setLoadError(null);
+      setIsSlowLoad(false);
+      webviewRef.current?.reload();
+    };
+  }, []);
+
+  // Listen for webview unresponsive/responsive events from the main process.
+  // Unresponsive is auto-clearing — the responsive event from Chromium dismisses
+  // the banner without user action, so this is Tier 1/3 ambient (no recovery
+  // button needed beyond the optional Reload). `crashed` outranks `unresponsive`:
+  // if the renderer has died, ignore a stale responsive event.
+  useEffect(() => {
+    const cleanupUnresponsive = window.electron.webview.onUnresponsive((data) => {
+      if (data.panelId !== id) return;
+      setCrashState((prev) => {
+        if (prev === "crashed") return prev;
+        // Clear any in-flight load error — the page is unresponsive, the
+        // error is no longer actionable, and its absolute z-30 overlay
+        // would occlude this banner.
+        setLoadError(null);
+        return "unresponsive";
+      });
+    });
+    const cleanupResponsive = window.electron.webview.onResponsive((data) => {
+      if (data.panelId !== id) return;
+      setCrashState((prev) => (prev === "unresponsive" ? "none" : prev));
+    });
+    return () => {
+      cleanupUnresponsive();
+      cleanupResponsive();
+    };
+  }, [id]);
+
+  // Clear crash state when the user navigates to a fresh URL. Depending on
+  // crashState here would create an instant-reset loop: the effect would fire
+  // the moment crashState transitions from "none" and clear it back. Track the
+  // last URL we cleared at via a ref so this effect runs only on real URL
+  // transitions.
+  const lastClearedCrashUrlRef = useRef<string>(currentUrl);
+  useEffect(() => {
+    if (currentUrl === lastClearedCrashUrlRef.current) return;
+    lastClearedCrashUrlRef.current = currentUrl;
+    if (currentUrl && currentUrl !== "about:blank") {
+      setCrashState("none");
+      setCrashDetails(null);
+      // Don't carry the prior URL's crash history into the new URL's 60s
+      // window — that would mis-throttle the first auto-recovery there.
+      crashTimestampsRef.current = [];
+    }
+  }, [currentUrl]);
+
+  // Clear crash state on memory eviction so a restored panel doesn't surface
+  // a stale banner. The eviction placeholder owns the visual signal in that
+  // window — see useWebviewEviction.
+  useEffect(() => {
+    if (isEvicted) {
+      setCrashState("none");
+      setCrashDetails(null);
+      crashTimestampsRef.current = [];
+    }
+  }, [isEvicted]);
 
   const handleCancelLoad = useCallback(() => {
     if (slowLoadTimeoutRef.current) {
@@ -461,9 +583,60 @@ export function BrowserPane({
     };
   }, []);
 
+  // XButton1/XButton2 back/forward on Windows/Linux. The <webview> does not
+  // propagate app-command, so mouseup on the parent document catches clicks
+  // on toolbar chrome. macOS maps side buttons differently and stays on the
+  // existing Cmd+Left / Cmd+Right keychord.
+  useEffect(() => {
+    const handleMouseUp = (e: MouseEvent) => {
+      if (!isFocused) return;
+      if (e.button === 3) {
+        e.preventDefault();
+        handleBack();
+      } else if (e.button === 4) {
+        e.preventDefault();
+        handleForward();
+      }
+    };
+    document.addEventListener("mouseup", handleMouseUp);
+    return () => document.removeEventListener("mouseup", handleMouseUp);
+  }, [isFocused, handleBack, handleForward]);
+
   const handleSetZoom = useCallback((rawZoom: number) => {
     setZoomFactor(clampZoom(rawZoom));
   }, []);
+
+  const handleGoToHistoryIndex = useCallback(
+    async (index: number) => {
+      const entry = navSnapshot?.entries[index];
+      if (!entry) return;
+
+      const result = normalizeBrowserUrl(entry.url, { allowedHosts });
+      if (result.requiresConfirmation && result.hostname) {
+        setPendingApproval({ url: result.url!, hostname: result.hostname, historyIndex: index });
+        return;
+      }
+
+      const webview = webviewRef.current;
+      if (!webview || !isWebviewReady) return;
+      try {
+        const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
+        await window.electron.webview.goToHistoryIndex(wcId, index);
+        void refreshNavigationHistory();
+      } catch {
+        // Index may be stale — refresh and let the user retry
+        void refreshNavigationHistory();
+      }
+    },
+    [navSnapshot, allowedHosts, isWebviewReady, refreshNavigationHistory]
+  );
+
+  // Refresh navigation history snapshot after webview finishes loading
+  useEffect(() => {
+    if (isWebviewReady && !isLoading) {
+      void refreshNavigationHistory();
+    }
+  }, [isWebviewReady, isLoading, refreshNavigationHistory]);
 
   useBrowserActionListeners(id, {
     onReload: handleReload,
@@ -517,6 +690,9 @@ export function BrowserPane({
       url={currentUrl}
       canGoBack={canGoBack}
       canGoForward={canGoForward}
+      backEntry={backEntry}
+      forwardEntry={forwardEntry}
+      navSnapshot={navSnapshot}
       isLoading={showLoadingOverlay}
       zoomFactor={zoomFactor}
       isWebviewReady={isWebviewReady}
@@ -529,6 +705,7 @@ export function BrowserPane({
       onForward={() =>
         void actionService.dispatch("browser.forward", { terminalId: id }, { source: "user" })
       }
+      onGoToHistoryIndex={handleGoToHistoryIndex}
       onReload={() =>
         void actionService.dispatch("browser.reload", { terminalId: id }, { source: "user" })
       }
@@ -688,6 +865,50 @@ export function BrowserPane({
                   </button>
                 </div>
               </div>
+            )}
+            {crashState === "crashed" && (
+              <InlineStatusBanner
+                icon={XCircle}
+                title="Page process crashed"
+                description={
+                  crashDetails
+                    ? `Reason: ${crashDetails.reason} (exit code ${crashDetails.exitCode})`
+                    : "Browser renderer terminated unexpectedly."
+                }
+                severity="error"
+                animated={false}
+                action={{
+                  id: "reload",
+                  label: "Reload",
+                  icon: RotateCw,
+                  variant: "dangerFilled",
+                  onClick: handleReload,
+                  ariaLabel: "Reload page",
+                }}
+                onClose={() => {
+                  setCrashState("none");
+                  setCrashDetails(null);
+                  crashTimestampsRef.current = [];
+                }}
+              />
+            )}
+            {crashState === "unresponsive" && (
+              <InlineStatusBanner
+                icon={AlertTriangle}
+                title="Page not responding"
+                description="The page may be stuck in a long-running script."
+                severity="warning"
+                animated={false}
+                action={{
+                  id: "reload",
+                  label: "Reload",
+                  icon: RotateCw,
+                  variant: "danger",
+                  onClick: handleReload,
+                  ariaLabel: "Reload page",
+                }}
+                onClose={() => setCrashState("none")}
+              />
             )}
             {blockedNav && (
               <div

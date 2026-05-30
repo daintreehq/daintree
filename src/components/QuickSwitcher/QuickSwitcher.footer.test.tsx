@@ -186,6 +186,15 @@ describe("QuickSwitcher dynamic footer hint", () => {
       selectedIndex: 0,
     });
 
-    expect(document.body.querySelector("[aria-live]")).toBeNull();
+    // Scope the assertion to the footer container — the dialog itself mounts
+    // an AccessibilityAnnouncer with two aria-live sr-only divs (intentional;
+    // VoiceOver suppresses aria-live outside the focused aria-modal subtree).
+    const listbox = screen.getByRole("listbox");
+    const firstOption = within(listbox).getAllByRole("option")[0]!;
+    const footerHintId = firstOption.getAttribute("aria-describedby");
+    expect(footerHintId).toBeTruthy();
+    const footerContainer = document.getElementById(footerHintId!);
+    expect(footerContainer).not.toBeNull();
+    expect(footerContainer?.querySelector("[aria-live]")).toBeNull();
   });
 });

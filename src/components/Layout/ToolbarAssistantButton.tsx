@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { cn } from "@/lib/utils";
@@ -188,7 +187,6 @@ export function ToolbarAssistantButton({
               )
             )}
           </div>
-          <ShortcutRevealChip actionId="help.togglePanel" />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="bottom">

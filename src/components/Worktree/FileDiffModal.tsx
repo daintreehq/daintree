@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useCallback, useState, useRef } from "react";
 import type { GitStatus } from "@shared/types";
+import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { actionService } from "@/services/ActionService";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { useBranchForPath } from "@/hooks/useBranchForPath";
@@ -36,6 +37,14 @@ export interface FileDiffModalProps {
   status: GitStatus;
   worktreePath: string;
   onClose: () => void;
+  /** Element to focus when the dialog closes and its trigger was unmounted. */
+  restoreFocusTo?: RestoreFocusTarget;
+  /** Zero-based position of the current file within the navigable set. */
+  currentFileIndex?: number;
+  /** Total number of files the user can step through. */
+  totalFileCount?: number;
+  /** Step to the previous (-1) or next (1) file in the set. */
+  onNavigateFile?: (delta: -1 | 1) => void;
 }
 
 export function FileDiffModal({
@@ -44,6 +53,10 @@ export function FileDiffModal({
   status,
   worktreePath,
   onClose,
+  restoreFocusTo,
+  currentFileIndex,
+  totalFileCount,
+  onNavigateFile,
 }: FileDiffModalProps) {
   const [diff, setDiff] = useState<string | undefined>(undefined);
   const requestRef = useRef(0);
@@ -95,6 +108,10 @@ export function FileDiffModal({
         defaultMode="diff"
         onRetryDiff={fetchDiff}
         onClose={onClose}
+        restoreFocusTo={restoreFocusTo}
+        currentFileIndex={currentFileIndex}
+        totalFileCount={totalFileCount}
+        onNavigateFile={onNavigateFile}
       />
     </Suspense>
   );

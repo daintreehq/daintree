@@ -4,6 +4,7 @@ import type { BackendStatus } from "@/store/panelStore";
 
 export type RestartBannerVariant =
   | { type: "auto-restarting" }
+  | { type: "restarting" }
   | { type: "exit-error"; exitCode: number }
   | { type: "none" };
 
@@ -23,6 +24,16 @@ export interface RestartBannerInput {
 export function getRestartBannerVariant(input: RestartBannerInput): RestartBannerVariant {
   if (input.isAutoRestarting && !input.restartError && !input.reconnectError && !input.spawnError) {
     return { type: "auto-restarting" };
+  }
+
+  if (
+    input.isRestarting &&
+    !input.isAutoRestarting &&
+    !input.restartError &&
+    !input.reconnectError &&
+    !input.spawnError
+  ) {
+    return { type: "restarting" };
   }
 
   if (

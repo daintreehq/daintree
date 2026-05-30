@@ -226,7 +226,7 @@ describe("optimistic panel spawn (#5789)", () => {
     }
   });
 
-  it("removes the panel when the background spawn rejects", async () => {
+  it("keeps the panel with spawnStatus 'failed' when the background spawn rejects", async () => {
     const { terminalClient } = (await import("@/clients")) as unknown as {
       terminalClient: { spawn: ReturnType<typeof vi.fn> };
     };
@@ -247,12 +247,16 @@ describe("optimistic panel spawn (#5789)", () => {
     expect(id).toBe("will-fail");
     expect(usePanelStore.getState().panelsById["will-fail"]).toBeDefined();
 
-    // Drain microtasks for the rejection handler to run removePanel.
+    // Drain microtasks for the rejection handler to set spawnStatus: "failed".
     await drainMicrotasks();
 
     const state = usePanelStore.getState();
-    expect(state.panelsById["will-fail"]).toBeUndefined();
-    expect(state.panelIds).not.toContain("will-fail");
+    const failed = state.panelsById["will-fail"] as PtyPanelData | undefined;
+    expect(failed).toBeDefined();
+    expect(failed?.spawnStatus).toBe("failed");
+    expect(failed?.spawnError?.code).toBe("UNKNOWN");
+    expect(failed?.spawnError?.message).toBe("spawn boom");
+    expect(failed?.runtimeStatus).toBe("error");
   });
 
   it("marks reconnect panels as 'ready' without calling spawn", async () => {

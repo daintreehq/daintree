@@ -1621,4 +1621,63 @@ describe("useDevServer adversarial races", () => {
       );
     });
   });
+
+  describe("restored-stopped (#9094)", () => {
+    it("does not auto-ensure when the panel is restored-stopped on launch", async () => {
+      getStateMock.mockImplementation(async (request: { projectId: string }) =>
+        buildState({
+          panelId: "panel-1",
+          projectId: request.projectId,
+          status: "restored-stopped",
+        })
+      );
+
+      const { result } = renderHook(() =>
+        useDevServer({
+          panelId: "panel-1",
+          devCommand: "npm run dev",
+          cwd: "/repo",
+        })
+      );
+
+      await waitFor(() => {
+        expect(result.current.status).toBe("restored-stopped");
+      });
+
+      // The whole point of #9094: the prior dev server must NOT relaunch itself.
+      expect(ensureMock).not.toHaveBeenCalled();
+    });
+
+    it("ensures when the user explicitly starts a restored-stopped panel", async () => {
+      getStateMock.mockImplementation(async (request: { projectId: string }) =>
+        buildState({
+          panelId: "panel-1",
+          projectId: request.projectId,
+          status: "restored-stopped",
+        })
+      );
+
+      const { result } = renderHook(() =>
+        useDevServer({
+          panelId: "panel-1",
+          devCommand: "npm run dev",
+          cwd: "/repo",
+        })
+      );
+
+      await waitFor(() => {
+        expect(result.current.status).toBe("restored-stopped");
+      });
+      expect(ensureMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await result.current.start();
+      });
+
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+      expect(ensureMock).toHaveBeenCalledWith(
+        expect.objectContaining({ projectId: "project-1", devCommand: "npm run dev" })
+      );
+    });
+  });
 });

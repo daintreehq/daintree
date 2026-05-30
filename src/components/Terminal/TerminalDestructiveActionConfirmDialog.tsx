@@ -1,7 +1,7 @@
 import { type ReactElement, useCallback } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { actionService } from "@/services/ActionService";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { closeAndAnnounce } from "@/lib/accessibility";
 import {
   useTerminalPendingDestructiveActionStore,
   type TerminalPendingDestructiveActionSnapshot,
@@ -154,12 +154,10 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         break;
       }
     }
-    // Close the dialog first so the announce fires after focus returns to
-    // the main tree — VoiceOver suppresses live-region updates from outside
-    // the current modal subtree while focus is trapped.
-    clear();
     if (announcement) {
-      useAnnouncerStore.getState().announce(announcement);
+      closeAndAnnounce(clear, announcement);
+    } else {
+      clear();
     }
   }, [pending, clear]);
 

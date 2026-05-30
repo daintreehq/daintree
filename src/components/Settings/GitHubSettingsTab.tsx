@@ -1,6 +1,7 @@
 import { useState, useEffect, type ComponentType, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { Key, Check, AlertCircle, FlaskConical, ExternalLink, Github } from "lucide-react";
+import { Key, Check, AlertCircle, FlaskConical, ExternalLink } from "lucide-react";
+import { GitHubIcon } from "@/components/icons/brands";
 // TODO(#8061): replace with plugin settings contribution when forge settings UI lands
 import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
 import { actionService } from "@/services/ActionService";
@@ -283,7 +284,7 @@ export function GitHubSettingsTab() {
       </ForgeSettingBlock>
 
       <ForgeSettingBlock
-        icon={Github}
+        icon={GitHubIcon}
         title="Create a new token"
         description="To create a personal access token with the required scopes, click the button below. This will open GitHub in your browser."
       >

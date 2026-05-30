@@ -1,7 +1,7 @@
 import { describe, expect } from "vitest";
 import { fc, test } from "@fast-check/vitest";
 import { summarizeMcpArgs } from "../../../shared/utils/mcpArgsSummary.js";
-import { scrubSecrets } from "../secretScrubber.js";
+import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { sanitizePath } from "../pathScrubber.js";
 
 function productionSummarize(args: unknown): string {

@@ -292,13 +292,35 @@ export function registerPortalTabActions(
     category: "portal",
     kind: "command",
     danger: "safe",
+    // Runtime-escalated to a D1 confirm when 3+ tabs would close. A confirmed
+    // dispatch carries `{ confirmed: true }`; recording that into `lastAction`
+    // would let `action.repeatLast` replay it past its gate.
+    nonRepeatable: true,
     scope: "renderer",
-    argsSchema: z.object({ tabId: z.string().optional() }),
+    argsSchema: z
+      .object({ tabId: z.string().optional(), confirmed: z.boolean().optional() })
+      .optional(),
     run: async (args: unknown) => {
-      const { tabId } = args as { tabId?: string };
+      const { tabId } = (args ?? {}) as { tabId?: string };
       const state = usePortalStore.getState();
       const targetId = tabId ?? state.activeTabId;
       if (!targetId) return;
+      const index = state.tabs.findIndex((t) => t.id === targetId);
+      if (index === -1) return;
+      const tabsToClose = state.tabs.slice(index + 1);
+      if (tabsToClose.length === 0) return;
+      if (
+        !parseConfirmed(args) &&
+        deriveEffectiveTier("portal.closeToRight", { tabCount: tabsToClose.length }) === "D1"
+      ) {
+        usePortalPendingCloseStore.getState().request({
+          kind: "closeToRight",
+          tabsToClose,
+          keepTabId: targetId,
+        });
+        return;
+      }
+      clearPortalPendingIf("closeToRight");
       state.closeTabsAfter(targetId);
       const next = usePortalStore.getState();
       if (!next.activeTabId) {

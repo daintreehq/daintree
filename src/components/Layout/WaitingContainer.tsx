@@ -8,7 +8,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store";
 import type { PtyPanelData } from "@shared/types/panel";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { closeAndAnnounce } from "@/lib/accessibility";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWaitingTerminals } from "@/hooks/useTerminalSelectors";
 import { useWorktrees } from "@/hooks/useWorktrees";
@@ -144,13 +144,10 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
     if (killConfirmId) {
       const target = terminals.find((t) => t.id === killConfirmId);
       removePanel(killConfirmId);
-      // Close the confirm dialog first so the announce reaches AT after focus
-      // returns to the main tree (VoiceOver suppresses live-region updates
-      // from outside the active modal subtree).
-      setKillConfirmId(null);
-      useAnnouncerStore
-        .getState()
-        .announce(target?.title ? `${target.title} killed` : "Terminal killed");
+      closeAndAnnounce(
+        () => setKillConfirmId(null),
+        target?.title ? `${target.title} killed` : "Terminal killed"
+      );
       return;
     }
     setKillConfirmId(null);

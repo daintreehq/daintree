@@ -46,18 +46,22 @@ export function classifyPartition(partition: string): WebviewPartitionType {
  * applied at the session level before the framework is known.
  */
 export function getLocalhostDevCSP(): string {
+  // http://*.localhost:* (and ws://*.localhost:* for HMR) covers the stable dev-preview proxy
+  // origin (#9100). The webview loads `http://dp-<token>.localhost:<proxyPort>`, so every
+  // directive that admits a localhost wildcard must also admit the subdomain wildcard or the
+  // page's own assets/HMR socket would be blocked.
   return [
-    "default-src 'self' http://localhost:* http://127.0.0.1:* http://[::1]:* https://localhost:* https://127.0.0.1:* https://[::1]:*",
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* http://127.0.0.1:* http://[::1]:* https://localhost:* https://127.0.0.1:* https://[::1]:*",
-    "style-src 'self' 'unsafe-inline' http://localhost:* http://127.0.0.1:* http://[::1]:* https://localhost:* https://127.0.0.1:* https://[::1]:*",
-    "connect-src 'self' ws://localhost:* ws://127.0.0.1:* ws://[::1]:* wss://localhost:* wss://127.0.0.1:* wss://[::1]:* http://localhost:* http://127.0.0.1:* http://[::1]:* https://localhost:* https://127.0.0.1:* https://[::1]:*",
-    "img-src 'self' data: blob: https: http://localhost:* http://127.0.0.1:* http://[::1]:* https://localhost:* https://127.0.0.1:* https://[::1]:*",
+    "default-src 'self' http://localhost:* http://127.0.0.1:* http://[::1]:* http://*.localhost:* https://localhost:* https://127.0.0.1:* https://[::1]:*",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* http://127.0.0.1:* http://[::1]:* http://*.localhost:* https://localhost:* https://127.0.0.1:* https://[::1]:*",
+    "style-src 'self' 'unsafe-inline' http://localhost:* http://127.0.0.1:* http://[::1]:* http://*.localhost:* https://localhost:* https://127.0.0.1:* https://[::1]:*",
+    "connect-src 'self' ws://localhost:* ws://127.0.0.1:* ws://[::1]:* ws://*.localhost:* wss://localhost:* wss://127.0.0.1:* wss://[::1]:* http://localhost:* http://127.0.0.1:* http://[::1]:* http://*.localhost:* https://localhost:* https://127.0.0.1:* https://[::1]:*",
+    "img-src 'self' data: blob: https: http://localhost:* http://127.0.0.1:* http://[::1]:* http://*.localhost:* https://localhost:* https://127.0.0.1:* https://[::1]:*",
     "font-src 'self' data:",
-    "frame-src 'self' blob: http://localhost:* http://127.0.0.1:* http://[::1]:* https://localhost:* https://127.0.0.1:* https://[::1]:*",
+    "frame-src 'self' blob: http://localhost:* http://127.0.0.1:* http://[::1]:* http://*.localhost:* https://localhost:* https://127.0.0.1:* https://[::1]:*",
     "worker-src 'self' blob:",
     "object-src 'none'",
     "base-uri 'self'",
-    "form-action 'self' http://localhost:* http://127.0.0.1:* http://[::1]:* https://localhost:* https://127.0.0.1:* https://[::1]:*",
+    "form-action 'self' http://localhost:* http://127.0.0.1:* http://[::1]:* http://*.localhost:* https://localhost:* https://127.0.0.1:* https://[::1]:*",
   ].join("; ");
 }
 

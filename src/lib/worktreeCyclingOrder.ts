@@ -3,6 +3,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
+import { useWorktreeDevServerStore } from "@/store/worktreeDevServerStore";
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
 import type { WorktreeLifecycleStage } from "@/components/Worktree/WorktreeCard/hooks/useWorktreeStatus";
 import {
@@ -125,12 +126,15 @@ export function getVisibleWorktreesForCycling(
     prIssueFilters,
     sessionFilters,
     activityFilters,
+    devServerFilters,
     alwaysShowActive,
     alwaysShowWaiting,
     pinnedWorktrees,
     manualOrder,
     quickStateFilter,
   } = filterState;
+
+  const devServerSessions = useWorktreeDevServerStore.getState().sessionsByWorktreeId;
 
   const viewState = getCurrentViewStore().getState();
   const rawWorktrees = Array.from(viewState.worktrees.values())
@@ -178,6 +182,7 @@ export function getVisibleWorktreesForCycling(
     prIssueFilters,
     sessionFilters,
     activityFilters,
+    devServerFilters,
   };
 
   const hasFacetFiltersActive = filterState.hasFacetFilters();
@@ -213,7 +218,7 @@ export function getVisibleWorktreesForCycling(
     if (quickStateFilter !== "all" && !matchesQuickStateFilter(quickStateFilter, derived)) {
       return false;
     }
-    return matchesFilters(worktree, filters, derived, isActive);
+    return matchesFilters(worktree, filters, derived, isActive, devServerSessions);
   });
 
   const existingIds = new Set(rawWorktrees.map((w) => w.id));
@@ -244,7 +249,13 @@ export function getVisibleWorktreesForCycling(
     };
     if (
       !hasFacetFiltersActive ||
-      matchesFilters(mainWorktree, filters, mainDerived, mainWorktree.id === activeWorktreeId)
+      matchesFilters(
+        mainWorktree,
+        filters,
+        mainDerived,
+        mainWorktree.id === activeWorktreeId,
+        devServerSessions
+      )
     ) {
       topPinned.push(mainWorktree);
     }
@@ -265,7 +276,8 @@ export function getVisibleWorktreesForCycling(
         integrationWorktree,
         filters,
         intDerived,
-        integrationWorktree.id === activeWorktreeId
+        integrationWorktree.id === activeWorktreeId,
+        devServerSessions
       )
     ) {
       topPinned.push(integrationWorktree);

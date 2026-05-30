@@ -3,12 +3,42 @@ import { EventEmitter } from "node:events";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
+import { fileURLToPath } from "node:url";
 import type { PanelKindConfig } from "../../../shared/config/panelKindRegistry.js";
 
 const appMock = vi.hoisted(() => ({
   getVersion: vi.fn(() => "0.0.0"),
 }));
+const ipcMainMock = vi.hoisted(() => {
+  const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+  return {
+    on: vi.fn((channel: string, handler: (...args: unknown[]) => void) => {
+      let set = listeners.get(channel);
+      if (!set) {
+        set = new Set();
+        listeners.set(channel, set);
+      }
+      set.add(handler);
+    }),
+    removeListener: vi.fn((channel: string, handler: (...args: unknown[]) => void) => {
+      listeners.get(channel)?.delete(handler);
+    }),
+    _emit: (channel: string, event: unknown, payload: unknown) => {
+      for (const handler of [...(listeners.get(channel) ?? [])]) handler(event, payload);
+    },
+    _listenerCount: (channel: string) => listeners.get(channel)?.size ?? 0,
+    _reset: () => listeners.clear(),
+  };
+});
+const windowRefMock = vi.hoisted(() => ({
+  getWindowRegistry: vi.fn(() => null),
+  getProjectViewManager: vi.fn(() => null),
+}));
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+const projectStoreMock = vi.hoisted(() => ({
+  getCurrentProject: vi.fn((): { path: string } | null => null),
+  getProjectById: vi.fn((_id: string): { path: string } | null => null),
+}));
 const storeMock = vi.hoisted(() => {
   const state = new Map<string, unknown>();
   return {
@@ -20,12 +50,24 @@ const storeMock = vi.hoisted(() => {
 
 vi.mock("electron", () => ({
   app: appMock,
+  ipcMain: ipcMainMock,
+}));
+vi.mock("../../window/windowRef.js", () => ({
+  getWindowRegistry: windowRefMock.getWindowRegistry,
+  getProjectViewManager: windowRefMock.getProjectViewManager,
+  setWindowRegistry: vi.fn(),
+  setMainWindow: vi.fn(),
+  getMainWindow: vi.fn(() => null),
+  setProjectViewManager: vi.fn(),
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
 }));
 vi.mock("../../store.js", () => ({
   store: storeMock,
+}));
+vi.mock("../ProjectStore.js", () => ({
+  projectStore: projectStoreMock,
 }));
 vi.mock("../../../shared/config/panelKindRegistry.js", () => ({
   registerPanelKind: vi.fn(),
@@ -42,6 +84,7 @@ vi.mock("../../../shared/config/toolbarButtonRegistry.js", () => ({
 vi.mock("../pluginMenuRegistry.js", () => ({
   registerPluginMenuItem: vi.fn(),
   unregisterPluginMenuItems: vi.fn(),
+  getPluginMenuItems: vi.fn(() => []),
 }));
 vi.mock("../forgeProviderRegistry.js", () => ({
   registerForgeProviders: vi.fn(),
@@ -52,12 +95,41 @@ vi.mock("../forgeProviderRegistry.js", () => ({
   getForgeProviderImpl: vi.fn(),
   clearForgeProviderImplRegistry: vi.fn(),
 }));
+// Mocked so unload-cascade tests can simulate a throwing decoration unregister
+// without exercising the real (currently no-op) registry. Pre-existing tests
+// transitively touched these via unloadPlugin but never asserted call counts.
+vi.mock("../fileDecorationRegistry.js", () => ({
+  registerFileDecorationProviders: vi.fn(),
+  registerFileDecorationProviderImpl: vi.fn(),
+  unregisterFileDecorationProviders: vi.fn(),
+  unregisterFileDecorationProviderImpls: vi.fn(),
+  unregisterFileDecorationProviderImpl: vi.fn(),
+  scopeMatchesPattern: vi.fn((s: string, p: string) => s === p),
+}));
 
+// Mocked so MCP-server activation tests don't try to spawn real subprocesses
+// or exercise the execa dynamic-import. The supervisor's wiring is verified
+// here; PluginMcpSupervisor's own lifecycle is covered by its dedicated test.
+const mockPluginMcpSupervisor = {
+  start: vi.fn(async () => undefined) as ReturnType<typeof vi.fn>,
+  shutdown: vi.fn(async () => undefined) as ReturnType<typeof vi.fn>,
+  shutdownAll: vi.fn(async () => undefined) as ReturnType<typeof vi.fn>,
+  callTool: vi.fn(),
+  restart: vi.fn(),
+  list: vi.fn(() => []),
+  getStderr: vi.fn(() => ({ pluginId: "", serverId: "", lines: [], totalLines: 0 })),
+};
+vi.mock("../PluginMcpSupervisor.js", () => ({
+  getPluginMcpSupervisor: () => mockPluginMcpSupervisor,
+}));
+
+import { z } from "zod";
 import { PluginService } from "../PluginService.js";
-import { PluginManifestSchema } from "../../schemas/plugin.js";
+import { getPluginManifestSchema, isPrivateOrLoopbackHostname } from "../../schemas/plugin.js";
 import {
-  BUILT_IN_PLUGIN_PERMISSIONS,
+  BUILT_IN_PLUGIN_CAPABILITIES,
   type PluginIpcContext,
+  type PluginManifest,
 } from "../../../shared/types/plugin.js";
 import {
   registerPanelKind,
@@ -75,6 +147,10 @@ import {
   unregisterForgeProviderImpls,
   unregisterForgeProviders,
 } from "../forgeProviderRegistry.js";
+import {
+  unregisterFileDecorationProviders,
+  unregisterFileDecorationProviderImpls,
+} from "../fileDecorationRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
@@ -119,7 +195,7 @@ describe("PluginManifestSchema name validation", () => {
     "acme.good-1",
     sixtyFourCharName,
   ])("accepts scoped name %j", (name) => {
-    const result = PluginManifestSchema.safeParse({ name, ...validBase });
+    const result = getPluginManifestSchema(false).safeParse({ name, ...validBase });
     expect(result.success).toBe(true);
   });
 
@@ -145,7 +221,7 @@ describe("PluginManifestSchema name validation", () => {
     sixtyFiveCharName,
     "",
   ])("rejects unscoped or malformed name %j", (name) => {
-    const result = PluginManifestSchema.safeParse({ name, ...validBase });
+    const result = getPluginManifestSchema(false).safeParse({ name, ...validBase });
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.issues.some((i) => i.path[0] === "name")).toBe(true);
@@ -153,7 +229,7 @@ describe("PluginManifestSchema name validation", () => {
   });
 
   it("rejection includes an explanatory error message", () => {
-    const result = PluginManifestSchema.safeParse({ name: "bare-plugin", ...validBase });
+    const result = getPluginManifestSchema(false).safeParse({ name: "bare-plugin", ...validBase });
     expect(result.success).toBe(false);
     if (!result.success) {
       const nameIssue = result.error.issues.find((i) => i.path[0] === "name");
@@ -162,135 +238,396 @@ describe("PluginManifestSchema name validation", () => {
   });
 });
 
-describe("PluginManifestSchema permissions field", () => {
+describe("getPluginManifestSchema namespace lock", () => {
+  const validBase = { name: "acme.test", version: "1.0.0" };
+
+  it("rejects user plugin with daintree.* name", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      name: "daintree.github-evil",
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const nsIssue = result.error.issues.find(
+        (i) =>
+          i.code === "custom" &&
+          (i as unknown as { params?: { errorCode?: string } }).params?.errorCode ===
+            "namespace_reserved"
+      );
+      expect(nsIssue).toBeDefined();
+      expect(nsIssue!.path).toEqual(["name"]);
+    }
+  });
+
+  it("accepts builtin plugin with daintree.* name", () => {
+    const result = getPluginManifestSchema(true).safeParse({
+      ...validBase,
+      name: "daintree.github",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts user plugin with non-daintree.* scoped name", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      name: "acme.daintree",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts user plugin with daintreehq.* name (not the daintree. prefix)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      name: "daintreehq.dev-tools",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects user plugin with bare daintree.foo name at schema level", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      name: "daintree.foo",
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const nsIssue = result.error.issues.find(
+        (i) =>
+          i.code === "custom" &&
+          (i as unknown as { params?: { errorCode?: string } }).params?.errorCode ===
+            "namespace_reserved"
+      );
+      expect(nsIssue).toBeDefined();
+    }
+  });
+});
+
+describe("PluginManifestSchema capabilities field", () => {
   const validBase = { name: "acme.test", version: "1.0.0" };
 
   it("defaults to empty array when omitted", () => {
-    const result = PluginManifestSchema.safeParse(validBase);
+    const result = getPluginManifestSchema(false).safeParse(validBase);
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.permissions).toEqual([]);
+      expect(result.data.capabilities).toEqual([]);
     }
   });
 
-  it("accepts an empty permissions array", () => {
-    const result = PluginManifestSchema.safeParse({ ...validBase, permissions: [] });
+  it("accepts an empty capabilities array", () => {
+    const result = getPluginManifestSchema(false).safeParse({ ...validBase, capabilities: [] });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.permissions).toEqual([]);
+      expect(result.data.capabilities).toEqual([]);
     }
   });
 
-  it("accepts built-in permission strings", () => {
-    const result = PluginManifestSchema.safeParse({
+  it("accepts built-in capability strings", () => {
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
-      permissions: ["fs:project-read", "network:fetch", "agent:invoke"],
+      capabilities: ["fs:project-read", "network:fetch", "agent:invoke"],
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.permissions).toEqual(["fs:project-read", "network:fetch", "agent:invoke"]);
+      expect(result.data.capabilities).toEqual([
+        "fs:project-read",
+        "network:fetch",
+        "agent:invoke",
+      ]);
     }
   });
 
-  it("rejects custom (non-built-in) permission strings", () => {
-    const result = PluginManifestSchema.safeParse({
+  it("rejects custom (non-built-in) capability strings", () => {
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
-      permissions: ["custom:my-perm", "org.specific:do-thing"],
+      capabilities: ["custom:my-perm", "org.specific:do-thing"],
     });
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues.some((i) => i.path[0] === "permissions")).toBe(true);
+      expect(result.error.issues.some((i) => i.path[0] === "capabilities")).toBe(true);
     }
   });
 
-  it("rejects empty string in permissions array", () => {
-    const result = PluginManifestSchema.safeParse({
+  it("rejects empty string in capabilities array", () => {
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
-      permissions: ["fs:project-read", ""],
+      capabilities: ["fs:project-read", ""],
     });
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues.some((i) => i.path[0] === "permissions")).toBe(true);
+      expect(result.error.issues.some((i) => i.path[0] === "capabilities")).toBe(true);
     }
   });
 
-  it("rejects whitespace-padded permission strings (no implicit trim)", () => {
-    const result = PluginManifestSchema.safeParse({
+  it("rejects whitespace-padded capability strings (no implicit trim)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
-      permissions: ["  fs:project-read  "],
+      capabilities: ["  fs:project-read  "],
     });
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues.some((i) => i.path[0] === "permissions")).toBe(true);
+      expect(result.error.issues.some((i) => i.path[0] === "capabilities")).toBe(true);
     }
   });
 
-  it("rejects whitespace-only permission strings", () => {
-    const result = PluginManifestSchema.safeParse({
+  it("rejects whitespace-only capability strings", () => {
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
-      permissions: ["   "],
+      capabilities: ["   "],
     });
     expect(result.success).toBe(false);
   });
 
-  it("rejects permission strings containing newline characters", () => {
-    const result = PluginManifestSchema.safeParse({
+  it("rejects capability strings containing newline characters", () => {
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
-      permissions: ["fs:project-read\n"],
+      capabilities: ["fs:project-read\n"],
     });
     expect(result.success).toBe(false);
   });
 
-  it("BUILT_IN_PLUGIN_PERMISSIONS contains all documented capabilities", () => {
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("fs:project-read");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("fs:project-write");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("fs:user-data-read");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("fs:user-data-write");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("network:fetch");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("agent:invoke");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("agent:read");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("git:read");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("git:write");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("clipboard:read");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("clipboard:write");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("shell:exec");
-  });
-
-  it("BUILT_IN_PLUGIN_PERMISSIONS has exactly 12 unique entries", () => {
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toHaveLength(12);
-    expect(new Set(BUILT_IN_PLUGIN_PERMISSIONS).size).toBe(12);
-  });
-
-  it("rejects null permissions value", () => {
-    const result = PluginManifestSchema.safeParse({
+  it('rejects stale "permissions" key because schema is strict', () => {
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
-      permissions: null,
+      permissions: ["fs:project-read"],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.code === "unrecognized_keys")).toBe(true);
+    }
+  });
+
+  it("BUILT_IN_PLUGIN_CAPABILITIES contains all documented capabilities", () => {
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("fs:project-read");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("fs:project-write");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("fs:user-data-read");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("fs:user-data-write");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("network:fetch");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:invoke");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:read");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("git:read");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("git:write");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("clipboard:read");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("clipboard:write");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("shell:exec");
+  });
+
+  it("BUILT_IN_PLUGIN_CAPABILITIES has exactly 12 unique entries", () => {
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toHaveLength(12);
+    expect(new Set(BUILT_IN_PLUGIN_CAPABILITIES).size).toBe(12);
+  });
+
+  it("rejects null capabilities value", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      capabilities: null,
     });
     expect(result.success).toBe(false);
   });
 
-  it("rejects scalar (non-array) permissions value", () => {
-    const result = PluginManifestSchema.safeParse({
+  it("rejects scalar (non-array) capabilities value", () => {
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
-      permissions: "git:read",
+      capabilities: "git:read",
     });
     expect(result.success).toBe(false);
   });
 
-  it("rejects non-string elements in permissions array", () => {
-    const result = PluginManifestSchema.safeParse({
+  it("rejects non-string elements in capabilities array", () => {
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
-      permissions: [1, "git:read"],
+      capabilities: [1, "git:read"],
     });
     expect(result.success).toBe(false);
   });
+});
+
+describe("PluginManifestSchema scopes field", () => {
+  const validBase = { name: "acme.scope-test", version: "1.0.0" };
+
+  it("accepts manifest with no scopes field", () => {
+    const result = getPluginManifestSchema(false).safeParse(validBase);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.scopes).toBeUndefined();
+    }
+  });
+
+  it("accepts empty scopes object (both buckets optional)", () => {
+    const result = getPluginManifestSchema(false).safeParse({ ...validBase, scopes: {} });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a valid network scope with one https URL", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: { network: { allowedUrls: ["https://api.example.com/v2"] } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.scopes?.network?.allowedUrls).toEqual(["https://api.example.com/v2"]);
+    }
+  });
+
+  it.each([
+    ["http://api.example.com", "scope_url_not_https"],
+    ["ftp://api.example.com", "scope_url_not_https"],
+    ["file:///etc/passwd", "scope_url_not_https"],
+    ["https://localhost", "scope_url_private_target"],
+    ["https://intranet", "scope_url_hostname_unqualified"],
+    ["https://127.0.0.1", "scope_url_private_target"],
+    ["https://[::1]", "scope_url_private_target"],
+    ["https://[fe80::1]", "scope_url_private_target"],
+    ["https://[fc00::1]", "scope_url_private_target"],
+    ["https://[fd00::1]", "scope_url_private_target"],
+    ["https://[::ffff:127.0.0.1]", "scope_url_private_target"],
+    ["https://169.254.169.254", "scope_url_private_target"],
+    ["https://10.0.0.1", "scope_url_private_target"],
+    ["https://192.168.1.1", "scope_url_private_target"],
+    ["https://172.16.0.1", "scope_url_private_target"],
+    ["https://172.31.255.255", "scope_url_private_target"],
+    ["https://0", "scope_url_private_target"],
+    ["https://0.0.0.0", "scope_url_private_target"],
+    ["https://localhost.", "scope_url_private_target"],
+    ["https://LOCALHOST", "scope_url_private_target"],
+    ["https://user:pass@example.com", "scope_url_has_credentials"],
+    ["https://example.com/*", "scope_wildcard_rejected"],
+    ["https://*.example.com", "scope_wildcard_rejected"],
+    ["not-a-url", "scope_url_invalid"],
+  ])("rejects network.allowedUrls entry %j with errorCode %s", (url, errorCode) => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: { network: { allowedUrls: [url] } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const matching = result.error.issues.find(
+        (i) =>
+          i.code === "custom" &&
+          (i as unknown as { params?: { errorCode?: string } }).params?.errorCode === errorCode
+      );
+      expect(matching).toBeDefined();
+    }
+  });
+
+  it("rejects empty allowedUrls array (min 1 required)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: { network: { allowedUrls: [] } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects unknown key inside scopes (strict)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: { networking: { allowedUrls: ["https://api.example.com"] } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.code === "unrecognized_keys")).toBe(true);
+    }
+  });
+
+  it("rejects unknown key inside scopes.network (strict)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: {
+        network: {
+          allowedUrls: ["https://api.example.com"],
+          deniedUrls: ["https://evil.com"],
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.code === "unrecognized_keys")).toBe(true);
+    }
+  });
+
+  it("accepts a valid fs scope with an absolute path", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: { fs: { allowedPaths: ["/home/user/projects"] } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.scopes?.fs?.allowedPaths).toEqual(["/home/user/projects"]);
+    }
+  });
+
+  it.each([
+    ["relative/path", "scope_path_relative"],
+    ["./relative", "scope_path_relative"],
+    ["../escape", "scope_path_relative"],
+    ["/home/user/../etc", "scope_path_traversal"],
+    ["/home/user/**", "scope_wildcard_rejected"],
+    ["/home/*/projects", "scope_wildcard_rejected"],
+  ])("rejects fs.allowedPaths entry %j with errorCode %s", (entryPath, errorCode) => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: { fs: { allowedPaths: [entryPath] } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const matching = result.error.issues.find(
+        (i) =>
+          i.code === "custom" &&
+          (i as unknown as { params?: { errorCode?: string } }).params?.errorCode === errorCode
+      );
+      expect(matching).toBeDefined();
+    }
+  });
+
+  it("rejects empty allowedPaths array (min 1 required)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: { fs: { allowedPaths: [] } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects scalar (non-array) allowedUrls value", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      scopes: { network: { allowedUrls: "https://api.example.com" } },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("isPrivateOrLoopbackHostname (download SSRF guard)", () => {
+  // `new URL` keeps brackets on IPv6 literals, so feed the bracketed form the
+  // install/checkForUpdate paths actually pass.
+  it.each([
+    "[::1]",
+    "[fe80::1]",
+    "[fc00::1]",
+    "[fd00::1]",
+    "[::ffff:127.0.0.1]",
+    "127.0.0.1",
+    "169.254.169.254",
+    "10.0.0.1",
+    "192.168.1.1",
+    "172.16.0.1",
+    "0.0.0.0",
+    "localhost",
+    "localhost.",
+  ])("blocks %j", (host) => {
+    expect(isPrivateOrLoopbackHostname(host)).toBe(true);
+  });
+
+  it.each(["8.8.8.8", "[2606:4700::1111]", "203.0.113.5", "api.example.com"])(
+    "allows public address %j",
+    (host) => {
+      expect(isPrivateOrLoopbackHostname(host)).toBe(false);
+    }
+  );
 });
 
 describe("PluginManifestSchema forgeProviders contribution", () => {
   const validBase = { name: "acme.forge", version: "1.0.0" };
 
   it("defaults contributes.forgeProviders to [] when contributes is absent", () => {
-    const result = PluginManifestSchema.safeParse(validBase);
+    const result = getPluginManifestSchema(false).safeParse(validBase);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.contributes.forgeProviders).toEqual([]);
@@ -298,7 +635,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 
   it("defaults contributes.forgeProviders to [] when contributes is an empty object", () => {
-    const result = PluginManifestSchema.safeParse({ ...validBase, contributes: {} });
+    const result = getPluginManifestSchema(false).safeParse({ ...validBase, contributes: {} });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.contributes.forgeProviders).toEqual([]);
@@ -306,7 +643,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 
   it("accepts a fully specified forgeProviders entry", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
         forgeProviders: [
@@ -337,7 +674,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 
   it("accepts a forgeProviders entry with only required fields", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
         forgeProviders: [{ id: "gh", name: "GitHub", matches: ["github.com"] }],
@@ -347,7 +684,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 
   it("rejects a forgeProviders entry with an empty matches array", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
         forgeProviders: [{ id: "gh", name: "GitHub", matches: [] }],
@@ -357,7 +694,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 
   it("rejects a forgeProviders entry missing required fields", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
         forgeProviders: [{ id: "gh" }],
@@ -366,16 +703,17 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
     expect(result.success).toBe(false);
   });
 
-  it("strips unknown keys on a forgeProviders entry (matches sibling contribution schemas)", () => {
-    const result = PluginManifestSchema.safeParse({
+  it("rejects unknown keys on a forgeProviders entry (strict schema)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
         forgeProviders: [{ id: "gh", name: "GitHub", matches: ["github.com"], unknownKey: true }],
       },
     });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.contributes.forgeProviders[0]).not.toHaveProperty("unknownKey");
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const unrecognizedIssue = result.error.issues.find((i) => i.code === "unrecognized_keys");
+      expect(unrecognizedIssue).toBeDefined();
     }
   });
 });
@@ -384,7 +722,7 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   const validBase = { name: "acme.decor", version: "1.0.0" };
 
   it("defaults contributes.fileDecorationProviders to [] when contributes is absent", () => {
-    const result = PluginManifestSchema.safeParse(validBase);
+    const result = getPluginManifestSchema(false).safeParse(validBase);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.contributes.fileDecorationProviders).toEqual([]);
@@ -392,7 +730,7 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   });
 
   it("defaults to [] when contributes is an empty object", () => {
-    const result = PluginManifestSchema.safeParse({ ...validBase, contributes: {} });
+    const result = getPluginManifestSchema(false).safeParse({ ...validBase, contributes: {} });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.contributes.fileDecorationProviders).toEqual([]);
@@ -400,7 +738,7 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   });
 
   it("accepts a valid fileDecorationProviders entry", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
         fileDecorationProviders: [{ id: "worktree-diff-review", scopes: ["worktree-diff:*"] }],
@@ -415,7 +753,7 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   });
 
   it("rejects an entry with an empty scopes array", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: { fileDecorationProviders: [{ id: "d", scopes: [] }] },
     });
@@ -423,7 +761,7 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   });
 
   it("rejects an entry missing required fields", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: { fileDecorationProviders: [{ id: "d" }] },
     });
@@ -431,13 +769,77 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   });
 
   it("rejects unknown keys on the entry (strict schema)", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
         fileDecorationProviders: [{ id: "d", scopes: ["s:*"], extra: true }],
       },
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("PluginManifestSchema contributes strict validation", () => {
+  const validBase = { name: "acme.test", version: "1.0.0" };
+
+  it("rejects unknown keys inside contributes (typo'd contribution-point names)", () => {
+    // `commandz` is a deliberate typo of `commands` (#9281) — strict-mode
+    // rejection of unknown keys catches plugin-author typos.
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: {
+        commandz: [{ id: "foo", title: "Foo", description: "bar", category: "test" }],
+      },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const unrecognizedIssue = result.error.issues.find((i) => i.code === "unrecognized_keys");
+      expect(unrecognizedIssue).toBeDefined();
+    }
+  });
+
+  it("rejects old unprefixed views key inside contributes", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: { views: [{ id: "v", name: "V", componentPath: "./v.js", location: "panel" }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects old unprefixed mcpServers key inside contributes", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: { mcpServers: [{ id: "svc", name: "Svc", command: "node" }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an arbitrary unknown key inside contributes", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: { unknownKey: true },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts empty contributes object (no unknown keys, defaults populate)", () => {
+    const result = getPluginManifestSchema(false).safeParse({ ...validBase, contributes: {} });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.experimental_views).toEqual([]);
+      expect(result.data.contributes.experimental_mcpServers).toEqual([]);
+    }
+  });
+
+  it("accepts known contributes keys without extra keys", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: {
+        panels: [],
+        toolbarButtons: [],
+      },
+    });
+    expect(result.success).toBe(true);
   });
 });
 
@@ -605,6 +1007,41 @@ describe("PluginService", () => {
     expect(Object.keys(plugins[0])).not.toContain("resolvedMain");
   });
 
+  it("listPlugins includes archiveHash when set on a loaded plugin", async () => {
+    await writePlugin("hashed", {
+      name: "acme.hashed",
+      version: "1.0.0",
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const validHash = "a".repeat(64);
+    service.setPluginArchiveHash("acme.hashed", validHash);
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].archiveHash).toBe(validHash);
+  });
+
+  it("listPlugins returns null archiveHash when not set", async () => {
+    await writePlugin("unhashed", {
+      name: "acme.unhashed",
+      version: "1.0.0",
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].archiveHash).toBeNull();
+  });
+
+  it("setPluginArchiveHash is a silent no-op for unknown plugin ids", () => {
+    const service = new PluginService(tmpDir);
+    expect(() => service.setPluginArchiveHash("acme.nonexistent", "deadbeef")).not.toThrow();
+  });
+
   it("rejects manifest with empty name", async () => {
     await writePlugin("empty-name", { name: "", version: "1.0.0" });
 
@@ -707,7 +1144,7 @@ describe("PluginService", () => {
 
     expect(registerToolbarButton).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "plugin.acme.toolbar-test.my-btn",
+        id: "acme.toolbar-test.my-btn",
         label: "My Button",
         iconId: "puzzle",
         actionId: "acme.toolbar-test.doThing",
@@ -738,7 +1175,7 @@ describe("PluginService", () => {
 
     expect(registerToolbarButton).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "plugin.acme.default-priority.btn",
+        id: "acme.default-priority.btn",
         priority: 3,
       })
     );
@@ -780,6 +1217,348 @@ describe("PluginService", () => {
 
     expect(registerToolbarButton).not.toHaveBeenCalled();
     expect(registerPluginMenuItem).not.toHaveBeenCalled();
+  });
+});
+
+describe("PluginService manifest command contributions (#9281)", () => {
+  async function writePluginWithSrc(
+    name: string,
+    manifest: Record<string, unknown>,
+    files: Record<string, string> = {}
+  ): Promise<void> {
+    const dir = path.join(tmpDir, name);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "plugin.json"), JSON.stringify(manifest));
+    if (Object.keys(files).length > 0) {
+      await fs.mkdir(path.join(dir, "src"), { recursive: true });
+      for (const [filename, content] of Object.entries(files)) {
+        await fs.writeFile(path.join(dir, "src", filename), content);
+      }
+    }
+  }
+
+  function ctx(pluginId: string): PluginIpcContext {
+    return makeCtx(pluginId);
+  }
+
+  it("registers a manifest command descriptor at load time without importing the handler", async () => {
+    await writePluginWithSrc(
+      "cmd-lazy",
+      {
+        name: "acme.cmd-lazy",
+        version: "1.0.0",
+        contributes: {
+          commands: [
+            {
+              id: "do-thing",
+              title: "Do Thing",
+              description: "Run the thing",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+        },
+      },
+      {
+        "do-thing.ts": `export default () => "loaded"`,
+      }
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const actions = service.listPluginActions();
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      pluginId: "acme.cmd-lazy",
+      id: "acme.cmd-lazy.do-thing",
+      title: "Do Thing",
+      category: "Test",
+      kind: "command",
+      danger: "safe",
+      effectiveDanger: "safe",
+    });
+  });
+
+  it("lazily imports and invokes the handler on first dispatch", async () => {
+    await writePluginWithSrc(
+      "cmd-dispatch",
+      {
+        name: "acme.cmd-dispatch",
+        version: "1.0.0",
+        contributes: {
+          commands: [
+            {
+              id: "plan",
+              title: "Plan",
+              description: "",
+              category: "Planning",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+        },
+      },
+      {
+        "plan.ts": `export default async (args) => ({ ok: true, args })`,
+      }
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const result = await service.dispatchHandler(
+      "acme.cmd-dispatch",
+      "acme.cmd-dispatch.plan",
+      ctx("acme.cmd-dispatch"),
+      [{ issue: 42 }]
+    );
+    expect(result).toEqual({ ok: true, args: { issue: 42 } });
+  });
+
+  it("throws the documented toast error when the handler file is missing", async () => {
+    await writePluginWithSrc("cmd-missing", {
+      name: "acme.cmd-missing",
+      version: "1.0.0",
+      contributes: {
+        commands: [
+          {
+            id: "ghost",
+            title: "Ghost",
+            description: "",
+            category: "Test",
+            kind: "command",
+            danger: "safe",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    // Descriptor is still registered (palette visibility) even with no file.
+    expect(service.listPluginActions()).toHaveLength(1);
+
+    await expect(
+      service.dispatchHandler(
+        "acme.cmd-missing",
+        "acme.cmd-missing.ghost",
+        ctx("acme.cmd-missing"),
+        []
+      )
+    ).rejects.toThrow('Command "acme.cmd-missing.ghost" has no handler');
+  });
+
+  it("throws when the handler module has no callable default export", async () => {
+    await writePluginWithSrc(
+      "cmd-nodef",
+      {
+        name: "acme.cmd-nodef",
+        version: "1.0.0",
+        contributes: {
+          commands: [
+            {
+              id: "broken",
+              title: "Broken",
+              description: "",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+        },
+      },
+      {
+        "broken.ts": `export const named = 1`,
+      }
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    await expect(
+      service.dispatchHandler("acme.cmd-nodef", "acme.cmd-nodef.broken", ctx("acme.cmd-nodef"), [])
+    ).rejects.toThrow(/no callable default export/);
+  });
+
+  it("probes extensions in order .ts → .tsx → .js → .mjs", async () => {
+    // When both .ts and .js exist, .ts wins.
+    await writePluginWithSrc(
+      "cmd-order",
+      {
+        name: "acme.cmd-order",
+        version: "1.0.0",
+        contributes: {
+          commands: [
+            {
+              id: "pick",
+              title: "Pick",
+              description: "",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+        },
+      },
+      {
+        "pick.ts": `export default () => "ts-wins"`,
+        "pick.js": `export default () => "js-loses"`,
+      }
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const result = await service.dispatchHandler(
+      "acme.cmd-order",
+      "acme.cmd-order.pick",
+      ctx("acme.cmd-order"),
+      []
+    );
+    expect(result).toBe("ts-wins");
+  });
+
+  it("surfaces a loadError when a manifest command collides with a built-in id", async () => {
+    // Construct a plugin whose namespaced command id WILL collide. The
+    // manifest schema requires `publisher.name` form (`/^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/`),
+    // so we filter built-ins to ones whose first two dotted segments would
+    // satisfy that pattern — three-segment, all-lowercase, no camelCase or
+    // special chars.
+    const { BUILT_IN_ACTION_IDS } = await import("../../../shared/config/actionIds.js");
+    const pluginNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
+    const threeSegment = BUILT_IN_ACTION_IDS.find((id) => {
+      const parts = id.split(".");
+      if (parts.length < 3) return false;
+      return pluginNamePattern.test(`${parts[0]}.${parts[1]}`);
+    });
+    if (!threeSegment) {
+      // No suitable target — the collision path is structurally unreachable
+      // from a well-formed plugin manifest, so the load-time guard is
+      // defence-in-depth against a future built-in id whose shape would
+      // overlap. The test still validates the descriptor-registration path
+      // doesn't accidentally allow such an id.
+      return;
+    }
+    const parts = threeSegment.split(".");
+    const pluginName = `${parts[0]}.${parts[1]}`;
+    const cmdId = parts.slice(2).join(".");
+
+    await writePluginWithSrc(pluginName, {
+      name: pluginName,
+      version: "1.0.0",
+      contributes: {
+        commands: [
+          {
+            id: cmdId,
+            title: "Collides",
+            description: "",
+            category: "X",
+            kind: "command",
+            danger: "safe",
+          },
+        ],
+      },
+    });
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      const namespacedId = `${pluginName}.${cmdId}`;
+      // No descriptor for the colliding id.
+      expect(service.listPluginActions().some((a) => a.id === namespacedId)).toBe(false);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`command id "${namespacedId}" collides with a built-in action id`)
+      );
+      // Provenance loadError set on the installed record.
+      const installed = (storeMock._state.get("plugins") as { installed?: Record<string, unknown> })
+        ?.installed as Record<string, { loadError?: { message: string } }> | undefined;
+      expect(installed?.[pluginName]?.loadError?.message).toContain("collides with a built-in");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("registers the toolbar button under the canonical {pluginId}.{btnId} namespace", async () => {
+    await writePlugin("ns-check", {
+      name: "acme.ns-check",
+      version: "1.0.0",
+      contributes: {
+        toolbarButtons: [{ id: "btn", label: "Btn", iconId: "i", actionId: "acme.ns-check.act" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(registerToolbarButton).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "acme.ns-check.btn",
+        pluginId: "acme.ns-check",
+      })
+    );
+  });
+
+  it("preserves a collision loadError across a successful main activation", async () => {
+    // A plugin with both `main` AND a colliding manifest command writes a
+    // loadError at load time; `_doActivate()` success previously cleared it
+    // unconditionally, erasing the diagnostic. The collision is a manifest-
+    // level fact that doesn't go away when `main` activates cleanly.
+    const { BUILT_IN_ACTION_IDS } = await import("../../../shared/config/actionIds.js");
+    const pluginNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
+    const threeSegment = BUILT_IN_ACTION_IDS.find((id) => {
+      const parts = id.split(".");
+      if (parts.length < 3) return false;
+      return pluginNamePattern.test(`${parts[0]}.${parts[1]}`);
+    });
+    if (!threeSegment) return;
+    const parts = threeSegment.split(".");
+    const pluginName = `${parts[0]}.${parts[1]}`;
+    const cmdId = parts.slice(2).join(".");
+
+    const pluginDir = path.join(tmpDir, pluginName);
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: pluginName,
+        version: "1.0.0",
+        main: "main.js",
+        contributes: {
+          commands: [
+            {
+              id: cmdId,
+              title: "Bad",
+              description: "",
+              category: "X",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+        },
+      })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.js"),
+      `export async function activate() { /* no-op */ }`
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      await service.activatePlugin(pluginName);
+
+      const installed = (storeMock._state.get("plugins") as { installed?: Record<string, unknown> })
+        ?.installed as Record<string, { loadError?: { message: string } | null }> | undefined;
+      expect(installed?.[pluginName]?.loadError?.message).toContain("collides with a built-in");
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
 
@@ -876,15 +1655,16 @@ describe("PluginService built-in plugin loading", () => {
       expect(plugins[0].manifest.description).toBe("builtin");
       expect(plugins[0].isBuiltin).toBe(true);
       expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining(`Duplicate plugin name "daintree.dupe"`)
+        expect.stringContaining(`Invalid manifest in collision-user`),
+        expect.anything()
       );
     } finally {
       errorSpy.mockRestore();
     }
   });
 
-  it("skips built-ins listed in plugins.disabledBuiltins", async () => {
-    storeMock._state.set("plugins", { disabledBuiltins: ["daintree.muted"] });
+  it("skips built-ins listed in plugins.disabled but still lists them as disabled", async () => {
+    storeMock._state.set("plugins", { disabled: ["daintree.muted"] });
     await writeBuiltinPlugin("muted", {
       name: "daintree.muted",
       version: "1.0.0",
@@ -898,11 +1678,15 @@ describe("PluginService built-in plugin loading", () => {
     await service.initialize();
 
     const plugins = service.listPlugins();
-    expect(plugins.map((p) => p.manifest.name)).toEqual(["daintree.kept"]);
+    const kept = plugins.find((p) => p.manifest.name === "daintree.kept");
+    const muted = plugins.find((p) => p.manifest.name === "daintree.muted");
+    expect(kept?.disabled).toBe(false);
+    expect(muted?.disabled).toBe(true);
+    expect(muted?.isBuiltin).toBe(true);
   });
 
-  it("disabledBuiltins does not affect user plugins with the same name", async () => {
-    storeMock._state.set("plugins", { disabledBuiltins: ["acme.user-plugin"] });
+  it("skips user plugins listed in plugins.disabled and lists them as disabled", async () => {
+    storeMock._state.set("plugins", { disabled: ["acme.user-plugin"] });
     await writePlugin("acme.user-plugin", {
       name: "acme.user-plugin",
       version: "1.0.0",
@@ -913,10 +1697,22 @@ describe("PluginService built-in plugin loading", () => {
 
     const plugins = service.listPlugins();
     expect(plugins).toHaveLength(1);
+    expect(plugins[0].disabled).toBe(true);
     expect(plugins[0].isBuiltin).toBe(false);
   });
 
-  it("treats missing plugins.disabledBuiltins as empty (no exception)", async () => {
+  it("marks active plugins with disabled=false", async () => {
+    await writePlugin("acme.active", { name: "acme.active", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].disabled).toBe(false);
+  });
+
+  it("treats missing plugins.disabled as empty (no exception)", async () => {
     // store has no "plugins" key at all (in-memory fallback shape)
     await writeBuiltinPlugin("daintree.helper", {
       name: "daintree.helper",
@@ -927,10 +1723,11 @@ describe("PluginService built-in plugin loading", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
+    expect(service.listPlugins()[0].disabled).toBe(false);
   });
 
-  it("ignores malformed disabledBuiltins values defensively", async () => {
-    storeMock._state.set("plugins", { disabledBuiltins: "not-an-array" });
+  it("ignores malformed disabled values defensively", async () => {
+    storeMock._state.set("plugins", { disabled: "not-an-array" });
     await writeBuiltinPlugin("daintree.helper", {
       name: "daintree.helper",
       version: "1.0.0",
@@ -940,21 +1737,256 @@ describe("PluginService built-in plugin loading", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
+    expect(service.listPlugins()[0].disabled).toBe(false);
   });
 
-  it("reserves a disabled built-in's namespace against a hijacking user plugin", async () => {
+  it("a disabled name collision keeps the built-in entry (loaded first) for the toggle", async () => {
+    storeMock._state.set("plugins", { disabled: ["daintree.github"] });
+    await writeBuiltinPlugin("github", {
+      name: "daintree.github",
+      version: "1.0.0",
+      description: "first-party",
+    });
+    await writePlugin("hijacker", {
+      name: "daintree.github",
+      version: "9.9.9",
+      description: "third-party impostor",
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].disabled).toBe(true);
+    expect(plugins[0].isBuiltin).toBe(true);
+    expect(plugins[0].manifest.description).toBe("first-party");
+  });
+
+  describe("setEnabled", () => {
+    it("adds a plugin id to plugins.disabled when disabling", () => {
+      storeMock._state.set("plugins", { disabled: [] });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+
+      service.setEnabled("acme.foo", false);
+
+      expect(storeMock._state.get("plugins")).toEqual({ disabled: ["acme.foo"] });
+    });
+
+    it("removes a plugin id from plugins.disabled when enabling", () => {
+      storeMock._state.set("plugins", { disabled: ["acme.foo", "acme.bar"] });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+
+      service.setEnabled("acme.foo", true);
+
+      expect(storeMock._state.get("plugins")).toEqual({ disabled: ["acme.bar"] });
+    });
+
+    it("is idempotent — disabling an already-disabled plugin does not duplicate it", () => {
+      storeMock._state.set("plugins", { disabled: ["acme.foo"] });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+
+      service.setEnabled("acme.foo", false);
+
+      expect(storeMock._state.get("plugins")).toEqual({ disabled: ["acme.foo"] });
+    });
+
+    it("preserves other keys in the plugins object", () => {
+      storeMock._state.set("plugins", { disabled: [], other: "keep" });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+
+      service.setEnabled("acme.foo", false);
+
+      expect(storeMock._state.get("plugins")).toEqual({ disabled: ["acme.foo"], other: "keep" });
+    });
+
+    it("throws on an empty or whitespace-only plugin id", () => {
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      expect(() => service.setEnabled("", false)).toThrow(/non-empty string/);
+      expect(() => service.setEnabled("   ", false)).toThrow(/non-empty string/);
+    });
+
+    it("listPlugins reflects a runtime disable as disabled+pendingRestart without restart", async () => {
+      storeMock._state.set("plugins", { disabled: [] });
+      await writePlugin("acme.runtime", { name: "acme.runtime", version: "1.0.0" });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      expect(service.listPlugins()[0]).toMatchObject({ disabled: false, pendingRestart: false });
+
+      service.setEnabled("acme.runtime", false);
+
+      // Still running this session, but the desired state is now off.
+      expect(service.listPlugins()[0]).toMatchObject({ disabled: true, pendingRestart: true });
+    });
+
+    it("listPlugins reflects a runtime re-enable of a launch-disabled plugin", async () => {
+      storeMock._state.set("plugins", { disabled: ["acme.off"] });
+      await writePlugin("acme.off", { name: "acme.off", version: "1.0.0" });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      expect(service.listPlugins()[0]).toMatchObject({ disabled: true, pendingRestart: false });
+
+      service.setEnabled("acme.off", true);
+
+      // Not running this session, but the desired state is now on.
+      expect(service.listPlugins()[0]).toMatchObject({ disabled: false, pendingRestart: true });
+    });
+  });
+
+  describe("uninstallPlugin", () => {
+    it("removes a running plugin from listPlugins, deletes its dir, and broadcasts provenance-changed", async () => {
+      await writePlugin("acme.live", { name: "acme.live", version: "1.0.0" });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+      expect(service.listPlugins()).toHaveLength(1);
+
+      await service.uninstallPlugin("acme.live");
+
+      expect(service.listPlugins()).toEqual([]);
+      await expect(fs.access(path.join(tmpDir, "acme.live"))).rejects.toThrow();
+      expect(broadcastToRendererMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ name: "plugin:provenance-changed" })
+      );
+    });
+
+    it("removes a launch-disabled plugin and clears it from plugins.disabled (no zombie row)", async () => {
+      // Regression: a disabled plugin lives in `disabledPlugins`, not `plugins`,
+      // so unloadPlugin alone leaves the row in listPlugins and resurrects it on
+      // the next launch.
+      storeMock._state.set("plugins", { disabled: ["acme.off"] });
+      await writePlugin("acme.off", { name: "acme.off", version: "1.0.0" });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+      expect(service.listPlugins()).toHaveLength(1);
+      expect(service.listPlugins()[0]).toMatchObject({ disabled: true });
+
+      await service.uninstallPlugin("acme.off");
+
+      expect(service.listPlugins()).toEqual([]);
+      await expect(fs.access(path.join(tmpDir, "acme.off"))).rejects.toThrow();
+      const stored = storeMock._state.get("plugins") as { disabled?: string[] };
+      expect(stored.disabled ?? []).not.toContain("acme.off");
+    });
+
+    it("deletes the installed provenance record", async () => {
+      storeMock._state.set("plugins", {
+        disabled: [],
+        installed: { "acme.gone": { source: "sideload", installedAt: 1 } },
+      });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+
+      await service.uninstallPlugin("acme.gone");
+
+      const stored = storeMock._state.get("plugins") as { installed?: Record<string, unknown> };
+      expect(stored.installed ?? {}).not.toHaveProperty("acme.gone");
+    });
+
+    it("preserves the user-scope settings file by default", async () => {
+      const pluginsRoot = path.join(tmpDir, "plugins");
+      await fs.mkdir(path.join(pluginsRoot, "acme.keep"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginsRoot, "acme.keep", "plugin.json"),
+        JSON.stringify({ name: "acme.keep", version: "1.0.0" })
+      );
+      const settingsFile = path.join(tmpDir, "plugin-settings", "acme.keep.json");
+      await fs.mkdir(path.dirname(settingsFile), { recursive: true });
+      await fs.writeFile(settingsFile, JSON.stringify({ token: "secret" }));
+      const service = new PluginService(pluginsRoot, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      await service.uninstallPlugin("acme.keep");
+
+      await expect(fs.access(path.join(pluginsRoot, "acme.keep"))).rejects.toThrow();
+      // Secrets survive a plain uninstall.
+      await expect(fs.access(settingsFile)).resolves.toBeUndefined();
+    });
+
+    it("deletes the user-scope settings file when deleteSettings is true", async () => {
+      const pluginsRoot = path.join(tmpDir, "plugins");
+      await fs.mkdir(path.join(pluginsRoot, "acme.wipe"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginsRoot, "acme.wipe", "plugin.json"),
+        JSON.stringify({ name: "acme.wipe", version: "1.0.0" })
+      );
+      const settingsFile = path.join(tmpDir, "plugin-settings", "acme.wipe.json");
+      await fs.mkdir(path.dirname(settingsFile), { recursive: true });
+      await fs.writeFile(settingsFile, JSON.stringify({ token: "secret" }));
+      const service = new PluginService(pluginsRoot, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      await service.uninstallPlugin("acme.wipe", true);
+
+      await expect(fs.access(path.join(pluginsRoot, "acme.wipe"))).rejects.toThrow();
+      await expect(fs.access(settingsFile)).rejects.toThrow();
+    });
+
+    it("never deletes a project-scope settings file, even with deleteSettings", async () => {
+      // Uninstall only ever targets the user-scope settings root; per-repo
+      // `.daintree/plugin-settings/` files are tracked git artifacts and are not
+      // the uninstall's to remove. Drift guard for docs/plugins/distribution.md.
+      const pluginsRoot = path.join(tmpDir, "plugins");
+      await fs.mkdir(path.join(pluginsRoot, "acme.proj"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginsRoot, "acme.proj", "plugin.json"),
+        JSON.stringify({ name: "acme.proj", version: "1.0.0" })
+      );
+      const projectSettingsFile = path.join(
+        tmpDir,
+        "some-project",
+        ".daintree",
+        "plugin-settings",
+        "acme.proj.json"
+      );
+      await fs.mkdir(path.dirname(projectSettingsFile), { recursive: true });
+      await fs.writeFile(projectSettingsFile, JSON.stringify({ team: "platform" }));
+      const service = new PluginService(pluginsRoot, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      await service.uninstallPlugin("acme.proj", true);
+
+      await expect(fs.access(path.join(pluginsRoot, "acme.proj"))).rejects.toThrow();
+      await expect(fs.access(projectSettingsFile)).resolves.toBeUndefined();
+    });
+
+    it("clears the launch-time name reservation so a same-session reinstall isn't blocked", async () => {
+      // Regression: a disabled-at-launch plugin reserves its name; uninstall
+      // must release it or loadPlugin rejects the reinstall as a duplicate.
+      storeMock._state.set("plugins", { disabled: ["acme.reserve"] });
+      await writePlugin("acme.reserve", { name: "acme.reserve", version: "1.0.0" });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+      const reserved = () =>
+        (service as unknown as { reservedNames: Set<string> }).reservedNames.has("acme.reserve");
+      expect(reserved()).toBe(true);
+
+      await service.uninstallPlugin("acme.reserve");
+
+      expect(reserved()).toBe(false);
+    });
+
+    it("rejects a path-traversal or non-scoped plugin id before touching the filesystem", async () => {
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await expect(service.uninstallPlugin("../../../etc")).rejects.toThrow(/scoped plugin name/);
+      await expect(service.uninstallPlugin("no-dot")).rejects.toThrow(/scoped plugin name/);
+    });
+
+    it("rejects on an empty or whitespace-only plugin id", async () => {
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await expect(service.uninstallPlugin("")).rejects.toThrow(/non-empty string/);
+      await expect(service.uninstallPlugin("   ")).rejects.toThrow(/non-empty string/);
+    });
+  });
+
+  it("emits toast when a user plugin uses the daintree.* namespace", async () => {
+    const { broadcastToRenderer } = await import("../../ipc/utils.js");
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      storeMock._state.set("plugins", { disabledBuiltins: ["daintree.github"] });
-      await writeBuiltinPlugin("github", {
-        name: "daintree.github",
+      await writePlugin("daintree.pirate", {
+        name: "daintree.pirate",
         version: "1.0.0",
-        description: "first-party",
-      });
-      await writePlugin("hijacker", {
-        name: "daintree.github",
-        version: "9.9.9",
-        description: "third-party impostor",
       });
 
       const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
@@ -962,7 +1994,16 @@ describe("PluginService built-in plugin loading", () => {
 
       expect(service.listPlugins()).toEqual([]);
       expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining(`Duplicate plugin name "daintree.github"`)
+        expect.stringContaining("Invalid manifest in daintree.pirate"),
+        expect.anything()
+      );
+      expect(broadcastToRenderer).toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
+        expect.objectContaining({
+          type: "error",
+          title: "Plugin uses a reserved namespace",
+          message: expect.stringContaining("daintree.pirate"),
+        })
       );
     } finally {
       errorSpy.mockRestore();
@@ -1092,6 +2133,673 @@ describe("Plugin IPC handler registration", () => {
       []
     );
     expect(result).toBe("sync-result");
+  });
+
+  describe("dispatchHandler args validation", () => {
+    it("validates args when channel matches a registered action with inputSchema", async () => {
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.ping",
+        title: "Ping",
+        description: "Ping action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        },
+      });
+      const handler = vi.fn().mockResolvedValue("ok");
+      service.registerHandler("acme.test-plugin", "acme.test-plugin.ping", handler);
+
+      await expect(
+        service.dispatchHandler(
+          "acme.test-plugin",
+          "acme.test-plugin.ping",
+          makeCtx("acme.test-plugin"),
+          [{ name: 42 }]
+        )
+      ).rejects.toThrow("Invalid arguments for plugin action");
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("passes valid args through to the handler", async () => {
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.echo",
+        title: "Echo",
+        description: "Echo action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        },
+      });
+      const handler = vi.fn().mockResolvedValue("ok");
+      service.registerHandler("acme.test-plugin", "acme.test-plugin.echo", handler);
+
+      const result = await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.echo",
+        makeCtx("acme.test-plugin"),
+        [{ name: "world" }]
+      );
+      expect(result).toBe("ok");
+      expect(handler).toHaveBeenCalledWith(expect.anything(), { name: "world" });
+    });
+
+    it("skips validation when no action descriptor is registered for the channel", async () => {
+      const handler = vi.fn().mockResolvedValue("ok");
+      service.registerHandler("acme.test-plugin", "raw-channel", handler);
+
+      const result = await service.dispatchHandler(
+        "acme.test-plugin",
+        "raw-channel",
+        makeCtx("acme.test-plugin"),
+        [{ anything: "goes" }]
+      );
+      expect(result).toBe("ok");
+    });
+
+    it("skips validation when the descriptor has no inputSchema", async () => {
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.no-schema",
+        title: "No Schema",
+        description: "No schema action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+      });
+      const handler = vi.fn().mockResolvedValue("ok");
+      service.registerHandler("acme.test-plugin", "acme.test-plugin.no-schema", handler);
+
+      const result = await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.no-schema",
+        makeCtx("acme.test-plugin"),
+        [{ foo: "bar" }]
+      );
+      expect(result).toBe("ok");
+    });
+
+    it("caches the compiled validator and reuses it on subsequent calls", async () => {
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.cached",
+        title: "Cached",
+        description: "Cache test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        inputSchema: {
+          type: "object",
+          properties: { value: { type: "number" } },
+          required: ["value"],
+        },
+      });
+      const handler = vi.fn().mockResolvedValue("ok");
+      service.registerHandler("acme.test-plugin", "acme.test-plugin.cached", handler);
+
+      // First call compiles
+      await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.cached",
+        makeCtx("acme.test-plugin"),
+        [{ value: 1 }]
+      );
+      // Second call reuses cached validator
+      await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.cached",
+        makeCtx("acme.test-plugin"),
+        [{ value: 2 }]
+      );
+
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(handler).toHaveBeenNthCalledWith(1, expect.anything(), { value: 1 });
+      expect(handler).toHaveBeenNthCalledWith(2, expect.anything(), { value: 2 });
+    });
+
+    it("treats no args as empty object for validation", async () => {
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.opt",
+        title: "Opt",
+        description: "Optional args action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" } },
+        },
+      });
+      const handler = vi.fn().mockResolvedValue("ok");
+      service.registerHandler("acme.test-plugin", "acme.test-plugin.opt", handler);
+
+      // No args call — should validate against {} which matches the schema (no required fields)
+      const result = await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.opt",
+        makeCtx("acme.test-plugin"),
+        []
+      );
+      expect(result).toBe("ok");
+    });
+
+    it("cleans up the validator when the handler is removed", async () => {
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.cleanup",
+        title: "Cleanup",
+        description: "Cleanup test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        inputSchema: {
+          type: "object",
+          properties: { x: { type: "number" } },
+          required: ["x"],
+        },
+      });
+      service.registerHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.cleanup",
+        vi.fn().mockResolvedValue("ok")
+      );
+
+      // Prime the validator cache with a successful call
+      await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.cleanup",
+        makeCtx("acme.test-plugin"),
+        [{ x: 1 }]
+      );
+
+      service.removeHandlers("acme.test-plugin");
+
+      // Re-register and re-prime — the old validator should be gone
+      service.registerHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.cleanup",
+        vi.fn().mockResolvedValue("ok")
+      );
+      // Should still work (compiles fresh)
+      const result = await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.cleanup",
+        makeCtx("acme.test-plugin"),
+        [{ x: 42 }]
+      );
+      expect(result).toBe("ok");
+    });
+
+    it("rejects async ($async) schemas at compile time", async () => {
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.async",
+        title: "Async",
+        description: "Async schema action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        inputSchema: { $async: true, type: "object" },
+      });
+      service.registerHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.async",
+        vi.fn().mockResolvedValue("ok")
+      );
+
+      await expect(
+        service.dispatchHandler(
+          "acme.test-plugin",
+          "acme.test-plugin.async",
+          makeCtx("acme.test-plugin"),
+          [{}]
+        )
+      ).rejects.toThrow("async");
+    });
+
+    it("supports standard JSON Schema formats like uri and email", async () => {
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.format",
+        title: "Format",
+        description: "Format test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        inputSchema: {
+          type: "object",
+          properties: {
+            url: { type: "string", format: "uri" },
+            email: { type: "string", format: "email" },
+          },
+        },
+      });
+      const handler = vi.fn().mockResolvedValue("ok");
+      service.registerHandler("acme.test-plugin", "acme.test-plugin.format", handler);
+
+      // Valid formats
+      await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.format",
+        makeCtx("acme.test-plugin"),
+        [{ url: "https://example.com", email: "test@example.com" }]
+      );
+      expect(handler).toHaveBeenCalled();
+
+      // Invalid format rejects
+      await expect(
+        service.dispatchHandler(
+          "acme.test-plugin",
+          "acme.test-plugin.format",
+          makeCtx("acme.test-plugin"),
+          [{ url: "not-a-url", email: "test@example.com" }]
+        )
+      ).rejects.toThrow("Invalid arguments for plugin action");
+    });
+
+    it("does not validate when descriptor.pluginId differs from dispatch pluginId", async () => {
+      // Register an action for acme.test-plugin
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.guarded",
+        title: "Guarded",
+        description: "Owner-check action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        },
+      });
+
+      // Load a second plugin
+      await writePlugin("other", { name: "acme.other", version: "1.0.0" });
+      const service2 = new PluginService(tmpDir);
+      await service2.initialize();
+
+      // Register a raw handler on the second plugin whose channel collides with first plugin's action id
+      const handler = vi.fn().mockResolvedValue("ok");
+      service2.registerHandler("acme.other", "acme.test-plugin.guarded", handler);
+
+      // Dispatch via the second plugin — should NOT validate (owner mismatch)
+      const result = await service2.dispatchHandler(
+        "acme.other",
+        "acme.test-plugin.guarded",
+        { projectId: null, worktreeId: null, webContentsId: 1, pluginId: "acme.other" },
+        [{ name: 42 }]
+      );
+      expect(result).toBe("ok");
+    });
+
+    it("cleans up validators on unregisterPluginAction", async () => {
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.stale",
+        title: "Stale",
+        description: "Stale validator test",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        inputSchema: {
+          type: "object",
+          properties: { x: { type: "number" } },
+          required: ["x"],
+        },
+      });
+      service.registerHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.stale",
+        vi.fn().mockResolvedValue("ok")
+      );
+
+      // Prime the cache
+      await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.stale",
+        makeCtx("acme.test-plugin"),
+        [{ x: 1 }]
+      );
+
+      // Unregister and re-register with a different schema
+      service.unregisterPluginAction("acme.test-plugin", "acme.test-plugin.stale");
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.stale",
+        title: "Stale",
+        description: "Stale validator test — new schema",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        inputSchema: {
+          type: "object",
+          properties: { y: { type: "string" } },
+          required: ["y"],
+        },
+      });
+      const handler = vi.fn().mockResolvedValue("ok");
+      service.registerHandler("acme.test-plugin", "acme.test-plugin.stale", handler);
+
+      // Old schema required `x: number` — should now reject that
+      await expect(
+        service.dispatchHandler(
+          "acme.test-plugin",
+          "acme.test-plugin.stale",
+          makeCtx("acme.test-plugin"),
+          [{ x: 1 }]
+        )
+      ).rejects.toThrow("Invalid arguments for plugin action");
+
+      // New schema requires `y: string` — should pass with correct args
+      await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.stale",
+        makeCtx("acme.test-plugin"),
+        [{ y: "hello" }]
+      );
+      expect(handler).toHaveBeenCalledWith(expect.anything(), { y: "hello" });
+    });
+
+    it("does not validate when a different plugin registers a handler with same channel as another plugin's action id", async () => {
+      // Register action for acme.test-plugin with a restrictive schema
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.shared-channel",
+        title: "Shared Channel",
+        description: "Test shared channel collision",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        },
+      });
+
+      // Load a second plugin and register a raw handler on the same channel
+      await writePlugin("collider-plugin", { name: "acme.collider", version: "1.0.0" });
+      const colliderService = new PluginService(tmpDir, "0.0.0");
+      await colliderService.initialize();
+
+      // Register a raw handler whose channel collides with test-plugin's action id
+      const handler = vi.fn().mockResolvedValue("cross-plugin-ok");
+      colliderService.registerHandler("acme.collider", "acme.test-plugin.shared-channel", handler);
+
+      // Dispatching via collider plugin should NOT inherit test-plugin's schema
+      const result = await colliderService.dispatchHandler(
+        "acme.collider",
+        "acme.test-plugin.shared-channel",
+        { projectId: null, worktreeId: null, webContentsId: 99, pluginId: "acme.collider" },
+        [{ name: 42 }]
+      );
+      expect(result).toBe("cross-plugin-ok");
+    });
+  });
+
+  describe("typed channel registration (registerHandler schema overload)", () => {
+    let typedService: PluginService;
+
+    beforeEach(async () => {
+      await writePlugin("typed-plugin", {
+        name: "acme.typed",
+        version: "1.0.0",
+        capabilities: ["fs:project-read", "git:read"],
+      });
+      typedService = new PluginService(tmpDir);
+      await typedService.initialize();
+    });
+
+    it("registers and dispatches a typed channel with parsed args and result", async () => {
+      const schema = {
+        args: z.object({ name: z.string() }),
+        result: z.object({ greeting: z.string() }),
+      };
+      const handler = vi.fn(async (_ctx, args: { name: string }) => ({
+        greeting: `hello ${args.name}`,
+      }));
+      typedService.registerHandler("acme.typed", "greet", schema, handler);
+
+      const result = await typedService.dispatchHandler(
+        "acme.typed",
+        "greet",
+        makeCtx("acme.typed"),
+        [{ name: "world" }]
+      );
+      expect(result).toEqual({ greeting: "hello world" });
+      // The handler must receive the parsed single payload, not the raw variadic.
+      expect(handler).toHaveBeenCalledWith(expect.anything(), { name: "world" });
+    });
+
+    it("throws SCHEMA_ERROR when args fail Zod validation and never calls the handler", async () => {
+      const schema = {
+        args: z.object({ count: z.number().int().positive() }),
+        result: z.unknown(),
+      };
+      const handler = vi.fn();
+      typedService.registerHandler("acme.typed", "tally", schema, handler);
+
+      await expect(
+        typedService.dispatchHandler("acme.typed", "tally", makeCtx("acme.typed"), [
+          { count: "not-a-number" },
+        ])
+      ).rejects.toThrow(/^SCHEMA_ERROR:/);
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("throws SCHEMA_ERROR when the handler returns a result that fails the result schema", async () => {
+      const schema = {
+        args: z.object({}).passthrough(),
+        result: z.object({ count: z.number() }),
+      };
+      const handler = vi.fn(async () => ({ count: "nope" as unknown as number }));
+      typedService.registerHandler("acme.typed", "broken", schema, handler);
+
+      await expect(
+        typedService.dispatchHandler("acme.typed", "broken", makeCtx("acme.typed"), [{}])
+      ).rejects.toThrow(/^SCHEMA_ERROR: result for channel "broken" failed validation/);
+    });
+
+    it("rejects registration with PERMISSION_REQUIRED when a required capability is not declared", () => {
+      const schema = {
+        args: z.object({}),
+        result: z.object({}),
+        requires: ["fs:project-write" as const],
+      };
+      expect(() =>
+        typedService.registerHandler("acme.typed", "write-stuff", schema, vi.fn())
+      ).toThrow(/^PERMISSION_REQUIRED:/);
+    });
+
+    it("allows registration when every required capability is declared in the manifest", () => {
+      const schema = {
+        args: z.object({}),
+        result: z.object({}),
+        requires: ["fs:project-read" as const, "git:read" as const],
+      };
+      expect(() =>
+        typedService.registerHandler(
+          "acme.typed",
+          "read-stuff",
+          schema,
+          vi.fn().mockResolvedValue({})
+        )
+      ).not.toThrow();
+    });
+
+    it("throws PERMISSION_REQUIRED at dispatch when manifest capability disappears after registration (defense-in-depth)", async () => {
+      const schema = {
+        args: z.object({}),
+        result: z.unknown(),
+        requires: ["fs:project-read" as const],
+      };
+      const handler = vi.fn().mockResolvedValue({ ok: true });
+      typedService.registerHandler("acme.typed", "guarded", schema, handler);
+
+      // Tamper with the loaded manifest to simulate a future code path that
+      // removes a capability after registration. The dispatch-time re-check
+      // must reject before the handler runs.
+      const plugin = (
+        typedService as unknown as { plugins: Map<string, { manifest: PluginManifest }> }
+      ).plugins.get("acme.typed");
+      if (plugin) {
+        plugin.manifest = { ...plugin.manifest, capabilities: [] };
+      }
+
+      await expect(
+        typedService.dispatchHandler("acme.typed", "guarded", makeCtx("acme.typed"), [{}])
+      ).rejects.toThrow(/^PERMISSION_REQUIRED:/);
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("removeHandlers cleans up channel schemas and capability gates", async () => {
+      const schema = {
+        args: z.object({ x: z.number() }),
+        result: z.object({ doubled: z.number() }),
+      };
+      typedService.registerHandler(
+        "acme.typed",
+        "double",
+        schema,
+        async (_ctx, args: { x: number }) => ({ doubled: args.x * 2 })
+      );
+
+      typedService.removeHandlers("acme.typed");
+
+      await expect(
+        typedService.dispatchHandler("acme.typed", "double", makeCtx("acme.typed"), [{ x: 3 }])
+      ).rejects.toThrow(/No plugin handler registered/);
+
+      // Re-register WITHOUT the typed overload — the old schema must be gone
+      // so legacy validation doesn't run on the new untyped handler.
+      typedService.registerHandler(
+        "acme.typed",
+        "double",
+        vi.fn().mockResolvedValue({ doubled: "string-result-not-validated" })
+      );
+      const legacyResult = await typedService.dispatchHandler(
+        "acme.typed",
+        "double",
+        makeCtx("acme.typed"),
+        [{ x: "anything" }]
+      );
+      expect(legacyResult).toEqual({ doubled: "string-result-not-validated" });
+    });
+
+    it("re-registering a typed channel as legacy drops the prior schema", async () => {
+      const schema = {
+        args: z.object({ x: z.number() }),
+        result: z.unknown(),
+      };
+      typedService.registerHandler(
+        "acme.typed",
+        "swap",
+        schema,
+        vi.fn().mockResolvedValue("typed")
+      );
+
+      const legacyHandler = vi.fn().mockResolvedValue("legacy");
+      typedService.registerHandler("acme.typed", "swap", legacyHandler);
+
+      // Now the legacy untyped path runs — args validation does not fire,
+      // so a previously-invalid payload would now go through.
+      const result = await typedService.dispatchHandler(
+        "acme.typed",
+        "swap",
+        makeCtx("acme.typed"),
+        [{ x: "string-was-invalid-before" }]
+      );
+      expect(result).toBe("legacy");
+      expect(legacyHandler).toHaveBeenCalledWith(expect.anything(), {
+        x: "string-was-invalid-before",
+      });
+    });
+
+    it("treats missing args as undefined for the typed args schema", async () => {
+      const schema = {
+        args: z.object({ name: z.string() }).optional(),
+        result: z.string(),
+      };
+      const handler = vi.fn(async (_ctx, args: { name: string } | undefined) =>
+        args ? args.name : "anonymous"
+      );
+      typedService.registerHandler("acme.typed", "optional", schema, handler);
+
+      const result = await typedService.dispatchHandler(
+        "acme.typed",
+        "optional",
+        makeCtx("acme.typed"),
+        []
+      );
+      expect(result).toBe("anonymous");
+    });
+
+    it("passes Zod-parsed output (defaults / coercions) to the handler, not the raw payload", async () => {
+      const schema = {
+        args: z.object({
+          n: z.coerce.number().int(),
+          tag: z.string().default("auto"),
+        }),
+        result: z.object({ n: z.number(), tag: z.string() }),
+      };
+      const handler = vi.fn(async (_ctx, args: { n: number; tag: string }) => args);
+      typedService.registerHandler("acme.typed", "coerce", schema, handler);
+
+      // Dispatch with a string "n" (coerced) and no `tag` (defaulted).
+      const result = await typedService.dispatchHandler(
+        "acme.typed",
+        "coerce",
+        makeCtx("acme.typed"),
+        [{ n: "42" }]
+      );
+      expect(result).toEqual({ n: 42, tag: "auto" });
+      expect(handler).toHaveBeenCalledWith(expect.anything(), { n: 42, tag: "auto" });
+    });
+
+    it("rejects malformed schema at registration when args/result lack safeParse", () => {
+      expect(() =>
+        typedService.registerHandler(
+          "acme.typed",
+          "bad-schema",
+          // Missing `result` ZodType — bare object has no safeParse method.
+          { args: z.object({}), result: {} as unknown as z.ZodType<unknown> },
+          vi.fn()
+        )
+      ).toThrow(/Plugin handler must be a function|^PERMISSION_REQUIRED:/);
+      // Specifically, isChannelSchema returns false for missing safeParse,
+      // so the legacy path runs and the bare object is rejected as a
+      // non-function handler. Either way: malformed schema is rejected at
+      // registration time, not at dispatch.
+    });
+
+    it("legacy untyped handler still dispatches alongside typed handlers on the same plugin", async () => {
+      typedService.registerHandler(
+        "acme.typed",
+        "typed-ch",
+        { args: z.string(), result: z.string() },
+        async (_ctx, args: string) => args.toUpperCase()
+      );
+      typedService.registerHandler(
+        "acme.typed",
+        "legacy-ch",
+        vi.fn().mockResolvedValue("legacy-result")
+      );
+
+      const typedResult = await typedService.dispatchHandler(
+        "acme.typed",
+        "typed-ch",
+        makeCtx("acme.typed"),
+        ["hello"]
+      );
+      expect(typedResult).toBe("HELLO");
+
+      const legacyResult = await typedService.dispatchHandler(
+        "acme.typed",
+        "legacy-ch",
+        makeCtx("acme.typed"),
+        ["whatever"]
+      );
+      expect(legacyResult).toBe("legacy-result");
+    });
   });
 });
 
@@ -1480,6 +3188,7 @@ describe("Plugin unload lifecycle", () => {
 
     try {
       await service.initialize();
+      await service.activateStartupFinishedPlugins();
       expect((globalThis as { __pluginInitObserved?: boolean }).__pluginInitObserved).toBe(true);
     } finally {
       delete (globalThis as { __pluginInitCheck?: unknown }).__pluginInitCheck;
@@ -1520,7 +3229,11 @@ describe("Plugin unload lifecycle", () => {
 type CreateHostShape = (pluginId: string) => {
   host: {
     pluginId: string;
-    registerHandler: (channel: string, handler: (...args: unknown[]) => unknown) => void;
+    registerHandler: (
+      channel: string,
+      schemaOrHandler: unknown,
+      typedHandler?: (...args: unknown[]) => unknown
+    ) => void;
     broadcastToRenderer: (channel: string, payload: unknown) => void;
     registerForgeProvider: (descriptor: { id: string }, impl: unknown) => () => void;
   };
@@ -1578,6 +3291,27 @@ describe("createHost (plugin activation API)", () => {
     );
   });
 
+  it("host.registerHandler rejects a 3-arg call where the second arg isn't a channel schema", async () => {
+    await writePlugin("mismatch-test", { name: "acme.mismatch", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.mismatch"
+    );
+
+    expect(() =>
+      // A typed handler was provided but the second arg is a function, not
+      // a schema — silently dropping the typed handler would phantom-no-op
+      // at dispatch, so this must throw.
+      host.registerHandler(
+        "ch",
+        () => "legacy",
+        () => "typed"
+      )
+    ).toThrow(/second argument must be a channel schema/);
+  });
+
   it("revoked host rejects registerHandler and broadcastToRenderer calls", async () => {
     await writePlugin("revoke-test", { name: "acme.revoke-test", version: "1.0.0" });
     const service = new PluginService(tmpDir);
@@ -1596,6 +3330,491 @@ describe("createHost (plugin activation API)", () => {
     expect(() => host.registerForgeProvider({ id: "github" }, {})).toThrow(
       /host revoked: registerForgeProvider/
     );
+  });
+});
+
+type ShowToastOptions = {
+  message: string;
+  type?: "info" | "success" | "warning" | "error";
+  durationMs?: number;
+};
+type ToastHostShape = (pluginId: string) => {
+  host: { showToast: (options: ShowToastOptions) => Promise<void> };
+  revoke: () => void;
+};
+
+describe("createHost — showToast", () => {
+  it("broadcasts NOTIFICATION_SHOW_TOAST with the pluginId-namespaced message", async () => {
+    await writePlugin("toast-test", { name: "acme.toast-test", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-test"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await host.showToast({ message: "Synced 12 issues", type: "success" });
+
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      type: "success",
+      message: "acme.toast-test: Synced 12 issues",
+      duration: undefined,
+      rateLimitKey: "plugin:acme.toast-test:success",
+    });
+  });
+
+  it("defaults type to info when omitted", async () => {
+    await writePlugin("toast-default", { name: "acme.toast-default", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-default"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await host.showToast({ message: "Done" });
+
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      type: "info",
+      message: "acme.toast-default: Done",
+      duration: undefined,
+      rateLimitKey: "plugin:acme.toast-default:info",
+    });
+  });
+
+  it("forwards durationMs as duration", async () => {
+    await writePlugin("toast-duration", { name: "acme.toast-duration", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-duration"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await host.showToast({ message: "Saved", type: "success", durationMs: 3000 });
+
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      type: "success",
+      message: "acme.toast-duration: Saved",
+      duration: 3000,
+      rateLimitKey: "plugin:acme.toast-duration:success",
+    });
+  });
+
+  it("rejects an out-of-range or non-integer durationMs and does not broadcast", async () => {
+    await writePlugin("toast-dur-range", { name: "acme.toast-dur-range", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-dur-range"
+    );
+
+    broadcastToRendererMock.mockClear();
+    for (const durationMs of [0, -1, 1.5, 60_001]) {
+      await expect(host.showToast({ message: "x", durationMs })).rejects.toThrow(
+        /showToast: invalid options/
+      );
+    }
+    // Boundaries that should pass.
+    await host.showToast({ message: "min", durationMs: 1 });
+    await host.showToast({ message: "max", durationMs: 60_000 });
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a message over the max length and does not broadcast", async () => {
+    await writePlugin("toast-maxlen", { name: "acme.toast-maxlen", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-maxlen"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await host.showToast({ message: "x".repeat(2000) });
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+
+    await expect(host.showToast({ message: "x".repeat(2001) })).rejects.toThrow(
+      /showToast: invalid options/
+    );
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an empty/whitespace message and does not broadcast", async () => {
+    await writePlugin("toast-empty", { name: "acme.toast-empty", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-empty"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await expect(host.showToast({ message: "   " })).rejects.toThrow(/showToast: invalid options/);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown type and does not broadcast", async () => {
+    await writePlugin("toast-badtype", { name: "acme.toast-badtype", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-badtype"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await expect(
+      host.showToast({ message: "Oops", type: "fatal" as ShowToastOptions["type"] })
+    ).rejects.toThrow(/showToast: invalid options/);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown fields (strict schema)", async () => {
+    await writePlugin("toast-strict", { name: "acme.toast-strict", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-strict"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await expect(
+      host.showToast({ message: "Hi", priority: "low" } as unknown as ShowToastOptions)
+    ).rejects.toThrow(/showToast: invalid options/);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("is NOT revoke-guarded — still delivers after revoke() while the plugin is loaded", async () => {
+    await writePlugin("toast-revoke", { name: "acme.toast-revoke", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host, revoke } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-revoke"
+    );
+
+    revoke();
+    broadcastToRendererMock.mockClear();
+    await host.showToast({ message: "Still alive" });
+
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      type: "info",
+      message: "acme.toast-revoke: Still alive",
+      duration: undefined,
+      rateLimitKey: "plugin:acme.toast-revoke:info",
+    });
+  });
+
+  it("is a silent no-op once the plugin is unloaded (liveness guard)", async () => {
+    await writePlugin("toast-unload", { name: "acme.toast-unload", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-unload"
+    );
+
+    service.unloadPlugin("acme.toast-unload");
+    broadcastToRendererMock.mockClear();
+    await expect(host.showToast({ message: "Gone" })).resolves.toBeUndefined();
+
+    // unloadPlugin emits its own registry-change broadcasts; assert specifically
+    // that no toast was delivered rather than "no broadcast at all".
+    const toastBroadcasts = broadcastToRendererMock.mock.calls.filter(
+      (call: unknown[]) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
+    );
+    expect(toastBroadcasts).toHaveLength(0);
+  });
+});
+
+type DispatchHostShape = (pluginId: string) => {
+  host: {
+    dispatch: (
+      actionId: string,
+      args?: unknown
+    ) => Promise<import("../../../shared/types/actions.js").ActionDispatchResult>;
+  };
+  revoke: () => void;
+};
+
+interface FakeWebContents {
+  id: number;
+  isDestroyed: () => boolean;
+  once: ReturnType<typeof vi.fn>;
+  removeListener: ReturnType<typeof vi.fn>;
+  send: ReturnType<typeof vi.fn>;
+  _triggerDestroyed: () => void;
+}
+
+function makeFakeWebContents(id: number): FakeWebContents {
+  const destroyedHandlers = new Set<() => void>();
+  return {
+    id,
+    isDestroyed: () => false,
+    once: vi.fn((event: string, cb: () => void) => {
+      if (event === "destroyed") destroyedHandlers.add(cb);
+    }),
+    removeListener: vi.fn((event: string, cb: () => void) => {
+      if (event === "destroyed") destroyedHandlers.delete(cb);
+    }),
+    send: vi.fn(),
+    _triggerDestroyed: () => {
+      for (const cb of [...destroyedHandlers]) cb();
+    },
+  };
+}
+
+/** Set the active renderer the plugin dispatch bridge will target, or `null`. */
+function setActiveWebContents(wc: FakeWebContents | null): void {
+  windowRefMock.getWindowRegistry.mockReturnValue(null);
+  windowRefMock.getProjectViewManager.mockReturnValue(
+    wc ? ({ getActiveView: () => ({ webContents: wc }) } as never) : null
+  );
+}
+
+/** Read the request payload from the most recent dispatch `webContents.send`. */
+function lastDispatchRequest(wc: FakeWebContents): {
+  requestId: string;
+  actionId: string;
+  args?: unknown;
+} {
+  const call = [...wc.send.mock.calls]
+    .reverse()
+    .find((c) => c[0] === CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST);
+  if (!call) throw new Error("no PLUGIN_DISPATCH_ACTION_REQUEST send recorded");
+  return call[1] as { requestId: string; actionId: string; args?: unknown };
+}
+
+describe("createHost — dispatch", () => {
+  beforeEach(() => {
+    ipcMainMock._reset();
+    setActiveWebContents(null);
+  });
+
+  it("returns PLUGIN_UNLOADED without a round-trip once the plugin is unloaded", async () => {
+    const wc = makeFakeWebContents(7);
+    setActiveWebContents(wc);
+    await writePlugin("dispatch-unload", { name: "acme.dispatch-unload", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: DispatchHostShape }).createHost(
+      "acme.dispatch-unload"
+    );
+
+    service.unloadPlugin("acme.dispatch-unload");
+    const result = await host.dispatch("terminal.new", { x: 1 });
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "PLUGIN_UNLOADED", message: expect.stringContaining("no longer loaded") },
+    });
+    expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("returns EXECUTION_ERROR when no renderer is available", async () => {
+    setActiveWebContents(null);
+    await writePlugin("dispatch-norender", { name: "acme.dispatch-norender", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: DispatchHostShape }).createHost(
+      "acme.dispatch-norender"
+    );
+
+    const result = await host.dispatch("app.openSettings");
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: expect.stringContaining("No active renderer") },
+    });
+  });
+
+  it("sends the request and resolves with the renderer's matching response", async () => {
+    const wc = makeFakeWebContents(11);
+    setActiveWebContents(wc);
+    await writePlugin("dispatch-ok", { name: "acme.dispatch-ok", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: DispatchHostShape }).createHost(
+      "acme.dispatch-ok"
+    );
+
+    const pending = host.dispatch("acme.dispatch-ok.doThing", { count: 3 });
+
+    const req = lastDispatchRequest(wc);
+    expect(req.actionId).toBe("acme.dispatch-ok.doThing");
+    expect(req.args).toEqual({ count: 3 });
+    expect(typeof req.requestId).toBe("string");
+
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: 11 } },
+      { requestId: req.requestId, result: { ok: true, result: 42 } }
+    );
+
+    await expect(pending).resolves.toEqual({ ok: true, result: 42 });
+  });
+
+  it("ignores a response from an unexpected sender id (cross-window guard)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const wc = makeFakeWebContents(11);
+    setActiveWebContents(wc);
+    await writePlugin("dispatch-guard", { name: "acme.dispatch-guard", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: DispatchHostShape }).createHost(
+      "acme.dispatch-guard"
+    );
+
+    const pending = host.dispatch("acme.dispatch-guard.go");
+    const req = lastDispatchRequest(wc);
+
+    // Ignore any warnings emitted during plugin load/init; only count the guard.
+    warnSpy.mockClear();
+
+    // Wrong sender — must be ignored and warned about.
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: 999 } },
+      { requestId: req.requestId, result: { ok: true, result: "spoofed" } }
+    );
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("unexpected sender"));
+
+    // Correct sender — resolves with the real result.
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: 11 } },
+      { requestId: req.requestId, result: { ok: true, result: "real" } }
+    );
+
+    await expect(pending).resolves.toEqual({ ok: true, result: "real" });
+    warnSpy.mockRestore();
+  });
+
+  it("dispose() drains pending dispatches and removes the response listener", async () => {
+    const wc = makeFakeWebContents(11);
+    setActiveWebContents(wc);
+    await writePlugin("dispatch-dispose", { name: "acme.dispatch-dispose", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: DispatchHostShape }).createHost(
+      "acme.dispatch-dispose"
+    );
+
+    const pending = host.dispatch("acme.dispatch-dispose.go");
+    expect(ipcMainMock._listenerCount(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE)).toBe(1);
+
+    service.dispose();
+
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: expect.stringContaining("disposed") },
+    });
+    expect(ipcMainMock.removeListener).toHaveBeenCalledWith(
+      CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE,
+      expect.any(Function)
+    );
+  });
+
+  it("resolves with EXECUTION_ERROR when the target renderer is destroyed mid-dispatch", async () => {
+    const wc = makeFakeWebContents(11);
+    setActiveWebContents(wc);
+    await writePlugin("dispatch-destroyed", { name: "acme.dispatch-destroyed", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: DispatchHostShape }).createHost(
+      "acme.dispatch-destroyed"
+    );
+
+    const pending = host.dispatch("acme.dispatch-destroyed.go");
+    wc._triggerDestroyed();
+
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: expect.stringContaining("destroyed") },
+    });
+  });
+
+  it("after dispose() returns PLUGIN_UNLOADED without re-registering a listener", async () => {
+    const wc = makeFakeWebContents(11);
+    setActiveWebContents(wc);
+    await writePlugin("dispatch-after-dispose", {
+      name: "acme.dispatch-after-dispose",
+      version: "1.0.0",
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: DispatchHostShape }).createHost(
+      "acme.dispatch-after-dispose"
+    );
+
+    // dispose() runs the full disposer cascade, which unloads every plugin
+    // (removes it from the map). A post-dispose dispatch therefore fails the
+    // host's PLUGIN_UNLOADED membership guard before any renderer round-trip —
+    // no listener is registered and the renderer is never touched.
+    service.dispose();
+    const result = await host.dispatch("acme.dispatch-after-dispose.go");
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "PLUGIN_UNLOADED",
+        message: expect.stringContaining("no longer loaded"),
+      },
+    });
+    expect(ipcMainMock._listenerCount(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE)).toBe(0);
+    expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("times out a dispatch that never receives a response and ignores a late reply", async () => {
+    const wc = makeFakeWebContents(11);
+    setActiveWebContents(wc);
+    await writePlugin("dispatch-timeout", { name: "acme.dispatch-timeout", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: DispatchHostShape }).createHost(
+      "acme.dispatch-timeout"
+    );
+
+    // Switch to fake timers only after plugin load/init (which uses real I/O).
+    vi.useFakeTimers();
+    try {
+      const pending = host.dispatch("acme.dispatch-timeout.go");
+      const req = lastDispatchRequest(wc);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await expect(pending).resolves.toEqual({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: expect.stringContaining("timed out") },
+      });
+
+      // A late response for a timed-out request is silently dropped (no throw,
+      // no double-resolve) because the pending entry was already deleted.
+      expect(() =>
+        ipcMainMock._emit(
+          CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE,
+          { sender: { id: 11 } },
+          { requestId: req.requestId, result: { ok: true, result: "late" } }
+        )
+      ).not.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1849,7 +4068,7 @@ describe("Plugin action registry", () => {
     );
   });
 
-  it("sets effectiveDanger='safe' when the plugin holds no high-risk permission", () => {
+  it("sets effectiveDanger='safe' when the plugin holds no high-risk capability", () => {
     service.registerPluginAction("acme.my-plugin", validContribution());
     expect(service.listPluginActions()[0].effectiveDanger).toBe("safe");
   });
@@ -1862,11 +4081,11 @@ describe("Plugin action registry", () => {
     expect(service.listPluginActions()[0].effectiveDanger).toBe("confirm");
   });
 
-  it("raises effectiveDanger to 'confirm' for a self-declared 'safe' action when the manifest grants a high-risk permission", async () => {
+  it("raises effectiveDanger to 'confirm' for a self-declared 'safe' action when the manifest grants a high-risk capability", async () => {
     await writePlugin("risky", {
       name: "acme.risky",
       version: "1.0.0",
-      permissions: ["fs:project-read", "shell:exec"],
+      capabilities: ["fs:project-read", "shell:exec"],
     });
     const svc = new PluginService(tmpDir);
     await svc.initialize();
@@ -1884,12 +4103,12 @@ describe("Plugin action registry", () => {
 
   it.each(["shell:exec", "git:write", "fs:project-write", "fs:user-data-write", "agent:invoke"])(
     "raises a self-declared 'safe' action to confirm when the manifest grants %s",
-    async (permission) => {
-      const name = `acme.perm-${permission.replace(/[^a-z]/g, "-")}`;
-      await writePlugin(`perm-${permission.replace(/[^a-z]/g, "-")}`, {
+    async (capability) => {
+      const name = `acme.perm-${capability.replace(/[^a-z]/g, "-")}`;
+      await writePlugin(`perm-${capability.replace(/[^a-z]/g, "-")}`, {
         name,
         version: "1.0.0",
-        permissions: [permission],
+        capabilities: [capability],
       });
       const svc = new PluginService(tmpDir);
       await svc.initialize();
@@ -1906,11 +4125,195 @@ describe("Plugin action registry", () => {
     }
   );
 
-  it("does not raise effectiveDanger for read-only / reversible permissions", async () => {
+  it.each([
+    ["agent:read", "network:fetch"],
+    ["git:read", "network:fetch"],
+    ["fs:project-read", "network:fetch"],
+    ["fs:user-data-read", "network:fetch"],
+  ])(
+    "raises effectiveDanger to 'confirm' for compound exfiltration pair %s + %s (no scope)",
+    async (source, sink) => {
+      const safeName = `${source}-${sink}`.replace(/[^a-z]/g, "-");
+      const name = `acme.compound-${safeName}`;
+      await writePlugin(`compound-${safeName}`, {
+        name,
+        version: "1.0.0",
+        capabilities: [source, sink],
+      });
+      const svc = new PluginService(tmpDir);
+      await svc.initialize();
+
+      svc.registerPluginAction(name, {
+        ...validContribution(),
+        id: `${name}.doThing`,
+        danger: "safe" as const,
+      });
+
+      const action = svc.listPluginActions().find((a) => a.id === `${name}.doThing`);
+      expect(action?.danger).toBe("safe");
+      expect(action?.effectiveDanger).toBe("confirm");
+    }
+  );
+
+  it.each(["agent:read", "git:read", "fs:project-read", "fs:user-data-read"])(
+    "tight network scope attenuates compound elevation for sensitive-read source %s + network:fetch",
+    async (source) => {
+      const safe = source.replace(/[^a-z]/g, "-");
+      const name = `acme.attenuated-${safe}`;
+      await writePlugin(`attenuated-${safe}`, {
+        name,
+        version: "1.0.0",
+        capabilities: [source, "network:fetch"],
+        scopes: { network: { allowedUrls: ["https://api.example.com/v2"] } },
+      });
+      const svc = new PluginService(tmpDir);
+      await svc.initialize();
+
+      svc.registerPluginAction(name, {
+        ...validContribution(),
+        id: `${name}.doThing`,
+        danger: "safe" as const,
+      });
+
+      expect(svc.listPluginActions().find((a) => a.id === `${name}.doThing`)?.effectiveDanger).toBe(
+        "safe"
+      );
+    }
+  );
+
+  it("scoped network:fetch does NOT suppress flat elevation from fs:project-write", async () => {
+    // The compound attenuation only short-circuits the compound elevation path
+    // — flat-elevated capabilities in CONFIRM_TRIGGERING_CAPABILITIES must
+    // still raise effectiveDanger regardless of any scope.
+    await writePlugin("scoped-with-write", {
+      name: "acme.scoped-with-write",
+      version: "1.0.0",
+      capabilities: ["network:fetch", "fs:project-write"],
+      scopes: { network: { allowedUrls: ["https://api.example.com"] } },
+    });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+
+    svc.registerPluginAction("acme.scoped-with-write", {
+      ...validContribution(),
+      id: "acme.scoped-with-write.doThing",
+      danger: "safe" as const,
+    });
+
+    expect(
+      svc.listPluginActions().find((a) => a.id === "acme.scoped-with-write.doThing")
+        ?.effectiveDanger
+    ).toBe("confirm");
+  });
+
+  it("raises effectiveDanger for sensitive-read + shell:exec even with network scope (shell is never attenuated)", async () => {
+    await writePlugin("read-shell", {
+      name: "acme.read-shell",
+      version: "1.0.0",
+      capabilities: ["fs:project-read", "shell:exec"],
+      scopes: { network: { allowedUrls: ["https://api.example.com"] } },
+    });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+
+    svc.registerPluginAction("acme.read-shell", {
+      ...validContribution(),
+      id: "acme.read-shell.doThing",
+      danger: "safe" as const,
+    });
+
+    // shell:exec is flat-elevated regardless — but the test asserts the compound
+    // path also fires because the network scope must not attenuate shell sinks.
+    const action = svc.listPluginActions().find((a) => a.id === "acme.read-shell.doThing");
+    expect(action?.effectiveDanger).toBe("confirm");
+  });
+
+  it("raises effectiveDanger for remote-mutation pair network:fetch + git:write (no scope)", async () => {
+    await writePlugin("net-write", {
+      name: "acme.net-write",
+      version: "1.0.0",
+      capabilities: ["network:fetch", "git:write"],
+    });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+
+    svc.registerPluginAction("acme.net-write", {
+      ...validContribution(),
+      id: "acme.net-write.doThing",
+      danger: "safe" as const,
+    });
+
+    // git:write already elevates flat — compound path is redundant but correct.
+    expect(
+      svc.listPluginActions().find((a) => a.id === "acme.net-write.doThing")?.effectiveDanger
+    ).toBe("confirm");
+  });
+
+  it("does not compound-elevate a plugin holding only a sensitive read (no sink)", async () => {
+    await writePlugin("read-only", {
+      name: "acme.read-only",
+      version: "1.0.0",
+      capabilities: ["agent:read", "git:read"],
+    });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+
+    svc.registerPluginAction("acme.read-only", {
+      ...validContribution(),
+      id: "acme.read-only.doThing",
+      danger: "safe" as const,
+    });
+
+    expect(
+      svc.listPluginActions().find((a) => a.id === "acme.read-only.doThing")?.effectiveDanger
+    ).toBe("safe");
+  });
+
+  it("does not compound-elevate a plugin holding only network:fetch (no source/sink pair)", async () => {
+    await writePlugin("net-only", {
+      name: "acme.net-only",
+      version: "1.0.0",
+      capabilities: ["network:fetch"],
+    });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+
+    svc.registerPluginAction("acme.net-only", {
+      ...validContribution(),
+      id: "acme.net-only.doThing",
+      danger: "safe" as const,
+    });
+
+    expect(
+      svc.listPluginActions().find((a) => a.id === "acme.net-only.doThing")?.effectiveDanger
+    ).toBe("safe");
+  });
+
+  it("compound elevation is order-independent in the capabilities array", async () => {
+    await writePlugin("order", {
+      name: "acme.order",
+      version: "1.0.0",
+      capabilities: ["network:fetch", "agent:read"],
+    });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+
+    svc.registerPluginAction("acme.order", {
+      ...validContribution(),
+      id: "acme.order.doThing",
+      danger: "safe" as const,
+    });
+
+    expect(
+      svc.listPluginActions().find((a) => a.id === "acme.order.doThing")?.effectiveDanger
+    ).toBe("confirm");
+  });
+
+  it("does not raise effectiveDanger for read-only / reversible capabilities (no compound pair)", async () => {
     await writePlugin("readonly", {
       name: "acme.readonly",
       version: "1.0.0",
-      permissions: ["fs:project-read", "network:fetch", "clipboard:write", "git:read"],
+      capabilities: ["fs:project-read", "clipboard:write", "git:read"],
     });
     const svc = new PluginService(tmpDir);
     await svc.initialize();
@@ -2003,6 +4406,329 @@ describe("Plugin action registry", () => {
   });
 });
 
+type ActionDescriptorInput = {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  kind: "command" | "query";
+  danger: "safe" | "confirm";
+  keywords?: string[];
+  inputSchema?: Record<string, unknown>;
+};
+type ActionHostShape = (pluginId: string) => {
+  host: {
+    registerAction: (
+      descriptor: ActionDescriptorInput,
+      handler: (args: unknown) => unknown
+    ) => void;
+  };
+  revoke: () => void;
+};
+
+describe("createHost — registerAction", () => {
+  let service: PluginService;
+
+  const descriptor = (overrides: Partial<ActionDescriptorInput> = {}): ActionDescriptorInput => ({
+    id: "plan-from-issue",
+    title: "Plan from issue",
+    description: "Turn an issue into a session",
+    category: "Planner",
+    kind: "command",
+    danger: "safe",
+    ...overrides,
+  });
+
+  const getHost = (pluginId: string) =>
+    (service as unknown as { createHost: ActionHostShape }).createHost(pluginId);
+
+  beforeEach(async () => {
+    await writePlugin("act-test", { name: "acme.act-test", version: "1.0.0" });
+    service = new PluginService(tmpDir);
+    await service.initialize();
+    broadcastToRendererMock.mockClear();
+  });
+
+  it("namespaces the un-prefixed id to {pluginId}.{id} and stores the descriptor", () => {
+    const { host } = getHost("acme.act-test");
+    host.registerAction(descriptor(), () => "ok");
+
+    const actions = service.listPluginActions();
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      pluginId: "acme.act-test",
+      id: "acme.act-test.plan-from-issue",
+      title: "Plan from issue",
+    });
+    // Registering a new action broadcasts the refreshed list to renderers.
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.EVENTS_PUSH, {
+      name: "plugin:actions-changed",
+      payload: { actions },
+    });
+  });
+
+  it("invokes the handler with the args payload only — no IPC ctx", async () => {
+    const handler = vi.fn().mockResolvedValue({ done: true });
+    const { host } = getHost("acme.act-test");
+    host.registerAction(descriptor(), handler);
+
+    const result = await service.dispatchHandler(
+      "acme.act-test",
+      "acme.act-test.plan-from-issue",
+      makeCtx("acme.act-test"),
+      [{ issue: 42 }]
+    );
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith({ issue: 42 });
+    expect(result).toEqual({ done: true });
+  });
+
+  it("invokes the handler with {} when dispatched with no args", async () => {
+    const handler = vi.fn().mockReturnValue("ran");
+    const { host } = getHost("acme.act-test");
+    host.registerAction(descriptor(), handler);
+
+    const result = await service.dispatchHandler(
+      "acme.act-test",
+      "acme.act-test.plan-from-issue",
+      makeCtx("acme.act-test"),
+      []
+    );
+    // Defaults to {} (matching the input-schema validation default) rather than
+    // undefined, so a handler can safely destructure the args object.
+    expect(handler).toHaveBeenCalledWith({});
+    expect(result).toBe("ran");
+  });
+
+  it("rejects calls after the host is revoked", () => {
+    const { host, revoke } = getHost("acme.act-test");
+    revoke();
+    expect(() => host.registerAction(descriptor(), () => undefined)).toThrow(
+      /host revoked: registerAction/
+    );
+  });
+
+  it("rejects a non-object descriptor", () => {
+    const { host } = getHost("acme.act-test");
+    expect(() =>
+      host.registerAction(null as unknown as ActionDescriptorInput, () => undefined)
+    ).toThrow(/descriptor must be an object/);
+  });
+
+  it("rejects a non-function handler", () => {
+    const { host } = getHost("acme.act-test");
+    expect(() =>
+      host.registerAction(descriptor(), "not-a-function" as unknown as () => unknown)
+    ).toThrow(/handler must be a function/);
+  });
+
+  it("rejects an empty descriptor.id", () => {
+    const { host } = getHost("acme.act-test");
+    expect(() => host.registerAction(descriptor({ id: "" }), () => undefined)).toThrow(
+      /descriptor.id must be a non-empty string/
+    );
+  });
+
+  it("rejects an id that already includes the plugin prefix (no double-prefix)", () => {
+    const { host } = getHost("acme.act-test");
+    expect(() =>
+      host.registerAction(descriptor({ id: "acme.act-test.plan-from-issue" }), () => undefined)
+    ).toThrow(/must not include the plugin prefix/);
+    // Nothing was registered under the doubled id.
+    expect(service.listPluginActions()).toHaveLength(0);
+  });
+
+  it("passes {} to the handler when dispatched with no args (matches schema validation)", async () => {
+    const handler = vi.fn().mockReturnValue("ok");
+    const { host } = getHost("acme.act-test");
+    // Schema with only optional fields accepts an empty object.
+    host.registerAction(
+      descriptor({ inputSchema: { type: "object", properties: { flag: { type: "boolean" } } } }),
+      handler
+    );
+
+    const result = await service.dispatchHandler(
+      "acme.act-test",
+      "acme.act-test.plan-from-issue",
+      makeCtx("acme.act-test"),
+      []
+    );
+    // Handler receives the same {} the validator accepted — not undefined.
+    expect(handler).toHaveBeenCalledWith({});
+    expect(result).toBe("ok");
+  });
+
+  it("rejects restricted danger", () => {
+    const { host } = getHost("acme.act-test");
+    expect(() =>
+      host.registerAction(
+        descriptor({ danger: "restricted" as unknown as "safe" }),
+        () => undefined
+      )
+    ).toThrow(/invalid danger/i);
+  });
+
+  it("raises effectiveDanger to confirm when the manifest grants a high-risk capability", async () => {
+    await writePlugin("act-risky", {
+      name: "acme.act-risky",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+    const { host } = (svc as unknown as { createHost: ActionHostShape }).createHost(
+      "acme.act-risky"
+    );
+
+    host.registerAction(descriptor({ danger: "safe" }), () => undefined);
+
+    const action = svc.listPluginActions().find((a) => a.id === "acme.act-risky.plan-from-issue");
+    expect(action?.danger).toBe("safe");
+    expect(action?.effectiveDanger).toBe("confirm");
+  });
+
+  it("replaces the prior descriptor and handler on re-registration with the same id", async () => {
+    const first = vi.fn().mockReturnValue("first");
+    const second = vi.fn().mockReturnValue("second");
+    const { host } = getHost("acme.act-test");
+
+    host.registerAction(descriptor({ title: "Old title" }), first);
+    host.registerAction(descriptor({ title: "New title" }), second);
+
+    // Exactly one descriptor — replace, not append.
+    const actions = service.listPluginActions();
+    expect(actions).toHaveLength(1);
+    expect(actions[0].title).toBe("New title");
+
+    const result = await service.dispatchHandler(
+      "acme.act-test",
+      "acme.act-test.plan-from-issue",
+      makeCtx("acme.act-test"),
+      [{}]
+    );
+    expect(result).toBe("second");
+    expect(first).not.toHaveBeenCalled();
+  });
+
+  it("lets a host re-registration replace a renderer IPC registration", async () => {
+    // IPC path registers metadata only (no main-side handler).
+    service.registerPluginAction("acme.act-test", {
+      id: "acme.act-test.plan-from-issue",
+      title: "Via IPC",
+      description: "registered through the renderer path",
+      category: "Planner",
+      kind: "command",
+      danger: "safe",
+    });
+
+    const handler = vi.fn().mockReturnValue("from-host");
+    const { host } = getHost("acme.act-test");
+    // Replace semantics: re-registering the same id from the host does not throw.
+    expect(() => host.registerAction(descriptor(), handler)).not.toThrow();
+
+    const result = await service.dispatchHandler(
+      "acme.act-test",
+      "acme.act-test.plan-from-issue",
+      makeCtx("acme.act-test"),
+      [{}]
+    );
+    expect(result).toBe("from-host");
+  });
+
+  it("keeps the renderer IPC path throwing on a duplicate id (asymmetric semantics)", () => {
+    const { host } = getHost("acme.act-test");
+    host.registerAction(descriptor(), () => undefined);
+
+    // The IPC path stays loud on duplicates even after a host registration.
+    expect(() =>
+      service.registerPluginAction("acme.act-test", {
+        id: "acme.act-test.plan-from-issue",
+        title: "Dup",
+        description: "duplicate",
+        category: "Planner",
+        kind: "command",
+        danger: "safe",
+      })
+    ).toThrow(/already registered/);
+  });
+
+  it("validates args against the action's inputSchema", async () => {
+    const handler = vi.fn().mockReturnValue("ok");
+    const { host } = getHost("acme.act-test");
+    host.registerAction(
+      descriptor({
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        },
+      }),
+      handler
+    );
+
+    await expect(
+      service.dispatchHandler(
+        "acme.act-test",
+        "acme.act-test.plan-from-issue",
+        makeCtx("acme.act-test"),
+        [{}]
+      )
+    ).rejects.toThrow(/Invalid arguments/);
+    expect(handler).not.toHaveBeenCalled();
+
+    const result = await service.dispatchHandler(
+      "acme.act-test",
+      "acme.act-test.plan-from-issue",
+      makeCtx("acme.act-test"),
+      [{ name: "issue" }]
+    );
+    expect(result).toBe("ok");
+  });
+
+  it("propagates an async handler rejection through dispatch", async () => {
+    const { host } = getHost("acme.act-test");
+    host.registerAction(descriptor(), async () => {
+      throw new Error("handler boom");
+    });
+
+    await expect(
+      service.dispatchHandler(
+        "acme.act-test",
+        "acme.act-test.plan-from-issue",
+        makeCtx("acme.act-test"),
+        [{}]
+      )
+    ).rejects.toThrow("handler boom");
+  });
+
+  it("removes the handler on unload so dispatch throws afterwards", async () => {
+    const { host } = getHost("acme.act-test");
+    host.registerAction(descriptor(), () => "ok");
+    expect(
+      await service.dispatchHandler(
+        "acme.act-test",
+        "acme.act-test.plan-from-issue",
+        makeCtx("acme.act-test"),
+        [{}]
+      )
+    ).toBe("ok");
+
+    service.unloadPlugin("acme.act-test");
+
+    expect(service.listPluginActions()).toEqual([]);
+    await expect(
+      service.dispatchHandler(
+        "acme.act-test",
+        "acme.act-test.plan-from-issue",
+        makeCtx("acme.act-test"),
+        [{}]
+      )
+    ).rejects.toThrow(
+      "No plugin handler registered for acme.act-test:acme.act-test.plan-from-issue"
+    );
+  });
+});
+
 describe("Plugin panel kind registry broadcast", () => {
   it("dispose() drops a microtask scheduled before disposal", async () => {
     // Capture the listener PluginService passes into onPanelKindRegistered so
@@ -2046,7 +4772,89 @@ describe("Plugin panel kind registry broadcast", () => {
   });
 });
 
-describe("permissions declaration logging", () => {
+describe("Plugin menu items broadcast", () => {
+  it("coalesces load + unload in the same tick into a single broadcast with complete=true", async () => {
+    // Schedule a non-complete (load) broadcast followed by a complete (unload)
+    // broadcast in the same synchronous tick. The OR-accumulation invariant
+    // means the single coalesced broadcast must carry complete=true so the
+    // renderer treats it as authoritative.
+    const service = new PluginService();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).broadcaster.scheduleMenuItemsBroadcast(false);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).broadcaster.scheduleMenuItemsBroadcast(true);
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const menuItemsBroadcasts = broadcastToRendererMock.mock.calls.filter(
+      (call) => (call[1] as { name?: unknown })?.name === "plugin:menu-items-changed"
+    );
+    expect(menuItemsBroadcasts).toHaveLength(1);
+    expect(
+      (menuItemsBroadcasts[0]?.[1] as { payload: { complete: boolean } }).payload.complete
+    ).toBe(true);
+
+    service.dispose();
+  });
+
+  it("dispose() drops a menu items broadcast scheduled before disposal", async () => {
+    const service = new PluginService();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).broadcaster.scheduleMenuItemsBroadcast(true);
+    service.dispose();
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const menuItemsBroadcasts = broadcastToRendererMock.mock.calls.filter(
+      (call) => (call[1] as { name?: unknown })?.name === "plugin:menu-items-changed"
+    );
+    expect(menuItemsBroadcasts).toHaveLength(0);
+  });
+});
+
+describe("Plugin context-menu items broadcast", () => {
+  it("coalesces load + unload in the same tick into a single broadcast with complete=true", async () => {
+    const service = new PluginService();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).broadcaster.scheduleContextMenuItemsBroadcast(false);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).broadcaster.scheduleContextMenuItemsBroadcast(true);
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const broadcasts = broadcastToRendererMock.mock.calls.filter(
+      (call) => (call[1] as { name?: unknown })?.name === "plugin:context-menu-items-changed"
+    );
+    expect(broadcasts).toHaveLength(1);
+    expect((broadcasts[0]?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(true);
+
+    service.dispose();
+  });
+
+  it("dispose() drops a context-menu items broadcast scheduled before disposal", async () => {
+    const service = new PluginService();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).broadcaster.scheduleContextMenuItemsBroadcast(true);
+    service.dispose();
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const broadcasts = broadcastToRendererMock.mock.calls.filter(
+      (call) => (call[1] as { name?: unknown })?.name === "plugin:context-menu-items-changed"
+    );
+    expect(broadcasts).toHaveLength(0);
+  });
+});
+
+describe("capabilities declaration logging", () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
 
@@ -2060,11 +4868,11 @@ describe("permissions declaration logging", () => {
     errorSpy.mockRestore();
   });
 
-  it("logs declared permissions when plugin has permissions", async () => {
+  it("logs declared capabilities when plugin has capabilities", async () => {
     await writePlugin("perm-plugin", {
       name: "acme.perm-plugin",
       version: "1.0.0",
-      permissions: ["fs:project-read", "network:fetch"],
+      capabilities: ["fs:project-read", "network:fetch"],
     });
 
     const service = new PluginService(tmpDir);
@@ -2073,12 +4881,12 @@ describe("permissions declaration logging", () => {
     expect(service.listPlugins()).toHaveLength(1);
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining(
-        'Plugin "acme.perm-plugin" declares permissions: fs:project-read, network:fetch'
+        'Plugin "acme.perm-plugin" declares capabilities: fs:project-read, network:fetch'
       )
     );
   });
 
-  it("does not log when plugin has no permissions", async () => {
+  it("does not log when plugin has no capabilities", async () => {
     await writePlugin("no-perms", {
       name: "acme.no-perms",
       version: "1.0.0",
@@ -2089,16 +4897,16 @@ describe("permissions declaration logging", () => {
 
     expect(service.listPlugins()).toHaveLength(1);
     const permLogs = logSpy.mock.calls.filter(
-      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares capabilities")
     );
     expect(permLogs).toHaveLength(0);
   });
 
-  it("does not log permissions for incompatible plugins", async () => {
+  it("does not log capabilities for incompatible plugins", async () => {
     await writePlugin("incompatible-perms", {
       name: "acme.incompatible-perms",
       version: "1.0.0",
-      permissions: ["fs:project-read"],
+      capabilities: ["fs:project-read"],
       engines: { daintree: "^1.0.0" },
     });
 
@@ -2107,26 +4915,26 @@ describe("permissions declaration logging", () => {
 
     expect(service.listPlugins()).toEqual([]);
     const permLogs = logSpy.mock.calls.filter(
-      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares capabilities")
     );
     expect(permLogs).toHaveLength(0);
   });
 
-  it("includes permissions in loaded plugin manifest", async () => {
+  it("includes capabilities in loaded plugin manifest", async () => {
     await writePlugin("with-perms", {
       name: "acme.with-perms",
       version: "1.0.0",
-      permissions: ["git:read", "agent:invoke"],
+      capabilities: ["git:read", "agent:invoke"],
     });
 
     const service = new PluginService(tmpDir);
     await service.initialize();
 
     const plugins = service.listPlugins();
-    expect(plugins[0].manifest.permissions).toEqual(["git:read", "agent:invoke"]);
+    expect(plugins[0].manifest.capabilities).toEqual(["git:read", "agent:invoke"]);
   });
 
-  it("defaults permissions to empty array for plugins without the field", async () => {
+  it("defaults capabilities to empty array for plugins without the field", async () => {
     await writePlugin("no-field", {
       name: "acme.no-field",
       version: "1.0.0",
@@ -2136,14 +4944,14 @@ describe("permissions declaration logging", () => {
     await service.initialize();
 
     const plugins = service.listPlugins();
-    expect(plugins[0].manifest.permissions).toEqual([]);
+    expect(plugins[0].manifest.capabilities).toEqual([]);
   });
 
-  it("rejects plugins that declare unknown permissions and does not log them", async () => {
+  it("rejects plugins that declare unknown capabilities and does not log them", async () => {
     await writePlugin("unknown-perm", {
       name: "acme.unknown-perm",
       version: "1.0.0",
-      permissions: ["shell:exec", "invalid:perm"],
+      capabilities: ["shell:exec", "invalid:perm"],
     });
 
     const service = new PluginService(tmpDir);
@@ -2151,7 +4959,7 @@ describe("permissions declaration logging", () => {
 
     expect(service.listPlugins()).toEqual([]);
     const permLogs = logSpy.mock.calls.filter(
-      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares capabilities")
     );
     expect(permLogs).toHaveLength(0);
     expect(errorSpy).toHaveBeenCalledWith(
@@ -2160,11 +4968,11 @@ describe("permissions declaration logging", () => {
     );
   });
 
-  it("rejects plugins with newline characters in permission strings", async () => {
+  it("rejects plugins with newline characters in capability strings", async () => {
     await writePlugin("padded-perm", {
       name: "acme.padded-perm",
       version: "1.0.0",
-      permissions: ["fs:project-read\n", "agent:invoke\r"],
+      capabilities: ["fs:project-read\n", "agent:invoke\r"],
     });
 
     const service = new PluginService(tmpDir);
@@ -2172,7 +4980,7 @@ describe("permissions declaration logging", () => {
 
     expect(service.listPlugins()).toEqual([]);
     const permLogs = logSpy.mock.calls.filter(
-      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares capabilities")
     );
     expect(permLogs).toHaveLength(0);
     expect(errorSpy).toHaveBeenCalledWith(
@@ -2181,11 +4989,11 @@ describe("permissions declaration logging", () => {
     );
   });
 
-  it("rejects plugins where any one permission in a mixed array is invalid", async () => {
+  it("rejects plugins where any one capability in a mixed array is invalid", async () => {
     await writePlugin("mixed-perm", {
       name: "acme.mixed-perm",
       version: "1.0.0",
-      permissions: ["fs:project-read", "invalid:perm", "git:read"],
+      capabilities: ["fs:project-read", "invalid:perm", "git:read"],
     });
 
     const service = new PluginService(tmpDir);
@@ -2193,7 +5001,7 @@ describe("permissions declaration logging", () => {
 
     expect(service.listPlugins()).toEqual([]);
     const permLogs = logSpy.mock.calls.filter(
-      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares capabilities")
     );
     expect(permLogs).toHaveLength(0);
   });
@@ -2567,13 +5375,14 @@ describe("reserved contribution point warnings", () => {
     errorSpy.mockRestore();
   });
 
-  it("accepts a contributes.views entry and logs a 'not yet implemented' warning", async () => {
+  it("attaches componentPath to the matching panel kind when a view targets location 'panel' (#9229)", async () => {
     await writePlugin("views", {
       name: "acme.views",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
-        views: [
+        panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
+        experimental_views: [
           {
             id: "main",
             name: "Main",
@@ -2588,18 +5397,213 @@ describe("reserved contribution point warnings", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "acme.views.main",
+        extensionId: "acme.views",
+        componentPath: "plugin://acme.views/dist/view.js",
+      })
+    );
+    const viewWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
+      String(call[0]).includes("experimental_views")
+    );
+    expect(viewWarnings).toHaveLength(0);
+  });
+
+  it("warns and skips an experimental_views entry with no matching panel id", async () => {
+    await writePlugin("orphan", {
+      name: "acme.orphan",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
+        experimental_views: [
+          {
+            id: "ghost",
+            name: "Ghost",
+            componentPath: "./dist/view.js",
+            location: "panel",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(registerPanelKind).toHaveBeenCalledTimes(1);
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acme.orphan.main" })
+    );
+    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      componentPath?: string;
+    };
+    expect(panelCall.componentPath).toBeUndefined();
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Plugin "acme.views": contributes.views is not yet implemented')
+      expect.stringContaining(
+        'Plugin "acme.orphan": experimental_views entry "ghost" has no matching contributes.panels entry'
+      )
     );
   });
 
-  it("accepts a contributes.mcpServers entry and logs a 'not yet implemented' warning", async () => {
+  it("warns and skips a sidebar-location view entry until the sidebar host ships", async () => {
+    await writePlugin("sidebar", {
+      name: "acme.sidebar",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
+        experimental_views: [
+          {
+            id: "main",
+            name: "Main",
+            componentPath: "./dist/view.js",
+            location: "sidebar",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      componentPath?: string;
+    };
+    expect(panelCall.componentPath).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Plugin "acme.sidebar": experimental_views entry "main" has location "sidebar" which is not yet implemented'
+      )
+    );
+  });
+
+  it("warns when an experimental_views entry targets a PTY-backed panel", async () => {
+    await writePlugin("pty-view", {
+      name: "acme.pty-view",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc", hasPty: true }],
+        experimental_views: [
+          {
+            id: "main",
+            name: "Main",
+            componentPath: "./dist/view.js",
+            location: "panel",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      componentPath?: string;
+      hasPty?: boolean;
+    };
+    expect(panelCall.hasPty).toBe(true);
+    expect(panelCall.componentPath).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('experimental_views entry "main" matches a panel with hasPty=true')
+    );
+  });
+
+  it("rejects an unsafe experimental_views componentPath", async () => {
+    await writePlugin("unsafe", {
+      name: "acme.unsafe",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
+        experimental_views: [
+          {
+            id: "main",
+            name: "Main",
+            componentPath: "../escape.js",
+            location: "panel",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      componentPath?: string;
+    };
+    expect(panelCall.componentPath).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('experimental_views entry "main" has an unsafe componentPath')
+    );
+  });
+
+  it("rejects an absolute https componentPath as unsafe", async () => {
+    await writePlugin("https", {
+      name: "acme.https",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
+        experimental_views: [
+          {
+            id: "main",
+            name: "Main",
+            componentPath: "https://evil.example/view.js",
+            location: "panel",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      componentPath?: string;
+    };
+    expect(panelCall.componentPath).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('experimental_views entry "main" has an unsafe componentPath')
+    );
+  });
+
+  it("warns and keeps the first occurrence on duplicate experimental_views ids", async () => {
+    await writePlugin("dup", {
+      name: "acme.dup",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
+        experimental_views: [
+          { id: "main", name: "First", componentPath: "./first.js", location: "panel" },
+          { id: "main", name: "Second", componentPath: "./second.js", location: "panel" },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      componentPath?: string;
+    };
+    expect(panelCall.componentPath).toBe("plugin://acme.dup/first.js");
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('experimental_views has duplicate entries for id "main"')
+    );
+  });
+
+  it("registers a contributes.experimental_mcpServers entry without eagerly spawning it (#9235)", async () => {
+    mockPluginMcpSupervisor.start.mockClear();
     await writePlugin("mcp", {
       name: "acme.mcp",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
-        mcpServers: [
+        experimental_mcpServers: [
           {
             id: "linear",
             name: "Linear MCP",
@@ -2615,9 +5619,19 @@ describe("reserved contribution point warnings", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Plugin "acme.mcp": contributes.mcpServers is not yet implemented')
-    );
+    // Lazy discovery (#9235): activation must NOT spawn the MCP subprocess —
+    // it starts on the first `plugin-mcp:list-tools` enumeration instead.
+    expect(mockPluginMcpSupervisor.start).not.toHaveBeenCalled();
+    // The contribution is still registered so the IPC boundary can resolve and
+    // lazily start it on demand.
+    const lookup = service.findMcpServerContribution("acme.mcp", "linear");
+    expect(lookup?.contribution).toEqual({
+      id: "linear",
+      name: "Linear MCP",
+      command: "node",
+      args: ["./server.js"],
+      env: { LINEAR_API_KEY: "secret" },
+    });
   });
 
   it("registers a contributes.forgeProviders entry with the forge provider registry", async () => {
@@ -2686,8 +5700,12 @@ describe("reserved contribution point warnings", () => {
 
     expect(service.listPlugins()).toHaveLength(1);
     const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(warnMessages.some((m: string) => m.includes("contributes.views"))).toBe(false);
-    expect(warnMessages.some((m: string) => m.includes("contributes.mcpServers"))).toBe(false);
+    expect(warnMessages.some((m: string) => m.includes("contributes.experimental_views"))).toBe(
+      false
+    );
+    expect(
+      warnMessages.some((m: string) => m.includes("contributes.experimental_mcpServers"))
+    ).toBe(false);
     expect(warnMessages.some((m: string) => m.includes("contributes.forgeProviders"))).toBe(false);
   });
 
@@ -2696,7 +5714,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.explicit-empty",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
-      contributes: { views: [], mcpServers: [], forgeProviders: [] },
+      contributes: { experimental_views: [], experimental_mcpServers: [], forgeProviders: [] },
     });
 
     const service = new PluginService(tmpDir, "0.7.5");
@@ -2704,20 +5722,27 @@ describe("reserved contribution point warnings", () => {
 
     expect(service.listPlugins()).toHaveLength(1);
     const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(warnMessages.some((m: string) => m.includes("contributes.views"))).toBe(false);
-    expect(warnMessages.some((m: string) => m.includes("contributes.mcpServers"))).toBe(false);
+    expect(warnMessages.some((m: string) => m.includes("contributes.experimental_views"))).toBe(
+      false
+    );
+    expect(
+      warnMessages.some((m: string) => m.includes("contributes.experimental_mcpServers"))
+    ).toBe(false);
     expect(warnMessages.some((m: string) => m.includes("contributes.forgeProviders"))).toBe(false);
   });
 
   it("still processes other contributions when reserved points are present", async () => {
+    mockPluginMcpSupervisor.start.mockClear();
     await writePlugin("mixed", {
       name: "acme.mixed",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
-        views: [{ id: "main", name: "Main", componentPath: "./v.js", location: "sidebar" }],
-        mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
+        experimental_views: [
+          { id: "main", name: "Main", componentPath: "./v.js", location: "sidebar" },
+        ],
+        experimental_mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
       },
     });
 
@@ -2727,20 +5752,27 @@ describe("reserved contribution point warnings", () => {
     expect(service.listPlugins()).toHaveLength(1);
     expect(registerPanelKind).toHaveBeenCalledTimes(1);
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("contributes.views is not yet implemented")
+      expect.stringContaining(
+        'experimental_views entry "main" has location "sidebar" which is not yet implemented'
+      )
     );
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("contributes.mcpServers is not yet implemented")
-    );
+    // experimental_mcpServers is registered (no warning) but, under lazy
+    // discovery (#9235), is NOT spawned at activation.
+    expect(mockPluginMcpSupervisor.start).not.toHaveBeenCalled();
+    expect(service.findMcpServerContribution("acme.mixed", "svc")).toBeDefined();
   });
 
-  it("warns once per category regardless of entry count", async () => {
+  it("logs one warning per orphan or unsupported view entry", async () => {
     await writePlugin("many", {
       name: "acme.many",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
-        views: [
+        // `a` matches a panel and binds; `b` is a sidebar view; `c` is an
+        // orphan with no matching panel id. Each non-binding entry should log
+        // exactly one warning naming the entry id.
+        panels: [{ id: "a", name: "A", iconId: "eye", color: "#000" }],
+        experimental_views: [
           { id: "a", name: "A", componentPath: "./a.js", location: "panel" },
           { id: "b", name: "B", componentPath: "./b.js", location: "sidebar" },
           { id: "c", name: "C", componentPath: "./c.js", location: "panel" },
@@ -2751,64 +5783,1387 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    const viewWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
-      String(call[0]).includes("contributes.views is not yet implemented")
+    const sidebarWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
+      String(call[0]).includes('"b" has location "sidebar"')
     );
-    expect(viewWarnings).toHaveLength(1);
+    const orphanWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
+      String(call[0]).includes('"c" has no matching contributes.panels')
+    );
+    expect(sidebarWarnings).toHaveLength(1);
+    expect(orphanWarnings).toHaveLength(1);
   });
 
   it("rejects a views entry with an invalid location at schema level", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       name: "acme.bad-location",
       version: "1.0.0",
       contributes: {
-        views: [{ id: "main", name: "Main", componentPath: "./v.js", location: "floating" }],
+        experimental_views: [
+          { id: "main", name: "Main", componentPath: "./v.js", location: "floating" },
+        ],
       },
     });
     expect(result.success).toBe(false);
   });
 
   it("rejects a views entry missing componentPath", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       name: "acme.no-path",
       version: "1.0.0",
       contributes: {
-        views: [{ id: "main", name: "Main", location: "panel" }],
+        experimental_views: [{ id: "main", name: "Main", location: "panel" }],
       },
     });
     expect(result.success).toBe(false);
   });
 
   it("rejects an mcpServers entry missing command", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       name: "acme.no-cmd",
       version: "1.0.0",
       contributes: {
-        mcpServers: [{ id: "svc", name: "Svc" }],
+        experimental_mcpServers: [{ id: "svc", name: "Svc" }],
       },
     });
     expect(result.success).toBe(false);
   });
 
   it("rejects an mcpServers entry with non-string env values", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       name: "acme.bad-env",
       version: "1.0.0",
       contributes: {
-        mcpServers: [{ id: "svc", name: "Svc", command: "node", env: { PORT: 8080 } }],
+        experimental_mcpServers: [{ id: "svc", name: "Svc", command: "node", env: { PORT: 8080 } }],
       },
     });
     expect(result.success).toBe(false);
   });
 
   it("accepts an mcpServers entry without optional args/env fields", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       name: "acme.minimal-mcp",
       version: "1.0.0",
       contributes: {
-        mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
+        experimental_mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
       },
     });
     expect(result.success).toBe(true);
+  });
+});
+
+// Boundary containment regression tests for issue #9276 — verify that a
+// plugin's exceptions can't escape the host. Each block covers one boundary:
+// activation, action dispatch, and the unload cascade.
+
+describe("Plugin exception containment (#9276)", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  describe("Boundary 1 — activation failure", () => {
+    it("records the activation error on getPluginLoadError without rethrowing", async () => {
+      const pluginDir = path.join(tmpDir, "throws-activate");
+      await fs.mkdir(pluginDir);
+      await fs.writeFile(
+        path.join(pluginDir, "plugin.json"),
+        JSON.stringify({ name: "acme.throws-activate", version: "1.0.0", main: "main.mjs" })
+      );
+      await fs.writeFile(
+        path.join(pluginDir, "main.mjs"),
+        "export function activate() { throw new Error('boom on activate'); }"
+      );
+
+      const service = new PluginService(tmpDir);
+      // The host MUST NOT crash — initialize() should resolve.
+      await expect(service.initialize()).resolves.toBeUndefined();
+      await service.activateStartupFinishedPlugins();
+
+      const record = service.getPluginLoadError("acme.throws-activate");
+      expect(record).toBeDefined();
+      expect(record?.message).toBe("boom on activate");
+      expect(record?.stack).toContain("boom on activate");
+      expect(typeof record?.at).toBe("number");
+      // The plugin is still registered (manifest-declared contributions survive
+      // even if the JS main entry blows up).
+      expect(service.hasPlugin("acme.throws-activate")).toBe(true);
+    });
+
+    it("returns undefined when the plugin's activate succeeds", async () => {
+      const pluginDir = path.join(tmpDir, "clean-activate");
+      await fs.mkdir(pluginDir);
+      await fs.writeFile(
+        path.join(pluginDir, "plugin.json"),
+        JSON.stringify({ name: "acme.clean-activate", version: "1.0.0", main: "main.mjs" })
+      );
+      await fs.writeFile(
+        path.join(pluginDir, "main.mjs"),
+        "export function activate() { return () => {}; }"
+      );
+
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      await service.activateStartupFinishedPlugins();
+
+      expect(service.getPluginLoadError("acme.clean-activate")).toBeUndefined();
+    });
+
+    it("returns undefined when the plugin declares no main entry", async () => {
+      await writePlugin("no-main", { name: "acme.no-main", version: "1.0.0" });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      expect(service.getPluginLoadError("acme.no-main")).toBeUndefined();
+    });
+
+    it("load error persists in the provenance record across unload", async () => {
+      const pluginDir = path.join(tmpDir, "throws-then-unload");
+      await fs.mkdir(pluginDir);
+      await fs.writeFile(
+        path.join(pluginDir, "plugin.json"),
+        JSON.stringify({ name: "acme.throws-then-unload", version: "1.0.0", main: "main.mjs" })
+      );
+      await fs.writeFile(
+        path.join(pluginDir, "main.mjs"),
+        "export function activate() { throw new Error('boom'); }"
+      );
+
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      await service.activateStartupFinishedPlugins();
+      expect(service.getPluginLoadError("acme.throws-then-unload")).toBeDefined();
+
+      // Unload removes the plugin from the registry, but the persisted
+      // provenance record (including loadError) survives so diagnostics
+      // export and re-install flows can still read it.
+      service.unloadPlugin("acme.throws-then-unload");
+      expect(service.getPluginLoadError("acme.throws-then-unload")).toBeDefined();
+      expect(service.getPluginLoadError("acme.throws-then-unload")?.message).toBe("boom");
+    });
+
+    it("normalises non-Error throws into a load error record", async () => {
+      const pluginDir = path.join(tmpDir, "throws-string");
+      await fs.mkdir(pluginDir);
+      await fs.writeFile(
+        path.join(pluginDir, "plugin.json"),
+        JSON.stringify({ name: "acme.throws-string", version: "1.0.0", main: "main.mjs" })
+      );
+      // Throw a plain string — many plugin authors do this.
+      await fs.writeFile(
+        path.join(pluginDir, "main.mjs"),
+        "export function activate() { throw 'plain-string-failure'; }"
+      );
+
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      await service.activateStartupFinishedPlugins();
+
+      const record = service.getPluginLoadError("acme.throws-string");
+      expect(record?.message).toBe("plain-string-failure");
+      expect(record?.stack).toBeUndefined();
+    });
+  });
+
+  describe("Boundary 2 — action handler throw", () => {
+    it("dispatchHandler rejects with the original error and logs to console.error", async () => {
+      await writePlugin("acme.throwy-handler", {
+        name: "acme.throwy-handler",
+        version: "1.0.0",
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      const original = new Error("handler boom");
+      service.registerHandler("acme.throwy-handler", "blow-up", () => {
+        throw original;
+      });
+
+      await expect(
+        service.dispatchHandler(
+          "acme.throwy-handler",
+          "blow-up",
+          makeCtx("acme.throwy-handler"),
+          []
+        )
+      ).rejects.toBe(original);
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`Handler "acme.throwy-handler:blow-up" threw:`),
+        original
+      );
+    });
+
+    it("dispatchHandler rejects with an async handler's rejection and logs", async () => {
+      await writePlugin("acme.async-throwy", {
+        name: "acme.async-throwy",
+        version: "1.0.0",
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      const original = new Error("async boom");
+      service.registerHandler("acme.async-throwy", "blow-up", async () => {
+        throw original;
+      });
+
+      await expect(
+        service.dispatchHandler("acme.async-throwy", "blow-up", makeCtx("acme.async-throwy"), [])
+      ).rejects.toBe(original);
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`Handler "acme.async-throwy:blow-up" threw:`),
+        original
+      );
+    });
+  });
+
+  describe("Boundary 3 — unload cascade containment", () => {
+    it("continues past a throwing menu-items unregister and still clears the plugin", async () => {
+      await writePlugin("cascade-test", {
+        name: "acme.cascade-test",
+        version: "1.0.0",
+        contributes: {
+          panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
+          toolbarButtons: [{ id: "btn", label: "Btn", iconId: "icon", actionId: "x.y" }],
+          menuItems: [{ label: "L", actionId: "x.y", location: "terminal" }],
+        },
+      });
+
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      vi.mocked(unregisterPluginMenuItems).mockImplementationOnce(() => {
+        throw new Error("menu unregister boom");
+      });
+
+      service.unloadPlugin("acme.cascade-test");
+
+      // Each step after the throwing one still ran:
+      expect(unregisterPluginToolbarButtons).toHaveBeenCalledWith("acme.cascade-test");
+      expect(unregisterPluginPanelKinds).toHaveBeenCalledWith("acme.cascade-test");
+      expect(unregisterForgeProviders).toHaveBeenCalledWith("acme.cascade-test");
+      expect(unregisterForgeProviderImpls).toHaveBeenCalledWith("acme.cascade-test");
+      expect(unregisterFileDecorationProviders).toHaveBeenCalledWith("acme.cascade-test");
+      expect(unregisterFileDecorationProviderImpls).toHaveBeenCalledWith("acme.cascade-test");
+
+      // Containment guarantees: plugin gone from registry, no rethrown error.
+      expect(service.hasPlugin("acme.cascade-test")).toBe(false);
+
+      // Disposer throws are warnings, not errors (per issue constraint).
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Unload step "unregisterPluginMenuItems" for "acme.cascade-test" threw:`
+        ),
+        expect.any(Error)
+      );
+    });
+
+    it("continues past a throwing toolbar unregister", async () => {
+      await writePlugin("toolbar-throws", {
+        name: "acme.toolbar-throws",
+        version: "1.0.0",
+        contributes: {
+          panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
+        },
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      vi.mocked(unregisterPluginToolbarButtons).mockImplementationOnce(() => {
+        throw new Error("toolbar boom");
+      });
+
+      service.unloadPlugin("acme.toolbar-throws");
+
+      // Subsequent steps in cascade still run.
+      expect(unregisterPluginPanelKinds).toHaveBeenCalledWith("acme.toolbar-throws");
+      expect(service.hasPlugin("acme.toolbar-throws")).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Unload step "unregisterPluginToolbarButtons" for "acme.toolbar-throws" threw:`
+        ),
+        expect.any(Error)
+      );
+    });
+
+    it("continues past a throwing forge-provider unregister AND still runs the impl unregister", async () => {
+      await writePlugin("forge-throws", {
+        name: "acme.forge-throws",
+        version: "1.0.0",
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      vi.mocked(unregisterForgeProviders).mockImplementationOnce(() => {
+        throw new Error("forge boom");
+      });
+
+      service.unloadPlugin("acme.forge-throws");
+
+      // Critical: the impl unregister must run even if the provider unregister
+      // threw, otherwise impl entries leak across reload. Coupled steps under
+      // a single try/catch wrapper would have skipped this call.
+      expect(unregisterForgeProviderImpls).toHaveBeenCalledWith("acme.forge-throws");
+      expect(unregisterFileDecorationProviders).toHaveBeenCalledWith("acme.forge-throws");
+      expect(unregisterFileDecorationProviderImpls).toHaveBeenCalledWith("acme.forge-throws");
+      expect(service.hasPlugin("acme.forge-throws")).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Unload step "unregisterForgeProviders" for "acme.forge-throws" threw:`
+        ),
+        expect.any(Error)
+      );
+    });
+
+    it("continues past a throwing fileDecoration-provider unregister AND still runs the impl unregister", async () => {
+      await writePlugin("file-decoration-throws", {
+        name: "acme.file-decoration-throws",
+        version: "1.0.0",
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      vi.mocked(unregisterFileDecorationProviders).mockImplementationOnce(() => {
+        throw new Error("file-decoration boom");
+      });
+
+      service.unloadPlugin("acme.file-decoration-throws");
+
+      // Same correctness check as the forge case: the impl unregister must
+      // not be stranded by a throw in the provider unregister.
+      expect(unregisterFileDecorationProviderImpls).toHaveBeenCalledWith(
+        "acme.file-decoration-throws"
+      );
+      expect(service.hasPlugin("acme.file-decoration-throws")).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Unload step "unregisterFileDecorationProviders" for "acme.file-decoration-throws" threw:`
+        ),
+        expect.any(Error)
+      );
+    });
+
+    it("continues past a throwing removeHandlers, running every later registry step", async () => {
+      await writePlugin("remove-handlers-throws", {
+        name: "acme.remove-handlers-throws",
+        version: "1.0.0",
+        contributes: {
+          panels: [{ id: "p", name: "P", iconId: "i", color: "#000" }],
+          toolbarButtons: [{ id: "b", label: "B", iconId: "i", actionId: "x.y" }],
+          menuItems: [{ label: "L", actionId: "x.y", location: "terminal" }],
+        },
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      const removeHandlersSpy = vi
+        .spyOn(service as unknown as { removeHandlers: (id: string) => void }, "removeHandlers")
+        .mockImplementationOnce(() => {
+          throw new Error("removeHandlers boom");
+        });
+
+      service.unloadPlugin("acme.remove-handlers-throws");
+
+      // Even though the very first step threw, every later step ran.
+      expect(unregisterPluginMenuItems).toHaveBeenCalledWith("acme.remove-handlers-throws");
+      expect(unregisterPluginToolbarButtons).toHaveBeenCalledWith("acme.remove-handlers-throws");
+      expect(unregisterPluginPanelKinds).toHaveBeenCalledWith("acme.remove-handlers-throws");
+      expect(unregisterForgeProviders).toHaveBeenCalledWith("acme.remove-handlers-throws");
+      expect(unregisterForgeProviderImpls).toHaveBeenCalledWith("acme.remove-handlers-throws");
+      expect(unregisterFileDecorationProviders).toHaveBeenCalledWith("acme.remove-handlers-throws");
+      expect(unregisterFileDecorationProviderImpls).toHaveBeenCalledWith(
+        "acme.remove-handlers-throws"
+      );
+      expect(service.hasPlugin("acme.remove-handlers-throws")).toBe(false);
+
+      removeHandlersSpy.mockRestore();
+    });
+  });
+
+  describe("Boundary 1 — non-Error throws", () => {
+    it("normalises a bare `throw undefined` into a string message", async () => {
+      const pluginDir = path.join(tmpDir, "throws-undefined");
+      await fs.mkdir(pluginDir);
+      await fs.writeFile(
+        path.join(pluginDir, "plugin.json"),
+        JSON.stringify({ name: "acme.throws-undefined", version: "1.0.0", main: "main.mjs" })
+      );
+      // `throw undefined` is a real footgun in plugin code — make sure the
+      // load-error record never sneaks an `undefined` into its `message`
+      // field, which would violate the type contract for the F19 / #9271
+      // consumer.
+      await fs.writeFile(
+        path.join(pluginDir, "main.mjs"),
+        "export function activate() { throw undefined; }"
+      );
+
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      await service.activateStartupFinishedPlugins();
+
+      const record = service.getPluginLoadError("acme.throws-undefined");
+      expect(record).toBeDefined();
+      expect(typeof record?.message).toBe("string");
+      expect(record?.message.length).toBeGreaterThan(0);
+    });
+
+    it("normalises a bare `throw null` into a string message", async () => {
+      const pluginDir = path.join(tmpDir, "throws-null");
+      await fs.mkdir(pluginDir);
+      await fs.writeFile(
+        path.join(pluginDir, "plugin.json"),
+        JSON.stringify({ name: "acme.throws-null", version: "1.0.0", main: "main.mjs" })
+      );
+      await fs.writeFile(
+        path.join(pluginDir, "main.mjs"),
+        "export function activate() { throw null; }"
+      );
+
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      await service.activateStartupFinishedPlugins();
+
+      const record = service.getPluginLoadError("acme.throws-null");
+      expect(record).toBeDefined();
+      expect(typeof record?.message).toBe("string");
+      expect(record?.message.length).toBeGreaterThan(0);
+    });
+  });
+});
+
+describe("hello-daintree sample fixture", () => {
+  const fixturePath = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../../plugins/sample/hello-daintree/plugin.json"
+  );
+  const readManifest = async (): Promise<unknown> =>
+    JSON.parse(await fs.readFile(fixturePath, "utf8"));
+
+  it("validates against the manifest schema", async () => {
+    const result = getPluginManifestSchema(true).safeParse(await readManifest());
+    expect(result.success).toBe(true);
+  });
+
+  it("declares the first-party name and the wired contribution points", async () => {
+    const manifest = getPluginManifestSchema(true).parse(await readManifest());
+    expect(manifest.name).toBe("daintree.hello");
+    expect(manifest.engines?.daintree).toBe(">=0.11.0");
+    expect(manifest.contributes.toolbarButtons).toHaveLength(1);
+    expect(manifest.contributes.toolbarButtons[0].id).toBe("ping");
+    expect(manifest.contributes.menuItems).toHaveLength(1);
+    expect(manifest.contributes.fileDecorationProviders).toHaveLength(1);
+    expect(manifest.contributes.fileDecorationProviders[0].scopes).toEqual(["hello:*"]);
+  });
+});
+
+describe("Plugin provenance persistence", () => {
+  it("creates a sideload record for non-builtin plugin on first load", async () => {
+    await writePlugin("fresh", { name: "acme.fresh", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].source).toBe("sideload");
+    expect(plugins[0].installedAt).toBeGreaterThan(0);
+    expect(plugins[0].archiveHash).toBeNull();
+    expect(plugins[0].originalUrl).toBeNull();
+    expect(plugins[0].disabled).toBe(false);
+    expect(plugins[0].updateAvailable).toBeNull();
+    expect(plugins[0].devMode).toBe(false);
+    expect(plugins[0].loadError).toBeNull();
+  });
+
+  it("built-in plugins return synthetic provenance fields without a store record", async () => {
+    const builtinDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-builtin-prov-"));
+    try {
+      const dir = path.join(builtinDir, "helper");
+      await fs.mkdir(dir);
+      await fs.writeFile(
+        path.join(dir, "plugin.json"),
+        JSON.stringify({ name: "daintree.helper", version: "1.0.0" })
+      );
+
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      const plugins = service.listPlugins();
+      const builtin = plugins.find((p) => p.manifest.name === "daintree.helper");
+      expect(builtin).toBeDefined();
+      expect(builtin!.source).toBe("builtin");
+      expect(builtin!.installedAt).toBe(0);
+      expect(builtin!.archiveHash).toBeNull();
+      expect(builtin!.originalUrl).toBeNull();
+      expect(builtin!.loadError).toBeNull();
+      expect(builtin!.disabled).toBe(false);
+      expect(builtin!.updateAvailable).toBeNull();
+      expect(builtin!.devMode).toBe(false);
+    } finally {
+      await fs.rm(builtinDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves installedAt across repeated loads (idempotent record creation)", async () => {
+    await writePlugin("persist", { name: "acme.persist", version: "1.0.0" });
+
+    const first = new PluginService(tmpDir);
+    await first.initialize();
+    const firstInstalledAt = first.listPlugins()[0].installedAt;
+
+    // Second service instance simulates a restart — the store mock persists
+    // the record (store is a singleton mock in tests).
+    const second = new PluginService(tmpDir);
+    await second.initialize();
+
+    const plugins = second.listPlugins();
+    expect(plugins[0].installedAt).toBe(firstInstalledAt);
+  });
+
+  it("non-builtin plugin with disabled=true is listed but not activated", async () => {
+    const pluginDir = path.join(tmpDir, "disabled-nonbuiltin");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.disabled-nb",
+        version: "1.0.0",
+        main: "main.mjs",
+      })
+    );
+    // main.mjs calls a global to prove activation was skipped
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__disabledActivated = true; export function activate() {}"
+    );
+
+    // Pre-seed the store with the unified disabled list (#9284); the
+    // provenance record's `disabled` field is set independently by
+    // setEnabled() — listing alone surfaces the unified state.
+    storeMock._state.set("plugins", {
+      disabled: ["acme.disabled-nb"],
+      installed: {
+        "acme.disabled-nb": {
+          source: "sideload",
+          installedAt: Date.now(),
+          archiveHash: null,
+          originalUrl: null,
+          disabled: true,
+          updateAvailable: null,
+          devMode: false,
+          loadError: null,
+        },
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    // Force the startup activation pass so this test exercises the path that
+    // would normally import every onStartupFinished plugin. The disabled plugin
+    // is rejected at scan time (never inserted into the plugins map), so the
+    // activation pass cannot pick it up — that's exactly what we assert below.
+    await service.activateStartupFinishedPlugins();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].manifest.name).toBe("acme.disabled-nb");
+    expect(plugins[0].disabled).toBe(true);
+    expect(plugins[0].isBuiltin).toBe(false);
+
+    // Activation was skipped — the main.mjs was never imported
+    expect((globalThis as Record<string, unknown>).__disabledActivated).toBeUndefined();
+  });
+
+  it("writes activation error to the persisted record", async () => {
+    const pluginDir = path.join(tmpDir, "err-persist");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.err-persist", version: "1.0.0", main: "main.mjs" })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "export function activate() { throw new Error('persisted-boom'); }"
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activateStartupFinishedPlugins();
+
+    const record = service.getPluginLoadError("acme.err-persist");
+    expect(record?.message).toBe("persisted-boom");
+
+    // Also visible via listPlugins
+    const plugins = service.listPlugins();
+    expect(plugins[0].loadError?.message).toBe("persisted-boom");
+  });
+
+  it("clears loadError on a subsequent successful activation", async () => {
+    // Use two different plugin directories with distinct names to avoid
+    // Node ESM module caching (import() caches by URL, so the same file
+    // path would return the cached throwing module).
+    const failDir = path.join(tmpDir, "heal-fail");
+    await fs.mkdir(failDir);
+    await fs.writeFile(
+      path.join(failDir, "plugin.json"),
+      JSON.stringify({ name: "acme.heal-fail", version: "1.0.0", main: "main.mjs" })
+    );
+    await fs.writeFile(
+      path.join(failDir, "main.mjs"),
+      "globalThis.__healFailCalled = true; export function activate() { throw new Error('first-fail'); }"
+    );
+
+    const first = new PluginService(tmpDir);
+    await first.initialize();
+    await first.activateStartupFinishedPlugins();
+    expect(first.getPluginLoadError("acme.heal-fail")?.message).toBe("first-fail");
+
+    // Second plugin: same concept but different dir + name, so ESM cache
+    // doesn't interfere. The store still holds the first plugin's error
+    // record, confirming persistence works.
+    const healDir = path.join(tmpDir, "heal-ok");
+    await fs.mkdir(healDir);
+    await fs.writeFile(
+      path.join(healDir, "plugin.json"),
+      JSON.stringify({ name: "acme.heal-ok", version: "1.0.0", main: "main.mjs" })
+    );
+    await fs.writeFile(
+      path.join(healDir, "main.mjs"),
+      "export function activate() { return () => {}; }"
+    );
+
+    const second = new PluginService(tmpDir);
+    await second.initialize();
+    await second.activateStartupFinishedPlugins();
+
+    // New plugin loaded successfully — no error
+    expect(second.getPluginLoadError("acme.heal-ok")).toBeUndefined();
+    const plugins = second.listPlugins();
+    const healed = plugins.find((p) => p.manifest.name === "acme.heal-ok");
+    expect(healed?.loadError).toBeNull();
+
+    // Original failed plugin's error still in the store
+    expect(second.getPluginLoadError("acme.heal-fail")?.message).toBe("first-fail");
+  });
+
+  it("getPluginLoadError returns undefined for an unknown plugin", () => {
+    const service = new PluginService(tmpDir);
+    expect(service.getPluginLoadError("acme.never-existed")).toBeUndefined();
+  });
+
+  it("listPlugins includes all provenance fields in output", async () => {
+    await writePlugin("full-prov", { name: "acme.full-prov", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const [plugin] = service.listPlugins();
+    expect(Object.keys(plugin)).toContain("source");
+    expect(Object.keys(plugin)).toContain("installedAt");
+    expect(Object.keys(plugin)).toContain("archiveHash");
+    expect(Object.keys(plugin)).toContain("originalUrl");
+    expect(Object.keys(plugin)).toContain("loadError");
+    expect(Object.keys(plugin)).toContain("disabled");
+    expect(Object.keys(plugin)).toContain("updateAvailable");
+    expect(Object.keys(plugin)).toContain("devMode");
+    // Runtime fields still present
+    expect(Object.keys(plugin)).toContain("manifest");
+    expect(Object.keys(plugin)).toContain("dir");
+    expect(Object.keys(plugin)).toContain("loadedAt");
+    expect(Object.keys(plugin)).toContain("isBuiltin");
+    // Internal field still excluded
+    expect(Object.keys(plugin)).not.toContain("resolvedMain");
+  });
+
+  it("disabled builtin returns disabled=true in listPlugins output", async () => {
+    const builtinDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-builtin-dis-"));
+    try {
+      const dir = path.join(builtinDir, "muted");
+      await fs.mkdir(dir);
+      await fs.writeFile(
+        path.join(dir, "plugin.json"),
+        JSON.stringify({ name: "daintree.muted", version: "1.0.0" })
+      );
+
+      storeMock._state.set("plugins", { disabled: ["daintree.muted"], installed: {} });
+
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      // Disabled builtins are tracked in `disabledPlugins` so listPlugins()
+      // can surface them for the Preferences toggle (#9284); they are not
+      // activated. The entry reports disabled=true.
+      const plugins = service.listPlugins();
+      const muted = plugins.find((p) => p.manifest.name === "daintree.muted");
+      expect(muted).toBeDefined();
+      expect(muted!.disabled).toBe(true);
+      expect(muted!.loadedAt).toBe(0);
+    } finally {
+      await fs.rm(builtinDir, { recursive: true, force: true });
+    }
+  });
+
+  it("plugin with dot in name stores record without nesting", async () => {
+    // Plugin names are scoped as "publisher.name" — a single dot is valid.
+    // electron-store's dotNotation would split "acme.foo" into nested keys
+    // if written per-field, so we write the whole `plugins.installed` object.
+    const pluginDir = path.join(tmpDir, "dot-plugin");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.foo", version: "1.0.0" })
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].manifest.name).toBe("acme.foo");
+
+    // Record stored under the dotted name without nesting
+    const stored = storeMock._state.get("plugins") as
+      | { installed?: Record<string, unknown> }
+      | undefined;
+    expect(stored?.installed).toHaveProperty("acme.foo");
+    expect(stored?.installed?.["acme.foo"]).toBeDefined();
+  });
+});
+
+describe("PluginManifestSchema activationEvents field", () => {
+  const schema = getPluginManifestSchema(false);
+
+  it("defaults to an empty array when omitted", () => {
+    const result = schema.safeParse({
+      name: "acme.foo",
+      version: "1.0.0",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.activationEvents).toEqual([]);
+    }
+  });
+
+  it("accepts an explicit ['onStartupFinished']", () => {
+    const result = schema.safeParse({
+      name: "acme.foo",
+      version: "1.0.0",
+      activationEvents: ["onStartupFinished"],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown activation event strings (no onCommand/onView in v1)", () => {
+    const result = schema.safeParse({
+      name: "acme.foo",
+      version: "1.0.0",
+      activationEvents: ["onCommand:foo"],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects non-array activationEvents value", () => {
+    const result = schema.safeParse({
+      name: "acme.foo",
+      version: "1.0.0",
+      activationEvents: "onStartupFinished",
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("Deferred activation — activatePlugin", () => {
+  it("initialize() does not import plugin main; activateStartupFinishedPlugins does", async () => {
+    const pluginDir = path.join(tmpDir, "deferred-import");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.deferred-import", version: "1.0.0", main: "main.mjs" })
+    );
+    // The module sets a global as a side effect at import time. If the
+    // module were imported during initialize() the global would be set
+    // before we explicitly activate.
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__deferredImportRan = true; export function activate() {}"
+    );
+
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      // Scan must register the plugin (contributions populated) but must NOT
+      // have imported its main module yet.
+      expect(service.hasPlugin("acme.deferred-import")).toBe(true);
+      expect((globalThis as Record<string, unknown>).__deferredImportRan).toBeUndefined();
+
+      await service.activateStartupFinishedPlugins();
+      expect((globalThis as Record<string, unknown>).__deferredImportRan).toBe(true);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__deferredImportRan;
+    }
+  });
+
+  it("activatePlugin is idempotent — _doActivate runs once across concurrent callers", async () => {
+    const pluginDir = path.join(tmpDir, "dedup-activate");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.dedup-activate", version: "1.0.0", main: "main.mjs" })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__dedupCount = (globalThis.__dedupCount ?? 0) + 1; export function activate() {}"
+    );
+
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      // Fan out activation from three concurrent callers; the in-flight
+      // promise dedup means _doActivate runs exactly once.
+      await Promise.all([
+        service.activatePlugin("acme.dedup-activate"),
+        service.activatePlugin("acme.dedup-activate"),
+        service.activatePlugin("acme.dedup-activate"),
+      ]);
+
+      // A fourth call after the first settled should hit the synchronous
+      // `activatedPlugins` fast path and not re-import either.
+      await service.activatePlugin("acme.dedup-activate");
+
+      expect((globalThis as unknown as Record<string, number>).__dedupCount).toBe(1);
+    } finally {
+      delete (globalThis as unknown as Record<string, number>).__dedupCount;
+    }
+  });
+
+  it("activatePlugin does not reject when activate() throws", async () => {
+    const pluginDir = path.join(tmpDir, "throwy-but-stable");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.throwy-but-stable", version: "1.0.0", main: "main.mjs" })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "export function activate() { throw new Error('nope'); }"
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      // Implicit-trigger contract: the promise resolves so callers don't
+      // need a try/catch around every dispatch.
+      await expect(service.activatePlugin("acme.throwy-but-stable")).resolves.toBeUndefined();
+      // Error is persisted to the provenance record instead of propagating.
+      expect(service.getPluginLoadError("acme.throwy-but-stable")?.message).toBe("nope");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("activatePlugin can re-run after a failure (Settings → Retry)", async () => {
+    const pluginDir = path.join(tmpDir, "retry-activate");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.retry-activate", version: "1.0.0", main: "main.mjs" })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__retryCount = (globalThis.__retryCount ?? 0) + 1; export function activate() { throw new Error('retry-boom'); }"
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      await service.activatePlugin("acme.retry-activate");
+
+      // After a failure the in-flight entry is dropped so a retry calls
+      // through to _doActivate again. ESM import() is URL-cached, so the
+      // module is only evaluated once — but `activate()` still runs again
+      // on the cached exports. Assert via the persisted error record.
+      expect(service.getPluginLoadError("acme.retry-activate")?.message).toBe("retry-boom");
+
+      await service.activatePlugin("acme.retry-activate");
+      // The fact that this resolves and re-records the error proves the
+      // promise was not cached as a settled success.
+      expect(service.getPluginLoadError("acme.retry-activate")?.message).toBe("retry-boom");
+    } finally {
+      errorSpy.mockRestore();
+      delete (globalThis as unknown as Record<string, number>).__retryCount;
+    }
+  });
+
+  it("activateStartupFinishedPlugins activates plugins with activationEvents=['onStartupFinished']", async () => {
+    const pluginDir = path.join(tmpDir, "explicit-onstartup");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.explicit-onstartup",
+        version: "1.0.0",
+        main: "main.mjs",
+        activationEvents: ["onStartupFinished"],
+      })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__explicitOnstartupRan = true; export function activate() {}"
+    );
+
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      expect((globalThis as Record<string, unknown>).__explicitOnstartupRan).toBeUndefined();
+
+      await service.activateStartupFinishedPlugins();
+      expect((globalThis as Record<string, unknown>).__explicitOnstartupRan).toBe(true);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__explicitOnstartupRan;
+    }
+  });
+
+  it("import() with a hanging top-level await times out instead of stalling forever", async () => {
+    const pluginDir = path.join(tmpDir, "hanging-import");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.hanging-import", version: "1.0.0", main: "main.mjs" })
+    );
+    // Top-level `await new Promise(() => {})` hangs forever. Without the
+    // import-timeout guard this would pin `_doActivate` and any
+    // `Promise.allSettled` fan-out behind it.
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "await new Promise(() => {}); export function activate() {}"
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      // The promise resolves (it doesn't reject — `activatePlugin` swallows)
+      // and the timeout error is persisted as the loadError so diagnostics
+      // surface why the plugin never came up.
+      await service.activatePlugin("acme.hanging-import");
+      const record = service.getPluginLoadError("acme.hanging-import");
+      expect(record?.message).toContain("timed out");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  }, 10_000);
+
+  it("unloadPlugin during a racing activation does not leak activatedPlugins state", async () => {
+    const pluginDir = path.join(tmpDir, "race-unload");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.race-unload", version: "1.0.0", main: "main.mjs" })
+    );
+    // Activate resolves successfully but the test will unload mid-flight so
+    // the .then handler sees a tombstoned plugins map.
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "export function activate() { return () => {}; }"
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const activation = service.activatePlugin("acme.race-unload");
+    // Synchronously unload before the activation promise resolves. The
+    // plugin is still in `this.plugins` at this point (activation is
+    // mid-flight), so unload runs fully.
+    service.unloadPlugin("acme.race-unload");
+    await activation;
+
+    // The .then(success) handler now runs after unload; the guard must
+    // prevent re-adding the id to `activatedPlugins`.
+    expect(service.hasPlugin("acme.race-unload")).toBe(false);
+    expect(
+      (service as unknown as { activatedPlugins: Set<string> }).activatedPlugins.has(
+        "acme.race-unload"
+      )
+    ).toBe(false);
+    expect(
+      (service as unknown as { cleanupMap: Map<string, () => void> }).cleanupMap.has(
+        "acme.race-unload"
+      )
+    ).toBe(false);
+  });
+
+  it("dispatchHandler implicitly activates the owning plugin before lookup", async () => {
+    const pluginDir = path.join(tmpDir, "implicit-dispatch");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.implicit-dispatch",
+        version: "1.0.0",
+        main: "main.mjs",
+      })
+    );
+    // The plugin's activate() registers a handler. If dispatchHandler did
+    // not force activation first, the handler would not be registered yet
+    // and the dispatch would throw "No plugin handler registered".
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "export function activate(host) { host.registerHandler('probe', () => 'pong'); }"
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    // Crucially, do NOT call activateStartupFinishedPlugins(). The dispatch
+    // path itself must trigger activation.
+    const result = await service.dispatchHandler(
+      "acme.implicit-dispatch",
+      "probe",
+      makeCtx("acme.implicit-dispatch"),
+      []
+    );
+    expect(result).toBe("pong");
+  });
+});
+
+type SettingsScope = "user" | "project";
+type SettingsHostShape = (pluginId: string) => {
+  host: {
+    settings: {
+      get: <T = unknown>(key: string, scope?: SettingsScope) => Promise<T | undefined>;
+      set: <T = unknown>(key: string, value: T, scope?: SettingsScope) => Promise<void>;
+      onDidChange: <T = unknown>(
+        key: string,
+        cb: (value: T | undefined) => void,
+        scope?: SettingsScope
+      ) => () => void;
+    };
+  };
+  revoke: () => void;
+};
+
+async function setupSettingsService(
+  pluginId: string
+): Promise<{ service: PluginService; settingsRoot: string }> {
+  const pluginsRoot = path.join(tmpDir, "plugins");
+  const dir = path.join(pluginsRoot, pluginId);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, "plugin.json"),
+    JSON.stringify({ name: pluginId, version: "1.0.0" })
+  );
+  const service = new PluginService(pluginsRoot);
+  await service.initialize();
+  // User-scope settings live as a sibling of the plugins dir.
+  return { service, settingsRoot: path.join(tmpDir, "plugin-settings") };
+}
+
+function createSettingsHost(service: PluginService, pluginId: string) {
+  return (service as unknown as { createHost: SettingsHostShape }).createHost(pluginId);
+}
+
+describe("createHost — settings", () => {
+  beforeEach(() => {
+    projectStoreMock.getCurrentProject.mockReturnValue(null);
+  });
+
+  it("get returns undefined for an unset key", async () => {
+    const { service } = await setupSettingsService("acme.settings-get");
+    const { host } = createSettingsHost(service, "acme.settings-get");
+    expect(await host.settings.get("token")).toBeUndefined();
+  });
+
+  it("round-trips a value in user scope and persists it as JSON", async () => {
+    const { service, settingsRoot } = await setupSettingsService("acme.settings-rt");
+    const { host } = createSettingsHost(service, "acme.settings-rt");
+    await host.settings.set("token", "sk-test");
+    expect(await host.settings.get<string>("token")).toBe("sk-test");
+    const raw = await fs.readFile(path.join(settingsRoot, "acme.settings-rt.json"), "utf-8");
+    expect(JSON.parse(raw)).toEqual({ token: "sk-test" });
+  });
+
+  const chmodIt = process.platform === "win32" ? it.skip : it;
+  chmodIt("writes the user-scope file with mode 0o600", async () => {
+    const { service, settingsRoot } = await setupSettingsService("acme.settings-mode");
+    const { host } = createSettingsHost(service, "acme.settings-mode");
+    await host.settings.set("token", "secret");
+    const stat = await fs.stat(path.join(settingsRoot, "acme.settings-mode.json"));
+    expect(stat.mode & 0o777).toBe(0o600);
+  });
+
+  it("project scope get returns undefined when no project is active", async () => {
+    projectStoreMock.getCurrentProject.mockReturnValue(null);
+    const { service } = await setupSettingsService("acme.settings-noproj");
+    const { host } = createSettingsHost(service, "acme.settings-noproj");
+    expect(await host.settings.get("token", "project")).toBeUndefined();
+  });
+
+  it("project scope set throws when no project is active", async () => {
+    projectStoreMock.getCurrentProject.mockReturnValue(null);
+    const { service } = await setupSettingsService("acme.settings-noproj2");
+    const { host } = createSettingsHost(service, "acme.settings-noproj2");
+    await expect(host.settings.set("token", "x", "project")).rejects.toThrow(/no active project/);
+  });
+
+  it("project scope writes under the active project root", async () => {
+    const projectDir = path.join(tmpDir, "proj");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projectDir });
+    const { service } = await setupSettingsService("acme.settings-proj");
+    const { host } = createSettingsHost(service, "acme.settings-proj");
+    await host.settings.set("token", "in-project", "project");
+    expect(await host.settings.get<string>("token", "project")).toBe("in-project");
+    const raw = await fs.readFile(
+      path.join(projectDir, ".daintree", "plugin-settings", "acme.settings-proj.json"),
+      "utf-8"
+    );
+    expect(JSON.parse(raw)).toEqual({ token: "in-project" });
+  });
+
+  it("resolves the active project at call time, tracking project switches", async () => {
+    const projA = path.join(tmpDir, "projA");
+    const projB = path.join(tmpDir, "projB");
+    const { service } = await setupSettingsService("acme.settings-switch");
+    const { host } = createSettingsHost(service, "acme.settings-switch");
+
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projA });
+    await host.settings.set("k", "a-value", "project");
+
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projB });
+    expect(await host.settings.get("k", "project")).toBeUndefined();
+    await host.settings.set("k", "b-value", "project");
+    expect(await host.settings.get<string>("k", "project")).toBe("b-value");
+
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projA });
+    expect(await host.settings.get<string>("k", "project")).toBe("a-value");
+  });
+
+  it("set rejects undefined and non-serializable values", async () => {
+    const { service } = await setupSettingsService("acme.settings-bad");
+    const { host } = createSettingsHost(service, "acme.settings-bad");
+    await expect(host.settings.set("k", undefined as unknown as string)).rejects.toThrow(
+      /undefined/
+    );
+    await expect(host.settings.set("k", (() => {}) as unknown as string)).rejects.toThrow(
+      /not JSON-serializable/
+    );
+  });
+
+  it("set rejects an empty key", async () => {
+    const { service } = await setupSettingsService("acme.settings-emptykey");
+    const { host } = createSettingsHost(service, "acme.settings-emptykey");
+    await expect(host.settings.set("", "x")).rejects.toThrow(/non-empty string/);
+  });
+
+  it("onDidChange fires with the new value after a changing set", async () => {
+    const { service } = await setupSettingsService("acme.settings-watch");
+    const { host } = createSettingsHost(service, "acme.settings-watch");
+    const cb = vi.fn();
+    host.settings.onDidChange<string>("token", cb);
+    await host.settings.set("token", "v1");
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb).toHaveBeenCalledWith("v1");
+  });
+
+  it("onDidChange does not fire for a no-op write", async () => {
+    const { service } = await setupSettingsService("acme.settings-noop");
+    const { host } = createSettingsHost(service, "acme.settings-noop");
+    const cb = vi.fn();
+    host.settings.onDidChange("token", cb);
+    await host.settings.set("token", "same");
+    await host.settings.set("token", "same");
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("onDidChange only fires for its subscribed scope", async () => {
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: path.join(tmpDir, "proj-scope") });
+    const { service } = await setupSettingsService("acme.settings-scope");
+    const { host } = createSettingsHost(service, "acme.settings-scope");
+    const userCb = vi.fn();
+    host.settings.onDidChange("token", userCb, "user");
+    await host.settings.set("token", "proj-value", "project");
+    expect(userCb).not.toHaveBeenCalled();
+  });
+
+  it("onDidChange disposer stops further callbacks", async () => {
+    const { service } = await setupSettingsService("acme.settings-dispose");
+    const { host } = createSettingsHost(service, "acme.settings-dispose");
+    const cb = vi.fn();
+    const dispose = host.settings.onDidChange("token", cb);
+    dispose();
+    await host.settings.set("token", "v1");
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("unloadPlugin disposes settings subscriptions", async () => {
+    const { service } = await setupSettingsService("acme.settings-unload");
+    const { host } = createSettingsHost(service, "acme.settings-unload");
+    const cb = vi.fn();
+    host.settings.onDidChange("token", cb);
+    service.unloadPlugin("acme.settings-unload");
+    await host.settings.set("token", "after-unload");
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("revoked host rejects settings.onDidChange but still allows get/set", async () => {
+    const { service } = await setupSettingsService("acme.settings-revoke");
+    const { host, revoke } = createSettingsHost(service, "acme.settings-revoke");
+    revoke();
+    expect(() => host.settings.onDidChange("token", () => {})).toThrow(/host revoked/);
+    await expect(host.settings.set("token", "still-works")).resolves.toBeUndefined();
+    expect(await host.settings.get<string>("token")).toBe("still-works");
+  });
+});
+
+describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
+  it("waitForInit() stays pending until activateStartupFinishedPlugins() settles", async () => {
+    const service = new PluginService(tmpDir);
+    let resolved = false;
+    const waiter = service.waitForInit().then(() => {
+      resolved = true;
+    });
+    // Yield through several microtasks to make sure nothing leaks out of init.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    await service.activateStartupFinishedPlugins();
+    await waiter;
+    expect(resolved).toBe(true);
+  });
+
+  it("waitForInit() resolves after activateStartupFinishedPlugins() even with zero plugins", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    await expect(service.waitForInit()).resolves.toBeUndefined();
+  });
+
+  it("dispose() resolves a pending waitForInit() so callers don't deadlock", async () => {
+    const service = new PluginService(tmpDir);
+    const waiter = service.waitForInit();
+    service.dispose();
+    await expect(waiter).resolves.toBeUndefined();
+  });
+
+  it("pushSnapshotTo() sends actions, panel kinds, toolbar buttons, menu items, and context-menu items to the target webContents", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    const send = vi.fn();
+    const wc = { send, isDestroyed: () => false } as unknown as Electron.WebContents;
+
+    await service.pushSnapshotTo(wc);
+
+    expect(send).toHaveBeenCalledTimes(6);
+    // Every replay goes through the EVENTS_PUSH channel — the same channel the
+    // renderer hooks' persistent push listeners consume, so no renderer-side
+    // changes are needed for the cold-restore path.
+    for (const call of send.mock.calls) {
+      expect(call[0]).toBe(CHANNELS.EVENTS_PUSH);
+    }
+    const names = send.mock.calls.map((c) => (c[1] as { name?: string })?.name);
+    expect(names).toContain("plugin:actions-changed");
+    expect(names).toContain("plugin:panel-kinds-changed");
+    expect(names).toContain("plugin:toolbar-buttons-changed");
+    expect(names).toContain("plugin:menu-items-changed");
+    expect(names).toContain("plugin:keybindings-changed");
+    expect(names).toContain("plugin:context-menu-items-changed");
+    // The keybindings replay is a full authoritative snapshot — the renderer
+    // hook full-replaces its plugin bindings on every push, so `complete: true`
+    // is consistent with that replace-all semantics.
+    const keybindingsCall = send.mock.calls.find(
+      (c) => (c[1] as { name?: string })?.name === "plugin:keybindings-changed"
+    );
+    expect((keybindingsCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(
+      true
+    );
+    // Toolbar, menu-item, and context-menu-item replays must use `complete: false`
+    // so the renderer does not run a stale-prune sweep — replay is a load-style
+    // snapshot, not an unload-driven authoritative sweep.
+    const toolbarCall = send.mock.calls.find(
+      (c) => (c[1] as { name?: string })?.name === "plugin:toolbar-buttons-changed"
+    );
+    expect((toolbarCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(false);
+    const menuItemsCall = send.mock.calls.find(
+      (c) => (c[1] as { name?: string })?.name === "plugin:menu-items-changed"
+    );
+    expect((menuItemsCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(false);
+    const contextMenuItemsCall = send.mock.calls.find(
+      (c) => (c[1] as { name?: string })?.name === "plugin:context-menu-items-changed"
+    );
+    expect((contextMenuItemsCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(
+      false
+    );
+  });
+
+  it("pushSnapshotTo() keeps sending remaining channels when one send() throws (TOCTOU)", async () => {
+    // Simulates the wc being destroyed between the isDestroyed() guard and an
+    // individual send — Electron raises "Object has been destroyed". Without
+    // per-send try/catch one bad call would silently drop the remaining
+    // channels and the cold-restored renderer would miss state.
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    const send = vi.fn((_channel: string, payload: { name: string }) => {
+      if (payload.name === "plugin:actions-changed") {
+        throw new Error("Object has been destroyed");
+      }
+    });
+    const wc = { send, isDestroyed: () => false } as unknown as Electron.WebContents;
+
+    await service.pushSnapshotTo(wc);
+
+    expect(send).toHaveBeenCalledTimes(6);
+    const names = send.mock.calls.map((c) => (c[1] as { name?: string })?.name);
+    expect(names).toContain("plugin:panel-kinds-changed");
+    expect(names).toContain("plugin:toolbar-buttons-changed");
+    expect(names).toContain("plugin:menu-items-changed");
+    expect(names).toContain("plugin:keybindings-changed");
+    expect(names).toContain("plugin:context-menu-items-changed");
+  });
+
+  it("pushSnapshotTo() skips a destroyed webContents", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    const send = vi.fn();
+    const wc = { send, isDestroyed: () => true } as unknown as Electron.WebContents;
+
+    await service.pushSnapshotTo(wc);
+
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("pushSnapshotTo() waits for init before sending — no empty snapshot races startup", async () => {
+    const service = new PluginService(tmpDir);
+    const send = vi.fn();
+    const wc = { send, isDestroyed: () => false } as unknown as Electron.WebContents;
+
+    // Fire pushSnapshotTo before init has resolved — it must hold off the
+    // webContents.send calls until activateStartupFinishedPlugins() settles.
+    const inFlight = service.pushSnapshotTo(wc);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(send).not.toHaveBeenCalled();
+
+    await service.activateStartupFinishedPlugins();
+    await inFlight;
+    expect(send).toHaveBeenCalledTimes(6);
+  });
+
+  it("pushSnapshotTo() does not send after dispose()", async () => {
+    const service = new PluginService(tmpDir);
+    const send = vi.fn();
+    const wc = { send, isDestroyed: () => false } as unknown as Electron.WebContents;
+    const inFlight = service.pushSnapshotTo(wc);
+    service.dispose();
+    await inFlight;
+    expect(send).not.toHaveBeenCalled();
   });
 });

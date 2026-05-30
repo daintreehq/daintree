@@ -1,0 +1,25 @@
+name: Notify website of new release
+description: POST the refresh-releases webhook to daintree.org
+
+inputs:
+  webhook_secret:
+    description: Website webhook secret (WEBSITE_WEBHOOK_SECRET)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Notify website
+      shell: bash
+      env:
+        WEBSITE_WEBHOOK_SECRET: ${{ inputs.webhook_secret }}
+      run: |
+        sleep 1
+        RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://daintree.org/api/refresh-releases \
+          -H "Authorization: Bearer ${WEBSITE_WEBHOOK_SECRET}")
+        HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+        BODY=$(echo "$RESPONSE" | sed '$d')
+        echo "Response (HTTP ${HTTP_CODE}): ${BODY}"
+        if [ "$HTTP_CODE" -ne 200 ]; then
+          echo "::warning::Website refresh failed (HTTP ${HTTP_CODE})"
+        fi

@@ -23,6 +23,15 @@ describe("PortalCloseConfirmDialog buildCopy", () => {
     expect(copy.description).toContain("4 tabs will close");
   });
 
+  it("closeToRight: names the right-hand direction, verb-noun confirm, accurate count", () => {
+    const copy = buildCopy({ kind: "closeToRight", tabsToClose: tabs(3), keepTabId: "anchor" });
+    expect(copy.title).toBe("Close tabs to the right?");
+    expect(copy.confirmLabel).toBe("Close 3 portal tabs");
+    expect(copy.description).toContain("to the right");
+    expect(copy.description).toContain("3 tabs will close");
+    expect(copy.description).not.toMatch(/cannot be undone/i);
+  });
+
   it("singularizes the noun for a single closing tab", () => {
     const copy = buildCopy({ kind: "closeAll", tabsToClose: tabs(1) });
     expect(copy.confirmLabel).toBe("Close 1 portal tab");

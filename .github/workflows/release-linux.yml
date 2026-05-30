@@ -34,28 +34,20 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --prune --no-recurse-submodules --depth=1 origin "$GITHUB_SHA"
-          git -C "$GITHUB_WORKSPACE" checkout --force FETCH_HEAD
-          git -C "$GITHUB_WORKSPACE" clean -ffdx
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - uses: actions/setup-node@v6
+        uses: actions/checkout@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          clean: true
+          fetch-depth: 1
 
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libarchive-tools
 
-      - name: Install dependencies
-        run: node scripts/ci/npm-ci-retry.mjs
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
 
       - name: Check
         run: npm run check
@@ -66,28 +58,20 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Check out repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --prune --no-recurse-submodules --depth=1 origin "$GITHUB_SHA"
-          git -C "$GITHUB_WORKSPACE" checkout --force FETCH_HEAD
-          git -C "$GITHUB_WORKSPACE" clean -ffdx
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - uses: actions/setup-node@v6
+        uses: actions/checkout@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          clean: true
+          fetch-depth: 1
 
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libarchive-tools
 
-      - name: Install dependencies
-        run: node scripts/ci/npm-ci-retry.mjs
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
 
       - name: Test
         run: npm run test
@@ -116,6 +100,9 @@ jobs:
       suite: ${{ matrix.suite }}
       platform: linux
 
+  # Online E2E runs for signal only — nothing `needs:` it, so it never gates
+  # build or publish. Do NOT add job-level continue-on-error here: it is invalid
+  # on reusable-workflow (`uses:`) jobs and makes the whole workflow fail to start.
   e2e-online-gate:
     needs: [checks, unit-tests]
     uses: ./.github/workflows/e2e.yml
@@ -125,33 +112,19 @@ jobs:
     secrets: inherit
 
   build-daintree:
-    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate, e2e-online-gate]
+    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
     name: Build Daintree (Linux)
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
       - name: Check out repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --prune --no-recurse-submodules --depth=1 origin "$GITHUB_SHA"
-          git -C "$GITHUB_WORKSPACE" checkout --force FETCH_HEAD
-          git -C "$GITHUB_WORKSPACE" clean -ffdx
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Resolve update metadata prefix
-        shell: bash
-        run: |
-          PKG_VERSION=$(node -p "require('./package.json').version")
-          if [[ "$PKG_VERSION" == *-rc* ]]; then
-            echo "UPDATE_METADATA_PREFIX=rc" >> "$GITHUB_ENV"
-          elif [[ "$PKG_VERSION" == *-beta* ]]; then
-            echo "UPDATE_METADATA_PREFIX=beta" >> "$GITHUB_ENV"
-          else
-            echo "UPDATE_METADATA_PREFIX=latest" >> "$GITHUB_ENV"
-          fi
+        uses: ./.github/actions/resolve-update-metadata-prefix
 
       - name: Verify version matches tag
         if: startsWith(github.ref, 'refs/tags/v')
@@ -164,14 +137,10 @@ jobs:
             exit 1
           fi
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-
-      - name: Install dependencies
-        run: node scripts/ci/npm-ci-retry.mjs
+          node_version: ${{ env.NODE_VERSION }}
 
       - name: Install Linux dependencies
         run: |
@@ -191,6 +160,9 @@ jobs:
           DEBUG: electron-builder,electron-notarize*,electron-osx-sign*
         run: |
           npm run build
+          # Hard security gate (#9148) — fail before packaging if any E2E
+          # backdoor survived the production strip.
+          npm run check:preload-backdoors
           PUBLISH_FLAG="always"
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "::warning::Dry run — skipping publish to electron-builder targets"
@@ -208,6 +180,42 @@ jobs:
           fi
           node scripts/ci/validate-update-metadata.mjs "release/${UPDATE_METADATA_PREFIX}-linux.yml"
 
+      - name: Install Linux runtime dependencies (packaged smoke)
+        run: |
+          sudo apt-get install -y \
+            libgbm1 \
+            libgtk-3-0 \
+            libnss3 \
+            libasound2 \
+            libxss1 \
+            libxtst6 \
+            libatk1.0-0 \
+            libatk-bridge2.0-0 \
+            libcups2 \
+            libdrm2 \
+            libnotify4 \
+            xvfb
+
+      - name: Smoke test (packaged Linux)
+        shell: bash
+        timeout-minutes: 8
+        env:
+          PACKAGED_BINARY: ${{ github.workspace }}/squashfs-root/AppRun
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          SMOKE_TIMEOUT_MS: "210000"
+        run: |
+          APPIMAGE=$(ls release/*.AppImage | head -1)
+          if [ -z "$APPIMAGE" ]; then
+            echo "::error::No AppImage found in release/"
+            exit 1
+          fi
+          chmod +x "$APPIMAGE"
+          rm -rf squashfs-root
+          # FUSE is unavailable on GitHub runners, so extract rather than mount.
+          "$APPIMAGE" --appimage-extract
+          xvfb-run --auto-servernum node scripts/run-packaged-smoke.mjs
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -220,116 +228,103 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  # Packaged-artifact smoke (#9246) — launches the freshly-built AppImage in
+  # --smoke-test mode and validates every stability marker including the
+  # node-pty, better-sqlite3, and posix-pty-reaper native module checks. Gates
+  # publish so a regression in the packaged tree (e.g. an asar.unpacked native
+  # missing for the build's arch) fails the release instead of shipping.
+  smoke-packaged:
+    needs: [build-daintree]
+    name: Smoke (packaged AppImage)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            xvfb \
+            libgbm1 \
+            libgtk-3-0 \
+            libnss3 \
+            libasound2 \
+            libxss1 \
+            libxtst6 \
+            libatk1.0-0 \
+            libdrm2
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: release-daintree-ubuntu-22.04
+          path: ${{ runner.temp }}/release-artifact
+
+      - name: Extract AppImage
+        id: extract
+        shell: bash
+        run: |
+          set -euo pipefail
+          APPIMAGE=$(find "$RUNNER_TEMP/release-artifact" -maxdepth 2 -name '*.AppImage' | head -n 1)
+          if [ -z "$APPIMAGE" ]; then
+            echo "::error::No .AppImage found in downloaded artifact"
+            find "$RUNNER_TEMP/release-artifact" -maxdepth 3 -type f | head -50
+            exit 1
+          fi
+          echo "Found AppImage: $APPIMAGE"
+          chmod +x "$APPIMAGE"
+          mkdir -p "$RUNNER_TEMP/appimage-work"
+          cd "$RUNNER_TEMP/appimage-work"
+          # --appimage-extract avoids FUSE, which is unavailable on GitHub
+          # Actions hosted runners. The packaged smoke runner supplies APPDIR
+          # when invoking the extracted AppRun entry point; the AppImage
+          # runtime would normally do that when mounting the image.
+          "$APPIMAGE" --appimage-extract
+          BIN="$RUNNER_TEMP/appimage-work/squashfs-root/AppRun"
+          if [ ! -x "$BIN" ]; then
+            echo "::error::Extracted AppRun missing or not executable at $BIN"
+            ls -la "$RUNNER_TEMP/appimage-work/squashfs-root" || true
+            exit 1
+          fi
+          echo "packaged_binary=$BIN" >> "$GITHUB_OUTPUT"
+
+      - name: Run packaged smoke
+        env:
+          PACKAGED_BINARY: ${{ steps.extract.outputs.packaged_binary }}
+        run: xvfb-run --auto-servernum node scripts/run-packaged-smoke.mjs
+
   publish-daintree:
     if: startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true
-    needs: [build-daintree]
+    needs: [build-daintree, smoke-packaged]
     runs-on: ubuntu-22.04
     timeout-minutes: 15
 
     steps:
-      - name: Checkout repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --prune --no-recurse-submodules --depth=1 origin "$GITHUB_SHA"
-          git -C "$GITHUB_WORKSPACE" checkout --force FETCH_HEAD
-          git -C "$GITHUB_WORKSPACE" clean -ffdx
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - name: Check out repository
+        uses: actions/checkout@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          clean: true
+          fetch-depth: 1
 
-      - name: Install dependencies
-        run: node scripts/ci/npm-ci-retry.mjs --ignore-scripts
-
-      - name: Resolve update metadata prefix
-        shell: bash
-        run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          if [[ "$TAG_VERSION" == *-rc* ]]; then
-            echo "UPDATE_METADATA_PREFIX=rc" >> "$GITHUB_ENV"
-          elif [[ "$TAG_VERSION" == *-beta* ]]; then
-            echo "UPDATE_METADATA_PREFIX=beta" >> "$GITHUB_ENV"
-          else
-            echo "UPDATE_METADATA_PREFIX=latest" >> "$GITHUB_ENV"
-          fi
-
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v8
+      - name: Publish Daintree (Linux)
+        uses: ./.github/actions/publish-daintree
         with:
-          name: release-daintree-ubuntu-22.04
-          path: release/
-
-      - name: List release files
-        run: ls -lah release/
-
-      - name: Install gate dependencies
-        shell: bash
-        run: npm install --no-save --no-audit --no-fund --ignore-scripts js-yaml semver
-
-      - name: Check version is monotonically increasing
-        shell: bash
-        env:
-          UPDATE_METADATA_PREFIX: ${{ env.UPDATE_METADATA_PREFIX }}
-          RELEASE_PLATFORMS: linux
-        run: node scripts/ci/check-version-monotonic.mjs
-
-      - name: Upload binaries to R2
-        shell: bash
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_BUCKET: ${{ secrets.DAINTREE_R2_BUCKET }}
-        run: |
-          aws s3 sync release/ "s3://${R2_BUCKET}/releases/" \
-            --endpoint-url "${R2_ENDPOINT}" \
-            --no-progress \
-            --exclude "*" \
-            --include "*.AppImage" \
-            --include "*.deb" \
-            --include "*.blockmap" \
-            --cache-control "public, max-age=31536000, immutable"
-
-      - name: Verify binaries reachable on R2
-        shell: bash
-        env:
-          PUBLISH_URL: https://updates.daintree.org/releases/
-        run: node scripts/ci/verify-r2-uploads.mjs
-
-      - name: Upload metadata to R2
-        shell: bash
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_BUCKET: ${{ secrets.DAINTREE_R2_BUCKET }}
-        run: |
-          aws s3 sync release/ "s3://${R2_BUCKET}/releases/" \
-            --endpoint-url "${R2_ENDPOINT}" \
-            --no-progress \
-            --exclude "*" \
-            --include "${UPDATE_METADATA_PREFIX}-linux.yml" \
-            --cache-control "no-cache, no-store, must-revalidate"
-
-      - name: Notify website of new release
-        shell: bash
-        env:
-          WEBSITE_WEBHOOK_SECRET: ${{ secrets.WEBSITE_WEBHOOK_SECRET }}
-        run: |
-          sleep 1
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://daintree.org/api/refresh-releases \
-            -H "Authorization: Bearer ${WEBSITE_WEBHOOK_SECRET}")
-          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          BODY=$(echo "$RESPONSE" | sed '$d')
-          echo "Response (HTTP ${HTTP_CODE}): ${BODY}"
-          if [ "$HTTP_CODE" -ne 200 ]; then
-            echo "::warning::Website refresh failed (HTTP ${HTTP_CODE})"
-          fi
+          artifact_name: release-daintree-ubuntu-22.04
+          include_globs: "*.AppImage *.deb *.blockmap"
+          metadata_suffix: "-linux"
+          release_platforms: linux
+          r2_access_key_id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2_secret_access_key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          r2_endpoint: ${{ secrets.R2_ENDPOINT }}
+          r2_bucket: ${{ secrets.DAINTREE_R2_BUCKET }}
+          website_webhook_secret: ${{ secrets.WEBSITE_WEBHOOK_SECRET }}

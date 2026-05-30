@@ -30,6 +30,7 @@ export type TypeFilter =
 export type PrIssueFilter = "hasIssue" | "hasPR" | "prOpen" | "prMerged" | "prClosed";
 export type SessionFilter = "hasTerminals" | "working" | "waiting" | "completed" | "exited";
 export type ActivityFilter = "last15m" | "last1h" | "last24h" | "last7d";
+export type DevServerFilter = "running" | "starting" | "hasDevServer" | "error";
 
 const PR_ISSUE_FILTER_VALUES: ReadonlySet<string> = new Set<PrIssueFilter>([
   "hasIssue",
@@ -51,6 +52,8 @@ interface WorktreeFilterState {
   prIssueFilters: Set<PrIssueFilter>;
   sessionFilters: Set<SessionFilter>;
   activityFilters: Set<ActivityFilter>;
+  /** Transient session-only dev-server facet filter (not persisted). */
+  devServerFilters: Set<DevServerFilter>;
   alwaysShowActive: boolean;
   alwaysShowWaiting: boolean;
   hideMainWorktree: boolean;
@@ -70,6 +73,7 @@ interface WorktreeFilterActions {
   togglePrIssueFilter: (filter: PrIssueFilter) => void;
   toggleSessionFilter: (filter: SessionFilter) => void;
   toggleActivityFilter: (filter: ActivityFilter) => void;
+  toggleDevServerFilter: (filter: DevServerFilter) => void;
   setAlwaysShowActive: (enabled: boolean) => void;
   setAlwaysShowWaiting: (enabled: boolean) => void;
   setHideMainWorktree: (enabled: boolean) => void;
@@ -107,8 +111,11 @@ interface GlobalPrefsState {
 /**
  * Fields that are query-shaped or identity-scoped — they must not leak across
  * projects. These live in the per-project store
- * (`daintree-worktree-filters:{projectId}`). `quickStateFilter` is transient
- * (not persisted) but is also scoped to the current project's in-memory state.
+ * (`daintree-worktree-filters:{projectId}`). `quickStateFilter` and
+ * `devServerFilters` are transient (not persisted) but are also scoped to the
+ * current project's in-memory state. `devServerFilters` is deliberately session
+ * -only: a persisted "running" filter would show an empty worktree list on the
+ * next launch (no servers are running yet) until the user noticed and cleared it.
  */
 interface ProjectScopedState {
   query: string;
@@ -121,6 +128,7 @@ interface ProjectScopedState {
   collapsedWorktrees: string[];
   manualOrder: string[];
   quickStateFilter: QuickStateFilter;
+  devServerFilters: Set<DevServerFilter>;
 }
 
 interface GlobalPersistedShape {
@@ -171,6 +179,11 @@ const GLOBAL_KEY = "daintree-worktree-filters";
  */
 function resolveProjectIdFromUrl(): string {
   if (typeof window === "undefined") return "default";
+  // Prefer the id seeded by preload via additionalArguments (#9162); preload
+  // runs before this module evaluates, so the global is available. Fall back to
+  // the `?projectId=` query string (initial-window load) and finally "default".
+  const seeded = window.__DAINTREE_INITIAL_PROJECT__?.id;
+  if (seeded && seeded.length > 0) return seeded;
   try {
     const fromUrl = new URLSearchParams(window.location.search).get("projectId");
     return fromUrl && fromUrl.length > 0 ? fromUrl : "default";
@@ -330,6 +343,7 @@ const _projectStore = create<ProjectScopedState>()(
       collapsedWorktrees: _legacySeed.collapsedWorktrees ?? [],
       manualOrder: _legacySeed.manualOrder ?? [],
       quickStateFilter: "all",
+      devServerFilters: new Set<DevServerFilter>(),
     }),
     {
       name: PROJECT_KEY,
@@ -445,6 +459,14 @@ const _actions: WorktreeFilterActions = {
       return { activityFilters: next };
     });
   },
+  toggleDevServerFilter: (filter) => {
+    _projectStore.setState((state) => {
+      const next = new Set(state.devServerFilters);
+      if (next.has(filter)) next.delete(filter);
+      else next.add(filter);
+      return { devServerFilters: next };
+    });
+  },
   setAlwaysShowActive: (enabled) => {
     _globalPrefsStore.setState({ alwaysShowActive: enabled });
   },
@@ -516,6 +538,7 @@ const _actions: WorktreeFilterActions = {
       sessionFilters: new Set(),
       activityFilters: new Set(),
       quickStateFilter: "all",
+      devServerFilters: new Set(),
     });
     _globalPrefsStore.setState({ hideMainWorktree: false });
   },
@@ -529,6 +552,7 @@ const _actions: WorktreeFilterActions = {
       p.prIssueFilters.size +
       p.sessionFilters.size +
       p.activityFilters.size +
+      p.devServerFilters.size +
       (p.quickStateFilter !== "all" ? 1 : 0)
     );
   },
@@ -542,6 +566,7 @@ const _actions: WorktreeFilterActions = {
       p.prIssueFilters.size > 0 ||
       p.sessionFilters.size > 0 ||
       p.activityFilters.size > 0 ||
+      p.devServerFilters.size > 0 ||
       p.quickStateFilter !== "all"
     );
   },
@@ -552,7 +577,8 @@ const _actions: WorktreeFilterActions = {
       p.typeFilters.size > 0 ||
       p.prIssueFilters.size > 0 ||
       p.sessionFilters.size > 0 ||
-      p.activityFilters.size > 0
+      p.activityFilters.size > 0 ||
+      p.devServerFilters.size > 0
     );
   },
 };
@@ -577,6 +603,7 @@ function _computeMergedState(): WorktreeFilterStore {
     prIssueFilters: p.prIssueFilters,
     sessionFilters: p.sessionFilters,
     activityFilters: p.activityFilters,
+    devServerFilters: p.devServerFilters,
     alwaysShowActive: g.alwaysShowActive,
     alwaysShowWaiting: g.alwaysShowWaiting,
     hideMainWorktree: g.hideMainWorktree,

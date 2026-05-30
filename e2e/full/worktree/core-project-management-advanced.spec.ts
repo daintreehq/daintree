@@ -3,6 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { addAndSwitchToProject, selectExistingProjectAndRefresh } from "../../helpers/workflows";
+import { dismissBlockingPalette } from "../../helpers/overlays";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
@@ -77,15 +78,18 @@ test.describe.serial("Core: Project Management Advanced", () => {
       await dialog.getByRole("button", { name: "Cancel" }).click();
       await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
 
-      // Reopen palette and verify project is still listed
-      await window.locator(SEL.toolbar.projectSwitcherTrigger).click();
+      // The cancel flow returns to the underlying switcher when it remains open.
+      // Only click the trigger if the dialog teardown closed the switcher too.
+      if (!(await palette.isVisible().catch(() => false))) {
+        await window.locator(SEL.toolbar.projectSwitcherTrigger).click();
+      }
       await expect(palette).toBeVisible({ timeout: T_MEDIUM });
       await expect(palette.getByText(SECONDARY_NAME, { exact: false })).toBeVisible({
         timeout: T_SHORT,
       });
 
       // Close palette
-      await window.keyboard.press("Escape");
+      await dismissBlockingPalette(window);
       await expect(palette).not.toBeVisible({ timeout: T_SHORT });
     });
 
@@ -119,7 +123,8 @@ test.describe.serial("Core: Project Management Advanced", () => {
       });
 
       // Close palette
-      await window.keyboard.press("Escape");
+      await dismissBlockingPalette(window);
+      await expect(palette).not.toBeVisible({ timeout: T_SHORT });
     });
   });
 

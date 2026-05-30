@@ -119,6 +119,7 @@ export const CHANNELS = {
   DIAGNOSTICS_GET_PROCESS_METRICS: "diagnostics:get-process-metrics",
   DIAGNOSTICS_GET_HEAP_STATS: "diagnostics:get-heap-stats",
   DIAGNOSTICS_GET_INFO: "diagnostics:get-info",
+  SYSTEM_GET_REPORT_ENRICHMENT: "system:get-report-enrichment",
   SYSTEM_REPORT_BLINK_MEMORY: "system:report-blink-memory",
   SYSTEM_REPORT_RENDERER_ELU: "system:report-renderer-elu",
 
@@ -142,6 +143,7 @@ export const CHANNELS = {
   GITHUB_LIST_ISSUES: "github:list-issues",
   GITHUB_LIST_PRS: "github:list-prs",
   GITHUB_ASSIGN_ISSUE: "github:assign-issue",
+  GITHUB_UNASSIGN_ISSUE: "github:unassign-issue",
   GITHUB_GET_ISSUE_TOOLTIP: "github:get-issue-tooltip",
   GITHUB_GET_PR_TOOLTIP: "github:get-pr-tooltip",
   GITHUB_GET_ISSUE_URL: "github:get-issue-url",
@@ -162,6 +164,7 @@ export const CHANNELS = {
   APP_GET_STATE: "app:get-state",
   APP_SET_STATE: "app:set-state",
   APP_GET_VERSION: "app:get-version",
+  APP_GET_VERSION_INFO: "app:get-version-info",
   APP_HYDRATE: "app:hydrate",
   APP_BOOT: "app:boot",
   APP_QUIT: "app:quit",
@@ -362,6 +365,7 @@ export const CHANNELS = {
   WEBVIEW_DIALOG_REQUEST: "webview:dialog-request",
   WEBVIEW_DIALOG_RESPONSE: "webview:dialog-response",
   WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
+  WEBVIEW_RELOAD_SHORTCUT: "webview:reload-shortcut",
   WEBVIEW_NAVIGATION_BLOCKED: "webview:navigation-blocked",
   WEBVIEW_UNRESPONSIVE: "webview:unresponsive",
   WEBVIEW_RESPONSIVE: "webview:responsive",
@@ -376,12 +380,20 @@ export const CHANNELS = {
   WEBVIEW_GET_SCROLL_POSITION: "webview:get-scroll-position",
   WEBVIEW_CONSOLE_MESSAGE: "webview:console-message",
   WEBVIEW_CONSOLE_CONTEXT_CLEARED: "webview:console-context-cleared",
+  WEBVIEW_GET_NAVIGATION_HISTORY: "webview:get-navigation-history",
+  WEBVIEW_GO_TO_HISTORY_INDEX: "webview:go-to-history-index",
 
   SYSTEM_SLEEP_GET_METRICS: "system-sleep:get-metrics",
   SYSTEM_SLEEP_GET_AWAKE_TIME: "system-sleep:get-awake-time",
   SYSTEM_SLEEP_RESET: "system-sleep:reset",
   SYSTEM_SLEEP_ON_SUSPEND: "system-sleep:on-suspend",
   SYSTEM_SLEEP_ON_WAKE: "system-sleep:on-wake",
+
+  // OS Do-Not-Disturb / Focus state. Read-only push channel for the renderer;
+  // never used to suppress in-app toasts (the OS already silences its native
+  // banners — double-gating would hide signals the user cannot observe).
+  OS_DND_GET_STATE: "os-dnd:get-state",
+  OS_DND_STATE_CHANGED: "os-dnd:state-changed",
 
   KEYBINDING_GET_OVERRIDES: "keybinding:get-overrides",
   KEYBINDING_SET_OVERRIDE: "keybinding:set-override",
@@ -456,10 +468,16 @@ export const CHANNELS = {
   DEV_PREVIEW_STOP_BY_PANEL: "dev-preview:stop-by-panel",
   DEV_PREVIEW_GET_STATE: "dev-preview:get-state",
   DEV_PREVIEW_GET_BY_WORKTREE: "dev-preview:get-by-worktree",
+  DEV_PREVIEW_GET_ALL_SESSIONS: "dev-preview:get-all-sessions",
   DEV_PREVIEW_GET_DESTRUCTIVE_PREVIEW_META: "dev-preview:get-destructive-preview-meta",
   DEV_PREVIEW_GET_DESTRUCTIVE_PREVIEW_SIZES: "dev-preview:get-destructive-preview-sizes",
   DEV_PREVIEW_STOP_BY_WORKTREE: "dev-preview:stop-by-worktree",
+  DEV_PREVIEW_RESTART_BY_WORKTREE: "dev-preview:restart-by-worktree",
+  DEV_PREVIEW_STOP_DEV_SERVER_BY_WORKTREE: "dev-preview:stop-dev-server-by-worktree",
+  DEV_PREVIEW_GET_PROXY_PORT: "dev-preview:get-proxy-port",
+  DEV_PREVIEW_MINT_BROWSER_TOKEN: "dev-preview:mint-browser-token",
   DEV_PREVIEW_STATE_CHANGED: "dev-preview:state-changed",
+  DEV_PREVIEW_ALL_SESSIONS_CHANGED: "dev-preview:all-sessions-changed",
 
   COMMANDS_LIST: "commands:list",
   COMMANDS_GET: "commands:get",
@@ -757,6 +775,7 @@ export const CHANNELS = {
   FORGE_OPEN_ISSUE: "forge:open-issue",
   FORGE_GET_ISSUE_URL: "forge:get-issue-url",
   FORGE_ASSIGN_ISSUE: "forge:assign-issue",
+  FORGE_UNASSIGN_ISSUE: "forge:unassign-issue",
   FORGE_VALIDATE_TOKEN: "forge:validate-token",
   FORGE_SET_CREDENTIAL: "forge:set-credential",
   FORGE_GET_CREDENTIAL_STATUS: "forge:get-credential-status",
@@ -768,11 +787,30 @@ export const CHANNELS = {
   FORGE_GET_REPO_METADATA: "forge:get-repo-metadata",
   FORGE_CLASSIFY_PUSH_ERROR: "forge:classify-push-error",
 
+  // Forge audit log channels — separate prefix from `forge:*` so the codegen
+  // produces a dedicated `forgeAudit` namespace in the renderer rather than
+  // appending into the hand-written `forge` namespace.
+  FORGE_AUDIT_GET_RECORDS: "forge-audit:get-records",
+  FORGE_AUDIT_GET_CONFIG: "forge-audit:get-config",
+  FORGE_AUDIT_GET_STATS: "forge-audit:get-stats",
+  FORGE_AUDIT_CLEAR_LOG: "forge-audit:clear-log",
+  FORGE_AUDIT_EXPORT_LOG: "forge-audit:export-log",
+  FORGE_AUDIT_SET_ENABLED: "forge-audit:set-enabled",
+
   // Plugin channels
   PLUGIN_LIST: "plugin:list",
+  PLUGIN_INSTALL: "plugin:install",
+  PLUGIN_SET_ENABLED: "plugin:set-enabled",
+  PLUGIN_INSTALL_FROM_FILE: "plugin:install-from-file",
+  PLUGIN_INSTALL_FROM_PATH: "plugin:install-from-path",
+  PLUGIN_INSTALL_FROM_URL: "plugin:install-from-url",
+  PLUGIN_UNINSTALL: "plugin:uninstall",
+  PLUGIN_CHECK_FOR_UPDATE: "plugin:check-for-update",
   PLUGIN_INVOKE: "plugin:invoke",
   PLUGIN_TOOLBAR_BUTTONS: "plugin:toolbar-buttons",
   PLUGIN_MENU_ITEMS: "plugin:menu-items",
+  PLUGIN_KEYBINDINGS: "plugin:keybindings",
+  PLUGIN_CONTEXT_MENU_ITEMS: "plugin:context-menu-items",
   PLUGIN_VALIDATE_ACTION_IDS: "plugin:validate-action-ids",
   PLUGIN_ACTIONS_GET: "plugin:actions-get",
   PLUGIN_ACTIONS_REGISTER: "plugin:actions-register",
@@ -780,6 +818,35 @@ export const CHANNELS = {
   PLUGIN_PANEL_KINDS_GET: "plugin:panel-kinds-get",
   PLUGIN_FORGE_PROVIDERS_GET: "plugin:forge-providers-get",
   PLUGIN_FILE_DECORATIONS_GET: "plugin:file-decorations-get",
+  PLUGIN_GET_AUDIT_RECORDS: "plugin:get-audit-records",
+  PLUGIN_GET_AUDIT_CONFIG: "plugin:get-audit-config",
+  PLUGIN_CLEAR_AUDIT_LOG: "plugin:clear-audit-log",
+  PLUGIN_SET_AUDIT_ENABLED: "plugin:set-audit-enabled",
+  PLUGIN_SET_AUDIT_MAX_RECORDS: "plugin:set-audit-max-records",
+  PLUGIN_EXPORT_AUDIT_LOG: "plugin:export-audit-log",
+  PLUGIN_GET_DIAGNOSTICS_SNAPSHOT: "plugin:get-diagnostics-snapshot",
+  PLUGIN_SETTINGS_GET_VALUES: "plugin:settings-get-values",
+  PLUGIN_SETTINGS_SET_VALUE: "plugin:settings-set-value",
+  PLUGIN_SETTINGS_DELETE_VALUE: "plugin:settings-delete-value",
+  PLUGIN_SETTINGS_REVEAL_SECRET: "plugin:settings-reveal-secret",
+  /** Bridge: main process dispatches a plugin-sourced action request to the renderer. */
+  PLUGIN_DISPATCH_ACTION_REQUEST: "plugin:dispatch-action-request",
+  /** Bridge: renderer returns the plugin-sourced action dispatch result to the main process. */
+  PLUGIN_DISPATCH_ACTION_RESPONSE: "plugin:dispatch-action-response",
+
+  // Plugin MCP supervisor channels (#9233) — stdio MCP servers contributed by
+  // plugin manifests, supervised in the main process via execa. Distinct from
+  // `mcp-server:*`, which covers the in-process inbound MCP server.
+  PLUGIN_MCP_LIST: "plugin-mcp:list",
+  PLUGIN_MCP_GET_STDERR: "plugin-mcp:get-stderr",
+  PLUGIN_MCP_RESTART: "plugin-mcp:restart",
+  // Lazy two-tier tool discovery (#9235): tier-1 summaries on demand and the
+  // tier-2 full schema for a single selected tool.
+  PLUGIN_MCP_LIST_TOOLS: "plugin-mcp:list-tools",
+  PLUGIN_MCP_GET_FULL_SCHEMA: "plugin-mcp:get-full-schema",
+  // Advanced tuning: the global tool-count cap surfaced as a setting (#9235).
+  PLUGIN_MCP_GET_CONFIG: "plugin-mcp:get-config",
+  PLUGIN_MCP_SET_CONFIG: "plugin-mcp:set-config",
 
   // Config reload channels
   APP_RELOAD_CONFIG: "app:reload-config",

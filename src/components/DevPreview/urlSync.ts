@@ -5,17 +5,68 @@
  * Returns `false` when no adoption is needed (no detected URL, or the detected
  * URL is the same origin the pane is already on — a port-stable restart).
  *
- * When the dev server restarts on a different origin (typically a port shift,
- * e.g. 3000 → 3001), the detected URL is the bare server root. Navigating to it
- * directly would drop the route the user was on. To preserve it, the current
- * URL's pathname/search/hash are grafted onto the detected origin.
+ * **Proxy mode (#9100):** when `proxyOrigin` is supplied, the webview always sits
+ * on the stable `dp-*.localhost` proxy origin and never moves off it. A dev-server
+ * restart only shifts the upstream port — which the proxy resolves live — so once
+ * the pane is on the proxy origin there is nothing to navigate (returns `false`).
+ * The only navigation is the first one onto the proxy origin (and any migration
+ * off a stale direct-localhost URL), where the route is taken from the detected
+ * URL's non-root path, else the pane's current route, else `/`.
  *
- * If the detected URL itself carries a non-root path (e.g. a Vite `base`
- * config advertising `http://localhost:5174/app/`), that path is intentional
- * and is navigated to as-is — grafting only applies to a bare server root.
+ * **Legacy mode (no proxy):** when the dev server restarts on a different origin
+ * (typically a port shift, e.g. 3000 → 3001), the detected URL is the bare server
+ * root. Navigating to it directly would drop the route the user was on; to preserve
+ * it, the current URL's pathname/search/hash are grafted onto the detected origin.
+ * If the detected URL itself carries a non-root path (e.g. a Vite `base` config
+ * advertising `http://localhost:5174/app/`), that path is intentional and is
+ * navigated to as-is — grafting only applies to a bare server root.
  */
-export function computeDevServerUrl(detectedUrl: string, currentUrl: string): string | false {
+export function computeDevServerUrl(
+  detectedUrl: string,
+  currentUrl: string,
+  proxyOrigin?: string | null
+): string | false {
   if (!detectedUrl) return false;
+
+  if (proxyOrigin) {
+    let proxy: URL;
+    try {
+      proxy = new URL(proxyOrigin);
+    } catch {
+      return false;
+    }
+    let current: URL | null;
+    try {
+      current = currentUrl ? new URL(currentUrl) : null;
+    } catch {
+      current = null;
+    }
+    // Already on the stable proxy origin — a restart only moved the upstream port,
+    // which the proxy follows transparently. Nothing to navigate.
+    if (current && current.origin === proxy.origin) return false;
+
+    // First navigation onto the proxy origin (or migrating off a stale localhost
+    // URL). Choose the route: honor a non-root path the dev server advertises
+    // (Vite `base`), else preserve the pane's current route, else land on root.
+    let detected: URL | null;
+    try {
+      detected = new URL(detectedUrl);
+    } catch {
+      detected = null;
+    }
+    const target = new URL(proxy.toString());
+    if (detected && detected.pathname !== "/") {
+      target.pathname = detected.pathname;
+      target.search = detected.search;
+      target.hash = detected.hash;
+    } else if (current) {
+      target.pathname = current.pathname;
+      target.search = current.search;
+      target.hash = current.hash;
+    }
+    return target.toString();
+  }
+
   if (!currentUrl) return detectedUrl;
   if (detectedUrl === currentUrl) return false;
 

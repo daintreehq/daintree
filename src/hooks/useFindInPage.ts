@@ -5,6 +5,7 @@ export interface FindInPageState {
   query: string;
   activeMatch: number;
   matchCount: number;
+  matchCase: boolean;
   inputRef: React.RefObject<HTMLInputElement | null>;
   isComposingRef: React.RefObject<boolean>;
   open: () => void;
@@ -12,6 +13,7 @@ export interface FindInPageState {
   setQuery: (q: string) => void;
   goNext: () => void;
   goPrev: () => void;
+  toggleMatchCase: () => void;
 }
 
 export function useFindInPage(
@@ -24,21 +26,26 @@ export function useFindInPage(
   const [query, setQueryState] = useState("");
   const [activeMatch, setActiveMatch] = useState(0);
   const [matchCount, setMatchCount] = useState(0);
+  const [matchCase, setMatchCase] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const isComposingRef = useRef(false);
   const latestRequestIdRef = useRef<number | null>(null);
 
   const safeFind = useCallback(
-    (text: string, opts: { forward?: boolean; findNext?: boolean }) => {
+    (text: string, opts: { forward?: boolean; findNext?: boolean; matchCase?: boolean }) => {
       if (!webviewElement || !isWebviewReady || !text) return;
       try {
-        const requestId = webviewElement.findInPage(text, opts);
+        const { matchCase: explicitMatchCase, ...restOpts } = opts;
+        const requestId = webviewElement.findInPage(text, {
+          ...restOpts,
+          matchCase: explicitMatchCase ?? matchCase,
+        });
         latestRequestIdRef.current = requestId;
       } catch {
         // webview detached
       }
     },
-    [webviewElement, isWebviewReady]
+    [webviewElement, isWebviewReady, matchCase]
   );
 
   const safeStopFind = useCallback(() => {
@@ -64,6 +71,7 @@ export function useFindInPage(
     setQueryState("");
     setActiveMatch(0);
     setMatchCount(0);
+    setMatchCase(false);
     latestRequestIdRef.current = null;
     safeStopFind();
   }, [safeStopFind]);
@@ -92,6 +100,14 @@ export function useFindInPage(
   const goPrev = useCallback(() => {
     if (query) safeFind(query, { forward: false, findNext: true });
   }, [query, safeFind]);
+
+  const toggleMatchCase = useCallback(() => {
+    const next = !matchCase;
+    setMatchCase(next);
+    if (query && isOpen) {
+      safeFind(query, { findNext: false, matchCase: next });
+    }
+  }, [query, isOpen, matchCase, safeFind]);
 
   // Listen for found-in-page events
   useEffect(() => {
@@ -182,6 +198,7 @@ export function useFindInPage(
     query,
     activeMatch,
     matchCount,
+    matchCase,
     inputRef,
     isComposingRef,
     open,
@@ -189,5 +206,6 @@ export function useFindInPage(
     setQuery,
     goNext,
     goPrev,
+    toggleMatchCase,
   };
 }

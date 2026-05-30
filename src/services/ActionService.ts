@@ -349,12 +349,18 @@ export class ActionService {
       return { ok: false, error };
     }
 
-    // Enforce confirmation for destructive actions from agent sources
-    // Agents must explicitly confirm before executing dangerous operations
-    if (definition.danger === "confirm" && source === "agent" && !options?.confirmed) {
+    // Enforce confirmation for destructive actions from agent and plugin
+    // sources. Agents may explicitly confirm via { confirmed: true }; plugins
+    // have NO confirm bypass — the `confirmed` flag is ignored for plugin
+    // sources, so danger:"confirm" actions always return CONFIRMATION_REQUIRED
+    // for them even if a caller spoofs `confirmed: true` on a "plugin" dispatch.
+    if (
+      definition.danger === "confirm" &&
+      (source === "plugin" || (source === "agent" && !options?.confirmed))
+    ) {
       const error: ActionError = {
         code: "CONFIRMATION_REQUIRED",
-        message: `Action "${actionId}" requires explicit confirmation from agent sources. Set { confirmed: true } to proceed.`,
+        message: `Action "${actionId}" requires explicit confirmation from ${source} sources.`,
       };
       return { ok: false, error };
     }
@@ -392,6 +398,7 @@ export class ActionService {
         danger: definition.danger,
         safeArgs: this.extractSafeBreadcrumbArgs(args, definition),
         confirmed: options?.confirmed,
+        pluginId: definition.pluginId,
       });
       this.emitShortcutHint(actionId, source);
       return { ok: true, result: result as Result };
@@ -603,8 +610,14 @@ export class ActionService {
     danger: ActionDanger;
     safeArgs?: Record<string, unknown>;
     confirmed?: boolean;
+    pluginId?: string;
   }): Promise<void> {
     if (!isElectronApiAvailable()) return;
+
+    // Plugin actions feed the plugin-action audit log: compute the SHA-256
+    // digest of the (already redacted) args in the renderer so raw args need
+    // never cross IPC for fingerprinting. Built-in actions skip this entirely.
+    const argsHash = payload.pluginId !== undefined ? await sha256Hex(payload.args) : undefined;
 
     try {
       await window.electron.events.emit("action:dispatched", {
@@ -618,6 +631,8 @@ export class ActionService {
         danger: payload.danger,
         ...(payload.safeArgs ? { safeArgs: payload.safeArgs } : {}),
         ...(payload.confirmed !== undefined ? { confirmed: payload.confirmed } : {}),
+        ...(payload.pluginId !== undefined ? { pluginId: payload.pluginId } : {}),
+        ...(argsHash !== undefined ? { argsHash } : {}),
       });
     } catch (err) {
       logWarn("Failed to emit action:dispatched event", {
@@ -625,6 +640,33 @@ export class ActionService {
         error: err,
       });
     }
+  }
+}
+
+/**
+ * SHA-256 hex digest of the JSON-serialized value, computed via SubtleCrypto.
+ * Returns an empty string when the value is absent, unserializable, or when
+ * the Web Crypto API is unavailable — the audit record stores `""` rather
+ * than failing the dispatch flow.
+ */
+async function sha256Hex(value: unknown): Promise<string> {
+  if (value === undefined || value === null) return "";
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    serialized = "[unserializable]";
+  }
+  if (serialized === undefined) serialized = "[unserializable]";
+  try {
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle) return "";
+    const buf = await subtle.digest("SHA-256", new TextEncoder().encode(serialized));
+    return Array.from(new Uint8Array(buf))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  } catch {
+    return "";
   }
 }
 

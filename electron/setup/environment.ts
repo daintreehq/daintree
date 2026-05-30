@@ -25,6 +25,7 @@ import fs from "fs";
 import { existsSync } from "fs";
 import os from "os";
 import { isLinuxWaylandHybridGpu } from "../utils/gpuDetection.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 export let exposeGc: (() => void) | undefined;
 try {
@@ -48,6 +49,17 @@ if (!app.isPackaged && !hasExplicitUserDataDir) {
       ? devUserDataDir
       : path.join(app.getPath("appData"), "daintree-dev")
   );
+}
+
+// E2E: redirect crash dumps to workspace-relative path so CI artifact upload
+// captures them. Runs before crashReporter.start() (main.ts:158) because
+// environment.ts is imported synchronously at the top of main.ts.
+if (
+  process.env.DAINTREE_E2E_MODE === "1" &&
+  process.env.DAINTREE_E2E_CRASH_DUMPS_DIR &&
+  path.isAbsolute(process.env.DAINTREE_E2E_CRASH_DUMPS_DIR)
+) {
+  app.setPath("crashDumps", process.env.DAINTREE_E2E_CRASH_DUMPS_DIR);
 }
 
 // Handle --reset-data: wipe userData before Chromium acquires file locks
@@ -649,6 +661,94 @@ if (isSmokeTest) {
     console.error("[SMOKE] FAILED — better-sqlite3 native module:", (err as Error).message);
     app.exit(1);
   }
+
+  // Surface the help-session crash-safe reaping native modules (#7526 Windows /
+  // #8769 POSIX). Neither is required for app start — a load failure only
+  // disables crash-safe PTY tree reaping — so these are WARN-level, never a
+  // fatal exit. require() (not await import) mirrors HelpSessionJobService's
+  // load path exactly and avoids a missing-type-declaration error for these
+  // untyped vendored addons. This is a runtime presence check (isAvailable);
+  // the deeper build-time exec/dlopen probe that catches a present-but-broken
+  // binary (missing DLL, wrong arch) lives in scripts/afterPack.cjs.
+  if (process.platform === "win32") {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const winJobObject = require("win-job-object") as {
+        isAvailable: () => boolean;
+        getLoadError: () => unknown;
+      };
+      if (winJobObject.isAvailable()) {
+        console.error("[SMOKE] CHECK: win-job-object native module — OK");
+      } else {
+        const msg = formatErrorMessage(winJobObject.getLoadError(), "unknown error");
+        console.error(`[SMOKE] WARN — win-job-object unavailable: ${msg}`);
+      }
+    } catch (err) {
+      console.error("[SMOKE] WARN — win-job-object load failed:", (err as Error).message);
+    }
+  } else {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const posixReaper = require("posix-pty-reaper") as {
+        isAvailable: () => boolean;
+        getSupervisorPath: () => string | null;
+      };
+      if (posixReaper.isAvailable()) {
+        console.error("[SMOKE] CHECK: posix-pty-reaper supervisor — OK");
+      } else {
+        console.error(
+          "[SMOKE] WARN — posix-pty-reaper supervisor binary not found or not executable"
+        );
+      }
+    } catch (err) {
+      console.error("[SMOKE] WARN — posix-pty-reaper load failed:", (err as Error).message);
+    }
+  }
+}
+
+// macOS `open-file` handler (#9293) — fires when the user double-clicks a
+// `.dntr` plugin archive in Finder or picks "Open With → Daintree". This file
+// is imported on the first line of main.ts, so the listener is registered
+// synchronously at module load — before `app.whenReady()` resolves. That
+// timing matters: on a cold launch the OS delivers `open-file` during early
+// startup, and a listener registered later (e.g. inside the whenReady chain)
+// would miss it. Paths that arrive before PluginService exists are queued;
+// `activateOpenFileInstaller` (./openFileInstall.ts) drains the queue and
+// takes over live events once the service is ready. macOS-only — `open-file`
+// never fires on Windows/Linux.
+const _pendingOpenFilePaths: string[] = [];
+let _openFileConsumer: ((filePath: string) => void) | null = null;
+
+/** Snapshot (copy) of paths queued before the installer was activated. */
+export function getPendingOpenFilePaths(): string[] {
+  return [..._pendingOpenFilePaths];
+}
+
+export function clearPendingOpenFilePaths(): void {
+  _pendingOpenFilePaths.length = 0;
+}
+
+/**
+ * Install the live `open-file` consumer. Once set, incoming paths route
+ * directly to it instead of the pre-ready queue. Pass `null` to detach.
+ */
+export function setOpenFileConsumer(consumer: ((filePath: string) => void) | null): void {
+  _openFileConsumer = consumer;
+}
+
+if (process.platform === "darwin") {
+  app.on("open-file", (event, filePath) => {
+    // Required: without preventDefault, Chromium's default handling may try to
+    // navigate the focused window to the file path.
+    event.preventDefault();
+    if (_openFileConsumer) {
+      _openFileConsumer(filePath);
+    } else if (!_pendingOpenFilePaths.includes(filePath)) {
+      // Dedup: a burst of `open -a Daintree same.dntr` before activation
+      // shouldn't queue N copies and trigger N redundant reinstalls.
+      _pendingOpenFilePaths.push(filePath);
+    }
+  });
 }
 
 app.enableSandbox();

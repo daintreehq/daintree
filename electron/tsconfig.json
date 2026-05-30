@@ -18,7 +18,11 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["./**/*.ts", "../plugins/builtin/github/main/**/*.ts"],
+  "include": [
+    "./**/*.ts",
+    "../plugins/builtin/github/main/**/*.ts",
+    "../plugins/sample/hello-daintree/main/**/*.ts"
+  ],
   "exclude": ["node_modules", "preload.cts"],
   "references": [{ "path": "../shared/tsconfig.json" }]
 }

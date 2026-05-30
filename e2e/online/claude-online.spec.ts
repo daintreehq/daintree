@@ -1,13 +1,7 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import {
-  launchApp,
-  closeApp,
-  mockOpenDialog,
-  refreshActiveWindow,
-  type AppContext,
-} from "../helpers/launch";
+import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
-import { dismissTelemetryConsent } from "../helpers/project";
+import { dismissTelemetryConsent, openAndOnboardProject } from "../helpers/project";
 import { getTerminalText, writeTerminalInput } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
 import { configureClaudeAuthEnv, hasClaudeApiKey } from "../helpers/claudeAuth";
@@ -109,6 +103,11 @@ test.describe("Claude Online Flow", () => {
   });
 
   test("full Claude agent interaction", async () => {
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "ANTHROPIC_API_KEY is required for Claude online flow",
+    });
+
     test.skip(!hasClaudeApiKey(), "ANTHROPIC_API_KEY is required for Claude online flow");
 
     await test.step("launch app", async () => {
@@ -116,17 +115,9 @@ test.describe("Claude Online Flow", () => {
     });
 
     await test.step("open folder", async () => {
-      const { app, window } = ctx;
-
-      await mockOpenDialog(app, fixtureDir);
-      await window.getByRole("button", { name: "Open folder" }).click();
+      ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir);
     });
 
-    // Re-acquire window after open — ProjectViewManager creates a new
-    // WebContentsView for the project — then dismiss the telemetry consent
-    // dialog if it appears.
-    ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
-    await dismissTelemetryConsent(ctx.window);
     await configureClaudeAuthEnv(ctx.window);
 
     await test.step("launch Claude agent", async () => {

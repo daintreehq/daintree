@@ -1,0 +1,235 @@
+import path from "path";
+import fs from "fs";
+import { execFileSync } from "child_process";
+import { test, expect } from "@playwright/test";
+import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
+import { createFixtureRepo } from "../../helpers/fixtures";
+import { openAndOnboardProject } from "../../helpers/project";
+import { SEL } from "../../helpers/selectors";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
+import { ensureWindowFocused } from "../../helpers/focus";
+import { getGridPanelCount } from "../../helpers/panels";
+import { waitForTerminalText } from "../../helpers/terminal";
+import {
+  writeResourceConfig,
+  createWorktree,
+  commandArg,
+  nodeScriptCommand,
+  sameFilesystemEntry,
+} from "../../helpers/resource-lifecycle";
+
+/**
+ * E2E tests for worktree resource command substitution: connect commands,
+ * DAINTREE_* environment variables, and {{branch}}/{{worktree_path}} templates.
+ *
+ * Uses shell script simulation instead of real Docker/SSH.
+ */
+
+let ctx: AppContext;
+let fixtureDir: string;
+let fixtureCleanup: (() => void) | undefined;
+
+const BRANCH = "e2e/resource-substitution";
+const mod = process.platform === "darwin" ? "Meta" : "Control";
+
+test.describe.serial("Full: Worktree Resource Substitution", () => {
+  test.beforeAll(async () => {
+    ({ dir: fixtureDir, cleanup: fixtureCleanup } = createFixtureRepo({
+      name: "worktree-resource-substitution",
+    }));
+    writeResourceConfig(fixtureDir);
+
+    ctx = await launchApp();
+    ctx.window = await openAndOnboardProject(
+      ctx.app,
+      ctx.window,
+      fixtureDir,
+      "Worktree Resource Substitution"
+    );
+
+    const card = await createWorktree(ctx.window, BRANCH);
+    await card.click({ position: { x: 10, y: 10 } });
+    await expect
+      .poll(() => card.getAttribute("aria-label"), {
+        timeout: T_LONG,
+        message: "Worktree card should become selected",
+      })
+      .toContain("selected");
+    await ctx.window.waitForTimeout(3000);
+  });
+
+  test.afterAll(async () => {
+    if (ctx?.app) await closeApp(ctx.app);
+    fixtureCleanup?.();
+  });
+
+  test("connect action spawns terminal with substituted worktree_name variable", async () => {
+    const { window } = ctx;
+
+    const countBefore = await getGridPanelCount(window);
+
+    await ensureWindowFocused(ctx.app);
+    await window.keyboard.press(`${mod}+Shift+P`);
+
+    const palette = window.locator(SEL.actionPalette.dialog);
+    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
+
+    const searchInput = palette.locator(SEL.actionPalette.searchInput);
+    await searchInput.fill("Connect to Resource");
+
+    const connectOption = palette
+      .locator('[role="option"]')
+      .filter({ hasText: /Connect to Resource/i });
+    await expect(connectOption.first()).toBeVisible({ timeout: T_SHORT });
+    await connectOption.first().click();
+
+    await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(countBefore + 1);
+
+    const newPanel = window.locator(SEL.panel.gridPanel).last();
+    const xtermScreen = newPanel.locator(SEL.terminal.xtermRows);
+    await expect(xtermScreen).toBeVisible({ timeout: T_MEDIUM });
+
+    await expect(newPanel.locator("text=Connect:")).toBeVisible({ timeout: T_MEDIUM });
+    await expect(newPanel.locator(`text=Connect: ${BRANCH}`)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+  });
+
+  test("DAINTREE_* env vars are available in lifecycle commands", async () => {
+    const { window } = ctx;
+
+    const worktreeListOutput = execFileSync("git", ["worktree", "list", "--porcelain"], {
+      cwd: fixtureDir,
+      encoding: "utf-8",
+    });
+    const worktreeBlocks = worktreeListOutput.split("\n\n");
+    let worktreePath = "";
+    for (const block of worktreeBlocks) {
+      if (block.includes(`refs/heads/${BRANCH}`)) {
+        const match = block.match(/^worktree (.+)$/m);
+        if (match) worktreePath = match[1];
+        break;
+      }
+    }
+    expect(worktreePath.length).toBeGreaterThan(0);
+
+    const wtDaintreeDir = path.join(worktreePath, ".daintree");
+    fs.mkdirSync(wtDaintreeDir, { recursive: true });
+    const wtConfigPath = path.join(wtDaintreeDir, "config.json");
+    const markerFile = path.join(wtDaintreeDir, "env-marker.txt");
+
+    const mainDaintreeDir = path.join(fixtureDir, ".daintree");
+    const originalConfig = fs.readFileSync(path.join(mainDaintreeDir, "config.json"), "utf-8");
+    const config = JSON.parse(originalConfig);
+
+    config.resource.status = nodeScriptCommand(path.join(mainDaintreeDir, "resource-action.cjs"), [
+      commandArg("env-status"),
+      commandArg(markerFile),
+    ]);
+
+    fs.writeFileSync(
+      path.join(mainDaintreeDir, "resource-state.json"),
+      JSON.stringify({ status: "ready" })
+    );
+    fs.writeFileSync(wtConfigPath, JSON.stringify(config, null, 2));
+
+    await ensureWindowFocused(ctx.app);
+    await window.keyboard.press(`${mod}+Shift+P`);
+    const palette = window.locator(SEL.actionPalette.dialog);
+    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
+    await palette.locator(SEL.actionPalette.searchInput).fill("Check Resource Status");
+    const option = palette.locator('[role="option"]').filter({ hasText: /Check Resource Status/i });
+    await expect(option.first()).toBeVisible({ timeout: T_SHORT });
+    await option.first().click();
+
+    await expect
+      .poll(
+        () => {
+          try {
+            return fs.existsSync(markerFile);
+          } catch {
+            return false;
+          }
+        },
+        { timeout: T_LONG, message: "Marker file should be written by status command" }
+      )
+      .toBe(true);
+
+    const marker = fs.readFileSync(markerFile, "utf-8").trim().split("\n");
+    expect(marker[0]?.length).toBeGreaterThan(0);
+    expect(marker[1]?.length).toBeGreaterThan(0);
+    expect(sameFilesystemEntry(marker[2]!, fixtureDir)).toBe(true);
+
+    if (fs.existsSync(markerFile)) fs.unlinkSync(markerFile);
+    if (fs.existsSync(wtConfigPath)) fs.unlinkSync(wtConfigPath);
+  });
+
+  test("{{branch}} and {{worktree_path}} are substituted in connect command", async () => {
+    const { window } = ctx;
+
+    const worktreeListOutput = execFileSync("git", ["worktree", "list", "--porcelain"], {
+      cwd: fixtureDir,
+      encoding: "utf-8",
+    });
+    const worktreeBlocks = worktreeListOutput.split("\n\n");
+    let worktreePath = "";
+    for (const block of worktreeBlocks) {
+      if (block.includes(`refs/heads/${BRANCH}`)) {
+        const match = block.match(/^worktree (.+)$/m);
+        if (match) worktreePath = match[1];
+        break;
+      }
+    }
+    expect(worktreePath.length).toBeGreaterThan(0);
+
+    const wtDaintreeDir = path.join(worktreePath, ".daintree");
+    fs.mkdirSync(wtDaintreeDir, { recursive: true });
+    const wtConfigPath = path.join(wtDaintreeDir, "config.json");
+
+    const mainDaintreeDir = path.join(fixtureDir, ".daintree");
+    const originalConfig = fs.readFileSync(path.join(mainDaintreeDir, "config.json"), "utf-8");
+    const config = JSON.parse(originalConfig);
+
+    config.resource.connect = nodeScriptCommand(path.join(mainDaintreeDir, "resource-action.cjs"), [
+      commandArg("connect"),
+      "BRANCH={{branch}}",
+      "PATH={{worktree_path}}",
+      "PROJECT={{project_root}}",
+    ]);
+    fs.writeFileSync(wtConfigPath, JSON.stringify(config, null, 2));
+
+    await ensureWindowFocused(ctx.app);
+    await window.keyboard.press(`${mod}+Shift+P`);
+    let palette = window.locator(SEL.actionPalette.dialog);
+    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
+    await palette.locator(SEL.actionPalette.searchInput).fill("Provision Resource");
+    let option = palette.locator('[role="option"]').filter({ hasText: /Provision Resource/i });
+    await expect(option.first()).toBeVisible({ timeout: T_SHORT });
+    await option.first().click();
+    const confirmBtn = window.locator('button:has-text("Confirm")');
+    if (await confirmBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await confirmBtn.click();
+    }
+    await window.waitForTimeout(2000);
+
+    const countBefore = await getGridPanelCount(window);
+    await window.keyboard.press(`${mod}+Shift+P`);
+    palette = window.locator(SEL.actionPalette.dialog);
+    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
+    await palette.locator(SEL.actionPalette.searchInput).fill("Connect to Resource");
+    option = palette.locator('[role="option"]').filter({ hasText: /Connect to Resource/i });
+    await expect(option.first()).toBeVisible({ timeout: T_SHORT });
+    await option.first().click();
+
+    await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(countBefore + 1);
+
+    const newPanel = window.locator(SEL.panel.gridPanel).last();
+    const xtermScreen = newPanel.locator(SEL.terminal.xtermRows);
+    await expect(xtermScreen).toBeVisible({ timeout: T_MEDIUM });
+
+    await waitForTerminalText(newPanel, `BRANCH=${BRANCH}`);
+    await waitForTerminalText(newPanel, process.platform === "win32" ? "PATH=" : "PATH=/");
+
+    if (fs.existsSync(wtConfigPath)) fs.unlinkSync(wtConfigPath);
+  });
+});

@@ -58,7 +58,11 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:actions-changed": "external",
   "plugin:panel-kinds-changed": "external",
   "plugin:toolbar-buttons-changed": "external",
+  "plugin:menu-items-changed": "external",
+  "plugin:keybindings-changed": "external",
+  "plugin:context-menu-items-changed": "external",
   "plugin:decorations-changed": "external",
+  "plugin:provenance-changed": "external",
   "terminal:exit": "external",
   "terminal:spawn-result": "external",
 } as const satisfies Record<keyof IpcEventBusMap, "bus" | "external">;
@@ -181,6 +185,19 @@ function normalizeActionDispatchedPayload(
   const confirmed: boolean | undefined =
     typeof payload.confirmed === "boolean" ? payload.confirmed : undefined;
 
+  // Plugin-action audit fields. Both are renderer-controlled strings crossing
+  // a trust boundary, so cap/shape them: `pluginId` to a sane length and
+  // `argsHash` to a strict 64-char lowercase-hex SHA-256 digest.
+  const pluginIdRaw = payload.pluginId;
+  const pluginId =
+    typeof pluginIdRaw === "string" && pluginIdRaw.trim().length > 0 && pluginIdRaw.length <= 100
+      ? pluginIdRaw
+      : undefined;
+
+  const argsHashRaw = payload.argsHash;
+  const argsHash =
+    typeof argsHashRaw === "string" && /^[0-9a-f]{64}$/.test(argsHashRaw) ? argsHashRaw : undefined;
+
   return {
     actionId,
     args: safeArgs,
@@ -192,6 +209,8 @@ function normalizeActionDispatchedPayload(
     danger,
     ...(safeBreadcrumbArgs ? { safeArgs: safeBreadcrumbArgs } : {}),
     ...(confirmed !== undefined ? { confirmed } : {}),
+    ...(pluginId !== undefined ? { pluginId } : {}),
+    ...(argsHash !== undefined ? { argsHash } : {}),
   };
 }
 

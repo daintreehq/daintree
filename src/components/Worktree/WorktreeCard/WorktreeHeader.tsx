@@ -10,8 +10,11 @@ import type { AggregateCounts } from "./MainWorktreeSummaryRows";
 import { IssueBadge } from "./IssueBadge";
 import { PRBadge } from "./PRBadge";
 import { EnvironmentPopover } from "./EnvironmentPopover";
+import { DevServerIndicator } from "./DevServerIndicator";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
 import { CollapsedAlarmPill } from "./CollapsedAlarmPill";
+import { isLiveDevServerStatus } from "@/lib/worktreeFilters";
+import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import { WorktreeActionsToolbar } from "./WorktreeActionsToolbar";
 import { MainWorktreeSecondaryRow } from "./MainWorktreeSecondaryRow";
 import { NonMainSecondaryRow } from "./NonMainSecondaryRow";
@@ -44,6 +47,7 @@ export interface WorktreeHeaderProps {
   resourceLastOutput?: string;
   resourceEndpoint?: string;
   resourceLastCheckedAt?: number;
+  devServerSession?: DevPreviewSessionState;
   lastGitStatusCheckedAt?: number;
   onRevalidateGitStatus?: () => void;
   onCheckResourceStatus?: () => void;
@@ -114,6 +118,8 @@ export interface WorktreeHeaderProps {
     onResourceConnect?: () => void;
     onResourceStatus?: () => void;
     onResourceTeardown?: () => void;
+    onStopDevServer?: (worktreeId: string) => void;
+    onRestartDevServer?: (worktreeId: string) => void;
   };
 }
 
@@ -233,6 +239,7 @@ export function WorktreeHeader({
   resourceLastOutput,
   resourceEndpoint,
   resourceLastCheckedAt,
+  devServerSession,
   lastGitStatusCheckedAt,
   onRevalidateGitStatus,
   onCheckResourceStatus,
@@ -269,6 +276,7 @@ export function WorktreeHeader({
     : !!(worktree.issueNumber && displayTitle);
   const hasPlanFile = Boolean(worktree.hasPlanFile);
   const hasFreshnessPill = !!(lastGitStatusCheckedAt && lastGitStatusCheckedAt > 0);
+  const hasDevServerSignal = !!devServerSession && isLiveDevServerStatus(devServerSession.status);
   const underlineOnHover = variant !== "sidebar" || isActive;
   const hasUpstreamDelta =
     (worktree.aheadCount !== undefined && worktree.aheadCount > 0) ||
@@ -390,6 +398,7 @@ export function WorktreeHeader({
           (worktree.worktreeMode && worktree.worktreeMode !== "local") ||
           resourceStatusLabel ||
           isLifecycleRunning ||
+          hasDevServerSignal ||
           hasFreshnessPill) && (
           <div className="flex items-center gap-2 shrink-0">
             {isPinned && !isMainWorktree && (
@@ -424,6 +433,7 @@ export function WorktreeHeader({
                 className="w-3.5 h-3.5 text-daintree-text/40"
               />
             )}
+            <DevServerIndicator session={devServerSession} />
           </div>
         )}
 

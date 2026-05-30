@@ -47,28 +47,20 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --prune --no-recurse-submodules --depth=1 origin "$GITHUB_SHA"
-          git -C "$GITHUB_WORKSPACE" checkout --force FETCH_HEAD
-          git -C "$GITHUB_WORKSPACE" clean -ffdx
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - uses: actions/setup-node@v6
+        uses: actions/checkout@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          clean: true
+          fetch-depth: 1
 
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libarchive-tools
 
-      - name: Install dependencies
-        run: node scripts/ci/npm-ci-retry.mjs
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
 
       - name: Check
         run: npm run check
@@ -79,23 +71,15 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Check out repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --prune --no-recurse-submodules --depth=1 origin "$GITHUB_SHA"
-          git -C "$GITHUB_WORKSPACE" checkout --force FETCH_HEAD
-          git -C "$GITHUB_WORKSPACE" clean -ffdx
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - uses: actions/setup-node@v6
+        uses: actions/checkout@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          clean: true
+          fetch-depth: 1
 
-      - name: Install dependencies
-        run: node scripts/ci/npm-ci-retry.mjs
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
 
       - name: Test
         run: npm run test
@@ -127,6 +111,9 @@ jobs:
       suite: ${{ matrix.suite }}
       platform: macos
 
+  # Online E2E runs for signal only — nothing `needs:` it, so it never gates
+  # build or publish. Do NOT add job-level continue-on-error here: it is invalid
+  # on reusable-workflow (`uses:`) jobs and makes the whole workflow fail to start.
   e2e-online-gate:
     needs: [checks, unit-tests]
     uses: ./.github/workflows/e2e.yml
@@ -142,27 +129,13 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Check out repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --prune --no-recurse-submodules --depth=1 origin "$GITHUB_SHA"
-          git -C "$GITHUB_WORKSPACE" checkout --force FETCH_HEAD
-          git -C "$GITHUB_WORKSPACE" clean -ffdx
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Resolve update metadata prefix
-        shell: bash
-        run: |
-          PKG_VERSION=$(node -p "require('./package.json').version")
-          if [[ "$PKG_VERSION" == *-rc* ]]; then
-            echo "UPDATE_METADATA_PREFIX=rc" >> "$GITHUB_ENV"
-          elif [[ "$PKG_VERSION" == *-beta* ]]; then
-            echo "UPDATE_METADATA_PREFIX=beta" >> "$GITHUB_ENV"
-          else
-            echo "UPDATE_METADATA_PREFIX=latest" >> "$GITHUB_ENV"
-          fi
+        uses: ./.github/actions/resolve-update-metadata-prefix
 
       - name: Verify version matches tag
         if: startsWith(github.ref, 'refs/tags/v')
@@ -175,14 +148,10 @@ jobs:
             exit 1
           fi
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-
-      - name: Install dependencies
-        run: node scripts/ci/npm-ci-retry.mjs
+          node_version: ${{ env.NODE_VERSION }}
 
       - name: Import macOS certificates
         uses: apple-actions/import-codesign-certs@v6
@@ -212,6 +181,9 @@ jobs:
           npm_config_build_from_source: "true"
         run: |
           npm run build
+          # Hard security gate (#9148) — fail before packaging if any E2E
+          # backdoor survived the production strip.
+          npm run check:preload-backdoors
           PUBLISH_FLAG="always"
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "::warning::Dry run — skipping publish to electron-builder targets"
@@ -241,12 +213,62 @@ jobs:
               echo "::error::Missing expected macOS app bundle: $app"
               exit 1
             fi
-            echo "--- codesign: $app"
-            codesign --verify --deep --strict --verbose=4 "$app"
-            echo "--- stapler validate: $app"
+            echo "--- stapler validate (offline ticket): $app"
             xcrun stapler validate "$app"
+            echo "--- codesign --check-notarization (online Apple ack): $app"
+            # stapler validate only confirms a locally-attached ticket; this asks
+            # Apple's notary service whether the notarization is still acknowledged.
+            # Retry transient network failures, but treat exit 3 (valid signature,
+            # not acknowledged) as a definitive revocation — never retry it.
+            notary_exit=0
+            for attempt in 1 2 3; do
+              notary_exit=0
+              codesign -vvvv -R="notarized" --check-notarization "$app" || notary_exit=$?
+              if [[ $notary_exit -eq 0 || $notary_exit -eq 3 ]]; then
+                break
+              fi
+              echo "::warning::check-notarization attempt $attempt failed (exit $notary_exit); retrying in 10s"
+              sleep 10
+            done
+            if [[ $notary_exit -eq 3 ]]; then
+              echo "::error::Notarization NOT acknowledged by Apple (on-disk signature valid but revoked or never recorded): $app"
+              exit 1
+            elif [[ $notary_exit -ne 0 ]]; then
+              echo "::error::codesign --check-notarization failed (exit $notary_exit) after retries — bundle unsigned, invalid, does not meet the notarized requirement, or Apple's notary service is unreachable: $app"
+              exit 1
+            fi
             echo "--- spctl (diagnostic only): $app"
             spctl --assess --type execute --verbose --ignore-cache --no-cache "$app" || true
+          done
+
+      - name: Verify macOS signing audit (TeamIdentifier + hardened runtime)
+        # No skip_notarization guard: signing is a code-signing property that must
+        # be validated even when notarization is manually disabled.
+        shell: bash
+        env:
+          EXPECTED_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$EXPECTED_TEAM_ID" ]]; then
+            echo "::error::APPLE_TEAM_ID secret is empty — cannot verify TeamIdentifier"
+            exit 1
+          fi
+          apps=(
+            "release/mac-arm64/Daintree.app"
+            "release/mac/Daintree.app"
+            "release/mac-universal/Daintree.app"
+          )
+          for app in "${apps[@]}"; do
+            if [[ ! -d "$app" ]]; then
+              echo "::error::Missing expected macOS app bundle: $app"
+              exit 1
+            fi
+            # Signature integrity verification lives here (not the notarization
+            # step) so it runs even when skip_notarization is true.
+            echo "--- codesign --verify: $app"
+            codesign --verify --deep --strict --verbose=4 "$app"
+            scripts/ci/verify-team-identifier.sh "$app" "$EXPECTED_TEAM_ID"
+            scripts/ci/verify-hardened-runtime.sh "$app"
           done
 
       - name: Validate update metadata (macOS)
@@ -267,6 +289,25 @@ jobs:
           echo "✓ Found $DMG_COUNT DMGs, $ZIP_COUNT ZIPs, and ${UPDATE_METADATA_PREFIX}-mac.yml"
           node scripts/ci/validate-update-metadata.mjs "release/${UPDATE_METADATA_PREFIX}-mac.yml"
 
+      - name: Smoke test (packaged macOS)
+        shell: bash
+        timeout-minutes: 15
+        env:
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          SMOKE_TIMEOUT_MS: "210000"
+        run: |
+          set -euo pipefail
+          # Smoke every published arch (matching the per-arch codesign/staple
+          # audits above). The macos-14 runner is arm64; the x64 bundle runs via
+          # the pre-installed Rosetta 2, and the universal bundle runs its arm64
+          # slice — together exercising the unpacked natives of all three.
+          for app in release/mac-arm64/Daintree.app release/mac/Daintree.app release/mac-universal/Daintree.app; do
+            echo "::group::Packaged smoke — $app"
+            PACKAGED_BINARY="$app/Contents/MacOS/Daintree" node scripts/run-packaged-smoke.mjs
+            echo "::endgroup::"
+          done
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -286,112 +327,21 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Checkout repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --prune --no-recurse-submodules --depth=1 origin "$GITHUB_SHA"
-          git -C "$GITHUB_WORKSPACE" checkout --force FETCH_HEAD
-          git -C "$GITHUB_WORKSPACE" clean -ffdx
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - name: Check out repository
+        uses: actions/checkout@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          clean: true
+          fetch-depth: 1
 
-      - name: Install dependencies
-        run: node scripts/ci/npm-ci-retry.mjs --ignore-scripts
-
-      - name: Resolve update metadata prefix
-        shell: bash
-        run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          if [[ "$TAG_VERSION" == *-rc* ]]; then
-            echo "UPDATE_METADATA_PREFIX=rc" >> "$GITHUB_ENV"
-          elif [[ "$TAG_VERSION" == *-beta* ]]; then
-            echo "UPDATE_METADATA_PREFIX=beta" >> "$GITHUB_ENV"
-          else
-            echo "UPDATE_METADATA_PREFIX=latest" >> "$GITHUB_ENV"
-          fi
-
-      - name: Download macOS artifacts
-        uses: actions/download-artifact@v8
+      - name: Publish Daintree (macOS)
+        uses: ./.github/actions/publish-daintree
         with:
-          name: release-daintree-macos-14
-          path: release/
-
-      - name: List release files
-        run: ls -lah release/
-
-      - name: Install gate dependencies
-        shell: bash
-        run: npm install --no-save --no-audit --no-fund --ignore-scripts js-yaml semver
-
-      - name: Check version is monotonically increasing
-        shell: bash
-        env:
-          UPDATE_METADATA_PREFIX: ${{ env.UPDATE_METADATA_PREFIX }}
-          # Per-OS scope (#8052): only macOS metadata is present in this
-          # workflow's release/ dir. Per-platform monotonicity is the only
-          # invariant electron-updater enforces; cross-OS alignment is not.
-          RELEASE_PLATFORMS: mac
-        run: node scripts/ci/check-version-monotonic.mjs
-
-      - name: Upload binaries to R2
-        shell: bash
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_BUCKET: ${{ secrets.DAINTREE_R2_BUCKET }}
-        run: |
-          aws s3 sync release/ "s3://${R2_BUCKET}/releases/" \
-            --endpoint-url "${R2_ENDPOINT}" \
-            --no-progress \
-            --exclude "*" \
-            --include "*.dmg" \
-            --include "*.zip" \
-            --include "*.blockmap" \
-            --cache-control "public, max-age=31536000, immutable"
-
-      - name: Verify binaries reachable on R2
-        shell: bash
-        env:
-          PUBLISH_URL: https://updates.daintree.org/releases/
-        run: node scripts/ci/verify-r2-uploads.mjs
-
-      - name: Upload metadata to R2
-        shell: bash
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_BUCKET: ${{ secrets.DAINTREE_R2_BUCKET }}
-        run: |
-          aws s3 sync release/ "s3://${R2_BUCKET}/releases/" \
-            --endpoint-url "${R2_ENDPOINT}" \
-            --no-progress \
-            --exclude "*" \
-            --include "${UPDATE_METADATA_PREFIX}-mac.yml" \
-            --cache-control "no-cache, no-store, must-revalidate"
-
-      - name: Notify website of new release
-        shell: bash
-        env:
-          WEBSITE_WEBHOOK_SECRET: ${{ secrets.WEBSITE_WEBHOOK_SECRET }}
-        run: |
-          sleep 1
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://daintree.org/api/refresh-releases \
-            -H "Authorization: Bearer ${WEBSITE_WEBHOOK_SECRET}")
-          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          BODY=$(echo "$RESPONSE" | sed '$d')
-          echo "Response (HTTP ${HTTP_CODE}): ${BODY}"
-          if [ "$HTTP_CODE" -ne 200 ]; then
-            echo "::warning::Website refresh failed (HTTP ${HTTP_CODE})"
-          fi
+          artifact_name: release-daintree-macos-14
+          include_globs: "*.dmg *.zip *.blockmap"
+          metadata_suffix: "-mac"
+          release_platforms: mac
+          r2_access_key_id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2_secret_access_key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          r2_endpoint: ${{ secrets.R2_ENDPOINT }}
+          r2_bucket: ${{ secrets.DAINTREE_R2_BUCKET }}
+          website_webhook_secret: ${{ secrets.WEBSITE_WEBHOOK_SECRET }}

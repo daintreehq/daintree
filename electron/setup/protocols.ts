@@ -2,13 +2,16 @@ import { app, protocol, net, session } from "electron";
 import { getWindowForWebContents, getAppWebContents } from "../window/webContentsRegistry.js";
 import path from "path";
 import fs from "fs/promises";
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "url";
 import {
   resolveAppUrlToDistPath,
   getMimeType,
   buildHeaders,
+  isImmutableAppAsset,
   isNotModified,
 } from "../utils/appProtocol.js";
+import { DAINTREE_APP_PERMISSIONS_POLICY } from "../../shared/config/permissionsPolicy.js";
 import {
   classifyPartition,
   getDaintreeAppCSP,
@@ -17,14 +20,21 @@ import {
   isDevPreviewPartition,
 } from "../utils/webviewCsp.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
-import { isLocalhostUrl, isSafeNavigationUrl } from "../../shared/utils/urlUtils.js";
+import {
+  isLocalhostUrl,
+  isDevPreviewProxyUrl,
+  isSafeNavigationUrl,
+} from "../../shared/utils/urlUtils.js";
 import { getWebviewDialogService } from "../services/WebviewDialogService.js";
 import { looksLikeOAuthUrl } from "../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../ipc/channels.js";
 
+export type GetPluginDir = (pluginId: string) => string | undefined;
+
 // Track which sessions have had protocols registered to avoid double-registration
 const registeredSessions = new WeakSet<Electron.Session>();
 let cachedDistPath: string | null = null;
+let cachedGetPluginDir: GetPluginDir | null = null;
 
 /**
  * Create the app:// protocol handler function for a given distPath.
@@ -259,10 +269,215 @@ function createDaintreeFileProtocolHandler() {
   };
 }
 
+const ONE_YEAR_SECONDS = 31_536_000;
+const PLUGIN_IMMUTABLE_DIRECTIVE = `public, max-age=${ONE_YEAR_SECONDS}, immutable`;
+const PLUGIN_REVALIDATE_DIRECTIVE = "no-cache";
+
+// Hardened response headers for plugin://.
+// CORP must be cross-origin: plugin assets may be loaded as sub-resources from
+// documents under app://, daintree-file:// or a future plugin host frame. With
+// same-origin, COEP-enabled embedders silently reject every plugin asset with
+// ERR_BLOCKED_BY_RESPONSE. COEP is not set on individual sub-resources — the
+// plugin view document is responsible for cross-origin isolation policy.
+function buildPluginHeaders(mimeType: string, filePath: string): Record<string, string> {
+  // Vite content-hashed assets (`assets/<name>-<hash>.<ext>`) are immutable;
+  // everything else is `no-cache` so plugin reloads pick up fresh bundles.
+  // V8 code cache persistence requires a validator header (Last-Modified or
+  // ETag) on top of Cache-Control. We omit both for the MVP — first-load cost
+  // only; revisit if profile data shows a regression.
+  const cacheControl = isImmutableAppAsset(filePath)
+    ? PLUGIN_IMMUTABLE_DIRECTIVE
+    : PLUGIN_REVALIDATE_DIRECTIVE;
+
+  return {
+    "Content-Type": mimeType,
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "Permissions-Policy": DAINTREE_APP_PERMISSIONS_POLICY,
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": cacheControl,
+  };
+}
+
+function buildPluginErrorHeaders(): Record<string, string> {
+  return {
+    "Content-Type": "text/plain",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
+  };
+}
+
 /**
- * Register app:// and daintree-file:// protocol handlers on a specific session.
+ * Create the plugin:// protocol handler.
+ *
+ * URL shape: `plugin://{pluginId}/{relative/path}`. The host segment is the
+ * plugin's manifest name; the pathname is resolved against the plugin's
+ * installed-on-disk root via `getPluginDir`. Security mirrors `daintree-file://`:
+ * segment-by-segment `..` rejection, `fs.realpath()` containment, and
+ * `O_RDONLY | O_NOFOLLOW` on the final open to close the realpath/open TOCTOU.
+ */
+export function createPluginProtocolHandler(getPluginDir: GetPluginDir) {
+  return async (request: GlobalRequest) => {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return new Response("Method Not Allowed", {
+        status: 405,
+        headers: buildPluginErrorHeaders(),
+      });
+    }
+
+    let url: URL;
+    try {
+      url = new URL(request.url);
+    } catch {
+      return new Response("Bad Request", {
+        status: 400,
+        headers: buildPluginErrorHeaders(),
+      });
+    }
+
+    const pluginId = url.hostname;
+    if (!pluginId) {
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildPluginErrorHeaders(),
+      });
+    }
+
+    const pluginRoot = getPluginDir(pluginId);
+    if (!pluginRoot) {
+      // Unknown plugin id, or the plugin is currently disabled. 404 — do not
+      // leak the existence of the disk path via a different status code.
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildPluginErrorHeaders(),
+      });
+    }
+
+    const pathname = url.pathname;
+    if (pathname === "/" || pathname === "") {
+      // No directory listings — a bare `plugin://id/` is not a valid asset URL.
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildPluginErrorHeaders(),
+      });
+    }
+
+    let decodedPath: string;
+    try {
+      decodedPath = decodeURIComponent(pathname.startsWith("/") ? pathname.slice(1) : pathname);
+    } catch {
+      return new Response("Bad Request", {
+        status: 400,
+        headers: buildPluginErrorHeaders(),
+      });
+    }
+
+    if (decodedPath.includes("\0")) {
+      return new Response("Bad Request", {
+        status: 400,
+        headers: buildPluginErrorHeaders(),
+      });
+    }
+
+    if (decodedPath.includes("\\")) {
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildPluginErrorHeaders(),
+      });
+    }
+
+    // Normalize and re-check for '..'. The leading-slash normalize collapses
+    // every `..` against the root, so the segment scan is redundant for
+    // standard inputs — but cheap defense-in-depth against future changes to
+    // posix.normalize semantics or edge-case inputs that surface a `..` after
+    // decode. #4702: segment match, never substring `includes('..')`, which
+    // would also reject legitimate paths like `..hidden/file.txt`. The actual
+    // traversal defense is the realpath/path.relative containment below.
+    const normalizedPosix = path.posix.normalize("/" + decodedPath).slice(1);
+    if (normalizedPosix.split("/").some((seg) => seg === "..")) {
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildPluginErrorHeaders(),
+      });
+    }
+
+    const candidatePath = path.resolve(pluginRoot, normalizedPosix);
+
+    // Resolve symlinks before containment so an in-root symlink pointing
+    // outside the plugin root is rejected (CVE-2025-53109 / -54794 class).
+    let realRoot: string;
+    let realFile: string;
+    try {
+      realRoot = await fs.realpath(pluginRoot);
+      realFile = await fs.realpath(candidatePath);
+    } catch {
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildPluginErrorHeaders(),
+      });
+    }
+
+    const rel = path.relative(realRoot, realFile);
+    if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) {
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildPluginErrorHeaders(),
+      });
+    }
+
+    // Open the user-derived candidate path (not the realpath-resolved one)
+    // with O_NOFOLLOW so a final-component symlink swap injected between
+    // realpath and open is rejected with ELOOP. On Windows O_NOFOLLOW is 0
+    // (no-op); realpath containment still applies. Mirrors daintree-file://.
+    let fileHandle: Awaited<ReturnType<typeof fs.open>>;
+    try {
+      fileHandle = await fs.open(candidatePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    } catch (err) {
+      const errCode = (err as NodeJS.ErrnoException).code;
+      if (errCode === "ELOOP" || errCode === "ENOENT" || errCode === "EISDIR") {
+        return new Response("Not Found", {
+          status: 404,
+          headers: buildPluginErrorHeaders(),
+        });
+      }
+      console.error("[MAIN] plugin protocol open failed:", candidatePath, err);
+      return new Response("Internal Server Error", {
+        status: 500,
+        headers: buildPluginErrorHeaders(),
+      });
+    }
+
+    try {
+      const buffer = await fileHandle.readFile();
+      const mimeType = getMimeType(realFile);
+      return new Response(buffer, {
+        status: 200,
+        headers: buildPluginHeaders(mimeType, realFile),
+      });
+    } catch (err) {
+      console.error("[MAIN] plugin protocol read failed:", candidatePath, err);
+      return new Response("Internal Server Error", {
+        status: 500,
+        headers: buildPluginErrorHeaders(),
+      });
+    } finally {
+      // Swallow close errors so they don't mask a preceding readFile failure.
+      await fileHandle.close().catch(() => {});
+    }
+  };
+}
+
+/**
+ * Register app://, daintree-file://, and plugin:// protocol handlers on a specific session.
  * Safe to call multiple times — skips sessions that are already configured.
  * Used for per-project session partitions that don't inherit the default session's handlers.
+ *
+ * `plugin://` is only registered when `registerPluginProtocol()` has already
+ * cached a resolver — at runtime the default-session registration in
+ * `app.whenReady()` always runs before any project view is created, so this is
+ * effectively unconditional in production. Tests that don't exercise plugin://
+ * skip this branch.
  */
 export function registerProtocolsForSession(ses: Electron.Session, distPath: string): void {
   if (registeredSessions.has(ses)) return;
@@ -270,6 +485,9 @@ export function registerProtocolsForSession(ses: Electron.Session, distPath: str
 
   ses.protocol.handle("app", createAppProtocolHandler(distPath));
   ses.protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
+  if (cachedGetPluginDir) {
+    ses.protocol.handle("plugin", createPluginProtocolHandler(cachedGetPluginDir));
+  }
 }
 
 export function registerAppProtocol(distPath: string): void {
@@ -281,6 +499,11 @@ export function registerDaintreeFileProtocol(): void {
   protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
 }
 
+export function registerPluginProtocol(getPluginDir: GetPluginDir): void {
+  cachedGetPluginDir = getPluginDir;
+  protocol.handle("plugin", createPluginProtocolHandler(getPluginDir));
+}
+
 /**
  * Get the cached distPath for use when registering protocols on dynamic sessions.
  */
@@ -288,8 +511,47 @@ export function getDistPath(): string | null {
   return cachedDistPath;
 }
 
+// Read the production import-map hash sidecar emitted by the Vite build
+// (`hostImportMapPlugin` in vite.config.ts). The hash must reach the
+// `Content-Security-Policy` HTTP header layer so it stays aligned with the
+// `<meta http-equiv>` value inside the document — the browser intersects the
+// two policies, and a divergence silently drops the inline importmap. In dev,
+// the sidecar doesn't exist (Vite serves React from the module graph and the
+// dev CSP carries `'unsafe-inline'`), so this returns []. Failure to read or
+// parse the sidecar in production logs a warning and returns []; without the
+// hash the host page still loads, but plugins that externalize React will
+// fail to resolve `react` at runtime — visible enough to debug, but not worth
+// crashing app startup over a missing build artifact.
+function loadHostImportMapHashes(distPath: string | null): string[] {
+  if (process.env.NODE_ENV === "development") return [];
+  if (!distPath) return [];
+
+  try {
+    const sidecarPath = path.join(distPath, "importmap-meta.json");
+    const raw = readFileSync(sidecarPath, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "scriptSrcHashes" in parsed &&
+      Array.isArray((parsed as { scriptSrcHashes: unknown }).scriptSrcHashes)
+    ) {
+      const hashes = (parsed as { scriptSrcHashes: unknown[] }).scriptSrcHashes.filter(
+        (h): h is string => typeof h === "string"
+      );
+      return hashes;
+    }
+    console.warn("[MAIN] importmap-meta.json is malformed; missing scriptSrcHashes array.");
+    return [];
+  } catch (err) {
+    console.warn("[MAIN] Failed to load importmap-meta.json sidecar:", err);
+    return [];
+  }
+}
+
 export function setupWebviewCSP(): void {
   const configuredPartitions = new Set<string>();
+  const scriptSrcHashes = loadHostImportMapHashes(cachedDistPath);
 
   const applyCSP = (partition: string): void => {
     if (configuredPartitions.has(partition)) {
@@ -305,9 +567,12 @@ export function setupWebviewCSP(): void {
     }
 
     const ses = session.fromPartition(partition);
+    const isDev = process.env.NODE_ENV === "development";
     const cspPolicy =
       partitionType === "project"
-        ? getDaintreeAppCSP(process.env.NODE_ENV === "development")
+        ? scriptSrcHashes.length > 0
+          ? getDaintreeAppCSP(isDev, { scriptSrcHashes })
+          : getDaintreeAppCSP(isDev)
         : getLocalhostDevCSP();
 
     ses.webRequest.onHeadersReceived((details, callback) => {
@@ -418,7 +683,7 @@ export function setupWebviewCSP(): void {
 
         const blocked = isBrowserPanel
           ? !isSafeNavigationUrl(navigationUrl)
-          : !isLocalhostUrl(navigationUrl);
+          : !isLocalhostUrl(navigationUrl) && !isDevPreviewProxyUrl(navigationUrl);
 
         if (blocked) {
           const label = isBrowserPanel ? "unsafe" : "non-localhost";
@@ -433,7 +698,7 @@ export function setupWebviewCSP(): void {
 
         const blocked = isBrowserPanel
           ? !isSafeNavigationUrl(redirectUrl)
-          : !isLocalhostUrl(redirectUrl);
+          : !isLocalhostUrl(redirectUrl) && !isDevPreviewProxyUrl(redirectUrl);
 
         if (blocked) {
           const label = isBrowserPanel ? "unsafe" : "non-localhost";
@@ -510,7 +775,10 @@ export function setupWebviewCSP(): void {
       contents.on("unresponsive", notifyUnresponsive);
       contents.on("responsive", notifyResponsive);
 
-      // Intercept find-in-page shortcuts (Cmd/Ctrl+F, Cmd/Ctrl+G, Escape) from webview guests
+      // Intercept find-in-page (Cmd/Ctrl+F, Cmd/Ctrl+G, Escape) and reload
+      // (Cmd/Ctrl+R) shortcuts from webview guests. When the guest has focus
+      // Chromium routes keystrokes directly to it, so the outer renderer's
+      // keydown listener never sees these — they must be caught here.
       contents.on("before-input-event", (event, input) => {
         if (input.type !== "keyDown") return;
         const isMac = process.platform === "darwin";
@@ -525,15 +793,35 @@ export function setupWebviewCSP(): void {
           shortcut = input.shift ? "prev" : "next";
         }
 
-        if (!shortcut) return;
+        const isReload = mod && input.key.toLowerCase() === "r" && !input.alt && !input.shift;
 
-        const panelId = getWebviewDialogService().getPanelId(contents.id);
+        if (!shortcut && !isReload) return;
+
+        const dialogService = getWebviewDialogService();
+        const panelId = dialogService.getPanelId(contents.id);
         if (!panelId) return;
+
+        const findParentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
+
+        if (isReload) {
+          // Only dev-preview guests get Cmd/Ctrl+R reload — claiming the key for
+          // other webview kinds (e.g. the browser panel) would swallow it from
+          // the guest page, which has no reload handler of its own here.
+          if (dialogService.getPanelKind(contents.id) !== "dev-preview") return;
+          // preventDefault only when the signal can actually be delivered, so a
+          // window teardown race doesn't eat the key with no reload to show for it.
+          if (findParentWindow && !findParentWindow.isDestroyed()) {
+            event.preventDefault();
+            getAppWebContents(findParentWindow).send(CHANNELS.WEBVIEW_RELOAD_SHORTCUT, {
+              panelId,
+            });
+          }
+          return;
+        }
 
         if (shortcut !== "close") {
           event.preventDefault();
         }
-        const findParentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
         if (findParentWindow && !findParentWindow.isDestroyed()) {
           getAppWebContents(findParentWindow).send(CHANNELS.WEBVIEW_FIND_SHORTCUT, {
             panelId,

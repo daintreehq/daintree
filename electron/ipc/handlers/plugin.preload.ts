@@ -7,8 +7,17 @@ import type { IpcInvokeMap } from "../../types/index.js";
 // (allowlisted in `ipcHandleCoverage.test.ts`).
 export const PLUGIN_METHOD_CHANNELS = {
   list: "plugin:list",
+  install: "plugin:install",
+  setEnabled: "plugin:set-enabled",
+  installFromFile: "plugin:install-from-file",
+  installFromPath: "plugin:install-from-path",
+  installFromUrl: "plugin:install-from-url",
+  uninstall: "plugin:uninstall",
+  checkForUpdate: "plugin:check-for-update",
   toolbarButtons: "plugin:toolbar-buttons",
   menuItems: "plugin:menu-items",
+  keybindings: "plugin:keybindings",
+  contextMenuItems: "plugin:context-menu-items",
   validateActionIds: "plugin:validate-action-ids",
   getActions: "plugin:actions-get",
   registerAction: "plugin:actions-register",
@@ -16,6 +25,17 @@ export const PLUGIN_METHOD_CHANNELS = {
   getPanelKinds: "plugin:panel-kinds-get",
   getForgeProviders: "plugin:forge-providers-get",
   getDecorations: "plugin:file-decorations-get",
+  getAuditRecords: "plugin:get-audit-records",
+  getAuditConfig: "plugin:get-audit-config",
+  clearAuditLog: "plugin:clear-audit-log",
+  setAuditEnabled: "plugin:set-audit-enabled",
+  setAuditMaxRecords: "plugin:set-audit-max-records",
+  exportAuditLog: "plugin:export-audit-log",
+  getDiagnosticsSnapshot: "plugin:get-diagnostics-snapshot",
+  getSettingValues: "plugin:settings-get-values",
+  setSettingValue: "plugin:settings-set-value",
+  deleteSettingValue: "plugin:settings-delete-value",
+  revealSecretSetting: "plugin:settings-reveal-secret",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PLUGIN_METHOD_CHANNELS;

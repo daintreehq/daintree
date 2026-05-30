@@ -127,7 +127,7 @@ describe("routeHostEvent", () => {
     routeHostEvent({ type: "error", id: "t1", error: "boom" }, deps);
 
     expect(dataListener).toHaveBeenCalledWith("t1", "x");
-    expect(exitListener).toHaveBeenCalledWith("t1", 0);
+    expect(exitListener).toHaveBeenCalledWith("t1", 0, undefined);
     expect(errorListener).toHaveBeenCalledWith("t1", "boom");
   });
 

@@ -75,7 +75,7 @@ export const theme: BuiltInThemeSource = {
   tokens: {
     "focus-ring": "rgba(54,206,148,0.55)",
     "search-highlight-background": "rgba(54,206,148,0.20)",
-    "search-highlight-text": "#5F8B6D",
+    "search-highlight-text": "#36CE94",
     "search-match-badge-background": "rgba(54,206,148,0.20)",
     "search-match-badge-text": "#36CE94",
     "search-selected-result-border": "rgba(54,206,148,0.30)",

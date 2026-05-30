@@ -2,7 +2,31 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   useNotificationHistoryStore,
   getEntriesByCorrelationId,
+  pruneNotificationEntries,
+  sanitizePersistedEntry,
+  sanitizeSnoozedThreads,
+  READ_RETENTION_MS,
+  ARCHIVED_RETENTION_MS,
+  type NotificationHistoryEntry,
 } from "../slices/notificationHistorySlice";
+
+function makeEntry(overrides: Partial<NotificationHistoryEntry> = {}): NotificationHistoryEntry {
+  return {
+    id: overrides.id ?? crypto.randomUUID(),
+    type: overrides.type ?? "info",
+    message: overrides.message ?? "msg",
+    timestamp: overrides.timestamp ?? Date.now(),
+    seenAsToast: overrides.seenAsToast ?? false,
+    summarized: overrides.summarized ?? false,
+    countable: overrides.countable ?? true,
+    archivedAt: overrides.archivedAt ?? null,
+    title: overrides.title,
+    correlationId: overrides.correlationId,
+    supersedeKey: overrides.supersedeKey,
+    context: overrides.context,
+    actions: overrides.actions,
+  };
+}
 
 const { getState } = useNotificationHistoryStore;
 
@@ -30,6 +54,7 @@ describe("notificationHistorySlice", () => {
       entries: [],
       unreadCount: 0,
       evictedToInboxCount: 0,
+      snoozedThreads: {},
     });
   });
 
@@ -946,6 +971,462 @@ describe("notificationHistorySlice", () => {
       expect(
         (getState().entries.find((e) => e.id === newId)! as { supersedes?: string }).supersedes
       ).toBeUndefined();
+    });
+  });
+
+  describe("age-based retention (pruneNotificationEntries)", () => {
+    const now = Date.now();
+
+    it("keeps unread entries regardless of age", () => {
+      const ancient = makeEntry({
+        timestamp: now - 365 * 24 * 60 * 60 * 1000,
+        seenAsToast: false,
+      });
+      const result = pruneNotificationEntries([ancient], now);
+      expect(result).toHaveLength(1);
+      expect(result[0]!.id).toBe(ancient.id);
+    });
+
+    it("drops read entries older than the 7-day cutoff", () => {
+      const stale = makeEntry({ timestamp: now - READ_RETENTION_MS - 1, seenAsToast: true });
+      const fresh = makeEntry({ timestamp: now - READ_RETENTION_MS + 1000, seenAsToast: true });
+      const result = pruneNotificationEntries([stale, fresh], now);
+      expect(result).toHaveLength(1);
+      expect(result[0]!.id).toBe(fresh.id);
+    });
+
+    it("keeps a read entry exactly at the 7-day boundary", () => {
+      const atBoundary = makeEntry({ timestamp: now - READ_RETENTION_MS, seenAsToast: true });
+      const result = pruneNotificationEntries([atBoundary], now);
+      expect(result).toHaveLength(1);
+    });
+
+    it("drops archived entries older than the 30-day cutoff", () => {
+      const stale = makeEntry({
+        seenAsToast: true,
+        archivedAt: now - ARCHIVED_RETENTION_MS - 1,
+        timestamp: now - ARCHIVED_RETENTION_MS - 1,
+      });
+      const fresh = makeEntry({
+        seenAsToast: true,
+        archivedAt: now - ARCHIVED_RETENTION_MS + 1000,
+      });
+      const result = pruneNotificationEntries([stale, fresh], now);
+      expect(result).toHaveLength(1);
+      expect(result[0]!.id).toBe(fresh.id);
+    });
+
+    it("keeps an archived entry exactly at the 30-day boundary", () => {
+      const atBoundary = makeEntry({
+        seenAsToast: true,
+        archivedAt: now - ARCHIVED_RETENTION_MS,
+      });
+      const result = pruneNotificationEntries([atBoundary], now);
+      expect(result).toHaveLength(1);
+    });
+
+    it("does not drop an old unread entry just because it would have expired if read", () => {
+      const oldUnread = makeEntry({
+        timestamp: now - READ_RETENTION_MS - 10000,
+        seenAsToast: false,
+      });
+      const result = pruneNotificationEntries([oldUnread], now);
+      expect(result).toHaveLength(1);
+    });
+
+    it("treats non-countable seen entries with the read retention rule", () => {
+      const stale = makeEntry({
+        seenAsToast: true,
+        countable: false,
+        timestamp: now - READ_RETENTION_MS - 1,
+      });
+      expect(pruneNotificationEntries([stale], now)).toHaveLength(0);
+    });
+
+    it("applies the 200-entry safety cap after age pruning", () => {
+      const entries: NotificationHistoryEntry[] = [];
+      for (let i = 0; i < 210; i++) {
+        entries.push(makeEntry({ id: `unread-${i}`, seenAsToast: false }));
+      }
+      const result = pruneNotificationEntries(entries, now);
+      expect(result).toHaveLength(200);
+      expect(result[0]!.id).toBe("unread-0");
+    });
+
+    it("pruneExpiredEntries action removes expired entries and updates unreadCount", () => {
+      useNotificationHistoryStore.setState({
+        entries: [
+          makeEntry({ id: "live-unread", seenAsToast: false, timestamp: now }),
+          makeEntry({
+            id: "stale-read",
+            seenAsToast: true,
+            timestamp: now - READ_RETENTION_MS - 1,
+          }),
+        ],
+        unreadCount: 1,
+        evictedToInboxCount: 0,
+      });
+      getState().pruneExpiredEntries(now);
+      const after = getState();
+      expect(after.entries).toHaveLength(1);
+      expect(after.entries[0]!.id).toBe("live-unread");
+      expect(after.unreadCount).toBe(1);
+    });
+
+    it("pruneExpiredEntries is a no-op when nothing has expired", () => {
+      const fresh = makeEntry({ seenAsToast: false, timestamp: now });
+      useNotificationHistoryStore.setState({
+        entries: [fresh],
+        unreadCount: 1,
+        evictedToInboxCount: 0,
+      });
+      const beforeEntries = getState().entries;
+      getState().pruneExpiredEntries(now);
+      const afterEntries = getState().entries;
+      // Same reference — set((state) => state) doesn't allocate a new entries array.
+      expect(afterEntries).toBe(beforeEntries);
+    });
+  });
+
+  describe("sanitizePersistedEntry", () => {
+    it("rejects non-object input", () => {
+      expect(sanitizePersistedEntry(null)).toBeNull();
+      expect(sanitizePersistedEntry(undefined)).toBeNull();
+      expect(sanitizePersistedEntry("string")).toBeNull();
+      expect(sanitizePersistedEntry(42)).toBeNull();
+    });
+
+    it("rejects entries missing a string id", () => {
+      expect(
+        sanitizePersistedEntry({ id: 123, timestamp: 1, type: "info", message: "" })
+      ).toBeNull();
+      expect(
+        sanitizePersistedEntry({ id: "", timestamp: 1, type: "info", message: "" })
+      ).toBeNull();
+    });
+
+    it("rejects entries with non-finite timestamp", () => {
+      expect(
+        sanitizePersistedEntry({ id: "a", timestamp: NaN, type: "info", message: "" })
+      ).toBeNull();
+      expect(
+        sanitizePersistedEntry({ id: "a", timestamp: "now", type: "info", message: "" })
+      ).toBeNull();
+    });
+
+    it("rejects entries with an unknown type", () => {
+      expect(
+        sanitizePersistedEntry({ id: "a", timestamp: 1, type: "fatal", message: "" })
+      ).toBeNull();
+    });
+
+    it("coerces non-string message to empty string", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "info",
+        message: { $$typeof: Symbol.for("react.element") },
+      });
+      expect(result).not.toBeNull();
+      expect(result!.message).toBe("");
+    });
+
+    it("forces summarized to false on hydration", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "info",
+        message: "x",
+        summarized: true,
+      });
+      expect(result!.summarized).toBe(false);
+    });
+
+    it("defaults countable to true when missing", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "info",
+        message: "x",
+      });
+      expect(result!.countable).toBe(true);
+    });
+
+    it("preserves valid archivedAt and rejects bogus values", () => {
+      const withArchived = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "info",
+        message: "x",
+        archivedAt: 1234,
+      });
+      expect(withArchived!.archivedAt).toBe(1234);
+
+      const withBogusArchived = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "info",
+        message: "x",
+        archivedAt: "yesterday",
+      });
+      expect(withBogusArchived!.archivedAt).toBeNull();
+    });
+
+    it("preserves correlationId, supersedeKey, title when string, drops otherwise", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "info",
+        message: "x",
+        correlationId: "c",
+        supersedeKey: "k",
+        title: "t",
+      });
+      expect(result!.correlationId).toBe("c");
+      expect(result!.supersedeKey).toBe("k");
+      expect(result!.title).toBe("t");
+    });
+
+    it("rejects timestamps <= 0", () => {
+      expect(
+        sanitizePersistedEntry({ id: "a", timestamp: 0, type: "info", message: "x" })
+      ).toBeNull();
+      expect(
+        sanitizePersistedEntry({ id: "a", timestamp: -1, type: "info", message: "x" })
+      ).toBeNull();
+    });
+
+    it("rejects timestamps far in the future (beyond clock-skew allowance)", () => {
+      const farFuture = Date.now() + 365 * 24 * 60 * 60 * 1000;
+      expect(
+        sanitizePersistedEntry({ id: "a", timestamp: farFuture, type: "info", message: "x" })
+      ).toBeNull();
+    });
+
+    it("coerces archivedAt: 0 to null (preserves truthy-check consistency)", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "info",
+        message: "x",
+        archivedAt: 0,
+      });
+      expect(result!.archivedAt).toBeNull();
+    });
+
+    it("drops action entries with non-string label or actionId", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "info",
+        message: "x",
+        actions: [
+          null,
+          { label: { bad: true }, actionId: "panel.focus" },
+          { label: "ok", actionId: 99 },
+          { label: "good", actionId: "panel.focus" },
+        ],
+      });
+      expect(result!.actions).toHaveLength(1);
+      expect(result!.actions![0]!.label).toBe("good");
+      expect(result!.actions![0]!.actionId).toBe("panel.focus");
+    });
+
+    it("drops the actions field entirely when no element survives validation", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "info",
+        message: "x",
+        actions: [null, null, { label: "", actionId: "" }],
+      });
+      expect(result!.actions).toBeUndefined();
+    });
+
+    it("preserves valid actionArgs and variant on action elements", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "info",
+        message: "x",
+        actions: [
+          {
+            label: "go",
+            actionId: "panel.focus",
+            actionArgs: { panelId: "p1" },
+            variant: "secondary",
+          },
+        ],
+      });
+      expect(result!.actions![0]!.actionArgs).toEqual({ panelId: "p1" });
+      expect(result!.actions![0]!.variant).toBe("secondary");
+    });
+  });
+
+  describe("snoozedThreads", () => {
+    it("defaults to an empty map", () => {
+      expect(getState().snoozedThreads).toEqual({});
+    });
+
+    it("snoozeThread adds and overwrites the expiry for a correlationId", () => {
+      const until = Date.now() + 60_000;
+      getState().snoozeThread("thread-1", until);
+      expect(getState().snoozedThreads["thread-1"]).toBe(until);
+      const later = until + 60_000;
+      getState().snoozeThread("thread-1", later);
+      expect(getState().snoozedThreads["thread-1"]).toBe(later);
+    });
+
+    it("snoozeThread ignores empty correlationId and non-finite timestamps", () => {
+      getState().snoozeThread("", Date.now() + 1000);
+      getState().snoozeThread("thread-x", Number.NaN);
+      getState().snoozeThread("thread-y", Number.POSITIVE_INFINITY);
+      expect(getState().snoozedThreads).toEqual({});
+    });
+
+    it("clearSnooze removes the entry", () => {
+      getState().snoozeThread("thread-1", Date.now() + 60_000);
+      getState().clearSnooze("thread-1");
+      expect(getState().snoozedThreads["thread-1"]).toBeUndefined();
+    });
+
+    it("clearSnooze is a no-op when nothing is snoozed", () => {
+      const before = getState();
+      getState().clearSnooze("missing");
+      expect(getState()).toBe(before);
+    });
+
+    it("clearExpiredSnoozes drops only past entries", () => {
+      const now = Date.now();
+      getState().snoozeThread("future", now + 60_000);
+      getState().snoozeThread("past", now + 50);
+      getState().clearExpiredSnoozes(now + 1000);
+      expect(getState().snoozedThreads).toEqual({ future: now + 60_000 });
+    });
+
+    it("clearExpiredSnoozes is a no-op when nothing has expired", () => {
+      getState().snoozeThread("future", Date.now() + 60_000);
+      const before = getState();
+      getState().clearExpiredSnoozes(Date.now());
+      expect(getState()).toBe(before);
+    });
+
+    it("unreadCount excludes snoozed correlationIds", () => {
+      addEntry({ correlationId: "panel-1", message: "first" });
+      addEntry({ correlationId: "panel-1", message: "second" });
+      addEntry({ correlationId: "panel-2", message: "other" });
+      addEntry({ message: "uncorrelated" });
+      expect(getState().unreadCount).toBe(4);
+
+      getState().snoozeThread("panel-1", Date.now() + 60_000);
+      expect(getState().unreadCount).toBe(2);
+
+      getState().clearSnooze("panel-1");
+      expect(getState().unreadCount).toBe(4);
+    });
+
+    it("unreadCount excludes a snoozed thread when a new entry lands on it", () => {
+      getState().snoozeThread("panel-1", Date.now() + 60_000);
+      addEntry({ correlationId: "panel-1", message: "new entry" });
+      expect(getState().unreadCount).toBe(0);
+    });
+
+    it("dismissByCorrelationId clears the corresponding snooze", () => {
+      getState().snoozeThread("thread-1", Date.now() + 60_000);
+      getState().dismissByCorrelationId("thread-1");
+      expect(getState().snoozedThreads["thread-1"]).toBeUndefined();
+    });
+
+    it("archiveByCorrelationId clears the corresponding snooze", () => {
+      addEntry({ correlationId: "thread-1", message: "stuck" });
+      getState().snoozeThread("thread-1", Date.now() + 60_000);
+      getState().archiveByCorrelationId("thread-1");
+      expect(getState().snoozedThreads["thread-1"]).toBeUndefined();
+    });
+
+    it("dismissEntry clears the snooze when the dismissed entry was the last active one for that correlationId", () => {
+      addEntry({ correlationId: "solo", message: "only entry" });
+      const id = getState().entries[0]!.id;
+      getState().snoozeThread("solo", Date.now() + 60_000);
+      getState().dismissEntry(id);
+      expect(getState().snoozedThreads["solo"]).toBeUndefined();
+    });
+
+    it("dismissEntry keeps the snooze when other active entries share the correlationId", () => {
+      addEntry({ correlationId: "shared", message: "first" });
+      addEntry({ correlationId: "shared", message: "second" });
+      const until = Date.now() + 60_000;
+      getState().snoozeThread("shared", until);
+      const firstId = getState().entries[1]!.id;
+      getState().dismissEntry(firstId);
+      expect(getState().snoozedThreads["shared"]).toBe(until);
+    });
+
+    it("archiveEntry clears the snooze when archiving the last active entry for that correlationId", () => {
+      addEntry({ correlationId: "solo-arch", message: "only entry" });
+      const id = getState().entries[0]!.id;
+      getState().snoozeThread("solo-arch", Date.now() + 60_000);
+      getState().archiveEntry(id);
+      expect(getState().snoozedThreads["solo-arch"]).toBeUndefined();
+    });
+
+    it("archiveEntry keeps the snooze when other active entries share the correlationId", () => {
+      addEntry({ correlationId: "shared-arch", message: "first" });
+      addEntry({ correlationId: "shared-arch", message: "second" });
+      const until = Date.now() + 60_000;
+      getState().snoozeThread("shared-arch", until);
+      const firstId = getState().entries[1]!.id;
+      getState().archiveEntry(firstId);
+      expect(getState().snoozedThreads["shared-arch"]).toBe(until);
+    });
+
+    it("dismissEntry on an uncorrelated entry does not touch the snooze map", () => {
+      addEntry({ message: "uncorrelated" });
+      const id = getState().entries[0]!.id;
+      const until = Date.now() + 60_000;
+      getState().snoozeThread("other", until);
+      getState().dismissEntry(id);
+      expect(getState().snoozedThreads["other"]).toBe(until);
+    });
+
+    it("clearAll empties snoozedThreads", () => {
+      getState().snoozeThread("thread-1", Date.now() + 60_000);
+      getState().clearAll();
+      expect(getState().snoozedThreads).toEqual({});
+    });
+  });
+
+  describe("sanitizeSnoozedThreads", () => {
+    it("returns empty map for non-object input", () => {
+      expect(sanitizeSnoozedThreads(null)).toEqual({});
+      expect(sanitizeSnoozedThreads(undefined)).toEqual({});
+      expect(sanitizeSnoozedThreads("nope")).toEqual({});
+      expect(sanitizeSnoozedThreads(42)).toEqual({});
+    });
+
+    it("drops keys with blank ids or non-numeric values", () => {
+      const result = sanitizeSnoozedThreads(
+        {
+          "": Date.now() + 60_000,
+          "thread-1": "not-a-number",
+          "thread-2": Number.NaN,
+          "thread-3": Number.POSITIVE_INFINITY,
+        },
+        Date.now()
+      );
+      expect(result).toEqual({});
+    });
+
+    it("drops keys whose snooze already expired", () => {
+      const now = Date.now();
+      const result = sanitizeSnoozedThreads(
+        {
+          past: now - 1,
+          future: now + 60_000,
+        },
+        now
+      );
+      expect(result).toEqual({ future: now + 60_000 });
     });
   });
 });

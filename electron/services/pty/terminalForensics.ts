@@ -20,7 +20,7 @@ export const EXPECTED_TERMINATION_SIGNALS = new Set<number>([
   15, // SIGTERM (polite shutdown)
 ]);
 
-const CRASH_SIGNALS = new Set<number>([
+export const CRASH_SIGNALS = new Set<number>([
   4, // SIGILL (illegal instruction)
   6, // SIGABRT (abort)
   7, // SIGBUS (bus error)

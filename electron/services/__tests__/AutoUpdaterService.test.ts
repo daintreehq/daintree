@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import path from "node:path";
 
 const appMock = vi.hoisted(() => ({
   isPackaged: true,
   getVersion: vi.fn(() => "1.0.0"),
+  exit: vi.fn(),
 }));
+
+const trackEventMock = vi.hoisted(() => vi.fn());
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -69,6 +73,10 @@ vi.mock("../CrashRecoveryService.js", () => ({
   getCrashRecoveryService: () => ({ cleanupOnExit: cleanupOnExitMock }),
 }));
 
+vi.mock("../TelemetryService.js", () => ({
+  trackEvent: trackEventMock,
+}));
+
 vi.mock("electron", () => ({
   app: appMock,
   ipcMain: ipcMainMock,
@@ -109,6 +117,8 @@ describe("AutoUpdaterService", () => {
     windowMock.webContents.isDestroyed.mockReturnValue(false);
     delete process.env.PORTABLE_EXECUTABLE_FILE;
     delete process.env.APPIMAGE;
+    delete process.env.FLATPAK_ID;
+    delete process.env.SNAP;
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     Object.defineProperty(process, "resourcesPath", {
       value: "/mock/resources",
@@ -130,6 +140,9 @@ describe("AutoUpdaterService", () => {
     trustedRendererMock.isTrustedRendererUrl.mockImplementation((url: string) =>
       url.startsWith("app://daintree")
     );
+    appMock.getVersion.mockReset().mockReturnValue("1.0.0");
+    appMock.exit.mockReset();
+    trackEventMock.mockReset();
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -145,6 +158,8 @@ describe("AutoUpdaterService", () => {
       configurable: true,
     });
     delete process.env.APPIMAGE;
+    delete process.env.FLATPAK_ID;
+    delete process.env.SNAP;
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -425,6 +440,49 @@ describe("AutoUpdaterService", () => {
       expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled();
     });
 
+    it("skips initialization on Linux when FLATPAK_ID is set", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.FLATPAK_ID = "com.daintreehq.Daintree";
+
+      autoUpdaterService.initialize();
+
+      expect(autoUpdaterMock.on).not.toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining("Linux Flatpak sandbox detected")
+      );
+
+      autoUpdaterService.checkForUpdatesManually();
+      expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled();
+    });
+
+    it("skips initialization on Linux when SNAP is set", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.SNAP = "/snap/daintree/current";
+
+      autoUpdaterService.initialize();
+
+      expect(autoUpdaterMock.on).not.toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining("Linux Snap sandbox detected")
+      );
+
+      autoUpdaterService.checkForUpdatesManually();
+      expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled();
+    });
+
+    it("skips initialization on Linux when both FLATPAK_ID and APPIMAGE are set", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.FLATPAK_ID = "com.daintreehq.Daintree";
+      process.env.APPIMAGE = "/path/to/app.AppImage";
+
+      autoUpdaterService.initialize();
+
+      expect(autoUpdaterMock.on).not.toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining("Linux Flatpak sandbox detected")
+      );
+    });
+
     it("initializes normally on Linux when APPIMAGE is set", () => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
       process.env.APPIMAGE = "/path/to/app.AppImage";
@@ -496,7 +554,7 @@ describe("AutoUpdaterService", () => {
 
       autoUpdaterService.initialize();
 
-      expect(fsMock.existsSync).toHaveBeenCalledWith(expect.stringContaining("package-type"));
+      expect(fsMock.existsSync).toHaveBeenCalledWith(path.join("/mock/resources", "package-type"));
     });
 
     it("skips filesystem probe when APPIMAGE is set", () => {
@@ -2091,6 +2149,364 @@ describe("AutoUpdaterService", () => {
 
       const registeredChannels = (ipcMainMock.handle as Mock).mock.calls.map((args) => args[0]);
       expect(registeredChannels).toContain(CHANNELS.UPDATE_DISMISS_TOAST);
+    });
+  });
+
+  describe("quit-and-install watchdog (issue #9261)", () => {
+    let quitAndInstallHandler: (event: unknown) => void;
+    let downloadedHandler: (info: { version: string }) => void;
+
+    beforeEach(() => {
+      autoUpdaterService.initialize();
+
+      quitAndInstallHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_QUIT_AND_INSTALL
+      )![1];
+
+      downloadedHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-downloaded"
+      )![1];
+    });
+
+    it("arms a 5s app.exit(0) watchdog on darwin after quitAndInstall fires", () => {
+      downloadedHandler({ version: "2.0.0" });
+      quitAndInstallHandler(TRUSTED_SENDER);
+
+      vi.advanceTimersToNextTimer();
+      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+      expect(appMock.exit).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(4_999);
+      expect(appMock.exit).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(appMock.exit).toHaveBeenCalledTimes(1);
+      expect(appMock.exit).toHaveBeenCalledWith(0);
+    });
+
+    it("does not arm the watchdog on win32", () => {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      downloadedHandler({ version: "2.0.0" });
+      quitAndInstallHandler(TRUSTED_SENDER);
+
+      vi.advanceTimersToNextTimer();
+      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(60_000);
+      expect(appMock.exit).not.toHaveBeenCalled();
+    });
+
+    it("does not arm the watchdog on linux", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      downloadedHandler({ version: "2.0.0" });
+      quitAndInstallHandler(TRUSTED_SENDER);
+
+      vi.advanceTimersToNextTimer();
+      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(60_000);
+      expect(appMock.exit).not.toHaveBeenCalled();
+    });
+
+    it("swallows a thrown app.exit so the watchdog callback never escapes", () => {
+      appMock.exit.mockImplementation(() => {
+        throw new Error("exit refused");
+      });
+      downloadedHandler({ version: "2.0.0" });
+      quitAndInstallHandler(TRUSTED_SENDER);
+
+      vi.advanceTimersToNextTimer();
+      expect(() => vi.advanceTimersByTime(5_000)).not.toThrow();
+      expect(appMock.exit).toHaveBeenCalledTimes(1);
+    });
+
+    it("quitAndInstallIfReady also arms the macOS watchdog", () => {
+      downloadedHandler({ version: "2.0.0" });
+      const triggered = autoUpdaterService.quitAndInstallIfReady();
+      expect(triggered).toBe(true);
+
+      vi.advanceTimersToNextTimer();
+      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+      expect(appMock.exit).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(5_000);
+      expect(appMock.exit).toHaveBeenCalledTimes(1);
+    });
+
+    it("dispose() cancels a pending watchdog so app.exit never fires", () => {
+      downloadedHandler({ version: "2.0.0" });
+      quitAndInstallHandler(TRUSTED_SENDER);
+      vi.advanceTimersToNextTimer();
+      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+
+      autoUpdaterService.dispose();
+      vi.advanceTimersByTime(60_000);
+      expect(appMock.exit).not.toHaveBeenCalled();
+    });
+
+    it("still arms the watchdog when autoUpdater.quitAndInstall throws", () => {
+      autoUpdaterMock.quitAndInstall.mockImplementationOnce(() => {
+        throw new Error("no staged installer");
+      });
+      downloadedHandler({ version: "2.0.0" });
+      quitAndInstallHandler(TRUSTED_SENDER);
+
+      expect(() => vi.advanceTimersToNextTimer()).not.toThrow();
+      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(5_000);
+      expect(appMock.exit).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("pendingUpdateVersion persistence (issue #9261)", () => {
+    let downloadedHandler: (info: { version?: unknown }) => void;
+
+    beforeEach(() => {
+      autoUpdaterService.initialize();
+      downloadedHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-downloaded"
+      )![1];
+    });
+
+    it("persists a valid version on update-downloaded", () => {
+      downloadedHandler({ version: "2.0.0" });
+      expect(storeMock.set).toHaveBeenCalledWith("pendingUpdateVersion", "2.0.0");
+    });
+
+    it("persists a pre-release version", () => {
+      downloadedHandler({ version: "0.9.0-nightly.20251231" });
+      expect(storeMock.set).toHaveBeenCalledWith("pendingUpdateVersion", "0.9.0-nightly.20251231");
+    });
+
+    it("trims surrounding whitespace before persisting", () => {
+      downloadedHandler({ version: "  2.0.0  " });
+      expect(storeMock.set).toHaveBeenCalledWith("pendingUpdateVersion", "2.0.0");
+    });
+
+    it("ignores a non-string version", () => {
+      downloadedHandler({ version: 42 });
+      expect(storeMock.set).not.toHaveBeenCalledWith("pendingUpdateVersion", expect.anything());
+    });
+
+    it("ignores an empty version", () => {
+      downloadedHandler({ version: "   " });
+      expect(storeMock.set).not.toHaveBeenCalledWith("pendingUpdateVersion", expect.anything());
+    });
+
+    it("ignores a malformed semver", () => {
+      downloadedHandler({ version: "not-a-version" });
+      expect(storeMock.set).not.toHaveBeenCalledWith("pendingUpdateVersion", expect.anything());
+    });
+
+    it("does not persist when the download belongs to a stale channel", () => {
+      const availableHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-available"
+      )![1] as (info: { version: string }) => void;
+      availableHandler({ version: "2.0.0" });
+
+      const setChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+      )![1] as (event: unknown, channel: string) => Promise<unknown>;
+      storeMock.get.mockReturnValueOnce("stable");
+      void setChannelHandler({}, "nightly");
+
+      storeMock.set.mockClear();
+      downloadedHandler({ version: "2.0.0" });
+      expect(storeMock.set).not.toHaveBeenCalledWith("pendingUpdateVersion", expect.anything());
+    });
+
+    it("does not throw if store.set rejects", () => {
+      storeMock.set.mockImplementationOnce(() => {
+        throw new Error("disk full");
+      });
+      expect(() => downloadedHandler({ version: "2.0.0" })).not.toThrow();
+    });
+
+    it("persists before broadcasting UPDATE_DOWNLOADED so a crash mid-event leaves the marker on disk", () => {
+      downloadedHandler({ version: "2.0.0" });
+
+      const setOrder =
+        (storeMock.set as Mock).mock.calls
+          .map((args, i) => ({ args, order: (storeMock.set as Mock).mock.invocationCallOrder[i] }))
+          .find((c) => c.args[0] === "pendingUpdateVersion")?.order ?? Infinity;
+      const broadcastOrder =
+        (broadcastMock as Mock).mock.calls
+          .map((args, i) => ({ args, order: (broadcastMock as Mock).mock.invocationCallOrder[i] }))
+          .find((c) => c.args[0] === CHANNELS.UPDATE_DOWNLOADED)?.order ?? -1;
+
+      expect(setOrder).toBeLessThan(broadcastOrder);
+    });
+
+    it("stores the canonical semver form (no leading v prefix)", () => {
+      downloadedHandler({ version: "v2.0.0" });
+      expect(storeMock.set).toHaveBeenCalledWith("pendingUpdateVersion", "2.0.0");
+    });
+  });
+
+  describe("pendingUpdateVersion channel-switch clear (issue #9261)", () => {
+    it("clears the marker when the user switches channels", async () => {
+      autoUpdaterService.initialize();
+      const downloadedHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-downloaded"
+      )![1] as (info: { version: string }) => void;
+      const setChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+      )![1] as (event: unknown, channel: string) => Promise<unknown>;
+
+      downloadedHandler({ version: "2.0.0" });
+      expect(storeMock.set).toHaveBeenCalledWith("pendingUpdateVersion", "2.0.0");
+
+      storeMock.get.mockImplementation((key: string) =>
+        key === "updateChannel" ? "stable" : undefined
+      );
+      storeMock.delete.mockClear();
+      await setChannelHandler({}, "nightly");
+
+      expect(storeMock.delete).toHaveBeenCalledWith("pendingUpdateVersion");
+    });
+
+    it("does not clear the marker on a same-channel re-save", async () => {
+      autoUpdaterService.initialize();
+      const setChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+      )![1] as (event: unknown, channel: string) => Promise<unknown>;
+
+      storeMock.get.mockImplementation((key: string) =>
+        key === "updateChannel" ? "stable" : undefined
+      );
+      storeMock.delete.mockClear();
+      await setChannelHandler({}, "stable");
+
+      expect(storeMock.delete).not.toHaveBeenCalledWith("pendingUpdateVersion");
+    });
+
+    it("does not throw if store.delete rejects during channel switch", async () => {
+      autoUpdaterService.initialize();
+      const setChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+      )![1] as (event: unknown, channel: string) => Promise<unknown>;
+
+      storeMock.get.mockImplementation((key: string) =>
+        key === "updateChannel" ? "stable" : undefined
+      );
+      storeMock.delete.mockImplementationOnce(() => {
+        throw new Error("disk full");
+      });
+      await expect(setChannelHandler({}, "nightly")).resolves.toBe("nightly");
+    });
+  });
+
+  describe("boot-time install verification (issue #9261)", () => {
+    it("fires trackEvent on version mismatch in packaged mode", () => {
+      appMock.getVersion.mockReturnValue("1.0.0");
+      storeMock.get.mockImplementation((key: string) =>
+        key === "pendingUpdateVersion" ? "2.0.0" : undefined
+      );
+
+      autoUpdaterService.initialize();
+
+      expect(storeMock.delete).toHaveBeenCalledWith("pendingUpdateVersion");
+      expect(trackEventMock).toHaveBeenCalledWith("auto_update_install_version_mismatch", {
+        expectedVersion: "2.0.0",
+        actualVersion: "1.0.0",
+        platform: "darwin",
+      });
+    });
+
+    it("does not fire trackEvent when versions match", () => {
+      appMock.getVersion.mockReturnValue("2.0.0");
+      storeMock.get.mockImplementation((key: string) =>
+        key === "pendingUpdateVersion" ? "2.0.0" : undefined
+      );
+
+      autoUpdaterService.initialize();
+
+      expect(storeMock.delete).toHaveBeenCalledWith("pendingUpdateVersion");
+      expect(trackEventMock).not.toHaveBeenCalled();
+    });
+
+    it("clears the marker but does not fire trackEvent in non-packaged mode", () => {
+      appMock.isPackaged = false;
+      storeMock.get.mockImplementation((key: string) =>
+        key === "pendingUpdateVersion" ? "2.0.0" : undefined
+      );
+
+      autoUpdaterService.initialize();
+
+      expect(storeMock.delete).not.toHaveBeenCalledWith("pendingUpdateVersion");
+      expect(trackEventMock).not.toHaveBeenCalled();
+    });
+
+    it("is a no-op when no pendingUpdateVersion is stored", () => {
+      storeMock.get.mockReturnValue(undefined);
+
+      autoUpdaterService.initialize();
+
+      expect(trackEventMock).not.toHaveBeenCalled();
+    });
+
+    it("clears but does not fire trackEvent on an invalid stored value", () => {
+      storeMock.get.mockImplementation((key: string) =>
+        key === "pendingUpdateVersion" ? "not-a-version" : undefined
+      );
+
+      autoUpdaterService.initialize();
+
+      expect(storeMock.delete).toHaveBeenCalledWith("pendingUpdateVersion");
+      expect(trackEventMock).not.toHaveBeenCalled();
+    });
+
+    it("clears but does not fire trackEvent on a non-string stored value", () => {
+      storeMock.get.mockImplementation((key: string) =>
+        key === "pendingUpdateVersion" ? 42 : undefined
+      );
+
+      autoUpdaterService.initialize();
+
+      expect(storeMock.delete).toHaveBeenCalledWith("pendingUpdateVersion");
+      expect(trackEventMock).not.toHaveBeenCalled();
+    });
+
+    it("propagates the actual platform on linux", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.APPIMAGE = "/path/to/app.AppImage";
+      appMock.getVersion.mockReturnValue("1.0.0");
+      storeMock.get.mockImplementation((key: string) =>
+        key === "pendingUpdateVersion" ? "2.0.0" : undefined
+      );
+
+      autoUpdaterService.initialize();
+
+      expect(trackEventMock).toHaveBeenCalledWith(
+        "auto_update_install_version_mismatch",
+        expect.objectContaining({ platform: "linux" })
+      );
+    });
+
+    it("does not crash when store.delete throws", () => {
+      storeMock.get.mockImplementation((key: string) =>
+        key === "pendingUpdateVersion" ? "2.0.0" : undefined
+      );
+      storeMock.delete.mockImplementationOnce(() => {
+        throw new Error("disk full");
+      });
+
+      expect(() => autoUpdaterService.initialize()).not.toThrow();
+      // trackEvent still fires because the delete failure is logged but
+      // doesn't abort the comparison path.
+      expect(trackEventMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("swallows a thrown trackEvent so initialize never throws", () => {
+      storeMock.get.mockImplementation((key: string) =>
+        key === "pendingUpdateVersion" ? "2.0.0" : undefined
+      );
+      trackEventMock.mockImplementationOnce(() => {
+        throw new Error("sentry offline");
+      });
+
+      expect(() => autoUpdaterService.initialize()).not.toThrow();
     });
   });
 });

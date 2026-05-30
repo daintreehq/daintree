@@ -11,7 +11,8 @@ export type DevPreviewStatus =
   | "installing"
   | "running"
   | "stopping"
-  | "error";
+  | "error"
+  | "restored-stopped";
 
 export interface UseDevServerOptions {
   panelId: string;
@@ -44,6 +45,12 @@ export interface UseDevServerReturn extends UseDevServerState {
    */
   stuckTier: DevServerStuckTier;
   forceKilled?: boolean;
+  /**
+   * True when the PTY-layer crash-loop guard halted auto-respawn after repeated
+   * fast install→crash cycles. Pairs with `status === "stopped"` to surface a
+   * recoverable banner; an explicit restart clears it.
+   */
+  crashLoopStopped?: boolean;
 }
 
 /**
@@ -116,8 +123,16 @@ export function useDevServer({
   const [error, setError] = useState<DevServerError | null>(null);
   const [phaseLabel, setPhaseLabel] = useState<"Compiling" | undefined>(undefined);
   const [isRestarting, setIsRestarting] = useState(false);
+  // Gates the auto-ensure effect until the first getState() resolves. The
+  // auto-ensure effect fires synchronously on mount — before getState() can
+  // report a "restored-stopped" status — so without this gate it would
+  // immediately spawn a dev server that the user closed Daintree with running,
+  // violating the no-auto-spawn-on-launch contract (#9094). Sticky: once true
+  // it stays true (restored-stopped only ever surfaces on the initial launch).
+  const [initialStateResolved, setInitialStateResolved] = useState(false);
   const [stuckTier, setStuckTier] = useState<DevServerStuckTier>(0);
   const [forceKilled, setForceKilled] = useState<boolean | undefined>(undefined);
+  const [crashLoopStopped, setCrashLoopStopped] = useState<boolean | undefined>(undefined);
   const latestSessionRef = useRef<{
     status: DevPreviewStatus;
     url: string | null;
@@ -193,6 +208,7 @@ export function useDevServer({
     setPhaseLabel(state.phaseLabel);
     setIsRestarting(state.isRestarting);
     setForceKilled(state.forceKilled);
+    setCrashLoopStopped(state.crashLoopStopped);
   }, []);
 
   const applyInvokeError = useCallback((err: unknown) => {
@@ -371,6 +387,7 @@ export function useDevServer({
       lastEnsureConfigRef.current = "";
       pendingEnsureConfigRef.current = null;
       persistedEnsureCache.delete(panelId);
+      setInitialStateResolved(true);
       return;
     }
 
@@ -382,6 +399,9 @@ export function useDevServer({
       })
       .catch((err) => {
         if (!cancelled) applyInvokeError(err);
+      })
+      .finally(() => {
+        if (!cancelled) setInitialStateResolved(true);
       });
 
     return () => {
@@ -395,7 +415,11 @@ export function useDevServer({
       const { state } = payload;
       if (state.panelId !== panelId) return;
       if (state.projectId !== currentProjectId) return;
-      if (state.status === "error" || state.status === "stopped") {
+      if (
+        state.status === "error" ||
+        state.status === "stopped" ||
+        state.status === "restored-stopped"
+      ) {
         persistedEnsureCache.delete(panelId);
       }
       applyState(state);
@@ -430,6 +454,11 @@ export function useDevServer({
   useEffect(() => {
     if (!currentProjectId) return;
     if (!devCommand.trim()) return;
+    // Wait for the first getState() to resolve before auto-spawning. A
+    // "restored-stopped" panel must surface its restart CTA, not silently
+    // relaunch the dev server the user closed Daintree with (#9094).
+    if (!initialStateResolved) return;
+    if (status === "restored-stopped") return;
 
     const configKey = buildEnsureConfigKey({
       projectId: currentProjectId,
@@ -464,6 +493,8 @@ export function useDevServer({
     envSignature,
     turbopackEnabled,
     ensureLatestConfig,
+    initialStateResolved,
+    status,
   ]);
 
   // Staged stuck-start escalation (#8276, retuned #9099). Replaces the
@@ -513,6 +544,17 @@ export function useDevServer({
     };
   }, [panelId, currentProjectId, status, terminalId, url, isRestarting]);
 
+  // When the backend signals a compile is in progress, downgrade any
+  // existing Tier 2 "no signal yet" banner to Tier 1 (benign pulse). The
+  // compile IS the signal — the user doesn't need both warnings.
+  // Kept in a separate effect so timer starts from the main effect aren't
+  // reset when phaseLabel toggles (Tier 3 at 45s must still fire).
+  useEffect(() => {
+    if (phaseLabel === "Compiling") {
+      setStuckTier((prev) => (prev >= 2 ? 1 : prev));
+    }
+  }, [phaseLabel]);
+
   return {
     status,
     url,
@@ -525,5 +567,6 @@ export function useDevServer({
     isRestarting,
     stuckTier,
     forceKilled,
+    crashLoopStopped,
   };
 }

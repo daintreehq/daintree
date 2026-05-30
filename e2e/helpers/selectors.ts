@@ -118,6 +118,7 @@ export const SEL = {
     zoomIn: '[aria-label="Zoom in"]',
     zoomOut: '[aria-label="Zoom out"]',
     zoomReset: '[aria-label="Reset zoom"]',
+    promoteToPortal: '[data-testid="browser-promote-portal"]',
     findInput: 'input[placeholder="Find in page"]',
     findPrev: '[aria-label="Previous match"]',
     findNext: '[aria-label="Next match"]',

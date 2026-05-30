@@ -4,7 +4,15 @@ import type {
   ForgeRpcMethod,
   ForgeResolveProviderResult,
 } from "../../shared/types/workspace-host.js";
-import type { CIStatus, Issue, PR, RateLimitInfo, RepoRef } from "../../shared/types/forge.js";
+import type {
+  CIStatus,
+  Issue,
+  PR,
+  PRListProbeResult,
+  PRSnapshot,
+  RateLimitInfo,
+  RepoRef,
+} from "../../shared/types/forge.js";
 
 // Deterministic stringify so identical arg shapes coalesce regardless of
 // property order.
@@ -129,6 +137,20 @@ export class ForgeBridge {
       repo,
       prNumbers,
     ]);
+  }
+
+  /**
+   * Optional cheap conditional probe of the repo's open-PR list. Returns `null`
+   * when the provider does not implement `batchLookups.probeOpenPRList`; the
+   * caller then revalidates every tracked PR as if no probe existed. See
+   * {@link PRListProbeResult}.
+   */
+  probeOpenPRList(
+    namespacedId: string,
+    repo: RepoRef,
+    tracked: PRSnapshot[]
+  ): Promise<PRListProbeResult | null> {
+    return this.invoke<PRListProbeResult | null>("probeOpenPRList", namespacedId, [repo, tracked]);
   }
 
   /**

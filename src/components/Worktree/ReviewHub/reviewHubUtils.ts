@@ -2,6 +2,7 @@ import type { GitStatus, StagingFileEntry } from "@shared/types";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { getGitRecoveryHint } from "@shared/utils/gitOperationErrors";
 import { isClientGitError } from "@/utils/clientGitError";
+import { isGeneratedFile } from "../generatedFileClassifier";
 
 export type DiffMode = "working-tree" | "base-branch";
 
@@ -240,7 +241,7 @@ export function getBaseBranchStatusConfig(status: string): {
   );
 }
 
-export type SortKey = "path" | "status";
+export type SortKey = "path" | "status" | "churn";
 export type SortDirection = "asc" | "desc";
 export type Density = "comfortable" | "compact";
 
@@ -259,25 +260,6 @@ export const DEFAULT_SECTION_STATE: SectionViewState = {
   density: "comfortable",
   showGenerated: true,
 };
-
-const GENERATED_FILE_PATTERNS = [
-  /(^|\/)package-lock\.json$/,
-  /(^|\/)pnpm-lock\.yaml$/,
-  /(^|\/)yarn\.lock$/,
-  /(^|\/)bun\.lockb?$/,
-  /(^|\/)Cargo\.lock$/,
-  /(^|\/)Gemfile\.lock$/,
-  /(^|\/)composer\.lock$/,
-  /(^|\/)poetry\.lock$/,
-  /\.gen\.\w+$/,
-  /\.generated\.\w+$/,
-  /__generated__\//,
-];
-
-export function isGeneratedFile(path: string): boolean {
-  const normalized = path.replace(/\\/g, "/");
-  return GENERATED_FILE_PATTERNS.some((re) => re.test(normalized));
-}
 
 export function matchesFilter(path: string, query: string): boolean {
   const trimmed = query.trim().replace(/\\/g, "/");
@@ -329,9 +311,22 @@ export function sortFiles(
   ];
 
   sorted.sort((a, b) => {
+    // Generated files sort last across every sort mode and direction — this
+    // tier is intentionally outside the dir flip below so descending sorts
+    // don't surface generated files first.
+    const genTier = Number(isGeneratedFile(a.path)) - Number(isGeneratedFile(b.path));
+    if (genTier !== 0) return genTier;
+
     let cmp: number;
     if (key === "path") {
       cmp = a.path.localeCompare(b.path);
+    } else if (key === "churn") {
+      const aChurn = (a.insertions ?? 0) + (a.deletions ?? 0);
+      const bChurn = (b.insertions ?? 0) + (b.deletions ?? 0);
+      cmp = aChurn - bChurn;
+      if (cmp === 0) {
+        cmp = a.path.localeCompare(b.path);
+      }
     } else {
       const ai = statusOrder.indexOf(a.status);
       const bi = statusOrder.indexOf(b.status);
@@ -349,7 +344,7 @@ export function sortFiles(
 export const FILTER_DEBOUNCE_MS = 200;
 
 export function isSortKey(v: string): v is SortKey {
-  return v === "path" || v === "status";
+  return v === "path" || v === "status" || v === "churn";
 }
 
 export function isDensity(v: string): v is Density {

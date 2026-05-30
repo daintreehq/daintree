@@ -271,8 +271,8 @@ describe("GitService", () => {
       expect(typeof result).toBe("object");
       if (typeof result === "object") {
         expect(result.files).toHaveLength(2);
-        expect(result.files[0]).toEqual({ status: "M", path: "src/app.ts" });
-        expect(result.files[1]).toEqual({ status: "A", path: "src/new.ts" });
+        expect(result.files[0]).toMatchObject({ status: "M", path: "src/app.ts" });
+        expect(result.files[1]).toMatchObject({ status: "A", path: "src/new.ts" });
       }
     });
 
@@ -285,7 +285,7 @@ describe("GitService", () => {
       expect(typeof result).toBe("object");
       if (typeof result === "object") {
         expect(result.files).toHaveLength(1);
-        expect(result.files[0]).toEqual({ status: "M", path: "src/app.ts" });
+        expect(result.files[0]).toMatchObject({ status: "M", path: "src/app.ts" });
       }
     });
 

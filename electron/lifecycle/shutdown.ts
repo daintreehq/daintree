@@ -19,6 +19,7 @@ import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceSe
 import { getHibernationService } from "../services/HibernationService.js";
 import { getIdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
 import { getSystemSleepService } from "../services/SystemSleepService.js";
+import { getOsDndService } from "../services/OsDndService.js";
 import { gitHubTokenHealthService } from "../services/github/GitHubTokenHealthService.js";
 import {
   agentConnectivityService,
@@ -204,10 +205,39 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           import("../services/McpServerService.js")
             .then(({ mcpServerService }) => mcpServerService.stop())
             .catch(() => {}),
+          // Flush any debounced plugin-audit records before exit — the flush
+          // timer is unref'd, so the tail of a session would otherwise be lost.
+          // Lazy-import guarded like MCP: skip silently if init never ran.
+          import("../services/PluginActionAuditService.js")
+            .then(({ getPluginActionAuditService }) => getPluginActionAuditService().flushNow())
+            .catch(() => {}),
+          // Flush any forge audit records still inside the 2s debounce window.
+          // The flush timer is unref()'d so Node won't keep the process alive
+          // for it — without this drain, the last few records are lost on quit.
+          // Lazy-imported: the module only loads if a forge handler ran.
+          import("../services/forge/forgeAuditService.js")
+            .then(({ forgeAuditService }) => forgeAuditService.flushNow())
+            .catch(() => {}),
+          // Mirror for the plugin-MCP inbound audit ring (#9234). Same unref'd
+          // 2s debounce, same loss-on-quit if not drained explicitly.
+          import("../services/plugin-mcp/instances.js")
+            .then(({ getPluginMcpAuditService }) => getPluginMcpAuditService().flushNow())
+            .catch(() => {}),
           // Revoke and remove any in-flight help-session dirs. Same lazy-import
           // guard as MCP — the module only loads if a help session was provisioned.
           import("../services/HelpSessionService.js")
             .then(({ helpSessionService }) => helpSessionService.revokeAll())
+            .catch(() => {}),
+          // Tear down every supervised plugin MCP subprocess (#9233). Same
+          // lazy-import guard — if no plugin ever activated an MCP server, the
+          // supervisor module never loaded and there is nothing to stop.
+          import("../services/PluginMcpSupervisor.js")
+            .then(({ getPluginMcpSupervisor }) => getPluginMcpSupervisor().shutdownAll())
+            .catch(() => {}),
+          // Close the CLI control socket and unlink the socket file (F32). Same
+          // lazy-import guard — the module only loaded if the deferred task ran.
+          import("../services/PluginCliServer.js")
+            .then(({ stopPluginCliServer }) => stopPluginCliServer())
             .catch(() => {}),
           new Promise<void>((resolve) => {
             // Global singletons that previously tore down on last-window-close
@@ -240,6 +270,11 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
               getSystemSleepService().dispose();
             } catch (err) {
               console.warn("[MAIN] SystemSleepService.dispose failed:", err);
+            }
+            try {
+              getOsDndService().dispose();
+            } catch (err) {
+              console.warn("[MAIN] OsDndService.dispose failed:", err);
             }
 
             try {

@@ -374,5 +374,50 @@ describe("UrlDetector", () => {
         expect(result.url).toBe("http://localhost:3000/");
       });
     });
+
+    describe("compile markers", () => {
+      it("detects webpack 'compiling...' line", () => {
+        const result = detector.scanOutput("compiling...", "");
+        expect(result.compileMarker).toBe(true);
+        expect(result.readyMarker).toBe(false);
+      });
+
+      it("detects Vite hmr update", () => {
+        const result = detector.scanOutput("[vite] hmr update /src/App.tsx", "");
+        expect(result.compileMarker).toBe(true);
+      });
+
+      it("detects Vite page reload", () => {
+        const result = detector.scanOutput("[vite] page reload src/main.tsx", "");
+        expect(result.compileMarker).toBe(true);
+      });
+
+      it("detects Next.js 'Compiling /route'", () => {
+        const result = detector.scanOutput("Compiling /dashboard", "");
+        expect(result.compileMarker).toBe(true);
+      });
+
+      it("does not match 'Compiled' (completion, not compile-start)", () => {
+        const result = detector.scanOutput("Compiled successfully in 234ms", "");
+        expect(result.compileMarker).toBe(false);
+      });
+
+      it("does not match unrelated output", () => {
+        const result = detector.scanOutput("Watching for file changes...", "");
+        expect(result.compileMarker).toBe(false);
+        expect(result.readyMarker).toBe(false);
+      });
+
+      it("handles ANSI-coloured compile markers", () => {
+        const withAnsi = "\x1b[36mcompiling...\x1b[0m";
+        const result = detector.scanOutput(withAnsi, "");
+        expect(result.compileMarker).toBe(true);
+      });
+
+      it("returns false for empty data", () => {
+        const result = detector.scanOutput("", "");
+        expect(result.compileMarker).toBe(false);
+      });
+    });
   });
 });

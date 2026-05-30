@@ -3,10 +3,10 @@ import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
 
 // ── Mock the `ws` package ────────────────────────────────────────────────────
 //
-// The service imports `WebSocket from "ws"` (the npm package, not the WHATWG
-// global) because Node's global WebSocket constructor silently drops the
-// custom-headers option needed for OpenAI auth. We mock the entire module so
-// the constructor returns a controllable EventEmitter-style stub.
+// The coordinator delegates to a concrete provider (OpenAI or Deepgram), each
+// of which imports `WebSocket from "ws"`. We mock the module once so both
+// providers receive the same controllable stub. The stub records string control
+// frames and binary audio frames so the test can tell the two transports apart.
 
 interface MockOptions {
   headers: Record<string, string>;
@@ -23,9 +23,9 @@ class MockWebSocket {
   url: string;
   options: MockOptions;
   readyState: number = MockWebSocket.CONNECTING;
-  sent: string[] = [];
+  sent: Array<string | Buffer> = [];
   closeCalls = 0;
-  closeCode?: number;
+  terminateCalls = 0;
 
   private listeners: Map<string, Set<WsListener>> = new Map();
 
@@ -58,17 +58,24 @@ class MockWebSocket {
     for (const listener of set) listener(...args);
   }
 
-  send(payload: string): void {
+  send(payload: string | Buffer): void {
     this.sent.push(payload);
   }
 
   close(code?: number): void {
     this.closeCalls++;
-    this.closeCode = code;
+    void code;
     this.readyState = MockWebSocket.CLOSED;
   }
 
-  // Test helpers
+  terminate(): void {
+    this.terminateCalls++;
+    this.readyState = MockWebSocket.CLOSED;
+    this.fire("close", 1006, undefined);
+  }
+
+  ping(): void {}
+
   simulateOpen(): void {
     this.readyState = MockWebSocket.OPEN;
     this.fire("open");
@@ -78,48 +85,101 @@ class MockWebSocket {
     this.fire("message", Buffer.from(JSON.stringify({ type, ...payload })));
   }
 
-  simulateRawMessage(data: string | Buffer): void {
-    this.fire("message", data);
+  textFrames(): Array<Record<string, unknown>> {
+    return this.sent
+      .filter((s): s is string => typeof s === "string")
+      .map((s) => JSON.parse(s) as Record<string, unknown>);
   }
 
-  simulateError(err: Error = new Error("WebSocket error")): void {
-    this.fire("error", err);
-  }
-
-  simulateClose(code?: number, reason?: Buffer | string): void {
-    this.readyState = MockWebSocket.CLOSED;
-    this.fire("close", code, reason);
-  }
-
-  sentJson(): Array<Record<string, unknown>> {
-    return this.sent.map((s) => JSON.parse(s) as Record<string, unknown>);
+  binaryFrames(): Buffer[] {
+    return this.sent.filter((s): s is Buffer => Buffer.isBuffer(s));
   }
 }
 
 const instances: MockWebSocket[] = [];
-let throwOnConstruct = false;
-let constructError: Error | null = null;
 
 vi.mock("ws", () => {
   const ctor = function (this: unknown, url: string, options: MockOptions) {
-    if (throwOnConstruct) {
-      throw constructError ?? new Error("WebSocket construction failed");
-    }
     return new MockWebSocket(url, options);
   } as unknown as new (url: string, options: MockOptions) => MockWebSocket;
   return { default: ctor };
 });
 
-// Import the service AFTER vi.mock so the mocked `ws` is used.
+// ── Mock the VAD worker (`node:worker_threads`) ──────────────────────────────
+//
+// The OpenAI provider spawns a Silero VAD worker. Replace it with a stub so the
+// coordinator tests can drive speech-end events synchronously instead of
+// loading ONNX or spawning a real thread.
+
+type VadListener = (...args: unknown[]) => void;
+
+class MockVadWorker {
+  terminateCalls = 0;
+  private listeners: Map<string, Set<VadListener>> = new Map();
+
+  constructor(_path: string | URL) {
+    vadWorkers.push(this);
+  }
+
+  on(event: string, listener: VadListener): this {
+    if (!this.listeners.has(event)) this.listeners.set(event, new Set());
+    this.listeners.get(event)!.add(listener);
+    return this;
+  }
+
+  removeAllListeners(event?: string): this {
+    if (event) this.listeners.delete(event);
+    else this.listeners.clear();
+    return this;
+  }
+
+  postMessage(): void {}
+
+  terminate(): Promise<number> {
+    this.terminateCalls++;
+    return Promise.resolve(0);
+  }
+
+  private fire(event: string, ...args: unknown[]): void {
+    const set = this.listeners.get(event);
+    if (!set) return;
+    for (const listener of set) listener(...args);
+  }
+
+  emitSpeechStart(): void {
+    this.fire("message", { type: "speech-start" });
+  }
+  emitSpeechEnd(): void {
+    this.fire("message", { type: "speech-end" });
+  }
+}
+
+const vadWorkers: MockVadWorker[] = [];
+
+vi.mock("node:worker_threads", () => ({
+  Worker: function (this: unknown, scriptPath: string | URL) {
+    return new MockVadWorker(scriptPath);
+  } as unknown as new (scriptPath: string | URL) => MockVadWorker,
+}));
+
+function latestVadWorker(): MockVadWorker {
+  const worker = vadWorkers.at(-1);
+  if (!worker) throw new Error("No MockVadWorker instance created");
+  return worker;
+}
+
+// Import AFTER vi.mock so the providers use the mocked `ws`.
 const { VoiceTranscriptionService } = await import("../VoiceTranscriptionService.js");
 type VoiceTranscriptionServiceInstance = InstanceType<typeof VoiceTranscriptionService>;
 type VoiceTranscriptionEvent = import("../VoiceTranscriptionService.js").VoiceTranscriptionEvent;
 
-const BASE_SETTINGS: VoiceInputSettings = {
+const OPENAI_SETTINGS: VoiceInputSettings = {
   enabled: true,
   openaiApiKey: "sk-test",
+  deepgramApiKey: "",
   language: "en",
   customDictionary: [],
+  transcriptionProvider: "openai",
   transcriptionModel: "gpt-realtime-whisper",
   correctionEnabled: false,
   correctionModel: "gpt-5-mini",
@@ -127,6 +187,16 @@ const BASE_SETTINGS: VoiceInputSettings = {
   paragraphingStrategy: "spoken-command",
   resolveFileLinks: true,
   deviceId: "",
+  organizationId: "",
+  projectId: "",
+  recordingMode: "toggle",
+};
+
+const DEEPGRAM_SETTINGS: VoiceInputSettings = {
+  ...OPENAI_SETTINGS,
+  openaiApiKey: "",
+  deepgramApiKey: "dg-test",
+  transcriptionProvider: "deepgram",
 };
 
 function latestInstance(): MockWebSocket {
@@ -135,36 +205,33 @@ function latestInstance(): MockWebSocket {
   return instance;
 }
 
-/** Advance the service through connect → ready. Returns the active mock socket. */
-async function bringSessionReady(
-  service: VoiceTranscriptionServiceInstance,
-  settings: VoiceInputSettings = BASE_SETTINGS
-): Promise<{ socket: MockWebSocket; result: { ok: true } | { ok: false; error: string } }> {
-  const startPromise = service.start(settings);
-  // start() runs synchronously through to assigning pendingStart; allow the
-  // microtask queue to settle so the constructor + onopen wiring is in place.
+async function bringOpenAiReady(
+  service: VoiceTranscriptionServiceInstance
+): Promise<MockWebSocket> {
+  const startPromise = service.start(OPENAI_SETTINGS);
   await Promise.resolve();
   const socket = latestInstance();
   socket.simulateOpen();
   socket.simulateMessage("session.updated");
-  const result = await startPromise;
-  return { socket, result };
+  await startPromise;
+  return socket;
 }
 
-/**
- * Feed enough uncommitted audio that the next `input_audio_buffer.commit` clears
- * the MIN_COMMIT_BYTES floor — otherwise the service skips the commit to avoid
- * OpenAI's "undersized buffer" error.
- */
-function feedCommittableAudio(service: VoiceTranscriptionServiceInstance): void {
-  service.sendAudioChunk(new Uint8Array(5_000).buffer);
+async function bringDeepgramReady(
+  service: VoiceTranscriptionServiceInstance
+): Promise<MockWebSocket> {
+  const startPromise = service.start(DEEPGRAM_SETTINGS);
+  await Promise.resolve();
+  const socket = latestInstance();
+  socket.simulateOpen();
+  await startPromise;
+  return socket;
 }
 
-describe("VoiceTranscriptionService", () => {
+describe("VoiceTranscriptionService (coordinator)", () => {
   beforeEach(() => {
     instances.length = 0;
-    throwOnConstruct = false;
-    constructError = null;
+    vadWorkers.length = 0;
     vi.useFakeTimers();
   });
 
@@ -173,733 +240,164 @@ describe("VoiceTranscriptionService", () => {
     vi.restoreAllMocks();
   });
 
-  // ── Startup / readiness ──────────────────────────────────────────────────
+  // ── Provider selection ──────────────────────────────────────────────────
 
-  it("fails to start when no OpenAI API key is configured", async () => {
+  it("routes to the OpenAI provider for transcriptionProvider 'openai'", async () => {
     const service = new VoiceTranscriptionService();
-    const result = await service.start({ ...BASE_SETTINGS, openaiApiKey: "" });
-    expect(result).toEqual({ ok: false, error: "OpenAI API key not configured" });
-    expect(instances).toHaveLength(0);
-  });
-
-  it("constructs the WebSocket with the realtime URL and auth headers", async () => {
-    const service = new VoiceTranscriptionService();
-    void service.start({ ...BASE_SETTINGS, openaiApiKey: "sk-abc" });
+    void service.start(OPENAI_SETTINGS);
     await Promise.resolve();
     const socket = latestInstance();
     expect(socket.url).toBe("wss://api.openai.com/v1/realtime?intent=transcription");
-    expect(socket.options.headers.Authorization).toBe("Bearer sk-abc");
+    expect(socket.options.headers.Authorization).toBe("Bearer sk-test");
     service.stop();
   });
 
-  it("sends session.update on WebSocket open and stays not-ready until session.updated", async () => {
+  it("routes to the Deepgram provider for transcriptionProvider 'deepgram'", async () => {
+    const service = new VoiceTranscriptionService();
+    void service.start(DEEPGRAM_SETTINGS);
+    await Promise.resolve();
+    const socket = latestInstance();
+    expect(new URL(socket.url).host).toBe("api.deepgram.com");
+    expect(socket.options.headers.Authorization).toBe("Token dg-test");
+    service.stop();
+  });
+
+  // ── Event forwarding ──────────────────────────────────────────────────────
+
+  it("forwards provider status events to subscribers", async () => {
     const service = new VoiceTranscriptionService();
     const statuses: string[] = [];
     service.onEvent((e) => {
       if (e.type === "status") statuses.push(e.status);
     });
-
-    const startPromise = service.start(BASE_SETTINGS);
-    expect(statuses).toEqual(["connecting"]);
-    await Promise.resolve();
-    const socket = latestInstance();
-    socket.simulateOpen();
-
-    expect(socket.sent).toHaveLength(1);
-    const sessionUpdate = JSON.parse(socket.sent[0]) as {
-      type: string;
-      session: { type: string; audio: { input: Record<string, unknown> } };
-    };
-    expect(sessionUpdate.type).toBe("session.update");
-    expect(sessionUpdate.session.type).toBe("transcription");
-    expect(sessionUpdate.session.audio.input).toMatchObject({
-      format: { type: "audio/pcm", rate: 24000 },
-      transcription: { model: "gpt-realtime-whisper", language: "en" },
-    });
-    // `turn_detection` must be EXPLICITLY null for gpt-realtime-whisper — see
-    // the session.update comment in VoiceTranscriptionService. Omitting it
-    // makes the server silently emit no transcription items.
-    expect(sessionUpdate.session.audio.input.turn_detection).toBeNull();
-
-    // Still not ready — start() must wait for session.updated
-    expect(statuses).toEqual(["connecting"]);
-
-    socket.simulateMessage("session.updated");
-    await expect(startPromise).resolves.toEqual({ ok: true });
+    await bringOpenAiReady(service);
     expect(statuses).toEqual(["connecting", "recording"]);
-  });
-
-  it("uses the configured language in session.update", async () => {
-    const service = new VoiceTranscriptionService();
-    void service.start({ ...BASE_SETTINGS, language: "es" });
-    await Promise.resolve();
-    const socket = latestInstance();
-    socket.simulateOpen();
-    const payload = JSON.parse(socket.sent[0]) as {
-      session: { audio: { input: { transcription: { language: string } } } };
-    };
-    expect(payload.session.audio.input.transcription.language).toBe("es");
     service.stop();
   });
 
-  it("settles a pending start when the session is stopped before session.updated", async () => {
-    const service = new VoiceTranscriptionService();
-    const startPromise = service.start(BASE_SETTINGS);
-    await Promise.resolve();
-    latestInstance().simulateOpen();
-    // No session.updated yet — stop before ready.
-    service.stop();
-    await expect(startPromise).resolves.toEqual({
-      ok: false,
-      error: "Voice session stopped",
-    });
-  });
-
-  it("does not emit idle when start() replaces a previous session", async () => {
-    const service = new VoiceTranscriptionService();
-    await bringSessionReady(service);
-
-    const events: VoiceTranscriptionEvent[] = [];
-    service.onEvent((e) => events.push(e));
-
-    const secondPromise = service.start(BASE_SETTINGS);
-    const idleBeforeConnect = events.filter((e) => e.type === "status" && e.status === "idle");
-    expect(idleBeforeConnect).toHaveLength(0);
-
-    await Promise.resolve();
-    const socket = latestInstance();
-    socket.simulateOpen();
-    socket.simulateMessage("session.updated");
-    await secondPromise;
-  });
-
-  it("times out and closes the socket if session.updated does not arrive within 10s", async () => {
-    const service = new VoiceTranscriptionService();
-    const errors: string[] = [];
-    service.onEvent((e) => {
-      if (e.type === "error") errors.push(e.message);
-    });
-
-    const startPromise = service.start(BASE_SETTINGS);
-    await Promise.resolve();
-    const socket = latestInstance();
-    socket.simulateOpen();
-    // Never simulate session.updated.
-
-    vi.advanceTimersByTime(10_000);
-
-    await expect(startPromise).resolves.toEqual({ ok: false, error: "Connection timed out" });
-    expect(errors).toContain("Connection timed out");
-    expect(socket.closeCalls).toBe(1);
-  });
-
-  // ── Delta / complete events ──────────────────────────────────────────────
-
-  it("emits delta for incremental transcription deltas", async () => {
-    const service = new VoiceTranscriptionService();
-    const deltas: string[] = [];
-    service.onEvent((e) => {
-      if (e.type === "delta") deltas.push(e.text);
-    });
-
-    const { socket } = await bringSessionReady(service);
-    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
-      delta: "Hello",
-    });
-    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
-      delta: " world",
-    });
-
-    expect(deltas).toEqual(["Hello", " world"]);
-  });
-
-  it("ignores empty deltas", async () => {
-    const service = new VoiceTranscriptionService();
-    const deltas: string[] = [];
-    service.onEvent((e) => {
-      if (e.type === "delta") deltas.push(e.text);
-    });
-
-    const { socket } = await bringSessionReady(service);
-    socket.simulateMessage("conversation.item.input_audio_transcription.delta", { delta: "" });
-    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {});
-
-    expect(deltas).toEqual([]);
-  });
-
-  it("emits complete with stub confidence on transcription.completed", async () => {
+  it("forwards delta and complete events from the active provider", async () => {
     const service = new VoiceTranscriptionService();
     const events: VoiceTranscriptionEvent[] = [];
     service.onEvent((e) => events.push(e));
 
-    const { socket } = await bringSessionReady(service);
+    const socket = await bringOpenAiReady(service);
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", { delta: "Hi" });
     socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
-      transcript: "Hello world",
+      transcript: "Hi there",
     });
 
-    const complete = events.find((e) => e.type === "complete");
-    expect(complete).toEqual({
-      type: "complete",
-      text: "Hello world",
-      confidence: { minConfidence: 1.0, wordCount: 0, uncertainWords: [], words: [] },
-    });
-  });
-
-  it("does not emit complete when transcript is empty or whitespace-only", async () => {
-    const service = new VoiceTranscriptionService();
-    const completes: string[] = [];
-    service.onEvent((e) => {
-      if (e.type === "complete") completes.push(e.text);
-    });
-
-    const { socket } = await bringSessionReady(service);
-    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
-      transcript: "",
-    });
-    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
-      transcript: "   ",
-    });
-    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {});
-
-    expect(completes).toEqual([]);
-  });
-
-  it("emits complete from a conversation.item.done event (intent=transcription endpoint)", async () => {
-    const service = new VoiceTranscriptionService();
-    const events: VoiceTranscriptionEvent[] = [];
-    service.onEvent((e) => events.push(e));
-
-    const { socket } = await bringSessionReady(service);
-    // The `?intent=transcription` endpoint reports each committed segment via
-    // conversation.item.done; the transcript lives on the input_audio part.
-    socket.simulateMessage("conversation.item.added", {
-      item: { content: [{ type: "input_audio" }] },
-    });
-    socket.simulateMessage("conversation.item.done", {
-      item: {
-        content: [{ type: "input_audio", transcript: "hello from done" }],
-      },
-    });
-
-    const complete = events.find((e) => e.type === "complete");
-    expect(complete).toEqual({
-      type: "complete",
-      text: "hello from done",
-      confidence: { minConfidence: 1.0, wordCount: 0, uncertainWords: [], words: [] },
-    });
-  });
-
-  it("ignores a conversation.item.done with no input_audio transcript", async () => {
-    const service = new VoiceTranscriptionService();
-    const completes: string[] = [];
-    service.onEvent((e) => {
-      if (e.type === "complete") completes.push(e.text);
-    });
-
-    const { socket } = await bringSessionReady(service);
-    socket.simulateMessage("conversation.item.done", { item: { content: [] } });
-    socket.simulateMessage("conversation.item.done", {
-      item: { content: [{ type: "input_audio", transcript: "   " }] },
-    });
-    socket.simulateMessage("conversation.item.done", {});
-
-    expect(completes).toEqual([]);
-  });
-
-  // ── Audio chunk handling ─────────────────────────────────────────────────
-
-  it("sends audio chunks as base64 input_audio_buffer.append after session.updated", async () => {
-    const service = new VoiceTranscriptionService();
-    const { socket } = await bringSessionReady(service);
-
-    const chunk = new Uint8Array([1, 2, 3, 4]).buffer;
-    const sentBeforeAudio = socket.sent.length;
-    service.sendAudioChunk(chunk);
-    expect(socket.sent.length).toBe(sentBeforeAudio + 1);
-    const payload = JSON.parse(socket.sent.at(-1)!) as { type: string; audio: string };
-    expect(payload.type).toBe("input_audio_buffer.append");
-    expect(payload.audio).toBe(Buffer.from(chunk).toString("base64"));
-  });
-
-  it("buffers pre-connect audio chunks and flushes them after session.updated", async () => {
-    const service = new VoiceTranscriptionService();
-    const startPromise = service.start(BASE_SETTINGS);
-    await Promise.resolve();
-    const socket = latestInstance();
-
-    // Queue chunks before the WS open / session.updated round-trip.
-    service.sendAudioChunk(new Uint8Array([1]).buffer);
-    service.sendAudioChunk(new Uint8Array([2]).buffer);
-
-    expect(socket.sent).toHaveLength(0);
-
-    socket.simulateOpen();
-    // session.update sent on open, no audio yet
-    expect(socket.sent).toHaveLength(1);
-
-    socket.simulateMessage("session.updated");
-    await startPromise;
-
-    const audioPayloads = socket
-      .sentJson()
-      .filter((p) => p.type === "input_audio_buffer.append")
-      .map((p) => p.audio as string);
-    expect(audioPayloads).toEqual([
-      Buffer.from(new Uint8Array([1])).toString("base64"),
-      Buffer.from(new Uint8Array([2])).toString("base64"),
-    ]);
-  });
-
-  it("caps the pre-connect buffer at 100 chunks and warns once on overflow", async () => {
-    const service = new VoiceTranscriptionService();
-    void service.start(BASE_SETTINGS);
-    await Promise.resolve();
-
-    // Push 105 chunks before session.updated — last 5 should be dropped.
-    for (let i = 0; i < 105; i++) {
-      service.sendAudioChunk(new Uint8Array([i % 256]).buffer);
-    }
-    const socket = latestInstance();
-    socket.simulateOpen();
-    socket.simulateMessage("session.updated");
-
-    const audioCount = socket
-      .sentJson()
-      .filter((p) => p.type === "input_audio_buffer.append").length;
-    expect(audioCount).toBe(100);
+    expect(events.some((e) => e.type === "delta" && e.text === "Hi")).toBe(true);
+    expect(events.some((e) => e.type === "complete" && e.text === "Hi there")).toBe(true);
     service.stop();
   });
 
-  it("drops audio chunks while draining", async () => {
-    const service = new VoiceTranscriptionService();
-    const { socket } = await bringSessionReady(service);
+  // ── Server-VAD-driven segmentation difference ─────────────────────────────
 
-    // Feed enough audio that stop sends a real final commit and genuinely drains.
-    feedCommittableAudio(service);
-    const drainPromise = service.stopGracefully();
-    const sentAtStartOfDrain = socket.sent.length;
-    service.sendAudioChunk(new Uint8Array([99]).buffer);
-    expect(socket.sent.length).toBe(sentAtStartOfDrain);
+  it("commits on client VAD speech-end for OpenAI but not for Deepgram", async () => {
+    const openai = new VoiceTranscriptionService();
+    const openaiSocket = await bringOpenAiReady(openai);
+    const worker = latestVadWorker();
+    openai.sendAudioChunk(new Uint8Array(5_000).buffer);
+    // The client-side VAD drives the commit at end-of-speech.
+    worker.emitSpeechStart();
+    worker.emitSpeechEnd();
+    expect(
+      openaiSocket.textFrames().filter((f) => f.type === "input_audio_buffer.commit")
+    ).toHaveLength(1);
+    openai.stop();
 
-    socket.simulateMessage("conversation.item.done", {
-      item: { content: [{ type: "input_audio", transcript: "done" }] },
-    });
-    await drainPromise;
-  });
-
-  // ── Interval commit ──────────────────────────────────────────────────────
-  // gpt-realtime-whisper has no server VAD, so the service commits the input
-  // buffer on a timer to drive segmentation; without commits no transcription
-  // events ever arrive.
-
-  it("commits the audio buffer on the interval timer once enough audio has streamed", async () => {
-    const service = new VoiceTranscriptionService();
-    const { socket } = await bringSessionReady(service);
-
-    feedCommittableAudio(service);
-    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(0);
-
-    vi.advanceTimersByTime(2_000);
-    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(1);
-
-    service.stop();
-  });
-
-  it("skips the interval commit when too little audio has streamed since the last commit", async () => {
-    const service = new VoiceTranscriptionService();
-    const { socket } = await bringSessionReady(service);
-
-    // A tiny chunk, well under MIN_COMMIT_BYTES — committing it would draw a
-    // fatal "undersized buffer" error from OpenAI, so the timer must skip it.
-    service.sendAudioChunk(new Uint8Array(10).buffer);
-    vi.advanceTimersByTime(2_000);
-    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(0);
-
-    service.stop();
-  });
-
-  it("commitParagraphBoundary flushes the current segment when enough audio has streamed", async () => {
-    const service = new VoiceTranscriptionService();
-    const { socket } = await bringSessionReady(service);
-
-    feedCommittableAudio(service);
-    service.commitParagraphBoundary();
-    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(1);
-
-    service.stop();
-  });
-
-  // ── Graceful stop / drain ────────────────────────────────────────────────
-
-  it("sends input_audio_buffer.commit on stopGracefully and waits for completed", async () => {
-    const service = new VoiceTranscriptionService();
-    const statuses: string[] = [];
-    service.onEvent((e) => {
-      if (e.type === "status") statuses.push(e.status);
-    });
-
-    const { socket } = await bringSessionReady(service);
-    feedCommittableAudio(service);
-    const drainPromise = service.stopGracefully();
-    expect(statuses).toContain("finishing");
-
-    const commitPayloads = socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit");
-    expect(commitPayloads).toHaveLength(1);
-
-    socket.simulateMessage("conversation.item.done", {
-      item: { content: [{ type: "input_audio", transcript: "final" }] },
-    });
-    await drainPromise;
-    expect(statuses.at(-1)).toBe("idle");
-  });
-
-  it("drain waits for every outstanding commit's transcript, not just the first", async () => {
-    const service = new VoiceTranscriptionService();
-    const completes: string[] = [];
-    service.onEvent((e) => {
-      if (e.type === "complete") completes.push(e.text);
-    });
-
-    const { socket } = await bringSessionReady(service);
-    // An interval commit goes out (segment A), then more audio accumulates and
-    // stop sends a final commit (segment B) — two transcripts now outstanding.
-    feedCommittableAudio(service);
-    vi.advanceTimersByTime(2_000);
-    feedCommittableAudio(service);
-    const drainPromise = service.stopGracefully();
-    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(2);
-
-    let settled = false;
-    void drainPromise.then(() => {
-      settled = true;
-    });
-
-    // Segment A completes first — drain must NOT settle, B is still in flight.
-    socket.simulateMessage("conversation.item.done", {
-      item: { content: [{ type: "input_audio", transcript: "first half" }] },
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    // Segment B completes — every outstanding commit has now reported back.
-    socket.simulateMessage("conversation.item.done", {
-      item: { content: [{ type: "input_audio", transcript: "second half" }] },
-    });
-    await drainPromise;
-    expect(completes).toEqual(["first half", "second half"]);
-  });
-
-  it("drain resolves after the timeout if no completion arrives", async () => {
-    const service = new VoiceTranscriptionService();
-    await bringSessionReady(service);
-    feedCommittableAudio(service);
-
-    const drainPromise = service.stopGracefully();
-    vi.advanceTimersByTime(3_000);
-    await expect(drainPromise).resolves.toBeUndefined();
-  });
-
-  it("stop with a sub-threshold buffer and nothing outstanding resolves immediately", async () => {
-    const service = new VoiceTranscriptionService();
-    const { socket } = await bringSessionReady(service);
-
-    // No audio since the last commit and no commits in flight — nothing to
-    // transcribe, so stop closes without sending a commit or arming a timer.
-    const drainPromise = service.stopGracefully();
-    await expect(drainPromise).resolves.toBeUndefined();
-    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(0);
-  });
-
-  it("stop with a sub-threshold buffer still drains for an in-flight interval commit", async () => {
-    const service = new VoiceTranscriptionService();
-    const completes: string[] = [];
-    service.onEvent((e) => {
-      if (e.type === "complete") completes.push(e.text);
-    });
-
-    const { socket } = await bringSessionReady(service);
-    // An interval commit went out; its transcript hasn't come back yet.
-    feedCommittableAudio(service);
-    vi.advanceTimersByTime(2_000);
-    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(1);
-
-    // Stop with nothing new buffered — no final commit, but the drain must
-    // still wait for the outstanding interval commit's transcript.
-    const drainPromise = service.stopGracefully();
-    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(1);
-
-    let settled = false;
-    void drainPromise.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    socket.simulateMessage("conversation.item.done", {
-      item: { content: [{ type: "input_audio", transcript: "tail" }] },
-    });
-    await drainPromise;
-    expect(completes).toEqual(["tail"]);
-  });
-
-  it("ignores a duplicate conversation.item.done for the same item during drain", async () => {
-    const service = new VoiceTranscriptionService();
-    const completes: string[] = [];
-    service.onEvent((e) => {
-      if (e.type === "complete") completes.push(e.text);
-    });
-
-    const { socket } = await bringSessionReady(service);
-    // Two outstanding commits: an interval commit, then a final commit on stop.
-    feedCommittableAudio(service);
-    vi.advanceTimersByTime(2_000);
-    feedCommittableAudio(service);
-    const drainPromise = service.stopGracefully();
-
-    let settled = false;
-    void drainPromise.then(() => {
-      settled = true;
-    });
-
-    // Segment A completes, then a DUPLICATE of A arrives — the duplicate must
-    // not be counted again (which would settle the drain while B is still in
-    // flight) and must not re-emit A's transcript.
-    const itemADone = {
-      item: { id: "item-A", content: [{ type: "input_audio", transcript: "alpha" }] },
-    };
-    socket.simulateMessage("conversation.item.done", itemADone);
-    socket.simulateMessage("conversation.item.done", itemADone);
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    expect(completes).toEqual(["alpha"]);
-
-    // Segment B completes — now every outstanding commit has reported back.
-    socket.simulateMessage("conversation.item.done", {
-      item: { id: "item-B", content: [{ type: "input_audio", transcript: "beta" }] },
-    });
-    await drainPromise;
-    expect(completes).toEqual(["alpha", "beta"]);
-  });
-
-  it("does not let a conversation.item.done without an input_audio part settle the drain", async () => {
-    const service = new VoiceTranscriptionService();
-    const { socket } = await bringSessionReady(service);
-
-    feedCommittableAudio(service);
-    const drainPromise = service.stopGracefully(); // one outstanding commit
-
-    let settled = false;
-    void drainPromise.then(() => {
-      settled = true;
-    });
-
-    // A `done` with no input_audio content part — not a transcription segment,
-    // so it must not be counted against the outstanding commit.
-    socket.simulateMessage("conversation.item.done", {
-      item: { id: "item-noaudio", content: [{ type: "text" }] },
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    socket.simulateMessage("conversation.item.done", {
-      item: { id: "item-real", content: [{ type: "input_audio", transcript: "real" }] },
-    });
-    await drainPromise;
-  });
-
-  it("repeated stopGracefully calls share a single in-flight drain", async () => {
-    const service = new VoiceTranscriptionService();
-    const { socket } = await bringSessionReady(service);
-    feedCommittableAudio(service);
-
-    const first = service.stopGracefully();
-    const second = service.stopGracefully();
-
-    // Only one commit is sent, even though stop was called twice.
-    const commits = socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit");
-    expect(commits).toHaveLength(1);
-
-    socket.simulateMessage("conversation.item.done", {
-      item: { content: [{ type: "input_audio", transcript: "ok" }] },
-    });
-    await Promise.all([first, second]);
-  });
-
-  it("stopGracefully without an open connection goes straight to idle", async () => {
-    const service = new VoiceTranscriptionService();
-    const statuses: string[] = [];
-    service.onEvent((e) => {
-      if (e.type === "status") statuses.push(e.status);
-    });
-
-    await service.stopGracefully();
-    expect(statuses).toEqual(["idle"]);
-  });
-
-  it("start() during an in-flight drain resolves the old drain and reaches recording", async () => {
-    const service = new VoiceTranscriptionService();
-    const statuses: string[] = [];
-    service.onEvent((e) => {
-      if (e.type === "status") statuses.push(e.status);
-    });
-
-    const { socket: firstSocket } = await bringSessionReady(service);
-    feedCommittableAudio(service);
-    const drainPromise = service.stopGracefully();
-    // Don't simulate completion — drain is still in flight when start() runs.
-
-    const secondStart = service.start(BASE_SETTINGS);
-    await Promise.resolve();
-    const secondSocket = latestInstance();
-    secondSocket.simulateOpen();
-    secondSocket.simulateMessage("session.updated");
-    await secondStart;
-
-    // The first drain resolves once cleanupPreviousSession fires from start().
-    await drainPromise;
-
-    // Old commit was sent, new commit was NOT (new session has no drain).
-    const commitsOnFirst = firstSocket
-      .sentJson()
-      .filter((p) => p.type === "input_audio_buffer.commit").length;
-    const commitsOnSecond = secondSocket
-      .sentJson()
-      .filter((p) => p.type === "input_audio_buffer.commit").length;
-    expect(commitsOnFirst).toBe(1);
-    expect(commitsOnSecond).toBe(0);
-    expect(statuses.at(-1)).toBe("recording");
-  });
-
-  // ── Error handling ───────────────────────────────────────────────────────
-
-  it("emits error and error status when the WebSocket reports an error", async () => {
-    const service = new VoiceTranscriptionService();
-    const events: VoiceTranscriptionEvent[] = [];
-    service.onEvent((e) => events.push(e));
-
-    const startPromise = service.start(BASE_SETTINGS);
-    await Promise.resolve();
-    const socket = latestInstance();
-    socket.simulateOpen();
-    socket.simulateError(new Error("network down"));
-
-    await expect(startPromise).resolves.toEqual({ ok: false, error: "network down" });
-    expect(events.some((e) => e.type === "error" && /network down/.test(e.message))).toBe(true);
-    expect(events.some((e) => e.type === "status" && e.status === "error")).toBe(true);
-  });
-
-  it("propagates server-side error events", async () => {
-    const service = new VoiceTranscriptionService();
-    const errors: string[] = [];
-    service.onEvent((e) => {
-      if (e.type === "error") errors.push(e.message);
-    });
-
-    const { socket } = await bringSessionReady(service);
-    socket.simulateMessage("error", {
-      error: { message: "invalid_session_config", type: "invalid_request_error" },
-    });
-
-    expect(errors).toContain("invalid_session_config");
-  });
-
-  it("parses string message data as well as Buffer", async () => {
-    const service = new VoiceTranscriptionService();
-    const completes: string[] = [];
-    service.onEvent((e) => {
-      if (e.type === "complete") completes.push(e.text);
-    });
-
-    const { socket } = await bringSessionReady(service);
-    // `ws` can deliver messages as strings when the server sends a text frame.
-    socket.simulateRawMessage(
-      JSON.stringify({
-        type: "conversation.item.input_audio_transcription.completed",
-        transcript: "from string",
-      })
+    // Deepgram has server-side VAD — no client worker is spawned and no client
+    // commit is ever sent.
+    const deepgram = new VoiceTranscriptionService();
+    const deepgramSocket = await bringDeepgramReady(deepgram);
+    deepgram.sendAudioChunk(new Uint8Array(5_000).buffer);
+    vi.advanceTimersByTime(2_500);
+    expect(deepgramSocket.textFrames().some((f) => f.type === "input_audio_buffer.commit")).toBe(
+      false
     );
-    expect(completes).toEqual(["from string"]);
+    deepgram.stop();
   });
 
-  it("ignores malformed JSON messages without throwing", async () => {
+  // ── Audio transport delegation ─────────────────────────────────────────────
+
+  it("delegates audio as base64 JSON for OpenAI and raw binary for Deepgram", async () => {
+    const openai = new VoiceTranscriptionService();
+    const openaiSocket = await bringOpenAiReady(openai);
+    const chunk = new Uint8Array([1, 2, 3]).buffer;
+    openai.sendAudioChunk(chunk);
+    const append = openaiSocket.textFrames().find((f) => f.type === "input_audio_buffer.append");
+    expect(append?.audio).toBe(Buffer.from(chunk).toString("base64"));
+    expect(openaiSocket.binaryFrames()).toHaveLength(0);
+    openai.stop();
+
+    const deepgram = new VoiceTranscriptionService();
+    const deepgramSocket = await bringDeepgramReady(deepgram);
+    deepgram.sendAudioChunk(chunk);
+    expect(deepgramSocket.binaryFrames()).toHaveLength(1);
+    expect(deepgramSocket.binaryFrames()[0].equals(Buffer.from(chunk))).toBe(true);
+    deepgram.stop();
+  });
+
+  // ── Provider switch teardown ───────────────────────────────────────────────
+
+  it("tears down the previous provider and stops forwarding its events on switch", async () => {
     const service = new VoiceTranscriptionService();
     const events: VoiceTranscriptionEvent[] = [];
     service.onEvent((e) => events.push(e));
 
-    const { socket } = await bringSessionReady(service);
-    expect(() => socket.simulateRawMessage("not json {")).not.toThrow();
+    const openaiSocket = await bringOpenAiReady(service);
 
-    // Service still functional afterward
-    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
-      transcript: "ok",
-    });
-    expect(events.some((e) => e.type === "complete")).toBe(true);
-  });
+    // Switch to Deepgram — the previous OpenAI socket must be closed.
+    const deepgramSocket = await bringDeepgramReady(service);
+    expect(deepgramSocket).not.toBe(openaiSocket);
+    expect(openaiSocket.closeCalls).toBeGreaterThanOrEqual(1);
 
-  it("fails start when WebSocket construction throws", async () => {
-    throwOnConstruct = true;
-    constructError = new Error("ECONNREFUSED");
-    const service = new VoiceTranscriptionService();
-    const result = await service.start(BASE_SETTINGS);
-    expect(result).toEqual({ ok: false, error: "ECONNREFUSED" });
-  });
-
-  // ── Reentrancy / stale-session guard ─────────────────────────────────────
-
-  it("ignores transcript events from a stale session", async () => {
-    const service = new VoiceTranscriptionService();
-    const completes: string[] = [];
-    service.onEvent((e) => {
-      if (e.type === "complete") completes.push(e.text);
-    });
-
-    const { socket: firstSocket } = await bringSessionReady(service);
-    // Start a second session; the first socket is now stale.
-    const secondPromise = service.start(BASE_SETTINGS);
-    await Promise.resolve();
-    const secondSocket = latestInstance();
-    secondSocket.simulateOpen();
-    secondSocket.simulateMessage("session.updated");
-    await secondPromise;
-
-    firstSocket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+    const completesBefore = events.filter((e) => e.type === "complete").length;
+    // A late event from the torn-down OpenAI socket must not be forwarded.
+    openaiSocket.simulateMessage("conversation.item.input_audio_transcription.completed", {
       transcript: "ghost",
     });
+    expect(events.filter((e) => e.type === "complete").length).toBe(completesBefore);
 
-    expect(completes).toEqual([]);
-  });
-
-  // ── commitParagraphBoundary ──────────────────────────────────────────────
-
-  it("commitParagraphBoundary resets state and does not touch the WebSocket", async () => {
-    const service = new VoiceTranscriptionService();
-    const { socket } = await bringSessionReady(service);
-    const sentBefore = socket.sent.length;
-
-    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
-      delta: "Hello",
+    // The new Deepgram provider's events are forwarded.
+    deepgramSocket.simulateMessage("Results", {
+      is_final: true,
+      channel: { alternatives: [{ transcript: "live" }] },
     });
-    service.commitParagraphBoundary();
-
-    expect(socket.sent.length).toBe(sentBefore);
-    expect(socket.closeCalls).toBe(0);
+    expect(events.some((e) => e.type === "complete" && e.text === "live")).toBe(true);
+    service.stop();
   });
 
-  // ── destroy ─────────────────────────────────────────────────────────────
+  // ── Lifecycle delegation ───────────────────────────────────────────────────
 
-  it("destroy closes the socket and clears listeners", async () => {
+  it("delegates commitParagraphBoundary to the active provider", async () => {
+    const service = new VoiceTranscriptionService();
+    const socket = await bringDeepgramReady(service);
+    service.commitParagraphBoundary();
+    expect(socket.textFrames().filter((f) => f.type === "Finalize")).toHaveLength(1);
+    service.stop();
+  });
+
+  it("stopGracefully is a no-op before any session is started", async () => {
+    const service = new VoiceTranscriptionService();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    await expect(service.stopGracefully()).resolves.toBeUndefined();
+    expect(events).toEqual([]);
+  });
+
+  it("destroy disposes the active provider and clears listeners", async () => {
     const service = new VoiceTranscriptionService();
     const events: VoiceTranscriptionEvent[] = [];
     service.onEvent((e) => events.push(e));
 
-    const { socket } = await bringSessionReady(service);
+    const socket = await bringOpenAiReady(service);
     service.destroy();
     expect(socket.closeCalls).toBe(1);
 
-    // Listeners cleared: subsequent emits should not reach the recorded array.
     const lengthAtDestroy = events.length;
-    // Spawn a brand-new session — the listener from before destroy should be gone.
-    const { socket: socket2 } = await bringSessionReady(service);
+    // Listener cleared — a brand-new session's events must not reach the array.
+    const socket2 = await bringOpenAiReady(service);
     socket2.simulateMessage("conversation.item.input_audio_transcription.completed", {
       transcript: "after destroy",
     });

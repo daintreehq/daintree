@@ -59,6 +59,10 @@ on:
         description: "Optional total shard count for a single-shard rerun, e.g. 4. Must be paired with shard."
         type: string
         default: ""
+      json_report:
+        description: "Enable Playwright JSON reporter for machine-readable test results (nightly dedup)."
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       platform:
@@ -81,6 +85,18 @@ on:
         description: "Optional total shard count for a single-shard rerun. Must be paired with shard."
         type: string
         default: ""
+      json_report:
+        description: "Enable Playwright JSON reporter for machine-readable test results (nightly dedup)."
+        type: boolean
+        default: false
+      enable_blob_report:
+        description: "Enable Playwright blob reporter so downstream jobs can merge reports across shards/OSes (nightly-only)."
+        type: boolean
+        default: false
+      emit_classification:
+        description: "Enable per-shard failure classification artifact. Set in nightly to feed the auto-issue body. Implies the blob reporter so the JSON results that the classifier reads are written."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -103,7 +119,7 @@ jobs:
   # split their spec list across SHARD_TOTAL parallel runners via Playwright's
   # native `--shard`. A 39-minute serial Windows bucket becomes ~10min
   # wall-time, and a hung shard takes out 1/N of the bucket instead of the
-  # whole thing. The heaviest Windows full-platform/full-worktree/full-panels buckets use
+  # whole thing. The heaviest Windows full-platform/full-worktree/full-resilience/full-panels buckets use
   # extra slices so restart/persistence-heavy shards do not own enough serial
   # tests to hit the job timeout. core/online/nightly stay unsharded —
   # online hits real APIs (3 specs), and nightly's leak heuristic depends on serialized launches
@@ -133,20 +149,33 @@ jobs:
 
           # Only the full-* buckets and the `full` meta-suite fan out. N=4 is
           # the tuned starting point from #8053 (39min → ~10min on Windows).
-          # Windows full-platform contains restart/persistence-heavy tests
-          # that still form a >45m shard at 8 slices, so use 16 slices there.
-          # full-worktree/full-panels are lighter but still need more than the
-          # default 4. full-presets also needs extra Windows slices after
-          # Windows 2/4 exceeded the nightly shard window in run 26445552027.
+          # Windows full-platform/full-terminal contain restart/persistence-heavy
+          # and PTY stress tests that still form >45m shards at smaller splits,
+          # so use 16 slices there.
+          # full-worktree has restart-heavy cross-project and deletion-cleanup
+          # specs that can still exceed the 45m reusable workflow timeout at
+          # 8 slices, so match full-platform's 16-slice Windows split. full-presets
+          # has context-menu/custom-preset shards that also exceed the release
+          # window at 8 slices, so it uses the same 16-slice Windows split.
+          # full-panels is lighter but still needs more than the default 4.
+          # full-resilience's crash/error-recovery specs also need extra Windows
+          # slices after shard 2/4 exceeded the release gate in run 26672763326.
           case "$SUITE" in
-            full-platform)
+            full-platform|full-terminal)
               if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
                 SHARD_TOTAL=16
               else
                 SHARD_TOTAL=4
               fi
               ;;
-            full-worktree|full-presets|full-panels)
+            full-worktree|full-presets)
+              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
+                SHARD_TOTAL=16
+              else
+                SHARD_TOTAL=4
+              fi
+              ;;
+            full-resilience|full-panels)
               if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
                 SHARD_TOTAL=8
               else
@@ -238,15 +267,10 @@ jobs:
           }
 
       - name: Check out repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --prune --no-recurse-submodules --depth=1 origin "$GITHUB_SHA"
-          git -C "$GITHUB_WORKSPACE" checkout --force FETCH_HEAD
-          git -C "$GITHUB_WORKSPACE" clean -ffdx
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Cache Playwright browsers
         id: cache-playwright
@@ -319,10 +343,15 @@ jobs:
         run: fc-cache -fv
 
       - name: Install dependencies
-        run: node scripts/ci/npm-ci-retry.mjs
+        shell: bash
+        run: |
+          ELECTRON_VERSION=$(node scripts/ci/resolve-electron-version.mjs) || exit 1
+          export npm_config_runtime=electron
+          export npm_config_target=$ELECTRON_VERSION
+          node scripts/ci/npm-ci-retry.mjs
 
       - name: Build app
-        run: npm run build
+        run: npm run build:e2e
 
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
@@ -371,29 +400,33 @@ jobs:
             echo "args=$PROJECT_ARGS $EXTRA" >> "$GITHUB_OUTPUT"
           fi
 
-      # Restore .last-run.json from the previous attempt so a job-level retry
-      # (via "Re-run failed jobs") can scope to --last-failed and rerun only
-      # the specs that failed before. Cache keys are immutable, so the save
-      # key includes run_attempt; restore-keys strips that suffix to find the
-      # prior attempt's entry. Missing on attempt 1 — that's expected. Note:
-      # "Re-run all jobs" forces a fresh runner but doesn't preserve failure
-      # context — that path bypasses --last-failed and reruns the full suite,
-      # which is correct (the user asked for a clean rerun).
-      - name: Restore Playwright last-run results
+      # Download the failed-specs artifact from attempt 1 so a job-level retry
+      # (via "Re-run failed jobs") can scope to --test-list and rerun only the
+      # specs that failed before. Artifacts are scoped by run_id, so a retry
+      # attempt can download artifacts from prior attempts of the same run.
+      # Missing on attempt 1 (gated by if:) or if attempt 1 had zero failures
+      # (continue-on-error skips the hard-fail). "Re-run all jobs" creates a
+      # new run_id — the download fails harmlessly since the artifact doesn't
+      # exist, and the arg resolution step falls back to a full-suite rerun.
+      #
+      # Always downloads the attempt-1 artifact (not attempt N-1). This is
+      # intentionally conservative: a shrinking failure set across attempts
+      # risks missing regressions introduced by the retry fix itself. Re-running
+      # the full original failure list on every retry is safer and simpler.
+      # (Playwright #33094: merging retry blobs with primary blobs can duplicate
+      # entries, so per-attempt artifacts are deliberately kept separate.)
+      - name: Download failed-specs from prior attempt
         if: github.run_attempt > 1
-        uses: actions/cache/restore@v5
+        continue-on-error: true
+        uses: actions/download-artifact@v7
         with:
-          path: test-results/.last-run.json
-          # Scoped per-shard: each shard writes its own .last-run.json, so the
-          # restore must not bleed one shard's failures into another. (#8053)
-          key: e2e-last-run-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite || 'core' }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            e2e-last-run-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite || 'core' }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}-${{ github.run_id }}-
+          name: failed-specs-${{ inputs.suite || 'core' }}-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}-attempt-1
+          path: .
 
       # Single source of truth for the shard slice and the retry gate.
       # Exporting via $GITHUB_ENV keeps the three OS run steps below identical
       # and prevents drift.
-      - name: Resolve shard and --last-failed args
+      - name: Resolve shard and retry args
         shell: bash
         run: |
           set -euo pipefail
@@ -401,36 +434,42 @@ jobs:
           SHARD_INDEX="${{ matrix.shard }}"
           SHARD_TOTAL="${{ matrix.shardTotal }}"
 
-          LAST_FAILED_ARGS=""
-          # Append --last-failed only on retries that (a) restored the prior
-          # attempt's results, (b) target a suite with meaningful retry
-          # semantics, and (c) aren't already scoped to a single test file.
+          RETRY_ARGS=""
+          # On retry, pass --test-list with the prior attempt's failed specs.
+          # Gate: (a) retry attempt, (b) failed-specs file was downloaded and is
+          # non-empty, (c) suite has meaningful retry semantics, (d) not already
+          # scoped to a single test file.
           if [ "${{ github.run_attempt }}" -gt 1 ] \
-             && [ -f test-results/.last-run.json ] \
+             && [ -f failed-specs.txt ] \
+             && [ -s failed-specs.txt ] \
              && [ "$SUITE" != "nightly" ] \
              && [ "$SUITE" != "online" ] \
              && [ -z "${{ inputs.test_file }}" ]; then
-            LAST_FAILED_ARGS="--last-failed"
-            echo "[e2e] Retry attempt ${{ github.run_attempt }} — running with --last-failed"
+            RETRY_ARGS="--test-list failed-specs.txt"
+            echo "[e2e] Retry attempt ${{ github.run_attempt }} — running with --test-list ($(wc -l < failed-specs.txt) specs)"
+          elif [ "${{ github.run_attempt }}" -gt 1 ] \
+             && [ "$SUITE" != "nightly" ] \
+             && [ "$SUITE" != "online" ] \
+             && [ -z "${{ inputs.test_file }}" ]; then
+            echo "::warning::Retry attempt but no failed-specs artifact found — falling back to full suite rerun"
           fi
 
           SHARD_ARGS=""
           if [ "$SHARD_TOTAL" -gt 1 ]; then
-            if [ -n "$LAST_FAILED_ARGS" ]; then
-              # This shard's restored .last-run.json already contains only the
-              # specs THIS shard executed. Re-applying --shard would re-slice
-              # that tiny failed-only list by round-robin index — a 1-test list
-              # lands entirely on shard 1, starving every other shard's retry.
-              # Drop --shard and let --last-failed rerun exactly this shard's
-              # failures. (#8053)
-              echo "[e2e] Retry with --last-failed — dropping --shard for this attempt"
+            if [ -n "$RETRY_ARGS" ]; then
+              # The failed-specs artifact already contains only this shard's
+              # failures. Re-applying --shard would re-slice that tiny list by
+              # round-robin index — a 1-spec list lands entirely on shard 1,
+              # starving every other shard's retry. Drop --shard and let
+              # --test-list rerun exactly this shard's failures. (#8053)
+              echo "[e2e] Retry with --test-list — dropping --shard for this attempt"
             else
               SHARD_ARGS="--shard=$SHARD_INDEX/$SHARD_TOTAL"
               echo "[e2e] Sharded run — slice $SHARD_INDEX of $SHARD_TOTAL"
             fi
           fi
 
-          echo "LAST_FAILED_ARGS=$LAST_FAILED_ARGS" >> "$GITHUB_ENV"
+          echo "RETRY_ARGS=$RETRY_ARGS" >> "$GITHUB_ENV"
           echo "SHARD_ARGS=$SHARD_ARGS" >> "$GITHUB_ENV"
 
       - name: Run ${{ inputs.suite || 'core' }} e2e tests (macOS)
@@ -441,9 +480,16 @@ jobs:
           # when secrets aren't inherited.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
+          FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
+          # Always emit the JSON report so the failed-specs extractor below has
+          # something to read on retry. Nightly dedup (`inputs.json_report`)
+          # piggybacks on the same file via `PLAYWRIGHT_JSON_REPORT`.
+          PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/report.json
+          PLAYWRIGHT_JSON_REPORT: ${{ inputs.json_report && '1' || '' }}
+          PLAYWRIGHT_BLOB_REPORT: ${{ (inputs.enable_blob_report || inputs.emit_classification) && '1' || '' }}
         run: |
           set -euo pipefail
-          npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${LAST_FAILED_ARGS:-}
+          npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${RETRY_ARGS:-}
 
       - name: Run ${{ inputs.suite || 'core' }} e2e tests (Linux)
         if: runner.os == 'Linux'
@@ -451,9 +497,13 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
+          FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
+          PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/report.json
+          PLAYWRIGHT_JSON_REPORT: ${{ inputs.json_report && '1' || '' }}
+          PLAYWRIGHT_BLOB_REPORT: ${{ (inputs.enable_blob_report || inputs.emit_classification) && '1' || '' }}
         run: |
           set -euo pipefail
-          xvfb-run --auto-servernum npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${LAST_FAILED_ARGS:-}
+          xvfb-run --auto-servernum npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${RETRY_ARGS:-}
 
       - name: Verify native modules (Windows)
         if: runner.os == 'Windows'
@@ -466,43 +516,236 @@ jobs:
         shell: bash
         env:
           ELECTRON_ENABLE_LOGGING: "1"
+          DEBUG: "pw:protocol,pw:browser"
+          DEBUG_COLORS: "0"
+          E2E_LAUNCH_TELEMETRY: "1"
+          E2E_LAUNCH_TELEMETRY_FILE: ${{ runner.temp }}/e2e-launch-telemetry-${{ matrix.shard }}.jsonl
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
+          FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
+          PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/report.json
+          PLAYWRIGHT_JSON_REPORT: ${{ inputs.json_report && '1' || '' }}
+          PLAYWRIGHT_BLOB_REPORT: ${{ (inputs.enable_blob_report || inputs.emit_classification) && '1' || '' }}
         run: |
           set -euo pipefail
 
           while true; do
             sleep 60
             echo "[e2e] heartbeat $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            if [ -f "$E2E_LAUNCH_TELEMETRY_FILE" ]; then
+              tail -n 3 "$E2E_LAUNCH_TELEMETRY_FILE" 2>/dev/null | sed 's/^/[e2e] launch-telemetry /'
+            fi
           done &
           heartbeat_pid=$!
           trap 'kill "$heartbeat_pid" 2>/dev/null || true' EXIT
 
-          npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${LAST_FAILED_ARGS:-}
+          npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${RETRY_ARGS:-}
 
-      # Persist .last-run.json for a potential job-level retry. Runs even on
-      # Playwright failure (if: always()) — that's precisely when the retry
-      # needs the prior attempt's results to scope to --last-failed.
-      - name: Check for Playwright last-run results
-        id: playwright-last-run
+      # Extract failed spec paths from the JSON report so they can be uploaded
+      # as a --test-list artifact for any retry attempt. Runs even on Playwright
+      # failure (if: always()) — that's precisely when the retry needs the list.
+      # Attempt artifacts are intentionally kept separate: merging retry blobs
+      # with primary blobs can duplicate entries (Playwright #33094).
+      - name: Extract failed specs from JSON report
         if: always()
         continue-on-error: true
         shell: bash
         run: |
-          if [ -f test-results/.last-run.json ]; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          rm -f failed-specs.txt
+          if [ -f test-results/report.json ] && [ -s test-results/report.json ]; then
+            jq -r '.suites[] | .. | objects | select(.file != null and .ok == false) | .file' test-results/report.json | sort -u > failed-specs.txt
+            echo "[e2e] Extracted $(wc -l < failed-specs.txt) failed spec(s) from JSON report"
           else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "[e2e] No Playwright last-run file found; skipping retry cache save"
+            echo "[e2e] JSON report missing or empty — no failures to extract"
           fi
 
-      - name: Save Playwright last-run results
-        if: always() && steps.playwright-last-run.outputs.exists == 'true'
+      - name: Upload failed-specs artifact
+        if: always()
         continue-on-error: true
-        uses: actions/cache/save@v5
+        uses: actions/upload-artifact@v7
         with:
-          path: test-results/.last-run.json
-          key: e2e-last-run-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite || 'core' }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: failed-specs-${{ inputs.suite || 'core' }}-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}-attempt-${{ github.run_attempt }}
+          path: failed-specs.txt
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # Extract structured failure data for nightly dedup. Only runs when the
+      # caller opted into the dedup pipeline (`inputs.json_report`) AND the
+      # test run failed. The JSON report lives at `test-results/report.json`
+      # — the same file the failed-specs extractor reads above — so both
+      # consumers share a single artifact.
+      - name: Extract failure signatures
+        if: failure() && inputs.json_report
+        shell: bash
+        run: |
+          if [ -f test-results/report.json ]; then
+            node scripts/ci/extract-failures.mjs test-results/report.json /tmp/failure-report.json
+          else
+            echo "[extract] No test-results/report.json found — skipping"
+            echo '[]' > /tmp/failure-report.json
+          fi
+
+      - name: Upload failure report
+        if: failure() && inputs.json_report
+        uses: actions/upload-artifact@v7
+        with:
+          name: failure-report-${{ inputs.suite || 'core' }}-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}
+          path: /tmp/failure-report.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Collect crash dumps (fallback from platform default paths)
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          FALLBACK_DIR="daintree-e2e-artifacts/fallback-crash-dumps"
+          mkdir -p "$FALLBACK_DIR"
+
+          case "$RUNNER_OS" in
+            macOS)
+              CRASHPAD_DIR="$HOME/Library/Application Support/Daintree/Crashpad"
+              ;;
+            Linux)
+              CRASHPAD_DIR="$HOME/.config/Daintree/Crashpad"
+              ;;
+            Windows)
+              CRASHPAD_DIR="$APPDATA/Daintree/Crashpad"
+              ;;
+            *)
+              echo "[e2e] Unknown OS, skipping fallback crash dump collection"
+              exit 0
+              ;;
+          esac
+
+          for subdir in new pending completed; do
+            if [ -d "$CRASHPAD_DIR/$subdir" ]; then
+              cp -r "$CRASHPAD_DIR/$subdir" "$FALLBACK_DIR/$subdir" 2>/dev/null || true
+            fi
+          done
+
+          # Count what we collected
+          COLLECTED=$(find "$FALLBACK_DIR" -type f 2>/dev/null | wc -l)
+          echo "[e2e] Fallback crash dump collection: $COLLECTED files"
+
+      # Classification regex table — keep in sync with CLASSIFICATION_RULES in
+      # scripts/ci/classify-e2e-failures.mjs. Rules are ordered; the first match
+      # wins. Specific patterns (spawn EPERM) must precede broad ones (bare
+      # EPERM) so the more actionable bucket is chosen.
+      #
+      # Infrastructure (OS / CI runner resource contention):
+      #   spawn EPERM           -> AV on-access scan
+      #   EBUSY on .tmp paths   -> indexer contention
+      #   EPERM / EACCES / ENOSPC -> permission / disk
+      #
+      # Test-Logic (handshake / timing / stale references):
+      #   CDP target not found / Target.targetCreated timeout -> handshake
+      #   Target/Browser/Page has been closed                -> stale ref
+      #   Protocol error (Target.closeTarget)                -> target close
+      #   Selector timeout / Test timeout                     -> timing
+      #
+      # Product-Logic (renderer crashes, actual bugs):
+      #   WebContents crashed / renderer process crash        -> renderer
+      #   GPU process crash / utility process crash           -> GPU/utility
+      #
+      # Unmatched errors land in Unclassified.
+      # Reads the same `test-results/report.json` that the retry-path and
+      # extract-failures steps already consume — no separate JSON output.
+      - name: Classify e2e failures
+        id: classify
+        if: always() && inputs.emit_classification
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p test-results
+          if [ -f test-results/report.json ]; then
+            node scripts/ci/classify-e2e-failures.mjs \
+              --input test-results/report.json \
+              --output test-results/e2e-failure-classification.json
+          else
+            echo "[e2e] No report.json found; writing empty classification"
+            echo '{"totalUnique":0,"totalAttempts":0,"buckets":{},"failures":[]}' \
+              > test-results/e2e-failure-classification.json
+          fi
+
+      - name: Upload failure classification
+        if: always() && inputs.emit_classification
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-classification-${{ inputs.suite || 'core' }}-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}
+          path: test-results/e2e-failure-classification.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # Extract a flat manifest of failing spec file paths from the JSON reporter
+      # output. Consumed by the nightly notify job for git-blame-based assignee
+      # routing (a separate signal from the structured failure-report dedup).
+      - name: Extract failing spec manifest
+        id: failure-manifest
+        if: always() && inputs.json_report
+        continue-on-error: true
+        shell: bash
+        run: |
+          SUITE="${{ inputs.suite || 'core' }}"
+          # Include matrix name + shard so download-artifact merge-multiple
+          # doesn't overwrite manifests from other platforms or shards.
+          MANIFEST="nightly-failure-manifest-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}.json"
+
+          extract_failures() {
+            if [ ! -f test-results/report.json ]; then
+              echo '{"suite":"'"$SUITE"'","failedSpecs":[],"error":"test-results/report.json not found"}' > "$MANIFEST"
+              return
+            fi
+            node -e "
+              const fs = require('fs');
+              const data = JSON.parse(fs.readFileSync('test-results/report.json', 'utf8'));
+              const failed = new Set();
+
+              function walk(suite) {
+                for (const s of suite.suites || []) walk(s);
+                for (const spec of suite.specs || []) {
+                  const tests = spec.tests || [];
+                  if (tests.some(t => {
+                    const lastResult = t.results?.[t.results.length - 1];
+                    const lastStatus = lastResult?.status;
+                    // Final retry passed but test was flaky — Playwright exits non-zero
+                    // when FAIL_ON_FLAKY_TESTS is set.
+                    if (t.status === 'flaky') return true;
+                    return lastStatus && lastStatus !== 'passed' && lastStatus !== 'skipped';
+                  })) {
+                    if (spec.file) failed.add(spec.file);
+                  }
+                }
+              }
+
+              for (const suite of data.suites || []) walk(suite);
+
+              const manifest = {
+                suite: '$SUITE',
+                platform: '${{ runner.os }}',
+                shard: ${{ matrix.shard }},
+                shardTotal: ${{ matrix.shardTotal }},
+                failedSpecs: [...failed].sort(),
+                timestamp: new Date().toISOString(),
+              };
+              fs.writeFileSync('$MANIFEST', JSON.stringify(manifest));
+            "
+          }
+          extract_failures
+          echo "Manifest written:"
+          cat "$MANIFEST"
+
+      - name: Upload failure manifest
+        if: always() && inputs.json_report
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-manifest-${{ inputs.suite || 'core' }}-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}
+          path: nightly-failure-manifest-*.json
+          retention-days: 3
+          if-no-files-found: ignore
 
       - name: Upload test results
         if: always()
@@ -513,5 +756,16 @@ jobs:
           path: |
             test-results/
             playwright-report/
+            daintree-e2e-artifacts/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload blob report
+        if: always() && inputs.enable_blob_report
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-${{ inputs.suite || 'core' }}-blob-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: blob-report/
           retention-days: 7
           if-no-files-found: ignore

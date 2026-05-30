@@ -41,7 +41,7 @@ import {
 } from "@/components/Worktree/terminalStateConfig";
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
+import { useDockPanelPortal } from "./dockPanelPortalContext";
 import {
   useDockBlockedState,
   getDockDisplayAgentState,
@@ -52,15 +52,15 @@ import { SortableTabButton } from "@/components/Panel/SortableTabButton";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
 import type { TabGroup } from "@/types";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
-import { handleDockInteractOutside, handleDockEscapeKeyDown } from "./dockPopoverGuard";
+import {
+  handleDockInteractOutside,
+  handleDockEscapeKeyDown,
+  handleDockFocusOutside,
+} from "./dockPopoverGuard";
 import { usePreferencesStore } from "@/store";
 import { UI_ANIMATION_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
-
-// Defer terminal focus by one frame's worth so Radix Popover finishes its
-// open animation before we steal focus into the PTY.
-const TERMINAL_FOCUS_DELAY_MS = 50;
 
 interface DockedTabGroupProps {
   group: TabGroup;
@@ -104,21 +104,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   // Derive isOpen from store state - open if ANY panel in this group is active
   const isOpen = panels.some((p) => p.id === activeDockTerminalId);
 
-  // Track when popover was just programmatically opened. Initialized to `isOpen` so a group
-  // that mounts already-open is armed before Radix's DismissableLayer can fire a spurious
-  // mount-time onOpenChange(false).
-  const wasJustOpenedRef = useRef(isOpen);
   const [tabListEl, setTabListEl] = useState<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!isOpen) return;
-
-    wasJustOpenedRef.current = true;
-    const timer = setTimeout(() => {
-      wasJustOpenedRef.current = false;
-    }, 100);
-    return () => clearTimeout(timer);
-  }, [isOpen]);
 
   // Mirrors DockedTerminalItem: only the worktree-sidebar-hidden state
   // changes left-side popover collision padding. Right padding is handled by
@@ -144,6 +130,37 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     portalContainerElementRef.current = node;
     setPortalContainer(node);
   }, []);
+
+  // True once the active panel's terminal host has migrated into the popover
+  // portal. Keyed to the active panel id and matched by `data-dock-panel-id`
+  // (not a bare child count) so a tab switch — which swaps the portal child
+  // rather than adding one — re-detects the new panel before focusing it.
+  const [migrated, setMigrated] = useState(false);
+
+  useEffect(() => {
+    const activeId = activePanel?.id;
+    if (!isOpen || !portalContainer || !activeId) {
+      setMigrated(false);
+      return;
+    }
+    const isPresent = () =>
+      Array.from(portalContainer.querySelectorAll("[data-dock-panel-id]")).some(
+        (el) => el.getAttribute("data-dock-panel-id") === activeId
+      );
+    if (isPresent()) {
+      setMigrated(true);
+      return;
+    }
+    setMigrated(false);
+    const observer = new MutationObserver(() => {
+      if (isPresent()) {
+        setMigrated(true);
+        observer.disconnect();
+      }
+    });
+    observer.observe(portalContainer, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [isOpen, portalContainer, activePanel?.id]);
 
   // Toggle buffering based on popover open state. The terminal stays mounted
   // in DockPanelOffscreenContainer across open/close cycles; the popover only
@@ -204,14 +221,46 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     };
   }, [isOpen, portalContainer, activePanel, portalTarget]);
 
+  // Focus the active panel's terminal once it has migrated into the popover
+  // portal — never the offscreen host. Honors focus-preserve / hybrid-input.
+  // Scalar deps (id / focusPolicy / isAgent value), not the activePanel object —
+  // so agent-state polling that mints a new panel object doesn't re-fire focus
+  // and yank it back into the terminal while the popover is open.
+  const activePanelId = activePanel?.id;
+  const activeFocusPolicy = activePanel?.focusPolicy;
+  const activeIsAgent = activePanel ? deriveTerminalChrome(activePanel).isAgent : false;
+
+  useEffect(() => {
+    if (!isOpen || !migrated || !activePanelId) return;
+    if (activeFocusPolicy === "preserve") return;
+
+    const focusTarget = getTerminalFocusTarget({
+      preferredTarget: preferredTerminalFocusTarget,
+      hasHybridInputSurface: activeIsAgent,
+      isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
+      hybridInputEnabled,
+    });
+    if (focusTarget === "hybridInput") return;
+
+    terminalInstanceService.focus(activePanelId);
+  }, [
+    isOpen,
+    migrated,
+    activePanelId,
+    activeFocusPolicy,
+    activeIsAgent,
+    preferredTerminalFocusTarget,
+    backendStatus,
+    hybridInputEnabled,
+  ]);
+
   const handleOpenChange = useCallback(
     (open: boolean) => {
       if (open) {
         openDockTerminal(activeTabId);
       } else {
-        if (wasJustOpenedRef.current) {
-          return;
-        }
+        // Focus-driven dismissals are blocked upstream by onFocusOutside, so a
+        // close here is a genuine pointer-outside or Escape and is honored.
         closeDockTerminal();
       }
     },
@@ -558,26 +607,12 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           collisionPadding={collisionPadding}
           onInteractOutside={(e) => handleDockInteractOutside(e, portalContainerElementRef.current)}
           onEscapeKeyDown={(e) => handleDockEscapeKeyDown(e, portalContainerElementRef.current)}
+          onFocusOutside={handleDockFocusOutside}
           onOpenAutoFocus={(event) => {
+            // Block Radix's own auto-focus; we focus the terminal once it has
+            // migrated into the portal (see the migration-focus effect), not on
+            // a fixed timer that races a cold xterm mount.
             event.preventDefault();
-            if (activePanel.focusPolicy === "preserve") {
-              return;
-            }
-            const focusTarget = getTerminalFocusTarget({
-              preferredTarget: preferredTerminalFocusTarget,
-              hasHybridInputSurface: activeChrome.isAgent,
-              isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
-              hybridInputEnabled,
-            });
-
-            if (focusTarget === "hybridInput") {
-              return;
-            }
-
-            setTimeout(
-              () => terminalInstanceService.focus(activePanel.id),
-              TERMINAL_FOCUS_DELAY_MS
-            );
           }}
         >
           {/* Tab bar at top of popover */}

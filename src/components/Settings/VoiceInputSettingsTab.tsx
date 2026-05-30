@@ -36,6 +36,8 @@ import type {
   MicPermissionStatus,
   VoiceCorrectionModel,
   VoiceParagraphingStrategy,
+  VoiceTranscriptionProvider,
+  VoiceRecordingMode,
 } from "@shared/types";
 
 const LANGUAGES = [
@@ -68,11 +70,30 @@ const CORRECTION_MODELS: {
   },
 ];
 
+const TRANSCRIPTION_PROVIDERS: {
+  value: VoiceTranscriptionProvider;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "openai",
+    label: "OpenAI",
+    description: "Realtime Whisper · spoken-command formatting",
+  },
+  {
+    value: "deepgram",
+    label: "Deepgram",
+    description: "Nova-3 · server-side turn detection",
+  },
+];
+
 const DEFAULT_SETTINGS: VoiceInputSettings = {
   enabled: false,
   openaiApiKey: "",
+  deepgramApiKey: "",
   language: "en",
   customDictionary: [],
+  transcriptionProvider: "openai",
   transcriptionModel: "gpt-realtime-whisper",
   correctionEnabled: false,
   correctionModel: "gpt-5-mini",
@@ -80,6 +101,9 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
   paragraphingStrategy: "spoken-command",
   resolveFileLinks: true,
   deviceId: "",
+  organizationId: "",
+  projectId: "",
+  recordingMode: "toggle",
 };
 
 type ApiKeyValidation = "idle" | "testing" | "valid" | "invalid";
@@ -179,7 +203,7 @@ export function VoiceInputSettingsTab() {
       <SettingsSection
         icon={Mic}
         title="Speech-to-text"
-        description="Real-time transcription. Requires an OpenAI API key and microphone access."
+        description="Real-time transcription. Requires a provider API key and microphone access."
         id="voice-speech-to-text"
       >
         <SettingsSwitchCard
@@ -201,6 +225,33 @@ export function VoiceInputSettingsTab() {
               onOpenSettings={handleOpenMicSettings}
               onRefresh={handleRefreshMicPermission}
             />
+
+            <SettingsSelect
+              label="Transcription provider"
+              description="The backend that turns your speech into text"
+              value={settings.transcriptionProvider}
+              onValueChange={(v) => {
+                // Narrow the select's string value to the union via a guard
+                // rather than an unsafe assertion.
+                if (v === "openai" || v === "deepgram") update({ transcriptionProvider: v });
+              }}
+              options={TRANSCRIPTION_PROVIDERS.map(({ value, label, description }) => ({
+                value,
+                label,
+                description,
+              }))}
+            />
+
+            <div
+              role="note"
+              className="rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-bg/40 p-3"
+            >
+              <p className="text-xs text-daintree-text/60 select-text">
+                {settings.transcriptionProvider === "deepgram"
+                  ? "Microphone audio is streamed over an encrypted connection to Deepgram for transcription using your API key. Deepgram does not retain streaming audio or transcripts by default."
+                  : "Microphone audio is streamed over an encrypted connection to OpenAI for transcription using your API key. Audio is not used for model training. OpenAI may retain audio in abuse-monitoring logs for up to 30 days."}
+              </p>
+            </div>
 
             <div className="flex items-center justify-between">
               <SettingsSelect
@@ -228,15 +279,53 @@ export function VoiceInputSettingsTab() {
               </button>
             </div>
 
-            <ApiKeyRow
-              label="OpenAI API Key"
-              value={settings.openaiApiKey}
-              placeholder="sk-..."
-              onSave={(key) => update({ openaiApiKey: key })}
-              onValidate={(key) => window.electron?.voiceInput?.validateApiKey(key)}
-              helpUrl="https://platform.openai.com/api-keys"
-              helpLabel="Get API key"
-            />
+            {settings.transcriptionProvider === "deepgram" ? (
+              <>
+                <ApiKeyRow
+                  label="Deepgram API Key"
+                  value={settings.deepgramApiKey}
+                  placeholder="Deepgram API key"
+                  onSave={(key) => update({ deepgramApiKey: key })}
+                  helpUrl="https://console.deepgram.com/"
+                  helpLabel="Get API key"
+                />
+
+                {settings.deepgramApiKey && (
+                  <p className="text-xs text-daintree-text/50 mt-1">
+                    Your API key is stored locally in plain text. Set usage limits on your Deepgram
+                    account to cap exposure.
+                  </p>
+                )}
+              </>
+            ) : (
+              <>
+                <ApiKeyRow
+                  label="OpenAI API Key"
+                  value={settings.openaiApiKey}
+                  placeholder="sk-..."
+                  onSave={(key) => update({ openaiApiKey: key })}
+                  onValidate={(key) => window.electron?.voiceInput?.validateApiKey(key)}
+                  helpUrl="https://platform.openai.com/api-keys"
+                  helpLabel="Get API key"
+                />
+
+                {(!settings.openaiApiKey || !settings.openaiApiKey.startsWith("sk-proj-")) && (
+                  <p className="text-xs text-daintree-text/50">
+                    Use a Project API key (starts with <code className="font-mono">sk-proj-</code>)
+                    for the best security
+                  </p>
+                )}
+
+                {settings.openaiApiKey && (
+                  <p className="text-xs text-daintree-text/50 mt-1">
+                    Your API key is stored locally in plain text. Set billing limits on your OpenAI
+                    account to cap exposure.
+                  </p>
+                )}
+              </>
+            )}
+
+            {settings.openaiApiKey && <AdvancedSection settings={settings} update={update} />}
 
             <SettingsSelect
               label="Language"
@@ -249,6 +338,11 @@ export function VoiceInputSettingsTab() {
               value={settings.paragraphingStrategy ?? "spoken-command"}
               language={settings.language}
               onChange={(v) => update({ paragraphingStrategy: v })}
+            />
+
+            <RecordingModeRow
+              value={settings.recordingMode ?? "toggle"}
+              onChange={(v) => update({ recordingMode: v })}
             />
 
             <DictionarySection
@@ -334,7 +428,11 @@ interface ApiKeyRowProps {
   value: string;
   placeholder: string;
   onSave: (key: string) => void;
-  onValidate: (key: string) => Promise<{ valid: boolean; error?: string } | undefined> | undefined;
+  /**
+   * Remote key validation. When omitted (e.g. providers without a validation
+   * endpoint), the key is saved without a remote check.
+   */
+  onValidate?: (key: string) => Promise<{ valid: boolean; error?: string } | undefined> | undefined;
   helpUrl: string;
   helpLabel: string;
 }
@@ -354,7 +452,7 @@ function ApiKeyRow({
   const [validationError, setValidationError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (validation !== "valid" && validation !== "invalid") return;
+    if (validation !== "valid") return;
     const timer = setTimeout(() => {
       setValidation("idle");
       setValidationError(null);
@@ -365,6 +463,13 @@ function ApiKeyRow({
   const handleSave = async () => {
     const key = keyInput.trim();
     if (!key) return;
+    // Providers without a validation endpoint save the key directly.
+    if (!onValidate) {
+      onSave(key);
+      setKeyInput("");
+      setValidation("valid");
+      return;
+    }
     setValidation("testing");
     setValidationError(null);
     try {
@@ -420,7 +525,13 @@ function ApiKeyRow({
           <input
             type={showKey ? "text" : "password"}
             value={keyInput}
-            onChange={(e) => setKeyInput(e.target.value)}
+            onChange={(e) => {
+              setKeyInput(e.target.value);
+              if (validation === "invalid") {
+                setValidation("idle");
+                setValidationError(null);
+              }
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
@@ -475,6 +586,73 @@ function ApiKeyRow({
           <AlertCircle className="w-3 h-3" />
           {validationError || "Invalid API key"}
         </p>
+      )}
+    </div>
+  );
+}
+
+// ── Advanced section (org/project ID for legacy keys) ──
+
+function AdvancedSection({
+  settings,
+  update,
+}: {
+  settings: VoiceInputSettings;
+  update: (patch: Partial<VoiceInputSettings>) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const isLegacyKey = settings.openaiApiKey && !settings.openaiApiKey.startsWith("sk-proj-");
+
+  return (
+    <div className="space-y-2">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-1.5 text-xs text-daintree-text/40 hover:text-daintree-text/60 transition-colors"
+      >
+        {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+        Advanced
+      </button>
+      {expanded && (
+        <div className="space-y-3">
+          <p className="text-xs text-daintree-text/40">
+            Only needed for legacy user keys (starts with <code className="font-mono">sk-</code>).
+          </p>
+          <div className="space-y-1.5">
+            <label className="text-sm text-daintree-text/70 flex items-center gap-2">
+              <Shield className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
+              Organization ID
+            </label>
+            <input
+              type="text"
+              value={settings.organizationId}
+              onChange={(e) => update({ organizationId: e.target.value })}
+              onBlur={(e) => update({ organizationId: e.target.value.trim() })}
+              placeholder={isLegacyKey ? "org-..." : ""}
+              disabled={!isLegacyKey}
+              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/50 transition-colors disabled:opacity-50"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm text-daintree-text/70 flex items-center gap-2">
+              <Shield className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
+              Project ID
+            </label>
+            <input
+              type="text"
+              value={settings.projectId}
+              onChange={(e) => update({ projectId: e.target.value })}
+              onBlur={(e) => update({ projectId: e.target.value.trim() })}
+              placeholder={isLegacyKey ? "proj_..." : ""}
+              disabled={!isLegacyKey}
+              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/50 transition-colors disabled:opacity-50"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+        </div>
       )}
     </div>
   );
@@ -641,6 +819,34 @@ function ParagraphingStrategyRow({
   );
 }
 
+// ── Recording mode row ──
+
+function RecordingModeRow({
+  value,
+  onChange,
+}: {
+  value: VoiceRecordingMode;
+  onChange: (v: VoiceRecordingMode) => void;
+}) {
+  const description =
+    value === "toggle"
+      ? "Press the dictation shortcut to start, press again to stop."
+      : "Hold the dictation shortcut to record. Releasing the key stops recording without submitting.";
+
+  return (
+    <SettingsSelect
+      label="Recording mode"
+      description={description}
+      value={value}
+      onValueChange={(v) => onChange(v as VoiceRecordingMode)}
+      options={[
+        { value: "toggle", label: "Toggle" },
+        { value: "push-to-talk", label: "Push to talk" },
+      ]}
+    />
+  );
+}
+
 // ── Dictionary section ──
 
 function DictionarySection({
@@ -681,7 +887,7 @@ function DictionarySection({
             }
           }}
           placeholder="Add term…"
-          className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus:border-daintree-accent transition-colors"
+          className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/50 transition-colors"
         />
         <Button
           onClick={onAdd}

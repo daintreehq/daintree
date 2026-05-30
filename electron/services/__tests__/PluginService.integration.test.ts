@@ -33,7 +33,11 @@ import { randomUUID } from "crypto";
 
 const storeState = new Map<string, unknown>();
 vi.mock("electron", () => ({
-  app: { getVersion: vi.fn(() => "0.0.0") },
+  // getPath is needed because importing PluginService transitively constructs
+  // the eager ProjectStore singleton (which reads app.getPath("userData")).
+  // The path is never written to disk in these tests — ProjectStore only does
+  // I/O in initialize(), which they don't call.
+  app: { getVersion: vi.fn(() => "0.0.0"), getPath: vi.fn(() => "/tmp/daintree-plugin-int") },
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: vi.fn(),
@@ -294,10 +298,8 @@ describe("PluginService integration — panel contributions", () => {
     expect(getPanelKindConfig("acme.real-plugin.viewer")?.extensionId).toBe("acme.real-plugin");
     expect(getPanelKindConfig("alias-dir.viewer")).toBeUndefined();
 
-    expect(getToolbarButtonConfig("plugin.acme.real-plugin.btn")?.pluginId).toBe(
-      "acme.real-plugin"
-    );
-    expect(getToolbarButtonConfig("plugin.alias-dir.btn")).toBeUndefined();
+    expect(getToolbarButtonConfig("acme.real-plugin.btn")?.pluginId).toBe("acme.real-plugin");
+    expect(getToolbarButtonConfig("alias-dir.btn")).toBeUndefined();
 
     const items = getPluginMenuItems();
     expect(items).toHaveLength(1);
@@ -326,10 +328,10 @@ describe("PluginService integration — toolbar button contributions", () => {
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
 
-    const config = getToolbarButtonConfig("plugin.acme.toolbar-plugin.my-btn");
+    const config = getToolbarButtonConfig("acme.toolbar-plugin.my-btn");
     expect(config).toBeDefined();
     expect(config).toMatchObject({
-      id: "plugin.acme.toolbar-plugin.my-btn",
+      id: "acme.toolbar-plugin.my-btn",
       label: "My Button",
       iconId: "puzzle",
       actionId: "toolbar-plugin.doThing",
@@ -357,7 +359,7 @@ describe("PluginService integration — toolbar button contributions", () => {
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
 
-    expect(getToolbarButtonConfig("plugin.acme.default-prio.btn")?.priority).toBe(3);
+    expect(getToolbarButtonConfig("acme.default-prio.btn")?.priority).toBe(3);
   });
 });
 
@@ -749,7 +751,7 @@ describe("PluginService integration — main entry execution", () => {
         expect.anything()
       );
       expect(getPanelKindConfig("acme.bad-main.p")).toBeDefined();
-      expect(getToolbarButtonConfig("plugin.acme.bad-main.b")).toBeDefined();
+      expect(getToolbarButtonConfig("acme.bad-main.b")).toBeDefined();
       expect(getPluginMenuItems()).toHaveLength(1);
     } finally {
       errorSpy.mockRestore();
@@ -874,6 +876,70 @@ describe("PluginService integration — activate() lifecycle", () => {
     expect(result.ctx.pluginId).toBe("acme.activating-plugin");
     expect(result.ctx.webContentsId).toBe(99);
     expect(result.args).toEqual(["hello"]);
+  });
+
+  it("registers a main-side action via host.registerAction and dispatches it end-to-end", async () => {
+    const pluginDir = await writePlugin("acme.action-plugin", {
+      name: "acme.action-plugin",
+      version: "1.0.0",
+    });
+    const mainFile = `action-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) {
+  host.registerAction(
+    {
+      id: "do-thing",
+      title: "Do thing",
+      description: "Does the thing",
+      category: "Actions",
+      kind: "command",
+      danger: "safe",
+    },
+    async (args) => ({ echoed: args })
+  );
+}
+`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.action-plugin",
+        version: "1.0.0",
+        main: mainFile,
+      })
+    );
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    // Activation is deferred: startup plugins activate via this fan-out (the
+    // production trigger is globalServicesInit). registerAction runs inside
+    // activate(), so the action only surfaces once activation has run.
+    await service.activateStartupFinishedPlugins();
+
+    // The action surfaces in the renderer-facing list with the namespaced id.
+    expect(service.listPluginActions().map((a) => a.id)).toContain("acme.action-plugin.do-thing");
+
+    // Dispatch lands on the main-side handler with the args payload only.
+    const result = await service.dispatchHandler(
+      "acme.action-plugin",
+      "acme.action-plugin.do-thing",
+      makeCtx("acme.action-plugin"),
+      [{ issue: 7 }]
+    );
+    expect(result).toEqual({ echoed: { issue: 7 } });
+
+    // Unload tears the handler down — a later dispatch finds nothing.
+    service.unloadPlugin("acme.action-plugin");
+    expect(service.listPluginActions()).toEqual([]);
+    await expect(
+      service.dispatchHandler(
+        "acme.action-plugin",
+        "acme.action-plugin.do-thing",
+        makeCtx("acme.action-plugin"),
+        [{}]
+      )
+    ).rejects.toThrow(/No plugin handler registered/);
   });
 
   it("invokes activate's returned cleanup before handlers are removed on unload", async () => {
@@ -1045,7 +1111,7 @@ describe("PluginService integration — full contribution fan-out", () => {
     await service.initialize();
 
     expect(getPanelKindConfig("acme.all-in-one.v")?.extensionId).toBe("acme.all-in-one");
-    expect(getToolbarButtonConfig("plugin.acme.all-in-one.b")?.priority).toBe(2);
+    expect(getToolbarButtonConfig("acme.all-in-one.b")?.priority).toBe(2);
     expect(getPluginMenuItems()).toEqual([
       {
         pluginId: "acme.all-in-one",
@@ -1109,7 +1175,7 @@ describe("PluginService integration — built-in plugin loading", () => {
   });
 
   it("does not register contributions for a disabled built-in", async () => {
-    storeState.set("plugins", { disabledBuiltins: ["daintree.disabled"] });
+    storeState.set("plugins", { disabled: ["daintree.disabled"] });
     await writeBuiltinPlugin("daintree.disabled", {
       name: "daintree.disabled",
       version: "1.0.0",
@@ -1124,7 +1190,12 @@ describe("PluginService integration — built-in plugin loading", () => {
 
     expect(getPanelKindConfig("daintree.disabled.x")).toBeUndefined();
     expect(getToolbarButtonConfig("plugin.daintree.disabled.b")).toBeUndefined();
-    expect(service.listPlugins()).toEqual([]);
+    // The plugin is still listed (as disabled) so the Preferences toggle can
+    // re-enable it — only its contributions are withheld.
+    const listed = service.listPlugins();
+    expect(listed).toHaveLength(1);
+    expect(listed[0].manifest.name).toBe("daintree.disabled");
+    expect(listed[0].disabled).toBe(true);
   });
 
   it("activates a built-in plugin's main entry through the standard lifecycle", async () => {
@@ -1150,6 +1221,44 @@ describe("PluginService integration — built-in plugin loading", () => {
     expect(service.listPlugins()[0].isBuiltin).toBe(true);
   });
 
+  it("does not register contributions or run main for a disabled user plugin", async () => {
+    const markerKey = makeMarkerKey();
+    const pluginDir = await writePlugin("acme.disabled-user", {
+      name: "acme.disabled-user",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "p", name: "P", iconId: "eye", color: "#000" }],
+        toolbarButtons: [{ id: "b", label: "B", iconId: "i", actionId: "acme.disabled-user.act" }],
+      },
+    });
+    const mainFile = await writeMainFixture(pluginDir, markerKey);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.disabled-user",
+        version: "1.0.0",
+        main: mainFile,
+        contributes: {
+          panels: [{ id: "p", name: "P", iconId: "eye", color: "#000" }],
+          toolbarButtons: [
+            { id: "b", label: "B", iconId: "i", actionId: "acme.disabled-user.act" },
+          ],
+        },
+      })
+    );
+    storeState.set("plugins", { disabled: ["acme.disabled-user"] });
+
+    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+
+    expect(readMarker(markerKey)).toBeUndefined();
+    expect(getPanelKindConfig("acme.disabled-user.p")).toBeUndefined();
+    expect(getToolbarButtonConfig("acme.disabled-user.b")).toBeUndefined();
+    const listed = service.listPlugins();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ disabled: true, isBuiltin: false });
+  });
+
   it("does not execute the main entry of a disabled built-in", async () => {
     const markerKey = makeMarkerKey();
     const pluginDir = await writeBuiltinPlugin("daintree.disabled-main", {
@@ -1165,13 +1274,16 @@ describe("PluginService integration — built-in plugin loading", () => {
         main: mainFile,
       })
     );
-    storeState.set("plugins", { disabledBuiltins: ["daintree.disabled-main"] });
+    storeState.set("plugins", { disabled: ["daintree.disabled-main"] });
 
     const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
     await service.initialize();
 
     expect(readMarker(markerKey)).toBeUndefined();
-    expect(service.listPlugins()).toEqual([]);
+    const listed = service.listPlugins();
+    expect(listed).toHaveLength(1);
+    expect(listed[0].manifest.name).toBe("daintree.disabled-main");
+    expect(listed[0].disabled).toBe(true);
   });
 
   it("loads remaining built-ins and user plugins when one built-in has a malformed manifest", async () => {
@@ -1203,5 +1315,172 @@ describe("PluginService integration — built-in plugin loading", () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+});
+
+describe("PluginService integration — diagnostic logger", () => {
+  async function loadWithLoggerActivate(
+    pluginName: string,
+    hostKey: string,
+    activateBody: string
+  ): Promise<PluginService> {
+    globalMarkers.add(hostKey);
+    const pluginDir = await writePlugin(pluginName, { name: pluginName, version: "1.2.3" });
+    const mainFile = `logger-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) {\n  globalThis[${JSON.stringify(hostKey)}] = host;\n  ${activateBody}\n}\n`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: pluginName,
+        version: "1.2.3",
+        displayName: "Logger Plugin",
+        main: mainFile,
+      })
+    );
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    // Activation is deferred — the logger is wired inside activate(), so it
+    // only fires once the startup fan-out runs (mirrors the line-918 pattern).
+    await service.activateStartupFinishedPlugins();
+    return service;
+  }
+
+  it("captures logger lines (level, message, folded fields) in the snapshot", async () => {
+    const service = await loadWithLoggerActivate(
+      "acme.logger",
+      "__loggerHost1",
+      `host.logger.info("hello");
+       host.logger.warn("careful", { code: 42 });
+       host.logger.error("boom");`
+    );
+
+    const entry = service
+      .getDiagnosticsSnapshot()
+      .plugins.find((p) => p.pluginId === "acme.logger");
+    expect(entry).toBeDefined();
+    expect(entry?.displayName).toBe("Logger Plugin");
+    expect(entry?.version).toBe("1.2.3");
+    expect(entry?.logLines.map((l) => ({ level: l.level, message: l.message }))).toEqual([
+      { level: "info", message: "hello" },
+      { level: "warn", message: 'careful {"code":42}' },
+      { level: "error", message: "boom" },
+    ]);
+    expect(entry?.logLines.every((l) => typeof l.ts === "number")).toBe(true);
+  });
+
+  it("evicts oldest lines beyond the 500-entry cap (FIFO)", async () => {
+    const service = await loadWithLoggerActivate(
+      "acme.logger-cap",
+      "__loggerHost2",
+      `for (let i = 0; i < 600; i++) host.logger.info("line-" + i);`
+    );
+
+    const entry = service
+      .getDiagnosticsSnapshot()
+      .plugins.find((p) => p.pluginId === "acme.logger-cap");
+    expect(entry?.logLines).toHaveLength(500);
+    // Oldest 100 evicted: buffer holds line-100 .. line-599.
+    expect(entry?.logLines[0]?.message).toBe("line-100");
+    expect(entry?.logLines.at(-1)?.message).toBe("line-599");
+  });
+
+  it("truncates a single line longer than the per-line byte cap with an ellipsis", async () => {
+    const service = await loadWithLoggerActivate(
+      "acme.logger-long",
+      "__loggerHost3",
+      `host.logger.info("x".repeat(5000));`
+    );
+
+    const entry = service
+      .getDiagnosticsSnapshot()
+      .plugins.find((p) => p.pluginId === "acme.logger-long");
+    const line = entry?.logLines[0]?.message ?? "";
+    expect(line).toHaveLength(2048);
+    expect(line.endsWith("…")).toBe(true);
+  });
+
+  it("truncates multi-byte glyph lines without producing a lone surrogate", async () => {
+    const service = await loadWithLoggerActivate(
+      "acme.logger-emoji",
+      "__loggerHost5",
+      `host.logger.info("😀".repeat(3000));`
+    );
+
+    const entry = service
+      .getDiagnosticsSnapshot()
+      .plugins.find((p) => p.pluginId === "acme.logger-emoji");
+    const line = entry?.logLines[0]?.message ?? "";
+    // A lone surrogate would make encodeURIComponent throw downstream.
+    expect(() => encodeURIComponent(line)).not.toThrow();
+    expect(line.endsWith("…")).toBe(true);
+  });
+
+  it("keeps per-plugin log buffers isolated", async () => {
+    await loadWithLoggerActivate("acme.logger-a", "__loggerHost6a", `host.logger.info("from-a");`);
+    const service = await loadWithLoggerActivate(
+      "acme.logger-b",
+      "__loggerHost6b",
+      `host.logger.info("from-b");`
+    );
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    const a = snapshot.plugins.find((p) => p.pluginId === "acme.logger-a");
+    const b = snapshot.plugins.find((p) => p.pluginId === "acme.logger-b");
+    expect(a?.logLines.map((l) => l.message)).toEqual(["from-a"]);
+    expect(b?.logLines.map((l) => l.message)).toEqual(["from-b"]);
+  });
+
+  it("logger writes are a silent no-op after the plugin unloads", async () => {
+    const service = await loadWithLoggerActivate(
+      "acme.logger-unload",
+      "__loggerHost4",
+      `host.logger.info("before-unload");`
+    );
+    const host = (globalThis as Record<string, unknown>).__loggerHost4 as {
+      logger: { info: (m: string) => void };
+    };
+
+    service.unloadPlugin("acme.logger-unload");
+    // The post-unload call must not throw and must not resurrect the buffer.
+    expect(() => host.logger.info("after-unload")).not.toThrow();
+
+    const entry = service
+      .getDiagnosticsSnapshot()
+      .plugins.find((p) => p.pluginId === "acme.logger-unload");
+    expect(entry).toBeUndefined();
+  });
+});
+
+describe("PluginService integration — stale temp dir sweep", () => {
+  it("reaps crash-left staging dirs at initialize() but keeps real plugins", async () => {
+    await fs.mkdir(path.join(tmpDir, ".install-tmp-x"), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, ".install-tmp-x", "leftover.txt"), "x");
+    await fs.mkdir(path.join(tmpDir, ".update-check-y"), { recursive: true });
+    await fs.mkdir(path.join(tmpDir, ".old-z"), { recursive: true });
+
+    await writePlugin("acme.real-plugin", {
+      name: "acme.real-plugin",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#abc" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    const remaining = await fs.readdir(tmpDir);
+    expect(remaining).not.toContain(".install-tmp-x");
+    expect(remaining).not.toContain(".update-check-y");
+    expect(remaining).not.toContain(".old-z");
+    expect(remaining).toContain("acme.real-plugin");
+
+    expect(getPanelKindConfig("acme.real-plugin.viewer")).toMatchObject({
+      id: "acme.real-plugin.viewer",
+      extensionId: "acme.real-plugin",
+    });
   });
 });

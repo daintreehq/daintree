@@ -35,6 +35,11 @@ interface PluginHostApi {
   registerAction(descriptor: PluginActionContribution, handler: ActionHandler): void;
 
   // IPC
+  registerHandler<TArgs, TResult>(
+    channel: string,
+    schema: PluginChannelSchema<TArgs, TResult>,
+    handler: PluginTypedIpcHandler<TArgs, TResult>
+  ): void;
   registerHandler(channel: string, handler: PluginIpcHandler): void;
   broadcastToRenderer(channel: string, payload: unknown): void;
 
@@ -46,15 +51,31 @@ interface PluginHostApi {
   ): () => void;
   onDidChangeWorktrees(callback: (snapshots: PluginWorktreeSnapshot[]) => void): () => void;
 
-  // Settings (planned)
-  settings: SettingsApi;
+  // Forge / file-decoration providers
+  registerForgeProvider(descriptor: ForgeProviderDescriptor, impl: ForgeProviderImpl): () => void;
+  registerFileDecorationProvider(
+    descriptor: FileDecorationProviderDescriptor,
+    impl: FileDecorationProviderImpl
+  ): () => void;
+  invalidateFileDecorations(scope: string, paths?: string[]): void;
+
+  // Action dispatch
+  dispatch(actionId: string, args?: unknown): Promise<ActionDispatchResult>;
+
+  // Settings
+  readonly settings: SettingsApi;
+
+  // Diagnostics
+  readonly logger: PluginLogger;
 
   // UI helpers
-  showToast(options: ToastOptions): Promise<void>;
+  showToast(options: PluginToastOptions): Promise<void>;
 }
 ```
 
 The authoritative definition is in `shared/types/plugin.ts` in the Daintree repo.
+
+The `register*` methods (`registerAction`, `registerHandler`, `registerForgeProvider`, `registerFileDecorationProvider`) are revoke-guarded — they must be called during `activate()` and throw once the host is revoked. `invalidateFileDecorations`, `showToast`, `dispatch`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op after unload.
 
 ## `registerAction`
 
@@ -111,7 +132,9 @@ host.broadcastToRenderer("sync-status", { status: "syncing" });
 ```
 
 ```ts
-// renderer side (in a view component)
+// renderer side (in a view component) — useHostChannel ships under the
+// @daintreehq/plugin-sdk/react subpath, which is Planned (F15/F36) and has no
+// exports in v1. See "React hooks" below.
 import { useHostChannel } from "@daintreehq/plugin-sdk/react";
 
 const invoke = useHostChannel();
@@ -124,6 +147,8 @@ const result = await invoke("sync-now", {});
 - Plugin-registered channels are addressed as `{pluginId}:{channel}` internally; the SDK handles the prefix.
 
 Handlers are unregistered on plugin unload.
+
+**Typed overload (preferred for new code):** pass a `PluginChannelSchema` with Zod `args`/`result` schemas and a `requires` capability list. The host rejects registration if any `requires` capability is missing from `manifest.capabilities` (fail-closed at the registration boundary). At dispatch, args are `safeParse`d before the handler runs and the result is `safeParse`d before returning to the renderer — schema failures throw with a `SCHEMA_ERROR:` prefix, missing capabilities throw with a `PERMISSION_REQUIRED:` prefix, and the renderer-side `useHostChannel` hook discriminates on those prefixes. The untyped overload above does no host-side validation and is retained only for plugins that haven't migrated to per-channel schemas.
 
 ## Worktree observation
 
@@ -208,15 +233,57 @@ const dispose = host.registerForgeProvider({ id: "linear", name: "Linear" }, imp
 
 For the end-to-end walkthrough — manifest entry, implementing `ForgeProviderImpl`, state normalization, capabilities, and tests — see [Implementing a forge provider](./forge-provider.md).
 
-## `settings` — _Planned_
+## `registerFileDecorationProvider` and `invalidateFileDecorations`
 
-Reads and subscribes to plugin-declared settings.
+Binds a runtime `FileDecorationProviderImpl` to a descriptor declared in `contributes.fileDecorationProviders`.
 
 ```ts
-// Current value
+const dispose = host.registerFileDecorationProvider({ id: "linear-status" }, impl);
+
+// Later, from a subscription callback or timer:
+host.invalidateFileDecorations("worktree", ["src/foo.ts"]);
+```
+
+**Rules:**
+
+- `registerFileDecorationProvider` is revoke-guarded — call it during `activate()`. `descriptor.id` must match an entry in `contributes.fileDecorationProviders`; undeclared ids are rejected so the impl can't drift from the manifest's scope-routing table. At runtime the id is namespaced to `{pluginId}.{descriptor.id}`.
+- Returns a disposer that unbinds the single impl. Re-registering with the same `descriptor.id` overwrites the prior binding; the older disposer becomes inert. All bindings are removed on plugin unload.
+- `invalidateFileDecorations(scope, paths?)` signals that decorations for `scope` (optionally narrowed to `paths`) changed so any renderer showing them re-pulls. It is NOT revoke-guarded — call it from your subscription callbacks and timers throughout the plugin's lifetime. It becomes a silent no-op after unload.
+
+## `dispatch`
+
+Invoke an action by id through Daintree's `ActionService` with a `"plugin"` source — your own registered actions, actions from other plugins, or any built-in action — always through the audited, validated dispatch path.
+
+```ts
+const result = await host.dispatch("acme.linear-planner.sync-now", { team: "engineering" });
+if (!result.ok) {
+  // result.error.code: "RESTRICTED" | "CONFIRMATION_REQUIRED" | "PLUGIN_UNLOADED" | ...
+}
+```
+
+Args are validated against the action's `argsSchema` by `ActionService`; the host does not re-validate. Actions classified `danger: "restricted"` reject with `RESTRICTED`; `danger: "confirm"` actions return `CONFIRMATION_REQUIRED` — plugins cannot bypass confirm-gating (there is no `confirmed` flag). `dispatch` is NOT revoke-guarded; once the plugin is unloaded it returns `{ ok: false, error: { code: "PLUGIN_UNLOADED" } }` without dispatching.
+
+## `logger`
+
+Structured diagnostic logger backed by a bounded per-plugin ring buffer (most recent ~500 entries) in the main process.
+
+```ts
+host.logger.info("Synced 12 issues", { team: "engineering" });
+host.logger.warn("Rate limited, backing off");
+host.logger.error("Token expired");
+```
+
+Lines are mirrored to the host console prefixed with `[plugin:{pluginId}]` and retained so they can be folded into an error report on demand. Calls return `void`, never throw, and never reject — an unserializable `fields` payload is coerced to a string rather than thrown. `logger` is NOT revoke-guarded; writes become a silent no-op after unload.
+
+## `settings`
+
+Persistent, plugin-scoped key/value settings. Reads, writes, and subscribes.
+
+```ts
+// Current value (scope defaults to "user")
 const token = await host.settings.get<string>("linear.apiToken");
 
-// Update (user scope usually not writable from plugin code)
+// Update
 await host.settings.set("linear.defaultTeam", "engineering");
 
 // Subscribe to changes
@@ -225,24 +292,27 @@ const dispose = host.settings.onDidChange("linear.apiToken", (newValue) => {
 });
 ```
 
-Scope resolution: `project` scope reads from the active project's config; if no project is active, returns undefined. `user` scope reads from Daintree's global config.
+Scope defaults to `"user"`. `project` scope resolves the active project at call time, so it tracks project switches: `get` returns `undefined` and `set` throws when no project is active. `set` rejects `undefined` and non-JSON-serializable values; when the manifest declares `contributes.settings`, an undeclared key is rejected. `onDidChange` fires only on in-process writes — edits made to the JSON file by other processes don't fire until the plugin reloads.
 
-Secret-type settings are stored in the OS keychain via `keytar`. They're returned from `get()` transparently but never logged or included in error reports.
+**Storage:** values are stored as plaintext JSON at `~/.daintree/plugin-settings/{pluginId}.json` (user scope) or `<projectRoot>/.daintree/plugin-settings/{pluginId}.json` (project scope), with `chmod 0o600` applied on POSIX. There is deliberately no OS-keychain integration (#9167) — `secret`-typed settings are kept out of logs and error reports, but they are NOT encrypted at rest. Do not store secrets that must survive disk compromise.
 
 ## `showToast`
 
 ```ts
 await host.showToast({
-  title: "Synced",
-  description: "Fetched 12 issues from Linear",
-  type: "success", // "info" | "success" | "warning" | "error"
-  durationMs: 4000,
+  message: "Fetched 12 issues from Linear",
+  type: "success", // "info" | "success" | "warning" | "error" — defaults to "info"
+  durationMs: 4000, // optional; defaults to the app's per-type duration
 });
 ```
 
-Toasts render in Daintree's standard toast container. There's no "sticky" or "action required" toast type — for persistent UI, register a panel view instead.
+The host prefixes `message` with your plugin id (`{pluginId}: {message}`) so users can tell which plugin raised the toast — you don't add the prefix yourself. `message` is a string only (max 2000 chars); `priority` and action buttons aren't exposed to plugins. `durationMs` must be a positive integer up to 60000 (60s). An empty message, an unknown `type`, or an out-of-range `durationMs` rejects.
 
-## React hooks — `@daintreehq/plugin-sdk/react`
+Toasts route through Daintree's standard `notify()` path, so quiet-hours and inbox-history semantics apply. The rate-limit bucket is scoped per plugin and type, so a noisy plugin can't suppress another plugin's toasts (or system toasts). Audit your toasts against the four-question checklist (timely, helpful, not already visible, ignorable) — the host delivers what you ask for, it doesn't second-guess. There's no "sticky" or "action required" toast type — for persistent UI, register a panel view instead.
+
+## React hooks — `@daintreehq/plugin-sdk/react` — _Planned (F15/F36)_
+
+The `@daintreehq/plugin-sdk/react` subpath is reserved for F15/F36 and ships no exports in v1. The hooks below describe the intended surface; the renderer implementations exist in Daintree's `src/hooks/` but are not yet wired into the SDK subpath. Do not import from this path in a v1 plugin — it resolves to an empty module.
 
 Import path lives separately so non-view code doesn't pull React into the main-process bundle.
 

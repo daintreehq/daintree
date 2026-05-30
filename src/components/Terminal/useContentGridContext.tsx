@@ -25,7 +25,7 @@ import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
-import { computeGridCanLaunch, computeGridSelectedAgentIds } from "./contentGridAgentFilter";
+import { computeGridSelectedAgentIds } from "./contentGridAgentFilter";
 import { buildFleetPanels } from "./contentGridFleetPanels";
 import { useDndPlaceholder, useIsDragging, GRID_PLACEHOLDER_ID } from "@/components/DragDrop";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -53,6 +53,8 @@ import {
   ContextMenuActionItem,
   ContextMenuContent,
   ContextMenuCheckboxItem,
+  ContextMenuItem,
+  ContextMenuLabel,
   ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
@@ -60,7 +62,17 @@ import {
 } from "@/components/ui/context-menu";
 import { MenuActionSourceContext } from "@/components/ui/menu-source";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
-import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { getEffectiveAgentIds } from "@shared/config/agentRegistry";
+import { getAgentConfig } from "@/config/agents";
+import {
+  DockLaunchMenuItems,
+  type DockLaunchAgent,
+  type DockLaunchMenuComponents,
+} from "@/components/Layout/DockLaunchMenuItems";
+import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { sortAgentsByToolbarPin } from "@/lib/agentMenuOrder";
 import { getMaximizedGroupFocusTarget } from "./contentGridFocus";
 import { setGridLayoutSnapshot } from "./gridLayoutSnapshot";
 import { actionService } from "@/services/ActionService";
@@ -72,6 +84,15 @@ import { actionService } from "@/services/ActionService";
 const EMPTY_PANEL_IDS: string[] = [];
 const EMPTY_TERMINALS: PanelInstance[] = [];
 const EMPTY_TAB_GROUPS: TabGroup[] = [];
+
+// Radix primitives mapped for the shared dock/grid launch menu. Defined per
+// call site (mirrors ContentDock) so the presentational component stays
+// decoupled from the consumer's Radix import space.
+const GRID_CONTEXT_MENU_COMPONENTS: DockLaunchMenuComponents = {
+  Item: ContextMenuItem,
+  Label: ContextMenuLabel,
+  Separator: ContextMenuSeparator,
+};
 
 export function pixelSnapTransform({ x, y }: TransformProperties): string {
   const tx = typeof x === "number" ? x : parseFloat(x ?? "0") || 0;
@@ -132,7 +153,6 @@ export interface ContentGridContext {
   panelIds: string[];
   gridItemCount: number;
   twoPaneTerminals: [PanelInstance, PanelInstance] | null;
-  gridAgentMenuItems: { id: string; name: string; canLaunch: boolean }[];
   gridContextMenuContent: React.ReactNode;
   handleAddTabForPanel: (panel: PanelInstance) => Promise<void>;
   handleGridLaunch: (agentId: string) => void;
@@ -223,6 +243,14 @@ export function useContentGridContext({
   const showProjectPulse = usePreferencesStore((state) => state.showProjectPulse);
   const currentProject = useProjectStore((state) => state.currentProject);
   const isAvailabilityInitialized = useCliAvailabilityStore((s) => s.isInitialized);
+  // `useShallow` is mandatory on the `leftButtons` array slice — a bare
+  // selector returns a new array reference every store tick and would
+  // invalidate this hook's "use memo" block on any unrelated toolbar update.
+  const leftButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.leftButtons));
+  const agentSettings = useAgentSettingsStore((s) => s.settings);
+  const hasDevPreview = useProjectSettingsStore((s) =>
+    Boolean(s.settings?.devServerCommand?.trim())
+  );
 
   const gridSelectedAgentIds = useMemo(
     () =>
@@ -243,6 +271,17 @@ export function useContentGridContext({
       ? activeWorktree.name?.trim() || "Unknown Worktree"
       : activeWorktree.branch?.trim() || activeWorktree.name?.trim() || "Unknown Worktree"
     : null;
+
+  // Mirrors ContentDock so the shared launch menu can run recipes with the
+  // same worktree-scoped variable substitutions from the grid surface.
+  const gridRecipeContext = activeWorktree
+    ? {
+        issueNumber: activeWorktree.issueNumber,
+        prNumber: activeWorktree.linked?.pr?.ref.number,
+        branchName: activeWorktree.branch,
+        worktreePath: activeWorktree.path,
+      }
+    : undefined;
 
   const isInTrash = usePanelStore((state) => state.isInTrash);
 
@@ -632,15 +671,23 @@ export function useContentGridContext({
   );
   const layoutAnimationEnabled = !isProjectSwitching && closingIds.size === 0;
 
-  const gridAgentMenuItems = useMemo(() => {
-    return getEffectiveAgentIds()
+  // Build the same `DockLaunchAgent[]` shape the dock uses so the grid menu
+  // renders identical brand icons, then split/order by toolbar pin state.
+  const { sorted: gridLaunchAgents, pinnedCount: gridAgentPinnedCount } = useMemo(() => {
+    const agents: DockLaunchAgent[] = getEffectiveAgentIds()
       .filter((id) => !gridSelectedAgentIds || gridSelectedAgentIds.has(id))
       .map((id) => {
-        const agentConfig = getEffectiveAgentConfig(id);
-        const canLaunch = computeGridCanLaunch(id, isAvailabilityInitialized, agentAvailability);
-        return { id, name: agentConfig?.name ?? id, canLaunch };
+        const config = getAgentConfig(id);
+        return {
+          id,
+          name: config?.name ?? id,
+          icon: config?.icon,
+          brandColor: config?.color,
+          availability: agentAvailability?.[id],
+        };
       });
-  }, [agentAvailability, gridSelectedAgentIds, isAvailabilityInitialized]);
+    return sortAgentsByToolbarPin(agents, leftButtons, agentSettings);
+  }, [agentAvailability, gridSelectedAgentIds, leftButtons, agentSettings]);
 
   const handleGridLaunch = useCallback(
     (agentId: string) => {
@@ -949,29 +996,17 @@ export function useContentGridContext({
 
   const gridContextMenuContent = (
     <ContextMenuContent>
-      <ContextMenuActionItem
-        actionId="agent.launch"
-        args={{ agentId: "terminal", location: "grid", cwd: defaultCwd || undefined }}
-      >
-        New Terminal
-      </ContextMenuActionItem>
-      <ContextMenuActionItem
-        actionId="agent.launch"
-        args={{ agentId: "browser", location: "grid", cwd: defaultCwd || undefined }}
-      >
-        New Browser
-      </ContextMenuActionItem>
-      {gridAgentMenuItems.length > 0 && <ContextMenuSeparator />}
-      {gridAgentMenuItems.map((agent) => (
-        <ContextMenuActionItem
-          key={agent.id}
-          actionId="agent.launch"
-          args={{ agentId: agent.id, location: "grid", cwd: defaultCwd || undefined }}
-          disabled={!agent.canLaunch}
-        >
-          New {agent.name}
-        </ContextMenuActionItem>
-      ))}
+      <DockLaunchMenuItems
+        components={GRID_CONTEXT_MENU_COMPONENTS}
+        agents={gridLaunchAgents}
+        pinnedCount={gridAgentPinnedCount}
+        hasDevPreview={hasDevPreview}
+        activeWorktreeId={activeWorktreeId}
+        cwd={defaultCwd ?? ""}
+        recipeContext={gridRecipeContext}
+        onLaunchAgent={handleGridLaunch}
+        settingsSource="context-menu"
+      />
       <ContextMenuSeparator />
       <ContextMenuSub>
         <ContextMenuSubTrigger>Grid Layout</ContextMenuSubTrigger>
@@ -1080,7 +1115,6 @@ export function useContentGridContext({
     panelIds,
     gridItemCount,
     twoPaneTerminals,
-    gridAgentMenuItems,
     gridContextMenuContent,
     handleAddTabForPanel,
     handleGridLaunch,

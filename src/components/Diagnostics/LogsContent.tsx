@@ -184,6 +184,16 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
     return counts;
   }, [logs]);
 
+  const sourceCounts = useMemo(() => {
+    const counts: Partial<Record<string, number>> = {};
+    for (const log of logs) {
+      if (log.id === "previous-session-separator") continue;
+      if (!log.source) continue;
+      counts[log.source] = (counts[log.source] ?? 0) + 1;
+    }
+    return counts;
+  }, [logs]);
+
   const filteredLogs = useMemo(() => filterLogs(logs, filters), [logs, filters]);
 
   const previousSessionEntry = filteredLogs.find((log) => log.id === "previous-session-separator");
@@ -248,6 +258,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
         onClear={clearFilters}
         availableSources={sources}
         levelCounts={levelCounts}
+        sourceCounts={sourceCounts}
       />
 
       {previousSessionEntry && !filters?.search && (

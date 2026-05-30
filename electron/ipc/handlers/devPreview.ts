@@ -1,33 +1,94 @@
+import { app } from "electron";
+import { z } from "zod";
 import { CHANNELS } from "../channels.js";
 import { broadcastToRenderer } from "../utils.js";
-import { defineIpcNamespace, op } from "../define.js";
+import { defineIpcNamespace, op, opValidated } from "../define.js";
 import { DEV_PREVIEW_METHOD_CHANNELS } from "./devPreview.preload.js";
 import type { HandlerDependencies } from "../types.js";
+// Type-only import: the manifest service does sync fs work, so its runtime
+// module is loaded lazily alongside DevPreviewSessionService (below) to keep it
+// off the eager main-process boot path.
+import type { DevPreviewManifestEntry } from "../../services/DevPreviewManifestService.js";
 import type {
   DevPreviewEnsureRequest,
   DevPreviewSessionRequest,
   DevPreviewStopByPanelRequest,
   DevPreviewStateChangedPayload,
+  DevPreviewAllSessionsPayload,
   DevPreviewGetByWorktreeRequest,
   DevPreviewDestructivePreviewSizesRequest,
   DevPreviewStopByWorktreeRequest,
+  DevPreviewRestartByWorktreeRequest,
+  DevPreviewStopDevServerByWorktreeRequest,
+  DevPreviewSessionState,
+  DevPreviewProxyInfo,
+  DevPreviewMintBrowserTokenResult,
 } from "../../../shared/types/ipc/devPreview.js";
 import type { DevPreviewSessionService as DevPreviewSessionServiceType } from "../../services/DevPreviewSessionService.js";
+import type { DevPreviewProxyService as DevPreviewProxyServiceType } from "../../services/DevPreviewProxyService.js";
 import { getHibernationService } from "../../services/HibernationService.js";
 
 export function registerDevPreviewHandlers(deps: HandlerDependencies): () => void {
   let sessionService: DevPreviewSessionServiceType | null = null;
   let sessionServicePromise: Promise<DevPreviewSessionServiceType> | null = null;
+  let proxyService: DevPreviewProxyServiceType | null = null;
+  let proxyServicePromise: Promise<DevPreviewProxyServiceType> | null = null;
+
+  // The reverse proxy (#9100) gives each dev-preview panel a stable `*.localhost` origin.
+  // It starts lazily on the first getProxyPort call (renderer mount) and resolves each
+  // request's subdomain to the live upstream port via the session service — which may not
+  // exist yet, in which case there is no upstream and the proxy returns a 502.
+  async function getProxyService(): Promise<DevPreviewProxyServiceType> {
+    if (proxyService) return proxyService;
+    if (!proxyServicePromise) {
+      proxyServicePromise = import("../../services/DevPreviewProxyService.js")
+        .then(async (mod) => {
+          const svc = new mod.DevPreviewProxyService((subdomain) =>
+            sessionService ? sessionService.getUpstreamPortForSubdomain(subdomain) : null
+          );
+          await svc.start();
+          proxyService = svc;
+          return svc;
+        })
+        .catch((err) => {
+          proxyServicePromise = null;
+          throw err;
+        });
+    }
+    return proxyServicePromise;
+  }
 
   async function getSessionService(): Promise<DevPreviewSessionServiceType> {
     if (sessionService) return sessionService;
     if (!sessionServicePromise) {
-      sessionServicePromise = import("../../services/DevPreviewSessionService.js")
-        .then((mod) => {
-          sessionService = new mod.DevPreviewSessionService(deps.ptyClient!, (state) => {
-            const payload: DevPreviewStateChangedPayload = { state };
-            broadcastToRenderer(CHANNELS.DEV_PREVIEW_STATE_CHANGED, payload);
-          });
+      sessionServicePromise = Promise.all([
+        import("../../services/DevPreviewSessionService.js"),
+        import("../../services/DevPreviewManifestService.js"),
+      ])
+        .then(([sessionMod, manifestMod]) => {
+          // Read (and clear) the restore manifest the previous session left
+          // behind. The in-memory copy owns restore state for this launch, so
+          // a corrupt or stale file degrades to "no restore" rather than
+          // re-prompting forever.
+          let restoredEntries: DevPreviewManifestEntry[] = [];
+          try {
+            restoredEntries = manifestMod.readAndClearDevPreviewManifest(app.getPath("userData"));
+          } catch (err) {
+            console.warn("[DevPreview] Failed to read restore manifest:", err);
+          }
+          sessionService = new sessionMod.DevPreviewSessionService(
+            deps.ptyClient!,
+            (state) => {
+              const payload: DevPreviewStateChangedPayload = { state };
+              broadcastToRenderer(CHANNELS.DEV_PREVIEW_STATE_CHANGED, payload);
+            },
+            restoredEntries,
+            (entries) => manifestMod.writeDevPreviewManifest(app.getPath("userData"), entries),
+            (sessions) => {
+              const payload: DevPreviewAllSessionsPayload = { sessions };
+              broadcastToRenderer(CHANNELS.DEV_PREVIEW_ALL_SESSIONS_CHANGED, payload);
+            }
+          );
           return sessionService;
         })
         .catch((err) => {
@@ -96,6 +157,16 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
           return svc.getByWorktree(request.worktreeId);
         }
       ),
+      getAllSessions: op(
+        DEV_PREVIEW_METHOD_CHANNELS.getAllSessions,
+        async (): Promise<DevPreviewSessionState[]> => {
+          // Lazy-init guard: with no session service yet, there are no sessions.
+          // Skip the import so the dashboard hydration call doesn't spin up the
+          // service just to return an empty snapshot.
+          if (!sessionService) return [];
+          return sessionService.getAllSessions();
+        }
+      ),
       getDestructivePreviewMeta: op(
         DEV_PREVIEW_METHOD_CHANNELS.getDestructivePreviewMeta,
         async (request: DevPreviewSessionRequest) => {
@@ -123,6 +194,46 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
           await sessionService.stopByWorktree(request.worktreeId);
         }
       ),
+      restartByWorktree: op(
+        DEV_PREVIEW_METHOD_CHANNELS.restartByWorktree,
+        async (request: DevPreviewRestartByWorktreeRequest) => {
+          if (!request || typeof request.worktreeId !== "string" || !request.worktreeId.trim()) {
+            throw new Error("worktreeId is required");
+          }
+          const svc = await getSessionService();
+          return svc.restartByWorktree(request.worktreeId);
+        }
+      ),
+      stopDevServerByWorktree: op(
+        DEV_PREVIEW_METHOD_CHANNELS.stopDevServerByWorktree,
+        async (request: DevPreviewStopDevServerByWorktreeRequest) => {
+          if (!request || typeof request.worktreeId !== "string" || !request.worktreeId.trim()) {
+            throw new Error("worktreeId is required");
+          }
+          const svc = await getSessionService();
+          return svc.stopDevServerByWorktree(request.worktreeId);
+        }
+      ),
+      getProxyPort: op(
+        DEV_PREVIEW_METHOD_CHANNELS.getProxyPort,
+        async (): Promise<DevPreviewProxyInfo> => {
+          const proxy = await getProxyService();
+          return { port: proxy.port };
+        }
+      ),
+      mintBrowserToken: opValidated(
+        DEV_PREVIEW_METHOD_CHANNELS.mintBrowserToken,
+        z.object({
+          panelId: z.string().min(1),
+          projectId: z.string().min(1),
+          redirectPath: z.string(),
+        }),
+        async ({ panelId, projectId, redirectPath }): Promise<DevPreviewMintBrowserTokenResult> => {
+          const proxy = await getProxyService();
+          const bootstrapUrl = proxy.mintBrowserToken(panelId, projectId, redirectPath);
+          return { bootstrapUrl };
+        }
+      ),
     },
   });
 
@@ -140,6 +251,9 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
     unsubHibernation();
     if (sessionService) {
       sessionService.dispose();
+    }
+    if (proxyService) {
+      proxyService.dispose();
     }
     cleanups.forEach((dispose) => dispose());
   };

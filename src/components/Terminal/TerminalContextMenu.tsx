@@ -3,6 +3,7 @@ import { isMac } from "@/lib/platform";
 import type React from "react";
 import { type PanelLocation } from "@/types";
 import { usePanelStore } from "@/store";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
@@ -12,8 +13,11 @@ import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isBrowserPanel, isDevPreviewPanel, isPtyPanel, isReviewPanel } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
+import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
+import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
+import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { closeAndAnnounce } from "@/lib/accessibility";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import {
   ArrowDownFromLine,
@@ -28,6 +32,8 @@ import {
   Link,
   Lock,
   Maximize2,
+  Mic,
+  MicOff,
   Minimize2,
   Moon,
   OctagonX,
@@ -94,6 +100,9 @@ export function TerminalContextMenu({
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(terminalId));
   const fleetSize = useFleetArmingStore((s) => s.armedIds.size);
   const isHibernated = useIsHibernated(terminalId);
+  const isVoiceLockedHere = useVoiceRecordingStore((s) => s.lockedTarget?.panelId === terminalId);
+  const recentVoiceTargets = useVoiceRecordingStore((s) => s.recentTargets);
+  const panelsById = usePanelStore((s) => s.panelsById);
   // Pull the panel directly here (rather than indexing through the shallow
   // selector above) so the eligibility check sees the live record. The
   // dropdown only renders fleet items when the panel is fleet-arm-eligible
@@ -102,6 +111,12 @@ export function TerminalContextMenu({
   // `multiSelectGestures`.
   const fleetEligible = isFleetArmEligible(terminal);
   const sourceRef = useRef<MenuActionSourceValue>("user");
+
+  const pluginMenuContext = useMemo<WhenClauseContext>(
+    () => ({ panelId: terminalId, panelKind: terminal?.kind }),
+    [terminalId, terminal?.kind]
+  );
+  const pluginItems = usePluginContextMenuItems("terminal", pluginMenuContext);
 
   const [hasSelection, setHasSelection] = useState(false);
   const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
@@ -131,6 +146,41 @@ export function TerminalContextMenu({
     },
     [terminalId]
   );
+
+  // Recent dictation targets surfaced in the context menu must resolve to a
+  // live, non-trashed PTY panel that isn't the current one. Persisted entries
+  // come back without a panelId (stripped on rehydrate) — we try to match each
+  // to a live panel by (worktreeId + panelTitle) so cross-session recall works
+  // when the user reopens with the same worktree layout. Entries that can't
+  // be resolved are hidden rather than shown as dead links.
+  const liveRecentVoiceTargets = useMemo(() => {
+    const resolved: Array<{ panelId: string; label: string }> = [];
+    const seenIds = new Set<string>([terminalId]);
+    for (const t of recentVoiceTargets) {
+      let livePanelId: string | undefined;
+      if (t.panelId) {
+        const panel = panelsById[t.panelId];
+        if (panel && panel.location !== "trash") livePanelId = t.panelId;
+      } else if (t.worktreeId && t.panelTitle) {
+        const titleMatch = Object.values(panelsById).find(
+          (panel) =>
+            panel.worktreeId === t.worktreeId &&
+            panel.title === t.panelTitle &&
+            panel.location !== "trash"
+        );
+        if (titleMatch) livePanelId = titleMatch.id;
+      }
+      if (!livePanelId || seenIds.has(livePanelId)) continue;
+      seenIds.add(livePanelId);
+      const label =
+        t.panelTitle?.trim() ||
+        t.worktreeLabel?.trim() ||
+        t.projectName?.trim() ||
+        "Untitled panel";
+      resolved.push({ panelId: livePanelId, label });
+    }
+    return resolved;
+  }, [recentVoiceTargets, panelsById, terminalId]);
 
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
   const terminalBrowser = terminal && isBrowserPanel(terminal) ? terminal : undefined;
@@ -163,6 +213,16 @@ export function TerminalContextMenu({
         void actionService.dispatch(
           "terminal.moveToWorktree",
           { terminalId, worktreeId },
+          { source: sourceRef.current }
+        );
+        return;
+      }
+
+      if (actionId.startsWith("recall-voice-target:")) {
+        const targetPanelId = actionId.slice("recall-voice-target:".length);
+        void actionService.dispatch(
+          "voiceInput.recallRecentTarget",
+          { panelId: targetPanelId },
           { source: sourceRef.current }
         );
         return;
@@ -269,6 +329,18 @@ export function TerminalContextMenu({
             { terminalId },
             { source: sourceRef.current }
           );
+          break;
+        case "voice-lock-target":
+          void actionService.dispatch(
+            "voiceInput.lockTarget",
+            { panelId: terminalId },
+            { source: sourceRef.current }
+          );
+          break;
+        case "voice-unlock-target":
+          void actionService.dispatch("voiceInput.unlockTarget", undefined, {
+            source: sourceRef.current,
+          });
           break;
         case "toggle-watch":
           void actionService.dispatch(
@@ -383,11 +455,7 @@ export function TerminalContextMenu({
       { terminalId, confirmed: true },
       { source: sourceRef.current }
     );
-    // Close the dialog first so the announce fires after focus returns to the
-    // main tree — VoiceOver suppresses live-region updates from outside the
-    // current modal subtree while focus is trapped.
-    setDestructiveConfirm(null);
-    useAnnouncerStore.getState().announce(announcement);
+    closeAndAnnounce(() => setDestructiveConfirm(null), announcement);
   }, [destructiveConfirm, terminalId]);
 
   const closeDestructiveConfirm = useCallback(() => {
@@ -750,6 +818,39 @@ export function TerminalContextMenu({
             )}
             {terminal.isInputLocked ? "Unlock Input" : "Lock Input"}
           </ContextMenuItem>
+          {hasPty && (
+            <ContextMenuItem
+              onSelect={() =>
+                handleAction(isVoiceLockedHere ? "voice-unlock-target" : "voice-lock-target")
+              }
+            >
+              {isVoiceLockedHere ? (
+                <MicOff className={ICON_CLASS} aria-hidden="true" />
+              ) : (
+                <Mic className={ICON_CLASS} aria-hidden="true" />
+              )}
+              {isVoiceLockedHere ? "Unlock dictation" : "Lock dictation to this panel"}
+            </ContextMenuItem>
+          )}
+          {hasPty && liveRecentVoiceTargets.length > 0 && (
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>
+                <Mic className={ICON_CLASS} aria-hidden="true" />
+                Recent dictation targets
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent>
+                {liveRecentVoiceTargets.map((target) => (
+                  <ContextMenuItem
+                    key={target.panelId}
+                    onSelect={() => handleAction(`recall-voice-target:${target.panelId}`)}
+                  >
+                    <Mic className={ICON_CLASS} aria-hidden="true" />
+                    {target.label}
+                  </ContextMenuItem>
+                ))}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          )}
           {terminal.detectedAgentId && (
             <ContextMenuItem onSelect={() => handleAction("toggle-watch")}>
               {isWatched ? (
@@ -796,6 +897,7 @@ export function TerminalContextMenu({
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
             Kill Terminal
           </ContextMenuItem>
+          <PluginContextMenuSection items={pluginItems} />
         </ContextMenuContent>
       </ContextMenu>
     </>

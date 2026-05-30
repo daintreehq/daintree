@@ -4,6 +4,34 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 const fallbackStorageData = new Map<string, string>();
 
+const BACKUP_KEY_SUFFIX = ".__bak";
+
+/**
+ * Synchronous notifier for permanent storage fallback. Registered once at app
+ * boot from `notify.ts`; tests register a spy directly. See
+ * `notifyPermanentFallbackOnce` for the rationale (avoids dynamic-import
+ * cross-test pollution).
+ */
+let permanentFallbackHandler: (() => void) | null = null;
+
+export function setPermanentFallbackHandler(handler: (() => void) | null): void {
+  permanentFallbackHandler = handler;
+}
+
+/**
+ * A `QuotaExceededError` (or its Firefox alias) is transient: the write was
+ * too large, but storage is still healthy, so smaller subsequent writes can
+ * succeed. We must NOT permanently route a store to in-memory storage on quota
+ * — that would silently drop every later write for the session (issue #9170).
+ */
+function isQuotaExceededError(error: unknown): boolean {
+  return (
+    typeof DOMException !== "undefined" &&
+    error instanceof DOMException &&
+    (error.name === "QuotaExceededError" || error.name === "NS_ERROR_DOM_QUOTA_REACHED")
+  );
+}
+
 function shouldCollectPersistencePerf(): boolean {
   if (typeof window === "undefined") return false;
   return isRendererPerfCaptureEnabled() || Array.isArray(window.__DAINTREE_PERF_MARKS__);
@@ -56,12 +84,58 @@ function resolveLocalStorage(): StateStorage | undefined {
   return hasStorageApi ? (candidate as StateStorage) : undefined;
 }
 
-function createResilientStorage(baseStorage: StateStorage | undefined): StateStorage {
+/**
+ * Outcome of a resilient write, so the caller can keep the backup copy
+ * consistent with what actually reached durable storage:
+ * - `durable`  — written to real localStorage; the backup may advance.
+ * - `quota`    — transient quota error; primary unchanged, backup must NOT advance.
+ * - `memory`   — written only to the in-memory fallback; nothing durable to back up.
+ */
+type ResilientWriteResult = "durable" | "quota" | "memory";
+
+/**
+ * Resilient storage augmented with best-effort backup operations. The backup
+ * methods write/read a sibling `${key}.__bak` entry directly on the real
+ * localStorage — bypassing the perf-marked primary path and skipping entirely
+ * once a permanent in-memory fallback is active (a backup in memory buys
+ * nothing and would needlessly re-hit broken localStorage).
+ */
+interface ResilientStorage {
+  getItem: (name: string) => string | null | Promise<string | null>;
+  setItem: (name: string, value: string) => ResilientWriteResult;
+  removeItem: (name: string) => void;
+  writeBackup: (name: string, value: string) => void;
+  readBackup: (name: string) => string | null;
+  removeBackup: (name: string) => void;
+}
+
+function createResilientStorage(baseStorage: StateStorage | undefined): ResilientStorage {
   let activeStorage = baseStorage ?? memoryStorage;
+  let hasNotifiedPermanentFallback = false;
 
   const switchToMemoryStorage = (): StateStorage => {
     activeStorage = memoryStorage;
     return activeStorage;
+  };
+
+  const backupKeyFor = (name: string): string => `${name}${BACKUP_KEY_SUFFIX}`;
+
+  // Fire exactly once per storage instance when a structural failure forces a
+  // permanent in-memory fallback. Until then writes never reach localStorage,
+  // so changes this session are lost on restart — a degradation the user can't
+  // otherwise observe. Quota errors are transient and never reach here.
+  //
+  // Dispatch is synchronous via a registered handler (see
+  // `setPermanentFallbackHandler` below). This avoids a dynamic
+  // `import("@/lib/notify").then(...)` whose late-resolving promise leaked
+  // across test boundaries and produced the well-documented
+  // persistenceBoundaryHardening notify-count flake. The handler is registered
+  // once at app boot from `notify.ts`; tests register a spy directly via
+  // `setPermanentFallbackHandler`, eliminating cross-test pollution entirely.
+  const notifyPermanentFallbackOnce = (): void => {
+    if (hasNotifiedPermanentFallback) return;
+    hasNotifiedPermanentFallback = true;
+    permanentFallbackHandler?.();
   };
 
   return {
@@ -101,6 +175,7 @@ function createResilientStorage(baseStorage: StateStorage | undefined): StateSto
       const payloadBytes = collectPerf ? estimateStringBytes(value) : null;
       const storage: "localStorage" | "memory" =
         activeStorage === memoryStorage ? "memory" : "localStorage";
+      const wroteToMemory = activeStorage === memoryStorage;
       try {
         activeStorage.setItem(name, value);
         if (collectPerf) {
@@ -112,7 +187,8 @@ function createResilientStorage(baseStorage: StateStorage | undefined): StateSto
             storage,
           });
         }
-      } catch {
+        return wroteToMemory ? "memory" : "durable";
+      } catch (error) {
         if (collectPerf) {
           markRendererPerformance("persistence_localstorage_set", {
             key: name,
@@ -122,17 +198,73 @@ function createResilientStorage(baseStorage: StateStorage | undefined): StateSto
             storage,
           });
         }
+        if (isQuotaExceededError(error)) {
+          // Transient: storage is healthy but this write was too large. Keep
+          // localStorage active so later (smaller) writes retry it. The value
+          // still lives in the in-memory React store this session; it simply
+          // isn't persisted, so we don't switch storages or notify.
+          console.warn("[safeStorage] storage quota exceeded, skipping persistent write", {
+            key: name,
+            error: formatErrorMessage(error, "Storage quota exceeded"),
+          });
+          return "quota";
+        }
         switchToMemoryStorage().setItem(name, value);
+        notifyPermanentFallbackOnce();
+        return "memory";
       }
     },
     removeItem: (name) => {
       try {
         activeStorage.removeItem(name);
-      } catch {
+      } catch (error) {
+        if (isQuotaExceededError(error)) {
+          memoryStorage.removeItem(name);
+          return;
+        }
         switchToMemoryStorage().removeItem(name);
+        notifyPermanentFallbackOnce();
+      }
+    },
+    writeBackup: (name, value) => {
+      // Skip while in memory fallback: localStorage is known broken, so a write
+      // here would just re-hit it (and a memory backup duplicates live state).
+      if (activeStorage === memoryStorage || !baseStorage) return;
+      try {
+        baseStorage.setItem(backupKeyFor(name), value);
+      } catch {
+        // Backup is opportunistic — losing it is acceptable.
+      }
+    },
+    readBackup: (name) => {
+      // localStorage is known broken once we've fallen back — don't re-hit it.
+      if (activeStorage === memoryStorage || !baseStorage) return null;
+      try {
+        const value = baseStorage.getItem(backupKeyFor(name));
+        return value instanceof Promise ? null : value;
+      } catch {
+        return null;
+      }
+    },
+    removeBackup: (name) => {
+      if (!baseStorage) return;
+      try {
+        baseStorage.removeItem(backupKeyFor(name));
+      } catch {
+        // Best-effort cleanup.
       }
     },
   };
+}
+
+/**
+ * Single sanctioned `JSON.parse` boundary for this module. `JSON.parse` returns
+ * `any`, so the cast to the caller's expected shape is inherently unchecked —
+ * centralising it here keeps that one unsafe assertion auditable in one place
+ * (callers always wrap this in try/catch and validate the result downstream).
+ */
+function parseJson<R>(raw: string): R {
+  return JSON.parse(raw) as R;
 }
 
 /**
@@ -148,7 +280,7 @@ export function safeJSONParse<T>(
 ): T {
   if (raw === null) return fallback;
   try {
-    return JSON.parse(raw) as T;
+    return parseJson<T>(raw);
   } catch (error) {
     console.warn("[safeStorage] JSON parse failed", {
       ...context,
@@ -158,11 +290,85 @@ export function safeJSONParse<T>(
   }
 }
 
+/**
+ * Parse a recovered backup blob, returning null when it is absent or itself
+ * corrupt so the caller falls through to a clean reset.
+ */
+function parseBackup<T>(raw: string | null): StorageValue<T> | null {
+  if (raw === null) return null;
+  try {
+    return parseJson<StorageValue<T>>(raw);
+  } catch {
+    return null;
+  }
+}
+
 export function createSafeJSONStorage<T>(): PersistStorage<T> {
   const raw = createResilientStorage(resolveLocalStorage());
 
   return {
     getItem: (name) => {
+      const value = raw.getItem(name);
+      if (value instanceof Promise) return null;
+      if (value === null) return null;
+      try {
+        return parseJson<StorageValue<T>>(value);
+      } catch (error) {
+        // The live blob is corrupt but present — try the last known-good backup
+        // before discarding the user's config to defaults (issue #9170).
+        const recovered = parseBackup<T>(raw.readBackup(name));
+        if (recovered !== null) {
+          console.warn("[safeStorage] corrupt persisted state, recovered from backup", {
+            key: name,
+            error: formatErrorMessage(error, "Corrupt persisted state"),
+          });
+          return recovered;
+        }
+        console.warn("[safeStorage] corrupt persisted state, resetting to defaults", {
+          key: name,
+          error: formatErrorMessage(error, "Corrupt persisted state"),
+        });
+        return null;
+      }
+    },
+    setItem: (name, value) => {
+      const serialized = JSON.stringify(value);
+      // Only advance the backup when the primary write actually reached durable
+      // storage. On a quota failure the primary keeps its old value, so writing
+      // a newer backup would leave the two inconsistent and recover stale state.
+      if (raw.setItem(name, serialized) === "durable") {
+        raw.writeBackup(name, serialized);
+      }
+    },
+    removeItem: (name) => {
+      raw.removeItem(name);
+      raw.removeBackup(name);
+    },
+  };
+}
+
+/**
+ * Like `createSafeJSONStorage`, but coalesces rapid `setItem` calls per key
+ * through a trailing-edge debounce. Reads stay synchronous so hydration is
+ * unaffected; `removeItem` cancels any pending write for the same key so a
+ * `clearAll` followed shortly by a tear-down can't be silently re-populated by
+ * a stale write timer.
+ */
+export function createDebouncedSafeJSONStorage<T>(delayMs: number): PersistStorage<T> {
+  const raw = createResilientStorage(resolveLocalStorage());
+  const pending = new Map<string, { timer: ReturnType<typeof setTimeout>; value: string }>();
+
+  const flush = (name: string): void => {
+    const entry = pending.get(name);
+    if (!entry) return;
+    pending.delete(name);
+    raw.setItem(name, entry.value);
+  };
+
+  return {
+    getItem: (name) => {
+      // Flush any pending write so reads-after-writes are coherent.
+      flush(name);
       const value = raw.getItem(name);
       if (value instanceof Promise) return null;
       if (value === null) return null;
@@ -177,9 +383,18 @@ export function createSafeJSONStorage<T>(): PersistStorage<T> {
       }
     },
     setItem: (name, value) => {
-      raw.setItem(name, JSON.stringify(value));
+      const serialized = JSON.stringify(value);
+      const existing = pending.get(name);
+      if (existing) clearTimeout(existing.timer);
+      const timer = setTimeout(() => flush(name), delayMs);
+      pending.set(name, { timer, value: serialized });
     },
     removeItem: (name) => {
+      const existing = pending.get(name);
+      if (existing) {
+        clearTimeout(existing.timer);
+        pending.delete(name);
+      }
       raw.removeItem(name);
     },
   };

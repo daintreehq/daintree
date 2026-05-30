@@ -21,6 +21,10 @@ interface PortalState {
   createdTabs: Set<string>;
   links: PortalLink[];
   defaultNewTabUrl: string | null;
+  // Opt-in cross-worktree dev-server dashboard, rendered below the active tab
+  // inside the dock. Off by default so existing users don't get an unexpected
+  // new dock surface; persisted so the choice survives reloads.
+  showDevDashboard: boolean;
 }
 
 interface PortalActions {
@@ -53,6 +57,7 @@ interface PortalActions {
   reorderLinks: (fromIndex: number, toIndex: number) => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
   setDefaultNewTabUrl: (url: string | null) => void;
+  toggleDevDashboard: () => void;
 }
 
 const initialState: PortalState = {
@@ -63,6 +68,7 @@ const initialState: PortalState = {
   createdTabs: new Set<string>(),
   links: [...DEFAULT_SYSTEM_LINKS],
   defaultNewTabUrl: null,
+  showDevDashboard: false,
 };
 
 const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) => {
@@ -399,6 +405,8 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
         console.warn("Invalid URL for default new tab, ignoring:", url);
       }
     },
+
+    toggleDevDashboard: () => set((s) => ({ showDevDashboard: !s.showDevDashboard })),
   };
 };
 
@@ -415,7 +423,9 @@ const portalStoreCreator: StateCreator<
     links: state.links,
     width: state.width,
     tabs: state.tabs,
+    activeTabId: state.activeTabId,
     defaultNewTabUrl: state.defaultNewTabUrl,
+    showDevDashboard: state.showDevDashboard,
   }),
   merge: (persistedState: unknown, currentState) => {
     const persisted = persistedState as Partial<PortalState>;
@@ -465,10 +475,19 @@ const portalStoreCreator: StateCreator<
       ] as PortalLink[];
     }
 
+    const persistedTabs = Array.isArray(persisted.tabs) ? persisted.tabs : currentState.tabs;
+    const persistedActiveTabId = persisted.activeTabId;
+    const activeTabId =
+      typeof persistedActiveTabId === "string" &&
+      persistedTabs.some((t) => t != null && t.id === persistedActiveTabId)
+        ? persistedActiveTabId
+        : (persistedTabs.find((t) => t != null)?.id ?? null);
+
     return {
       ...currentState,
       ...persisted,
       links,
+      tabs: persistedTabs,
       width:
         typeof persisted.width === "number"
           ? Math.min(Math.max(persisted.width, PORTAL_MIN_WIDTH), PORTAL_MAX_WIDTH)
@@ -477,6 +496,7 @@ const portalStoreCreator: StateCreator<
         typeof persisted.defaultNewTabUrl === "string" && persisted.defaultNewTabUrl.trim()
           ? persisted.defaultNewTabUrl.trim()
           : null,
+      activeTabId,
     };
   },
 });
@@ -486,5 +506,6 @@ export const usePortalStore = create<PortalState & PortalActions>()(portalStoreC
 registerPersistedStore({
   storeId: "portalStore",
   store: usePortalStore,
-  persistedStateType: "Partial<PortalState> (links, width, tabs, defaultNewTabUrl)",
+  persistedStateType:
+    "Partial<PortalState> (links, width, tabs, activeTabId, defaultNewTabUrl, showDevDashboard)",
 });

@@ -1,16 +1,21 @@
 // eager-import-allow: reads worktree settings via store.get synchronously in the IPC handler
+import { isAbsolute } from "path";
+import type { z } from "zod";
 import { CHANNELS } from "../../channels.js";
 import { store } from "../../../store.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
-import type { WorktreeSetActivePayload, WorktreeDeletePayload } from "../../../types/index.js";
+import type { WorktreeDeletePayload } from "../../../types/index.js";
 import type { WorktreeState } from "../../../../shared/types/worktree.js";
-import type { CreateWorktreeOptions } from "../../../../shared/types/git.js";
 import { fileSearchService } from "../../../services/FileSearchService.js";
 import { getSoundService } from "../../../services/getSoundService.js";
 import type * as SoundServiceModule from "../../../services/SoundService.js";
-import { defineIpcNamespace, op } from "../../define.js";
+import { defineIpcNamespace, op, opValidated } from "../../define.js";
+import {
+  WorktreeCreatePayloadSchema,
+  WorktreeSetActivePayloadSchema,
+} from "../../../schemas/ipc.js";
 import { checkRateLimit, waitForRateLimitSlot } from "../../utils.js";
 import { validateBranchName } from "../../../../shared/utils/pathPattern.js";
 import { WORKTREE_RATE_LIMIT_KEY, WORKTREE_RATE_LIMIT_INTERVAL_MS } from "./constants.js";
@@ -40,7 +45,7 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
 
   const handleWorktreeSetActive = async (
     ctx: IpcContext,
-    payload: WorktreeSetActivePayload
+    payload: z.output<typeof WorktreeSetActivePayloadSchema>
   ): Promise<void> => {
     if (!deps.worktreeService) {
       return;
@@ -50,17 +55,14 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
     });
   };
 
-  const handleWorktreeCreate = async (payload: {
-    rootPath: string;
-    options: CreateWorktreeOptions;
-  }): Promise<string> => {
-    if (
-      !payload ||
-      typeof payload !== "object" ||
-      !payload.options ||
-      typeof payload.options !== "object"
-    ) {
-      throw new Error("Invalid worktree create payload");
+  const handleWorktreeCreate = async (
+    payload: z.output<typeof WorktreeCreatePayloadSchema>
+  ): Promise<string> => {
+    // Semantic guard: rootPath flows into createHardenedGit at the service
+    // layer and must be an absolute path. The schema enforces structure
+    // (non-empty, no null bytes); absoluteness is checked here. #3742.
+    if (!isAbsolute(payload.rootPath)) {
+      throw new Error("rootPath must be an absolute path");
     }
     // Defense-in-depth: WorkspaceService.createWorktree also validates, but
     // throwing here surfaces a clean Error to the renderer without consuming
@@ -202,8 +204,17 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
     ops: {
       getAll: op(CHANNELS.WORKTREE_GET_ALL, handleWorktreeGetAll, { withContext: true }),
       refresh: op(CHANNELS.WORKTREE_REFRESH, handleWorktreeRefresh),
-      setActive: op(CHANNELS.WORKTREE_SET_ACTIVE, handleWorktreeSetActive, { withContext: true }),
-      create: op(CHANNELS.WORKTREE_CREATE, handleWorktreeCreate),
+      setActive: opValidated(
+        CHANNELS.WORKTREE_SET_ACTIVE,
+        WorktreeSetActivePayloadSchema,
+        handleWorktreeSetActive,
+        { withContext: true }
+      ),
+      create: opValidated(
+        CHANNELS.WORKTREE_CREATE,
+        WorktreeCreatePayloadSchema,
+        handleWorktreeCreate
+      ),
       restartService: op(CHANNELS.WORKTREE_RESTART_SERVICE, handleWorktreeRestartService, {
         withContext: true,
       }),

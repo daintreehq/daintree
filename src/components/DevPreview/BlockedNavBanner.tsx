@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ExternalLink, AlertTriangle, CircleCheck, Copy } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "../Terminal/InlineStatusBanner";
+import { BannerOverflowMenu } from "../Terminal/BannerOverflowMenu";
 import { looksLikeOAuthUrl } from "@shared/utils/urlUtils";
 import type { SessionStorageEntry } from "./useDevPreviewLoadLifecycle";
 
@@ -314,6 +315,33 @@ export function BlockedNavBanner({
       break;
   }
 
+  // `buildActions()` returns "Copy URL" followed by the phase-specific action
+  // (e.g. "Sign in via browser", "Try again"). Severity is computed per phase,
+  // so branch on it to satisfy the discriminated union. Non-error phases keep
+  // both actions; the error phases (oauth timeout/failure) keep the
+  // phase-specific recovery as the single primary action and demote "Copy URL"
+  // into the overflow menu.
+  const actions = buildActions();
+  const role = phase === "blocked" || phase === "oauth-started" ? "status" : "alert";
+
+  if (severity === "error") {
+    const primary = actions[actions.length - 1];
+    const overflow = actions.slice(0, -1);
+    return (
+      <InlineStatusBanner
+        icon={icon}
+        title={title}
+        description={description}
+        contextLine={url}
+        severity="error"
+        action={primary}
+        trailingSlot={overflow.length > 0 ? <BannerOverflowMenu actions={overflow} /> : undefined}
+        onClose={handleDismiss}
+        role={role}
+      />
+    );
+  }
+
   return (
     <InlineStatusBanner
       icon={icon}
@@ -321,9 +349,9 @@ export function BlockedNavBanner({
       description={description}
       contextLine={url}
       severity={severity}
-      actions={buildActions()}
+      actions={actions}
       onClose={handleDismiss}
-      role={phase === "blocked" || phase === "oauth-started" ? "status" : "alert"}
+      role={role}
     />
   );
 }

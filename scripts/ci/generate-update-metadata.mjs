@@ -47,10 +47,18 @@ async function artifactEntry(releaseDir, fileName) {
   return entry;
 }
 
+// electron-updater's MacUpdater.ts filters by "arm64" substring: on Apple Silicon
+// only files containing "arm64" are kept; on Intel Macs "arm64" files are excluded.
+// It then picks the first surviving entry. Rank native builds before universal so
+// each architecture selects its own native ZIP and universal is never picked when
+// a native build exists.
 function macZipPriority(fileName) {
-  if (fileName.includes("universal-mac.zip")) return 0;
-  if (fileName.includes("-arm64-mac.zip")) return 2;
-  if (fileName.includes("-x64-mac.zip") || fileName.endsWith("-mac.zip")) return 1;
+  if (fileName.includes("-x64-mac.zip")) return 0;
+  if (fileName.includes("-arm64-mac.zip")) return 1;
+  if (fileName.includes("universal-mac.zip")) return 2;
+  // Bare -mac.zip (no arch suffix) is the x64 build from electron-builder.
+  // Check after arm64 so arm64-mac.zip doesn't match this branch.
+  if (fileName.endsWith("-mac.zip")) return 0;
   return 3;
 }
 
@@ -77,13 +85,43 @@ function selectArtifacts(platform, fileNames) {
   }
 
   if (platform === "windows") {
-    // NSIS produces a single combined installer covering all selected archs;
-    // `.appx` artifacts are routed through the Store and must be excluded here.
-    const installers = fileNames.filter((fileName) => fileName.endsWith(".exe")).sort();
-    if (installers.length !== 1) {
-      throw new Error(
-        `Expected exactly 1 Windows NSIS .exe artifact, found ${installers.length}: ${installers.join(", ") || "(none)"}`
-      );
+    // Separate per-arch NSIS installers (#9244). `.appx` artifacts are routed
+    // through the Store and must be excluded here. electron-updater's
+    // Provider.findFile() selects the .exe whose URL contains process.arch,
+    // falling back to the first entry — so x64 must be first.
+    const archPattern = /-(x64|arm64)-setup\.exe$/;
+    const extractArch = (fileName) => {
+      const match = fileName.match(archPattern);
+      return match ? match[1] : null;
+    };
+
+    const installers = fileNames
+      .filter((fileName) => fileName.endsWith(".exe") && !fileName.endsWith(".exe.blockmap"))
+      .sort();
+    if (installers.length === 0) {
+      throw new Error(`Expected at least 1 Windows NSIS .exe artifact, found 0`);
+    }
+    for (const installer of installers) {
+      if (!extractArch(installer)) {
+        throw new Error(
+          `Windows NSIS .exe must include architecture token (-x64- or -arm64-): ${installer}`
+        );
+      }
+    }
+    // Sort x64 before arm64 so electron-updater's arch-agnostic fallback
+    // picks x64 (the larger install base).
+    const archOrder = { x64: 0, arm64: 1 };
+    installers.sort((a, b) => {
+      return archOrder[extractArch(a)] - archOrder[extractArch(b)];
+    });
+    // Fail on duplicate archs
+    const seen = new Set();
+    for (const installer of installers) {
+      const arch = extractArch(installer);
+      if (seen.has(arch)) {
+        throw new Error(`Duplicate ${arch} Windows NSIS .exe: ${installer}`);
+      }
+      seen.add(arch);
     }
     return installers;
   }

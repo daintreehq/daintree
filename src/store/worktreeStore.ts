@@ -50,6 +50,17 @@ interface CrossDiffDialogState {
 
 interface WorktreeSelectionState {
   activeWorktreeId: string | null;
+  /**
+   * The last *durable* worktree selection — the one that should round-trip
+   * across project switches. Diverges from `activeWorktreeId` when a worktree
+   * becomes active incidentally (a terminal in another worktree gains focus;
+   * see `selectWorktree({ source: "focus" })`). Such focus promotions update
+   * `activeWorktreeId` for the session but must not become the persisted
+   * restore point, or an unrelated operation (e.g. a batch PR merge spinning up
+   * temporary worktrees) could leave the project restoring a stray temp
+   * worktree instead of root (#9512).
+   */
+  restoreWorktreeId: string | null;
   focusedWorktreeId: string | null;
   pendingWorktreeId: string | null;
   pendingCreations: Map<string, PendingCreation>;
@@ -63,11 +74,13 @@ interface WorktreeSelectionState {
   lastFocusedTerminalByWorktree: Map<string, string>;
   isFleetScopeActive: boolean;
   _previousActiveWorktreeId: string | null;
+  /** Durable selection captured at fleet-scope entry, restored on exit (#9512). */
+  _previousRestoreWorktreeId: string | null;
   _fleetScopeToken: FleetScopeToken | null;
 
   setActiveWorktree: (id: string | null) => void;
   setFocusedWorktree: (id: string | null) => void;
-  selectWorktree: (id: string) => void;
+  selectWorktree: (id: string, options?: { source?: "user" | "focus" }) => void;
   setPendingWorktree: (id: string | null) => void;
   applyPendingWorktreeSelection: (worktreeId: string) => void;
   addPendingCreation: (path: string, meta: { branch: string }) => void;
@@ -226,6 +239,7 @@ function persistActiveWorktree(id: string | null): void {
 
 const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set, get) => ({
   activeWorktreeId: null,
+  restoreWorktreeId: null,
   focusedWorktreeId: null,
   pendingWorktreeId: null,
   pendingCreations: new Map<string, PendingCreation>(),
@@ -252,6 +266,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   lastFocusedTerminalByWorktree: new Map<string, string>(),
   isFleetScopeActive: false,
   _previousActiveWorktreeId: null,
+  _previousRestoreWorktreeId: null,
   _fleetScopeToken: null,
 
   setActiveWorktree: (id) => {
@@ -269,6 +284,18 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       focusedWorktreeId: id,
       _policyGeneration: generation,
     };
+
+    if (id !== null) {
+      // An explicit activation is a durable selection — make it the restore
+      // target so switching projects round-trips back to it (#9512).
+      updates.restoreWorktreeId = id;
+    } else if (previousId !== null && previousId === get().restoreWorktreeId) {
+      // Active worktree cleared (e.g. it was removed) AND it was the durable
+      // selection: drop the restore target so the project falls back to the
+      // main worktree on return. If the cleared worktree was only incidentally
+      // active (focus-promoted), the durable selection is left intact (#9512).
+      updates.restoreWorktreeId = null;
+    }
 
     if (previousId !== id) {
       updates.expandedTerminals = new Set<string>();
@@ -289,13 +316,27 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
 
   setFocusedWorktree: (id) => set({ focusedWorktreeId: id }),
 
-  selectWorktree: (id) => {
+  selectWorktree: (id, options) => {
+    // `"user"` (default) is a deliberate selection: it becomes the durable
+    // restore target, is persisted to the main-process store, and is recorded
+    // in the MRU. `"focus"` is an incidental promotion (a terminal in another
+    // worktree gained focus) — it updates the active worktree for the session
+    // only, so it never pollutes the persisted restore point or the MRU (#9512).
+    const source = options?.source ?? "user";
+
     // Skip if already active to prevent terminal reload flicker.
     // Also clear any pending selection for this ID — it's already active,
     // so the terminal policy was applied when we first selected it.
     if (get().activeWorktreeId === id) {
       if (get().pendingWorktreeId === id) {
         set({ pendingWorktreeId: null });
+      }
+      // A deliberate re-selection of the already-active worktree still confirms
+      // it as the durable restore target (it may have been activated only via
+      // focus promotion before).
+      if (source === "user" && get().restoreWorktreeId !== id) {
+        set({ restoreWorktreeId: id });
+        persistActiveWorktree(id);
       }
       return;
     }
@@ -313,14 +354,17 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       focusedWorktreeId: id,
       _policyGeneration: generation,
       expandedTerminals: new Set<string>(),
+      ...(source === "user" ? { restoreWorktreeId: id } : {}),
     });
 
-    persistActiveWorktree(id);
+    if (source === "user") {
+      persistActiveWorktree(id);
 
-    // Record worktree MRU on explicit selection (suppressed during hydration)
-    if (!mruRecordingSuppressed) {
-      usePanelStore.getState().recordMru(`worktree:${id}`);
-      persistMruList(usePanelStore.getState().mruList);
+      // Record worktree MRU on explicit selection (suppressed during hydration)
+      if (!mruRecordingSuppressed) {
+        usePanelStore.getState().recordMru(`worktree:${id}`);
+        persistMruList(usePanelStore.getState().mruList);
+      }
     }
 
     applyWorktreeTerminalPolicy(get, set, id, generation, () => {
@@ -633,6 +677,9 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     set({
       isFleetScopeActive: true,
       _previousActiveWorktreeId: activeWorktreeId,
+      // Snapshot the durable selection too so exiting scope can't downgrade an
+      // incidentally-active worktree into the persisted restore target (#9512).
+      _previousRestoreWorktreeId: get().restoreWorktreeId,
       _fleetScopeToken: token,
       _policyGeneration: generation,
     });
@@ -665,6 +712,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     // stale exit apart from a legitimate one.
     if (get()._fleetScopeToken !== token) return;
     const restoreId = get()._previousActiveWorktreeId;
+    const previousRestoreId = get()._previousRestoreWorktreeId;
     const generation = get()._policyGeneration + 1;
     // Snapshot the primary (most-recently-armed) terminal BEFORE `set()` so
     // the value used for focus restore is stable against any reads/writes
@@ -673,8 +721,12 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     set({
       isFleetScopeActive: false,
       _previousActiveWorktreeId: null,
+      _previousRestoreWorktreeId: null,
       _fleetScopeToken: null,
       activeWorktreeId: restoreId,
+      // Restore the durable selection captured at entry so a focus-promotion
+      // that happened before scope entry survives the cycle (#9512).
+      restoreWorktreeId: previousRestoreId,
       focusedWorktreeId: restoreId,
       _policyGeneration: generation,
     });
@@ -717,6 +769,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   reset: () =>
     set({
       activeWorktreeId: null,
+      restoreWorktreeId: null,
       focusedWorktreeId: null,
       pendingWorktreeId: null,
       pendingCreations: new Map<string, PendingCreation>(),
@@ -742,6 +795,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       lastFocusedTerminalByWorktree: new Map<string, string>(),
       isFleetScopeActive: false,
       _previousActiveWorktreeId: null,
+      _previousRestoreWorktreeId: null,
       _fleetScopeToken: null,
       // Bump the generation so any in-flight deferred policy/focus-restore
       // microtask (which captured an older generation) sees a mismatch and

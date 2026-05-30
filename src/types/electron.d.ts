@@ -27,6 +27,10 @@ declare global {
     };
     __DAINTREE_E2E_MODE__?: boolean;
     __DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS__?: boolean;
+    /** Persisted color scheme id seeded by preload for first-paint theming (#9169). */
+    __DAINTREE_INITIAL_THEME__?: { colorSchemeId: string };
+    /** Destination project id seeded by preload, replacing the `?projectId=` query string (#9162). */
+    __DAINTREE_INITIAL_PROJECT__?: { id: string };
     __daintreeDispatchAction?: (
       actionId: string,
       args?: unknown,

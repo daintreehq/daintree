@@ -2,23 +2,74 @@ import { useState, useEffect, useMemo } from "react";
 import * as CheckboxPrimitive from "@radix-ui/react-checkbox";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
-import { CheckIcon, Download, Eye, Replace } from "lucide-react";
+import { CheckIcon, Clock, Download, Eye, Replace, ShieldOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   SECTION_LABELS,
+  PREBUILT_REDACTIONS,
   filterSections,
+  filterLogEntriesByTime,
   applyReplacements,
   type ReplacementRule,
+  type PrebuiltRedactionId,
 } from "@shared/utils/diagnosticsTransform";
 import type { DiagnosticsReviewPayload } from "@shared/types/ipc/system";
 import { safeStringify } from "@/lib/safeStringify";
+import type { DiagnosticsReviewScope } from "@/store/diagnosticsReviewStore";
+
+type TimeWindowId = "5m" | "30m" | "launch" | "full";
+
+const TIME_WINDOW_OPTIONS: { id: TimeWindowId; label: string }[] = [
+  { id: "5m", label: "Last 5 minutes" },
+  { id: "30m", label: "Last 30 minutes" },
+  { id: "launch", label: "Since application launch" },
+  { id: "full", label: "Full log history" },
+];
+
+const DEFAULT_TIME_WINDOW: TimeWindowId = "30m";
+
+function isTimeWindowId(value: string): value is TimeWindowId {
+  return TIME_WINDOW_OPTIONS.some((o) => o.id === value);
+}
+
+/**
+ * Resolve a time-window option to an absolute ms cutoff (`null` = full history).
+ * `now` is captured once when the dialog opens so the preview and the saved
+ * bundle share an identical cutoff even if the user reviews for a while.
+ */
+function computeTimeWindowStart(
+  id: TimeWindowId,
+  appLaunchTimestamp: number,
+  now: number
+): number | null {
+  switch (id) {
+    case "5m":
+      return now - 5 * 60 * 1000;
+    case "30m":
+      return now - 30 * 60 * 1000;
+    case "launch":
+      return appLaunchTimestamp;
+    case "full":
+      return null;
+  }
+}
 
 interface DiagnosticsReviewDialogProps {
   isOpen: boolean;
   onClose: () => void;
   reviewPayload: DiagnosticsReviewPayload | null;
-  onSave: (enabledSections: Record<string, boolean>, replacements: ReplacementRule[]) => void;
+  onSave: (
+    enabledSections: Record<string, boolean>,
+    replacements: ReplacementRule[],
+    timeWindowStartMs: number | null
+  ) => void;
   isSaving: boolean;
+  /**
+   * Optional scope hint. When `sections` is provided, only those keys start
+   * enabled; sections not listed start unchecked. The user can still toggle
+   * any section manually before saving.
+   */
+  initialScope?: DiagnosticsReviewScope | null;
 }
 
 export function DiagnosticsReviewDialog({
@@ -27,38 +78,80 @@ export function DiagnosticsReviewDialog({
   reviewPayload,
   onSave,
   isSaving,
+  initialScope,
 }: DiagnosticsReviewDialogProps) {
   const [enabledSections, setEnabledSections] = useState<Record<string, boolean>>({});
   const [replacements, setReplacements] = useState<ReplacementRule[]>([
     { find: "", replace: "[REDACTED]" },
   ]);
+  const [prebuiltIds, setPrebuiltIds] = useState<Set<PrebuiltRedactionId>>(new Set());
+  const [timeWindow, setTimeWindow] = useState<TimeWindowId>(DEFAULT_TIME_WINDOW);
   const [showPreview, setShowPreview] = useState(false);
+  // Reference "now" captured at open so the relative windows resolve to a
+  // stable cutoff shared by the preview and the save call. Held as state (not a
+  // ref) so the render-time reads below don't trip the React Compiler.
+  const [openedAt, setOpenedAt] = useState(() => Date.now());
 
   useEffect(() => {
     if (isOpen && reviewPayload) {
+      setOpenedAt(Date.now());
+      const scopedSections = initialScope?.sections;
       const initial: Record<string, boolean> = {};
-      for (const key of reviewPayload.sectionKeys) {
-        initial[key] = true;
+      // Distinguish "no scope" (sectionKeys undefined → all enabled) from
+      // "explicit empty scope" (sectionKeys === [] → none enabled). The
+      // latter would otherwise fall back to all-enabled, ignoring an
+      // intentional clear from the caller.
+      if (scopedSections !== undefined) {
+        const allow = new Set(scopedSections);
+        for (const key of reviewPayload.sectionKeys) {
+          initial[key] = allow.has(key);
+        }
+      } else {
+        for (const key of reviewPayload.sectionKeys) {
+          initial[key] = true;
+        }
       }
       setEnabledSections(initial);
       setReplacements([{ find: "", replace: "[REDACTED]" }]);
+      setPrebuiltIds(new Set());
+      setTimeWindow(DEFAULT_TIME_WINDOW);
       setShowPreview(false);
     }
-  }, [isOpen, reviewPayload]);
+  }, [isOpen, reviewPayload, initialScope]);
+
+  // Active prebuilt toggles contribute regex rules, prepended before the user's
+  // literal rules so canonical patterns run first.
+  const effectiveReplacements = useMemo<ReplacementRule[]>(() => {
+    const prebuilt = PREBUILT_REDACTIONS.filter((p) => prebuiltIds.has(p.id)).flatMap(
+      (p) => p.rules
+    );
+    return [...prebuilt, ...replacements.filter((r) => r.find)];
+  }, [prebuiltIds, replacements]);
 
   const previewJson = useMemo(() => {
     if (!reviewPayload) return "";
-    const filtered = filterSections(reviewPayload.payload, enabledSections);
-    let json = safeStringify(filtered, 2);
-    json = applyReplacements(
-      json,
-      replacements.filter((r) => r.find)
+    const startMs = computeTimeWindowStart(timeWindow, reviewPayload.appLaunchTimestamp, openedAt);
+    const filtered = filterLogEntriesByTime(
+      filterSections(reviewPayload.payload, enabledSections),
+      startMs
     );
-    return json;
-  }, [reviewPayload, enabledSections, replacements]);
+    return applyReplacements(safeStringify(filtered, 2), effectiveReplacements);
+  }, [reviewPayload, enabledSections, effectiveReplacements, timeWindow, openedAt]);
 
   const toggleSection = (key: string) => {
     setEnabledSections((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const togglePrebuilt = (id: PrebuiltRedactionId) => {
+    setPrebuiltIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
   };
 
   const addReplacement = () => {
@@ -74,10 +167,9 @@ export function DiagnosticsReviewDialog({
   };
 
   const handleSave = () => {
-    onSave(
-      enabledSections,
-      replacements.filter((r) => r.find)
-    );
+    if (!reviewPayload) return;
+    const startMs = computeTimeWindowStart(timeWindow, reviewPayload.appLaunchTimestamp, openedAt);
+    onSave(enabledSections, effectiveReplacements, startMs);
   };
 
   const allEnabled = reviewPayload
@@ -139,6 +231,66 @@ export function DiagnosticsReviewDialog({
                   </CheckboxPrimitive.Indicator>
                 </CheckboxPrimitive.Root>
                 {SECTION_LABELS[key] ?? key}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <h4 className="text-sm font-medium text-daintree-text flex items-center gap-1.5 mb-2">
+            <Clock className="w-3.5 h-3.5" />
+            Log time window
+          </h4>
+          <select
+            value={timeWindow}
+            onChange={(e) => {
+              if (isTimeWindowId(e.target.value)) setTimeWindow(e.target.value);
+            }}
+            aria-label="Log time window"
+            className={cn(
+              "h-8 text-xs w-full px-2 rounded border border-daintree-border bg-daintree-bg",
+              "text-daintree-text focus:outline-hidden focus:border-daintree-accent"
+            )}
+          >
+            {TIME_WINDOW_OPTIONS.map((opt) => (
+              <option key={opt.id} value={opt.id}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <h4 className="text-sm font-medium text-daintree-text flex items-center gap-1.5 mb-2">
+            <ShieldOff className="w-3.5 h-3.5" />
+            Prebuilt redactions
+          </h4>
+          <div className="grid grid-cols-1 gap-1.5">
+            {PREBUILT_REDACTIONS.map((preset) => (
+              <label
+                key={preset.id}
+                className={cn(
+                  "flex items-center gap-2 px-2.5 py-1.5 rounded border text-xs cursor-pointer transition-colors",
+                  prebuiltIds.has(preset.id)
+                    ? "border-daintree-border bg-daintree-bg/50 text-daintree-text"
+                    : "border-daintree-border/40 bg-transparent text-daintree-text/60"
+                )}
+              >
+                <CheckboxPrimitive.Root
+                  checked={prebuiltIds.has(preset.id)}
+                  onCheckedChange={() => togglePrebuilt(preset.id)}
+                  className={cn(
+                    "flex shrink-0 w-3.5 h-3.5 rounded border transition-colors",
+                    "bg-daintree-bg border-border-strong",
+                    "data-[state=checked]:bg-daintree-text data-[state=checked]:border-daintree-text",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                  )}
+                >
+                  <CheckboxPrimitive.Indicator className="flex items-center justify-center text-text-inverse">
+                    <CheckIcon className="w-2.5 h-2.5" />
+                  </CheckboxPrimitive.Indicator>
+                </CheckboxPrimitive.Root>
+                {preset.label}
               </label>
             ))}
           </div>

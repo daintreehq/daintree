@@ -49,6 +49,10 @@ test.describe.serial("Core: Dev Preview", () => {
 
       const devBtn = window.locator(SEL.toolbar.openDevPreview);
       if (!(await devBtn.isVisible().catch(() => false))) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Dev preview toolbar button not visible in this launch state",
+        });
         test.skip();
         return;
       }
@@ -66,6 +70,10 @@ test.describe.serial("Core: Dev Preview", () => {
       // Skip if no dev preview panel is open (previous test may have skipped)
       const addressBar = window.locator(SEL.browser.addressBar);
       if (!(await addressBar.isVisible({ timeout: T_SHORT }).catch(() => false))) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Dev preview address bar not visible (panel not open)",
+        });
         test.skip();
         return;
       }
@@ -80,6 +88,10 @@ test.describe.serial("Core: Dev Preview", () => {
 
       const addressBar = window.locator(SEL.browser.addressBar);
       if (!(await addressBar.isVisible({ timeout: T_SHORT }).catch(() => false))) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Dev preview address bar not visible (panel not open)",
+        });
         test.skip();
         return;
       }
@@ -99,6 +111,10 @@ test.describe.serial("Core: Dev Preview", () => {
       const zoomReset = window.locator(SEL.browser.zoomReset);
 
       if (!(await zoomIn.isVisible({ timeout: T_SHORT }).catch(() => false))) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Zoom controls not visible (dev preview panel not open)",
+        });
         test.skip();
         return;
       }
@@ -109,6 +125,10 @@ test.describe.serial("Core: Dev Preview", () => {
 
     test("zoom in again steps to 150%", async () => {
       if (!devPreviewOpened) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Dev preview panel was not opened (earlier test skipped)",
+        });
         test.skip();
         return;
       }
@@ -123,6 +143,11 @@ test.describe.serial("Core: Dev Preview", () => {
 
     test("zoom out steps back toward 100%", async () => {
       if (!devPreviewOpened) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Dev preview panel was not opened (earlier test skipped)",
+        });
+
         test.skip();
         return;
       }
@@ -137,6 +162,11 @@ test.describe.serial("Core: Dev Preview", () => {
 
     test("zoom reset returns to 100%", async () => {
       if (!devPreviewOpened) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Dev preview panel was not opened (earlier test skipped)",
+        });
+
         test.skip();
         return;
       }
@@ -153,6 +183,11 @@ test.describe.serial("Core: Dev Preview", () => {
 
       const consoleToggle = window.locator(SEL.devPreview.consoleToggle).first();
       if (!(await consoleToggle.isVisible({ timeout: T_SHORT }).catch(() => false))) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Console drawer toggle not visible (panel not open)",
+        });
+
         test.skip();
         return;
       }
@@ -170,6 +205,11 @@ test.describe.serial("Core: Dev Preview", () => {
 
     test("closing dev preview panel removes it from grid", async () => {
       if (!devPreviewOpened) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Dev preview panel was not opened (earlier test skipped)",
+        });
+
         test.skip();
         return;
       }
@@ -204,6 +244,11 @@ server.listen(0, '127.0.0.1', () => {
       // Open dev preview panel
       const devBtn = window.locator(SEL.toolbar.openDevPreview);
       if (!(await devBtn.isVisible().catch(() => false))) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Dev preview toolbar button not visible in this launch state",
+        });
+
         test.skip();
         return;
       }
@@ -256,6 +301,11 @@ server.listen(0, '127.0.0.1', () => {
       // Open console drawer
       const consoleToggle = window.locator(SEL.devPreview.consoleToggle).first();
       if (!(await consoleToggle.isVisible({ timeout: T_SHORT }).catch(() => false))) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Console drawer toggle not visible (panel not open)",
+        });
+
         test.skip();
         return;
       }
@@ -297,6 +347,11 @@ server.listen(0, '127.0.0.1', () => {
 
       const before = await getGridPanelCount(window);
       if (before === 0) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "No panels to close in this launch state",
+        });
+
         test.skip();
         return;
       }

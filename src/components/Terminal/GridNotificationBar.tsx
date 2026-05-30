@@ -1,9 +1,17 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Info, XCircle } from "lucide-react";
-import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
-import { BANNER_ENTER_DURATION, BANNER_EXIT_DURATION } from "@/lib/animationUtils";
-import { useNotificationStore, type Notification } from "@/store/notificationStore";
+import {
+  BANNER_ENTER_DURATION,
+  BANNER_EXIT_DURATION,
+  LIVE_REGION_SWAP_DELAY,
+} from "@/lib/animationUtils";
+import {
+  GRID_BAR_DWELL_FLOOR_MS,
+  selectGridBarNotification,
+  useNotificationStore,
+  type Notification,
+} from "@/store/notificationStore";
 
 const STATUS_CONFIG = {
   success: {
@@ -56,57 +64,149 @@ export interface GridNotificationBarProps {
 }
 
 export function GridNotificationBar({ className }: GridNotificationBarProps) {
-  const notification = useNotificationStore(
-    useShallow((state) => state.notifications.find((item) => item.placement === "grid-bar"))
+  // Tracks the id currently visible to the user so the selector can enforce
+  // the dwell floor. A ref (not state) avoids spurious re-renders when the
+  // lock target changes — the selector reads the ref on every render.
+  const lockedIdRef = useRef<string | undefined>(undefined);
+  // Bumped by the dwell timeout to force a selector re-evaluation after
+  // dwell expires. The store-subscription path won't fire on its own when
+  // only time has passed.
+  const [, setDwellTick] = useState(0);
+  const dwellTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const notification = useNotificationStore((state) =>
+    selectGridBarNotification(state.notifications, Date.now(), lockedIdRef.current)
   );
   const removeNotification = useNotificationStore((state) => state.removeNotification);
 
+  // Mirrors InlineStatusBanner.tsx — synchronous read at render time is the
+  // codebase precedent for non-SSR Electron consumers. Three signals collapse
+  // to one: the OS-level media query, plus two app-set body attributes that
+  // override it (settings → reduced-animations, perf governor → performance-mode).
+  const prefersReducedMotion =
+    typeof window !== "undefined" &&
+    (window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
+      (typeof document !== "undefined" &&
+        (document.body.getAttribute("data-reduce-animations") === "true" ||
+          document.body.getAttribute("data-performance-mode") === "true")));
+
   // displayedNotification lags `notification` so the bar can keep rendering
-  // through the exit animation after the store entry is already gone.
+  // through the exit animation after the store entry is already gone, and so
+  // the live region can be cleared mid-swap without unmounting.
+  const initialNotification = notification ?? null;
   const [displayedNotification, setDisplayedNotification] = useState<Notification | null>(
-    notification ?? null
+    initialNotification
   );
-  const [isVisible, setIsVisible] = useState(false);
+  const [isVisible, setIsVisible] = useState(prefersReducedMotion && initialNotification !== null);
   const exitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const entryFrameRef = useRef<number | null>(null);
+  const swapTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (notification) {
-      // New or replacing notification: cancel any in-flight exit, swap content
-      // synchronously, and start fresh entry on the next frame so the browser
-      // sees the h-0/opacity-0 state before transitioning.
-      if (exitTimeoutRef.current !== null) {
-        clearTimeout(exitTimeoutRef.current);
-        exitTimeoutRef.current = null;
-      }
-      setDisplayedNotification(notification);
-
+    if (!notification) {
+      // Notification cleared: cancel any in-flight entry rAF or swap timer
+      // (either would otherwise re-open the bar mid-collapse), collapse, then
+      // unmount content after the exit window.
       if (entryFrameRef.current !== null) {
         cancelAnimationFrame(entryFrameRef.current);
-      }
-      entryFrameRef.current = requestAnimationFrame(() => {
         entryFrameRef.current = null;
-        setIsVisible(true);
-      });
+      }
+      if (swapTimeoutRef.current !== null) {
+        clearTimeout(swapTimeoutRef.current);
+        swapTimeoutRef.current = null;
+      }
+      setIsVisible(false);
+      if (exitTimeoutRef.current !== null) clearTimeout(exitTimeoutRef.current);
+      exitTimeoutRef.current = setTimeout(() => {
+        exitTimeoutRef.current = null;
+        setDisplayedNotification(null);
+      }, BANNER_EXIT_DURATION);
       return;
     }
 
-    // Notification cleared: cancel any in-flight entry rAF (would otherwise
-    // re-open the bar mid-collapse), then collapse and unmount content after
-    // the exit window. Guard against re-entry by clearing the timer in cleanup.
+    // Notification present — cancel any in-flight exit so we don't tear down.
+    if (exitTimeoutRef.current !== null) {
+      clearTimeout(exitTimeoutRef.current);
+      exitTimeoutRef.current = null;
+    }
+
+    // Replacement detection: there is (or was) live-region content that needs
+    // to be flushed before the new notification is announced. Covers two cases:
+    //   - displayed is non-null with a different id (active swap)
+    //   - a swap is already in flight (live region cleared, target pending)
+    //     and a third notification arrives — retarget the pending swap.
+    const isReplacement =
+      (displayedNotification !== null && displayedNotification.id !== notification.id) ||
+      swapTimeoutRef.current !== null;
+
+    if (isReplacement) {
+      // VoiceOver buffer flush: clear the live region first, wait ~150ms, then
+      // re-populate so AT picks up the change as a fresh announcement. The
+      // delay is a screen-reader concern, NOT motion — do not gate it on
+      // prefers-reduced-motion.
+      if (entryFrameRef.current !== null) {
+        cancelAnimationFrame(entryFrameRef.current);
+        entryFrameRef.current = null;
+      }
+      if (swapTimeoutRef.current !== null) {
+        clearTimeout(swapTimeoutRef.current);
+      }
+      setDisplayedNotification(null);
+      // Ensure the bar stays open during the swap gap (e.g. if a swap arrives
+      // mid-exit). Idempotent when already true.
+      setIsVisible(true);
+      swapTimeoutRef.current = setTimeout(() => {
+        swapTimeoutRef.current = null;
+        setDisplayedNotification(notification);
+      }, LIVE_REGION_SWAP_DELAY);
+      return;
+    }
+
+    // First entry from an empty live region: set content and animate in on the
+    // next frame so the browser sees the h-0/opacity-0 state before transitioning.
+    // Skip the rAF under reduced motion — the transition is zeroed out anyway.
+    setDisplayedNotification(notification);
     if (entryFrameRef.current !== null) {
       cancelAnimationFrame(entryFrameRef.current);
       entryFrameRef.current = null;
     }
-    setIsVisible(false);
-    if (exitTimeoutRef.current !== null) {
-      clearTimeout(exitTimeoutRef.current);
+    if (prefersReducedMotion) {
+      setIsVisible(true);
+    } else {
+      entryFrameRef.current = requestAnimationFrame(() => {
+        entryFrameRef.current = null;
+        setIsVisible(true);
+      });
     }
-    exitTimeoutRef.current = setTimeout(() => {
-      exitTimeoutRef.current = null;
-      setDisplayedNotification(null);
-    }, BANNER_EXIT_DURATION);
   }, [notification?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Refresh the dwell lock whenever the displayed notification changes.
+  // Uses a layout effect so the lock is set before paint — a contender
+  // arriving in the same render cycle as the first mount cannot preempt
+  // before the dwell guard is in place.
+  useLayoutEffect(() => {
+    if (dwellTimeoutRef.current !== null) {
+      clearTimeout(dwellTimeoutRef.current);
+      dwellTimeoutRef.current = null;
+    }
+    if (!displayedNotification) {
+      lockedIdRef.current = undefined;
+      return;
+    }
+    lockedIdRef.current = displayedNotification.id;
+    const firstShownAt = displayedNotification.firstShownAt ?? Date.now();
+    const dwellRemaining = firstShownAt + GRID_BAR_DWELL_FLOOR_MS - Date.now();
+    if (dwellRemaining <= 0) {
+      // Already past the floor; nudge a re-render so the selector can pick
+      // a higher-severity candidate that arrived during the prior render.
+      setDwellTick((t) => t + 1);
+      return;
+    }
+    dwellTimeoutRef.current = setTimeout(() => {
+      dwellTimeoutRef.current = null;
+      setDwellTick((t) => t + 1);
+    }, dwellRemaining);
+  }, [displayedNotification?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     return () => {
@@ -118,16 +218,20 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
         cancelAnimationFrame(entryFrameRef.current);
         entryFrameRef.current = null;
       }
+      if (swapTimeoutRef.current !== null) {
+        clearTimeout(swapTimeoutRef.current);
+        swapTimeoutRef.current = null;
+      }
+      if (dwellTimeoutRef.current !== null) {
+        clearTimeout(dwellTimeoutRef.current);
+        dwellTimeoutRef.current = null;
+      }
     };
   }, []);
 
-  if (!displayedNotification) {
-    return null;
-  }
-
-  const config = STATUS_CONFIG[displayedNotification.type];
-  const Icon = config.icon;
-  const actions = getActions(displayedNotification);
+  const config = displayedNotification ? STATUS_CONFIG[displayedNotification.type] : null;
+  const Icon = config?.icon;
+  const actions = displayedNotification ? getActions(displayedNotification) : [];
 
   // While not visible (entry pre-rAF or mid-exit), the bar is visually
   // collapsed but still in the DOM. Keep the wrapper out of the accessibility
@@ -145,37 +249,51 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
           : "h-0 opacity-0 ease-[var(--ease-exit)]"
       )}
       style={{
-        transitionDuration: `${isVisible ? BANNER_ENTER_DURATION : BANNER_EXIT_DURATION}ms`,
+        transitionDuration: prefersReducedMotion
+          ? "0ms"
+          : `${isVisible ? BANNER_ENTER_DURATION : BANNER_EXIT_DURATION}ms`,
       }}
-      role="status"
-      aria-live="polite"
     >
       <div
         className={cn(
           "flex items-center gap-3 rounded-[var(--radius-sm)] border px-3 py-2.5 shadow-[var(--theme-shadow-ambient)]",
-          config.containerClass,
+          config?.containerClass,
           className
         )}
       >
-        <Icon className={cn("h-4 w-4 shrink-0", config.iconClass)} aria-hidden="true" />
-
-        <div className="min-w-0 flex-1">
-          {displayedNotification.title && (
-            <p
-              className={cn(
-                "text-xs font-mono uppercase tracking-wide leading-tight",
-                config.titleClass
-              )}
-            >
-              {displayedNotification.title}
-            </p>
+        {/* Live region: text content only. APG anti-pattern to nest action
+         *  buttons here — they render as siblings below. Always mounted (even
+         *  when empty) so AT registers the region on page load rather than
+         *  ignoring a late-mounted live region. */}
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="flex min-w-0 flex-1 items-center gap-3"
+        >
+          {displayedNotification && Icon && config && (
+            <>
+              <Icon className={cn("h-4 w-4 shrink-0", config.iconClass)} aria-hidden="true" />
+              <div className="min-w-0 flex-1">
+                {displayedNotification.title && (
+                  <p
+                    className={cn(
+                      "text-xs font-mono uppercase tracking-wide leading-tight",
+                      config.titleClass
+                    )}
+                  >
+                    {displayedNotification.title}
+                  </p>
+                )}
+                <div className="text-xs leading-snug text-daintree-text/90">
+                  {displayedNotification.message}
+                </div>
+              </div>
+            </>
           )}
-          <div className="text-xs leading-snug text-daintree-text/90">
-            {displayedNotification.message}
-          </div>
         </div>
 
-        {actions.length > 0 && (
+        {displayedNotification && actions.length > 0 && (
           <div className="flex shrink-0 items-center gap-1.5">
             {actions.map((action, index) => (
               <button
@@ -200,7 +318,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
           </div>
         )}
 
-        {actions.length === 0 && (
+        {displayedNotification && actions.length === 0 && (
           <button
             type="button"
             onClick={() => removeNotification(displayedNotification.id)}

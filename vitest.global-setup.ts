@@ -31,7 +31,7 @@ export function setup(): void {
   const message = `${probe.stderr ?? ""}${probe.stdout ?? ""}`;
   if (message.includes("NODE_MODULE_VERSION") || message.includes("was compiled against")) {
     console.log("[vitest-setup] Rebuilding better-sqlite3 for system Node...");
-    execSync("npm rebuild better-sqlite3 --silent", { stdio: "inherit" });
+    execSync("npm rebuild better-sqlite3 --runtime=node --silent", { stdio: "inherit" });
     shouldRestoreElectronBuild = true;
   }
 }

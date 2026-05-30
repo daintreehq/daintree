@@ -8,11 +8,13 @@ import {
   prETagCache,
   branchListETagCache,
   repoPRListETagCache,
+  openPRListETagCache,
   truncateBody,
   getETagCacheVersion,
   writePRTooltip,
 } from "./GitHubCaches.js";
 import type { GitHubPRCIStatus, PRTooltipData } from "../../../../shared/types/github.js";
+import type { PRListProbeResult, PRSnapshot } from "../../../../shared/types/forge.js";
 import type { PRCheckCandidate, PRCheckResult, BatchPRCheckResult, LinkedPR } from "./types.js";
 
 interface BatchPRTooltipFields {
@@ -293,6 +295,163 @@ export async function probeRepoPRListChange(
   } catch {
     return "unknown";
   }
+}
+
+interface OpenPRListItem {
+  number?: number;
+  state?: string;
+  title?: string;
+  updated_at?: string;
+  head?: { sha?: string } | null;
+}
+
+/**
+ * Steady-state revalidation probe: one conditional `GET .../pulls?state=open`
+ * against the open-PR list. Diffs the result against the caller's `tracked`
+ * snapshots and returns only the PRs that changed, so an idle repo skips the
+ * GraphQL revalidation fan-out entirely (the old per-PR tick cost ~3 GraphQL
+ * points each; this costs zero on a `304`).
+ *
+ * ETag commit discipline (the key correctness rule, mirrors `fetchActivityProbe`
+ * in `GitHubStats.ts`): the new ETag is committed ONLY when no tracked PR
+ * changed — i.e. the caller's view is already in sync with the probe. While any
+ * tracked PR still differs the old ETag is left in place, so the next tick
+ * re-fetches (`200`) and re-diffs instead of masking the unconsumed change
+ * behind a `304`. Once the caller has processed the change and passes matching
+ * snapshots, the diff comes back clean and the ETag advances — 304s resume from
+ * then on. This gates the commit on caller-sync without a second round-trip.
+ *
+ * Returns `fallback` on any inconclusive outcome (rate-limit block, network or
+ * parse error, missing ETag, concurrent cache clear) so the caller runs its
+ * full revalidation. Uses the REST `core` bucket;
+ * `daintreeSkipRateLimitPreflight` bypasses the wrapper's unscoped (graphql)
+ * gate since the `core` check below is the correct one.
+ *
+ * Per-page limitation: the ETag covers only page 1 (`per_page=100`). For a repo
+ * with >100 open PRs a tracked PR on page 2 reads as "absent" and is reported
+ * changed every tick — wasting a GraphQL re-fetch but never masking a change.
+ * Daintree tracks few PRs per worktree, so this is a rare, bounded cost.
+ */
+export async function probeOpenPRList(
+  owner: string,
+  repo: string,
+  token: string,
+  tracked: PRSnapshot[]
+): Promise<PRListProbeResult> {
+  const block = gitHubRateLimitService.shouldBlockRequest("core");
+  if (block.blocked) return { kind: "fallback" };
+
+  const cacheKey = `${owner}/${repo}`;
+  const cachedETag = openPRListETagCache.get(cacheKey);
+  const versionAtStart = getETagCacheVersion();
+  const url = `https://api.github.com/repos/${owner}/${repo}/pulls?state=open&per_page=100`;
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  if (cachedETag) {
+    headers["If-None-Match"] = cachedETag;
+  }
+
+  let response: Response;
+  try {
+    response = await rateLimitAwareFetch(url, {
+      headers,
+      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+      daintreeSkipRateLimitPreflight: true,
+    });
+  } catch {
+    return { kind: "fallback" };
+  }
+
+  // A concurrent cache clear (token change / manual refresh) invalidated the
+  // ETag baseline this request was built on — fall back rather than acting on a
+  // `304` against a now-cleared ETag, or committing a stale-baseline `200`.
+  if (getETagCacheVersion() !== versionAtStart) {
+    return { kind: "fallback" };
+  }
+
+  if (response.status === 304) {
+    return { kind: "unchanged" };
+  }
+  if (response.status !== 200) {
+    return { kind: "fallback" };
+  }
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return { kind: "fallback" };
+  }
+  if (!Array.isArray(body)) {
+    return { kind: "fallback" };
+  }
+
+  const restByNumber = new Map<number, OpenPRListItem>();
+  for (const item of body as OpenPRListItem[]) {
+    if (item && typeof item.number === "number") {
+      restByNumber.set(item.number, item);
+    }
+  }
+
+  const changed: PRSnapshot[] = [];
+  for (const t of tracked) {
+    const rest = restByNumber.get(t.number);
+    if (t.state === "open" || t.state === null) {
+      // Expected in the open list. Absent → it left the open set (merged /
+      // closed / deleted), so the caller must re-fetch to learn the new state.
+      // Present with a different head SHA or update time → changed.
+      if (!rest) {
+        changed.push({
+          number: t.number,
+          headSha: null,
+          updatedAt: null,
+          state: null,
+          title: null,
+        });
+      } else {
+        const headSha = rest.head?.sha ?? null;
+        const updatedAt = rest.updated_at ?? null;
+        if (headSha !== t.headSha || updatedAt !== t.updatedAt) {
+          changed.push({
+            number: t.number,
+            headSha,
+            updatedAt,
+            state: "open",
+            title: rest.title ?? null,
+          });
+        }
+      }
+    } else if (rest) {
+      // Known merged/closed → expected absent. Present again means reopened.
+      changed.push({
+        number: t.number,
+        headSha: rest.head?.sha ?? null,
+        updatedAt: rest.updated_at ?? null,
+        state: "open",
+        title: rest.title ?? null,
+      });
+    }
+  }
+
+  if (changed.length === 0) {
+    // Caller is in sync with the probe — advance the ETag baseline so future
+    // unchanged ticks resolve as a zero-cost `304`. A `200` with no ETag can't
+    // establish a baseline, so drop any stale entry and re-probe next tick.
+    const etag = response.headers.get("etag");
+    if (etag) {
+      openPRListETagCache.set(cacheKey, etag);
+    } else {
+      openPRListETagCache.invalidate(cacheKey);
+    }
+    return { kind: "unchanged" };
+  }
+
+  // Tracked PRs still differ — deliberately do NOT advance the ETag; the next
+  // tick re-fetches and re-diffs until the caller has consumed the change.
+  return { kind: "changed", changed };
 }
 
 async function probePRChange(

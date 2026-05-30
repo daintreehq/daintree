@@ -1,5 +1,6 @@
 import { useMemo, useRef, useCallback, useLayoutEffect } from "react";
 
+import { useShallow } from "zustand/react/shallow";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
 import { useDndContext, useDroppable } from "@dnd-kit/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -32,6 +33,8 @@ import { useHorizontalScrollControls } from "@/hooks";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
+import { sortAgentsByToolbarPin } from "@/lib/agentMenuOrder";
 import type { ActionSource } from "@shared/types/actions";
 import { actionService } from "@/services/ActionService";
 import {
@@ -84,6 +87,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const helpTerminalId = useHelpPanelStore((s) => s.terminalId);
   const agentSettings = useAgentSettingsStore((s) => s.settings);
   const agentAvailability = useCliAvailabilityStore((s) => s.availability);
+  const leftButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.leftButtons));
   const setDockDensity = usePreferencesStore((s) => s.setDockDensity);
   const { settings: projectSettings } = useProjectSettings();
   const hasDevPreview = Boolean(projectSettings?.devServerCommand?.trim());
@@ -128,11 +132,11 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const activeWorktree = activeWorktreeId ? worktrees.find((w) => w.id === activeWorktreeId) : null;
   const cwd = activeWorktree?.path ?? currentProject?.path ?? "";
 
-  const launchAgents = useMemo<DockLaunchAgent[]>(() => {
+  const { sorted: launchAgents, pinnedCount } = useMemo(() => {
     const baseIds = getAgentIds();
     const settingsIds = agentSettings?.agents ? Object.keys(agentSettings.agents) : [];
     const extraIds = settingsIds.filter((id) => !baseIds.includes(id)).sort();
-    return [...baseIds, ...extraIds]
+    const agents: DockLaunchAgent[] = [...baseIds, ...extraIds]
       .filter((id) => isAgentInstalled(agentAvailability?.[id]))
       .map((id) => {
         const config = getAgentConfig(id);
@@ -144,7 +148,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           availability: agentAvailability?.[id],
         };
       });
-  }, [agentAvailability, agentSettings]);
+    return sortAgentsByToolbarPin(agents, leftButtons, agentSettings);
+  }, [agentAvailability, agentSettings, leftButtons]);
 
   const recipeContext = activeWorktree
     ? {
@@ -334,6 +339,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           <div className="shrink-0 flex items-center">
             <DockLaunchButton
               agents={launchAgents}
+              pinnedCount={pinnedCount}
               hasDevPreview={hasDevPreview}
               onLaunchAgent={(agentId) => void handleAddTerminal(agentId, "menu")}
               activeWorktreeId={activeWorktreeId}
@@ -464,6 +470,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
         <DockLaunchMenuItems
           components={CONTEXT_MENU_COMPONENTS}
           agents={launchAgents}
+          pinnedCount={pinnedCount}
           hasDevPreview={hasDevPreview}
           activeWorktreeId={activeWorktreeId}
           cwd={cwd}

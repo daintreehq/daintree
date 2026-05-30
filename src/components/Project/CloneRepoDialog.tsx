@@ -355,7 +355,6 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             severity="error"
             title="Partial clone not removed"
             description={cleanupError}
-            actions={[]}
             onClose={() => setCleanupError(null)}
             className="rounded-lg"
           />
@@ -369,30 +368,28 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             const showGitHubAuth =
               error.gitReason === "auth-failed" && isGitHubRemoteUrl(normalizeCloneUrl(url));
             if (showGitHubAuth) {
-              const actions: BannerAction[] = [
-                {
-                  id: "signin-github",
-                  label: "Sign in with GitHub",
-                  icon: LogIn,
-                  variant: "accent",
-                  onClick: () => {
-                    void actionService.dispatch(
-                      "app.settings.openTab",
-                      { tab: "github" },
-                      { source: "user" }
-                    );
-                  },
-                  title: "Open GitHub sign-in",
-                  ariaLabel: "Sign in with GitHub",
+              const signInAction: BannerAction = {
+                id: "signin-github",
+                label: "Sign in with GitHub",
+                icon: LogIn,
+                variant: "accent",
+                onClick: () => {
+                  void actionService.dispatch(
+                    "app.settings.openTab",
+                    { tab: "github" },
+                    { source: "user" }
+                  );
                 },
-              ];
+                title: "Open GitHub sign-in",
+                ariaLabel: "Sign in with GitHub",
+              };
               return (
                 <InlineStatusBanner
                   icon={AlertCircle}
                   title="Clone Failed"
                   description={error.message}
                   severity="error"
-                  actions={actions}
+                  action={signInAction}
                 />
               );
             }

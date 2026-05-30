@@ -412,7 +412,12 @@ export function HelpPanel({
         // trust the bar's internal rAF to take focus when its ref is present
         // — no xterm fallback in that branch, otherwise CodeMirror would
         // steal focus from xterm one frame later and produce a focus flicker.
-        if (terminalId && terminal && terminalPty?.spawnStatus !== "missing-cli") {
+        if (
+          terminalId &&
+          terminal &&
+          terminalPty?.spawnStatus !== "missing-cli" &&
+          terminalPty?.spawnStatus !== "failed"
+        ) {
           if (showHybridInputBar && inputBarRef.current) {
             inputBarRef.current.focusWithCursorAtEnd();
             return;

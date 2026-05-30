@@ -160,11 +160,17 @@ export type BuiltInKeyAction =
   | "panel.diagnosticsEvents"
   | "panel.diagnosticsMessages"
 
+  // Notification inbox
+  | "notifications.toggle"
+
   // Portal actions
   | "portal.newTab"
   | "portal.closeTab"
   | "portal.nextTab"
   | "portal.prevTab"
+
+  // Dev preview actions
+  | "devPreview.reloadPreview"
 
   // Action palette
   | "action.palette"
@@ -188,6 +194,10 @@ export type BuiltInKeyAction =
   // Voice input
   | "voiceInput.toggle"
   | "voiceInput.toggleAssistant"
+  | "voiceInput.togglePause"
+  | "voiceInput.lockTarget"
+  | "voiceInput.unlockTarget"
+  | "voiceInput.recallRecentTarget"
 
   // Layout undo/redo
   | "layout.undo"
@@ -334,13 +344,16 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "panel.palette",
   "panel.toggleDiagnostics",
   "panel.togglePortal",
+  "notifications.toggle",
   "panel.diagnosticsLogs",
   "panel.diagnosticsEvents",
   "panel.diagnosticsMessages",
+  "notifications.toggle",
   "portal.newTab",
   "portal.closeTab",
   "portal.nextTab",
   "portal.prevTab",
+  "devPreview.reloadPreview",
   "action.palette",
   "action.palette.open",
   "action.repeatLast",
@@ -356,6 +369,10 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "app.theme.pick",
   "voiceInput.toggle",
   "voiceInput.toggleAssistant",
+  "voiceInput.togglePause",
+  "voiceInput.lockTarget",
+  "voiceInput.unlockTarget",
+  "voiceInput.recallRecentTarget",
   "layout.undo",
   "layout.redo",
   "app.newWindow",

@@ -18,7 +18,7 @@ import {
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
 import { getDevServerUrl } from "../../shared/config/devServer.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
-import { isLocalhostUrl } from "../../shared/utils/urlUtils.js";
+import { isLocalhostUrl, isDevPreviewProxyUrl } from "../../shared/utils/urlUtils.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { forgetBlinkSample, forgetEluSample } from "../services/ProcessMemoryMonitor.js";
@@ -26,7 +26,14 @@ import { getPtyManager } from "../services/PtyManager.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { logInfo, logWarn } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { injectSkeletonCss } from "./skeletonCss.js";
+import {
+  injectSkeletonCss,
+  injectSkeletonProjectIdentity,
+  resolveInitialColorSchemeId,
+  INITIAL_COLOR_SCHEME_ARG,
+  INITIAL_PROJECT_ID_ARG,
+} from "./skeletonCss.js";
+import { projectStore } from "../services/ProjectStore.js";
 import { CHANNELS } from "../ipc/channels.js";
 import {
   attachRendererConsoleCapture,
@@ -953,7 +960,7 @@ export class ProjectViewManager {
     }
   }
 
-  private createView(_projectId: string): WebContentsView {
+  private createView(projectId: string): WebContentsView {
     const ses = session.fromPartition("persist:daintree");
 
     // Register app:// and daintree-file:// protocol handlers on this session.
@@ -973,6 +980,16 @@ export class ProjectViewManager {
         webviewTag: true,
         navigateOnDragDrop: false,
         v8CacheOptions: "code",
+        // Seed the renderer with the persisted theme so project-switch cold
+        // starts and LRU-evicted views paint the saved scheme on first frame
+        // instead of a prefers-color-scheme default (#9169). The project id is
+        // threaded the same way instead of via a `?projectId=` query string so
+        // the document URL stays static and the V8 bytecode cache is shared
+        // across projects (#9162).
+        additionalArguments: [
+          `${INITIAL_COLOR_SCHEME_ARG}=${resolveInitialColorSchemeId()}`,
+          `${INITIAL_PROJECT_ID_ARG}=${projectId}`,
+        ],
       },
     });
   }
@@ -1014,9 +1031,25 @@ export class ProjectViewManager {
       wc.once("preload-error", onPreloadError);
       wc.once("render-process-gone", onProcessGone);
 
-      injectSkeletonCss(wc);
+      // Paint the skeleton on `dom-ready`, NOT before `loadURL`. `insertCSS`
+      // and `executeJavaScript` are scoped to the live document, and the
+      // navigation that `loadURL` kicks off discards anything injected into the
+      // prior (about:blank) context — so injecting here pre-navigation was a
+      // silent no-op. Mirrors the `dom-ready` wiring in createWindow.ts. `once`
+      // is correct because each cold start creates a fresh WebContentsView.
+      // Re-read the project inside the handler rather than closing over a value
+      // captured now, so the freshest name/emoji/color is painted (#9162).
+      wc.once("dom-ready", () => {
+        if (wc.isDestroyed()) return;
+        const project = projectStore.getProjectById(projectId);
+        injectSkeletonCss(wc, project);
+        injectSkeletonProjectIdentity(wc, project);
+      });
 
-      const encodedId = encodeURIComponent(projectId);
+      // The document URL is intentionally static (no `?projectId=`): the id
+      // travels via additionalArguments so the V8 bytecode cache stays shared
+      // across projects instead of fragmenting one entry per project (#9162).
+      //
       // Outer .catch surfaces any rejection from `wc.loadURL` itself; the inner
       // did-fail-load / preload-error / timeout handlers already reject the
       // outer Promise with a descriptive Error. ERR_ABORTED is the dominant
@@ -1031,11 +1064,10 @@ export class ProjectViewManager {
         });
       };
       if (process.env.NODE_ENV === "development") {
-        const devServerUrl = getDevServerUrl();
-        const url = `${devServerUrl}?projectId=${encodedId}`;
+        const url = getDevServerUrl();
         wc.loadURL(url).catch((err) => onLoadURLReject(err, url));
       } else {
-        const url = `app://daintree/index.html?projectId=${encodedId}`;
+        const url = "app://daintree/index.html";
         wc.loadURL(url).catch((err) => onLoadURLReject(err, url));
       }
     });
@@ -1084,7 +1116,9 @@ export class ProjectViewManager {
       params: Record<string, string>
     ) => {
       const allowedPartitions = ["persist:browser", "persist:dev-preview"];
-      const isAllowedLocalhostUrl = isLocalhostUrl(params.src);
+      // Dev-preview webviews load the stable proxy origin (dp-*.localhost), which
+      // isLocalhostUrl rejects — accept it explicitly (#9100).
+      const isAllowedLocalhostUrl = isLocalhostUrl(params.src) || isDevPreviewProxyUrl(params.src);
       const isValidPartition =
         allowedPartitions.includes(params.partition || "") ||
         (params.partition?.startsWith("persist:dev-preview-") ?? false);

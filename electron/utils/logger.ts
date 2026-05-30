@@ -17,7 +17,7 @@ import { join } from "path";
 import { logBuffer, type LogEntry } from "../services/LogBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { resilientRenameSync } from "./fs.js";
-import { scrubSecrets } from "./secretScrubber.js";
+import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { getWritesSuppressed } from "../services/diskPressureState.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";

@@ -6,7 +6,7 @@ import { monitorEventLoopDelay, type IntervalHistogram } from "node:perf_hooks";
 import { promises as fs, createWriteStream } from "node:fs";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import archiver from "archiver";
+import { ZipArchive } from "archiver";
 import { CHANNELS } from "../channels.js";
 import { resilientAtomicWriteFile } from "../../utils/fs.js";
 import type { HandlerDependencies } from "../types.js";
@@ -18,7 +18,9 @@ import type {
   DiagnosticsInfo,
   DiagnosticsReviewPayload,
   DiagnosticsBundleSavePayload,
+  ReportIssueEnrichment,
 } from "../../../shared/types/ipc/system.js";
+import { getActionBreadcrumbService } from "../../services/ActionBreadcrumbService.js";
 import type * as DiagnosticsCollectorModule from "../../services/DiagnosticsCollector.js";
 import { recordBlinkSample, recordEluSample } from "../../services/ProcessMemoryMonitor.js";
 
@@ -33,6 +35,7 @@ import { getLogFilePath, getLogDirectory } from "../../utils/logger.js";
 import { safeStringify } from "../../utils/safeStringify.js";
 import {
   filterSections,
+  filterLogEntriesByTime,
   applyReplacements,
   type ReplacementRule,
 } from "../../../shared/utils/diagnosticsTransform.js";
@@ -40,11 +43,19 @@ import { typedHandle, typedHandleWithContext } from "../utils.js";
 
 let eventLoopHistogram: IntervalHistogram | null = null;
 
+// Approximate epoch the app process started. Captured at module evaluation
+// (the diagnostics handler is eagerly imported during startup) rather than
+// from `Date.now() - process.uptime() * 1000` at call time, which drifts
+// because `process.uptime()` pauses during OS sleep while `Date.now()` does
+// not. Backs the "Since application launch" time-window option.
+const APP_LAUNCH_TIMESTAMP = Date.now();
+
 async function writeBundleZip(
   zipPath: string,
   jsonContent: string,
   includeLogs: boolean,
-  replacements: ReplacementRule[]
+  replacements: ReplacementRule[],
+  timeWindowStartMs: number | null
 ): Promise<void> {
   const logDir = getLogDirectory();
   const logFile = getLogFilePath();
@@ -52,6 +63,7 @@ async function writeBundleZip(
   const logEntries: Array<{ name: string; content: string }> = [];
 
   if (includeLogs) {
+    // The active log is always current, so it's never time-filtered here.
     if (existsSync(logFile)) {
       const raw = await fs.readFile(logFile, "utf-8");
       logEntries.push({ name: "daintree.log", content: applyReplacements(raw, replacements) });
@@ -59,19 +71,31 @@ async function writeBundleZip(
 
     for (let i = 1; i <= 5; i++) {
       const rotated = path.join(logDir, `daintree.log.${i}`);
-      if (existsSync(rotated)) {
-        const raw = await fs.readFile(rotated, "utf-8");
-        logEntries.push({
-          name: `daintree.log.${i}`,
-          content: applyReplacements(raw, replacements),
-        });
+      if (!existsSync(rotated)) continue;
+
+      if (timeWindowStartMs !== null) {
+        try {
+          const stat = await fs.stat(rotated);
+          // Skip rotated files last written before the window. `mtime`
+          // over-includes a freshly-rotated file holding mostly old lines —
+          // the accepted failure mode (over-include rather than drop).
+          if (stat.mtimeMs < timeWindowStartMs) continue;
+        } catch {
+          // stat failed — include rather than silently drop relevant lines.
+        }
       }
+
+      const raw = await fs.readFile(rotated, "utf-8");
+      logEntries.push({
+        name: `daintree.log.${i}`,
+        content: applyReplacements(raw, replacements),
+      });
     }
   }
 
   await new Promise<void>((resolve, reject) => {
     const output = createWriteStream(zipPath, { mode: 0o600 });
-    const archive = archiver("zip", { zlib: { level: 6 } });
+    const archive = new ZipArchive({ zlib: { level: 6 } });
 
     output.on("close", () => {
       resolve();
@@ -172,6 +196,40 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
   };
   handlers.push(typedHandle(CHANNELS.DIAGNOSTICS_GET_INFO, handleGetDiagnosticsInfo));
 
+  const handleGetReportEnrichment = async (): Promise<ReportIssueEnrichment> => {
+    let gpuFlag: "off" | "angle" | "on" | "unknown";
+    try {
+      const { isGpuDisabledByFlag, isGpuAngleFallbackApplied } =
+        await import("../../services/GpuCrashMonitorService.js");
+      const userDataPath = app.getPath("userData");
+      if (isGpuDisabledByFlag(userDataPath)) {
+        gpuFlag = "off";
+      } else if (isGpuAngleFallbackApplied(userDataPath)) {
+        gpuFlag = "angle";
+      } else {
+        gpuFlag = "on";
+      }
+    } catch {
+      gpuFlag = "unknown";
+    }
+
+    const mem = process.memoryUsage();
+    const totalMB = Math.round(os.totalmem() / 1024 / 1024);
+    const freeMB = Math.round(os.freemem() / 1024 / 1024);
+    const heapMB = Math.round((mem.heapUsed / 1024 / 1024) * 10) / 10;
+
+    const lines = [
+      `App: ${app.getVersion()} | Electron: ${process.versions.electron ?? "?"} | Node: ${process.versions.node ?? "?"}`,
+      `OS: ${process.platform} ${os.release()} ${process.arch}`,
+      `Memory: ${totalMB} MB total, ${freeMB} MB free, heap ${heapMB} MB`,
+      `GPU: ${gpuFlag}`,
+    ];
+
+    const recentActions = getActionBreadcrumbService().getRecentActions().slice(-10);
+    return { systemInfo: lines.join("\n"), recentActions };
+  };
+  handlers.push(typedHandle(CHANNELS.SYSTEM_GET_REPORT_ENRICHMENT, handleGetReportEnrichment));
+
   // Renderer report → ProcessMemoryMonitor. webContents id is taken from
   // event.sender.id (cannot be spoofed by the renderer payload).
   handlers.push(
@@ -252,7 +310,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     const { collectDiagnosticsWithKeys } = await getDiagnosticsCollector();
     const { payload, sectionKeys } = await collectDiagnosticsWithKeys(deps);
     const previewJson = safeStringify(payload, 2);
-    return { payload, sectionKeys, previewJson };
+    return { payload, sectionKeys, previewJson, appLaunchTimestamp: APP_LAUNCH_TIMESTAMP };
   };
   handlers.push(
     typedHandle(CHANNELS.SYSTEM_COLLECT_DIAGNOSTICS_FOR_REVIEW, handleCollectDiagnosticsForReview)
@@ -261,7 +319,11 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
   const handleSaveDiagnosticsBundle = async (
     savePayload: DiagnosticsBundleSavePayload
   ): Promise<boolean> => {
-    const filtered = filterSections(savePayload.payload, savePayload.enabledSections);
+    const timeWindowStartMs = savePayload.timeWindowStartMs ?? null;
+    const filtered = filterLogEntriesByTime(
+      filterSections(savePayload.payload, savePayload.enabledSections),
+      timeWindowStartMs
+    );
     let json = safeStringify(filtered, 2);
     json = applyReplacements(json, savePayload.replacements as ReplacementRule[]);
 
@@ -284,7 +346,8 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       filePath,
       json,
       includeLogs,
-      savePayload.replacements as ReplacementRule[]
+      savePayload.replacements as ReplacementRule[],
+      timeWindowStartMs
     );
     shell.showItemInFolder(filePath);
     return true;

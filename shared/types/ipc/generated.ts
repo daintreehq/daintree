@@ -44,6 +44,10 @@ export interface GeneratedIpcInvokeMap {
     args: [panelId: string];
     result: { cleared: boolean };
   };
+  "app:get-version-info": {
+    args: [];
+    result: import("./app.js").AppVersionInfo;
+  };
   "artifact:apply-patch": {
     args: [options: import("./agent.js").ApplyPatchOptions];
     result: import("./agent.js").ApplyPatchResult;
@@ -188,6 +192,10 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./devPreview.js").DevPreviewEnsureRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
   };
+  "dev-preview:get-all-sessions": {
+    args: [];
+    result: import("./devPreview.js").DevPreviewSessionState[];
+  };
   "dev-preview:get-by-worktree": {
     args: [request: import("./devPreview.js").DevPreviewGetByWorktreeRequest];
     result: import("./devPreview.js").DevPreviewSessionState | null;
@@ -200,9 +208,17 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./devPreview.js").DevPreviewDestructivePreviewSizesRequest];
     result: import("./devPreview.js").DevPreviewDestructivePreviewSizes;
   };
+  "dev-preview:get-proxy-port": {
+    args: [];
+    result: import("./devPreview.js").DevPreviewProxyInfo;
+  };
   "dev-preview:get-state": {
     args: [request: import("./devPreview.js").DevPreviewSessionRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
+  };
+  "dev-preview:mint-browser-token": {
+    args: [__0: { panelId: string; projectId: string; redirectPath: string }];
+    result: import("./devPreview.js").DevPreviewMintBrowserTokenResult;
   };
   "dev-preview:reinstall-and-restart": {
     args: [request: import("./devPreview.js").DevPreviewSessionRequest];
@@ -216,6 +232,10 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./devPreview.js").DevPreviewSessionRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
   };
+  "dev-preview:restart-by-worktree": {
+    args: [request: import("./devPreview.js").DevPreviewRestartByWorktreeRequest];
+    result: import("./devPreview.js").DevPreviewSessionState;
+  };
   "dev-preview:stop": {
     args: [request: import("./devPreview.js").DevPreviewSessionRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
@@ -227,6 +247,10 @@ export interface GeneratedIpcInvokeMap {
   "dev-preview:stop-by-worktree": {
     args: [request: import("./devPreview.js").DevPreviewStopByWorktreeRequest];
     result: void;
+  };
+  "dev-preview:stop-dev-server-by-worktree": {
+    args: [request: import("./devPreview.js").DevPreviewStopDevServerByWorktreeRequest];
+    result: import("./devPreview.js").DevPreviewSessionState;
   };
   "editor:discover": {
     args: [];
@@ -255,6 +279,34 @@ export interface GeneratedIpcInvokeMap {
     args: [filters: import("./events.js").EventFilterOptions];
     result: import("./events.js").EventRecord[];
   };
+  "forge-audit:clear-log": {
+    args: [];
+    result: void;
+  };
+  "forge-audit:export-log": {
+    args: [records: import("./forge.js").ForgeAuditRecord[]];
+    result: boolean;
+  };
+  "forge-audit:get-config": {
+    args: [];
+    result: { enabled: boolean; maxRecords: number };
+  };
+  "forge-audit:get-records": {
+    args: [];
+    result: import("./forge.js").ForgeAuditRecord[];
+  };
+  "forge-audit:get-stats": {
+    args: [];
+    result: import("./forge.js").ForgeAuditStats;
+  };
+  "forge-audit:set-enabled": {
+    args: [enabled: boolean];
+    result: { enabled: boolean; maxRecords: number };
+  };
+  "forge:unassign-issue": {
+    args: [payload: { cwd: string; issueNumber: number; username: string }];
+    result: void;
+  };
   "gemini:enable-alternate-buffer": {
     args: [];
     result: { success: boolean };
@@ -262,6 +314,10 @@ export interface GeneratedIpcInvokeMap {
   "gemini:get-status": {
     args: [];
     result: { exists: boolean; alternateBufferEnabled: boolean; error?: string | undefined };
+  };
+  "github:unassign-issue": {
+    args: [payload: { cwd: string; issueNumber: number; username: string }];
+    result: void;
   };
   "global-env:get": {
     args: [];
@@ -523,6 +579,38 @@ export interface GeneratedIpcInvokeMap {
     args: [arg: string | { step: string | null; agentSetupIds?: string[] | undefined } | null];
     result: void;
   };
+  "os-dnd:get-state": {
+    args: [];
+    result: boolean | undefined;
+  };
+  "plugin-mcp:get-config": {
+    args: [];
+    result: import("./pluginMcp.js").PluginMcpConfig;
+  };
+  "plugin-mcp:get-full-schema": {
+    args: [key: import("./pluginMcp.js").PluginMcpToolKey];
+    result: import("./pluginMcp.js").PluginMcpGetFullSchemaResult;
+  };
+  "plugin-mcp:get-stderr": {
+    args: [key: import("./pluginMcp.js").PluginMcpServerKey];
+    result: import("./pluginMcp.js").PluginMcpStderrResult;
+  };
+  "plugin-mcp:list": {
+    args: [];
+    result: import("./pluginMcp.js").PluginMcpServerInfo[];
+  };
+  "plugin-mcp:list-tools": {
+    args: [key: import("./pluginMcp.js").PluginMcpServerKey];
+    result: import("./pluginMcp.js").PluginMcpListToolsResult;
+  };
+  "plugin-mcp:restart": {
+    args: [key: import("./pluginMcp.js").PluginMcpServerKey];
+    result: void;
+  };
+  "plugin-mcp:set-config": {
+    args: [config: import("./pluginMcp.js").PluginMcpConfig];
+    result: import("./pluginMcp.js").PluginMcpConfig;
+  };
   "plugin:actions-get": {
     args: [];
     result: import("../plugin.js").PluginActionDescriptor[];
@@ -535,6 +623,22 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, actionId: string];
     result: void;
   };
+  "plugin:check-for-update": {
+    args: [pluginId: string];
+    result: import("../plugin.js").PluginCheckUpdateResult;
+  };
+  "plugin:clear-audit-log": {
+    args: [];
+    result: void;
+  };
+  "plugin:context-menu-items": {
+    args: [];
+    result: { pluginId: string; item: import("../plugin.js").ContextMenuContribution }[];
+  };
+  "plugin:export-audit-log": {
+    args: [records: import("./pluginAudit.js").PluginActionAuditRecord[]];
+    result: boolean;
+  };
   "plugin:file-decorations-get": {
     args: [scope: string, paths: string[]];
     result: Record<string, import("../forge.js").FileDecoration>;
@@ -542,6 +646,38 @@ export interface GeneratedIpcInvokeMap {
   "plugin:forge-providers-get": {
     args: [];
     result: import("../forge.js").RegisteredForgeProvider[];
+  };
+  "plugin:get-audit-config": {
+    args: [];
+    result: import("./pluginAudit.js").PluginAuditConfig;
+  };
+  "plugin:get-audit-records": {
+    args: [];
+    result: import("./pluginAudit.js").PluginActionAuditRecord[];
+  };
+  "plugin:get-diagnostics-snapshot": {
+    args: [];
+    result: import("./pluginDiagnostics.js").PluginDiagnosticsSnapshot;
+  };
+  "plugin:install": {
+    args: [archivePath: string, opts?: import("../plugin.js").PluginInstallOptions | undefined];
+    result: import("../plugin.js").PluginInstallResult;
+  };
+  "plugin:install-from-file": {
+    args: [];
+    result: import("../plugin.js").PluginInstallResult;
+  };
+  "plugin:install-from-path": {
+    args: [path: string];
+    result: import("../plugin.js").PluginInstallResult;
+  };
+  "plugin:install-from-url": {
+    args: [url: string];
+    result: import("../plugin.js").PluginInstallResult;
+  };
+  "plugin:keybindings": {
+    args: [];
+    result: { pluginId: string; item: import("../plugin.js").KeybindingContribution }[];
   };
   "plugin:list": {
     args: [];
@@ -555,9 +691,61 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../../config/panelKindRegistry.js").PanelKindConfig[];
   };
+  "plugin:set-audit-enabled": {
+    args: [enabled: boolean];
+    result: import("./pluginAudit.js").PluginAuditConfig;
+  };
+  "plugin:set-audit-max-records": {
+    args: [max: number];
+    result: import("./pluginAudit.js").PluginAuditConfig;
+  };
+  "plugin:set-enabled": {
+    args: [pluginId: string, enabled: boolean];
+    result: void;
+  };
+  "plugin:settings-delete-value": {
+    args: [
+      pluginId: string,
+      key: string,
+      scope: import("../plugin.js").PluginSettingsScope,
+      projectId: string | null,
+    ];
+    result: void;
+  };
+  "plugin:settings-get-values": {
+    args: [
+      pluginId: string,
+      scope: import("../plugin.js").PluginSettingsScope,
+      projectId: string | null,
+    ];
+    result: import("../plugin.js").PluginSettingsUiValues;
+  };
+  "plugin:settings-reveal-secret": {
+    args: [
+      pluginId: string,
+      key: string,
+      scope: import("../plugin.js").PluginSettingsScope,
+      projectId: string | null,
+    ];
+    result: string | null;
+  };
+  "plugin:settings-set-value": {
+    args: [
+      pluginId: string,
+      key: string,
+      value: unknown,
+      scope: import("../plugin.js").PluginSettingsScope,
+      projectId: string | null,
+    ];
+    result: void;
+  };
   "plugin:toolbar-buttons": {
     args: [];
     result: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];
+  };
+  "plugin:uninstall": {
+    args: [pluginId: string, deleteSettings?: boolean | undefined];
+    result: void;
   };
   "plugin:validate-action-ids": {
     args: [actionIds: string[]];
@@ -948,6 +1136,19 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "webview:get-navigation-history": {
+    args: [webContentsId: number];
+    result: {
+      entries: import("../browser.js").BrowserNavigationHistoryEntry[];
+      activeIndex: number;
+      canGoBack: boolean;
+      canGoForward: boolean;
+    };
+  };
+  "webview:go-to-history-index": {
+    args: [webContentsId: number, index: number];
+    result: void;
+  };
   "worktree-config:dismiss-wsl-banner": {
     args: [payload: { worktreeId: string }];
     result: void;
@@ -969,7 +1170,25 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "worktree:create": {
-    args: [payload: { rootPath: string; options: import("../git.js").CreateWorktreeOptions }];
+    args: [
+      payload: {
+        rootPath: string;
+        options: {
+          baseBranch: string;
+          newBranch: string;
+          path: string;
+          fromRemote?: boolean | undefined;
+          useExistingBranch?: boolean | undefined;
+          provisionResource?: boolean | undefined;
+          worktreeMode?: string | undefined;
+          sourcePrNumber?: number | undefined;
+          sourcePrTitle?: string | undefined;
+          sourcePrUrl?: string | undefined;
+          sourcePrState?: "merged" | "open" | "closed" | undefined;
+          sourcePrLinkedIssueNumber?: number | undefined;
+        };
+      },
+    ];
     result: string;
   };
   "worktree:delete": {
@@ -1033,7 +1252,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "worktree:set-active": {
-    args: [payload: import("./worktree.js").WorktreeSetActivePayload];
+    args: [payload: { worktreeId: string }];
     result: void;
   };
 }

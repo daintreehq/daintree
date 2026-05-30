@@ -89,18 +89,39 @@ vi.mock("@/components/Terminal/InlineStatusBanner", () => ({
     title,
     description,
     severity,
+    action,
   }: {
     title: ReactNode;
     description?: ReactNode;
     severity?: string;
+    action?: { id: string; label: string; onClick: () => void };
   }) => (
     <div data-testid="inline-status-banner" data-severity={severity ?? "error"}>
       <span data-testid="inline-status-banner-title">{title}</span>
       {description ? (
         <span data-testid="inline-status-banner-description">{description}</span>
       ) : null}
+      {action ? (
+        <button
+          type="button"
+          data-testid={`inline-status-banner-action-${action.id}`}
+          onClick={action.onClick}
+        >
+          {action.label}
+        </button>
+      ) : null}
     </div>
   ),
+}));
+
+const actionServiceDispatchMock = vi.fn<
+  (actionId: string, args?: unknown, opts?: unknown) => Promise<{ ok: true; result: undefined }>
+>(async () => ({ ok: true, result: undefined }));
+vi.mock("@/services/ActionService", () => ({
+  actionService: {
+    dispatch: (actionId: string, args?: unknown, opts?: unknown) =>
+      actionServiceDispatchMock(actionId, args, opts),
+  },
 }));
 
 const mockPanels = [
@@ -119,6 +140,7 @@ const mockPanels = [
     cwd: "/project",
     location: "dock" as const,
     isSuspect: true,
+    suspectReason: "crash-window" as const,
     agentState: "working",
   },
   { id: "t3", kind: "browser", title: "Docs", location: "grid" as const, isSuspect: false },
@@ -183,6 +205,7 @@ function setup(overrides?: {
 
 beforeEach(() => {
   notifyMock.mockReset();
+  actionServiceDispatchMock.mockClear();
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
@@ -227,6 +250,64 @@ describe("CrashRecoveryDialog", () => {
     it("shows suspect badge on suspect panels", () => {
       setup();
       expect(screen.getByTestId("suspect-badge-t2")).toBeTruthy();
+      expect(screen.queryByTestId("suspect-badge-t1")).toBeNull();
+    });
+
+    it("shows per-panel reason text in the suspect badge title", () => {
+      setup();
+      expect(screen.getByTestId("suspect-badge-t2").getAttribute("title")).toBe(
+        "Created within 30 seconds of the crash"
+      );
+    });
+
+    it("renders an icon-only suspect badge with no title when suspectReason is absent", () => {
+      setup({
+        crash: {
+          panels: [
+            { id: "t1", kind: "terminal", title: "Shell", location: "grid", isSuspect: true },
+          ],
+        },
+      });
+      const badge = screen.getByTestId("suspect-badge-t1");
+      expect(badge).toBeTruthy();
+      expect(badge.getAttribute("title")).toBeNull();
+    });
+
+    it("renders an icon-only badge with no title for an unknown suspectReason", () => {
+      setup({
+        crash: {
+          panels: [
+            {
+              id: "t1",
+              kind: "terminal",
+              title: "Shell",
+              location: "grid",
+              isSuspect: true,
+              suspectReason: "some-future-reason" as never,
+            },
+          ],
+        },
+      });
+      const badge = screen.getByTestId("suspect-badge-t1");
+      expect(badge).toBeTruthy();
+      expect(badge.getAttribute("title")).toBeNull();
+    });
+
+    it("renders no suspect badge when suspectReason is set but isSuspect is false", () => {
+      setup({
+        crash: {
+          panels: [
+            {
+              id: "t1",
+              kind: "terminal",
+              title: "Shell",
+              location: "grid",
+              isSuspect: false,
+              suspectReason: "crash-window" as const,
+            },
+          ],
+        },
+      });
       expect(screen.queryByTestId("suspect-badge-t1")).toBeNull();
     });
 
@@ -631,44 +712,69 @@ describe("CrashRecoveryDialog", () => {
     expect(screen.getByTestId("report-button").textContent).toContain("Report this crash");
   });
 
-  it("shows privacy warning on first report click, copies on second click", async () => {
+  it("opens an editable preview on the first report click without opening the browser", () => {
     setup();
     fireEvent.click(screen.getByTestId("details-toggle"));
     fireEvent.click(screen.getByTestId("report-button"));
-    expect(screen.getByTestId("privacy-warning")).toBeTruthy();
-    expect(screen.getByTestId("privacy-warning").textContent).toContain(
-      "Opens GitHub Issues in your browser"
-    );
-    expect(screen.getByTestId("privacy-warning").textContent).toContain("publicly visible");
-    expect(screen.getByTestId("report-button").textContent).toContain("Copy & report on GitHub");
-
-    fireEvent.click(screen.getByTestId("report-button"));
-    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
-    expect(window.electron.system.openExternal).toHaveBeenCalledWith(
-      "https://github.com/daintreehq/daintree/issues/new"
-    );
-  });
-
-  it("first report click does not write to clipboard or open browser", () => {
-    setup();
-    fireEvent.click(screen.getByTestId("details-toggle"));
-    fireEvent.click(screen.getByTestId("report-button"));
+    const textarea = screen.getByTestId("report-textarea") as HTMLTextAreaElement;
+    expect(textarea).toBeTruthy();
+    expect(textarea.value).toContain("Crash Report");
+    expect(textarea.value).toContain("Something went wrong");
     expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
     expect(window.electron.system.openExternal).not.toHaveBeenCalled();
   });
 
-  it("does not open the browser when clipboard write fails", async () => {
-    (navigator.clipboard.writeText as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error("denied")
-    );
+  it("submits the report on GitHub from the preview", async () => {
     setup();
     fireEvent.click(screen.getByTestId("details-toggle"));
     fireEvent.click(screen.getByTestId("report-button"));
+    fireEvent.click(screen.getByTestId("submit-report-button"));
+    await waitFor(() =>
+      expect(window.electron.system.openExternal).toHaveBeenCalledWith(
+        expect.stringContaining("github.com/daintreehq/daintree/issues/new")
+      )
+    );
+  });
+
+  it("submits the edited textarea content, not the original report", async () => {
+    setup();
+    fireEvent.click(screen.getByTestId("details-toggle"));
     fireEvent.click(screen.getByTestId("report-button"));
-    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
-    // Allow the awaited copy promise rejection to settle.
-    await Promise.resolve();
+    const textarea = screen.getByTestId("report-textarea") as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Edited crash notes from the user" } });
+    fireEvent.click(screen.getByTestId("submit-report-button"));
+    await waitFor(() => expect(window.electron.system.openExternal).toHaveBeenCalled());
+    const url = (window.electron.system.openExternal as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0] as string;
+    const body = decodeURIComponent(url.match(/[?&]body=([^&]*)/)![1]!);
+    expect(body).toBe("Edited crash notes from the user");
+  });
+
+  it("hides the preview when Cancel is clicked", () => {
+    setup();
+    fireEvent.click(screen.getByTestId("details-toggle"));
+    fireEvent.click(screen.getByTestId("report-button"));
+    expect(screen.getByTestId("report-preview")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("cancel-report-button"));
+    expect(screen.queryByTestId("report-preview")).toBeNull();
     expect(window.electron.system.openExternal).not.toHaveBeenCalled();
+  });
+
+  it("keeps the preview open and shows an error when clipboard fallback fails", async () => {
+    (navigator.clipboard.writeText as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("denied")
+    );
+    setup({
+      crash: { entry: { ...mockCrash.entry, errorStack: "x".repeat(10000) } },
+    });
+    fireEvent.click(screen.getByTestId("details-toggle"));
+    fireEvent.click(screen.getByTestId("report-button"));
+    expect(screen.getByTestId("report-clipboard-note")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("submit-report-button"));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId("report-error")).toBeTruthy());
+    expect(window.electron.system.openExternal).not.toHaveBeenCalled();
+    expect(screen.getByTestId("report-preview")).toBeTruthy();
   });
 
   it("calls onUpdateConfig when auto-restore checkbox is changed", async () => {
@@ -730,27 +836,23 @@ describe("CrashRecoveryDialog", () => {
     expect(screen.queryByText("Electron")).toBeNull();
   });
 
-  it("clipboard includes environment metadata and details section", async () => {
+  it("report preview includes environment metadata and details section", () => {
     setup();
     fireEvent.click(screen.getByTestId("details-toggle"));
     fireEvent.click(screen.getByTestId("report-button"));
-    fireEvent.click(screen.getByTestId("report-button"));
-
-    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
-    const clipText = (navigator.clipboard.writeText as ReturnType<typeof vi.fn>).mock
-      .calls[0]![0] as string;
-    expect(clipText).toContain("Electron");
-    expect(clipText).toContain("40.0.0");
-    expect(clipText).toContain("Node");
-    expect(clipText).toContain("22.12.0");
-    expect(clipText).toContain("Memory (Free/Total)");
-    expect(clipText).toContain("Panels");
-    expect(clipText).toContain("<details>");
-    expect(clipText).toContain("Stack trace");
-    expect(clipText).toContain("Session");
+    const reportText = (screen.getByTestId("report-textarea") as HTMLTextAreaElement).value;
+    expect(reportText).toContain("Electron");
+    expect(reportText).toContain("40.0.0");
+    expect(reportText).toContain("Node");
+    expect(reportText).toContain("22.12.0");
+    expect(reportText).toContain("Memory (Free/Total)");
+    expect(reportText).toContain("Panels");
+    expect(reportText).toContain("<details>");
+    expect(reportText).toContain("Stack trace");
+    expect(reportText).toContain("Session");
   });
 
-  it("clipboard handles legacy entry without new fields gracefully", async () => {
+  it("report preview handles legacy entry without new fields gracefully", () => {
     setup({
       crash: {
         entry: {
@@ -767,14 +869,10 @@ describe("CrashRecoveryDialog", () => {
     });
     fireEvent.click(screen.getByTestId("details-toggle"));
     fireEvent.click(screen.getByTestId("report-button"));
-    fireEvent.click(screen.getByTestId("report-button"));
-
-    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
-    const clipText = (navigator.clipboard.writeText as ReturnType<typeof vi.fn>).mock
-      .calls[0]![0] as string;
-    expect(clipText).toContain("Daintree 1.0.0");
-    expect(clipText).toContain("old crash");
-    expect(clipText).not.toContain("Electron");
+    const reportText = (screen.getByTestId("report-textarea") as HTMLTextAreaElement).value;
+    expect(reportText).toContain("Daintree 1.0.0");
+    expect(reportText).toContain("old crash");
+    expect(reportText).not.toContain("Electron");
   });
 
   it("shows 'no backup' message when hasBackup is false in legacy mode", () => {
@@ -782,7 +880,7 @@ describe("CrashRecoveryDialog", () => {
     expect(screen.getByText(/No backup available/)).toBeTruthy();
   });
 
-  it("clipboard surfaces watchdog deadlock cause when present", async () => {
+  it("report preview surfaces watchdog deadlock cause when present", () => {
     setup({
       crash: {
         entry: {
@@ -801,13 +899,129 @@ describe("CrashRecoveryDialog", () => {
     });
     fireEvent.click(screen.getByTestId("details-toggle"));
     fireEvent.click(screen.getByTestId("report-button"));
-    fireEvent.click(screen.getByTestId("report-button"));
+    const reportText = (screen.getByTestId("report-textarea") as HTMLTextAreaElement).value;
+    expect(reportText).toContain("Watchdog deadlock");
+    expect(reportText).toContain("3 missed heartbeats");
+    expect(reportText).toContain("main PID 4242");
+  });
 
-    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
-    const clipText = (navigator.clipboard.writeText as ReturnType<typeof vi.fn>).mock
-      .calls[0]![0] as string;
-    expect(clipText).toContain("Watchdog deadlock");
-    expect(clipText).toContain("3 missed heartbeats");
-    expect(clipText).toContain("main PID 4242");
+  describe("recent actions trail", () => {
+    const actions = [
+      {
+        id: "act-1",
+        actionId: "terminal.kill",
+        category: "terminal",
+        source: "user" as const,
+        danger: "confirm" as const,
+        durationMs: 12,
+        timestamp: 1699999990000,
+        count: 1,
+        confirmed: true,
+      },
+      {
+        id: "act-2",
+        actionId: "files.open",
+        category: "files",
+        source: "agent" as const,
+        danger: "safe" as const,
+        durationMs: 4,
+        timestamp: 1699999995000,
+        count: 2,
+        args: { path: "/Users/alice/secret/file.ts" },
+      },
+    ];
+
+    it("renders the action trail when recentActions is present", () => {
+      setup({ crash: { entry: { ...mockCrash.entry, recentActions: actions } } });
+      fireEvent.click(screen.getByTestId("details-toggle"));
+      expect(screen.getByTestId("actions-section")).toBeTruthy();
+      expect(screen.getByTestId("action-row-act-1")).toBeTruthy();
+      expect(screen.getByTestId("action-row-act-2")).toBeTruthy();
+      expect(screen.getByText("terminal.kill")).toBeTruthy();
+      expect(screen.getByText("files.open")).toBeTruthy();
+    });
+
+    it("omits the action trail when recentActions is empty or undefined", () => {
+      setup({ crash: { entry: { ...mockCrash.entry, recentActions: [] } } });
+      fireEvent.click(screen.getByTestId("details-toggle"));
+      expect(screen.queryByTestId("actions-section")).toBeNull();
+    });
+
+    it("scrubs user paths in rendered action args", () => {
+      setup({ crash: { entry: { ...mockCrash.entry, recentActions: actions } } });
+      fireEvent.click(screen.getByTestId("details-toggle"));
+      const row = screen.getByTestId("action-row-act-2");
+      expect(row.textContent).toContain("/Users/USER/secret/file.ts");
+      expect(row.textContent).not.toContain("alice");
+    });
+
+    it("shows newest action first", () => {
+      setup({ crash: { entry: { ...mockCrash.entry, recentActions: actions } } });
+      fireEvent.click(screen.getByTestId("details-toggle"));
+      const list = screen.getByTestId("actions-list");
+      const rows = within(list).getAllByTestId(/^action-row-/);
+      expect(rows[0]!.getAttribute("data-testid")).toBe("action-row-act-2");
+      expect(rows[1]!.getAttribute("data-testid")).toBe("action-row-act-1");
+    });
+  });
+
+  describe("recovery-failed inline banner", () => {
+    it("does not render the banner during the happy path", () => {
+      setup();
+      expect(screen.queryByTestId("recovery-error")).toBeNull();
+    });
+
+    it("shows an inline error with Send diagnostics when onResolve rejects", async () => {
+      const failingResolve = vi.fn(async () => {
+        throw new Error("backup unreadable");
+      });
+      setup({ onResolve: failingResolve });
+
+      // Select-all is already selected by default for non-suspect panels; click
+      // "Restore selected" to fire onResolve.
+      fireEvent.click(screen.getByTestId("restore-selected-button"));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("recovery-error")).toBeTruthy();
+      });
+      const banner = within(screen.getByTestId("recovery-error")).getByTestId(
+        "inline-status-banner"
+      );
+      expect(banner.getAttribute("data-severity")).toBe("error");
+      const desc = within(screen.getByTestId("recovery-error")).getByTestId(
+        "inline-status-banner-description"
+      );
+      expect(desc.textContent).toContain("backup unreadable");
+
+      // notify() is NOT called for the recovery-failed path — the inline banner
+      // replaces it because the Toaster isn't mounted while the crash dialog
+      // is blocking the app.
+      expect(notifyMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Recovery failed" })
+      );
+    });
+
+    it("Send diagnostics button dispatches the diagnostics.openReview action", async () => {
+      const failingResolve = vi.fn(async () => {
+        throw new Error("boom");
+      });
+      setup({ onResolve: failingResolve });
+      fireEvent.click(screen.getByTestId("restore-selected-button"));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("recovery-error")).toBeTruthy();
+      });
+      fireEvent.click(
+        within(screen.getByTestId("recovery-error")).getByTestId(
+          "inline-status-banner-action-send-diagnostics"
+        )
+      );
+
+      expect(actionServiceDispatchMock).toHaveBeenCalledWith(
+        "diagnostics.openReview",
+        { scope: { source: "recovery.crashRecoveryFailed" } },
+        { source: "user" }
+      );
+    });
   });
 });

@@ -50,6 +50,11 @@ server.listen(0, '127.0.0.1', () => {
 
     const devBtn = window.locator(SEL.toolbar.openDevPreview);
     if (!(await devBtn.isVisible().catch(() => false))) {
+      test.info().annotations.push({
+        type: "conditional-skip",
+        description: "Dev preview toolbar button not visible in this launch state",
+      });
+
       test.skip();
       return;
     }
@@ -90,14 +95,20 @@ server.listen(0, '127.0.0.1', () => {
     await expect(consoleToggle).toHaveAttribute("aria-expanded", "true", {
       timeout: T_SHORT,
     });
-    await window.locator(SEL.devPreview.consoleTab).click();
+    const consoleTab = window.locator(SEL.devPreview.consoleTab);
+    const outputTab = window.locator(SEL.devPreview.outputTab);
+    await expect(consoleTab).toBeVisible({ timeout: T_SHORT });
+    await outputTab.focus();
+    await window.keyboard.press("ArrowRight");
+    await expect(consoleTab).toHaveAttribute("aria-selected", "true", {
+      timeout: T_SHORT,
+    });
 
     await expect(window.locator(`text=${CAPTURE_MARKER}-runtime`).first()).toBeVisible({
       timeout: T_LONG,
     });
 
     // The Console tab carries an error-count badge once errors land.
-    const consoleTab = window.locator(SEL.devPreview.consoleTab);
     await expect
       .poll(
         async () => {

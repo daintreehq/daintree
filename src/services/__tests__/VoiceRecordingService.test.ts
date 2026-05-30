@@ -11,21 +11,30 @@ vi.mock("@/store/voiceRecordingStore", () => {
     panelBuffers: {} as Record<string, unknown>,
     correctionEnabled: false,
     isConfigured: false,
+    lockedTarget: null as { panelId: string } | null,
+    recentTargets: [] as Array<unknown>,
   };
   const fns = {
-    setError: vi.fn(),
+    setLastError: vi.fn(),
     announce: vi.fn(),
     setStatus: vi.fn(),
     setConfigured: vi.fn(),
     setCorrectionEnabled: vi.fn(),
+    setArming: vi.fn(),
     beginSession: vi.fn(),
     finishSession: vi.fn(),
     setAudioLevel: vi.fn(),
     setElapsedSeconds: vi.fn(),
     appendDelta: vi.fn(),
     completeSegment: vi.fn(),
+    setSessionDraftStart: vi.fn(),
     setDraftLengthAtSegmentStart: vi.fn(),
+    setActiveParagraphStart: vi.fn(),
     clearPanelBuffer: vi.fn(),
+    lockTarget: vi.fn(),
+    unlockTarget: vi.fn(),
+    clearLockedTarget: vi.fn(),
+    recordRecentTarget: vi.fn(),
   };
   const getState = () => ({ ...state, ...fns });
   const subscribe = vi.fn(() => () => {});
@@ -50,7 +59,6 @@ vi.mock("@/store/terminalInputStore", () => {
   const fns = {
     getDraftInput: vi.fn(() => ""),
     setDraftInput: vi.fn(),
-    appendVoiceText: vi.fn(),
     bumpVoiceDraftRevision: vi.fn(),
   };
   const getState = () => fns;
@@ -106,6 +114,17 @@ vi.mock("@/utils/logger", () => ({
 
 vi.mock("@/lib/voiceInputSettingsEvents", () => ({
   VOICE_INPUT_SETTINGS_CHANGED_EVENT: "voice-input-settings-changed",
+}));
+
+vi.mock("@/services/KeybindingService", () => ({
+  keybindingService: {
+    getEffectiveCombo: vi.fn((actionId: string) => {
+      if (actionId === "voiceInput.toggle") return "Cmd+Shift+V";
+      if (actionId === "voiceInput.toggleAssistant") return "Cmd+Shift+Alt+V";
+      return undefined;
+    }),
+    matchesEvent: vi.fn(),
+  },
 }));
 
 function buildElectronStub() {
@@ -205,8 +224,21 @@ function setupGlobals(electronStub = buildElectronStub()) {
   vi.stubGlobal("AudioContext", function () {
     return ctx;
   });
+  // Capture the most-recently-constructed worklet node so tests can inspect its
+  // port. The service calls `port.postMessage` to signal pause/resume.
+  const workletNodes: Array<{
+    port: { onmessage: null | ((e: unknown) => void); postMessage: ReturnType<typeof vi.fn> };
+    connect: ReturnType<typeof vi.fn>;
+    disconnect: ReturnType<typeof vi.fn>;
+  }> = [];
   vi.stubGlobal("AudioWorkletNode", function () {
-    return { port: { onmessage: null }, connect: vi.fn(), disconnect: vi.fn() };
+    const node = {
+      port: { onmessage: null, postMessage: vi.fn() },
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    };
+    workletNodes.push(node);
+    return node;
   });
   vi.stubGlobal("navigator", {
     mediaDevices: {
@@ -217,7 +249,15 @@ function setupGlobals(electronStub = buildElectronStub()) {
     },
   });
 
-  return { windowListeners, documentListeners, electronStub, ctx, oscillatorMock, gainMock };
+  return {
+    windowListeners,
+    documentListeners,
+    electronStub,
+    ctx,
+    oscillatorMock,
+    gainMock,
+    workletNodes,
+  };
 }
 
 describe("VoiceRecordingService — background recording", () => {
@@ -239,14 +279,15 @@ describe("VoiceRecordingService — background recording", () => {
 
     voiceRecordingService.initialize();
 
-    // Fire every registered window "blur" listener — none should call stop().
+    // Fire every registered window "blur" listener. The push-to-talk blur
+    // listener (#9189) registers but is a no-op when no PTT press is active,
+    // so stop() must still not be called in toggle mode.
     const blurListeners = windowListeners["blur"] ?? [];
     for (const listener of blurListeners) {
       await listener(new Event("blur"));
     }
 
     expect(stopSpy).not.toHaveBeenCalled();
-    expect(blurListeners).toHaveLength(0);
   });
 
   it("does not stop recording when the window is hidden (visibilitychange event)", async () => {
@@ -378,12 +419,183 @@ describe("isActiveVoiceSession helper", () => {
   it("returns true for active phases", () => {
     expect(isActiveVoiceSession("connecting")).toBe(true);
     expect(isActiveVoiceSession("recording")).toBe(true);
+    expect(isActiveVoiceSession("paused")).toBe(true);
+    expect(isActiveVoiceSession("reconnecting")).toBe(true);
     expect(isActiveVoiceSession("finishing")).toBe(true);
   });
 
   it("returns false for terminal phases", () => {
     expect(isActiveVoiceSession("idle")).toBe(false);
     expect(isActiveVoiceSession("error")).toBe(false);
+  });
+
+  it("returns false for arming — it is pre-audio, not an active session", () => {
+    // Arming must be excluded so the toggle guard treats a second hotkey
+    // press during arming as continuing the start, not stopping a session
+    // that hasn't begun.
+    expect(isActiveVoiceSession("arming")).toBe(false);
+  });
+});
+
+describe("VoiceRecordingService — arming state", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("toggle() calls setArming() with the target before invoking start()", async () => {
+    setupGlobals();
+
+    const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      useVoiceRecordingStore: {
+        getState: () => { setArming: ReturnType<typeof vi.fn> };
+      };
+    };
+    const setArmingMock = storeModule.useVoiceRecordingStore.getState().setArming;
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const startSpy = vi
+      .spyOn(voiceRecordingService, "start")
+      .mockImplementation(async () => undefined);
+
+    const target = { panelId: "panel-1", panelTitle: "Terminal" };
+    await voiceRecordingService.toggle(target);
+
+    expect(setArmingMock).toHaveBeenCalledWith(target);
+    expect(startSpy).toHaveBeenCalledWith(target);
+    // Ordering: setArming must run before start() so the synchronous cue
+    // paints before any await yields control.
+    expect(setArmingMock.mock.invocationCallOrder[0]).toBeLessThan(
+      startSpy.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("toggle() during arming on the same target aborts via finishSession (no stop())", async () => {
+    setupGlobals();
+
+    const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      useVoiceRecordingStore: {
+        getState: () => { finishSession: ReturnType<typeof vi.fn> };
+      };
+      __state: { activeTarget: { panelId: string } | null; status: string };
+    };
+    storeModule.__state.activeTarget = { panelId: "panel-1" };
+    storeModule.__state.status = "arming";
+    const finishSessionMock = storeModule.useVoiceRecordingStore.getState().finishSession;
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop");
+    const startSpy = vi.spyOn(voiceRecordingService, "start");
+
+    await voiceRecordingService.toggle({ panelId: "panel-1" });
+
+    expect(finishSessionMock).toHaveBeenCalledWith({ nextStatus: "idle" });
+    expect(stopSpy).not.toHaveBeenCalled();
+    expect(startSpy).not.toHaveBeenCalled();
+
+    storeModule.__state.activeTarget = null;
+    storeModule.__state.status = "idle";
+  });
+
+  it("start() failure path clears arming so the store does not stay armed forever", async () => {
+    // Issue #9178 — every start() early-return after setArming() must roll
+    // the store off "arming", otherwise the toolbar/panel border keeps
+    // showing the pre-recording cue with no mic behind it. This test
+    // simulates the not-configured path.
+    const electronStub = buildElectronStub();
+    electronStub.voiceInput.getSettings.mockResolvedValue({
+      enabled: false,
+      openaiApiKey: "",
+      correctionEnabled: false,
+    });
+    setupGlobals(electronStub);
+
+    const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      useVoiceRecordingStore: {
+        getState: () => {
+          finishSession: ReturnType<typeof vi.fn>;
+          setLastError: ReturnType<typeof vi.fn>;
+        };
+      };
+    };
+    const fns = storeModule.useVoiceRecordingStore.getState();
+    const finishSessionMock = fns.finishSession;
+    const setLastErrorMock = fns.setLastError;
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+
+    await voiceRecordingService.start({ panelId: "panel-1" });
+
+    expect(setLastErrorMock).toHaveBeenCalled();
+    // failArming() routes through finishSession with nextStatus:"error"
+    expect(finishSessionMock).toHaveBeenCalledWith({ nextStatus: "error" });
+  });
+
+  it("cross-panel switch while recording tears down the existing session", async () => {
+    // Regression guard. Before the fix, toggle() set arming on the new
+    // target which masked the existing recording status — start()'s
+    // teardown check skipped, leaving the old MediaStream open. The fix
+    // keys teardown on this.stream rather than store status.
+    setupGlobals();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi
+      .spyOn(voiceRecordingService, "stop")
+      .mockImplementation(async () => undefined);
+
+    // Simulate an open audio session by attaching a stream directly.
+    // We use `as unknown as` to reach a private field for test setup only.
+    const fakeStream = { getTracks: () => [{ stop: vi.fn() }] };
+    (voiceRecordingService as unknown as { stream: unknown }).stream = fakeStream;
+
+    await voiceRecordingService.start({ panelId: "panel-b" });
+
+    // start() must call stop() to tear down the prior session even though
+    // setArming() has by now overwritten store status from "recording" to
+    // "arming". Before the fix this assertion failed.
+    expect(stopSpy).toHaveBeenCalled();
+
+    (voiceRecordingService as unknown as { stream: unknown }).stream = null;
+  });
+
+  it("Escape during arming routes through finishSession instead of stop()", async () => {
+    const { windowListeners } = setupGlobals();
+
+    const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      useVoiceRecordingStore: {
+        getState: () => { finishSession: ReturnType<typeof vi.fn> };
+      };
+      __state: { activeTarget: { panelId: string } | null; status: string };
+    };
+    storeModule.__state.activeTarget = { panelId: "panel-1" };
+    storeModule.__state.status = "arming";
+    const finishSessionMock = storeModule.useVoiceRecordingStore.getState().finishSession;
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop");
+
+    voiceRecordingService.initialize();
+
+    const escapeEvent = {
+      key: "Escape",
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    };
+    const keydownListeners = windowListeners["keydown"] ?? [];
+    for (const listener of keydownListeners) {
+      listener(escapeEvent);
+    }
+
+    expect(finishSessionMock).toHaveBeenCalledWith({ nextStatus: "idle" });
+    expect(stopSpy).not.toHaveBeenCalled();
+
+    storeModule.__state.activeTarget = null;
+    storeModule.__state.status = "idle";
   });
 });
 
@@ -524,12 +736,12 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
       useVoiceRecordingStore: {
         getState: () => {
-          setError: ReturnType<typeof vi.fn>;
+          setLastError: ReturnType<typeof vi.fn>;
           announce: ReturnType<typeof vi.fn>;
         };
       };
     };
-    voice.useVoiceRecordingStore.getState().setError.mockClear();
+    voice.useVoiceRecordingStore.getState().setLastError.mockClear();
     voice.useVoiceRecordingStore.getState().announce.mockClear();
     return { macro, help, panel };
   }
@@ -572,8 +784,8 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     await voiceRecordingService.toggleFocusedPanel();
 
     expect(toggleSpy).not.toHaveBeenCalled();
-    expect(useVoiceRecordingStore.getState().setError).toHaveBeenCalledWith(
-      expect.stringContaining("starting")
+    expect(useVoiceRecordingStore.getState().setLastError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("starting") })
     );
   });
 
@@ -611,8 +823,8 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     expect(help.__fns.setOpen).toHaveBeenCalledWith(true);
     expect(help.__fns.requestFocus).toHaveBeenCalled();
     expect(toggleSpy).not.toHaveBeenCalled();
-    expect(useVoiceRecordingStore.getState().setError).toHaveBeenCalledWith(
-      expect.stringContaining("Start the Daintree Assistant")
+    expect(useVoiceRecordingStore.getState().setLastError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("Start the Daintree Assistant") })
     );
   });
 
@@ -701,8 +913,803 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     await voiceRecordingService.toggleAssistant();
 
     expect(toggleSpy).not.toHaveBeenCalled();
-    expect(useVoiceRecordingStore.getState().setError).toHaveBeenCalledWith(
-      expect.stringContaining("Start the Daintree Assistant")
+    expect(useVoiceRecordingStore.getState().setLastError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("Start the Daintree Assistant") })
     );
+  });
+});
+
+describe("VoiceRecordingService — pause/resume (#9191)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function getVoiceMockState() {
+    const mod = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: { activeTarget: { panelId: string } | null; status: string };
+    };
+    return mod.__state;
+  }
+
+  // The voiceRecordingStore mock factory runs once per file, so vi.fn instances
+  // are shared across tests in this block — reset them so each test asserts
+  // against a clean call history.
+  async function resetVoiceStoreFns() {
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    const fns = useVoiceRecordingStore.getState();
+    (fns.setStatus as ReturnType<typeof vi.fn>).mockClear();
+    (fns.announce as ReturnType<typeof vi.fn>).mockClear();
+    (fns.beginSession as ReturnType<typeof vi.fn>).mockClear();
+    (fns.finishSession as ReturnType<typeof vi.fn>).mockClear();
+  }
+
+  it("pause() suspends the PCM worklet and sets status to paused", async () => {
+    const { workletNodes } = setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "recording";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+
+    voiceRecordingService.pause();
+
+    expect(workletNodes.length).toBeGreaterThan(0);
+    const node = workletNodes[workletNodes.length - 1]!;
+    expect(node.port.postMessage).toHaveBeenCalledWith({ type: "setPaused", value: true });
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    expect(useVoiceRecordingStore.getState().setStatus).toHaveBeenCalledWith("paused");
+    expect(useVoiceRecordingStore.getState().announce).toHaveBeenCalledWith("Dictation paused.");
+  });
+
+  it("pause() is a no-op when status is not recording", async () => {
+    const { workletNodes } = setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "connecting";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+
+    // Reset post-start calls so we only see post-pause behaviour.
+    const node = workletNodes[workletNodes.length - 1]!;
+    node.port.postMessage.mockClear();
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    (useVoiceRecordingStore.getState().setStatus as ReturnType<typeof vi.fn>).mockClear();
+
+    voiceRecordingService.pause();
+
+    expect(node.port.postMessage).not.toHaveBeenCalled();
+    expect(useVoiceRecordingStore.getState().setStatus).not.toHaveBeenCalled();
+  });
+
+  it("resume() ungates the PCM worklet and sets status back to recording", async () => {
+    const { workletNodes } = setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "paused";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+
+    const node = workletNodes[workletNodes.length - 1]!;
+    node.port.postMessage.mockClear();
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    (useVoiceRecordingStore.getState().setStatus as ReturnType<typeof vi.fn>).mockClear();
+
+    voiceRecordingService.resume();
+
+    expect(node.port.postMessage).toHaveBeenCalledWith({ type: "setPaused", value: false });
+    expect(useVoiceRecordingStore.getState().setStatus).toHaveBeenCalledWith("recording");
+    expect(useVoiceRecordingStore.getState().announce).toHaveBeenCalledWith("Dictation resumed.");
+  });
+
+  it("resume() is a no-op when status is not paused", async () => {
+    const { workletNodes } = setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "recording";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+
+    const node = workletNodes[workletNodes.length - 1]!;
+    node.port.postMessage.mockClear();
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    (useVoiceRecordingStore.getState().setStatus as ReturnType<typeof vi.fn>).mockClear();
+
+    voiceRecordingService.resume();
+
+    expect(node.port.postMessage).not.toHaveBeenCalled();
+    expect(useVoiceRecordingStore.getState().setStatus).not.toHaveBeenCalled();
+  });
+
+  it("togglePause() dispatches to pause when recording and resume when paused", async () => {
+    const { workletNodes } = setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "recording";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+
+    const node = workletNodes[workletNodes.length - 1]!;
+    node.port.postMessage.mockClear();
+
+    voiceRecordingService.togglePause();
+    expect(node.port.postMessage).toHaveBeenCalledWith({ type: "setPaused", value: true });
+
+    voiceState.status = "paused";
+    node.port.postMessage.mockClear();
+    voiceRecordingService.togglePause();
+    expect(node.port.postMessage).toHaveBeenCalledWith({ type: "setPaused", value: false });
+  });
+
+  it("togglePause() is a no-op when status is idle", async () => {
+    setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = null;
+    voiceState.status = "idle";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    voiceRecordingService.togglePause();
+    expect(useVoiceRecordingStore.getState().setStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe("VoiceRecordingService — interim delta handling (#9172)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("does not write to the draft store or bump the voice revision on interim deltas", async () => {
+    const { electronStub } = setupGlobals();
+    let deltaCallback: ((delta: string) => void) | null = null;
+    // Cast through unknown because the stub's vi.fn is initialised with a
+    // zero-arg shape; the real handler takes a (delta:string)=>void.
+    (
+      electronStub.voiceInput.onTranscriptionDelta as unknown as {
+        mockImplementation: (impl: (cb: (delta: string) => void) => () => void) => void;
+      }
+    ).mockImplementation((cb) => {
+      deltaCallback = cb;
+      return () => {};
+    });
+
+    const { __state } = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: { activeTarget: { panelId: string } | null };
+    };
+    __state.activeTarget = { panelId: "panel-1" };
+
+    const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+    const inputStore = useTerminalInputStore.getState();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+
+    expect(deltaCallback).not.toBeNull();
+    deltaCallback!("hello");
+    deltaCallback!(" world");
+    deltaCallback!(" again");
+
+    // The interim path must not mutate the draft store — that's the entire fix.
+    expect(inputStore.setDraftInput).not.toHaveBeenCalled();
+    expect(inputStore.bumpVoiceDraftRevision).not.toHaveBeenCalled();
+
+    __state.activeTarget = null;
+  });
+
+  it("commits exactly one draft write per onTranscriptionComplete (one undo step)", async () => {
+    const { electronStub } = setupGlobals();
+    let deltaCallback: ((delta: string) => void) | null = null;
+    let completeCallback: ((payload: { text: string }) => void) | null = null;
+    (
+      electronStub.voiceInput.onTranscriptionDelta as unknown as {
+        mockImplementation: (impl: (cb: (delta: string) => void) => () => void) => void;
+      }
+    ).mockImplementation((cb) => {
+      deltaCallback = cb;
+      return () => {};
+    });
+    (
+      electronStub.voiceInput.onTranscriptionComplete as unknown as {
+        mockImplementation: (impl: (cb: (payload: { text: string }) => void) => () => void) => void;
+      }
+    ).mockImplementation((cb) => {
+      completeCallback = cb;
+      return () => {};
+    });
+
+    const voiceModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: {
+        activeTarget: { panelId: string } | null;
+        panelBuffers: Record<string, { insertPoint: number }>;
+      };
+    };
+    voiceModule.__state.activeTarget = { panelId: "panel-1" };
+
+    const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+    const inputStore = useTerminalInputStore.getState();
+    (inputStore.getDraftInput as ReturnType<typeof vi.fn>).mockReturnValue("existing");
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+
+    // Five interim deltas — none should commit to the draft.
+    deltaCallback!("hel");
+    deltaCallback!("lo");
+    deltaCallback!(" wor");
+    deltaCallback!("ld");
+    deltaCallback!("!");
+
+    // Simulate insertPoint being captured by the first delta. The test stub
+    // for setInsertPoint is a no-op, so seed the buffer manually.
+    voiceModule.__state.panelBuffers["panel-1"] = { insertPoint: 8 };
+
+    // Single completion event — exactly one write, one revision bump.
+    completeCallback!({ text: "hello world!" });
+
+    expect(inputStore.setDraftInput).toHaveBeenCalledTimes(1);
+    expect(inputStore.bumpVoiceDraftRevision).toHaveBeenCalledTimes(1);
+
+    voiceModule.__state.activeTarget = null;
+    voiceModule.__state.panelBuffers = {};
+  });
+
+  it("does not write a separator-only draft on a silent (empty) onTranscriptionComplete", async () => {
+    const { electronStub } = setupGlobals();
+    let completeCallback: ((payload: { text: string }) => void) | null = null;
+    (
+      electronStub.voiceInput.onTranscriptionComplete as unknown as {
+        mockImplementation: (impl: (cb: (payload: { text: string }) => void) => () => void) => void;
+      }
+    ).mockImplementation((cb) => {
+      completeCallback = cb;
+      return () => {};
+    });
+
+    const voiceModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: {
+        activeTarget: { panelId: string } | null;
+        panelBuffers: Record<string, { insertPoint: number }>;
+      };
+    };
+    voiceModule.__state.activeTarget = { panelId: "panel-1" };
+    voiceModule.__state.panelBuffers["panel-1"] = { insertPoint: 5 };
+
+    const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+    const inputStore = useTerminalInputStore.getState();
+    (inputStore.getDraftInput as ReturnType<typeof vi.fn>).mockReturnValue("hello");
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+
+    // Defeat any cross-test fn-instance reuse (Vitest may keep top-level
+    // mock factory closures across re-imports).
+    (inputStore.setDraftInput as ReturnType<typeof vi.fn>).mockClear();
+    (inputStore.bumpVoiceDraftRevision as ReturnType<typeof vi.fn>).mockClear();
+
+    completeCallback!({ text: "   " });
+
+    expect(inputStore.setDraftInput).not.toHaveBeenCalled();
+    expect(inputStore.bumpVoiceDraftRevision).not.toHaveBeenCalled();
+
+    voiceModule.__state.activeTarget = null;
+    voiceModule.__state.panelBuffers = {};
+  });
+});
+
+describe("VoiceRecordingService — provider configuration gating", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("treats a Deepgram-only user (no OpenAI key) as configured", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "",
+      deepgramApiKey: "dg-test",
+      transcriptionProvider: "deepgram",
+      correctionEnabled: false,
+    });
+    setupGlobals(electron);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await expect(voiceRecordingService.refreshConfiguration()).resolves.toBe(true);
+  });
+
+  it("treats a Deepgram user without a Deepgram key as not configured", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      // An OpenAI key must NOT satisfy the Deepgram provider.
+      openaiApiKey: "sk-key",
+      deepgramApiKey: "",
+      transcriptionProvider: "deepgram",
+      correctionEnabled: false,
+    });
+    setupGlobals(electron);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await expect(voiceRecordingService.refreshConfiguration()).resolves.toBe(false);
+  });
+
+  it("treats an OpenAI user with an OpenAI key as configured", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "sk-key",
+      deepgramApiKey: "",
+      transcriptionProvider: "openai",
+      correctionEnabled: false,
+    });
+    setupGlobals(electron);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await expect(voiceRecordingService.refreshConfiguration()).resolves.toBe(true);
+  });
+});
+describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function buildPttElectronStub() {
+    const stub = buildElectronStub();
+    stub.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "sk-key",
+      correctionEnabled: false,
+      recordingMode: "push-to-talk",
+    });
+    return stub;
+  }
+
+  it("toggleFocusedPanel calls start() in push-to-talk mode (not toggle)", async () => {
+    const electron = buildPttElectronStub();
+    setupGlobals(electron);
+
+    const panel = (await import("@/store/panelStore")) as unknown as {
+      __state: { focusedId: string | null; panelsById: Record<string, unknown> };
+    };
+    panel.__state.focusedId = "panel-1";
+    panel.__state.panelsById = {
+      "panel-1": { id: "panel-1", title: "Terminal", location: "grid" },
+    };
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const startSpy = vi.spyOn(voiceRecordingService, "start").mockResolvedValue();
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(startSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ panelId: "panel-1", panelTitle: "Terminal" })
+    );
+    expect(toggleSpy).not.toHaveBeenCalled();
+  });
+
+  it("toggleFocusedPanel still calls toggle() in toggle mode (regression guard)", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "sk-key",
+      correctionEnabled: false,
+      recordingMode: "toggle",
+    });
+    setupGlobals(electron);
+
+    const panel = (await import("@/store/panelStore")) as unknown as {
+      __state: { focusedId: string | null; panelsById: Record<string, unknown> };
+    };
+    panel.__state.focusedId = "panel-1";
+    panel.__state.panelsById = {
+      "panel-1": { id: "panel-1", title: "Terminal", location: "grid" },
+    };
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const startSpy = vi.spyOn(voiceRecordingService, "start").mockResolvedValue();
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(toggleSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ panelId: "panel-1", panelTitle: "Terminal" })
+    );
+    expect(startSpy).not.toHaveBeenCalled();
+  });
+
+  it("keyup of the matched trigger key stops the PTT session", async () => {
+    const electron = buildPttElectronStub();
+    const { windowListeners } = setupGlobals(electron);
+
+    const { keybindingService } = (await import("@/services/KeybindingService")) as unknown as {
+      keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
+    };
+    keybindingService.matchesEvent.mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+V" && e.code === "KeyV"
+    );
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const keydownListeners = windowListeners["keydown"] ?? [];
+    const keyupListeners = windowListeners["keyup"] ?? [];
+    expect(keydownListeners.length).toBeGreaterThan(0);
+    expect(keyupListeners.length).toBeGreaterThan(0);
+
+    // Simulate the PTT keydown (Cmd+Shift+V).
+    const downEvent = {
+      code: "KeyV",
+      key: "V",
+      repeat: false,
+      metaKey: true,
+      shiftKey: true,
+      altKey: false,
+      ctrlKey: false,
+    } as unknown as KeyboardEvent;
+    for (const listener of keydownListeners) listener(downEvent);
+
+    // Simulate the keyup of the same key.
+    const upEvent = { code: "KeyV" } as unknown as KeyboardEvent;
+    for (const listener of keyupListeners) listener(upEvent);
+
+    expect(stopSpy).toHaveBeenCalledWith(
+      "Dictation stopped.",
+      expect.objectContaining({ preserveLiveText: true })
+    );
+  });
+
+  it("MetaLeft keyup stops the session even when the trigger key release is swallowed (macOS)", async () => {
+    const electron = buildPttElectronStub();
+    const { windowListeners } = setupGlobals(electron);
+
+    const { keybindingService } = (await import("@/services/KeybindingService")) as unknown as {
+      keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
+    };
+    keybindingService.matchesEvent.mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+V" && e.code === "KeyV"
+    );
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const keydownListeners = windowListeners["keydown"] ?? [];
+    const keyupListeners = windowListeners["keyup"] ?? [];
+
+    const downEvent = {
+      code: "KeyV",
+      key: "V",
+      repeat: false,
+      metaKey: true,
+      shiftKey: true,
+      altKey: false,
+      ctrlKey: false,
+    } as unknown as KeyboardEvent;
+    for (const listener of keydownListeners) listener(downEvent);
+
+    // KeyV keyup never arrives (macOS swallows it); only MetaLeft keyup fires.
+    const metaUpEvent = { code: "MetaLeft" } as unknown as KeyboardEvent;
+    for (const listener of keyupListeners) listener(metaUpEvent);
+
+    expect(stopSpy).toHaveBeenCalled();
+  });
+
+  it("ignores key-repeat keydown events (only the first physical press starts PTT)", async () => {
+    const electron = buildPttElectronStub();
+    const { windowListeners } = setupGlobals(electron);
+
+    const { keybindingService } = (await import("@/services/KeybindingService")) as unknown as {
+      keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
+    };
+    keybindingService.matchesEvent.mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+V" && e.code === "KeyV"
+    );
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const keydownListeners = windowListeners["keydown"] ?? [];
+    const keyupListeners = windowListeners["keyup"] ?? [];
+
+    // Only the repeating keydown fires — pttActiveKeyCode must not be set.
+    const repeatEvent = {
+      code: "KeyV",
+      key: "V",
+      repeat: true,
+      metaKey: true,
+      shiftKey: true,
+      altKey: false,
+      ctrlKey: false,
+    } as unknown as KeyboardEvent;
+    for (const listener of keydownListeners) listener(repeatEvent);
+
+    // Now release — keyup should NOT fire stop since no PTT session is tracked.
+    const upEvent = { code: "KeyV" } as unknown as KeyboardEvent;
+    for (const listener of keyupListeners) listener(upEvent);
+
+    expect(stopSpy).not.toHaveBeenCalled();
+  });
+
+  it("window blur stops the session when a PTT press is active", async () => {
+    const electron = buildPttElectronStub();
+    const { windowListeners } = setupGlobals(electron);
+
+    const { keybindingService } = (await import("@/services/KeybindingService")) as unknown as {
+      keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
+    };
+    keybindingService.matchesEvent.mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+V" && e.code === "KeyV"
+    );
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const keydownListeners = windowListeners["keydown"] ?? [];
+    const blurListeners = windowListeners["blur"] ?? [];
+    expect(blurListeners.length).toBeGreaterThan(0);
+
+    const downEvent = {
+      code: "KeyV",
+      key: "V",
+      repeat: false,
+      metaKey: true,
+      shiftKey: true,
+      altKey: false,
+      ctrlKey: false,
+    } as unknown as KeyboardEvent;
+    for (const listener of keydownListeners) listener(downEvent);
+
+    for (const listener of blurListeners) listener(new Event("blur"));
+
+    expect(stopSpy).toHaveBeenCalledWith(
+      "Dictation stopped.",
+      expect.objectContaining({ preserveLiveText: true })
+    );
+  });
+
+  it("window blur does NOT call stop when no PTT press is active (toggle mode unaffected)", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "sk-key",
+      correctionEnabled: false,
+      recordingMode: "toggle",
+    });
+    const { windowListeners } = setupGlobals(electron);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const blurListeners = windowListeners["blur"] ?? [];
+    for (const listener of blurListeners) listener(new Event("blur"));
+
+    expect(stopSpy).not.toHaveBeenCalled();
+  });
+
+  it("toggleAssistant calls start() in push-to-talk mode (not toggle)", async () => {
+    const electron = buildPttElectronStub();
+    setupGlobals(electron);
+
+    const help = (await import("@/store/helpPanelStore")) as unknown as {
+      __state: { isOpen: boolean; terminalId: string | null };
+      __fns: { setOpen: ReturnType<typeof vi.fn>; requestFocus: ReturnType<typeof vi.fn> };
+    };
+    const panel = (await import("@/store/panelStore")) as unknown as {
+      __state: { focusedId: string | null; panelsById: Record<string, unknown> };
+    };
+    help.__state.isOpen = true;
+    help.__state.terminalId = "assistant-term-1";
+    panel.__state.panelsById = {
+      "assistant-term-1": { id: "assistant-term-1", location: "background" },
+    };
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const startSpy = vi.spyOn(voiceRecordingService, "start").mockResolvedValue();
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    await voiceRecordingService.toggleAssistant();
+
+    expect(startSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        panelId: "assistant-term-1",
+        panelTitle: "Daintree Assistant",
+      })
+    );
+    expect(toggleSpy).not.toHaveBeenCalled();
+  });
+
+  it("ignores keyup of an unrelated key during an active PTT session", async () => {
+    const electron = buildPttElectronStub();
+    const { windowListeners } = setupGlobals(electron);
+
+    const { keybindingService } = (await import("@/services/KeybindingService")) as unknown as {
+      keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
+    };
+    keybindingService.matchesEvent.mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+V" && e.code === "KeyV"
+    );
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const keydownListeners = windowListeners["keydown"] ?? [];
+    const keyupListeners = windowListeners["keyup"] ?? [];
+
+    const downEvent = {
+      code: "KeyV",
+      key: "V",
+      repeat: false,
+      metaKey: true,
+      shiftKey: true,
+      altKey: false,
+      ctrlKey: false,
+    } as unknown as KeyboardEvent;
+    for (const listener of keydownListeners) listener(downEvent);
+
+    // KeyA release while V is still held — must not stop.
+    for (const listener of keyupListeners) listener({ code: "KeyA" } as unknown as KeyboardEvent);
+    expect(stopSpy).not.toHaveBeenCalled();
+
+    // KeyV release does stop.
+    for (const listener of keyupListeners) listener({ code: "KeyV" } as unknown as KeyboardEvent);
+    expect(stopSpy).toHaveBeenCalled();
+  });
+
+  it("command-palette re-invocation in PTT mode stops the active session", async () => {
+    const electron = buildPttElectronStub();
+    setupGlobals(electron);
+
+    const panel = (await import("@/store/panelStore")) as unknown as {
+      __state: { focusedId: string | null; panelsById: Record<string, unknown> };
+    };
+    panel.__state.focusedId = "panel-1";
+    panel.__state.panelsById = {
+      "panel-1": { id: "panel-1", title: "Terminal", location: "grid" },
+    };
+
+    // Mark the session as already active for panel-1.
+    const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: { activeTarget: { panelId: string } | null; status: string };
+    };
+    voice.__state.activeTarget = { panelId: "panel-1" };
+    voice.__state.status = "recording";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const startSpy = vi.spyOn(voiceRecordingService, "start").mockResolvedValue();
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(stopSpy).toHaveBeenCalledWith(
+      "Dictation stopped.",
+      expect.objectContaining({ preserveLiveText: true })
+    );
+    expect(startSpy).not.toHaveBeenCalled();
+
+    voice.__state.activeTarget = null;
+    voice.__state.status = "idle";
+  });
+
+  it("Shift release alone does NOT stop the PTT session (modifier release ignored)", async () => {
+    const electron = buildPttElectronStub();
+    const { windowListeners } = setupGlobals(electron);
+
+    const { keybindingService } = (await import("@/services/KeybindingService")) as unknown as {
+      keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
+    };
+    keybindingService.matchesEvent.mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+V" && e.code === "KeyV"
+    );
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const keydownListeners = windowListeners["keydown"] ?? [];
+    const keyupListeners = windowListeners["keyup"] ?? [];
+
+    const downEvent = {
+      code: "KeyV",
+      key: "V",
+      repeat: false,
+      metaKey: true,
+      shiftKey: true,
+      altKey: false,
+      ctrlKey: false,
+    } as unknown as KeyboardEvent;
+    for (const listener of keydownListeners) listener(downEvent);
+
+    // ShiftLeft release alone — should NOT stop.
+    const shiftUpEvent = { code: "ShiftLeft" } as unknown as KeyboardEvent;
+    for (const listener of keyupListeners) listener(shiftUpEvent);
+
+    expect(stopSpy).not.toHaveBeenCalled();
   });
 });

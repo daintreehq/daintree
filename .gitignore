@@ -77,6 +77,7 @@ coverage/
 test-results/
 playwright-report/
 blob-report/
+daintree-e2e-artifacts/
 
 # Temp files
 tmp/
@@ -106,6 +107,7 @@ planning/
 # Claude Code session markers
 .claude/nf-session-seen-*.flag
 .claude/scheduled_tasks.lock
+.claude/workflows/
 
 # Claude scratch / working notes (private, ephemeral)
 .claude-scratch/

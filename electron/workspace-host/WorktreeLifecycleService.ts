@@ -3,7 +3,7 @@ import { readFile, access, cp, mkdir, readdir, unlink } from "fs/promises";
 import { join as pathJoin, basename, dirname } from "path";
 import os from "os";
 import { z } from "zod/v4";
-import { scrubSecrets } from "../utils/secretScrubber.js";
+import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { buildProbeEnv } from "../utils/spawnEnv.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import type { WorktreeMonitor } from "./WorktreeMonitor.js";

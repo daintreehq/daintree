@@ -7,6 +7,7 @@ import type { WorktreeState } from "../worktree.js";
 import type {
   Project,
   ProjectSettings,
+  RecipeNameCollision,
   RunCommand,
   TerminalRecipe,
   TerminalSnapshot,
@@ -15,8 +16,8 @@ import type { ChecklistState, HelpAssistantTier, IpcEventBusMap, IpcInvokeMap } 
 import type { GeneratedElectronAPI } from "./generated-api.js";
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
-import type { VoiceInputStatus } from "../voice.js";
-export type { VoiceInputStatus };
+import type { VoiceInputError, VoiceInputStatus } from "../voice.js";
+export type { VoiceInputError, VoiceInputStatus };
 import type {
   AuthValidation,
   ForgeProviderEntry,
@@ -49,6 +50,7 @@ import type {
   TerminalActivityPayload,
   SemanticSearchMatch,
 } from "./terminal.js";
+import type { AppVersionInfo } from "./app.js";
 import type {
   SaveArtifactOptions,
   SaveArtifactResult,
@@ -145,7 +147,7 @@ import type {
   FileReadPayload,
   FileReadResult,
 } from "./files.js";
-import type { DevPreviewStateChangedPayload } from "./devPreview.js";
+import type { DevPreviewStateChangedPayload, DevPreviewAllSessionsPayload } from "./devPreview.js";
 import type { AppAgentConfig } from "../appAgent.js";
 import type { ActionContext } from "../actions.js";
 import type { AppThemeConfig } from "../appTheme.js";
@@ -373,6 +375,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getProcessMetrics(): Promise<import("./system.js").ProcessMetricEntry[]>;
     getHeapStats(): Promise<import("./system.js").HeapStats>;
     getDiagnosticsInfo(): Promise<import("./system.js").DiagnosticsInfo>;
+    getReportEnrichment(): Promise<import("./system.js").ReportIssueEnrichment>;
     installAgent(payload: {
       agentId: string;
       methodIndex?: number;
@@ -388,6 +391,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getState(): Promise<AppState>;
     setState(partialState: Partial<AppState>): Promise<void>;
     getVersion(): Promise<string>;
+    getVersionInfo(): Promise<AppVersionInfo>;
     hydrate(): Promise<HydrateResult>;
     boot(): Promise<BootResult>;
     quit(): Promise<void>;
@@ -520,7 +524,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onCloneProgress(callback: (event: CloneRepoProgressEvent) => void): () => void;
     /** Cancel an in-progress clone operation */
     cancelClone(): Promise<void>;
-    getRecipes(projectId: string): Promise<TerminalRecipe[]>;
+    getRecipes(
+      projectId: string
+    ): Promise<{ recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] }>;
     saveRecipes(projectId: string, recipes: TerminalRecipe[]): Promise<void>;
     addRecipe(projectId: string, recipe: TerminalRecipe): Promise<void>;
     updateRecipe(
@@ -536,7 +542,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     updateInRepoRecipe(
       projectId: string,
       recipe: TerminalRecipe,
-      previousName?: string
+      previousName?: string,
+      options?: { force?: boolean }
     ): Promise<void>;
     deleteInRepoRecipe(projectId: string, recipeName: string): Promise<void>;
     getInRepoPresets(projectId: string): Promise<Record<string, AgentPreset[]>>;
@@ -714,6 +721,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       sortOrder?: import("../github.js").GitHubSortOrder;
     }): Promise<import("../github.js").GitHubListResponse<import("../github.js").GitHubPR>>;
     assignIssue(cwd: string, issueNumber: number, username: string): Promise<void>;
+    unassignIssue(cwd: string, issueNumber: number, username: string): Promise<void>;
     getIssueTooltip(
       cwd: string,
       issueNumber: number
@@ -760,6 +768,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // onStateChanged is a renderer-only subscription.
   devPreview: GeneratedElectronAPI["devPreview"] & {
     onStateChanged(callback: (data: DevPreviewStateChangedPayload) => void): () => void;
+    onAllSessionsChanged(callback: (data: DevPreviewAllSessionsPayload) => void): () => void;
   };
   git: {
     getFileDiff(cwd: string, filePath: string, status: GitStatus): Promise<string>;
@@ -867,7 +876,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Freeze or unfreeze a webview's JS execution via CDP Page.setWebLifecycleState */
     setLifecycleState(webContentsId: number, frozen: boolean): Promise<void>;
     /** Register a webview's webContentsId with its panel ID for dialog routing */
-    registerPanel(webContentsId: number, panelId: string): Promise<void>;
+    registerPanel(webContentsId: number, panelId: string, kind?: string): Promise<void>;
     /** Respond to a JavaScript dialog (alert/confirm/prompt) shown by a webview */
     respondToDialog(dialogId: string, confirmed: boolean, response?: string): Promise<void>;
     /** Subscribe to dialog requests from webview guests */
@@ -884,6 +893,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onFindShortcut(
       callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void
     ): () => void;
+    /** Subscribe to reload shortcut (Cmd/Ctrl+R) forwarded from focused webview guests */
+    onReloadShortcut(callback: (payload: { panelId: string }) => void): () => void;
     /** Subscribe to blocked cross-origin navigation events from webview guests */
     onNavigationBlocked(
       callback: (payload: { panelId: string; url: string; canOpenExternal: boolean }) => void
@@ -942,6 +953,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     reloadIgnoringCache(webContentsId: number, panelId: string): Promise<void>;
     /** Read the current scroll position from Blink layout — works on frozen pages */
     getScrollPosition(webContentsId: number): Promise<number>;
+    /** Read Chromium navigation history for the webview */
+    getNavigationHistory(
+      webContentsId: number
+    ): Promise<import("../browser.js").BrowserNavigationHistorySnapshot>;
+    /** Navigate to a specific index in Chromium's navigation history */
+    goToHistoryIndex(webContentsId: number, index: number): Promise<void>;
   };
   // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
   hibernation: GeneratedElectronAPI["hibernation"] & {
@@ -971,6 +988,21 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onSuspend(callback: () => void): () => void;
     /** Subscribe to wake events with sleep duration */
     onWake(callback: (sleepDurationMs: number) => void): () => void;
+  };
+  /**
+   * OS Do-Not-Disturb / Focus state.
+   *
+   * `osDndActive` is `true` when the OS reports DND/Focus active, `false`
+   * when off, and `undefined` on unsupported platforms (Windows/Linux) or
+   * when detection fails — fail-soft semantics. Consumers must treat
+   * `undefined` as "unknown / do not gate". Used by the working-pulse audio
+   * gate and the read-only toolbar tooltip; never for in-app toast
+   * suppression. Invoke method comes from GeneratedElectronAPI;
+   * onStateChanged is a renderer-only subscription.
+   */
+  osDnd: GeneratedElectronAPI["osDnd"] & {
+    /** Subscribe to DND state transitions. Returns an unsubscribe function. */
+    onStateChanged(callback: (payload: { osDndActive: boolean | undefined }) => void): () => void;
   };
   keybinding: {
     /** Get current keybinding overrides */
@@ -1272,6 +1304,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getIssueUrl(payload: { cwd: string; issueNumber: number }): Promise<string>;
     /** Assign an issue to a user via the resolved forge provider. */
     assignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
+    /** Unassign a user from an issue via the resolved forge provider. */
+    unassignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
     /** Validate a token against the global default forge provider. */
     validateToken(token: string): Promise<AuthValidation>;
     /**
@@ -1330,6 +1364,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       stderr: string;
     }): Promise<{ providerId: string; classification: PushErrorClassification | null } | null>;
   };
+  // forgeAudit comes from GeneratedElectronAPI
   voiceInput: {
     getSettings(): Promise<VoiceInputSettings>;
     setSettings(settings: Partial<VoiceInputSettings>): Promise<void>;
@@ -1342,7 +1377,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: { text: string; willCorrect: boolean }) => void
     ): () => void;
     onParagraphBoundary(callback: (payload: { rawText: string | null }) => void): () => void;
-    onError(callback: (error: string) => void): () => void;
+    onError(callback: (error: VoiceInputError) => void): () => void;
     onStatus(callback: (status: VoiceInputStatus) => void): () => void;
     checkMicPermission(): Promise<MicPermissionStatus>;
     requestMicPermission(): Promise<boolean>;
@@ -1408,6 +1443,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * external/api-key dispatch, which keeps live renderer context.
          */
         context?: ActionContext;
+        /**
+         * Display-only requesting-bearer identity for the confirm dialog
+         * (#9157). Present only for unpinned external/api-key dispatch;
+         * absent for pinned help-session dispatch so the dialog stays
+         * provenance-free.
+         */
+        callerInfo?: import("./mcpServer.js").McpBearerIdentity;
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */
@@ -1417,18 +1459,47 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       confirmationDecision?: import("./mcpServer.js").McpConfirmationDecision;
     }): void;
   };
+  pluginBridge: {
+    /**
+     * Listen for plugin-sourced action dispatch requests from the main process.
+     * Unlike {@link mcpBridge.onDispatchActionRequest} there is no `confirmed`,
+     * `context`, or `callerInfo`: plugins cannot bypass confirm-gating and don't
+     * override the action context.
+     */
+    onDispatchActionRequest(
+      callback: (payload: { requestId: string; actionId: string; args?: unknown }) => void
+    ): () => void;
+    /** Send the plugin action dispatch result back to the main process. */
+    sendDispatchActionResponse(payload: {
+      requestId: string;
+      result: import("../actions.js").ActionDispatchResult;
+    }): void;
+  };
   // list / toolbarButtons / menuItems / validateActionIds / get|register|
   // unregisterAction / getPanelKinds / getForgeProviders / getDecorations
   // come from GeneratedElectronAPI; invoke + on are variadic plugin RPC
   // helpers that aren't expressible through IpcInvokeMap, and the on*
   // entries are renderer-only subscriptions.
   plugin: GeneratedElectronAPI["plugin"] & {
+    /**
+     * Resolve the absolute native filesystem path of a dropped File via
+     * `webUtils.getPathForFile`. Plugin-scoped (never exposed globally) so
+     * native-path recovery stays confined to the plugin install surface
+     * (#9295). Returns `""` for synthetic/non-disk File objects (clipboard
+     * paste, virtual files) — treat empty as a structured error.
+     */
+    getDroppedFilePath(file: File): string;
     invoke(pluginId: string, channel: string, ...args: unknown[]): Promise<unknown>;
     on(pluginId: string, channel: string, callback: (payload: unknown) => void): () => void;
     /** Subscribe to plugin-action registry changes. Returns a cleanup. */
     onActionsChanged(
       callback: (payload: { actions: import("../plugin.js").PluginActionDescriptor[] }) => void
     ): () => void;
+    /**
+     * Subscribe to provenance/installed-set changes (install, uninstall). The
+     * callback carries no data — re-pull via {@link list}. Returns a cleanup.
+     */
+    onProvenanceChanged(callback: (payload: Record<string, never>) => void): () => void;
     /**
      * Subscribe to file-decoration invalidations. The callback fires with the
      * changed scope (and optionally the narrowed paths) — it carries no
@@ -1447,6 +1518,33 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onToolbarButtonsChanged(
       callback: (payload: {
         buttons: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];
+        complete: boolean;
+      }) => void
+    ): () => void;
+    /** Subscribe to plugin menu item registry changes. Returns a cleanup. */
+    onMenuItemsChanged(
+      callback: (payload: {
+        items: Array<{
+          pluginId: string;
+          item: import("../plugin.js").MenuItemContribution;
+        }>;
+        complete: boolean;
+      }) => void
+    ): () => void;
+    /** Subscribe to plugin keybinding registry changes. Returns a cleanup. */
+    onKeybindingsChanged(
+      callback: (payload: {
+        keybindings: import("../plugin.js").PluginKeybindingDescriptor[];
+        complete: boolean;
+      }) => void
+    ): () => void;
+    /** Subscribe to plugin context-menu item registry changes. Returns a cleanup. */
+    onContextMenuItemsChanged(
+      callback: (payload: {
+        items: Array<{
+          pluginId: string;
+          item: import("../plugin.js").ContextMenuContribution;
+        }>;
         complete: boolean;
       }) => void
     ): () => void;
@@ -1518,6 +1616,17 @@ export type MicPermissionStatus =
 
 export type VoiceTranscriptionModel = "gpt-realtime-whisper";
 
+/**
+ * Transcription backend. Each provider owns its own WebSocket protocol, audio
+ * framing, and turn-detection behavior:
+ *
+ * - "openai": OpenAI Realtime (`gpt-realtime-whisper`). No server VAD, so the
+ *   provider drives segmentation with a client-side commit cadence.
+ * - "deepgram": Deepgram Nova-3 streaming. Native server-side VAD / endpointing,
+ *   so no client commit timer is needed.
+ */
+export type VoiceTranscriptionProvider = "openai" | "deepgram";
+
 export type VoiceCorrectionModel = "gpt-5-nano" | "gpt-5-mini";
 
 /**
@@ -1533,11 +1642,28 @@ export type VoiceCorrectionModel = "gpt-5-nano" | "gpt-5-mini";
  */
 export type VoiceParagraphingStrategy = "spoken-command" | "manual";
 
+/**
+ * Recording mode for voice dictation.
+ *
+ * "toggle" (default): Pressing the voice shortcut starts recording; pressing it
+ *   again stops recording. Recording persists until the user explicitly ends it.
+ *
+ * "push-to-talk": Recording is bound to the keyboard shortcut press. Pressing and
+ *   holding the voice shortcut starts recording; releasing the trigger key stops
+ *   recording and drains the transcript into the editor without auto-submitting.
+ *   Escape still cancels. The toolbar button remains toggle-only regardless of mode.
+ */
+export type VoiceRecordingMode = "toggle" | "push-to-talk";
+
 export interface VoiceInputSettings {
   enabled: boolean;
   openaiApiKey: string;
+  /** API key for the Deepgram transcription provider. Empty string when unset. */
+  deepgramApiKey: string;
   language: string;
   customDictionary: string[];
+  /** Which transcription backend to use. Defaults to "openai". */
+  transcriptionProvider: VoiceTranscriptionProvider;
   transcriptionModel: VoiceTranscriptionModel;
   correctionEnabled: boolean;
   correctionModel: VoiceCorrectionModel;
@@ -1548,6 +1674,12 @@ export interface VoiceInputSettings {
   resolveFileLinks: boolean;
   /** Microphone device ID to use for recording. Empty string means system default. */
   deviceId: string;
+  /** OpenAI Organization ID for legacy sk- keys. Sent as OpenAI-Organization header. */
+  organizationId: string;
+  /** OpenAI Project ID for legacy sk- keys. Sent as OpenAI-Project header. */
+  projectId: string;
+  /** Controls whether recording is held (push-to-talk) or toggled. Defaults to "toggle". */
+  recordingMode: VoiceRecordingMode;
 }
 
 export type HelpAssistantAuditRetention = 7 | 30 | 0;

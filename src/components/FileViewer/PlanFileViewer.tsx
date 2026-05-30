@@ -2,7 +2,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { CodeViewer } from "./CodeViewer";
 import { usePlanFileContent } from "@/hooks/usePlanFileContent";
 import { FileText } from "lucide-react";
-import { Spinner } from "@/components/ui/Spinner";
+import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 
 interface PlanFileViewerProps {
   isOpen: boolean;
@@ -41,11 +41,11 @@ export function PlanFileViewer({ isOpen, filePath, rootPath, onClose }: PlanFile
         )}
 
         {filePath && !isGone && status === "loading" && (
-          <div className="flex items-center justify-center h-48">
-            <div className="flex items-center gap-3 text-muted-foreground">
-              <Spinner size="lg" />
-              <span>Loading plan...</span>
-            </div>
+          <div className="p-4 space-y-3">
+            <Skeleton label="Loading plan">
+              <SkeletonBone className="h-5 w-1/3" />
+              <SkeletonText lines={15} />
+            </Skeleton>
           </div>
         )}
 

@@ -1,12 +1,4 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  createContext,
-  useContext,
-  useCallback,
-  useState,
-  useRef,
-} from "react";
+import { useEffect, useLayoutEffect, useCallback, useState, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, useWorktreeSelectionStore } from "@/store";
@@ -16,20 +8,7 @@ import { DockedPanel } from "@/components/Terminal/DockedPanel";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { logError } from "@/utils/logger";
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
-
-interface DockPanelContextValue {
-  portalTarget: (terminalId: string, target: HTMLElement | null) => void;
-}
-
-const DockPanelContext = createContext<DockPanelContextValue | null>(null);
-
-export function useDockPanelPortal() {
-  const context = useContext(DockPanelContext);
-  if (!context) {
-    throw new Error("useDockPanelPortal must be used within DockPanelOffscreenContainer");
-  }
-  return context.portalTarget;
-}
+import { DockPanelContext, type DockPanelContextValue } from "./dockPanelPortalContext";
 
 interface DockPanelOffscreenContainerProps {
   children: React.ReactNode;

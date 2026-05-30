@@ -7,6 +7,7 @@ import {
   type CorrectionPromptContext,
 } from "../../shared/config/voiceCorrection.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
 
 export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 
@@ -72,6 +73,8 @@ export interface VoiceCorrectionSettings {
   customInstructions?: string;
   projectName?: string;
   projectPath?: string;
+  organizationId?: string;
+  projectId?: string;
 }
 
 export interface VoiceCorrectionRequest {
@@ -257,7 +260,7 @@ export class VoiceCorrectionService {
 
   async detectFileLinkTokens(
     utterance: string,
-    settings: Pick<VoiceCorrectionSettings, "apiKey">
+    settings: Pick<VoiceCorrectionSettings, "apiKey" | "organizationId" | "projectId">
   ): Promise<Array<{ description: string }>> {
     const trimmed = utterance.trim();
     if (!trimmed) return [];
@@ -268,7 +271,7 @@ export class VoiceCorrectionService {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${settings.apiKey}`,
+          ...buildOpenAIHeaders(settings.apiKey, settings.organizationId, settings.projectId),
         },
         signal: this.buildFetchSignal(FILE_LINK_DETECTION_TIMEOUT_MS),
         body: JSON.stringify({
@@ -369,7 +372,7 @@ export class VoiceCorrectionService {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+        ...buildOpenAIHeaders(apiKey, settings.organizationId, settings.projectId),
       },
       signal: this.buildFetchSignal(CORRECTION_TIMEOUT_MS),
       body: JSON.stringify({

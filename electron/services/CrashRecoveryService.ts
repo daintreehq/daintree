@@ -677,6 +677,10 @@ export class CrashRecoveryService {
       for (const entry of terminals) {
         if (typeof entry !== "object" || entry === null) continue;
         const t = entry as Record<string, unknown>;
+        const isSuspect =
+          typeof t.createdAt === "number"
+            ? Math.abs(crashTimestamp - t.createdAt) < SUSPECT_WINDOW_MS
+            : false;
         summaries.push({
           id: String(t.id ?? ""),
           kind: String(t.kind ?? "terminal"),
@@ -684,10 +688,8 @@ export class CrashRecoveryService {
           cwd: t.cwd ? String(t.cwd) : undefined,
           worktreeId: t.worktreeId ? String(t.worktreeId) : undefined,
           location: (t.location === "dock" ? "dock" : "grid") as "grid" | "dock",
-          isSuspect:
-            typeof t.createdAt === "number"
-              ? Math.abs(crashTimestamp - t.createdAt) < SUSPECT_WINDOW_MS
-              : false,
+          isSuspect,
+          suspectReason: isSuspect ? "crash-window" : undefined,
           agentState: coerceAgentState(t.agentState),
           lastStateChange: typeof t.lastStateChange === "number" ? t.lastStateChange : undefined,
         });

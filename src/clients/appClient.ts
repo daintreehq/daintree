@@ -1,4 +1,5 @@
 import type { AppState, HydrateResult } from "@shared/types";
+import type { AppVersionInfo } from "@shared/types/ipc/app";
 
 /**
  * @example
@@ -16,6 +17,10 @@ export const appClient = {
 
   getVersion: (): Promise<string> => {
     return window.electron.app.getVersion();
+  },
+
+  getVersionInfo: (): Promise<AppVersionInfo> => {
+    return window.electron.app.getVersionInfo();
   },
 
   hydrate: (): Promise<HydrateResult> => {

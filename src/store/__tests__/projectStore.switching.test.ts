@@ -386,13 +386,14 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
   });
 });
 
-describe("buildOutgoingState worktree selection (#5000)", () => {
-  it("includes non-root activeWorktreeId in switchProject outgoing state", async () => {
-    mockActiveWorktreeId = "wt-feature";
-
+describe("buildOutgoingState worktree selection (#5000, #9512)", () => {
+  it("persists the durable restore selection in switchProject outgoing state", async () => {
     const { useProjectStore } = await import("../projectStore");
     const { setWorktreeSelectionAccessor } = await import("../storeAccessors");
-    setWorktreeSelectionAccessor(() => ({ activeWorktreeId: mockActiveWorktreeId }));
+    setWorktreeSelectionAccessor(() => ({
+      activeWorktreeId: "wt-feature",
+      restoreWorktreeId: "wt-feature",
+    }));
     useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
     await useProjectStore.getState().switchProject(projectB.id);
@@ -402,12 +403,13 @@ describe("buildOutgoingState worktree selection (#5000)", () => {
     expect(outgoing.activeWorktreeId).toBe("wt-feature");
   });
 
-  it("includes non-root activeWorktreeId in reopenProject outgoing state", async () => {
-    mockActiveWorktreeId = "wt-feature";
-
+  it("persists the durable restore selection in reopenProject outgoing state", async () => {
     const { useProjectStore } = await import("../projectStore");
     const { setWorktreeSelectionAccessor } = await import("../storeAccessors");
-    setWorktreeSelectionAccessor(() => ({ activeWorktreeId: mockActiveWorktreeId }));
+    setWorktreeSelectionAccessor(() => ({
+      activeWorktreeId: "wt-feature",
+      restoreWorktreeId: "wt-feature",
+    }));
     useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
     await useProjectStore.getState().reopenProject(projectB.id);
@@ -417,12 +419,36 @@ describe("buildOutgoingState worktree selection (#5000)", () => {
     expect(outgoing.activeWorktreeId).toBe("wt-feature");
   });
 
-  it("converts null activeWorktreeId to undefined in outgoing state", async () => {
-    mockActiveWorktreeId = null;
-
+  it("persists the durable selection, not an incidentally-active worktree (#9512)", async () => {
+    // A batch merge left a temporary PR worktree focused/active, but the user's
+    // last deliberate selection was the root worktree. The outgoing state must
+    // carry the durable selection so switching back lands on root.
     const { useProjectStore } = await import("../projectStore");
-    const { setWorktreeSelectionAccessor } = await import("../storeAccessors");
-    setWorktreeSelectionAccessor(() => ({ activeWorktreeId: mockActiveWorktreeId }));
+    const { setWorktreeSelectionAccessor, setWorktreeIdSetAccessor } =
+      await import("../storeAccessors");
+    setWorktreeSelectionAccessor(() => ({
+      activeWorktreeId: "wt-temp-pr",
+      restoreWorktreeId: "wt-root",
+    }));
+    setWorktreeIdSetAccessor(() => new Set(["wt-root", "wt-temp-pr"]));
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.switch.mock.calls[0]![1];
+    expect(outgoing.activeWorktreeId).toBe("wt-root");
+  });
+
+  it("drops a restore target that no longer exists so hydration falls back (#9512)", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    const { setWorktreeSelectionAccessor, setWorktreeIdSetAccessor } =
+      await import("../storeAccessors");
+    setWorktreeSelectionAccessor(() => ({
+      activeWorktreeId: null,
+      restoreWorktreeId: "wt-removed",
+    }));
+    setWorktreeIdSetAccessor(() => new Set(["wt-root"]));
     useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
     await useProjectStore.getState().switchProject(projectB.id);
@@ -433,13 +459,45 @@ describe("buildOutgoingState worktree selection (#5000)", () => {
     expect("activeWorktreeId" in outgoing).toBe(true);
   });
 
-  it("includes activeWorktreeId even when terminal store getter is null (early return)", async () => {
-    mockActiveWorktreeId = "wt-early";
+  it("preserves the restore target when no view store is mounted (skip validation)", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    const { setWorktreeSelectionAccessor } = await import("../storeAccessors");
+    // No setWorktreeIdSetAccessor → getWorktreeIdSet() returns null → no validation.
+    setWorktreeSelectionAccessor(() => ({
+      activeWorktreeId: "wt-feature",
+      restoreWorktreeId: "wt-feature",
+    }));
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.switch.mock.calls[0]![1];
+    expect(outgoing.activeWorktreeId).toBe("wt-feature");
+  });
+
+  it("converts null restore selection to undefined in outgoing state", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    const { setWorktreeSelectionAccessor } = await import("../storeAccessors");
+    setWorktreeSelectionAccessor(() => ({ activeWorktreeId: null, restoreWorktreeId: null }));
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.switch.mock.calls[0]![1];
+    expect(outgoing.activeWorktreeId).toBeUndefined();
+    expect("activeWorktreeId" in outgoing).toBe(true);
+  });
+
+  it("includes the restore selection even when terminal store getter is null (early return)", async () => {
     // Don't call setPanelStoreAccessor — forces the early return path
     const { useProjectStore } = await import("../projectStore");
     const { setWorktreeSelectionAccessor } = await import("../storeAccessors");
-    setWorktreeSelectionAccessor(() => ({ activeWorktreeId: mockActiveWorktreeId }));
+    setWorktreeSelectionAccessor(() => ({
+      activeWorktreeId: "wt-early",
+      restoreWorktreeId: "wt-early",
+    }));
     useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
     await useProjectStore.getState().switchProject(projectB.id);

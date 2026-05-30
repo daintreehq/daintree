@@ -56,7 +56,11 @@ describe("generate-update-metadata", () => {
     });
   });
 
-  it("uses the universal macOS ZIP as the top-level updater path", async () => {
+  // electron-updater's MacUpdater.ts picks the first entry whose URL passes the
+  // architecture filter. Native x64 must come first so Intel Macs select it instead
+  // of the larger universal ZIP; arm64 second for Apple Silicon; universal last as a
+  // fallback that should never be picked when a native build exists.
+  it("ranks native macOS ZIPs before the universal ZIP", async () => {
     const dir = await tempDir();
     const releaseDir = path.join(dir, "release");
     await mkdir(releaseDir);
@@ -74,11 +78,59 @@ describe("generate-update-metadata", () => {
       releaseDate: "2026-01-02T03:04:05.000Z",
     });
 
-    expect(metadata.path).toBe("Daintree-1.2.3-universal-mac.zip");
+    expect(metadata.path).toBe("Daintree-1.2.3-mac.zip");
     expect(metadata.files.map((file) => file.url)).toEqual([
-      "Daintree-1.2.3-universal-mac.zip",
       "Daintree-1.2.3-mac.zip",
       "Daintree-1.2.3-arm64-mac.zip",
+      "Daintree-1.2.3-universal-mac.zip",
+    ]);
+  });
+
+  it("ranks explicit -x64-mac.zip before universal when no bare -mac.zip is present", async () => {
+    const dir = await tempDir();
+    const releaseDir = path.join(dir, "release");
+    await mkdir(releaseDir);
+    const packagePath = await writePackageJson(dir);
+    await writeArtifact(releaseDir, "Daintree-1.2.3-arm64-mac.zip", "arm64");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-x64-mac.zip", "x64");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-universal-mac.zip", "universal");
+
+    const metadata = await generateUpdateMetadata({
+      platform: "mac",
+      releaseDir,
+      metadataPath: path.join(releaseDir, "latest-mac.yml"),
+      packagePath,
+      releaseDate: "2026-01-02T03:04:05.000Z",
+    });
+
+    expect(metadata.path).toBe("Daintree-1.2.3-x64-mac.zip");
+    expect(metadata.files.map((file) => file.url)).toEqual([
+      "Daintree-1.2.3-x64-mac.zip",
+      "Daintree-1.2.3-arm64-mac.zip",
+      "Daintree-1.2.3-universal-mac.zip",
+    ]);
+  });
+
+  it("ranks arm64 before universal when no x64 ZIP is present", async () => {
+    const dir = await tempDir();
+    const releaseDir = path.join(dir, "release");
+    await mkdir(releaseDir);
+    const packagePath = await writePackageJson(dir);
+    await writeArtifact(releaseDir, "Daintree-1.2.3-arm64-mac.zip", "arm64");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-universal-mac.zip", "universal");
+
+    const metadata = await generateUpdateMetadata({
+      platform: "mac",
+      releaseDir,
+      metadataPath: path.join(releaseDir, "latest-mac.yml"),
+      packagePath,
+      releaseDate: "2026-01-02T03:04:05.000Z",
+    });
+
+    expect(metadata.path).toBe("Daintree-1.2.3-arm64-mac.zip");
+    expect(metadata.files.map((file) => file.url)).toEqual([
+      "Daintree-1.2.3-arm64-mac.zip",
+      "Daintree-1.2.3-universal-mac.zip",
     ]);
   });
 
@@ -98,18 +150,16 @@ describe("generate-update-metadata", () => {
     ).rejects.toThrow("Expected exactly 1 Linux AppImage artifact");
   });
 
-  it("writes Windows metadata for the NSIS .exe and ignores .appx artifacts", async () => {
+  it("writes Windows metadata for a single NSIS .exe and ignores .appx artifacts", async () => {
     const dir = await tempDir();
     const releaseDir = path.join(dir, "release");
     await mkdir(releaseDir);
     const packagePath = await writePackageJson(dir, "1.2.3");
-    await writeArtifact(releaseDir, "Daintree-1.2.3-setup.exe", "nsis-installer");
-    await writeArtifact(releaseDir, "Daintree-1.2.3-setup.exe.blockmap", "blockmap");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-x64-setup.exe", "nsis-installer");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-x64-setup.exe.blockmap", "blockmap");
     await writeArtifact(releaseDir, "Daintree-1.2.3.appx", "appx");
 
     // electron-updater on Windows polls `<channel>.yml` (no platform suffix).
-    // Mirror the production filename so this test catches a regression that
-    // accidentally moves Windows metadata into `latest-win.yml` again.
     const metadataPath = path.join(releaseDir, "latest.yml");
     const metadata = await generateUpdateMetadata({
       platform: "windows",
@@ -122,12 +172,52 @@ describe("generate-update-metadata", () => {
     const fromFile = load(await readFile(metadataPath, "utf8"));
     expect(fromFile).toEqual(metadata);
     expect(metadata.version).toBe("1.2.3");
-    expect(metadata.path).toBe("Daintree-1.2.3-setup.exe");
+    expect(metadata.path).toBe("Daintree-1.2.3-x64-setup.exe");
     expect(metadata.files).toHaveLength(1);
     expect(metadata.files[0]).toMatchObject({
-      url: "Daintree-1.2.3-setup.exe",
+      url: "Daintree-1.2.3-x64-setup.exe",
       blockMapSize: 8,
     });
+  });
+
+  it("writes Windows metadata for separate x64 and arm64 NSIS installers", async () => {
+    const dir = await tempDir();
+    const releaseDir = path.join(dir, "release");
+    await mkdir(releaseDir);
+    const packagePath = await writePackageJson(dir, "1.2.3");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-arm64-setup.exe", "arm64");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-arm64-setup.exe.blockmap", "arm64-blockmap");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-x64-setup.exe", "x64");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-x64-setup.exe.blockmap", "x64-blockmap");
+    await writeArtifact(releaseDir, "Daintree-1.2.3.appx", "appx");
+
+    const metadataPath = path.join(releaseDir, "latest.yml");
+    const metadata = await generateUpdateMetadata({
+      platform: "windows",
+      releaseDir,
+      metadataPath,
+      packagePath,
+      releaseDate: "2026-01-02T03:04:05.000Z",
+    });
+
+    const fromFile = load(await readFile(metadataPath, "utf8"));
+    expect(fromFile).toEqual(metadata);
+    expect(metadata.version).toBe("1.2.3");
+    // x64 must be first for electron-updater's arch-agnostic fallback
+    expect(metadata.path).toBe("Daintree-1.2.3-x64-setup.exe");
+    expect(metadata.files).toHaveLength(2);
+    expect(metadata.files[0]).toMatchObject({
+      url: "Daintree-1.2.3-x64-setup.exe",
+      blockMapSize: 12,
+    });
+    expect(metadata.files[1]).toMatchObject({
+      url: "Daintree-1.2.3-arm64-setup.exe",
+      blockMapSize: 14,
+    });
+    expect(metadata.files.map((file) => file.url)).toEqual([
+      "Daintree-1.2.3-x64-setup.exe",
+      "Daintree-1.2.3-arm64-setup.exe",
+    ]);
   });
 
   it("fails when Windows packaging produced no NSIS .exe", async () => {
@@ -144,16 +234,15 @@ describe("generate-update-metadata", () => {
         metadataPath: path.join(releaseDir, "latest.yml"),
         packagePath,
       })
-    ).rejects.toThrow("Expected exactly 1 Windows NSIS .exe artifact, found 0");
+    ).rejects.toThrow("Expected at least 1 Windows NSIS .exe artifact, found 0");
   });
 
-  it("fails when Windows packaging produced more than one NSIS .exe", async () => {
+  it("fails when Windows NSIS .exe filename lacks an architecture token", async () => {
     const dir = await tempDir();
     const releaseDir = path.join(dir, "release");
     await mkdir(releaseDir);
     const packagePath = await writePackageJson(dir);
-    await writeArtifact(releaseDir, "Daintree-1.2.3-x64.exe", "x64");
-    await writeArtifact(releaseDir, "Daintree-1.2.3-arm64.exe", "arm64");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-setup.exe", "no-arch");
 
     await expect(
       generateUpdateMetadata({
@@ -162,6 +251,24 @@ describe("generate-update-metadata", () => {
         metadataPath: path.join(releaseDir, "latest.yml"),
         packagePath,
       })
-    ).rejects.toThrow("Expected exactly 1 Windows NSIS .exe artifact, found 2");
+    ).rejects.toThrow("must include architecture token");
+  });
+
+  it("fails when Windows packaging produced duplicate arch installers", async () => {
+    const dir = await tempDir();
+    const releaseDir = path.join(dir, "release");
+    await mkdir(releaseDir);
+    const packagePath = await writePackageJson(dir);
+    await writeArtifact(releaseDir, "Daintree-1.2.3-x64-setup.exe", "x64-a");
+    await writeArtifact(releaseDir, "Daintree-0.0.0-x64-setup.exe", "x64-b");
+
+    await expect(
+      generateUpdateMetadata({
+        platform: "windows",
+        releaseDir,
+        metadataPath: path.join(releaseDir, "latest.yml"),
+        packagePath,
+      })
+    ).rejects.toThrow("Duplicate x64 Windows NSIS .exe");
   });
 });

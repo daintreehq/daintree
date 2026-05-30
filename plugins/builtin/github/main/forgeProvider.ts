@@ -14,6 +14,8 @@ import type {
   NormalizedReviewDecision,
   PR,
   Page,
+  PRListProbeResult,
+  PRSnapshot,
   PushErrorClassification,
   RateLimitInfo,
   RepoMetadata,
@@ -45,6 +47,7 @@ import {
   repoEventsETagCache,
 } from "./GitHubCaches.js";
 import { parseGitHubError } from "./GitHubErrors.js";
+import { probeOpenPRList } from "./GitHubPRDiscovery.js";
 import { deriveRequiredCIStatus } from "./prRequiredCIStatus.js";
 import { MAX_REVIEW_THREAD_PAGES } from "./GitHubCaches.js";
 import type { RollupContextNode } from "./prRequiredCIStatus.js";
@@ -905,6 +908,17 @@ async function getCIStatusImpl(repo: RepoRef, prNumber: number): Promise<CIStatu
   });
 }
 
+async function probeOpenPRListImpl(
+  repo: RepoRef,
+  tracked: PRSnapshot[]
+): Promise<PRListProbeResult> {
+  const token = GitHubAuth.getToken();
+  // No token → the conditional GET can't be made; let the caller revalidate
+  // through its normal (also token-gated) path rather than claim "unchanged".
+  if (!token) return { kind: "fallback" };
+  return probeOpenPRList(repo.owner, repo.repo, token, tracked);
+}
+
 async function getRepoMetadataImpl(repo: RepoRef): Promise<RepoMetadata> {
   const response = await runQuery(
     REPO_METADATA_QUERY,
@@ -1065,6 +1079,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
   batchLookups: {
     findPRsByNumbers: findPRsByNumbersImpl,
     getCIStatuses: getCIStatusesImpl,
+    probeOpenPRList: probeOpenPRListImpl,
   },
   getRepoMetadata: getRepoMetadataImpl,
 
@@ -1128,6 +1143,31 @@ export const githubForgeProvider: ForgeProviderImpl = {
       const text = await response.text().catch(() => "");
       throw new Error(
         `Failed to assign issue #${issueNumber} to ${username}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
+      );
+    }
+  },
+
+  async unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void> {
+    const token = GitHubAuth.getToken();
+    if (!token) {
+      throw new Error("GitHub token not configured. Set it in Settings.");
+    }
+    const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}/assignees`;
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ assignees: [username] }),
+      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `Failed to unassign issue #${issueNumber} from ${username}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
       );
     }
   },

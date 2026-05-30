@@ -3,14 +3,27 @@ import https from "node:https";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DevPreviewSessionService } from "../DevPreviewSessionService.js";
 import * as portAllocator from "../DevPreviewPortAllocator.js";
+import { buildDevPreviewSubdomain } from "../../../shared/utils/devPreviewProxy.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { DevPreviewSessionState } from "../../../shared/types/ipc/devPreview.js";
 
 vi.mock("node:http", () => ({ default: { request: vi.fn() }, request: vi.fn() }));
 vi.mock("node:https", () => ({ default: { request: vi.fn() }, request: vi.fn() }));
 
+vi.mock("ws", () => {
+  class WebSocketMock {
+    once(event: "open" | "error" | "close", listener: () => void) {
+      if (event === "error") queueMicrotask(() => listener());
+      return this;
+    }
+    terminate() {}
+    constructor() {}
+  }
+  return { default: WebSocketMock };
+});
+
 type DataListener = (id: string, data: string | Uint8Array) => void;
-type ExitListener = (id: string, exitCode: number) => void;
+type ExitListener = (id: string, exitCode: number, signal?: number) => void;
 type MockIncomingMessage = {
   statusCode?: number;
   resume: () => void;
@@ -104,13 +117,13 @@ function createPtyClientMock(options?: { spawnError?: Error }) {
         spawnedAt: Date.now(),
       };
     }),
-    emitExit(id: string, exitCode: number) {
+    emitExit(id: string, exitCode: number, signal?: number) {
       const terminal = terminals.get(id);
       if (terminal) {
         terminal.hasPty = false;
       }
       for (const callback of exitListeners) {
-        callback(id, exitCode);
+        callback(id, exitCode, signal);
       }
     },
     emitData(id: string, data: string | Uint8Array) {
@@ -343,6 +356,217 @@ describe("DevPreviewSessionService", () => {
     expect(afterExit.terminalId).toBeNull();
   });
 
+  it("classifies port-conflict exit from buffered output", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    // Emit port-conflict output — handleData detects it mid-stream and
+    // transitions to "error" before the exit fires.
+    ptyClient.emitData(
+      started.terminalId!,
+      "Error: listen EADDRINUSE: address already in use :::3000\n"
+    );
+
+    const afterData = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(afterData.status).toBe("error");
+    expect(afterData.error?.type).toBe("port-conflict");
+
+    // Exit fires after mid-stream detection — handleExit reclassifies with
+    // full context (exit code + signal + buffer), preserving the classified error.
+    ptyClient.emitExit(started.terminalId!, 1);
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("error");
+    expect(state.error?.type).toBe("port-conflict");
+    expect(state.error?.port).toBe("3000");
+  });
+
+  it("handles exit after mid-stream missing-dependency detection triggers reinstall", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    // Mid-stream detection sets needsInstall + status: "installing"
+    ptyClient.emitData(started.terminalId!, "Error: Cannot find module 'vite'\n");
+
+    const afterData = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(afterData.status).toBe("installing");
+    expect(afterData.error?.type).toBe("missing-dependencies");
+
+    // Exit during "installing" triggers a guarded reinstall (not an error stop)
+    ptyClient.emitExit(started.terminalId!, 1);
+  });
+
+  it("classifies compile-error exit from buffered output", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    // Emit compile-error output — handleData detects it mid-stream
+    ptyClient.emitData(started.terminalId!, "Build failed with 3 errors:\n");
+
+    const afterData = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(afterData.status).toBe("error");
+    expect(afterData.error?.type).toBe("compile-error");
+
+    // Exit reclassifies with full context
+    ptyClient.emitExit(started.terminalId!, 1);
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("error");
+    expect(state.error?.type).toBe("compile-error");
+  });
+
+  it("classifies process-crash exit from SIGSEGV signal", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitExit(started.terminalId!, 0, 11); // SIGSEGV
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("error");
+    expect(state.error?.type).toBe("process-crash");
+    expect(state.error?.message).toContain("crashed");
+  });
+
+  it("treats SIGINT as clean stop (error: null)", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitExit(started.terminalId!, 0, 2); // SIGINT
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("stopped");
+    expect(state.error).toBeNull();
+  });
+
+  it("treats SIGTERM as clean stop (error: null)", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitExit(started.terminalId!, 0, 15); // SIGTERM
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("stopped");
+    expect(state.error).toBeNull();
+  });
+
+  it("classifies SIGKILL + OOM output as oom", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitData(
+      started.terminalId!,
+      "FATAL ERROR: CALL_AND_RETRY_LAST Allocation failed - JavaScript heap out of memory\n"
+    );
+    ptyClient.emitExit(started.terminalId!, 0, 9); // SIGKILL
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("error");
+    expect(state.error?.type).toBe("oom");
+  });
+
+  it("classifies SIGABRT + OOM output as oom (Node.js heap OOM)", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitData(
+      started.terminalId!,
+      "FATAL ERROR: CALL_AND_RETRY_LAST Allocation failed - JavaScript heap out of memory\n"
+    );
+    ptyClient.emitExit(started.terminalId!, 0, 6); // SIGABRT
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("error");
+    expect(state.error?.type).toBe("oom");
+  });
+
+  it("classifies SIGKILL without OOM output as unknown", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitExit(started.terminalId!, 0, 9); // SIGKILL, no OOM output
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("error");
+    expect(state.error?.type).toBe("unknown");
+  });
+
+  it("classifies exit code 0 with no signal as unknown error (exited before ready)", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitExit(started.terminalId!, 0);
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("error");
+    expect(state.error?.type).toBe("unknown");
+  });
+
+  it("classifies even when buffer is cleared after mid-stream detection", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    // handleData detects port-conflict and transitions to "error"
+    ptyClient.emitData(
+      started.terminalId!,
+      "Error: listen EADDRINUSE: address already in use :::3000\n"
+    );
+    // handleExit captures buffer before clearing, reclassifies correctly
+    ptyClient.emitExit(started.terminalId!, 1);
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.error?.type).toBe("port-conflict");
+  });
+
   it("detects URLs and transitions to running after readiness poll succeeds", async () => {
     const started = await service.ensure(baseRequest);
     expect(started.terminalId).toBeTruthy();
@@ -402,7 +626,8 @@ describe("DevPreviewSessionService", () => {
     expect(after.status).toBe("error");
   });
 
-  it("treats HTTP 4xx responses as ready (server is reachable)", async () => {
+  it("does not treat HTTP 4xx as ready (waits for 2xx/3xx)", async () => {
+    vi.useFakeTimers();
     mockHttpResponse(404);
 
     const started = await service.ensure(baseRequest);
@@ -410,14 +635,13 @@ describe("DevPreviewSessionService", () => {
 
     ptyClient.emitData(started.terminalId!, "ready at http://localhost:4173\n");
 
-    await vi.waitFor(() => {
-      const updated = service.getState({
-        panelId: baseRequest.panelId,
-        projectId: baseRequest.projectId,
-      });
-      expect(updated.status).toBe("running");
-      expect(updated.url).toMatch(/^http:\/\/localhost:4173\/?$/);
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    const after = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
     });
+    expect(after.status).toBe("error");
   });
 
   it("stays in starting status while readiness poll is in progress", async () => {
@@ -1024,5 +1248,392 @@ describe("DevPreviewSessionService", () => {
         projectId: "project-a",
       })
     );
+  });
+
+  describe("restore manifest (#9094)", () => {
+    it("captureManifest returns only running-state sessions with their spawn metadata", async () => {
+      await service.ensure({ ...baseRequest, env: { FOO: "bar" }, worktreeId: "wt-1" });
+
+      const captured = service.captureManifest();
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toMatchObject({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+        worktreeId: "wt-1",
+        cwd: baseRequest.cwd,
+        devCommand: baseRequest.devCommand,
+        env: { FOO: "bar" },
+      });
+      // Port comes from the allocator-backed registry, not the (possibly null) url.
+      expect(typeof captured[0].lastKnownPort === "number").toBe(true);
+    });
+
+    it("captureManifest omits a session once it has stopped", async () => {
+      await service.ensure(baseRequest);
+      await service.stop({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      expect(service.captureManifest()).toEqual([]);
+    });
+
+    it("reports restored-stopped for a panel that has a manifest entry but no live session", () => {
+      service.dispose();
+      service = new DevPreviewSessionService(ptyClient as unknown as PtyClient, onStateChanged, [
+        {
+          panelId: baseRequest.panelId,
+          projectId: baseRequest.projectId,
+          worktreeId: "wt-1",
+          cwd: baseRequest.cwd,
+          devCommand: baseRequest.devCommand,
+          lastKnownPort: 5173,
+          capturedAt: 1000,
+        },
+      ]);
+
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
+      expect(state.status).toBe("restored-stopped");
+      expect(state.worktreeId).toBe("wt-1");
+      expect(state.terminalId).toBeNull();
+      expect(state.url).toBeNull();
+    });
+
+    it("reports stopped (not restored-stopped) for an unrelated panel", () => {
+      service.dispose();
+      service = new DevPreviewSessionService(ptyClient as unknown as PtyClient, onStateChanged, [
+        {
+          panelId: baseRequest.panelId,
+          projectId: baseRequest.projectId,
+          cwd: baseRequest.cwd,
+          devCommand: baseRequest.devCommand,
+          lastKnownPort: null,
+          capturedAt: 1000,
+        },
+      ]);
+
+      const state = service.getState({ panelId: "other-panel", projectId: baseRequest.projectId });
+      expect(state.status).toBe("stopped");
+    });
+
+    it("getByWorktree falls back to a restored entry when no live session exists", () => {
+      service.dispose();
+      service = new DevPreviewSessionService(ptyClient as unknown as PtyClient, onStateChanged, [
+        {
+          panelId: baseRequest.panelId,
+          projectId: baseRequest.projectId,
+          worktreeId: "wt-7",
+          cwd: baseRequest.cwd,
+          devCommand: baseRequest.devCommand,
+          lastKnownPort: null,
+          capturedAt: 1000,
+        },
+      ]);
+
+      const state = service.getByWorktree("wt-7");
+      expect(state?.status).toBe("restored-stopped");
+      expect(service.getByWorktree("wt-unknown")).toBeNull();
+    });
+
+    it("persists the running manifest on start and clears it on explicit stop", async () => {
+      const persist = vi.fn();
+      service.dispose();
+      service = new DevPreviewSessionService(
+        ptyClient as unknown as PtyClient,
+        onStateChanged,
+        [],
+        persist
+      );
+
+      await service.ensure(baseRequest);
+      expect(persist).toHaveBeenCalled();
+      expect(persist.mock.calls.at(-1)?.[0]).toHaveLength(1);
+
+      persist.mockClear();
+      await service.stop({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      expect(persist).toHaveBeenCalled();
+      // Explicit stop persists an empty manifest (deletes the restore prompt).
+      expect(persist.mock.calls.at(-1)?.[0]).toEqual([]);
+    });
+
+    it("does not persist when a session exits on its own (manifest survives for restore)", async () => {
+      const persist = vi.fn();
+      service.dispose();
+      service = new DevPreviewSessionService(
+        ptyClient as unknown as PtyClient,
+        onStateChanged,
+        [],
+        persist
+      );
+
+      const started = await service.ensure(baseRequest);
+      persist.mockClear();
+
+      // A PTY exit (e.g. shutdown kill or server crash) must NOT clear the
+      // manifest — that's how the next launch keeps the restart offer.
+      ptyClient.emitExit(started.terminalId!, 0);
+      expect(persist).not.toHaveBeenCalled();
+    });
+
+    it("clears the restored-stopped status once the session is started", async () => {
+      service.dispose();
+      service = new DevPreviewSessionService(ptyClient as unknown as PtyClient, onStateChanged, [
+        {
+          panelId: baseRequest.panelId,
+          projectId: baseRequest.projectId,
+          cwd: baseRequest.cwd,
+          devCommand: baseRequest.devCommand,
+          lastKnownPort: null,
+          capturedAt: 1000,
+        },
+      ]);
+
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).status
+      ).toBe("restored-stopped");
+
+      await service.ensure(baseRequest);
+
+      // Once a real session exists, the synthetic restored-stopped status is gone
+      // even if the user later stops the server.
+      await service.stop({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).status
+      ).toBe("stopped");
+    });
+  });
+
+  describe("compile markers", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    async function sessionToRunning(): Promise<string> {
+      vi.useRealTimers();
+      const started = await service.ensure(baseRequest);
+      const tid = started.terminalId!;
+      ptyClient.emitData(tid, "ready at http://localhost:4173\n");
+      await vi.waitFor(() => {
+        const s = service.getState({
+          panelId: baseRequest.panelId,
+          projectId: baseRequest.projectId,
+        });
+        expect(s.status).toBe("running");
+      });
+      vi.useFakeTimers();
+      (onStateChanged as unknown as ReturnType<typeof vi.fn>).mockClear();
+      return tid;
+    }
+
+    it("arms then publishes Compiling after 1000ms during running session", async () => {
+      const tid = await sessionToRunning();
+
+      ptyClient.emitData(tid, "compiling...");
+
+      await vi.advanceTimersByTimeAsync(500);
+      let state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
+      expect(state.phaseLabel).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(500);
+      state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      expect(state.phaseLabel).toBe("Compiling");
+
+      await vi.advanceTimersByTimeAsync(1500);
+      state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      expect(state.phaseLabel).toBeUndefined();
+    });
+
+    it("fires compile marker during starting with pendingUrl set", async () => {
+      mockHttpError();
+      vi.useRealTimers();
+      const started = await service.ensure(baseRequest);
+      const tid = started.terminalId!;
+      ptyClient.emitData(tid, "http://localhost:3000\n");
+      await vi.waitFor(() => {
+        const s = service.getState({
+          panelId: baseRequest.panelId,
+          projectId: baseRequest.projectId,
+        });
+        expect(s.status).toBe("starting");
+        expect(s.url).toBeNull();
+      });
+
+      vi.useFakeTimers();
+      (onStateChanged as unknown as ReturnType<typeof vi.fn>).mockClear();
+
+      ptyClient.emitData(tid, "compiling...");
+      await vi.advanceTimersByTimeAsync(1000);
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
+      expect(state.phaseLabel).toBe("Compiling");
+    });
+
+    it("readyMarker within arm window cancels compile and never publishes", async () => {
+      const tid = await sessionToRunning();
+
+      ptyClient.emitData(tid, "compiling...");
+      await vi.advanceTimersByTimeAsync(400);
+      ptyClient.emitData(tid, "webpack compiled successfully");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
+      expect(state.phaseLabel).toBeUndefined();
+    });
+
+    it("second compile marker while visible resets auto-clear timer", async () => {
+      const tid = await sessionToRunning();
+
+      ptyClient.emitData(tid, "compiling...");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId })
+          .phaseLabel
+      ).toBe("Compiling");
+
+      // Advance 1300ms: auto-clear fires at 1500ms from publish, 200ms remain.
+      await vi.advanceTimersByTimeAsync(1300);
+
+      // Second compile marker resets the auto-clear timer.
+      ptyClient.emitData(tid, "Compiling /new-route");
+
+      // Old timer point (200ms later): should be suppressed (was cancelled).
+      await vi.advanceTimersByTimeAsync(200);
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId })
+          .phaseLabel
+      ).toBe("Compiling");
+
+      // Still visible 1100ms later (1400ms since reset, 100ms before new auto-clear).
+      await vi.advanceTimersByTimeAsync(1100);
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId })
+          .phaseLabel
+      ).toBe("Compiling");
+
+      // Auto-clear fires after remaining 200ms (1500ms since reset).
+      await vi.advanceTimersByTimeAsync(200);
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId })
+          .phaseLabel
+      ).toBeUndefined();
+    });
+
+    it("stop clears arm timer and never publishes", async () => {
+      const tid = await sessionToRunning();
+
+      ptyClient.emitData(tid, "compiling...");
+      await vi.advanceTimersByTimeAsync(500);
+
+      await service.stop({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+
+      await vi.advanceTimersByTimeAsync(1000);
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
+      expect(state.phaseLabel).toBeUndefined();
+    });
+
+    it("error in data handler clears compile timers", async () => {
+      const tid = await sessionToRunning();
+
+      ptyClient.emitData(tid, "compiling...");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId })
+          .phaseLabel
+      ).toBe("Compiling");
+
+      ptyClient.emitData(tid, "Error: EACCES: permission denied");
+
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
+      expect(state.status).toBe("error");
+      expect(state.phaseLabel).toBeUndefined();
+    });
+
+    it("terminal exit clears compile timers", async () => {
+      const tid = await sessionToRunning();
+
+      ptyClient.emitData(tid, "compiling...");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId })
+          .phaseLabel
+      ).toBe("Compiling");
+
+      ptyClient.emitExit(tid, 0);
+
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
+      expect(state.phaseLabel).toBeUndefined();
+    });
+
+    it("readyMarker during active compile clears label early", async () => {
+      const tid = await sessionToRunning();
+
+      ptyClient.emitData(tid, "compiling...");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId })
+          .phaseLabel
+      ).toBe("Compiling");
+
+      ptyClient.emitData(tid, "webpack compiled successfully");
+
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
+      expect(state.phaseLabel).toBeUndefined();
+    });
+  });
+
+  describe("getUpstreamPortForSubdomain (#9100)", () => {
+    it("resolves a panel's proxy subdomain to its allocated upstream port", async () => {
+      vi.spyOn(portAllocator, "allocatePort").mockImplementation(
+        async (registry: Map<string, number>, key: string) => {
+          registry.set(key, 4321);
+          return 4321;
+        }
+      );
+
+      await service.ensure(baseRequest);
+
+      const subdomain = buildDevPreviewSubdomain(baseRequest.projectId, baseRequest.panelId);
+      expect(service.getUpstreamPortForSubdomain(subdomain)).toBe(4321);
+    });
+
+    it("returns null for an unknown subdomain", () => {
+      expect(service.getUpstreamPortForSubdomain("dp-nope-nope")).toBeNull();
+    });
+
+    it("returns null once the session is stopped even though the registry entry lingers", async () => {
+      vi.spyOn(portAllocator, "allocatePort").mockImplementation(
+        async (registry: Map<string, number>, key: string) => {
+          registry.set(key, 4321);
+          return 4321;
+        }
+      );
+
+      await service.ensure(baseRequest);
+      const subdomain = buildDevPreviewSubdomain(baseRequest.projectId, baseRequest.panelId);
+      expect(service.getUpstreamPortForSubdomain(subdomain)).toBe(4321);
+
+      await service.stop({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+
+      expect(service.getUpstreamPortForSubdomain(subdomain)).toBeNull();
+    });
   });
 });

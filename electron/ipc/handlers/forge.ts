@@ -1,18 +1,63 @@
 // eager-import-allow: reads forge config via store.get synchronously in the IPC handler
-import { shell } from "electron";
 import { CHANNELS } from "../channels.js";
+import { openExternalUrl } from "../../utils/openExternal.js";
 import { typedHandle } from "../utils.js";
+import { defineIpcNamespace, op } from "../define.js";
 import { store } from "../../store.js";
 import {
   getForgeProviderImpl,
   getRegisteredForgeProviders,
 } from "../../services/forgeProviderRegistry.js";
 import { resolveForCwd, getImplForNamespace } from "./forgeResolution.js";
+import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAuditService.js";
 import type { PushErrorClassification } from "../../../shared/types/forge.js";
 import {
   makeForgeProviderId,
   normalizeProviderId,
 } from "../../../shared/utils/forgeProviderIds.js";
+
+async function handleForgeUnassignIssue(payload: {
+  cwd: string;
+  issueNumber: number;
+  username: string;
+}): Promise<void> {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+  if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+    throw new Error("Invalid working directory");
+  }
+  if (
+    typeof payload.issueNumber !== "number" ||
+    !Number.isInteger(payload.issueNumber) ||
+    payload.issueNumber <= 0
+  ) {
+    throw new Error("Invalid issue number");
+  }
+  const trimmedUsername = payload.username?.trim();
+  if (typeof payload.username !== "string" || !trimmedUsername) {
+    throw new Error("Invalid username");
+  }
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  await auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "unassignIssue",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("unassignIssue", payload.issueNumber),
+    },
+    () => impl.unassignIssue(repoRef, payload.issueNumber, trimmedUsername)
+  );
+}
+
+export const forgeUnassignIssueNamespace = defineIpcNamespace({
+  name: "forgeUnassignIssue",
+  ops: {
+    unassignIssue: op(CHANNELS.FORGE_UNASSIGN_ISSUE, handleForgeUnassignIssue),
+  },
+});
 
 export function registerForgeHandlers(): () => void {
   const cleanups: Array<() => void> = [];
@@ -22,7 +67,7 @@ export function registerForgeHandlers(): () => void {
       const { namespaceId, repoRef } = await resolveForCwd(cwd);
       const impl = getImplForNamespace(namespaceId);
       const url = impl.buildIssuesUrl(repoRef, { query, state });
-      await shell.openExternal(url);
+      await openExternalUrl(url);
     })
   );
 
@@ -31,7 +76,7 @@ export function registerForgeHandlers(): () => void {
       const { namespaceId, repoRef } = await resolveForCwd(cwd);
       const impl = getImplForNamespace(namespaceId);
       const url = impl.buildPRsUrl(repoRef, { query, state });
-      await shell.openExternal(url);
+      await openExternalUrl(url);
     })
   );
 
@@ -43,7 +88,7 @@ export function registerForgeHandlers(): () => void {
       const { namespaceId, repoRef } = await resolveForCwd(cwd);
       const impl = getImplForNamespace(namespaceId);
       const url = impl.buildCommitsUrl(repoRef, branch);
-      await shell.openExternal(url);
+      await openExternalUrl(url);
     })
   );
 
@@ -67,7 +112,7 @@ export function registerForgeHandlers(): () => void {
         const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
         const impl = getImplForNamespace(namespaceId);
         const url = impl.buildIssueUrl(repoRef, payload.issueNumber);
-        await shell.openExternal(url);
+        await openExternalUrl(url);
       }
     )
   );
@@ -119,10 +164,21 @@ export function registerForgeHandlers(): () => void {
         }
         const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
         const impl = getImplForNamespace(namespaceId);
-        await impl.assignIssue(repoRef, payload.issueNumber, trimmedUsername);
+        await auditForgeCall(
+          {
+            providerId: namespaceId,
+            methodName: "assignIssue",
+            repoOwner: repoRef.owner,
+            repoName: repoRef.repo,
+            argsSummary: summarizeForgeArgs("assignIssue", payload.issueNumber),
+          },
+          () => impl.assignIssue(repoRef, payload.issueNumber, trimmedUsername)
+        );
       }
     )
   );
+
+  cleanups.push(forgeUnassignIssueNamespace.register());
 
   cleanups.push(
     typedHandle(CHANNELS.FORGE_VALIDATE_TOKEN, async (token: string) => {
@@ -157,7 +213,14 @@ export function registerForgeHandlers(): () => void {
           error: `Forge provider "${entry.contribution.id}" not activated`,
         };
       }
-      return impl.validateToken(token.trim());
+      return auditForgeCall(
+        { providerId: namespaceId, methodName: "validateToken", argsSummary: "" },
+        () => impl.validateToken(token.trim()),
+        // A rejected credential ({ valid: false }) is a resolved call but a
+        // failed outcome — record it as an error so a burst of bad-token
+        // responses is visible to the failure-cluster detector.
+        (validation) => (validation.valid ? "success" : "error")
+      );
     })
   );
 

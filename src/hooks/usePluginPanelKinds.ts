@@ -1,21 +1,25 @@
-import { useEffect } from "react";
+import { useEffect, type ComponentType } from "react";
 import {
   registerPanelKind,
   unregisterPanelKind,
   unregisterPluginPanelKinds,
+  getPanelKindConfig,
   type PanelKindConfig,
 } from "@shared/config/panelKindRegistry";
 import { registerPanelKindDefinition, unregisterPanelKindDefinition } from "@/registry";
 import { TerminalPane } from "@/components/Terminal/TerminalPane";
+import { makePluginViewHost } from "@/components/Plugin/PluginViewHost";
 import { logWarn } from "@/utils/logger";
 
 /**
  * Pull plugin-contributed panel kinds on mount and keep the renderer
  * registries in sync with main's authoritative set. Panels using PTY are
  * rendered through `TerminalPane` (the only generic component that can host
- * an extension PTY); non-PTY plugin panels do not yet have a generic host
- * component and remain `PluginMissingPanel` placeholders until per-kind
- * components are registered separately.
+ * an extension PTY); non-PTY plugin panels with a `componentPath` set by an
+ * `experimental_views` contribution render through `makePluginViewHost`
+ * (#9229), which lazy-imports the plugin's React module over the `plugin://`
+ * protocol. Non-PTY plugin panels without a matching view remain
+ * `PluginMissingPanel` placeholders.
  *
  * Pull-on-mount is a safety net for cached `WebContentsView`s that may have
  * missed a broadcast. Push-on-change is authoritative — once a push has
@@ -31,11 +35,51 @@ import { logWarn } from "@/utils/logger";
  *      `useSyncExternalStore` subscribers, which is what causes a previously
  *      missing-kind panel to hot-swap into its real component.
  */
+// Metadata fields carried by a plugin panel kind over the IPC broadcast.
+// Function fields (serialize/createDefaults/policy) never cross the bridge, so
+// a shallow compare of these is a complete equality check for re-register
+// detection.
+const PANEL_KIND_META_KEYS = [
+  "name",
+  "iconId",
+  "color",
+  "hasPty",
+  "canRestart",
+  "canConvert",
+  "usesTerminalUi",
+  "keepAliveOnProjectSwitch",
+  "firstRenderRestore",
+  "lazyImportPath",
+  "showInPalette",
+  "extensionId",
+  "componentPath",
+  "shortcut",
+] as const satisfies readonly (keyof PanelKindConfig)[];
+
+function panelKindMetaEqual(a: PanelKindConfig, b: PanelKindConfig): boolean {
+  for (const key of PANEL_KIND_META_KEYS) {
+    if (a[key] !== b[key]) return false;
+  }
+  const aliasesA = a.searchAliases ?? [];
+  const aliasesB = b.searchAliases ?? [];
+  if (aliasesA.length !== aliasesB.length) return false;
+  return aliasesA.every((alias, i) => alias === aliasesB[i]);
+}
+
 export function usePluginPanelKinds(): void {
   useEffect(() => {
     let disposed = false;
     let pushReceived = false;
     const registeredByPlugin = new Map<string, Set<string>>();
+    // Memoize per-kind PluginViewHost factories so an identity-equal replay
+    // snapshot (or any push that doesn't actually change a kind) does not
+    // produce a new ComponentType ref. Without this, every broadcast would
+    // unmount+remount every live plugin view subtree — losing local state,
+    // in-flight requests, and active subscriptions. Cache key combines `id`
+    // with `componentPath` so a plugin that ships a new bundle path
+    // (legitimate hot-swap) does invalidate the cached host.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- registry component type uses unconstrained props
+    const hostCache = new Map<string, ComponentType<any>>();
 
     const sync = (kinds: PanelKindConfig[]): void => {
       if (disposed) return;
@@ -56,6 +100,7 @@ export function usePluginPanelKinds(): void {
         if (!incomingByPlugin.has(pluginId)) {
           for (const id of kindIds) {
             unregisterPanelKindDefinition(id);
+            hostCache.delete(id);
           }
           unregisterPluginPanelKinds(pluginId);
           registeredByPlugin.delete(pluginId);
@@ -74,20 +119,50 @@ export function usePluginPanelKinds(): void {
             if (!incomingIds.has(id)) {
               unregisterPanelKindDefinition(id);
               unregisterPanelKind(id);
+              hostCache.delete(id);
             }
           }
         }
 
         for (const config of configs) {
-          registerPanelKind(config);
+          // Only (re)register when the kind is new or its metadata actually
+          // changed. Re-registering an unchanged kind triggers the registry's
+          // "already registered, overwriting" warn on every broadcast (which
+          // fires per plugin lifecycle event), desensitizing the signal meant
+          // to catch genuine collisions.
+          const existing = getPanelKindConfig(config.id);
+          if (!existing || !panelKindMetaEqual(existing, config)) {
+            registerPanelKind(config);
+          }
           if (config.hasPty) {
             registerPanelKindDefinition(config.id, TerminalPane);
+            hostCache.delete(config.id);
+          } else if (config.componentPath) {
+            // Non-PTY plugin panel with a matching `experimental_views`
+            // contribution — render through PluginViewHost (#9229). Cache by
+            // (kind id + componentPath) so identity-equal replay snapshots
+            // don't churn the component ref and unmount live plugin views.
+            const cacheKey = `${config.id}\0${config.componentPath}`;
+            let host = hostCache.get(cacheKey);
+            if (!host) {
+              host = makePluginViewHost(config);
+              // A componentPath change for the same kind id invalidates the
+              // prior cached entry — drop any other entry for this id.
+              for (const key of hostCache.keys()) {
+                if (key.startsWith(`${config.id}\0`) && key !== cacheKey) {
+                  hostCache.delete(key);
+                }
+              }
+              hostCache.set(cacheKey, host);
+              registerPanelKindDefinition(config.id, host);
+            }
           } else {
-            // A plugin can re-register an existing kind with hasPty flipped
-            // from true to false; clear any prior TerminalPane definition so
-            // the renderer falls back to the missing-kind placeholder for
-            // non-PTY kinds we have no generic component for.
+            // Non-PTY plugin panel with no view contribution falls back to
+            // `PluginMissingPanel`. Also handles re-registration of a kind
+            // that flipped from `hasPty: true` to `hasPty: false` without a
+            // matching view: clear any prior TerminalPane definition.
             unregisterPanelKindDefinition(config.id);
+            hostCache.delete(config.id);
           }
         }
 
@@ -124,6 +199,7 @@ export function usePluginPanelKinds(): void {
         unregisterPluginPanelKinds(pluginId);
       }
       registeredByPlugin.clear();
+      hostCache.clear();
     };
   }, []);
 }

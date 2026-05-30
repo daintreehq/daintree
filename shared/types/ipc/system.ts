@@ -245,6 +245,12 @@ export interface DiagnosticsReviewPayload {
   sectionKeys: string[];
   /** Safe-stringified JSON preview (already redacted). */
   previewJson: string;
+  /**
+   * Approximate epoch (ms) the app process started, captured in the main
+   * process. Backs the "Since application launch" time-window option so the
+   * renderer can compute an absolute cutoff without a separate IPC round-trip.
+   */
+  appLaunchTimestamp: number;
 }
 
 /** User selections sent to the save-bundle IPC. */
@@ -254,7 +260,13 @@ export interface DiagnosticsBundleSavePayload {
   /** Sections the user chose to include. */
   enabledSections: Record<string, boolean>;
   /** Find-and-replace redaction rules. */
-  replacements: Array<{ find: string; replace: string }>;
+  replacements: Array<{ kind?: "literal" | "regex"; find: string; replace: string }>;
+  /**
+   * Absolute epoch (ms) cutoff for log inclusion. Entries and rotated log
+   * files older than this are excluded from the bundle. `null`/omitted means
+   * full history (no time bound).
+   */
+  timeWindowStartMs?: number | null;
 }
 
 /** Payload for starting an agent install via setup wizard */
@@ -278,6 +290,24 @@ export interface AgentInstallProgressEvent {
   jobId: string;
   chunk: string;
   stream: "stdout" | "stderr";
+}
+
+/**
+ * Lightweight enrichment payload for the "Report issue" deeplink. Fetched
+ * synchronously at click time — must NOT call the slow diagnostics collector
+ * (which spawns subprocesses and runs up to 5s per section). Encoded into
+ * the GitHub URL body as collapsible `<details>` sections, gated by the
+ * Sentry consent state on the renderer side.
+ */
+export interface ReportIssueEnrichment {
+  /** Compact pre-formatted system snapshot (one short line per fact). */
+  systemInfo: string;
+  /**
+   * Up to 10 most-recent action breadcrumbs (oldest first). Already
+   * scrubbed at storage time via `safeArgs`; the URL formatter trims them
+   * further to fit the budget.
+   */
+  recentActions: import("./crashRecovery.js").ActionBreadcrumb[];
 }
 
 /** Status of the installed Daintree CLI tool */

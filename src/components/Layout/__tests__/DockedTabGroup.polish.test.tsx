@@ -93,7 +93,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
-vi.mock("../DockPanelOffscreenContainer", () => ({
+vi.mock("../dockPanelPortalContext", () => ({
   useDockPanelPortal: () => vi.fn(),
 }));
 
@@ -107,6 +107,7 @@ vi.mock("../useDockBlockedState", () => ({
 vi.mock("../dockPopoverGuard", () => ({
   handleDockInteractOutside: vi.fn(),
   handleDockEscapeKeyDown: vi.fn(),
+  handleDockFocusOutside: vi.fn(),
 }));
 
 vi.mock("@/utils/terminalChrome", () => ({

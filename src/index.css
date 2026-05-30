@@ -801,34 +801,6 @@ code.hljs {
     display: none;
   }
 
-  /* Color vision deficiency overrides — Red-Green (Deuteranopia / Protanopia) */
-  html[data-colorblind="red-green"] {
-    --theme-status-success: #009e73;
-    --theme-status-danger: #fe6100;
-    --theme-activity-active: #648fff;
-    --theme-activity-working: #648fff;
-    --theme-pr-open: #648fff;
-    --theme-pr-closed: #fe6100;
-    --theme-terminal-selection: #1a1f2e;
-    --theme-terminal-red: #d55e00;
-    --theme-terminal-green: #009e73;
-    --theme-terminal-bright-red: #fe6100;
-    --theme-terminal-bright-green: #48c9a0;
-    --theme-terminal-magenta: #cc79a7;
-    --theme-terminal-bright-magenta: #d98fc4;
-  }
-
-  /* Color vision deficiency overrides — Blue-Yellow (Tritanopia) */
-  html[data-colorblind="blue-yellow"] {
-    --theme-status-warning: #94a3b8;
-    --theme-activity-waiting: #94a3b8;
-    --theme-pr-merged: #f97316;
-    --theme-terminal-yellow: #cc79a7;
-    --theme-terminal-blue: #0072b2;
-    --theme-terminal-bright-yellow: #d98fc4;
-    --theme-terminal-bright-blue: #56b4e9;
-  }
-
   /* Xterm font - required for correct font measurement */
   .xterm {
     font-family: var(--font-mono);
@@ -1783,6 +1755,7 @@ body,
   .animate-agent-pulse,
   .animate-breathe,
   .status-working,
+  .panel-state-compiling,
   .panel-state-working {
     transition: none;
   }
@@ -1883,6 +1856,17 @@ body,
     0 0 0 1px color-mix(in oklab, var(--color-activity-waiting) 10%, transparent);
 }
 
+/* Compiling state — neutral surface treatment surfacing framework compile
+ * activity (HMR rebuilds, lazy-compilation bursts). Uses --color-border-subtle
+ * (not the accent token) per the accent-restraint constraint. Ambient Tier 1
+ * signal: less prominent than working/waiting, more visible than hibernated. */
+.panel-state-compiling {
+  border-color: color-mix(in oklab, var(--color-border-subtle) 60%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-border-subtle) 10%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-border-subtle) 8%, transparent);
+}
+
 /* Working state hint — static colored border. Was a 4s infinite breathe,
  * which in peripheral vision across a multi-panel grid was a fatigue trigger
  * (WCAG COGA). Status being a value doesn't justify continuous motion.
@@ -1902,6 +1886,31 @@ body,
   box-shadow:
     inset 0 0 0 1px color-mix(in oklab, var(--color-activity-idle) 10%, transparent),
     0 0 0 1px color-mix(in oklab, var(--color-activity-idle) 8%, transparent);
+}
+
+/* Voice dictation lock — persistent amber border on the pinned dictation
+ * target. Uses --color-category-amber (not --color-activity-waiting) so the
+ * "I am holding dictation here" signal is visually distinct from the
+ * "agent waiting for input" state. Coexists with panel-state-* borders by
+ * design — a locked panel can also be working/waiting; both signals are
+ * independent and should be readable together. */
+.panel-voice-dictation-locked {
+  border-color: color-mix(in oklab, var(--color-category-amber) 75%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-category-amber) 15%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-category-amber) 10%, transparent);
+}
+
+/* Arming state — pre-audio confirmation window (~200ms). User pressed the
+ * dictation hotkey; this border paints synchronously so the target panel is
+ * unambiguous before the mic goes hot. Uses the accent token because the
+ * arming panel is the single load-bearing focus signal in its region for the
+ * brief window before "connecting" → "recording" replaces it. */
+.panel-state-arming {
+  border-color: color-mix(in oklab, var(--theme-accent-primary) 70%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--theme-accent-primary) 18%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--theme-accent-primary) 12%, transparent);
 }
 
 /* Per-worktree color identity — left-edge stripe on grid panels */
@@ -2631,6 +2640,10 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-left-color: Highlight;
   }
 
+  .panel-state-compiling {
+    border-color: GrayText;
+  }
+
   .panel-state-waiting {
     border-color: Highlight;
     outline: 2px solid Highlight;
@@ -2644,6 +2657,13 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
 
   .panel-state-hibernated {
     border-color: GrayText;
+  }
+
+  .panel-voice-dictation-locked,
+  .panel-state-arming {
+    border-color: Highlight;
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
   }
 
   .terminal-pane {
@@ -2741,9 +2761,12 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-left-width: 2px;
   }
 
+  .panel-state-compiling,
   .panel-state-waiting,
   .panel-state-working,
-  .panel-state-hibernated {
+  .panel-state-hibernated,
+  .panel-voice-dictation-locked,
+  .panel-state-arming {
     border-width: 2px;
   }
 

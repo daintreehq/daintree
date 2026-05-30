@@ -27,8 +27,8 @@ import {
   fileDropChipField,
   addFileDropChip,
   createFilePasteHandler,
-  interimMarkField,
-  setInterimRange,
+  interimWidgetField,
+  setInterimText,
   pendingAIField,
   setPendingAIRanges,
   diffChipField,
@@ -876,90 +876,74 @@ describe("createFilePasteHandler", () => {
   });
 });
 
-describe("interimMarkField", () => {
+describe("interimWidgetField", () => {
   function makeView(doc = "") {
     const parent = document.createElement("div");
     return new EditorView({
       parent,
-      state: EditorState.create({ doc, extensions: [interimMarkField] }),
+      state: EditorState.create({ doc, extensions: [interimWidgetField] }),
     });
   }
 
-  it("applies interim mark decoration for the given range", () => {
+  it("stores the interim text in the field when dispatched", () => {
     const view = makeView("hello world");
-    view.dispatch({ effects: setInterimRange.of({ from: 6, to: 11 }) });
+    view.dispatch({ effects: setInterimText.of("draft text") });
 
-    const decos = view.state.field(interimMarkField);
-    const iter = decos.iter();
-    expect(iter.value).not.toBeNull();
-    expect(iter.from).toBe(6);
-    expect(iter.to).toBe(11);
+    expect(view.state.field(interimWidgetField)).toBe("draft text");
     view.destroy();
   });
 
-  it("clears interim mark when null is dispatched", () => {
+  it("renders a ghost widget at the end of the doc when text is present", () => {
     const view = makeView("hello world");
-    view.dispatch({ effects: setInterimRange.of({ from: 0, to: 5 }) });
-    view.dispatch({ effects: setInterimRange.of(null) });
+    view.dispatch({ effects: setInterimText.of("more") });
 
-    const decos = view.state.field(interimMarkField);
-    const iter = decos.iter();
-    expect(iter.value).toBeNull();
+    // Locate the ghost span in the rendered DOM.
+    const ghost = view.contentDOM.querySelector(".cm-voice-interim");
+    expect(ghost).not.toBeNull();
+    expect(ghost?.textContent).toBe("more");
     view.destroy();
   });
 
-  it("does not expand mark past boundary on insert at the end", () => {
-    const view = makeView("hello");
-    view.dispatch({ effects: setInterimRange.of({ from: 0, to: 5 }) });
-    // Insert text at the end of the marked range
-    view.dispatch({ changes: { from: 5, insert: " world" } });
-
-    const decos = view.state.field(interimMarkField);
-    const iter = decos.iter();
-    expect(iter.value).not.toBeNull();
-    // Mark should still end at 5 (mapped through change), not expand to include " world"
-    expect(iter.from).toBe(0);
-    expect(iter.to).toBe(5);
-    view.destroy();
-  });
-
-  it("maps mark range through document changes", () => {
+  it("clears the ghost widget when an empty string is dispatched", () => {
     const view = makeView("hello world");
-    view.dispatch({ effects: setInterimRange.of({ from: 6, to: 11 }) });
-    // Insert "XX" at position 0
-    view.dispatch({ changes: { from: 0, insert: "XX" } });
+    view.dispatch({ effects: setInterimText.of("draft") });
+    expect(view.contentDOM.querySelector(".cm-voice-interim")).not.toBeNull();
 
-    const decos = view.state.field(interimMarkField);
-    const iter = decos.iter();
-    expect(iter.value).not.toBeNull();
-    expect(iter.from).toBe(8); // shifted by 2
-    expect(iter.to).toBe(13);
+    view.dispatch({ effects: setInterimText.of("") });
+    expect(view.contentDOM.querySelector(".cm-voice-interim")).toBeNull();
     view.destroy();
   });
 
-  it("handles simultaneous doc change and clear effect correctly (map-before-effect)", () => {
+  it("does not mutate the document when interim text is set", () => {
     const view = makeView("hello");
-    view.dispatch({ effects: setInterimRange.of({ from: 0, to: 5 }) });
+    const before = view.state.doc.toString();
+    view.dispatch({ effects: setInterimText.of("interim text not in doc") });
 
-    // Single transaction: insert text AND clear the mark
-    view.dispatch({
-      changes: { from: 5, insert: " world" },
-      effects: setInterimRange.of(null),
-    });
-
-    const decos = view.state.field(interimMarkField);
-    const iter = decos.iter();
-    expect(iter.value).toBeNull();
+    expect(view.state.doc.toString()).toBe(before);
+    expect(view.state.doc.length).toBe(5);
     view.destroy();
   });
 
-  it("returns Decoration.none for invalid range (from >= to)", () => {
-    const view = makeView("hello");
-    view.dispatch({ effects: setInterimRange.of({ from: 5, to: 5 }) });
+  it("interim updates do not enter the undo history (no docChanged)", () => {
+    const view = makeView("base");
+    view.dispatch({ effects: setInterimText.of("a") });
+    view.dispatch({ effects: setInterimText.of("ab") });
+    view.dispatch({ effects: setInterimText.of("abc") });
 
-    const decos = view.state.field(interimMarkField);
-    const iter = decos.iter();
-    expect(iter.value).toBeNull();
+    // None of the interim dispatches touched the document, so the doc
+    // is still the original value — and the undo history holds no entries
+    // attributable to these effect-only transactions.
+    expect(view.state.doc.toString()).toBe("base");
+    view.destroy();
+  });
+
+  it("ghost widget is suppressed during IME composition", () => {
+    const view = makeView("hello");
+    // jsdom doesn't expose a composing setter, so stub the property.
+    Object.defineProperty(view, "composing", { value: true, configurable: true });
+    view.dispatch({ effects: setInterimText.of("ime guard") });
+
+    expect(view.contentDOM.querySelector(".cm-voice-interim")).toBeNull();
     view.destroy();
   });
 });
@@ -1089,42 +1073,39 @@ describe("voice decoration phase integration", () => {
       parent,
       state: EditorState.create({
         doc,
-        extensions: [interimMarkField, pendingAIField],
+        extensions: [interimWidgetField, pendingAIField],
       }),
     });
   }
 
-  it("utterance_final phase produces no decorations even when ranges could be set", () => {
+  it("utterance_final phase produces no decorations even when effects could be set", () => {
     const view = makeView("hello world");
     view.dispatch({
-      effects: [setInterimRange.of(null), setPendingAIRanges.of([])],
+      effects: [setInterimText.of(""), setPendingAIRanges.of([])],
     });
 
-    const interimDecos = view.state.field(interimMarkField);
-    const aiDecos = view.state.field(pendingAIField);
-    expect(interimDecos.iter().value).toBeNull();
-    expect(aiDecos.iter().value).toBeNull();
+    expect(view.state.field(interimWidgetField)).toBe("");
+    expect(view.state.field(pendingAIField).iter().value).toBeNull();
+    expect(view.contentDOM.querySelector(".cm-voice-interim")).toBeNull();
     view.destroy();
   });
 
-  it("correctionEnabled=false suppresses both decorations", () => {
+  it("clearing both interim and pending decorations leaves no DOM artifacts", () => {
     const view = makeView("hello world");
     view.dispatch({
-      effects: [
-        setInterimRange.of({ from: 0, to: 5 }),
-        setPendingAIRanges.of([{ from: 6, to: 11 }]),
-      ],
+      effects: [setInterimText.of("draft"), setPendingAIRanges.of([{ from: 6, to: 11 }])],
     });
 
-    expect(view.state.field(interimMarkField).iter().value).not.toBeNull();
+    expect(view.state.field(interimWidgetField)).toBe("draft");
     expect(view.state.field(pendingAIField).iter().value).not.toBeNull();
 
     view.dispatch({
-      effects: [setInterimRange.of(null), setPendingAIRanges.of([])],
+      effects: [setInterimText.of(""), setPendingAIRanges.of([])],
     });
 
-    expect(view.state.field(interimMarkField).iter().value).toBeNull();
+    expect(view.state.field(interimWidgetField)).toBe("");
     expect(view.state.field(pendingAIField).iter().value).toBeNull();
+    expect(view.contentDOM.querySelector(".cm-voice-interim")).toBeNull();
     view.destroy();
   });
 });
@@ -1369,6 +1350,21 @@ describe("resolveInputBarColors", () => {
     expect(colors.errorColor).toBe("#f44747");
     expect(colors.successColor).toBe("#89d185");
   });
+
+  it("resolves voiceCursor from theme.yellow", () => {
+    const colors = resolveInputBarColors({ ...fullTheme, yellow: "#e5c07b" });
+    expect(colors.voiceCursor).toBe("#e5c07b");
+  });
+
+  it("falls back voiceCursor to brightYellow when yellow is missing", () => {
+    const colors = resolveInputBarColors({ ...fullTheme, brightYellow: "#f9e2af" });
+    expect(colors.voiceCursor).toBe("#f9e2af");
+  });
+
+  it("falls back voiceCursor to #e5c07b when both yellow and brightYellow are missing", () => {
+    const colors = resolveInputBarColors(fullTheme);
+    expect(colors.voiceCursor).toBe("#e5c07b");
+  });
 });
 
 describe("buildInputBarTheme", () => {
@@ -1419,6 +1415,21 @@ describe("buildInputBarTheme", () => {
     const colors = resolveInputBarColors(theme);
     const invalidRule = extractRuleBody(css, ".cm-slash-command-chip-invalid");
     expect(invalidRule).toContain(`color: ${colors.errorColor}`);
+  });
+
+  it("includes voice-active cursor CSS rules scoped to [data-voice-active]", () => {
+    const css = readGeneratedCss([buildInputBarTheme(theme)]);
+    const colors = resolveInputBarColors(theme);
+    expect(css).toMatch(
+      new RegExp(
+        `\\[data-voice-active="true"\\]\\s+\\.\\S+\\s+\\.cm-content\\s*\\{[^}]*caret-color:\\s*${colors.voiceCursor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`
+      )
+    );
+    expect(css).toMatch(
+      new RegExp(
+        `\\[data-voice-active="true"\\]\\s+\\.\\S+\\.cm-focused\\s+\\.cm-cursor\\s*\\{[^}]*border-left:\\s*2px solid ${colors.voiceCursor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`
+      )
+    );
   });
 });
 

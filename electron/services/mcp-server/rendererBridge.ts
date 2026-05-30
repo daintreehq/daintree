@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { WindowRegistry } from "../../window/WindowRegistry.js";
 import { getProjectViewManager } from "../../window/windowRef.js";
 import type { ActionContext, ActionManifestEntry } from "../../../shared/types/actions.js";
+import type { McpBearerIdentity } from "../../../shared/types/ipc/mcpServer.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import type { PendingRequest, DispatchEnvelope } from "./shared.js";
 import { MCP_MANIFEST_REQUEST_TIMEOUT_MS, MCP_DISPATCH_TIMEOUT_MS } from "./shared.js";
@@ -131,7 +132,8 @@ export function createRendererBridge(
     actionId: string,
     args: unknown,
     confirmed: boolean,
-    contextOverride?: ActionContext
+    contextOverride?: ActionContext,
+    callerInfo?: McpBearerIdentity
   ): Promise<DispatchEnvelope> {
     return new Promise((resolve, reject) => {
       let webContents: Electron.WebContents;
@@ -185,6 +187,10 @@ export function createRendererBridge(
           // unpinned external/api-key path leaves this undefined so the
           // renderer keeps its live focused-window context (#8317).
           context: contextOverride,
+          // Display-only requesting-bearer identity for the confirm dialog
+          // (#9157). Only the unpinned external path supplies it; absent for
+          // pinned help-session dispatch so the dialog stays provenance-free.
+          callerInfo,
         });
       } catch (err) {
         clearTimeout(timer);
@@ -207,9 +213,17 @@ export function createRendererBridge(
   function dispatchAction(
     actionId: string,
     args: unknown,
-    confirmed = false
+    confirmed = false,
+    callerInfo?: McpBearerIdentity
   ): Promise<DispatchEnvelope> {
-    return sendDispatchRequest(() => getActiveProjectWebContents(), actionId, args, confirmed);
+    return sendDispatchRequest(
+      () => getActiveProjectWebContents(),
+      actionId,
+      args,
+      confirmed,
+      undefined,
+      callerInfo
+    );
   }
 
   /**

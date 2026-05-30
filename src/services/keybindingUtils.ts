@@ -1,7 +1,14 @@
 import type { BuiltInActionId, ActionId } from "@shared/types/actions";
 import { isMac } from "@/lib/platform";
 
-export type KeyScope = "global" | "terminal" | "modal" | "worktreeList" | "portal" | "worktreeGrid";
+export type KeyScope =
+  | "global"
+  | "terminal"
+  | "modal"
+  | "worktreeList"
+  | "portal"
+  | "worktreeGrid"
+  | "dev-preview";
 
 export interface KeybindingConfig {
   actionId: BuiltInActionId;
@@ -16,6 +23,8 @@ export interface KeybindingConfig {
 // accepts plugin-defined IDs via the ActionId open union.
 export type RegisteredKeybindingConfig = Omit<KeybindingConfig, "actionId"> & {
   actionId: ActionId;
+  when?: string;
+  pluginId?: string;
 };
 
 // "conflict": same combo as an existing binding in an overlapping scope.

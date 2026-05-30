@@ -45,8 +45,13 @@ export interface SessionStoreOptions {
    * decayed session so the model's tool manifest reflects the narrowed
    * surface immediately. Optional so bare test fixtures construct without
    * one (decay still mutates the tier map; only the notification is skipped).
+   *
+   * `previousTier` is the elevated tier the session left; `newTier` is the
+   * baseline it decayed back to. Both are passed so the wiring can write a
+   * `tier.decayed` audit record without re-reading the (already-mutated)
+   * tier map.
    */
-  onTierDecayed?: (sessionId: string) => void;
+  onTierDecayed?: (sessionId: string, previousTier: McpTier, newTier: McpTier) => void;
 }
 
 /**
@@ -162,7 +167,11 @@ export class SessionStore {
   private readonly cleanupResourceSubscriptionsFn: (sessionId: string) => void;
   private readonly dropAbuseStateFn: (sessionId: string) => void;
   private readonly dropBearerStateFn: (sessionId: string) => void;
-  private readonly onTierDecayedFn: (sessionId: string) => void;
+  private readonly onTierDecayedFn: (
+    sessionId: string,
+    previousTier: McpTier,
+    newTier: McpTier
+  ) => void;
 
   constructor(
     cleanupResourceSubscriptions: (sessionId: string) => void,
@@ -529,7 +538,7 @@ export class SessionStore {
     // (the #8462 acceptance criterion). Per-tool grants survive — they are
     // an orthogonal explicit approval (#8442).
     this.grantCache.clearDenialCounts(sessionId);
-    this.onTierDecayedFn(sessionId);
+    this.onTierDecayedFn(sessionId, current, baseline);
   }
 
   /**

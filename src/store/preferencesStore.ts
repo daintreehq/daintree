@@ -35,6 +35,44 @@ interface PreferencesState {
   setSkipPushConfirmForWorktree: (worktreePath: string, value: boolean) => void;
 }
 
+function isDockDensity(value: unknown): value is DockDensity {
+  return value === "compact" || value === "normal" || value === "comfortable";
+}
+
+function isDiffViewType(value: unknown): value is DiffViewType {
+  return value === "split" || value === "unified";
+}
+
+/**
+ * Normalise the closed-set and record-shaped fields of a persisted blob against
+ * the current schema. Run from the persist `merge` callback so it executes on
+ * EVERY hydration — not only on version change, which is all `migrate` covers
+ * (issue #9170). A corrupt-but-parseable value (e.g. hand-edited
+ * `dockDensity: "dense"`, or a string where a record is expected) is replaced
+ * with a safe default instead of flowing into live state unchecked.
+ */
+function sanitizePersistedPreferences(
+  raw: Partial<PreferencesState> | undefined | null
+): Partial<PreferencesState> {
+  if (!raw || typeof raw !== "object") return {};
+  const sanitized: Partial<PreferencesState> = { ...raw };
+
+  if (!isDockDensity(sanitized.dockDensity)) sanitized.dockDensity = "normal";
+  if (!isDiffViewType(sanitized.diffViewType)) sanitized.diffViewType = "split";
+
+  // A truthy non-record value here would otherwise bypass the push-confirm gate.
+  const skip = sanitized.skipPushConfirmByWorktreePath;
+  const validatedSkip: Record<string, boolean> = {};
+  if (skip !== null && typeof skip === "object" && !Array.isArray(skip)) {
+    for (const [key, value] of Object.entries(skip)) {
+      if (typeof value === "boolean") validatedSkip[key] = value;
+    }
+  }
+  sanitized.skipPushConfirmByWorktreePath = validatedSkip;
+
+  return sanitized;
+}
+
 export const usePreferencesStore = create<PreferencesState>()(
   persist(
     (set) => ({
@@ -86,6 +124,13 @@ export const usePreferencesStore = create<PreferencesState>()(
       name: "daintree-preferences",
       storage: createSafeJSONStorage(),
       version: 9,
+      // Runs on every hydration (unlike `migrate`, which Zustand skips when the
+      // persisted version matches). Closed-set normalisation lives here so a
+      // corrupt-but-parseable value is clamped even at the current version.
+      merge: (persisted, current) => ({
+        ...current,
+        ...sanitizePersistedPreferences(persisted as Partial<PreferencesState> | undefined | null),
+      }),
       migrate: (persisted, version) => {
         if (version === 0 || version === undefined) {
           if (persisted && typeof persisted === "object") {

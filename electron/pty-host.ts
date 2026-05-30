@@ -620,7 +620,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   }
 });
 
-ptyManager.on("exit", (id: string, exitCode: number) => {
+ptyManager.on("exit", (id: string, exitCode: number, signal?: number) => {
   // Release all pause holds and remove coordinator for this terminal
   const coordinator = pauseCoordinators.get(id);
   if (coordinator) {
@@ -645,7 +645,7 @@ ptyManager.on("exit", (id: string, exitCode: number) => {
   // Clean up IPC data mirror state
   ipcDataMirrorTerminals.delete(id);
 
-  sendEvent({ type: "exit", id, exitCode });
+  sendEvent({ type: "exit", id, exitCode, signal });
 });
 
 ptyManager.on("error", (id: string, error: string) => {

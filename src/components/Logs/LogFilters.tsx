@@ -11,6 +11,7 @@ interface LogFiltersProps {
   onClear: () => void;
   availableSources: string[];
   levelCounts?: Partial<Record<LogLevel, number>>;
+  sourceCounts?: Partial<Record<string, number>>;
 }
 
 const LOG_LEVELS: { level: LogLevel; label: string; color: string }[] = [
@@ -30,6 +31,7 @@ export function LogFilters({
   onClear,
   availableSources,
   levelCounts,
+  sourceCounts,
 }: LogFiltersProps) {
   const [searchValue, setSearchValue] = useState(filters.search || "");
   const [isSourcesOpen, setIsSourcesOpen] = useState(false);
@@ -172,6 +174,7 @@ export function LogFilters({
             >
               {availableSources.map((source) => {
                 const isActive = filters.sources?.includes(source) ?? false;
+                const count = sourceCounts?.[source] ?? 0;
                 return (
                   <Button
                     key={source}
@@ -180,12 +183,14 @@ export function LogFilters({
                     onClick={() => handleSourceToggle(source)}
                     className={cn(
                       "w-full justify-start rounded-none",
-                      isActive ? "text-status-info bg-status-info/10" : "text-daintree-text"
+                      isActive ? "text-status-info bg-status-info/10" : "text-daintree-text",
+                      count === 0 && !isActive && "opacity-50"
                     )}
                     aria-pressed={isActive}
                   >
                     {isActive && "* "}
                     {source}
+                    <span className="ml-auto tabular-nums opacity-70">{count}</span>
                   </Button>
                 );
               })}

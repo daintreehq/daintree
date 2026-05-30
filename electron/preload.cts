@@ -10,12 +10,16 @@
  */
 
 import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
-import { isTrustedRendererUrl } from "../shared/utils/trustedRenderer.js";
+import { isTrustedRendererUrl, isRecoveryPageUrl } from "../shared/utils/trustedRenderer.js";
 import { isIpcEnvelope } from "../shared/types/ipc/errors.js";
 import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import type { AppErrorCode } from "../shared/types/appError.js";
-import type { McpRuntimeSnapshot } from "../shared/types/ipc/mcpServer.js";
-import type { ActionContext } from "../shared/types/actions.js";
+import type {
+  McpRuntimeSnapshot,
+  McpGrantLifecyclePayload,
+  McpBearerIdentity,
+} from "../shared/types/ipc/mcpServer.js";
+import type { ActionContext, ActionDispatchResult } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import { CHANNELS } from "./ipc/channels.js";
 import {
@@ -33,8 +37,10 @@ import { buildCommandsPreloadBindings } from "./ipc/handlers/commands.preload.js
 import { buildPortalPreloadBindings } from "./ipc/handlers/portal.preload.js";
 import { buildDevPreviewPreloadBindings } from "./ipc/handlers/devPreview.preload.js";
 import { buildPluginPreloadBindings } from "./ipc/handlers/plugin.preload.js";
+import { buildPluginMcpPreloadBindings } from "./ipc/handlers/pluginMcp.preload.js";
 import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
 import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
+import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preload.js";
 import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
 import { buildMilestonesPreloadBindings } from "./ipc/handlers/milestones.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
@@ -46,12 +52,15 @@ import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.pr
 import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
+import { buildAppVersionInfoPreloadBindings } from "./ipc/handlers/appVersionInfo.preload.js";
+import { buildOsDndPreloadBindings } from "./ipc/handlers/osDnd.preload.js";
 import { buildAgentCapabilitiesPreloadBindings } from "./ipc/handlers/agentCapabilities.preload.js";
 import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.preload.js";
 import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
+import { buildWebviewNavigationPreloadBindings } from "./ipc/handlers/webviewNavigation.preload.js";
 import { buildWorktreeConfigPreloadBindings } from "./ipc/handlers/worktreeConfig.preload.js";
 import { buildTerminalLayoutPreloadBindings } from "./ipc/handlers/terminalLayout.preload.js";
 import { buildTerminalConfigPreloadBindings } from "./ipc/handlers/terminalConfig.preload.js";
@@ -88,8 +97,10 @@ import type {
   GitStatus,
   KeyAction,
   TerminalRecipe,
+  RecipeNameCollision,
   AttachIssuePayload,
   IssueAssociation,
+  VoiceInputError,
   VoiceInputStatus,
 } from "../shared/types/index.js";
 import type { ColorVisionMode, AppColorScheme } from "../shared/types/appTheme.js";
@@ -109,6 +120,7 @@ import type {
   SaveArtifactOptions,
   ApplyPatchOptions,
   DevPreviewStateChangedPayload,
+  DevPreviewAllSessionsPayload,
 } from "../shared/types/ipc.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
 import type {
@@ -122,14 +134,45 @@ import type {
 type SpawnResultPayload = SpawnResult;
 import type { PortalNewTabMenuAction } from "../shared/types/portal.js";
 import type { ResourceProfilePayload } from "../shared/types/resourceProfile.js";
-import type { PluginActionDescriptor } from "../shared/types/plugin.js";
+import type {
+  PluginActionDescriptor,
+  MenuItemContribution,
+  PluginKeybindingDescriptor,
+  ContextMenuContribution,
+} from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
 import type { ToolbarButtonConfig } from "../shared/config/toolbarButtonRegistry.js";
 
 export type { ElectronAPI };
 
-const isDemoMode =
-  !process.argv.some((a) => a.includes("app.asar")) && process.argv.includes("--demo-mode");
+// True for packaged production builds. `process.resourcesPath` is undefined in
+// sandboxed preloads (sandbox: true), so the only reliable signal here is the
+// `app.asar` segment Electron injects into argv when running from the asar.
+// Used to gate the E2E test bridges below as defense-in-depth (#9148) — the
+// primary strip happens at build time via esbuild defines in build-main.mjs.
+const isPackagedBuild = process.argv.some((a) => a.includes("app.asar"));
+
+const isDemoMode = !isPackagedBuild && process.argv.includes("--demo-mode");
+
+// Persisted color scheme id passed from the main process via
+// webPreferences.additionalArguments. Read synchronously here (process.argv is
+// available even under sandbox: true) so the renderer can apply the saved theme
+// on its very first paint instead of a prefers-color-scheme default (#9169).
+const INITIAL_COLOR_SCHEME_ARG = "--daintree-initial-color-scheme-id=";
+const initialColorSchemeId = process.argv
+  .find((a) => a.startsWith(INITIAL_COLOR_SCHEME_ARG))
+  ?.slice(INITIAL_COLOR_SCHEME_ARG.length);
+
+// Destination project id passed from the main process via additionalArguments,
+// replacing the former `?projectId=` query string so the document URL stays
+// static and the V8 bytecode cache is shared across projects (#9162). Read the
+// same way as the color scheme above and exposed as
+// `window.__DAINTREE_INITIAL_PROJECT__` so renderer stores resolve their scope
+// without parsing the URL.
+const INITIAL_PROJECT_ID_ARG = "--daintree-initial-project-id=";
+const initialProjectId = process.argv
+  .find((a) => a.startsWith(INITIAL_PROJECT_ID_ARG))
+  ?.slice(INITIAL_PROJECT_ID_ARG.length);
 
 // Store MessagePort for direct Renderer ↔ Pty Host communication
 // Note: We cannot return MessagePort via contextBridge (it's not cloneable/transferable via that API).
@@ -1083,6 +1126,8 @@ const api: ElectronAPI = {
 
     getDiagnosticsInfo: () => _unwrappingInvoke(CHANNELS.DIAGNOSTICS_GET_INFO),
 
+    getReportEnrichment: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_REPORT_ENRICHMENT),
+
     onWake: (callback: (data: { sleepDuration: number; timestamp: number }) => void) => {
       return _eventBusOn("system:wake", callback);
     },
@@ -1106,6 +1151,8 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.APP_SET_STATE, partialState),
 
     getVersion: () => _unwrappingInvoke(CHANNELS.APP_GET_VERSION),
+
+    ...buildAppVersionInfoPreloadBindings(_unwrappingInvoke),
 
     hydrate: () => _unwrappingInvoke(CHANNELS.APP_HYDRATE),
 
@@ -1329,7 +1376,9 @@ const api: ElectronAPI = {
 
     cancelClone: (): Promise<void> => _unwrappingInvoke(CHANNELS.PROJECT_CLONE_CANCEL),
 
-    getRecipes: (projectId: string): Promise<TerminalRecipe[]> =>
+    getRecipes: (
+      projectId: string
+    ): Promise<{ recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] }> =>
       _unwrappingInvoke(CHANNELS.PROJECT_GET_RECIPES, projectId),
 
     saveRecipes: (projectId: string, recipes: TerminalRecipe[]): Promise<void> =>
@@ -1368,12 +1417,14 @@ const api: ElectronAPI = {
     updateInRepoRecipe: (
       projectId: string,
       recipe: import("../shared/types/index.js").TerminalRecipe,
-      previousName?: string
+      previousName?: string,
+      options?: { force?: boolean }
     ): Promise<void> =>
       _unwrappingInvoke(CHANNELS.PROJECT_UPDATE_INREPO_RECIPE, {
         projectId,
         recipe,
         previousName,
+        force: options?.force === true ? true : undefined,
       }),
 
     deleteInRepoRecipe: (projectId: string, recipeName: string): Promise<void> =>
@@ -1511,6 +1562,9 @@ const api: ElectronAPI = {
     assignIssue: (cwd: string, issueNumber: number, username: string): Promise<void> =>
       _unwrappingInvoke(CHANNELS.GITHUB_ASSIGN_ISSUE, { cwd, issueNumber, username }),
 
+    unassignIssue: (cwd: string, issueNumber: number, username: string): Promise<void> =>
+      _unwrappingInvoke(CHANNELS.GITHUB_UNASSIGN_ISSUE, { cwd, issueNumber, username }),
+
     getIssueTooltip: (cwd: string, issueNumber: number) =>
       _unwrappingInvoke(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP, { cwd, issueNumber }),
 
@@ -1580,6 +1634,9 @@ const api: ElectronAPI = {
 
     onStateChanged: (callback: (payload: DevPreviewStateChangedPayload) => void) =>
       _typedOn(CHANNELS.DEV_PREVIEW_STATE_CHANGED, callback),
+
+    onAllSessionsChanged: (callback: (payload: DevPreviewAllSessionsPayload) => void) =>
+      _typedOn(CHANNELS.DEV_PREVIEW_ALL_SESSIONS_CHANGED, callback),
   },
 
   // Git API
@@ -1722,8 +1779,8 @@ const api: ElectronAPI = {
   webview: {
     setLifecycleState: (webContentsId: number, frozen: boolean): Promise<void> =>
       _unwrappingInvoke(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, webContentsId, frozen),
-    registerPanel: (webContentsId: number, panelId: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.WEBVIEW_REGISTER_PANEL, { webContentsId, panelId }),
+    registerPanel: (webContentsId: number, panelId: string, kind?: string): Promise<void> =>
+      _unwrappingInvoke(CHANNELS.WEBVIEW_REGISTER_PANEL, { webContentsId, panelId, kind }),
     respondToDialog: (dialogId: string, confirmed: boolean, response?: string): Promise<void> =>
       _unwrappingInvoke(CHANNELS.WEBVIEW_DIALOG_RESPONSE, { dialogId, confirmed, response }),
     onDialogRequest: (
@@ -1738,6 +1795,8 @@ const api: ElectronAPI = {
     onFindShortcut: (
       callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void
     ): (() => void) => _typedOn(CHANNELS.WEBVIEW_FIND_SHORTCUT, callback),
+    onReloadShortcut: (callback: (payload: { panelId: string }) => void): (() => void) =>
+      _typedOn(CHANNELS.WEBVIEW_RELOAD_SHORTCUT, callback),
     onNavigationBlocked: (
       callback: (payload: { panelId: string; url: string; canOpenExternal: boolean }) => void
     ): (() => void) => _typedOn(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, callback),
@@ -1796,6 +1855,7 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.WEBVIEW_RELOAD_IGNORING_CACHE, webContentsId, panelId),
     getScrollPosition: (webContentsId: number): Promise<number> =>
       _unwrappingInvoke(CHANNELS.WEBVIEW_GET_SCROLL_POSITION, webContentsId),
+    ...buildWebviewNavigationPreloadBindings(_unwrappingInvoke),
   },
 
   // Hibernation API
@@ -1838,6 +1898,15 @@ const api: ElectronAPI = {
 
     onWake: (callback: (sleepDurationMs: number) => void) =>
       _typedOn(CHANNELS.SYSTEM_SLEEP_ON_WAKE, callback),
+  },
+
+  // OS Do-Not-Disturb / Focus state. Read-only signal — never used to gate
+  // in-app toasts (the OS already silences its native banners).
+  osDnd: {
+    ...buildOsDndPreloadBindings(_unwrappingInvoke),
+
+    onStateChanged: (callback: (payload: { osDndActive: boolean | undefined }) => void) =>
+      _typedOn(CHANNELS.OS_DND_STATE_CHANGED, callback),
   },
 
   // Keybinding API
@@ -1965,6 +2034,8 @@ const api: ElectronAPI = {
         type: "success" | "error" | "info" | "warning";
         title?: string;
         message: string;
+        duration?: number;
+        rateLimitKey?: string;
         action?: { label: string; ipcChannel: string; data?: string };
       }) => void
     ) => _typedOn(CHANNELS.NOTIFICATION_SHOW_TOAST, callback),
@@ -2223,6 +2294,8 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE_URL, payload),
     assignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
       _unwrappingInvoke(CHANNELS.FORGE_ASSIGN_ISSUE, payload),
+    unassignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_UNASSIGN_ISSUE, payload),
     validateToken: (token: string) => _unwrappingInvoke(CHANNELS.FORGE_VALIDATE_TOKEN, token),
     setCredential: (providerId: string, credentials: Record<string, string>) =>
       _unwrappingInvoke(CHANNELS.FORGE_SET_CREDENTIAL, providerId, credentials),
@@ -2252,6 +2325,8 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.FORGE_CLASSIFY_PUSH_ERROR, payload),
   },
 
+  forgeAudit: buildForgeAuditPreloadBindings(_unwrappingInvoke),
+
   // Voice Input API
   voiceInput: {
     getSettings: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_GET_SETTINGS),
@@ -2259,8 +2334,10 @@ const api: ElectronAPI = {
       patch: Partial<{
         enabled: boolean;
         openaiApiKey: string;
+        deepgramApiKey: string;
         language: string;
         customDictionary: string[];
+        transcriptionProvider: "openai" | "deepgram";
         transcriptionModel: "gpt-realtime-whisper";
         correctionEnabled: boolean;
         correctionModel: "gpt-5-nano" | "gpt-5-mini";
@@ -2268,6 +2345,7 @@ const api: ElectronAPI = {
         paragraphingStrategy: "spoken-command" | "manual";
         resolveFileLinks: boolean;
         deviceId: string;
+        recordingMode: "toggle" | "push-to-talk";
       }>
     ) => _unwrappingInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
     start: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_START),
@@ -2282,7 +2360,8 @@ const api: ElectronAPI = {
     ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
     onParagraphBoundary: (callback: (payload: { rawText: string | null }) => void) =>
       _typedOn(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, callback),
-    onError: (callback: (error: string) => void) => _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
+    onError: (callback: (error: VoiceInputError) => void) =>
+      _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
     onStatus: (callback: (status: VoiceInputStatus) => void) =>
       _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),
     checkMicPermission: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION),
@@ -2310,16 +2389,8 @@ const api: ElectronAPI = {
         targetTier: "workbench" | "action" | "system" | null;
       }) => void
     ) => _typedOn(CHANNELS.MCP_TIER_NOT_PERMITTED, callback),
-    onGrantLifecycle: (
-      callback: (payload: {
-        type: "grant.issued" | "grant.expired" | "grant.revoked";
-        sessionId: string;
-        toolId: string;
-        ttlMs: number;
-        expiresAt?: number;
-        revokedReason?: "user" | "session-ended" | "session-idle";
-      }) => void
-    ) => _typedOn(CHANNELS.MCP_GRANT_LIFECYCLE, callback),
+    onGrantLifecycle: (callback: (payload: McpGrantLifecyclePayload) => void) =>
+      _typedOn(CHANNELS.MCP_GRANT_LIFECYCLE, callback),
   },
 
   helpAssistant: buildHelpAssistantPreloadBindings(_unwrappingInvoke),
@@ -2343,6 +2414,7 @@ const api: ElectronAPI = {
         args?: unknown;
         confirmed?: boolean;
         context?: ActionContext;
+        callerInfo?: McpBearerIdentity;
       }) => void
     ) => {
       const handler = (
@@ -2353,6 +2425,7 @@ const api: ElectronAPI = {
           args?: unknown;
           confirmed?: boolean;
           context?: ActionContext;
+          callerInfo?: McpBearerIdentity;
         }
       ) => callback(payload);
       ipcRenderer.on(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, handler);
@@ -2368,8 +2441,33 @@ const api: ElectronAPI = {
     },
   },
 
+  pluginBridge: {
+    onDispatchActionRequest: (
+      callback: (payload: { requestId: string; actionId: string; args?: unknown }) => void
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        payload: { requestId: string; actionId: string; args?: unknown }
+      ) => callback(payload);
+      ipcRenderer.on(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST, handler);
+    },
+
+    sendDispatchActionResponse: (payload: { requestId: string; result: ActionDispatchResult }) => {
+      ipcRenderer.send(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE, payload);
+    },
+  },
+
   plugin: {
     ...buildPluginPreloadBindings(_unwrappingInvoke),
+
+    // Plugin-scoped bridge to the native filesystem path of a dropped File.
+    // `webUtils.getPathForFile` must run in the preload (Electron 32 removed
+    // `File.path`). Confined to the plugin namespace — deliberately NOT a
+    // global `window.electron` method — so arbitrary native-path recovery
+    // stays bounded to the plugin install surface (#9295). Returns `""` for
+    // synthetic/non-disk File objects; the renderer treats empty as an error.
+    getDroppedFilePath: (file: File): string => webUtils.getPathForFile(file),
 
     // plugin:invoke uses raw ipcMain.handle with variadic args — its signature
     // can't be expressed through IpcInvokeMap, so it stays inline.
@@ -2387,14 +2485,33 @@ const api: ElectronAPI = {
 
     onActionsChanged: (callback: (payload: { actions: PluginActionDescriptor[] }) => void) =>
       _eventBusOn("plugin:actions-changed", callback),
+    onProvenanceChanged: (callback: (payload: Record<string, never>) => void) =>
+      _eventBusOn("plugin:provenance-changed", callback),
     onPanelKindsChanged: (callback: (payload: { kinds: PanelKindConfig[] }) => void) =>
       _eventBusOn("plugin:panel-kinds-changed", callback),
     onToolbarButtonsChanged: (
       callback: (payload: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void
     ) => _eventBusOn("plugin:toolbar-buttons-changed", callback),
+    onMenuItemsChanged: (
+      callback: (payload: {
+        items: Array<{ pluginId: string; item: MenuItemContribution }>;
+        complete: boolean;
+      }) => void
+    ) => _eventBusOn("plugin:menu-items-changed", callback),
+    onKeybindingsChanged: (
+      callback: (payload: { keybindings: PluginKeybindingDescriptor[]; complete: boolean }) => void
+    ) => _eventBusOn("plugin:keybindings-changed", callback),
+    onContextMenuItemsChanged: (
+      callback: (payload: {
+        items: Array<{ pluginId: string; item: ContextMenuContribution }>;
+        complete: boolean;
+      }) => void
+    ) => _eventBusOn("plugin:context-menu-items-changed", callback),
     onDecorationsChanged: (callback: (payload: { scope: string; paths?: string[] }) => void) =>
       _eventBusOn("plugin:decorations-changed", callback),
   },
+
+  pluginMcp: buildPluginMcpPreloadBindings(_unwrappingInvoke),
 
   crashRecovery: {
     getPending: () => _unwrappingInvoke(CHANNELS.CRASH_RECOVERY_GET_PENDING),
@@ -2507,26 +2624,39 @@ const api: ElectronAPI = {
     : {}),
 };
 
-// Expose the API to the renderer process only for trusted origins in the main frame
-if (window.top === window && isTrustedRendererUrl(window.location.href)) {
-  contextBridge.exposeInMainWorld("electron", api);
-  // Bridge for @sentry/electron/renderer's IPC transport. The renderer SDK
-  // looks up window.__SENTRY_IPC__["sentry-ipc"] and uses these methods to
-  // forward envelopes to the main process (which owns the real DSN and HTTP
-  // transport). contextIsolation blocks Sentry's default preload injection,
-  // so we expose the bridge manually here — gated to the trusted main-frame
-  // origin just like the `electron` API above.
-  contextBridge.exposeInMainWorld("__SENTRY_IPC__", {
-    "sentry-ipc": {
-      sendRendererStart: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.start", ...args),
-      sendScope: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.scope", ...args),
-      sendEnvelope: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.envelope", ...args),
-      sendStatus: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.status", ...args),
-      sendStructuredLog: (...args: unknown[]) =>
-        ipcRenderer.send("sentry-ipc.structured-log", ...args),
-      sendMetric: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.metric", ...args),
-    },
-  });
+// Expose the API to the renderer process only for trusted origins in the main frame.
+// The recovery page (recovery.html) is a static crash-recovery surface whose sole
+// consumer (recovery-renderer.js) only touches `window.electron.recovery.*`. It gets
+// a narrow bridge exposing only the 4-method `recovery` namespace, so an XSS on that
+// page can't reach terminal.spawn, files.*, worktree.*, etc. Every other trusted
+// same-origin route (index.html, and any future route) gets the full surface — using
+// isRecoveryPageUrl as the discriminator keeps the full surface as the safe default.
+const rendererUrl = window.location.href;
+if (window.top === window && isTrustedRendererUrl(rendererUrl)) {
+  if (isRecoveryPageUrl(rendererUrl)) {
+    contextBridge.exposeInMainWorld("electron", { recovery: api.recovery });
+    // __SENTRY_IPC__ is intentionally withheld here: recovery.html has no Sentry
+    // renderer SDK and exposing the transport would needlessly widen its surface.
+  } else {
+    contextBridge.exposeInMainWorld("electron", api);
+    // Bridge for @sentry/electron/renderer's IPC transport. The renderer SDK
+    // looks up window.__SENTRY_IPC__["sentry-ipc"] and uses these methods to
+    // forward envelopes to the main process (which owns the real DSN and HTTP
+    // transport). contextIsolation blocks Sentry's default preload injection,
+    // so we expose the bridge manually here — gated to the trusted main-frame
+    // origin just like the `electron` API above.
+    contextBridge.exposeInMainWorld("__SENTRY_IPC__", {
+      "sentry-ipc": {
+        sendRendererStart: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.start", ...args),
+        sendScope: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.scope", ...args),
+        sendEnvelope: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.envelope", ...args),
+        sendStatus: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.status", ...args),
+        sendStructuredLog: (...args: unknown[]) =>
+          ipcRenderer.send("sentry-ipc.structured-log", ...args),
+        sendMetric: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.metric", ...args),
+      },
+    });
+  }
 } else {
   if (window.top !== window) {
     console.error(
@@ -2639,7 +2769,7 @@ _eventBusOn("window:sample-renderer-elu", ({ requestId }) => {
 
 // E2E test bridge: expose renderer-side IPC listener introspection in fault mode.
 // Gated by DAINTREE_E2E_FAULT_MODE to avoid production surface area.
-if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
+if (process.env.DAINTREE_E2E_FAULT_MODE === "1" && !isPackagedBuild) {
   contextBridge.exposeInMainWorld("__DAINTREE_E2E_IPC__", {
     getRendererListenerCount: (channel: string) => ipcRenderer.listenerCount(channel),
   });
@@ -2649,7 +2779,7 @@ if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
 // Used by the renderer to suppress side effects (like the auto-launched
 // primary agent at the end of onboarding) that would otherwise pollute
 // panel-count assertions in tests.
-if (process.env.DAINTREE_E2E_MODE === "1") {
+if (process.env.DAINTREE_E2E_MODE === "1" && !isPackagedBuild) {
   contextBridge.exposeInMainWorld("__DAINTREE_E2E_MODE__", true);
 }
 
@@ -2659,6 +2789,24 @@ if (process.env.DAINTREE_E2E_MODE === "1") {
 // only set when the E2E harness launches Electron. The sandboxed renderer
 // cannot read `process.env` directly, so the preload (which does have a
 // polyfilled `process.env` even under sandbox: true) is the propagation point.
-if (process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1") {
+if (process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1" && !isPackagedBuild) {
   contextBridge.exposeInMainWorld("__DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS__", true);
+}
+
+// Surface the persisted color scheme id (seeded via additionalArguments) so the
+// renderer applies the saved theme on first paint, eliminating the flash of the
+// prefers-color-scheme default before the async theme config resolves (#9169).
+if (initialColorSchemeId) {
+  contextBridge.exposeInMainWorld("__DAINTREE_INITIAL_THEME__", {
+    colorSchemeId: initialColorSchemeId,
+  });
+}
+
+// Surface the destination project id (seeded via additionalArguments) so the
+// renderer resolves its project scope without a `?projectId=` query string,
+// keeping the document URL static for V8 bytecode cache reuse (#9162).
+if (initialProjectId) {
+  contextBridge.exposeInMainWorld("__DAINTREE_INITIAL_PROJECT__", {
+    id: initialProjectId,
+  });
 }

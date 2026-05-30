@@ -158,6 +158,30 @@ describe("webviewCsp", () => {
       expect(csp).toContain("wss://[::1]:*");
     });
 
+    // The dev-preview reverse proxy serves the stable dp-*.localhost origin (#9100),
+    // so every directive that admits a localhost wildcard must also admit the subdomain
+    // wildcard, plus ws://*.localhost:* in connect-src for HMR.
+    it("includes the *.localhost proxy origin in every localhost-bearing directive", () => {
+      const directives = parseDirectives(getLocalhostDevCSP());
+
+      for (const directive of [
+        "default-src",
+        "script-src",
+        "style-src",
+        "connect-src",
+        "img-src",
+        "frame-src",
+        "form-action",
+      ]) {
+        expect(directives[directive]).toContain("http://*.localhost:*");
+      }
+    });
+
+    it("includes ws://*.localhost:* in connect-src for proxied HMR", () => {
+      const directives = parseDirectives(getLocalhostDevCSP());
+      expect(directives["connect-src"]).toContain("ws://*.localhost:*");
+    });
+
     it("does not allow external origins in script-src or default-src", () => {
       const csp = getLocalhostDevCSP();
       const directives = Object.fromEntries(

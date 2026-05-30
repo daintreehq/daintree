@@ -33,6 +33,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["agent-capabilities:is-agent-enabled"]["args"]
     ): Promise<IpcInvokeMap["agent-capabilities:is-agent-enabled"]["result"]>;
   };
+  app: {
+    getVersionInfo(
+      ...args: IpcInvokeMap["app:get-version-info"]["args"]
+    ): Promise<IpcInvokeMap["app:get-version-info"]["result"]>;
+  };
   cli: {
     getStatus(
       ...args: IpcInvokeMap["cli:get-status"]["args"]
@@ -84,6 +89,9 @@ export interface GeneratedElectronAPI {
     ensure(
       ...args: IpcInvokeMap["dev-preview:ensure"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:ensure"]["result"]>;
+    getAllSessions(
+      ...args: IpcInvokeMap["dev-preview:get-all-sessions"]["args"]
+    ): Promise<IpcInvokeMap["dev-preview:get-all-sessions"]["result"]>;
     getByWorktree(
       ...args: IpcInvokeMap["dev-preview:get-by-worktree"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:get-by-worktree"]["result"]>;
@@ -93,9 +101,15 @@ export interface GeneratedElectronAPI {
     getDestructivePreviewSizes(
       ...args: IpcInvokeMap["dev-preview:get-destructive-preview-sizes"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:get-destructive-preview-sizes"]["result"]>;
+    getProxyPort(
+      ...args: IpcInvokeMap["dev-preview:get-proxy-port"]["args"]
+    ): Promise<IpcInvokeMap["dev-preview:get-proxy-port"]["result"]>;
     getState(
       ...args: IpcInvokeMap["dev-preview:get-state"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:get-state"]["result"]>;
+    mintBrowserToken(
+      ...args: IpcInvokeMap["dev-preview:mint-browser-token"]["args"]
+    ): Promise<IpcInvokeMap["dev-preview:mint-browser-token"]["result"]>;
     reinstallAndRestart(
       ...args: IpcInvokeMap["dev-preview:reinstall-and-restart"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:reinstall-and-restart"]["result"]>;
@@ -105,6 +119,9 @@ export interface GeneratedElectronAPI {
     restartAndClearCache(
       ...args: IpcInvokeMap["dev-preview:restart-and-clear-cache"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:restart-and-clear-cache"]["result"]>;
+    restartByWorktree(
+      ...args: IpcInvokeMap["dev-preview:restart-by-worktree"]["args"]
+    ): Promise<IpcInvokeMap["dev-preview:restart-by-worktree"]["result"]>;
     stop(
       ...args: IpcInvokeMap["dev-preview:stop"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:stop"]["result"]>;
@@ -114,6 +131,9 @@ export interface GeneratedElectronAPI {
     stopByWorktree(
       ...args: IpcInvokeMap["dev-preview:stop-by-worktree"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:stop-by-worktree"]["result"]>;
+    stopDevServerByWorktree(
+      ...args: IpcInvokeMap["dev-preview:stop-dev-server-by-worktree"]["args"]
+    ): Promise<IpcInvokeMap["dev-preview:stop-dev-server-by-worktree"]["result"]>;
   };
   eventInspector: {
     clear(
@@ -125,6 +145,26 @@ export interface GeneratedElectronAPI {
     getFiltered(
       ...args: IpcInvokeMap["event-inspector:get-filtered"]["args"]
     ): Promise<IpcInvokeMap["event-inspector:get-filtered"]["result"]>;
+  };
+  forgeAudit: {
+    clearLog(
+      ...args: IpcInvokeMap["forge-audit:clear-log"]["args"]
+    ): Promise<IpcInvokeMap["forge-audit:clear-log"]["result"]>;
+    exportLog(
+      ...args: IpcInvokeMap["forge-audit:export-log"]["args"]
+    ): Promise<IpcInvokeMap["forge-audit:export-log"]["result"]>;
+    getConfig(
+      ...args: IpcInvokeMap["forge-audit:get-config"]["args"]
+    ): Promise<IpcInvokeMap["forge-audit:get-config"]["result"]>;
+    getRecords(
+      ...args: IpcInvokeMap["forge-audit:get-records"]["args"]
+    ): Promise<IpcInvokeMap["forge-audit:get-records"]["result"]>;
+    getStats(
+      ...args: IpcInvokeMap["forge-audit:get-stats"]["args"]
+    ): Promise<IpcInvokeMap["forge-audit:get-stats"]["result"]>;
+    setEnabled(
+      ...args: IpcInvokeMap["forge-audit:set-enabled"]["args"]
+    ): Promise<IpcInvokeMap["forge-audit:set-enabled"]["result"]>;
   };
   gemini: {
     enableAlternateBuffer(
@@ -295,19 +335,66 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["onboarding:set-step"]["args"]
     ): Promise<IpcInvokeMap["onboarding:set-step"]["result"]>;
   };
+  osDnd: {
+    getState(
+      ...args: IpcInvokeMap["os-dnd:get-state"]["args"]
+    ): Promise<IpcInvokeMap["os-dnd:get-state"]["result"]>;
+  };
   plugin: {
+    checkForUpdate(
+      ...args: IpcInvokeMap["plugin:check-for-update"]["args"]
+    ): Promise<IpcInvokeMap["plugin:check-for-update"]["result"]>;
+    clearAuditLog(
+      ...args: IpcInvokeMap["plugin:clear-audit-log"]["args"]
+    ): Promise<IpcInvokeMap["plugin:clear-audit-log"]["result"]>;
+    contextMenuItems(
+      ...args: IpcInvokeMap["plugin:context-menu-items"]["args"]
+    ): Promise<IpcInvokeMap["plugin:context-menu-items"]["result"]>;
+    deleteSettingValue(
+      ...args: IpcInvokeMap["plugin:settings-delete-value"]["args"]
+    ): Promise<IpcInvokeMap["plugin:settings-delete-value"]["result"]>;
+    exportAuditLog(
+      ...args: IpcInvokeMap["plugin:export-audit-log"]["args"]
+    ): Promise<IpcInvokeMap["plugin:export-audit-log"]["result"]>;
     getActions(
       ...args: IpcInvokeMap["plugin:actions-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-get"]["result"]>;
+    getAuditConfig(
+      ...args: IpcInvokeMap["plugin:get-audit-config"]["args"]
+    ): Promise<IpcInvokeMap["plugin:get-audit-config"]["result"]>;
+    getAuditRecords(
+      ...args: IpcInvokeMap["plugin:get-audit-records"]["args"]
+    ): Promise<IpcInvokeMap["plugin:get-audit-records"]["result"]>;
     getDecorations(
       ...args: IpcInvokeMap["plugin:file-decorations-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:file-decorations-get"]["result"]>;
+    getDiagnosticsSnapshot(
+      ...args: IpcInvokeMap["plugin:get-diagnostics-snapshot"]["args"]
+    ): Promise<IpcInvokeMap["plugin:get-diagnostics-snapshot"]["result"]>;
     getForgeProviders(
       ...args: IpcInvokeMap["plugin:forge-providers-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:forge-providers-get"]["result"]>;
     getPanelKinds(
       ...args: IpcInvokeMap["plugin:panel-kinds-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:panel-kinds-get"]["result"]>;
+    getSettingValues(
+      ...args: IpcInvokeMap["plugin:settings-get-values"]["args"]
+    ): Promise<IpcInvokeMap["plugin:settings-get-values"]["result"]>;
+    install(
+      ...args: IpcInvokeMap["plugin:install"]["args"]
+    ): Promise<IpcInvokeMap["plugin:install"]["result"]>;
+    installFromFile(
+      ...args: IpcInvokeMap["plugin:install-from-file"]["args"]
+    ): Promise<IpcInvokeMap["plugin:install-from-file"]["result"]>;
+    installFromPath(
+      ...args: IpcInvokeMap["plugin:install-from-path"]["args"]
+    ): Promise<IpcInvokeMap["plugin:install-from-path"]["result"]>;
+    installFromUrl(
+      ...args: IpcInvokeMap["plugin:install-from-url"]["args"]
+    ): Promise<IpcInvokeMap["plugin:install-from-url"]["result"]>;
+    keybindings(
+      ...args: IpcInvokeMap["plugin:keybindings"]["args"]
+    ): Promise<IpcInvokeMap["plugin:keybindings"]["result"]>;
     list(
       ...args: IpcInvokeMap["plugin:list"]["args"]
     ): Promise<IpcInvokeMap["plugin:list"]["result"]>;
@@ -317,15 +404,56 @@ export interface GeneratedElectronAPI {
     registerAction(
       ...args: IpcInvokeMap["plugin:actions-register"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-register"]["result"]>;
+    revealSecretSetting(
+      ...args: IpcInvokeMap["plugin:settings-reveal-secret"]["args"]
+    ): Promise<IpcInvokeMap["plugin:settings-reveal-secret"]["result"]>;
+    setAuditEnabled(
+      ...args: IpcInvokeMap["plugin:set-audit-enabled"]["args"]
+    ): Promise<IpcInvokeMap["plugin:set-audit-enabled"]["result"]>;
+    setAuditMaxRecords(
+      ...args: IpcInvokeMap["plugin:set-audit-max-records"]["args"]
+    ): Promise<IpcInvokeMap["plugin:set-audit-max-records"]["result"]>;
+    setEnabled(
+      ...args: IpcInvokeMap["plugin:set-enabled"]["args"]
+    ): Promise<IpcInvokeMap["plugin:set-enabled"]["result"]>;
+    setSettingValue(
+      ...args: IpcInvokeMap["plugin:settings-set-value"]["args"]
+    ): Promise<IpcInvokeMap["plugin:settings-set-value"]["result"]>;
     toolbarButtons(
       ...args: IpcInvokeMap["plugin:toolbar-buttons"]["args"]
     ): Promise<IpcInvokeMap["plugin:toolbar-buttons"]["result"]>;
+    uninstall(
+      ...args: IpcInvokeMap["plugin:uninstall"]["args"]
+    ): Promise<IpcInvokeMap["plugin:uninstall"]["result"]>;
     unregisterAction(
       ...args: IpcInvokeMap["plugin:actions-unregister"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-unregister"]["result"]>;
     validateActionIds(
       ...args: IpcInvokeMap["plugin:validate-action-ids"]["args"]
     ): Promise<IpcInvokeMap["plugin:validate-action-ids"]["result"]>;
+  };
+  pluginMcp: {
+    getConfig(
+      ...args: IpcInvokeMap["plugin-mcp:get-config"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:get-config"]["result"]>;
+    getFullSchema(
+      ...args: IpcInvokeMap["plugin-mcp:get-full-schema"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:get-full-schema"]["result"]>;
+    getStderr(
+      ...args: IpcInvokeMap["plugin-mcp:get-stderr"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:get-stderr"]["result"]>;
+    list(
+      ...args: IpcInvokeMap["plugin-mcp:list"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:list"]["result"]>;
+    listTools(
+      ...args: IpcInvokeMap["plugin-mcp:list-tools"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:list-tools"]["result"]>;
+    restart(
+      ...args: IpcInvokeMap["plugin-mcp:restart"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:restart"]["result"]>;
+    setConfig(
+      ...args: IpcInvokeMap["plugin-mcp:set-config"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:set-config"]["result"]>;
   };
   portal: {
     closeTab(
@@ -410,5 +538,13 @@ export interface GeneratedElectronAPI {
     reset(
       ...args: IpcInvokeMap["system-sleep:reset"]["args"]
     ): Promise<IpcInvokeMap["system-sleep:reset"]["result"]>;
+  };
+  webview: {
+    getNavigationHistory(
+      ...args: IpcInvokeMap["webview:get-navigation-history"]["args"]
+    ): Promise<IpcInvokeMap["webview:get-navigation-history"]["result"]>;
+    goToHistoryIndex(
+      ...args: IpcInvokeMap["webview:go-to-history-index"]["args"]
+    ): Promise<IpcInvokeMap["webview:go-to-history-index"]["result"]>;
   };
 }

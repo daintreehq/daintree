@@ -145,36 +145,36 @@ describe("toolbarPreferencesStore", () => {
       store.getState().setDefaultSelection("terminal");
       const before = store.getState().launcher.defaultSelection;
 
-      store.getState().toggleButtonVisibility("plugin.acme.foo" as AnyToolbarButtonId, "right");
+      store.getState().toggleButtonVisibility("acme.foo.btn" as AnyToolbarButtonId, "right");
 
       expect(store.getState().launcher.defaultSelection).toBe(before);
-      expect(store.getState().layout.pinnedButtons["plugin.acme.foo"]).toBe(false);
+      expect(store.getState().layout.pinnedButtons["acme.foo.btn"]).toBe(false);
     });
   });
 
   describe("sweepStalePluginPinnedButtons", () => {
     it("removes plugin entries absent from the valid id set", async () => {
       const store = await loadStore();
-      store.getState().toggleButtonVisibility("plugin.acme.old" as AnyToolbarButtonId, "right");
-      store.getState().toggleButtonVisibility("plugin.acme.active" as AnyToolbarButtonId, "right");
+      store.getState().toggleButtonVisibility("acme.foo.old" as AnyToolbarButtonId, "right");
+      store.getState().toggleButtonVisibility("acme.foo.active" as AnyToolbarButtonId, "right");
 
-      store.getState().sweepStalePluginPinnedButtons(["plugin.acme.active"]);
+      store.getState().sweepStalePluginPinnedButtons(["acme.foo.active"]);
 
       const { pinnedButtons } = store.getState().layout;
-      expect(pinnedButtons["plugin.acme.old"]).toBeUndefined();
-      expect(pinnedButtons["plugin.acme.active"]).toBe(false);
+      expect(pinnedButtons["acme.foo.old"]).toBeUndefined();
+      expect(pinnedButtons["acme.foo.active"]).toBe(false);
     });
 
     it("never touches built-in (non-plugin) keys", async () => {
       const store = await loadStore();
       store.getState().toggleButtonVisibility("copy-tree", "right");
-      store.getState().toggleButtonVisibility("plugin.acme.gone" as AnyToolbarButtonId, "right");
+      store.getState().toggleButtonVisibility("acme.foo.gone" as AnyToolbarButtonId, "right");
 
       store.getState().sweepStalePluginPinnedButtons([]);
 
       const { pinnedButtons } = store.getState().layout;
       expect(pinnedButtons["copy-tree"]).toBe(false);
-      expect(pinnedButtons["plugin.acme.gone"]).toBeUndefined();
+      expect(pinnedButtons["acme.foo.gone"]).toBeUndefined();
     });
 
     it("is a no-op (preserves layout reference) when nothing is stale", async () => {
@@ -847,6 +847,88 @@ describe("toolbarPreferencesStore", () => {
 
         const store = await loadStore();
         expect(store.getState().layout.pinnedButtons).toEqual({ "copy-tree": false });
+      });
+    });
+
+    describe("v8→v9 plugin toolbar id rename (#9281)", () => {
+      it("renames `plugin.{pluginId}.{btn}` pinned keys to canonical `{pluginId}.{btn}`", async () => {
+        storageMock.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            state: {
+              layout: {
+                leftButtons: ["terminal"],
+                rightButtons: ["settings"],
+                pinnedButtons: {
+                  "plugin.acme.foo.btn": false,
+                  "plugin.daintreehq.tool.opener": false,
+                  "copy-tree": false,
+                },
+              },
+              launcher: { alwaysShowDevServer: false },
+            },
+            version: 8,
+          })
+        );
+
+        const store = await loadStore();
+        const { pinnedButtons } = store.getState().layout;
+        expect(pinnedButtons["acme.foo.btn"]).toBe(false);
+        expect(pinnedButtons["daintreehq.tool.opener"]).toBe(false);
+        expect(pinnedButtons["copy-tree"]).toBe(false);
+        expect(pinnedButtons["plugin.acme.foo.btn"]).toBeUndefined();
+        expect(pinnedButtons["plugin.daintreehq.tool.opener"]).toBeUndefined();
+      });
+
+      it("is a no-op when there are no `plugin.` prefixed keys", async () => {
+        storageMock.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            state: {
+              layout: {
+                leftButtons: ["terminal"],
+                rightButtons: ["settings"],
+                pinnedButtons: { "copy-tree": false, terminal: false },
+              },
+              launcher: { alwaysShowDevServer: false },
+            },
+            version: 8,
+          })
+        );
+
+        const store = await loadStore();
+        expect(store.getState().layout.pinnedButtons).toEqual({
+          "copy-tree": false,
+          terminal: false,
+        });
+      });
+
+      it("renames `plugin.{pluginId}.{btn}` entries in leftButtons/rightButtons", async () => {
+        // Users who drag-and-dropped plugin toolbar buttons into a fixed
+        // slot had the old-form id stored in the position arrays. Without
+        // renaming, those become dangling references after the namespace
+        // change.
+        storageMock.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            state: {
+              layout: {
+                leftButtons: ["terminal", "plugin.acme.foo.btn", "browser"],
+                rightButtons: ["plugin.daintreehq.tool.opener", "settings"],
+                pinnedButtons: {},
+              },
+              launcher: { alwaysShowDevServer: false },
+            },
+            version: 8,
+          })
+        );
+
+        const store = await loadStore();
+        const { leftButtons, rightButtons } = store.getState().layout;
+        expect(leftButtons).toContain("acme.foo.btn");
+        expect(leftButtons).not.toContain("plugin.acme.foo.btn");
+        expect(rightButtons).toContain("daintreehq.tool.opener");
+        expect(rightButtons).not.toContain("plugin.daintreehq.tool.opener");
       });
     });
   });

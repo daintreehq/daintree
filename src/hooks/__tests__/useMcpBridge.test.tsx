@@ -60,6 +60,7 @@ describe("useMcpBridge", () => {
         args?: unknown;
         confirmed?: boolean;
         context?: Record<string, unknown>;
+        callerInfo?: { token4LastChars: string; userAgent: string };
       }) => void | Promise<void>)
     | undefined;
   let cleanupManifest: ReturnType<typeof vi.fn>;
@@ -96,6 +97,7 @@ describe("useMcpBridge", () => {
               args?: unknown;
               confirmed?: boolean;
               context?: Record<string, unknown>;
+              callerInfo?: { token4LastChars: string; userAgent: string };
             }) => void | Promise<void>
           ) => {
             dispatchHandler = callback;
@@ -251,6 +253,46 @@ describe("useMcpBridge", () => {
       result: { ok: true, result: { ok: true } },
       confirmationDecision: "approved",
     });
+  });
+
+  it("forwards the requesting-bearer identity into the confirm store (#9157)", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    const callerInfo = { token4LastChars: "1234", userAgent: "Claude Code" };
+    const dispatched = dispatchHandler?.({
+      requestId: "req-caller",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1" },
+      callerInfo,
+    });
+
+    await Promise.resolve();
+    expect(useMcpConfirmStore.getState().current?.callerInfo).toEqual(callerInfo);
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+  });
+
+  it("leaves callerInfo undefined in the store for pinned help-session dispatch (#9157)", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-no-caller",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1" },
+    });
+
+    await Promise.resolve();
+    expect(useMcpConfirmStore.getState().current?.callerInfo).toBeUndefined();
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
   });
 
   it("preserves the bound context across the confirmation wait (#8317)", async () => {

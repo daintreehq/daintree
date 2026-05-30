@@ -4,7 +4,9 @@ import type { AnyActionDefinition } from "@/services/actions/actionTypes";
 import type { ActionDefinition } from "@shared/types/actions";
 import type { PluginActionDescriptor } from "@shared/types/plugin";
 import { requestPluginConfirmation, usePluginConfirmStore } from "@/store/pluginConfirmStore";
+import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 import { logWarn } from "@/utils/logger";
+import { notify } from "@/lib/notify";
 
 /**
  * Pull plugin-registered actions on mount and keep the renderer registry in
@@ -42,7 +44,7 @@ export function usePluginActions(): void {
         if (!descriptorsEqual(current, next)) {
           // Re-register so stale title/category/schema is replaced.
           actionService.unregister(id);
-          actionService.register(toSyntheticDefinition(next, inFlightConfirms));
+          actionService.register(toSyntheticDefinition(next, inFlightConfirms, () => disposed));
           registered.set(id, next);
         }
       }
@@ -55,7 +57,7 @@ export function usePluginActions(): void {
           );
           continue;
         }
-        actionService.register(toSyntheticDefinition(descriptor, inFlightConfirms));
+        actionService.register(toSyntheticDefinition(descriptor, inFlightConfirms, () => disposed));
         registered.set(id, descriptor);
       }
     };
@@ -116,7 +118,8 @@ function descriptorsEqual(a: PluginActionDescriptor, b: PluginActionDescriptor):
 
 function toSyntheticDefinition(
   descriptor: PluginActionDescriptor,
-  inFlightConfirms: Set<string>
+  inFlightConfirms: Set<string>,
+  isDisposed: () => boolean
 ): AnyActionDefinition {
   const { pluginId, id, title, description, category, kind, keywords, inputSchema } = descriptor;
 
@@ -146,12 +149,20 @@ function toSyntheticDefinition(
         inFlightConfirms.add(requestId);
         let decision;
         try {
+          let argsSummary: string;
+          try {
+            argsSummary = summarizeMcpArgs(args);
+          } catch {
+            argsSummary = "<unserializable>";
+          }
           decision = await requestPluginConfirmation({
             requestId,
             pluginId,
             actionId: id,
             actionTitle: title ?? id,
             actionDescription: description ?? "",
+            effectiveDanger,
+            argsSummary,
           });
         } finally {
           inFlightConfirms.delete(requestId);
@@ -165,7 +176,28 @@ function toSyntheticDefinition(
           return undefined;
         }
       }
-      return window.electron.plugin.invoke(pluginId, id, args);
+      try {
+        return await window.electron.plugin.invoke(pluginId, id, args);
+      } catch (err) {
+        // ActionService.dispatch already catches this rejection and returns
+        // `{ ok: false }` so the *contract* is intact — this branch exists to
+        // turn the silent failure into a user-visible toast. `isDisposed`
+        // gates the notify so an in-flight invoke that resolves after the
+        // hook unmounts (HMR, window close, project switch) can't surface a
+        // stale toast for an action the user can no longer see. We swallow
+        // the error after notifying because surfacing a second failure path
+        // (via rethrow → ActionService) would double-route the same event.
+        if (!isDisposed()) {
+          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+          notify({
+            type: "error",
+            title: "Plugin action failed",
+            message: `"${title ?? id}" from plugin ${pluginId} threw an error.`,
+          });
+        }
+        logWarn(`[PluginActions] Plugin action "${id}" threw`, { error: err });
+        return undefined;
+      }
     },
   };
 

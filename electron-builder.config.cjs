@@ -43,15 +43,20 @@ module.exports = async function () {
     files: [
       "dist/**/*",
       "dist-electron/**/*",
+      "electron/services/persistence/migrations/**/*",
       "!demo/**",
       "!node_modules/node-pty/bin",
       "!node_modules/node-pty/prebuilds",
       "!node_modules/ffmpeg-static/**/*",
+      // Sample plugins are an e2e harness fixture (#9286) — sideloaded only
+      // when `DAINTREE_E2E_SIDELOAD_PLUGIN_DIR` is set, which is constant-
+      // folded to "" in production builds. Excluding the dir keeps shipped
+      // binaries from carrying dead test fixtures.
+      "!dist-electron/plugins/sample/**",
     ],
     extraResources: [
       { from: "help", to: "help" },
       { from: "electron/resources/sounds", to: "sounds" },
-      { from: "electron/services/persistence/migrations", to: "migrations" },
     ],
     // node-pty and better-sqlite3 contain native .node binaries that need
     // real filesystem access for `require()` — they cannot live inside the
@@ -63,6 +68,13 @@ module.exports = async function () {
       "node_modules/better-sqlite3/**/*",
       "node_modules/win-job-object/**/*",
       "node_modules/posix-pty-reaper/**/*",
+      // onnxruntime-node ships per-platform native binaries (.node/.dll/.dylib/
+      // .so) for the Silero VAD side-chain (#9177) — they require real
+      // filesystem access for the N-API load and cannot live inside the ASAR.
+      "node_modules/onnxruntime-node/**/*",
+      // avr-vad reads its bundled silero_vad_v5.onnx via `fs` relative to its
+      // own dist dir; unpack so that path resolves outside the ASAR too.
+      "node_modules/avr-vad/**/*",
     ],
     electronFuses: {
       runAsNode: false,
@@ -75,18 +87,37 @@ module.exports = async function () {
       grantFileProtocolExtraPrivileges: false,
     },
     afterPack: "./scripts/afterPack.cjs",
+    afterSign: "./scripts/notarize-macos.cjs",
     mac: {
       extraResources: [{ from: "scripts/daintree-cli.sh", to: "daintree-cli.sh" }],
       x64ArchFiles:
-        "Contents/Resources/app.asar.unpacked/node_modules/{node-pty/build/Release/**,win-job-object/bin/**,posix-pty-reaper/build/Release/**,@parcel/watcher-darwin-*/watcher.node,@parcel/watcher/bin/darwin-*/watcher.node}",
+        "Contents/Resources/app.asar.unpacked/node_modules/{node-pty/build/Release/**,better-sqlite3/build/Release/**,win-job-object/bin/**,posix-pty-reaper/build/Release/**,onnxruntime-node/bin/**,@parcel/watcher-darwin-*/watcher.node,@parcel/watcher/bin/darwin-*/watcher.node}",
       forceCodeSigning: true,
-      notarize: true,
+      notarize: false,
       binaries: [
         "Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper",
         "Contents/Resources/app.asar.unpacked/node_modules/posix-pty-reaper/build/Release/daintree_pty_supervisor",
       ],
       category: "public.app-category.developer-tools",
       icon: "build/icon.icns",
+      // Register the `.dntr` plugin-archive association so Finder double-click
+      // and "Open With → Daintree" route through the open-file handler (#9293).
+      // Gated on CSC_LINK (set only in signed CI release runs) so unsigned dev
+      // builds don't pollute the macOS Launch Services database with an
+      // unsigned mapping. `icon` is relative to buildResources ("build/"), so
+      // the value is "icons/dntr.icns" — not "build/icons/dntr.icns".
+      fileAssociations: process.env.CSC_LINK
+        ? [
+            {
+              ext: "dntr",
+              name: "Daintree Plugin",
+              role: "Editor",
+              rank: "Owner",
+              isPackage: false,
+              icon: "icons/dntr.icns",
+            },
+          ]
+        : [],
       extendInfo: {
         CFBundleIconName: "Icon",
         NSPrefersDisplaySafeAreaCompatibilityMode: false,
@@ -111,6 +142,7 @@ module.exports = async function () {
     },
     win: {
       icon: "build/icon.ico",
+      artifactName: "${productName}-${version}-${arch}-setup.${ext}",
       target: [
         { target: "appx", arch: ["x64"] },
         { target: "nsis", arch: ["x64", "arm64"] },
@@ -126,10 +158,11 @@ module.exports = async function () {
       applicationId: "Daintree",
       displayName: "Daintree",
       languages: ["en-US"],
+      setBuildNumber: true,
     },
-    // NSIS (non-Store) Windows installer. Produces a single combined x64+arm64
-    // `.exe`; the installer selects the right payload at runtime. Auto-update
-    // is delivered via the generic provider URL above — gated in the renderer
+    // NSIS (non-Store) Windows installer. Separate x64 and arm64 installers
+    // built on their respective native runners (#9244). Auto-update is
+    // delivered via the generic provider URL above — gated in the renderer
     // by `process.windowsStore` so MSIX/AppX builds keep using the Store path.
     nsis: {
       oneClick: false,
@@ -141,6 +174,15 @@ module.exports = async function () {
       shortcutName: "Daintree",
       uninstallDisplayName: "Daintree",
       differentialPackage: true,
+      buildUniversalInstaller: false,
+      // `.dntr` (plugin archive) file association is registered via a custom
+      // NSIS include rather than electron-builder's `fileAssociations`: the
+      // built-in path requires `perMachine: true` (HKLM, system-wide), which
+      // would force elevation on install AND on every auto-update. We keep the
+      // per-user (HKCU) install model and register the association by hand in
+      // build/installer.nsh. Double-clicking a `.dntr` then launches Daintree
+      // with the file path in argv, picked up by the second-instance handler.
+      include: "build/installer.nsh",
     },
     linux: {
       icon: "build/icon.png",
@@ -148,6 +190,17 @@ module.exports = async function () {
       target: ["AppImage", "deb"],
       category: "Development",
       desktop: { entry: { StartupWMClass: "daintree" } },
+      // `.dntr` plugin-archive association. electron-builder generates the XDG
+      // mime-type XML and adds `MimeType=application/x-dntr` to the .desktop
+      // entry; double-clicking then launches Daintree with the path in argv.
+      fileAssociations: [
+        {
+          ext: "dntr",
+          name: "Daintree Plugin",
+          description: "Daintree plugin archive",
+          mimeType: "application/x-dntr",
+        },
+      ],
       extraResources: [
         { from: "scripts/daintree-cli.sh", to: "daintree-cli.sh" },
         { from: "build/linux/daintree.apparmor", to: "daintree.apparmor" },
@@ -161,17 +214,24 @@ module.exports = async function () {
         "libnss3",
         "libasound2",
         "libgbm1",
+        "libxkbcommon0",
+        "libxrandr2",
+        "libxshmfence1",
         "libxss1",
         "libxtst6",
         "libx11-6",
         "libx11-xcb1",
         "libxcb1",
+        "libxdamage1",
+        "libxfixes3",
         "libatk1.0-0",
         "libatk-bridge2.0-0",
         "libcups2",
+        "libdbus-1-3",
         "libdrm2",
         "libexpat1",
         "libnotify4",
+        "libnspr4",
         "libsecret-1-0",
         "xdg-utils",
       ],

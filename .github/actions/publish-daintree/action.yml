@@ -1,0 +1,133 @@
+name: Publish Daintree release
+description: Download artifacts, verify monotonic version, upload to R2, and notify website
+
+inputs:
+  artifact_name:
+    description: Name of the build artifact to download
+    required: true
+  include_globs:
+    description: Space-separated glob patterns for binary R2 upload (e.g. "*.dmg *.zip *.blockmap")
+    required: true
+  metadata_suffix:
+    description: YAML metadata filename fragment (e.g. "-mac", "-linux", or "" for Windows)
+    required: false
+    default: ""
+  release_platforms:
+    description: Comma-separated platform list for check-version-monotonic.mjs (e.g. "mac", "linux", "win")
+    required: true
+  node_version:
+    description: Node.js version
+    required: false
+    default: "22"
+  publish_url:
+    description: Base URL for R2 upload verification
+    required: false
+    default: https://updates.daintree.org/releases/
+  r2_access_key_id:
+    description: R2 access key ID
+    required: true
+  r2_secret_access_key:
+    description: R2 secret access key
+    required: true
+  r2_endpoint:
+    description: R2 endpoint URL
+    required: true
+  r2_bucket:
+    description: R2 bucket name
+    required: true
+  website_webhook_secret:
+    description: Website webhook secret
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check out repository
+      uses: actions/checkout@v6
+      with:
+        clean: true
+        fetch-depth: 1
+
+    - name: Set up Node.js and install dependencies
+      uses: ./.github/actions/setup-node-install
+      with:
+        node_version: ${{ inputs.node_version }}
+        install_args: --ignore-scripts
+
+    - name: Resolve update metadata prefix
+      uses: ./.github/actions/resolve-update-metadata-prefix
+
+    - name: Download artifacts
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: release/
+
+    - name: List release files
+      shell: bash
+      run: ls -lah release/
+
+    - name: Install gate dependencies
+      shell: bash
+      run: npm install --no-save --no-audit --no-fund --ignore-scripts js-yaml semver
+
+    - name: Check version is monotonically increasing
+      shell: bash
+      env:
+        RELEASE_PLATFORMS: ${{ inputs.release_platforms }}
+      run: node scripts/ci/check-version-monotonic.mjs
+
+    - name: Upload binaries to R2
+      shell: bash
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.r2_access_key_id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.r2_secret_access_key }}
+        AWS_DEFAULT_REGION: auto
+        R2_ENDPOINT: ${{ inputs.r2_endpoint }}
+        R2_BUCKET: ${{ inputs.r2_bucket }}
+      run: |
+        read -ra GLOBS <<< "${{ inputs.include_globs }}"
+        INCLUDE_FLAGS=()
+        for glob in "${GLOBS[@]}"; do
+          INCLUDE_FLAGS+=(--include "$glob")
+        done
+        aws s3 sync release/ "s3://${R2_BUCKET}/releases/" \
+          --endpoint-url "${R2_ENDPOINT}" \
+          --no-progress \
+          --exclude "*" \
+          "${INCLUDE_FLAGS[@]}" \
+          --cache-control "public, max-age=31536000, immutable"
+
+    - name: Verify binaries reachable on R2
+      shell: bash
+      env:
+        PUBLISH_URL: ${{ inputs.publish_url }}
+      run: node scripts/ci/verify-r2-uploads.mjs
+
+    - name: Upload metadata to R2
+      shell: bash
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.r2_access_key_id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.r2_secret_access_key }}
+        AWS_DEFAULT_REGION: auto
+        R2_ENDPOINT: ${{ inputs.r2_endpoint }}
+        R2_BUCKET: ${{ inputs.r2_bucket }}
+      run: |
+        aws s3 sync release/ "s3://${R2_BUCKET}/releases/" \
+          --endpoint-url "${R2_ENDPOINT}" \
+          --no-progress \
+          --exclude "*" \
+          --include "${UPDATE_METADATA_PREFIX}${{ inputs.metadata_suffix }}.yml" \
+          --cache-control "no-cache, no-store, must-revalidate"
+
+    - name: Verify update metadata at CDN edge
+      shell: bash
+      env:
+        PUBLISH_URL: ${{ inputs.publish_url }}
+        METADATA_SUFFIX: ${{ inputs.metadata_suffix }}
+      run: node scripts/ci/verify-r2-metadata.mjs
+
+    - name: Notify website of new release
+      uses: ./.github/actions/website-notify
+      with:
+        webhook_secret: ${{ inputs.website_webhook_secret }}

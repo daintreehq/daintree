@@ -22,6 +22,20 @@ const CONFIRMATION_TIMEOUT_MS = 28_000;
 const CONFIRM_COOLDOWN_MS = 1_200;
 
 /**
+ * Upper bound for the user-agent shown in the "Requested by" row. An external
+ * client controls its own `User-Agent` header (capped at Node's ~8 KB header
+ * limit, not at a sane length), so clamp the display value here so an oversized
+ * string can't push the Arguments block and confirm button below the fold.
+ */
+const MAX_USER_AGENT_DISPLAY = 120;
+
+function truncateUserAgent(userAgent: string): string {
+  return userAgent.length > MAX_USER_AGENT_DISPLAY
+    ? `${userAgent.slice(0, MAX_USER_AGENT_DISPLAY - 1)}…`
+    : userAgent;
+}
+
+/**
  * Singleton dialog driven by the MCP confirmation queue. Mounted once near
  * the top of `App.tsx`. Reads `current` from `useMcpConfirmStore` and
  * surfaces one `ConfirmDialog` at a time — concurrent agent calls queue
@@ -85,10 +99,15 @@ export function McpConfirmDialog() {
   }
 
   // Severity follows the action's registry classification, not the fact that
-  // an MCP client dispatched it. Provenance is already conveyed by the
-  // "Run '…'?" framing; only genuinely destructive dispatches earn red.
+  // an MCP client dispatched it; only genuinely destructive dispatches earn
+  // red. Provenance differs by dispatch origin: pinned help-session dispatch
+  // is the assistant's own panel, so `callerInfo` is absent and the dialog
+  // stays provenance-free. Unpinned external/api-key dispatch carries the
+  // requesting bearer's identity (#9157), surfaced in a "Requested by" row so
+  // the user can see which client is asking before approving.
   const isDestructive = current.danger === "confirm";
   const variant = isDestructive ? "destructive" : "default";
+  const callerInfo = current.callerInfo;
 
   return (
     <ErrorBoundary variant="component" componentName="McpConfirmDialog" resetKeys={[resetKey]}>
@@ -104,11 +123,23 @@ export function McpConfirmDialog() {
         confirmCooldownMs={isDestructive ? CONFIRM_COOLDOWN_MS : undefined}
         cooldownKey={current.requestId}
       >
-        <div className="space-y-2">
-          <div className="text-xs text-daintree-text/60 uppercase tracking-wide">Arguments</div>
-          <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle rounded px-2 py-1.5 text-daintree-text/80">
-            {current.argsSummary || "(none)"}
-          </pre>
+        <div className="space-y-3">
+          {callerInfo && (
+            <div className="space-y-2">
+              <div className="text-xs text-daintree-text/60 uppercase tracking-wide">
+                Requested by
+              </div>
+              <div className="text-xs text-daintree-text/80 break-words">
+                …{callerInfo.token4LastChars} · {truncateUserAgent(callerInfo.userAgent)}
+              </div>
+            </div>
+          )}
+          <div className="space-y-2">
+            <div className="text-xs text-daintree-text/60 uppercase tracking-wide">Arguments</div>
+            <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle rounded px-2 py-1.5 text-daintree-text/80">
+              {current.argsSummary || "(none)"}
+            </pre>
+          </div>
         </div>
       </ConfirmDialog>
     </ErrorBoundary>

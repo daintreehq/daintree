@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import {
   getInvalidCommandMessage,
   normalizeNextjsDevCommand,
@@ -25,6 +26,8 @@ import {
 } from "./DevPreviewRequestValidators.js";
 
 export { normalizeNextjsDevCommand } from "./DevPreviewCommandNormalizer.js";
+import { buildDevPreviewSubdomain } from "../../shared/utils/devPreviewProxy.js";
+import type { DevPreviewManifestEntry } from "./DevPreviewManifestService.js";
 import type { PtyClient } from "./PtyClient.js";
 import { UrlDetector } from "./UrlDetector.js";
 import type {
@@ -40,6 +43,8 @@ import type {
   DevPreviewPackageManager,
 } from "../../shared/types/ipc/devPreview.js";
 import type { DevServerError } from "../../shared/utils/devServerErrors.js";
+import { detectDevServerError } from "../../shared/utils/devServerErrors.js";
+import { CRASH_SIGNALS, EXPECTED_TERMINATION_SIGNALS } from "./pty/terminalForensics.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -60,9 +65,19 @@ interface DevPreviewSession extends DevPreviewSessionState {
   startupReplayTimer: ReturnType<typeof setTimeout> | null;
   updatedAtPerformanceMs: number;
   phaseLabel?: "Compiling";
-  compilingEmitted: boolean;
+  compiling: boolean;
   compilingTimer: ReturnType<typeof setTimeout> | null;
+  compilingClearTimer: ReturnType<typeof setTimeout> | null;
   forceKilled?: boolean;
+  // Crash-loop guard state. crashCount is the number of consecutive fast
+  // install→crash cycles in the current window; devSpawnedAt marks when the
+  // dev server (not an install) last spawned, used to graduate the counter
+  // once a spawn survives CRASH_LOOP_MIN_UPTIME_MS. backoffAbort cancels a
+  // pending delayed re-install when the user restarts or the service disposes.
+  crashCount: number;
+  devSpawnedAt: number | null;
+  backoffAbort: AbortController | null;
+  crashLoopStopped: boolean;
 }
 
 const RUNNING_STATES: ReadonlySet<DevPreviewSessionStatus> = new Set([
@@ -72,12 +87,16 @@ const RUNNING_STATES: ReadonlySet<DevPreviewSessionStatus> = new Set([
 ]);
 
 // Framework build/dep caches wiped by restartAndClearCache, relative to the
-// session cwd. node_modules/.vite is Vite's dep-optimization cache and is
-// distinct from a root-level .vite directory.
+// session cwd. Covers Next, Vite, Turbo, SvelteKit, Astro, and Nuxt root caches
+// plus Vite's node_modules/.vite dep-optimization cache (distinct from a
+// root-level .vite directory). Missing dirs are tolerated by removal callers.
 const CACHE_DIRS: readonly string[] = [
   ".next",
   ".vite",
   ".turbo",
+  ".svelte-kit",
+  ".astro",
+  ".nuxt",
   path.join("node_modules", ".vite"),
 ];
 
@@ -87,6 +106,41 @@ const STALE_START_RECOVERY_MS = 10000;
 const STARTUP_REPLAY_DELAY_MS = 1500;
 const REPLAY_HISTORY_MAX_LINES = 300;
 const PTY_SUBMIT_AFTER_SPAWN_MS = 100;
+const COMPILE_ARM_MS = 1000;
+const COMPILE_CLEAR_MS = 1500;
+
+// Bounds for the `lastOutput` activity hint surfaced in the cross-worktree
+// dashboard. Only the buffer tail is scanned (the last line is all we need) and
+// the result is capped so a single pathological line can't bloat the snapshot.
+const LAST_OUTPUT_SCAN_BYTES = 2000;
+const LAST_OUTPUT_MAX_CHARS = 120;
+
+// Per-session crash-loop guard. A broken config (missing deps that an install
+// can't fix) otherwise drives an unbounded install→crash→reinstall cycle that
+// burns CPU and battery. The guard counts consecutive fast cycles, backs off
+// geometrically between re-install attempts, and after CRASH_LOOP_MAX_ATTEMPTS
+// halts auto-respawn into a recoverable "stopped" state. A dev server that
+// survives CRASH_LOOP_MIN_UPTIME_MS graduates and resets the counter. Values
+// are tuned for a dev workflow (sub-3s cap) — not Kubernetes-style multi-minute
+// waits — so a developer who just fixed the bug isn't punished. The first
+// re-install in a fresh window runs immediately; backoff applies only to
+// repeats.
+const CRASH_LOOP_MIN_UPTIME_MS = 5000;
+const CRASH_LOOP_INITIAL_DELAY_MS = 500;
+const CRASH_LOOP_BACKOFF_MULTIPLIER = 1.5;
+const CRASH_LOOP_MAX_DELAY_MS = 3000;
+const CRASH_LOOP_MAX_ATTEMPTS = 5;
+
+/** Parse the numeric port out of a detected dev-server URL, or null if absent/unparseable. */
+function parseUrlPort(url: string | null): number | null {
+  if (!url) return null;
+  try {
+    const port = new URL(url).port;
+    return port ? Number(port) : null;
+  } catch {
+    return null;
+  }
+}
 
 export class DevPreviewSessionService {
   private readonly detector = new UrlDetector();
@@ -97,17 +151,78 @@ export class DevPreviewSessionService {
   private disposed = false;
   private readonly portRegistry = new Map<string, number>(); // sessionKey -> allocated port
   private readonly worktreeToSession = new Map<string, string>(); // worktreeId -> sessionKey
+  // Spawn metadata for sessions that were running when Daintree last closed,
+  // loaded once at first init. A panel with a matching entry and no live
+  // session reports status "restored-stopped" so the UI can offer a restart.
+  // Entries are dropped the moment a real session is created for that key.
+  private readonly restoredEntries = new Map<string, DevPreviewManifestEntry>();
   private readonly onDataListener: (id: string, data: string | Uint8Array) => void;
-  private readonly onExitListener: (id: string, exitCode: number) => void;
+  private readonly onExitListener: (id: string, exitCode: number, signal?: number) => void;
 
   constructor(
     private readonly ptyClient: PtyClient,
-    private readonly onStateChanged: (state: DevPreviewSessionState) => void
+    private readonly onStateChanged: (state: DevPreviewSessionState) => void,
+    restoredEntries: readonly DevPreviewManifestEntry[] = [],
+    // Persists the running-session manifest. Invoked on two kinds of event:
+    // when a session ENTERS a running state (so a later crash can restore it),
+    // and after an EXPLICIT user stop (so the manifest stops offering a restart
+    // for a server the user deliberately stopped). Deliberately NOT invoked from
+    // handleExit — a process exit at shutdown must leave the manifest intact so
+    // the next launch can offer the restart (#9094).
+    private readonly onPersistManifest: (entries: DevPreviewManifestEntry[]) => void = () => {},
+    // Fired alongside onStateChanged with a snapshot of EVERY session (live and
+    // restored), powering the cross-worktree dev-server dashboard. Optional with
+    // a no-op default so the 2-arg test fixtures and other call sites that don't
+    // need the global view are unaffected.
+    private readonly onAllSessionsChanged: (sessions: DevPreviewSessionState[]) => void = () => {}
   ) {
     this.onDataListener = this.handleData.bind(this);
     this.onExitListener = this.handleExit.bind(this);
     this.ptyClient.on("data", this.onDataListener);
     this.ptyClient.on("exit", this.onExitListener);
+    for (const entry of restoredEntries) {
+      this.restoredEntries.set(createSessionKey(entry.projectId, entry.panelId), entry);
+    }
+  }
+
+  private persistManifest(): void {
+    if (this.disposed) return;
+    try {
+      this.onPersistManifest(this.captureManifest());
+    } catch (err) {
+      console.warn("[DevPreviewSessionService] persistManifest failed:", err);
+    }
+  }
+
+  /**
+   * Snapshot the spawn metadata of every currently-running session for the
+   * restore manifest. Captures only RUNNING_STATES — stopped/error sessions
+   * have nothing meaningful to restart. `lastKnownPort` comes from the port
+   * registry (populated even while a session is still starting, when `url` is
+   * not yet known) and is informational only.
+   *
+   * Must be called BEFORE the PTYs are killed at shutdown: a killed dev-server
+   * PTY fires `exit`, which transitions its session out of RUNNING_STATES, so a
+   * post-kill capture would return nothing.
+   */
+  captureManifest(): DevPreviewManifestEntry[] {
+    const entries: DevPreviewManifestEntry[] = [];
+    for (const [key, session] of this.sessions) {
+      if (!RUNNING_STATES.has(session.status)) continue;
+      if (!session.devCommand.trim() || !session.cwd) continue;
+      entries.push({
+        panelId: session.panelId,
+        projectId: session.projectId,
+        worktreeId: session.worktreeId,
+        cwd: session.cwd,
+        devCommand: session.devCommand,
+        env: session.env ? { ...session.env } : undefined,
+        turbopackEnabled: session.turbopackEnabled,
+        lastKnownPort: this.portRegistry.get(key) ?? null,
+        capturedAt: Date.now(),
+      });
+    }
+    return entries;
   }
 
   /**
@@ -128,10 +243,80 @@ export class DevPreviewSessionService {
 
   getByWorktree(worktreeId: string): DevPreviewSessionState | null {
     const key = this.worktreeToSession.get(worktreeId);
-    if (!key) return null;
-    const session = this.sessions.get(key);
-    if (!session) return null;
-    return this.toPublicState(session);
+    if (key) {
+      const session = this.sessions.get(key);
+      if (session) return this.toPublicState(session);
+    }
+    // Fall back to a restore placeholder so callers (e.g. the worktree-delete
+    // dialog) still surface a dangling dev-preview panel that was running when
+    // Daintree last closed but hasn't been restarted yet. #9094.
+    for (const entry of this.restoredEntries.values()) {
+      if (entry.worktreeId === worktreeId) {
+        return this.getSessionState(entry.projectId, entry.panelId);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Snapshot of every dev-preview session across all worktrees — live sessions
+   * plus any restore placeholders not yet superseded by a live session. Powers
+   * the cross-worktree dashboard and the all-sessions push channel. Mirrors the
+   * restore-placeholder fallback in getByWorktree so the dashboard never misses
+   * a dangling session the worktree-delete dialog already surfaces.
+   */
+  getAllSessions(): DevPreviewSessionState[] {
+    const result: DevPreviewSessionState[] = [];
+    for (const session of this.sessions.values()) {
+      result.push(this.toPublicState(session));
+    }
+    for (const [key, entry] of this.restoredEntries) {
+      // A live session always supersedes its restore placeholder (the entry is
+      // dropped in getOrCreateSession), but guard anyway so a key can't appear
+      // twice if that invariant ever changes.
+      if (this.sessions.has(key)) continue;
+      result.push({
+        panelId: entry.panelId,
+        projectId: entry.projectId,
+        worktreeId: entry.worktreeId,
+        status: "restored-stopped",
+        url: null,
+        predictedUrl: null,
+        error: null,
+        terminalId: null,
+        isRestarting: false,
+        generation: 0,
+        updatedAt: entry.capturedAt,
+        forceKilled: undefined,
+        phaseLabel: undefined,
+      });
+    }
+    return result;
+  }
+
+  /**
+   * Resolve a dev-preview proxy subdomain (`dp-<projectToken>-<panelToken>`) to the upstream
+   * dev-server port for that panel, or null when none is live (#9100). Used by
+   * DevPreviewProxyService to forward each request without coupling to session internals.
+   * We rebuild the expected subdomain per session and match on equality — avoiding any
+   * ambiguous split of a label whose sanitized tokens may themselves contain hyphens.
+   */
+  getUpstreamPortForSubdomain(subdomain: string): number | null {
+    for (const session of this.sessions.values()) {
+      if (buildDevPreviewSubdomain(session.projectId, session.panelId) !== subdomain) continue;
+      // Only forward to a live server. After an explicit stop the registry entry lingers
+      // (the success path doesn't release it), so a stale port could otherwise be handed to
+      // whatever process later binds it.
+      if (!RUNNING_STATES.has(session.status)) return null;
+      // Prefer the port the dev server actually bound — UrlDetector overwrites session.url
+      // when the server lands on a different port than the one allocated (a command that
+      // ignores the injected PORT). Fall back to the allocated port while still starting,
+      // before any URL has been detected.
+      const detectedPort = parseUrlPort(session.url);
+      if (detectedPort !== null) return detectedPort;
+      return this.portRegistry.get(createSessionKey(session.projectId, session.panelId)) ?? null;
+    }
+    return null;
   }
 
   dispose(): void {
@@ -141,6 +326,7 @@ export class DevPreviewSessionService {
     for (const session of this.sessions.values()) {
       this.clearStartupReplay(session);
       session.readinessAbort?.abort();
+      session.backoffAbort?.abort();
       this.clearCompiling(session);
     }
     for (const terminalId of this.terminalToSession.keys()) {
@@ -192,6 +378,13 @@ export class DevPreviewSessionService {
         session.env = cloneEnv(request.env);
       }
 
+      // A config change is an explicit "try again with new settings" — clear a
+      // tripped crash-loop guard so the fresh config gets its full attempt
+      // budget instead of inheriting a stopped state from the old config.
+      if (configChanged) {
+        this.resetCrashLoopGuard(session);
+      }
+
       if (prevWorktreeId && prevWorktreeId !== session.worktreeId) {
         this.worktreeToSession.delete(prevWorktreeId);
       }
@@ -239,6 +432,10 @@ export class DevPreviewSessionService {
       await this.runLocked(key, async () => {
         const session = this.sessions.get(key);
         if (!session) return;
+
+        // User-initiated restart cancels any pending crash-loop backoff and
+        // clears the guard so this attempt starts from a clean slate.
+        this.resetCrashLoopGuard(session);
 
         const commandError = getInvalidCommandMessage(session.devCommand);
         if (commandError) {
@@ -289,6 +486,8 @@ export class DevPreviewSessionService {
     await this.runLocked(key, async () => {
       const session = this.sessions.get(key);
       if (!session) return;
+
+      this.resetCrashLoopGuard(session);
 
       const commandError = getInvalidCommandMessage(session.devCommand);
       if (commandError) {
@@ -349,6 +548,8 @@ export class DevPreviewSessionService {
     await this.runLocked(key, async () => {
       const session = this.sessions.get(key);
       if (!session) return;
+
+      this.resetCrashLoopGuard(session);
 
       const commandError = getInvalidCommandMessage(session.devCommand);
       if (commandError) {
@@ -432,6 +633,12 @@ export class DevPreviewSessionService {
       const session = this.sessions.get(key);
       if (!session) return;
 
+      // An explicit stop ends the session — clear the guard (and any pending
+      // backoff) so it can't auto-respawn behind the user's back. The terminal
+      // branch routes through stopSessionTerminal, but a stop arriving mid
+      // backoff has no live terminal and would otherwise skip the abort.
+      this.resetCrashLoopGuard(session);
+
       if (session.terminalId) {
         this.updateSession(session, { status: "stopping", isRestarting: false });
         const stopStartedAt = performance.now();
@@ -486,6 +693,9 @@ export class DevPreviewSessionService {
         });
       }
     });
+    // Explicit user stop — drop this session from the restore manifest so the
+    // next launch doesn't offer to restart a server the user chose to stop.
+    this.persistManifest();
     return this.getSessionState(request.projectId, request.panelId);
   }
 
@@ -531,6 +741,7 @@ export class DevPreviewSessionService {
         });
       })
     );
+    this.persistManifest();
   }
 
   async stopByProject(projectId: string): Promise<void> {
@@ -565,6 +776,91 @@ export class DevPreviewSessionService {
         });
       })
     );
+    this.persistManifest();
+  }
+
+  async stopDevServerByWorktree(worktreeId: string): Promise<DevPreviewSessionState> {
+    const key = this.worktreeToSession.get(worktreeId);
+    if (!key) {
+      return {
+        panelId: "",
+        projectId: "",
+        worktreeId: undefined,
+        status: "stopped",
+        url: null,
+        predictedUrl: null,
+        error: null,
+        terminalId: null,
+        isRestarting: false,
+        generation: 0,
+        updatedAt: Date.now(),
+        forceKilled: undefined,
+        phaseLabel: undefined,
+      };
+    }
+    const session = this.sessions.get(key);
+    if (!session) {
+      return {
+        panelId: "",
+        projectId: "",
+        worktreeId: undefined,
+        status: "stopped",
+        url: null,
+        predictedUrl: null,
+        error: null,
+        terminalId: null,
+        isRestarting: false,
+        generation: 0,
+        updatedAt: Date.now(),
+        forceKilled: undefined,
+        phaseLabel: undefined,
+      };
+    }
+    return this.stop({ panelId: session.panelId, projectId: session.projectId });
+  }
+
+  async restartByWorktree(worktreeId: string): Promise<DevPreviewSessionState> {
+    const key = this.worktreeToSession.get(worktreeId);
+    const session = key ? this.sessions.get(key) : undefined;
+    if (session) {
+      return this.restart({ panelId: session.panelId, projectId: session.projectId });
+    }
+
+    // No live session — fall back to a restore placeholder so the dashboard's
+    // restart offer for a server that was running when Daintree last closed
+    // actually spawns it. This is an explicit user action, so (unlike a launch)
+    // spawning IS the intended behavior here (#9094); ensure() drops the
+    // manifest entry and starts the PTY. Mirrors getByWorktree's restore
+    // fallback so the dashboard restart isn't a silent no-op.
+    for (const entry of this.restoredEntries.values()) {
+      if (entry.worktreeId === worktreeId) {
+        return this.ensure({
+          panelId: entry.panelId,
+          projectId: entry.projectId,
+          cwd: entry.cwd,
+          devCommand: entry.devCommand,
+          worktreeId: entry.worktreeId,
+          env: entry.env,
+          turbopackEnabled: entry.turbopackEnabled,
+        });
+      }
+    }
+
+    return {
+      panelId: "",
+      projectId: "",
+      worktreeId: undefined,
+      status: "stopped",
+      url: null,
+      predictedUrl: null,
+      error: null,
+      terminalId: null,
+      isRestarting: false,
+      generation: 0,
+      updatedAt: Date.now(),
+      forceKilled: undefined,
+      phaseLabel: undefined,
+    };
   }
 
   // Called from the renderer's worktree delete path BEFORE `git worktree
@@ -608,6 +904,21 @@ export class DevPreviewSessionService {
       })
     );
 
+    // Drop any restore placeholder for this worktree too — the worktree is
+    // being removed, so its dev server must not be offered for restart.
+    for (const [key, entry] of this.restoredEntries) {
+      if (entry.worktreeId === worktreeId) {
+        this.restoredEntries.delete(key);
+      }
+    }
+    this.persistManifest();
+    // Live sessions broadcast via updateSession above, but a restore-only
+    // placeholder removal has no such trigger — push a fresh snapshot so the
+    // dashboard drops the now-gone row instead of showing it until a remount.
+    if (!this.disposed) {
+      this.onAllSessionsChanged(this.getAllSessions());
+    }
+
     if (errors.length > 0) {
       throw errors[0];
     }
@@ -622,6 +933,11 @@ export class DevPreviewSessionService {
     const key = createSessionKey(projectId, panelId);
     let session = this.sessions.get(key);
     if (session) return session;
+
+    // A real session supersedes any restore placeholder for this key — drop the
+    // manifest entry so getSessionState stops reporting "restored-stopped" once
+    // the user has restarted (or anything else spawned the server).
+    this.restoredEntries.delete(key);
 
     session = {
       panelId,
@@ -650,8 +966,13 @@ export class DevPreviewSessionService {
       isRunningInstall: false,
       installAttemptedGeneration: null,
       startupReplayTimer: null,
-      compilingEmitted: false,
+      compiling: false,
       compilingTimer: null,
+      compilingClearTimer: null,
+      crashCount: 0,
+      devSpawnedAt: null,
+      backoffAbort: null,
+      crashLoopStopped: false,
     };
     this.sessions.set(key, session);
     return session;
@@ -661,11 +982,12 @@ export class DevPreviewSessionService {
     const key = createSessionKey(projectId, panelId);
     const session = this.sessions.get(key);
     if (!session) {
+      const restored = this.restoredEntries.get(key);
       return {
         panelId,
         projectId,
-        worktreeId: undefined,
-        status: "stopped",
+        worktreeId: restored?.worktreeId,
+        status: restored ? "restored-stopped" : "stopped",
         url: null,
         predictedUrl: null,
         error: null,
@@ -695,7 +1017,43 @@ export class DevPreviewSessionService {
       updatedAt: session.updatedAt,
       phaseLabel: session.phaseLabel,
       forceKilled: session.forceKilled,
+      crashLoopStopped: session.crashLoopStopped || undefined,
+      lastOutput: session.status === "stopped" ? undefined : this.getLastOutputLine(session.buffer),
     };
+  }
+
+  /**
+   * Extract the last non-empty line of a terminal buffer for the dashboard
+   * activity hint. Only the buffer tail is scanned, ANSI/VT control sequences
+   * are stripped (Node 22 native `stripVTControlCharacters`), and the result is
+   * length-capped so one runaway line can't bloat the all-sessions snapshot.
+   * Splits on bare CR as well as LF so a carriage-return progress line
+   * (`Compiling 90%\rDone!`) reports the final segment, not the overwritten one.
+   */
+  private getLastOutputLine(buffer: string): string | undefined {
+    if (!buffer) return undefined;
+    const stripped = stripVTControlCharacters(buffer.slice(-LAST_OUTPUT_SCAN_BYTES));
+    const lines = stripped.split(/\r\n|\r|\n/);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const trimmed = lines[i]!.trim();
+      if (trimmed) {
+        return trimmed.length > LAST_OUTPUT_MAX_CHARS
+          ? trimmed.slice(0, LAST_OUTPUT_MAX_CHARS)
+          : trimmed;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Broadcast both the single-session state (per-panel subscribers) and the
+   * all-sessions snapshot (cross-worktree dashboard). Every onStateChanged
+   * call site routes through here so the dashboard never goes stale — including
+   * the compile-timer transitions that bypass updateSession.
+   */
+  private emitStateChanged(session: DevPreviewSession): void {
+    this.onStateChanged(this.toPublicState(session));
+    this.onAllSessionsChanged(this.getAllSessions());
   }
 
   private updateSession(
@@ -713,10 +1071,12 @@ export class DevPreviewSessionService {
         | "generation"
         | "phaseLabel"
         | "forceKilled"
+        | "crashLoopStopped"
       >
     >
   ): void {
     if (this.disposed) return;
+    const wasRunning = RUNNING_STATES.has(session.status);
     if (updates.status !== undefined) session.status = updates.status;
     if (updates.url !== undefined) session.url = updates.url;
     if (updates.predictedUrl !== undefined) session.predictedUrl = updates.predictedUrl;
@@ -727,9 +1087,18 @@ export class DevPreviewSessionService {
     if (updates.generation !== undefined) session.generation = updates.generation;
     if ("phaseLabel" in updates) session.phaseLabel = updates.phaseLabel;
     if ("forceKilled" in updates) session.forceKilled = updates.forceKilled;
+    if (updates.crashLoopStopped !== undefined) session.crashLoopStopped = updates.crashLoopStopped;
     session.updatedAt = Date.now();
     session.updatedAtPerformanceMs = performance.now();
-    this.onStateChanged(this.toPublicState(session));
+    this.emitStateChanged(session);
+
+    // Snapshot the manifest the moment a session enters a running state so an
+    // abrupt crash (SIGKILL/OOM, where shutdown hooks never run) can still
+    // restore it. Leaving a running state is handled by the explicit-stop
+    // sites — never here — so a shutdown PTY kill doesn't wipe the manifest.
+    if (!wasRunning && RUNNING_STATES.has(session.status)) {
+      this.persistManifest();
+    }
   }
 
   private async runLocked(key: string, task: () => Promise<void>): Promise<void> {
@@ -786,6 +1155,14 @@ export class DevPreviewSessionService {
       this.updateSession(session, { terminalId: null, url: null, predictedUrl: null });
     }
 
+    // A tripped crash-loop guard halts auto-respawn until the user restarts
+    // explicitly. ensure() runs on every remount (dock↔grid, eviction
+    // rehydration) with unchanged config, so without this the pane would
+    // silently respawn a known-broken server on each transition. A config
+    // change clears the guard upstream (resetCrashLoopGuard in ensure()), and
+    // restart() clears it before spawning, so only the automatic path is held.
+    if (session.crashLoopStopped) return;
+
     await this.spawnSessionTerminal(session);
   }
 
@@ -798,6 +1175,91 @@ export class DevPreviewSessionService {
         error: formatErrorMessage(err, "Failed to replay terminal history"),
       });
     }
+  }
+
+  /**
+   * Clear the crash-loop guard for an explicit user- or config-driven restart:
+   * cancel any pending backoff, zero the counter, and lift the stopped flag.
+   * Callers must run this before spawning/installing so the broadcast that
+   * follows reports a fresh (non-crash-looped) state.
+   */
+  private resetCrashLoopGuard(session: DevPreviewSession): void {
+    session.backoffAbort?.abort();
+    session.backoffAbort = null;
+    session.crashCount = 0;
+    session.crashLoopStopped = false;
+  }
+
+  /**
+   * Decide whether to auto-respawn after a dev-server exit that wants a
+   * (re)install, applying the crash-loop guard. A server that survived
+   * CRASH_LOOP_MIN_UPTIME_MS graduates and resets the counter. Once
+   * CRASH_LOOP_MAX_ATTEMPTS consecutive fast cycles accumulate, auto-respawn
+   * halts and the session lands in a recoverable "stopped" state. Otherwise
+   * the install is scheduled — immediately for the first attempt in a window,
+   * with geometric backoff for repeats. Returns nothing; the caller must
+   * `return` after invoking it (it owns the respawn decision).
+   */
+  private guardedReinstall(session: DevPreviewSession): void {
+    const uptime =
+      session.devSpawnedAt !== null ? performance.now() - session.devSpawnedAt : Infinity;
+    if (uptime >= CRASH_LOOP_MIN_UPTIME_MS) {
+      session.crashCount = 0;
+    }
+    session.crashCount += 1;
+
+    if (session.crashCount > CRASH_LOOP_MAX_ATTEMPTS) {
+      this.updateSession(session, {
+        status: "stopped",
+        url: null,
+        predictedUrl: null,
+        error: null,
+        terminalId: null,
+        isRestarting: false,
+        crashLoopStopped: true,
+        phaseLabel: undefined,
+      });
+      return;
+    }
+
+    const delayMs =
+      session.crashCount <= 1
+        ? 0
+        : Math.min(
+            CRASH_LOOP_INITIAL_DELAY_MS * CRASH_LOOP_BACKOFF_MULTIPLIER ** (session.crashCount - 2),
+            CRASH_LOOP_MAX_DELAY_MS
+          );
+
+    if (delayMs === 0) {
+      void this.runInstall(session);
+      return;
+    }
+    this.scheduleBackoffRespawn(session, delayMs, () => {
+      void this.runInstall(session);
+    });
+  }
+
+  /**
+   * Run `action` after `delayMs`, guarded so a user restart or dispose during
+   * the wait cancels it. The pending AbortController is parked on the session;
+   * resetCrashLoopGuard()/dispose() abort it to clear the timer, and the
+   * generation check rejects a respawn whose session moved on while waiting.
+   */
+  private scheduleBackoffRespawn(
+    session: DevPreviewSession,
+    delayMs: number,
+    action: () => void
+  ): void {
+    session.backoffAbort?.abort();
+    const abort = new AbortController();
+    session.backoffAbort = abort;
+    const generation = session.generation;
+    const timer = setTimeout(() => {
+      if (session.backoffAbort === abort) session.backoffAbort = null;
+      if (this.disposed || abort.signal.aborted || session.generation !== generation) return;
+      action();
+    }, delayMs);
+    abort.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
   }
 
   private async spawnSessionTerminal(session: DevPreviewSession): Promise<void> {
@@ -816,6 +1278,11 @@ export class DevPreviewSessionService {
     const predictedUrl = `http://localhost:${port}`;
 
     const spawnEnv: Record<string, string> = { ...session.env, PORT: String(port) };
+
+    // Mark the dev-server spawn time for the crash-loop graduation check. Set
+    // only here (the dev server), never in runInstall — an install is part of
+    // recovery, not a crash, and must not count toward the survival window.
+    session.devSpawnedAt = performance.now();
 
     session.buffer = "";
     session.lastErrorKey = null;
@@ -967,6 +1434,11 @@ export class DevPreviewSessionService {
     this.clearStartupReplay(session);
     session.readinessAbort?.abort();
     session.readinessAbort = null;
+    // Cancel a pending crash-loop backoff: otherwise the deferred re-install
+    // fires after the terminal is gone (and, on the delete paths, after the
+    // session is removed), spawning an orphan PTY on a stopped session.
+    session.backoffAbort?.abort();
+    session.backoffAbort = null;
     session.pendingUrl = null;
     session.markerSeen = false;
     this.clearCompiling(session);
@@ -1074,7 +1546,11 @@ export class DevPreviewSessionService {
       clearTimeout(session.compilingTimer);
       session.compilingTimer = null;
     }
-    session.compilingEmitted = false;
+    if (session.compilingClearTimer !== null) {
+      clearTimeout(session.compilingClearTimer);
+      session.compilingClearTimer = null;
+    }
+    session.compiling = false;
     if (session.phaseLabel === "Compiling") {
       session.phaseLabel = undefined;
     }
@@ -1110,8 +1586,6 @@ export class DevPreviewSessionService {
       // readiness marker to accelerate it again.
       session.markerSeen = false;
 
-      this.clearCompiling(session);
-
       this.pollServerReadiness(session, result.url, abort.signal, session.generation);
       urlJustStarted = true;
     }
@@ -1129,29 +1603,59 @@ export class DevPreviewSessionService {
       this.pollServerReadiness(session, session.pendingUrl, abort.signal, session.generation);
     }
 
-    // A readyMarker without a pending URL (post-install, pre-URL detection)
-    // signals the framework is compiling. Debounce at 600ms to avoid label
-    // flicker from markers that fire on consecutive data chunks.
+    // Compile marker detection fires whenever the framework emits a
+    // compile-start line (HMR rebuild, initial compilation burst). Uses a
+    // two-stage timer: arm debounce prevents flicker from rapid marker
+    // bursts, auto-clear removes the signal when markers go quiet.
     if (
-      result.readyMarker &&
-      !session.compilingEmitted &&
-      session.status === "starting" &&
-      !session.pendingUrl &&
-      !session.isRunningInstall &&
-      session.compilingTimer === null
+      result.compileMarker &&
+      session.status !== "stopped" &&
+      session.status !== "error" &&
+      !session.isRunningInstall
     ) {
-      session.compilingTimer = setTimeout(() => {
-        session.compilingTimer = null;
-        if (
-          session.status === "starting" &&
-          !session.pendingUrl &&
-          !session.url &&
-          !session.compilingEmitted
-        ) {
-          session.compilingEmitted = true;
-          this.updateSession(session, { phaseLabel: "Compiling" });
+      if (session.compiling) {
+        // Already visible — reset the auto-clear timer so the signal
+        // persists through a burst (HMR chains, multi-file saves).
+        if (session.compilingClearTimer !== null) {
+          clearTimeout(session.compilingClearTimer);
+          session.compilingClearTimer = setTimeout(() => {
+            session.compilingClearTimer = null;
+            this.clearCompiling(session);
+            this.emitStateChanged(session);
+          }, COMPILE_CLEAR_MS);
         }
-      }, 600);
+      } else if (session.compilingTimer === null) {
+        // Start the arm debounce — if no additional markers arrive before
+        // COMPILE_ARM_MS, publish the Compiling label.
+        session.compilingTimer = setTimeout(() => {
+          session.compilingTimer = null;
+          if (
+            session.status === "stopped" ||
+            session.status === "error" ||
+            session.isRunningInstall
+          ) {
+            return;
+          }
+          session.compiling = true;
+          this.updateSession(session, { phaseLabel: "Compiling" });
+          session.compilingClearTimer = setTimeout(() => {
+            session.compilingClearTimer = null;
+            this.clearCompiling(session);
+            this.emitStateChanged(session);
+          }, COMPILE_CLEAR_MS);
+        }, COMPILE_ARM_MS);
+      }
+    }
+
+    // A readyMarker during an active compile phase cancels both timers
+    // and clears the label early — the framework signaled completion.
+    if (result.readyMarker && (session.compiling || session.compilingTimer !== null)) {
+      if (session.compilingTimer !== null) {
+        clearTimeout(session.compilingTimer);
+        session.compilingTimer = null;
+      }
+      this.clearCompiling(session);
+      this.emitStateChanged(session);
     }
 
     if (!result.error) return;
@@ -1188,7 +1692,52 @@ export class DevPreviewSessionService {
     });
   }
 
-  private handleExit(id: string, exitCode: number): void {
+  private classifyExit(
+    exitCode: number,
+    signal: number | undefined,
+    recentOutput: string
+  ): DevServerError | null {
+    // Signal-based tier first
+    if (signal !== undefined) {
+      // Check OOM output across all crash signals — Node.js heap OOM sends
+      // SIGABRT (6), not SIGKILL (9). Kernel OOM killer uses SIGKILL.
+      if (
+        CRASH_SIGNALS.has(signal) &&
+        /\b(FATAL ERROR|out of memory|heap out of memory|Cannot allocate memory)\b/i.test(
+          recentOutput
+        )
+      ) {
+        return {
+          type: "oom",
+          message: "Dev server was killed — out of memory.",
+        };
+      }
+      if (signal === 9) {
+        // SIGKILL without OOM output: fall through to output/exit-code tiers
+      } else if (CRASH_SIGNALS.has(signal)) {
+        return {
+          type: "process-crash",
+          message: `Dev server crashed (signal ${signal}).`,
+        };
+      }
+      if (EXPECTED_TERMINATION_SIGNALS.has(signal)) {
+        return null;
+      }
+    }
+
+    // Output-based tier
+    const outputError = detectDevServerError(recentOutput);
+    if (outputError) return outputError;
+
+    // Exit-code fallback
+    if (exitCode === 0) return null;
+    return {
+      type: "unknown",
+      message: `Dev server exited with code ${exitCode}`,
+    };
+  }
+
+  private handleExit(id: string, exitCode: number, signal?: number): void {
     if (this.disposed) return;
     const sessionKey = this.terminalToSession.get(id);
     if (!sessionKey) return;
@@ -1203,6 +1752,7 @@ export class DevPreviewSessionService {
     this.clearCompiling(session);
 
     this.detachTerminal(session);
+    const recentOutput = session.buffer;
     session.buffer = "";
     session.lastErrorKey = null;
 
@@ -1229,13 +1779,30 @@ export class DevPreviewSessionService {
 
     if (session.needsInstall && session.installAttemptedGeneration !== session.generation) {
       session.needsInstall = false;
-      void this.runInstall(session);
+      this.guardedReinstall(session);
       return;
     }
     session.needsInstall = false;
 
-    if (session.status === "starting" || session.status === "installing") {
-      const error: DevServerError = {
+    if (
+      session.status === "starting" ||
+      session.status === "installing" ||
+      session.status === "error"
+    ) {
+      // Expected termination signals during startup/error = clean stop (user interrupted it)
+      if (signal !== undefined && EXPECTED_TERMINATION_SIGNALS.has(signal)) {
+        this.updateSession(session, {
+          status: "stopped",
+          url: null,
+          predictedUrl: null,
+          error: null,
+          terminalId: null,
+          isRestarting: false,
+          phaseLabel: undefined,
+        });
+        return;
+      }
+      const error = this.classifyExit(exitCode, signal, recentOutput) ?? {
         type: "unknown",
         message: `Dev server exited with code ${exitCode}`,
       };
@@ -1251,11 +1818,16 @@ export class DevPreviewSessionService {
       return;
     }
 
+    const crashError =
+      signal !== undefined && CRASH_SIGNALS.has(signal)
+        ? this.classifyExit(exitCode, signal, recentOutput)
+        : null;
+
     this.updateSession(session, {
       status: "stopped",
       url: null,
       predictedUrl: null,
-      error: null,
+      error: crashError,
       terminalId: null,
       isRestarting: false,
       phaseLabel: undefined,

@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 
 import { useOverlayState } from "@/hooks";
 import { ReviewHubContent } from "./ReviewHubContent";
+import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 
 interface ReviewHubProps {
   isOpen: boolean;
@@ -37,16 +38,30 @@ export function ReviewHub({
   autoStageOnOpen,
 }: ReviewHubProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  // Element focused when the hub opened. ReviewHub is hand-rolled (no AppDialog),
+  // so it restores focus on close itself. A ref — not state — avoids the
+  // re-render churn that bit #4220.
+  const previousActiveElementRef = useRef<HTMLElement | null>(null);
 
   useOverlayState(isOpen);
 
   useEffect(() => {
     if (!isOpen) return;
+    // Capture the trigger before focus moves into the dialog (the rAF below).
+    const opener = document.activeElement;
+    previousActiveElementRef.current = opener instanceof HTMLElement ? opener : null;
     requestAnimationFrame(() => {
       if (dialogRef.current && !dialogRef.current.contains(document.activeElement)) {
         dialogRef.current.focus();
       }
     });
+    return () => {
+      const target = previousActiveElementRef.current;
+      previousActiveElementRef.current = null;
+      if (target && document.contains(target)) {
+        target.focus();
+      }
+    };
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -87,6 +102,12 @@ export function ReviewHub({
           initialCommitMessage={initialCommitMessage}
           autoStageOnOpen={autoStageOnOpen}
         />
+        {/* Co-located live region: ForcePushConfirmDialog and other nested
+            flows close their inner dialog before announcing, returning focus
+            to this modal. VoiceOver suppresses external `aria-live` updates
+            outside this `aria-modal` subtree when `document.ariaNotify` is
+            unavailable (Chromium 354736464). */}
+        <AccessibilityAnnouncer />
       </div>
     </div>,
     document.body

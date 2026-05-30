@@ -17,11 +17,13 @@ import {
   setPanelStoreAccessor,
   setPanelStoreClearForSwitchAccessor,
   setWorktreeSelectionAccessor,
+  setWorktreeIdSetAccessor,
   setFleetArmingClearAccessor,
   setFleetArmedIdsAccessor,
   setFleetLastArmedIdAccessor,
   resetStoreAccessorsForTesting,
 } from "./storeAccessors";
+import { getCurrentViewStoreOrNull } from "./createWorktreeStore";
 import { setActiveContextAccessors } from "@/lib/notify";
 import { debounce } from "@/utils/debounce";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
@@ -50,7 +52,13 @@ export function initStoreOrchestrator(): () => void {
   });
   setWorktreeSelectionAccessor(() => ({
     activeWorktreeId: useWorktreeSelectionStore.getState().activeWorktreeId,
+    restoreWorktreeId: useWorktreeSelectionStore.getState().restoreWorktreeId,
   }));
+  setWorktreeIdSetAccessor(() => {
+    const viewStore = getCurrentViewStoreOrNull();
+    if (!viewStore) return null;
+    return new Set(viewStore.getState().worktrees.keys());
+  });
   setFleetArmingClearAccessor(() => {
     useFleetArmingStore.getState().clear();
   });
@@ -110,7 +118,9 @@ export function initStoreOrchestrator(): () => void {
           if (!terminal?.worktreeId) return;
           const worktreeState = useWorktreeSelectionStore.getState();
           if (terminal.worktreeId !== worktreeState.activeWorktreeId) {
-            worktreeState.selectWorktree(terminal.worktreeId);
+            // Focus promotion is incidental, not a deliberate selection: mark it
+            // so it doesn't become the persisted restore target (#9512).
+            worktreeState.selectWorktree(terminal.worktreeId, { source: "focus" });
           }
         }
       )
@@ -180,6 +190,9 @@ export function initStoreOrchestrator(): () => void {
             useTerminalInputStore.getState().clearTerminalState(removedId);
             useConsoleCaptureStore.getState().removePane(removedId);
             useVoiceRecordingStore.getState().clearPanelBuffer(removedId);
+            // Drop the dictation lock if it was pinned to this panel — panelIds
+            // are ephemeral and a stale lock would silently break routing.
+            useVoiceRecordingStore.getState().clearLockedTarget(removedId);
             unregisterInputController(removedId);
             semanticAnalysisService.unregisterTerminal(removedId);
 
@@ -211,6 +224,32 @@ export function initStoreOrchestrator(): () => void {
           const prevIdSet = new Set(prevPanelIds);
           if (panelIds.length !== prevIdSet.size || panelIds.some((id) => !prevIdSet.has(id))) {
             useLayoutUndoStore.getState().clearHistory();
+          }
+        }
+      )
+    )
+  );
+
+  // 3b. Voice-dictation lock auto-clear: a trashed panel isn't a valid
+  //     dictation target, but trashPanel doesn't remove the id from
+  //     `panelIds` (it only flips `location` to "trash") — so section-3
+  //     above never fires. Watch the locked panel's `location` directly and
+  //     drop the lock when it transitions to trash. Selector returns a
+  //     primitive (panelId or null) so unrelated `panelsById` mutations don't
+  //     wake this subscription.
+  disposables.add(
+    toDisposable(
+      usePanelStore.subscribe(
+        (state) => {
+          const lockedId = useVoiceRecordingStore.getState().lockedTarget?.panelId;
+          if (!lockedId) return null;
+          return state.panelsById[lockedId]?.location ?? null;
+        },
+        (location) => {
+          if (location !== "trash") return;
+          const lockedId = useVoiceRecordingStore.getState().lockedTarget?.panelId;
+          if (lockedId) {
+            useVoiceRecordingStore.getState().clearLockedTarget(lockedId);
           }
         }
       )

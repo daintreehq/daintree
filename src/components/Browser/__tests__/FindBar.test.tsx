@@ -23,6 +23,8 @@ function makeFindState(overrides: Partial<FindInPageState> = {}): FindInPageStat
     setQuery: vi.fn(),
     goNext: vi.fn(),
     goPrev: vi.fn(),
+    matchCase: false,
+    toggleMatchCase: vi.fn(),
     ...overrides,
   };
 }
@@ -52,5 +54,21 @@ describe("FindBar accessibility", () => {
     const describedBy = input.getAttribute("aria-describedby")!;
     const counter = container.querySelector(`[id="${describedBy}"]`);
     expect(counter?.getAttribute("role")).toBe("status");
+  });
+
+  it("match-case button has aria-pressed reflecting matchCase state", () => {
+    const { rerender } = render(<FindBar find={makeFindState({ matchCase: false })} />);
+    const btn = screen.getByLabelText("Match case");
+    expect(btn.getAttribute("aria-pressed")).toBe("false");
+
+    rerender(<FindBar find={makeFindState({ matchCase: true })} />);
+    expect(btn.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("match-case button calls toggleMatchCase on click", () => {
+    const toggleFn = vi.fn();
+    render(<FindBar find={makeFindState({ toggleMatchCase: toggleFn })} />);
+    screen.getByLabelText("Match case").click();
+    expect(toggleFn).toHaveBeenCalledTimes(1);
   });
 });

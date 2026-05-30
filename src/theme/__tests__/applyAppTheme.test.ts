@@ -1,8 +1,13 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it } from "vitest";
-import { APP_THEME_TOKEN_KEYS, type AppColorScheme } from "@shared/theme";
-import { applyAppThemeToRoot, applyColorVisionMode } from "../applyAppTheme";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { APP_THEME_TOKEN_KEYS, getAppThemeById, type AppColorScheme } from "@shared/theme";
+import {
+  ALL_CVD_TOKENS,
+  applyAppThemeToRoot,
+  applyColorVisionMode,
+  applyDefaultAppTheme,
+} from "../applyAppTheme";
 
 function createTestScheme(
   id: string,
@@ -164,5 +169,153 @@ describe("applyColorVisionMode", () => {
     expect(root.style.getPropertyValue("--theme-category-blue")).toBe("#dc267f");
     expect(root.style.getPropertyValue("--theme-category-teal")).toBe("#009e73");
     expect(root.dataset.colorblind).toBe("blue-yellow");
+  });
+
+  it("applies all 10 syntax tokens in red-green mode", () => {
+    const root = document.createElement("div");
+    applyColorVisionMode(root, "red-green");
+
+    expect(root.style.getPropertyValue("--theme-syntax-comment")).toBe("#999999");
+    expect(root.style.getPropertyValue("--theme-syntax-punctuation")).toBe("#555555");
+    expect(root.style.getPropertyValue("--theme-syntax-number")).toBe("#0072B2");
+    expect(root.style.getPropertyValue("--theme-syntax-string")).toBe("#E69F00");
+    expect(root.style.getPropertyValue("--theme-syntax-operator")).toBe("#555555");
+    expect(root.style.getPropertyValue("--theme-syntax-keyword")).toBe("#D55E00");
+    expect(root.style.getPropertyValue("--theme-syntax-function")).toBe("#0072B2");
+    expect(root.style.getPropertyValue("--theme-syntax-link")).toBe("#0072B2");
+    expect(root.style.getPropertyValue("--theme-syntax-quote")).toBe("#009E73");
+    expect(root.style.getPropertyValue("--theme-syntax-chip")).toBe("#CC79A7");
+  });
+
+  it("applies all 10 syntax tokens and status-info in blue-yellow mode", () => {
+    const root = document.createElement("div");
+    applyColorVisionMode(root, "blue-yellow");
+
+    expect(root.style.getPropertyValue("--theme-status-info")).toBe("#333333");
+    expect(root.style.getPropertyValue("--theme-syntax-comment")).toBe("#999999");
+    expect(root.style.getPropertyValue("--theme-syntax-punctuation")).toBe("#555555");
+    expect(root.style.getPropertyValue("--theme-syntax-number")).toBe("#CC79A7");
+    expect(root.style.getPropertyValue("--theme-syntax-string")).toBe("#E69F00");
+    expect(root.style.getPropertyValue("--theme-syntax-operator")).toBe("#555555");
+    expect(root.style.getPropertyValue("--theme-syntax-keyword")).toBe("#D55E00");
+    expect(root.style.getPropertyValue("--theme-syntax-function")).toBe("#56B4E9");
+    expect(root.style.getPropertyValue("--theme-syntax-link")).toBe("#0072B2");
+    expect(root.style.getPropertyValue("--theme-syntax-quote")).toBe("#F0E442");
+    expect(root.style.getPropertyValue("--theme-syntax-chip")).toBe("#009E73");
+  });
+
+  it("does not set status-info in red-green mode", () => {
+    const root = document.createElement("div");
+    applyColorVisionMode(root, "red-green");
+
+    expect(root.style.getPropertyValue("--theme-status-info")).toBe("");
+  });
+
+  it("ALL_CVD_TOKENS covers the expected token count", () => {
+    // Canary: if someone adds or removes tokens from either map,
+    // this size changes and the test catches it for review.
+    // 31 red-green + 26 blue-yellow = 57 total, 39 unique after dedup
+    expect(ALL_CVD_TOKENS.size).toBe(39);
+  });
+
+  it("switches from blue-yellow to red-green clearing blue-yellow-only tokens", () => {
+    const root = document.createElement("div");
+    applyColorVisionMode(root, "blue-yellow");
+    applyColorVisionMode(root, "red-green");
+
+    expect(root.style.getPropertyValue("--theme-status-info")).toBe("");
+    expect(root.style.getPropertyValue("--theme-syntax-number")).toBe("#0072B2");
+    expect(root.style.getPropertyValue("--theme-syntax-quote")).toBe("#009E73");
+    expect(root.dataset.colorblind).toBe("red-green");
+  });
+
+  it("switches from red-green to default clearing syntax tokens", () => {
+    const root = document.createElement("div");
+    applyColorVisionMode(root, "red-green");
+    applyColorVisionMode(root, "default");
+
+    expect(root.style.getPropertyValue("--theme-syntax-comment")).toBe("");
+    expect(root.style.getPropertyValue("--theme-syntax-keyword")).toBe("");
+    expect(root.style.getPropertyValue("--theme-syntax-string")).toBe("");
+    expect(root.style.getPropertyValue("--theme-category-blue")).toBe("");
+    expect(root.dataset.colorblind).toBeUndefined();
+  });
+});
+
+describe("applyDefaultAppTheme (#9169)", () => {
+  function mockPrefersDark(prefersDark: boolean): void {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockImplementation((query: string) => ({
+        matches: query.includes("dark") ? prefersDark : !prefersDark,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }))
+    );
+  }
+
+  afterEach(() => {
+    delete window.__DAINTREE_INITIAL_THEME__;
+    vi.unstubAllGlobals();
+  });
+
+  it("applies the seeded persisted scheme over the prefers-color-scheme default", () => {
+    // OS prefers dark (would resolve to daintree) but the persisted scheme is bondi.
+    mockPrefersDark(true);
+    window.__DAINTREE_INITIAL_THEME__ = { colorSchemeId: "bondi" };
+    const root = document.createElement("div");
+
+    const applied = applyDefaultAppTheme(root);
+
+    expect(applied.id).toBe("bondi");
+    expect(root.dataset.theme).toBe("bondi");
+  });
+
+  it("falls back to prefers-color-scheme when the seeded id is unknown (e.g. a custom scheme)", () => {
+    // Unknown ids must not paint a wrong built-in theme — they defer to the
+    // async useAppThemeConfig phase. OS prefers light → bondi.
+    mockPrefersDark(false);
+    window.__DAINTREE_INITIAL_THEME__ = { colorSchemeId: "totally-unknown-scheme" };
+    const root = document.createElement("div");
+
+    const applied = applyDefaultAppTheme(root);
+
+    expect(applied.id).toBe("bondi");
+    expect(root.dataset.theme).toBe("bondi");
+  });
+
+  it("falls back to prefers-color-scheme (dark) when no scheme is seeded", () => {
+    mockPrefersDark(true);
+    const root = document.createElement("div");
+
+    const applied = applyDefaultAppTheme(root);
+
+    expect(applied.id).toBe("daintree");
+    expect(root.dataset.theme).toBe("daintree");
+  });
+
+  it("falls back to prefers-color-scheme when the seeded id is an empty string", () => {
+    mockPrefersDark(true);
+    window.__DAINTREE_INITIAL_THEME__ = { colorSchemeId: "" };
+    const root = document.createElement("div");
+
+    const applied = applyDefaultAppTheme(root);
+
+    expect(applied.id).toBe("daintree");
+    expect(root.dataset.theme).toBe("daintree");
+  });
+
+  it("seeds a non-default built-in scheme that exists in the registry", () => {
+    mockPrefersDark(true);
+    // Sanity: the seeded id resolves to a real built-in scheme object.
+    expect(getAppThemeById("table-mountain")).toBeDefined();
+    window.__DAINTREE_INITIAL_THEME__ = { colorSchemeId: "table-mountain" };
+    const root = document.createElement("div");
+
+    const applied = applyDefaultAppTheme(root);
+
+    expect(applied.id).toBe("table-mountain");
+    expect(root.dataset.theme).toBe("table-mountain");
   });
 });

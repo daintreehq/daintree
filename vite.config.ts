@@ -6,6 +6,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { visualizer } from "rollup-plugin-visualizer";
 import path from "path";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { getDevServerConfig } from "./shared/config/devServer";
 import { getDaintreeAppDevCSP, getDaintreeAppProdCSP } from "./shared/config/csp";
@@ -18,7 +19,6 @@ const devServerConfig = getDevServerConfig();
 // by the main process stay in sync — the browser intersects header + meta, so
 // any divergence silently tightens the effective policy and breaks the app.
 const DEV_CSP = getDaintreeAppDevCSP();
-const PROD_CSP = getDaintreeAppProdCSP();
 
 // Severity bucketing derived from the live plugin's LintRules registry rather
 // than hard-coded, so a plugin upgrade that recategorizes a rule reflows the
@@ -222,12 +222,33 @@ function reactCompilerReportPlugin(command: "build" | "serve"): {
   };
 }
 
-// Plugin to transform CSP meta tag based on build mode
-function cspTransformPlugin(): Plugin {
+// Shared state between hostImportMapPlugin and cspTransformPlugin. Both hooks
+// use default-order transformIndexHtml; Vite preserves plugin-array order for
+// same-order hooks, and the array places hostImportMapPlugin before
+// cspTransformPlugin so the hash is set before the CSP meta tag is rewritten.
+// (`order: "pre"` would run before bundling and yield `ctx.bundle === undefined`,
+// hiding the vendor-react chunk path.) `buildStart` resets the hash so a
+// watch-mode rebuild can't reuse stale state from the previous build.
+interface ImportMapBuildState {
+  scriptSrcHash: string | null;
+}
+
+function createImportMapState(): ImportMapBuildState {
+  return { scriptSrcHash: null };
+}
+
+// Plugin to transform CSP meta tag based on build mode. In production it pulls
+// the host import-map hash from the shared state so the inline importmap script
+// satisfies `script-src` without weakening the policy with `'unsafe-inline'`.
+function cspTransformPlugin(state: ImportMapBuildState): Plugin {
   return {
     name: "csp-transform",
     transformIndexHtml(html, ctx) {
-      const csp = ctx.server ? DEV_CSP : PROD_CSP;
+      const csp = ctx.server
+        ? DEV_CSP
+        : getDaintreeAppProdCSP(
+            state.scriptSrcHash ? { scriptSrcHashes: [state.scriptSrcHash] } : undefined
+          );
       const cspRegex = /<meta\s+[^>]*http-equiv=["']Content-Security-Policy["'][^>]*>/i;
 
       if (!cspRegex.test(html)) {
@@ -239,6 +260,121 @@ function cspTransformPlugin(): Plugin {
       return html.replace(
         cspRegex,
         `<meta http-equiv="Content-Security-Policy" content="${csp}" />`
+      );
+    },
+  };
+}
+
+// Specifiers exposed to externalized plugin bundles. Each bare specifier points
+// at the same `vendor-react` chunk because Rolldown bundles `react`, `react-dom`,
+// `scheduler`, and `use-sync-external-store` into one file (see the
+// `vendor-react` codeSplitting group below). Trailing-slash mappings ("react/")
+// can't substitute here — a single chunk file has no subpath structure to
+// concatenate against — so every JSX/React entrypoint plugins might import is
+// listed explicitly. `react/jsx-dev-runtime` is included so the dev-mode JSX
+// transform (used by plugins building with mode=development) resolves to the
+// host React instance instead of bundling a separate copy. `scheduler` is
+// internal to React and not exposed because no documented plugin path imports
+// it directly; if that changes, add it here and to the plugin-vite externals
+// regex in lockstep.
+const HOST_IMPORTMAP_SPECIFIERS = [
+  "react",
+  "react/jsx-runtime",
+  "react/jsx-dev-runtime",
+  "react-dom",
+  "react-dom/client",
+] as const;
+
+const HOST_APP_ORIGIN = "app://daintree";
+
+// Locate the vendor-react chunk by its codeSplitting `name`, which Rolldown
+// preserves as `OutputChunk.name`. The hashed `.fileName` is what plugins (and
+// the browser) must load, so the import map resolves bare React specifiers to
+// that exact filename.
+function findVendorReactChunkPath(
+  bundle: Record<string, { type: string; name?: string; fileName?: string }>
+): string | null {
+  for (const output of Object.values(bundle)) {
+    if (output.type === "chunk" && output.name === "vendor-react" && output.fileName) {
+      return output.fileName;
+    }
+  }
+  return null;
+}
+
+// Injects `<script type="importmap">` into the production index.html and emits
+// `dist/importmap-meta.json` so the Electron main process can mirror the inline
+// script hash into its HTTP `Content-Security-Policy` header. Dev builds are
+// skipped — the dev server CSP carries `'unsafe-inline'` and `ctx.bundle` is
+// undefined in serve mode, so there's nothing to map. The map exists so plugin
+// bundles can declare React as an external and resolve to the host's single
+// React instance at runtime; bundling a second copy of React produces "Invalid
+// hook call" errors at the first JSX render.
+function hostImportMapPlugin(state: ImportMapBuildState): Plugin {
+  const sidecarPath = path.join(process.cwd(), "dist", "importmap-meta.json");
+
+  return {
+    name: "host-import-map",
+    apply: "build",
+    buildStart() {
+      state.scriptSrcHash = null;
+    },
+    // Default-order hook (no `order` field). Vite calls default-order
+    // transformIndexHtml hooks AFTER bundling so `ctx.bundle` is populated;
+    // `order: "pre"` runs before bundling and would see `ctx.bundle ===
+    // undefined`. cspTransformPlugin is the next default-order hook in the
+    // plugin array, so it observes the hash this hook stores in shared state.
+    transformIndexHtml(_html, ctx) {
+      // `ctx.bundle` is populated only for production builds. In the dev
+      // server the vendor-react chunk doesn't exist (Vite serves React from
+      // the module graph), and an importmap pointing at a hashed filename
+      // that won't be emitted would be a runtime 404.
+      if (!ctx.bundle) return;
+
+      const vendorReactPath = findVendorReactChunkPath(
+        ctx.bundle as Record<string, { type: string; name?: string; fileName?: string }>
+      );
+      if (!vendorReactPath) {
+        throw new Error(
+          "[host-import-map] vendor-react chunk not found in build output. " +
+            "Check the codeSplitting group with `name: 'vendor-react'` in vite.config.ts."
+        );
+      }
+
+      const targetUrl = `${HOST_APP_ORIGIN}/${vendorReactPath}`;
+      const importMapPayload = {
+        imports: Object.fromEntries(
+          HOST_IMPORTMAP_SPECIFIERS.map((specifier) => [specifier, targetUrl])
+        ),
+      };
+      // Compact JSON without trailing whitespace — the byte sequence here is
+      // exactly what the browser receives, and the SHA-256 must match.
+      const serialized = JSON.stringify(importMapPayload);
+      state.scriptSrcHash = `'sha256-${createHash("sha256").update(serialized, "utf8").digest("base64")}'`;
+
+      return [
+        {
+          tag: "script",
+          attrs: { type: "importmap" },
+          // `head-prepend` places the importmap before the entry `<script
+          // type="module">` so the browser parses it before resolving module
+          // specifiers. Per the HTML spec, the integrity attribute is
+          // FORBIDDEN on `<script type="importmap">`; a top-level `integrity`
+          // block inside the JSON payload is the supported mechanism, but it
+          // is only relevant when the map points at cross-origin chunks. The
+          // host vendor chunk is same-origin, so no integrity block is
+          // emitted today.
+          injectTo: "head-prepend",
+          children: serialized,
+        },
+      ];
+    },
+    closeBundle() {
+      if (!state.scriptSrcHash) return;
+      mkdirSync(path.dirname(sidecarPath), { recursive: true });
+      writeFileSync(
+        sidecarPath,
+        JSON.stringify({ scriptSrcHashes: [state.scriptSrcHash] }, null, 2) + "\n"
       );
     },
   };
@@ -398,6 +534,7 @@ function chunkModulesPlugin(): Plugin {
 export default defineConfig(({ command, mode }) => {
   const { logger: compilerLogger, plugin: compilerReportPlugin } =
     reactCompilerReportPlugin(command);
+  const importMapState = createImportMapState();
   return {
     envPrefix: ["VITE_", "DAINTREE_"],
     // xterm 6.0 ships a bundled InputHandler that references an unminified
@@ -427,7 +564,8 @@ export default defineConfig(({ command, mode }) => {
         ],
       }),
       tailwindcss(),
-      cspTransformPlugin(),
+      hostImportMapPlugin(importMapState),
+      cspTransformPlugin(importMapState),
       compilerReportPlugin,
       rendererBundleSizePlugin(),
       firstRenderSeedsPlugin(),

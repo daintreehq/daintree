@@ -188,6 +188,31 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
     })
   );
 
+  actions.set("forge.unassignIssue", () =>
+    defineAction({
+      id: "forge.unassignIssue",
+      title: "Unassign Issue",
+      description: "Remove a user's assignment from a forge issue via the active provider",
+      category: "github",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        issueNumber: z.number().int().positive(),
+        username: z.string().min(1).describe("Account whose assignment should be removed"),
+      }),
+      run: async ({ cwd, issueNumber, username }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        await forgeClient.unassignIssue(resolvedCwd, issueNumber, username);
+      },
+    })
+  );
+
   actions.set("forge.validateToken", () =>
     defineAction({
       id: "forge.validateToken",

@@ -20,12 +20,33 @@ vi.mock("electron", () => ({
   nativeImage: nativeImageMock,
 }));
 
-vi.mock("node:fs/promises", () => ({
+const fsPromisesMock = vi.hoisted(() => ({
   mkdir: vi.fn(() => Promise.resolve()),
   readdir: vi.fn(() => Promise.resolve([])),
   stat: vi.fn(),
   unlink: vi.fn(),
   writeFile: vi.fn(() => Promise.resolve()),
+  open: vi.fn(),
+  constants: { O_RDONLY: 1, O_NOFOLLOW: 0x20000 },
+}));
+
+vi.mock("node:fs/promises", () => fsPromisesMock);
+
+// pathGuard.ts resolves containment via the "fs" module's promises.realpath.
+const fsModuleMock = vi.hoisted(() => ({
+  promises: {
+    realpath: vi.fn<(p: string) => Promise<string>>((p: string) => Promise.resolve(p)),
+  },
+}));
+
+vi.mock("fs", () => ({ default: fsModuleMock, ...fsModuleMock }));
+
+const projectStoreMock = vi.hoisted(() => ({
+  getAllProjects: vi.fn<() => Array<{ path: string }>>(() => []),
+}));
+
+vi.mock("../../../services/ProjectStore.js", () => ({
+  projectStore: projectStoreMock,
 }));
 
 vi.mock("node:crypto", () => ({
@@ -33,7 +54,12 @@ vi.mock("node:crypto", () => ({
 }));
 
 import { ipcMain } from "electron";
+import * as fsPromises from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { registerClipboardHandlers } from "../clipboard.js";
+
+const CLIPBOARD_DIR = path.join(os.tmpdir(), "daintree-clipboard");
 
 type Handler = (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>;
 
@@ -175,6 +201,151 @@ describe("clipboard:write-text handler", () => {
     cleanup();
     const removedChannels = vi.mocked(ipcMain.removeHandler).mock.calls.map(([ch]) => ch);
     expect(removedChannels).toContain("clipboard:write-text");
+  });
+});
+
+describe("clipboard:save-image cleanup trigger", () => {
+  let cleanup: () => void;
+
+  const fakeClipboardImage = {
+    isEmpty: () => false,
+    toPNG: () => Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+    getSize: () => ({ width: 80, height: 40 }),
+    resize: () => ({ toPNG: () => Buffer.from([0x89]) }),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clipboardMock.readImage.mockReturnValue(fakeClipboardImage);
+    vi.mocked(fsPromises.readdir).mockResolvedValue([]);
+    cleanup = registerClipboardHandlers();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("runs cleanup fire-and-forget after writing the image", async () => {
+    const handler = getHandler("clipboard:save-image");
+    await handler(fakeEvent);
+
+    expect(fsPromises.writeFile).toHaveBeenCalled();
+    // cleanup reads the clipboard dir; startup also runs it once, so assert it
+    // ran again after the save (≥2 invocations total).
+    expect(vi.mocked(fsPromises.readdir).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not reject the save when cleanup fails", async () => {
+    vi.mocked(fsPromises.readdir).mockRejectedValue(new Error("disk gone"));
+    const handler = getHandler("clipboard:save-image");
+    await expect(handler(fakeEvent)).resolves.toMatchObject({
+      filePath: expect.any(String),
+      thumbnailDataUrl: expect.stringContaining("data:image/png;base64,"),
+    });
+  });
+});
+
+describe("clipboard:write-text size cap", () => {
+  const MAX_TEXT_BYTES = 8 * 1024 * 1024;
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cleanup = registerClipboardHandlers();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("accepts text at exactly the 8 MB limit", async () => {
+    const handler = getHandler("clipboard:write-text");
+    const text = "a".repeat(MAX_TEXT_BYTES);
+    await handler(fakeEvent, text);
+    expect(clipboardMock.writeText).toHaveBeenCalledWith(text);
+  });
+
+  it("rejects text one byte over the limit with PAYLOAD_TOO_LARGE", async () => {
+    const handler = getHandler("clipboard:write-text");
+    const text = "a".repeat(MAX_TEXT_BYTES + 1);
+    await expect(handler(fakeEvent, text)).rejects.toMatchObject({
+      name: "AppError",
+      code: "PAYLOAD_TOO_LARGE",
+    });
+    expect(clipboardMock.writeText).not.toHaveBeenCalled();
+  });
+
+  it("measures UTF-8 bytes, not string length, for multibyte input", async () => {
+    const handler = getHandler("clipboard:write-text");
+    // "😀" is 2 UTF-16 code units (.length 2) but 4 UTF-8 bytes. A string
+    // under the char limit can still exceed the byte limit.
+    const emojiCount = MAX_TEXT_BYTES / 4 + 1;
+    const text = "😀".repeat(emojiCount);
+    expect(text.length).toBeLessThan(MAX_TEXT_BYTES);
+    await expect(handler(fakeEvent, text)).rejects.toMatchObject({
+      name: "AppError",
+      code: "PAYLOAD_TOO_LARGE",
+    });
+    expect(clipboardMock.writeText).not.toHaveBeenCalled();
+  });
+});
+
+describe("clipboard:write-image size cap", () => {
+  const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cleanup = registerClipboardHandlers();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("rejects image data one byte over the limit before touching nativeImage", async () => {
+    const handler = getHandler("clipboard:write-image");
+    const pngData = new Uint8Array(MAX_IMAGE_BYTES + 1);
+    await expect(handler(fakeEvent, pngData)).rejects.toMatchObject({
+      name: "AppError",
+      code: "PAYLOAD_TOO_LARGE",
+    });
+    expect(nativeImageMock.createFromBuffer).not.toHaveBeenCalled();
+    expect(clipboardMock.writeImage).not.toHaveBeenCalled();
+  });
+
+  it("accepts image data within the limit", async () => {
+    const fakeImage = { isEmpty: () => false };
+    nativeImageMock.createFromBuffer.mockReturnValue(fakeImage);
+
+    const handler = getHandler("clipboard:write-image");
+    await handler(fakeEvent, new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+
+    expect(nativeImageMock.createFromBuffer).toHaveBeenCalledTimes(1);
+    expect(clipboardMock.writeImage).toHaveBeenCalledWith(fakeImage);
+  });
+
+  it("accepts image data exactly at the 20 MB limit", async () => {
+    const fakeImage = { isEmpty: () => false };
+    nativeImageMock.createFromBuffer.mockReturnValue(fakeImage);
+
+    const handler = getHandler("clipboard:write-image");
+    await handler(fakeEvent, new Uint8Array(MAX_IMAGE_BYTES));
+
+    expect(nativeImageMock.createFromBuffer).toHaveBeenCalledTimes(1);
+    expect(clipboardMock.writeImage).toHaveBeenCalledWith(fakeImage);
+  });
+
+  it("rejects non-Uint8Array input with VALIDATION before any allocation", async () => {
+    const handler = getHandler("clipboard:write-image");
+    for (const bad of [null, new ArrayBuffer(8)]) {
+      await expect(handler(fakeEvent, bad as unknown as Uint8Array)).rejects.toMatchObject({
+        name: "AppError",
+        code: "VALIDATION",
+      });
+    }
+    expect(nativeImageMock.createFromBuffer).not.toHaveBeenCalled();
+    expect(clipboardMock.writeImage).not.toHaveBeenCalled();
   });
 });
 
@@ -338,5 +509,144 @@ describe("clipboard:read-selection handler", () => {
 
     const handler = getHandler("clipboard:read-selection");
     await expect(handler(fakeEvent)).rejects.toThrow("focus required for primary read");
+  });
+});
+
+describe("clipboard:thumbnail-from-path handler", () => {
+  let cleanup: () => void;
+
+  const makeFakeImage = () => ({
+    isEmpty: () => false,
+    getSize: () => ({ width: 80, height: 40 }),
+    resize: () => ({ toPNG: () => Buffer.from([0x89, 0x50]) }),
+  });
+
+  const makeFileHandle = (readFile: () => Promise<Buffer>, size = 1024) => ({
+    readFile: vi.fn(readFile),
+    stat: vi.fn(() => Promise.resolve({ size })),
+    close: vi.fn(() => Promise.resolve()),
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: realpath echoes its input so containment is path-prefix based.
+    fsModuleMock.promises.realpath.mockImplementation((p: string) => Promise.resolve(p));
+    projectStoreMock.getAllProjects.mockReturnValue([]);
+    cleanup = registerClipboardHandlers();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("reads an image contained in the clipboard dir via an O_NOFOLLOW fd", async () => {
+    const filePath = path.join(CLIPBOARD_DIR, "clipboard-1.png");
+    const handle = makeFileHandle(() => Promise.resolve(Buffer.from([0x89, 0x50, 0x4e, 0x47])));
+    fsPromisesMock.open.mockResolvedValue(handle);
+    nativeImageMock.createFromBuffer.mockReturnValue(makeFakeImage());
+
+    const handler = getHandler("clipboard:thumbnail-from-path");
+    const result = (await handler(fakeEvent, filePath)) as {
+      filePath: string;
+      thumbnailDataUrl: string;
+    };
+
+    // Exact flag assertion: dropping O_NOFOLLOW must fail this test.
+    expect(fsPromisesMock.open).toHaveBeenCalledWith(filePath, 1 | 0x20000);
+    expect(nativeImageMock.createFromBuffer).toHaveBeenCalledTimes(1);
+    expect(handle.close).toHaveBeenCalled();
+    expect(result.filePath).toBe(filePath);
+    expect(result.thumbnailDataUrl).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it("reads a drag-dropped image contained in a project root", async () => {
+    const projectRoot = path.join(path.parse(process.cwd()).root, "repo");
+    projectStoreMock.getAllProjects.mockReturnValue([{ path: projectRoot }]);
+    const filePath = path.join(projectRoot, "assets", "photo.png");
+    const handle = makeFileHandle(() => Promise.resolve(Buffer.from([0x89, 0x50])));
+    fsPromisesMock.open.mockResolvedValue(handle);
+    nativeImageMock.createFromBuffer.mockReturnValue(makeFakeImage());
+
+    const handler = getHandler("clipboard:thumbnail-from-path");
+    const result = (await handler(fakeEvent, filePath)) as { filePath: string };
+
+    expect(fsPromisesMock.open).toHaveBeenCalledWith(filePath, 1 | 0x20000);
+    expect(result.filePath).toBe(filePath);
+  });
+
+  it("rejects a path outside every allowed root with OUTSIDE_ROOT", async () => {
+    const handler = getHandler("clipboard:thumbnail-from-path");
+    await expect(handler(fakeEvent, "/etc/passwd")).rejects.toMatchObject({
+      name: "AppError",
+      code: "OUTSIDE_ROOT",
+    });
+
+    expect(fsPromisesMock.open).not.toHaveBeenCalled();
+    expect(nativeImageMock.createFromBuffer).not.toHaveBeenCalled();
+  });
+
+  it("rejects a relative path with INVALID_PATH before touching the filesystem", async () => {
+    const handler = getHandler("clipboard:thumbnail-from-path");
+    await expect(handler(fakeEvent, "relative/clipboard.png")).rejects.toMatchObject({
+      name: "AppError",
+      code: "INVALID_PATH",
+    });
+
+    expect(fsModuleMock.promises.realpath).not.toHaveBeenCalled();
+    expect(fsPromisesMock.open).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized file via stat before reading it", async () => {
+    const filePath = path.join(CLIPBOARD_DIR, "huge.png");
+    const handle = makeFileHandle(() => Promise.resolve(Buffer.from([0x89])), 20 * 1024 * 1024 + 1);
+    fsPromisesMock.open.mockResolvedValue(handle);
+
+    const handler = getHandler("clipboard:thumbnail-from-path");
+    await expect(handler(fakeEvent, filePath)).rejects.toMatchObject({
+      name: "AppError",
+      code: "PAYLOAD_TOO_LARGE",
+    });
+
+    expect(handle.readFile).not.toHaveBeenCalled();
+    expect(handle.close).toHaveBeenCalled();
+    expect(nativeImageMock.createFromBuffer).not.toHaveBeenCalled();
+  });
+
+  it("rejects a symlink escape where the fd resolves outside the root (ELOOP)", async () => {
+    const filePath = path.join(CLIPBOARD_DIR, "evil.png");
+    fsPromisesMock.open.mockRejectedValue(Object.assign(new Error("ELOOP"), { code: "ELOOP" }));
+
+    const handler = getHandler("clipboard:thumbnail-from-path");
+    await expect(handler(fakeEvent, filePath)).rejects.toMatchObject({
+      name: "AppError",
+      code: "INVALID_PATH",
+    });
+
+    expect(nativeImageMock.createFromBuffer).not.toHaveBeenCalled();
+  });
+
+  it("closes the file handle when readFile fails", async () => {
+    const filePath = path.join(CLIPBOARD_DIR, "clipboard-2.png");
+    const handle = makeFileHandle(() => Promise.reject(new Error("read failed")));
+    fsPromisesMock.open.mockResolvedValue(handle);
+
+    const handler = getHandler("clipboard:thumbnail-from-path");
+    await expect(handler(fakeEvent, filePath)).rejects.toThrow("read failed");
+
+    expect(handle.close).toHaveBeenCalled();
+    expect(nativeImageMock.createFromBuffer).not.toHaveBeenCalled();
+  });
+
+  it("throws CLIPBOARD_INVALID when the decoded image is empty", async () => {
+    const filePath = path.join(CLIPBOARD_DIR, "clipboard-3.png");
+    const handle = makeFileHandle(() => Promise.resolve(Buffer.from([0x00])));
+    fsPromisesMock.open.mockResolvedValue(handle);
+    nativeImageMock.createFromBuffer.mockReturnValue({ isEmpty: () => true });
+
+    const handler = getHandler("clipboard:thumbnail-from-path");
+    await expect(handler(fakeEvent, filePath)).rejects.toMatchObject({
+      name: "AppError",
+      code: "CLIPBOARD_INVALID",
+    });
   });
 });

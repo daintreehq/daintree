@@ -13,10 +13,12 @@ Daintree supervises any MCP server a plugin ships. It spawns the process lazily,
 
 ### Manifest
 
+The manifest key is `experimental_mcpServers` — the `experimental_` prefix signals that the shape may change before the feature ships.
+
 ```json
 {
   "contributes": {
-    "mcpServers": [
+    "experimental_mcpServers": [
       {
         "id": "linear",
         "name": "Linear MCP",
@@ -112,6 +114,8 @@ Skills are markdown files a plugin contributes. Daintree's built-in MCP server e
 This is the right contribution point when the extension is about **knowledge or instructions** rather than **capabilities**. A TDD workflow skill doesn't need to call APIs — it just tells the agent how to think. A Linear integration, by contrast, needs network access and belongs in an MCP server.
 
 ### Manifest
+
+Skills are not yet present in the manifest schema. The example below shows the planned shape; it is documented here as a design preview.
 
 ```json
 {

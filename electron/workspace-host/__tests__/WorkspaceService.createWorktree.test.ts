@@ -121,6 +121,10 @@ vi.mock("fs/promises", () => ({
   access: vi.fn().mockResolvedValue(undefined),
   readFile: vi.fn().mockRejectedValue(new Error("ENOENT")),
   cp: vi.fn().mockResolvedValue(undefined),
+  // Identity by default: no symlinks in unit tests. The containment check
+  // (assertWorktreePathContained) realpaths the repo parent and the target's
+  // nearest existing ancestor; identity keeps resolved paths unchanged.
+  realpath: vi.fn().mockImplementation((p: string) => Promise.resolve(p)),
 }));
 
 // Default to "exists" so pre-existing tests don't exercise the parent mkdir
@@ -156,6 +160,11 @@ describe("WorkspaceService.createWorktree", () => {
 
     const fsModule = await import("../../utils/fs.js");
     waitForPathExists = vi.mocked(fsModule.waitForPathExists);
+
+    // Re-anchor realpath to identity each test so a per-test symlink override
+    // (the containment-escape cases below) can't leak into later tests.
+    const fsPromisesModule = await import("fs/promises");
+    vi.mocked(fsPromisesModule.realpath).mockImplementation((p: any) => Promise.resolve(p));
 
     mockSendEvent = vi.fn();
 
@@ -970,7 +979,9 @@ describe("WorkspaceService.createWorktree", () => {
   });
 
   it("creates the parent directory when it does not exist", async () => {
-    const expectedWorktreePath = path.resolve("/missing/parent/worktree");
+    // Nested under the repo's parent boundary (/test) so the containment gate
+    // passes; the parent (/test/sub) is the not-yet-existing dir under test.
+    const expectedWorktreePath = path.resolve("/test/sub/worktree");
     const fsModule = await import("fs");
     const fsPromisesModule = await import("fs/promises");
     vi.mocked(fsModule.existsSync).mockReturnValueOnce(false);
@@ -978,7 +989,7 @@ describe("WorkspaceService.createWorktree", () => {
     await service.createWorktree("req-no-parent", "/test/root", {
       baseBranch: "main",
       newBranch: "feature/foo",
-      path: "/missing/parent/worktree",
+      path: "/test/sub/worktree",
     });
 
     expect(fsPromisesModule.mkdir).toHaveBeenCalledWith(path.dirname(expectedWorktreePath), {
@@ -991,7 +1002,7 @@ describe("WorkspaceService.createWorktree", () => {
       "feature/foo",
       "--no-track",
       "--end-of-options",
-      "/missing/parent/worktree",
+      "/test/sub/worktree",
       "main",
     ]);
     expect(mockSendEvent).toHaveBeenCalledWith(
@@ -1102,6 +1113,142 @@ describe("WorkspaceService.createWorktree", () => {
         requestId: "req-normalized-absolute",
         success: true,
         worktreeId: expectedPath,
+      })
+    );
+  });
+
+  it("rejects an absolute path outside the repository's parent directory (#9154)", async () => {
+    await service.createWorktree("req-escape-abs", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/escape",
+      path: "/etc/cron.d/evil",
+    });
+
+    expect(mockSimpleGit.raw).not.toHaveBeenCalled();
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-escape-abs",
+        success: false,
+        error: expect.stringContaining("parent directory"),
+      })
+    );
+  });
+
+  it("rejects a relative path that traverses outside the parent directory (#9154)", async () => {
+    // /test/root + ../../escape resolves to /escape, above the /test boundary.
+    await service.createWorktree("req-escape-rel", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/escape-rel",
+      path: "../../escape",
+    });
+
+    expect(mockSimpleGit.raw).not.toHaveBeenCalled();
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-escape-rel",
+        success: false,
+        error: expect.stringContaining("parent directory"),
+      })
+    );
+  });
+
+  it("rejects a symlinked ancestor that escapes the parent directory (#9154)", async () => {
+    // /test/evil is a symlink to /outside; the not-yet-created worktree dir
+    // /test/evil/wt therefore really lives at /outside/wt, outside the /test
+    // boundary. canonicalizeNearestExisting must resolve the symlink.
+    const fsPromisesModule = await import("fs/promises");
+    vi.mocked(fsPromisesModule.realpath).mockImplementation((p: any) => {
+      const s = String(p);
+      if (s === path.resolve("/test/evil/wt")) {
+        return Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+      }
+      if (s === path.resolve("/test/evil")) {
+        return Promise.resolve(path.resolve("/outside"));
+      }
+      return Promise.resolve(s);
+    });
+
+    await service.createWorktree("req-escape-symlink", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/escape-symlink",
+      path: "/test/evil/wt",
+    });
+
+    expect(mockSimpleGit.raw).not.toHaveBeenCalled();
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-escape-symlink",
+        success: false,
+        error: expect.stringContaining("parent directory"),
+      })
+    );
+  });
+
+  it("rejects a path equal to the parent-directory boundary itself (#9154)", async () => {
+    // path "/test" == dirname("/test/root"); rel === "" must be rejected.
+    await service.createWorktree("req-boundary-eq", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/boundary",
+      path: "/test",
+    });
+
+    expect(mockSimpleGit.raw).not.toHaveBeenCalled();
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-boundary-eq",
+        success: false,
+        error: expect.stringContaining("parent directory"),
+      })
+    );
+  });
+
+  it("propagates a non-ENOENT realpath error instead of degrading containment (#9154)", async () => {
+    // EACCES on an existing-but-unreadable segment must fail closed, not be
+    // treated as a not-yet-created directory.
+    const fsPromisesModule = await import("fs/promises");
+    vi.mocked(fsPromisesModule.realpath).mockImplementation((p: any) => {
+      const s = String(p);
+      if (s === path.resolve("/test/locked/wt")) {
+        return Promise.reject(Object.assign(new Error("EACCES"), { code: "EACCES" }));
+      }
+      return Promise.resolve(s);
+    });
+
+    await service.createWorktree("req-eacces", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/eacces",
+      path: "/test/locked/wt",
+    });
+
+    expect(mockSimpleGit.raw).not.toHaveBeenCalled();
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-eacces",
+        success: false,
+        error: expect.stringContaining("EACCES"),
+      })
+    );
+  });
+
+  it("allows the default sibling worktree path under the parent directory (#9154)", async () => {
+    // Mirrors DEFAULT_WORKTREE_PATH_PATTERN: {parent-dir}/{base-folder}-worktrees/...
+    await service.createWorktree("req-sibling-ok", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/ok",
+      path: "/test/root-worktrees/feature-ok",
+    });
+
+    expect(mockSimpleGit.raw).toHaveBeenCalled();
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-sibling-ok",
+        success: true,
       })
     );
   });

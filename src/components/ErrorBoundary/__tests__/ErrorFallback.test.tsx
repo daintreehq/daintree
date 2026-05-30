@@ -70,14 +70,109 @@ describe("ErrorFallback", () => {
       expect(copyButton.getAttribute("aria-label")).toBe("Copy error ID");
     });
 
-    it("does not render technical details", () => {
+    it("renders technical details so crash reporters see the stack", () => {
       render(<ErrorFallback {...baseProps} variant="section" />);
-      expect(screen.queryByText("Technical details")).toBeNull();
+      expect(screen.getByText("Technical details")).toBeTruthy();
     });
 
-    it("does not render stack trace", () => {
+    it("renders the stack trace inside the details block", () => {
       render(<ErrorFallback {...baseProps} variant="section" />);
-      expect(screen.queryByText(/at TestComponent/)).toBeNull();
+      expect(screen.getByText(/at TestComponent/)).toBeTruthy();
+    });
+
+    it("keeps the details block collapsed by default (no open attribute)", () => {
+      const { container } = render(<ErrorFallback {...baseProps} variant="section" />);
+      const details = container.querySelector("details");
+      expect(details).toBeTruthy();
+      expect(details?.hasAttribute("open")).toBe(false);
+    });
+
+    it("scrubs user paths from the displayed stack", () => {
+      const error = Object.assign(new Error("boom"), {
+        stack: "Error: boom\n    at fn (/Users/alice/project/src/file.ts:10:5)",
+      });
+      const { container } = render(
+        <ErrorFallback {...baseProps} error={error} variant="section" />
+      );
+      const pre = container.querySelector("pre");
+      expect(pre?.textContent).toContain("/Users/USER/project/src/file.ts");
+      expect(pre?.textContent).not.toContain("/Users/alice/");
+    });
+
+    it("scrubs user paths from the displayed component stack", () => {
+      const error = Object.assign(new Error("boom"), { stack: "Error: boom" });
+      const errorInfo = {
+        componentStack: "\n    at Comp (/home/bob/app/Comp.tsx:3:1)",
+      } as React.ErrorInfo;
+      const { container } = render(
+        <ErrorFallback {...baseProps} error={error} errorInfo={errorInfo} variant="section" />
+      );
+      const pre = container.querySelector("pre");
+      expect(pre?.textContent).toContain("/home/USER/app/Comp.tsx");
+      expect(pre?.textContent).not.toContain("/home/bob/");
+    });
+
+    it("renders details when only error.stack is present (no componentStack)", () => {
+      const error = Object.assign(new Error("boom"), {
+        stack: "Error: boom\n    at solo (file.ts:1:1)",
+      });
+      render(
+        <ErrorFallback
+          error={error}
+          resetError={baseProps.resetError}
+          incidentId={baseProps.incidentId}
+          variant="section"
+        />
+      );
+      expect(screen.getByText("Technical details")).toBeTruthy();
+      expect(screen.getByText(/at solo/)).toBeTruthy();
+    });
+
+    it("does not render details when both stack and componentStack are absent", () => {
+      const error = Object.assign(new Error("boom"), { stack: undefined });
+      const { container } = render(
+        <ErrorFallback
+          error={error}
+          errorInfo={{ componentStack: "" } as React.ErrorInfo}
+          resetError={baseProps.resetError}
+          incidentId={baseProps.incidentId}
+          variant="section"
+        />
+      );
+      expect(screen.queryByText("Technical details")).toBeNull();
+      expect(container.querySelector("details")).toBeNull();
+    });
+
+    it("renders technical details for the fullscreen variant too", () => {
+      render(<ErrorFallback {...baseProps} variant="fullscreen" />);
+      expect(screen.getByText("Technical details")).toBeTruthy();
+      expect(screen.getByText(/at TestComponent/)).toBeTruthy();
+    });
+
+    it("scrubs the component stack when error.stack is absent", () => {
+      const error = Object.assign(new Error("boom"), { stack: undefined });
+      const errorInfo = {
+        componentStack: "\n    at Comp (/home/bob/app/Comp.tsx:3:1)",
+      } as React.ErrorInfo;
+      const { container } = render(
+        <ErrorFallback {...baseProps} error={error} errorInfo={errorInfo} variant="section" />
+      );
+      const pre = container.querySelector("pre");
+      expect(pre?.textContent).toContain("No stack trace available");
+      expect(pre?.textContent).toContain("/home/USER/app/Comp.tsx");
+      expect(pre?.textContent).not.toContain("/home/bob/");
+    });
+
+    it("scrubs Windows user paths from the displayed stack", () => {
+      const error = Object.assign(new Error("boom"), {
+        stack: "Error: boom\n    at fn (C:\\Users\\alice\\project\\file.ts:10:5)",
+      });
+      const { container } = render(
+        <ErrorFallback {...baseProps} error={error} variant="section" />
+      );
+      const pre = container.querySelector("pre");
+      expect(pre?.textContent).toContain("C:\\Users\\USER\\project\\file.ts");
+      expect(pre?.textContent).not.toContain("C:\\Users\\alice\\");
     });
   });
 

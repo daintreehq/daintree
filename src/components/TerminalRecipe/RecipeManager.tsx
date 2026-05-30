@@ -43,15 +43,11 @@ export function RecipeManager({
   onCreateRecipe,
 }: RecipeManagerProps) {
   const globalRecipes = useRecipeStore((s) => s.globalRecipes);
-  const rawProjectRecipes = useRecipeStore((s) => s.projectRecipes);
+  const projectRecipes = useRecipeStore((s) => s.projectRecipes);
   const inRepoRecipes = useRecipeStore((s) => s.inRepoRecipes);
 
-  // Filter out project recipes shadowed by in-repo recipes with the same name
+  // Derive which project recipes are shadowed by in-repo recipes
   const inRepoNames = useMemo(() => new Set(inRepoRecipes.map((r) => r.name)), [inRepoRecipes]);
-  const projectRecipes = useMemo(
-    () => rawProjectRecipes.filter((r) => !inRepoNames.has(r.name)),
-    [rawProjectRecipes, inRepoNames]
-  );
   const saveToRepo = useRecipeStore((s) => s.saveToRepo);
   const exportRecipe = useRecipeStore((s) => s.exportRecipe);
   const exportRecipeToFile = useRecipeStore((s) => s.exportRecipeToFile);
@@ -160,11 +156,18 @@ export function RecipeManager({
     }
   };
 
-  const renderRecipeRow = (recipe: TerminalRecipe, readOnly = false) => {
+  const renderRecipeRow = (recipe: TerminalRecipe, readOnly = false, isShadowed = false) => {
     const exported = exportFeedback === recipe.id;
-    const isGlobal = !isInRepoRecipeId(recipe.id) && recipe.projectId === undefined;
+    const isGlobal = !isInRepoRecipeId(recipe) && recipe.projectId === undefined;
     return (
-      <div key={recipe.id} className="p-3 hover:bg-muted/50 transition-colors group cursor-default">
+      <div
+        key={recipe.id}
+        className={
+          isShadowed
+            ? "p-3 hover:bg-muted/50 transition-colors group cursor-default opacity-60"
+            : "p-3 hover:bg-muted/50 transition-colors group cursor-default"
+        }
+      >
         <div className="flex items-start gap-3">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
@@ -173,6 +176,11 @@ export function RecipeManager({
                 <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
                   <Lock className="h-3 w-3" />
                   Read-only
+                </span>
+              )}
+              {isShadowed && (
+                <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
+                  Overridden by team recipe
                 </span>
               )}
               {isGlobal && (
@@ -217,7 +225,7 @@ export function RecipeManager({
                 <TooltipContent side="bottom">Edit recipe</TooltipContent>
               </Tooltip>
             )}
-            {!isInRepoRecipeId(recipe.id) && currentProject && (
+            {!isInRepoRecipeId(recipe) && currentProject && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -404,7 +412,7 @@ export function RecipeManager({
             ) : (
               <>
                 <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
-                  {projectRecipes.map((r) => renderRecipeRow(r))}
+                  {projectRecipes.map((r) => renderRecipeRow(r, false, inRepoNames.has(r.name)))}
                 </div>
                 <div className="flex gap-2 mt-2">
                   <Button variant="outline" size="sm" onClick={() => onCreateRecipe("project")}>
@@ -455,7 +463,17 @@ export function RecipeManager({
         description={
           saveError
             ? `Error: ${saveError}`
-            : "This recipe will be written to .daintree/recipes/ in the repository where it can be committed and shared with the team."
+            : (() => {
+                const recipeName =
+                  globalRecipes.find((r) => r.id === recipeToSave)?.name ??
+                  projectRecipes.find((r) => r.id === recipeToSave)?.name;
+                const collision = recipeName && inRepoRecipes.some((r) => r.name === recipeName);
+                const base =
+                  "This recipe will be written to .daintree/recipes/ in the repository where it can be committed and shared with the team.";
+                return collision
+                  ? `A team recipe named "${recipeName}" already exists. Saving will replace it. ${base}`
+                  : base;
+              })()
         }
         confirmLabel={saveError ? "Retry save" : "Save to repo"}
         variant="default"
@@ -469,7 +487,7 @@ export function RecipeManager({
 
       <ConfirmDialog
         isOpen={recipeToDeleteAfterSave !== null}
-        title={`Delete original '${globalRecipes.find((r) => r.id === recipeToDeleteAfterSave)?.name ?? rawProjectRecipes.find((r) => r.id === recipeToDeleteAfterSave)?.name ?? inRepoRecipes.find((r) => r.id === recipeToDeleteAfterSave)?.name ?? "recipe"}'?`}
+        title={`Delete original '${globalRecipes.find((r) => r.id === recipeToDeleteAfterSave)?.name ?? projectRecipes.find((r) => r.id === recipeToDeleteAfterSave)?.name ?? inRepoRecipes.find((r) => r.id === recipeToDeleteAfterSave)?.name ?? "recipe"}'?`}
         description="The recipe has been saved to the repository. The original copy on this machine will be permanently removed."
         confirmLabel="Delete original"
         cancelLabel="Keep both"

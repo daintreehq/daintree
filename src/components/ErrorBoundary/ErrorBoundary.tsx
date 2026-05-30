@@ -3,10 +3,42 @@ import { ErrorFallback, type ErrorFallbackProps } from "./ErrorFallback";
 import { useErrorStore } from "@/store/errorStore";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
-import { captureRendererException } from "@/utils/rendererSentry";
+import { captureRendererException, getRendererSentryConsent } from "@/utils/rendererSentry";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { buildReportIssueUrl } from "./buildReportIssueUrl";
 import { notify } from "@/lib/notify";
+import type { ReportIssueEnrichment } from "../../../shared/types/ipc/system";
+import type { PluginDiagnosticsSnapshot } from "../../../shared/types/ipc/pluginDiagnostics";
+
+const ENRICHMENT_TIMEOUT_MS = 2000;
+
+async function fetchReportEnrichment(): Promise<ReportIssueEnrichment | null> {
+  const consent = getRendererSentryConsent();
+  if (!consent.hasSeenPrompt || consent.level === "off") return null;
+  const getter = window.electron?.system?.getReportEnrichment;
+  if (!getter) return null;
+  try {
+    return await Promise.race<ReportIssueEnrichment | null>([
+      getter(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), ENRICHMENT_TIMEOUT_MS)),
+    ]);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchPluginDiagnostics(): Promise<PluginDiagnosticsSnapshot | null> {
+  const getter = window.electron?.plugin?.getDiagnosticsSnapshot;
+  if (!getter) return null;
+  try {
+    return await Promise.race<PluginDiagnosticsSnapshot | null>([
+      getter(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), ENRICHMENT_TIMEOUT_MS)),
+    ]);
+  } catch {
+    return null;
+  }
+}
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -163,6 +195,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
       if (!error) return;
 
+      const [enrichment, pluginDiagnostics] = await Promise.all([
+        fetchReportEnrichment(),
+        fetchPluginDiagnostics(),
+      ]);
+
       const { url, fullBody, usedClipboardFallback } = buildReportIssueUrl({
         incidentId,
         componentName,
@@ -170,6 +207,9 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         stack: error.stack ?? "",
         componentStack: errorInfo?.componentStack ?? "",
         context,
+        systemInfo: enrichment?.systemInfo,
+        recentActions: enrichment?.recentActions,
+        pluginDiagnostics,
       });
 
       if (usedClipboardFallback) {
@@ -190,14 +230,16 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             message:
               "The full crash report was copied to your clipboard — paste it into the issue body.",
             transient: true,
+            context: { eventKind: "uiFeedback" },
           });
         } else {
           notify({
             type: "info",
-            title: "Error details too long",
+            title: "Report not copied",
             message:
               "Couldn't copy the full report. Quote the Error ID shown above when filing the issue.",
             inboxMessage: "Couldn't copy crash report to clipboard.",
+            context: { eventKind: "uiFeedback" },
           });
         }
       }

@@ -12,6 +12,7 @@ import {
   type PrIssueFilter,
   type SessionFilter,
   type ActivityFilter,
+  type DevServerFilter,
 } from "@/store/worktreeFilterStore";
 import type { ChipCounts } from "@/lib/worktreeFilters";
 
@@ -125,6 +126,13 @@ const ACTIVITY_OPTIONS: { value: ActivityFilter; label: string }[] = [
   { value: "last7d", label: "7d" },
 ];
 
+const DEV_SERVER_OPTIONS: { value: DevServerFilter; label: string }[] = [
+  { value: "hasDevServer", label: "Has server" },
+  { value: "running", label: "Running" },
+  { value: "starting", label: "Starting" },
+  { value: "error", label: "Error" },
+];
+
 const ORDER_OPTIONS: { value: OrderBy; label: string }[] = [
   { value: "created", label: "Date created" },
   { value: "recent", label: "Recently updated" },
@@ -160,6 +168,7 @@ export function WorktreeFilterPopover({
     prIssueFilters,
     sessionFilters,
     activityFilters,
+    devServerFilters,
     setQuery,
     setOrderBy,
     setGroupByType,
@@ -168,6 +177,7 @@ export function WorktreeFilterPopover({
     togglePrIssueFilter,
     toggleSessionFilter,
     toggleActivityFilter,
+    toggleDevServerFilter,
     clearAll,
     getActiveFilterCount,
     hasActiveFilters,
@@ -181,6 +191,7 @@ export function WorktreeFilterPopover({
       prIssueFilters: state.prIssueFilters,
       sessionFilters: state.sessionFilters,
       activityFilters: state.activityFilters,
+      devServerFilters: state.devServerFilters,
       setQuery: state.setQuery,
       setOrderBy: state.setOrderBy,
       setGroupByType: state.setGroupByType,
@@ -189,6 +200,7 @@ export function WorktreeFilterPopover({
       togglePrIssueFilter: state.togglePrIssueFilter,
       toggleSessionFilter: state.toggleSessionFilter,
       toggleActivityFilter: state.toggleActivityFilter,
+      toggleDevServerFilter: state.toggleDevServerFilter,
       clearAll: state.clearAll,
       getActiveFilterCount: state.getActiveFilterCount,
       hasActiveFilters: state.hasActiveFilters,
@@ -418,6 +430,20 @@ export function WorktreeFilterPopover({
                   isActive={activityFilters.has(option.value)}
                   onClick={() => toggleActivityFilter(option.value)}
                   count={chipCounts?.activity[option.value]}
+                />
+              ))}
+            </div>
+          </FilterSection>
+
+          <FilterSection title="Dev server" defaultOpen={devServerFilters.size > 0}>
+            <div className="flex flex-wrap gap-1.5">
+              {DEV_SERVER_OPTIONS.map((option) => (
+                <FilterChip
+                  key={option.value}
+                  label={option.label}
+                  isActive={devServerFilters.has(option.value)}
+                  onClick={() => toggleDevServerFilter(option.value)}
+                  count={chipCounts?.devServer[option.value]}
                 />
               ))}
             </div>

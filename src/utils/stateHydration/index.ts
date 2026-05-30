@@ -38,6 +38,24 @@ import { restorePanelsPhase } from "./panelRestorePhase";
 const CLIPBOARD_DIR_NAME = "daintree-clipboard";
 const VERBOSE_HYDRATION_LOGGING = isDaintreeEnvEnabled("DAINTREE_VERBOSE");
 
+/**
+ * Pick the worktree to activate when the saved selection no longer exists.
+ *
+ * Always prefers the main worktree so a stale/removed saved selection never
+ * lands on a leftover temporary PR worktree whose name happens to sort first
+ * (#9512). Only when there is no main worktree does it fall back to the
+ * alphabetically-first one. Returns `undefined` for an empty list.
+ */
+export function selectFallbackWorktree<
+  T extends { id: string; name: string; isMainWorktree?: boolean },
+>(worktrees: readonly T[]): T | undefined {
+  if (worktrees.length === 0) return undefined;
+  return (
+    worktrees.find((wt) => wt.isMainWorktree === true) ??
+    [...worktrees].sort((a, b) => a.name.localeCompare(b.name))[0]
+  );
+}
+
 function logHydrationInfo(message: string, context?: Record<string, unknown>): void {
   if (!VERBOSE_HYDRATION_LOGGING) return;
   logInfo(message, context);
@@ -501,13 +519,9 @@ export async function hydrateAppState(
         // Restore the saved active worktree
         setActiveWorktree(savedActiveId);
       } else {
-        // Fallback to the first worktree (main worktree is typically first)
-        const sortedWorktrees = [...worktrees].sort((a, b) => {
-          if (a.isMainWorktree && !b.isMainWorktree) return -1;
-          if (!a.isMainWorktree && b.isMainWorktree) return 1;
-          return a.name.localeCompare(b.name);
-        });
-        const fallbackWorktree = sortedWorktrees[0]!;
+        // Fallback when the saved selection no longer exists — prefers the main
+        // worktree so we never land on a leftover temporary PR worktree (#9512).
+        const fallbackWorktree = selectFallbackWorktree(worktrees)!;
         logHydrationInfo(
           `Active worktree ${savedActiveId ?? "(none)"} not found, falling back to: ${fallbackWorktree.name}`
         );

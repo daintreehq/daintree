@@ -249,3 +249,118 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
     await expect(promise).rejects.toThrow(/MCP renderer bridge destroyed/);
   });
 });
+
+describe("rendererBridge — requesting-bearer identity passthrough (#9157)", () => {
+  let pendingManifests: Map<string, PendingRequest<ActionManifestEntry[]>>;
+  let pendingDispatches: Map<string, PendingRequest<DispatchEnvelope>>;
+
+  beforeEach(() => {
+    mockIpcMain.removeAllListeners();
+    mockWebContentsRegistry.clear();
+    pendingManifests = new Map();
+    pendingDispatches = new Map();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * Builds a bridge whose active-project resolver returns `wc`, exercising the
+   * unpinned `dispatchAction` path (external/api-key clients) — the only path
+   * that carries `callerInfo`.
+   */
+  function makeActiveBridge(wc: FakeWebContents) {
+    const registry = {
+      all: () => [
+        {
+          browserWindow: { isDestroyed: () => false },
+          services: {
+            projectViewManager: { getActiveView: () => ({ webContents: wc }) },
+          },
+        },
+      ],
+    };
+    const bridge = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () => registry as never
+    );
+    bridge.setupListeners([]);
+    return bridge;
+  }
+
+  it("includes callerInfo in the unpinned dispatch IPC payload when provided", async () => {
+    const wc = makeWebContents(801);
+    const bridge = makeActiveBridge(wc);
+
+    let sentPayload: { requestId: string; callerInfo?: unknown } | undefined;
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+      sentPayload = payload as { requestId: string; callerInfo?: unknown };
+      queueMicrotask(() => {
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+          { sender: { id: 801 } },
+          { requestId: payload.requestId, result: { ok: true, result: "ok" } }
+        );
+      });
+    });
+
+    const callerInfo = { token4LastChars: "1234", userAgent: "Claude Code" };
+    await bridge.dispatchAction("terminal.kill", {}, false, callerInfo);
+
+    expect(sentPayload?.callerInfo).toEqual(callerInfo);
+  });
+
+  it("leaves callerInfo absent (undefined) when not provided", async () => {
+    const wc = makeWebContents(802);
+    const bridge = makeActiveBridge(wc);
+
+    let sentPayload: { requestId: string; callerInfo?: unknown } | undefined;
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+      sentPayload = payload as { requestId: string; callerInfo?: unknown };
+      queueMicrotask(() => {
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+          { sender: { id: 802 } },
+          { requestId: payload.requestId, result: { ok: true, result: "ok" } }
+        );
+      });
+    });
+
+    await bridge.dispatchAction("actions.list", {}, false);
+
+    expect(sentPayload).toBeDefined();
+    expect(sentPayload?.callerInfo).toBeUndefined();
+  });
+
+  it("the pinned dispatch path leaves callerInfo undefined (provenance-free)", async () => {
+    // Pinned (help-session) dispatch must stay provenance-free. Mirrors the
+    // `context: undefined` convention — the key is present but undefined, which
+    // structured clone strips at the IPC boundary so the renderer sees nothing.
+    const wc = makeWebContents(803);
+    mockWebContentsRegistry.set(803, wc);
+    const bridge = createRendererBridge(pendingManifests, pendingDispatches, () => null);
+    bridge.setupListeners([]);
+
+    let sentPayload: { requestId: string; callerInfo?: unknown } | undefined;
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+      sentPayload = payload as { requestId: string; callerInfo?: unknown };
+      queueMicrotask(() => {
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+          { sender: { id: 803 } },
+          { requestId: payload.requestId, result: { ok: true, result: "ok" } }
+        );
+      });
+    });
+
+    await bridge.dispatchActionForWebContents(803, "actions.list", {}, false);
+
+    expect(sentPayload).toBeDefined();
+    expect(sentPayload?.callerInfo).toBeUndefined();
+  });
+});

@@ -28,6 +28,7 @@ import { useGitHubRateLimit } from "./hooks/useGitHubRateLimit";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { usePluginActions } from "./hooks/usePluginActions";
 import { usePluginPanelKinds } from "./hooks/usePluginPanelKinds";
+import { usePluginKeybindings } from "./hooks/usePluginKeybindings";
 import { useUpdateListener } from "./hooks/useUpdateListener";
 import { useStoreUpdateListener } from "./hooks/useStoreUpdateListener";
 import { useMainProcessToastListener } from "./hooks/useMainProcessToastListener";
@@ -39,9 +40,9 @@ import { useQuickCreatePalette } from "./hooks/useQuickCreatePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
 import { useMcpBridge } from "./hooks/useMcpBridge";
+import { usePluginBridge } from "./hooks/usePluginBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { useSoundPlaybackListener } from "./hooks/useSoundPlaybackListener";
-import { useHeldShortcutReveal } from "./hooks/useHeldShortcutReveal";
 import { notifyViewPainted, removeStartupSkeleton } from "./utils/removeStartupSkeleton";
 import { useAppBoot } from "./hooks/app/useAppBoot";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
@@ -57,6 +58,8 @@ import {
   useOrchestrationMilestones,
   useAgentWaitingNudge,
   useFocusOnActivateIntent,
+  useNotificationHistoryPruning,
+  useRecipeFocusReload,
   useUnloadCleanup,
   useHomeDir,
   usePerformanceMonitors,
@@ -66,6 +69,7 @@ import {
   useThemeBrowserSettingsBridge,
   useErrorRetry,
   useActiveWorktreeSync,
+  useWorktreeDevServerStateSync,
 } from "./hooks/app";
 import { useResourceProfile } from "./hooks/useResourceProfile";
 import { AppLayout } from "./components/Layout";
@@ -245,11 +249,25 @@ const LazyPluginConfirmDialog = lazy(() =>
   preloadPluginConfirmDialog().then((m) => ({ default: m.PluginConfirmDialog }))
 );
 
+function preloadPluginMcpConfirmDialog() {
+  return import("./components/Plugin/PluginMcpConfirmDialog");
+}
+const LazyPluginMcpConfirmDialog = lazy(() =>
+  preloadPluginMcpConfirmDialog().then((m) => ({ default: m.PluginMcpConfirmDialog }))
+);
+
 function preloadPanelLimitConfirmDialog() {
   return import("./components/Terminal/PanelLimitConfirmDialog");
 }
 const LazyPanelLimitConfirmDialog = lazy(() =>
   preloadPanelLimitConfirmDialog().then((m) => ({ default: m.PanelLimitConfirmDialog }))
+);
+
+function preloadDiagnosticsReviewDialogHost() {
+  return import("./components/Settings/DiagnosticsReviewDialogHost");
+}
+const LazyDiagnosticsReviewDialogHost = lazy(() =>
+  preloadDiagnosticsReviewDialogHost().then((m) => ({ default: m.DiagnosticsReviewDialogHost }))
 );
 
 function preloadGitPushConfirmDialog() {
@@ -268,35 +286,18 @@ const LazyGitPullRebaseConfirmDialog = lazy(() =>
   }))
 );
 
+function preloadRecipeConflictDialog() {
+  return import("./components/TerminalRecipe/RecipeConflictDialog");
+}
+const LazyRecipeConflictDialog = lazy(() =>
+  preloadRecipeConflictDialog().then((m) => ({ default: m.RecipeConflictDialog }))
+);
+
 function preloadCrashRecoveryDialog() {
   return import("./components/Recovery/CrashRecoveryDialog");
 }
 const LazyCrashRecoveryDialog = lazy(() =>
   preloadCrashRecoveryDialog().then((m) => ({ default: m.CrashRecoveryDialog }))
-);
-
-function preloadRecoveryBannerCoordinator() {
-  return import("./components/Recovery/RecoveryBannerCoordinator");
-}
-const LazyRecoveryBannerCoordinator = lazy(() =>
-  preloadRecoveryBannerCoordinator().then((m) => ({ default: m.RecoveryBannerCoordinator }))
-);
-// Fetch eagerly: `safeMode` is set synchronously during hydration, so the
-// first post-hydration render can suspend before the idle preload fires.
-void preloadRecoveryBannerCoordinator();
-
-function preloadGitHubTokenBanner() {
-  return import("./components/Recovery/GitHubTokenBanner");
-}
-const LazyGitHubTokenBanner = lazy(() =>
-  preloadGitHubTokenBanner().then((m) => ({ default: m.GitHubTokenBanner }))
-);
-
-function preloadCloudSyncBanner() {
-  return import("./components/Recovery/CloudSyncBanner");
-}
-const LazyCloudSyncBanner = lazy(() =>
-  preloadCloudSyncBanner().then((m) => ({ default: m.CloudSyncBanner }))
 );
 
 import { Toaster } from "./components/ui/toaster";
@@ -340,6 +341,8 @@ function AppInner() {
   useGitHubRateLimit();
   useUnloadCleanup();
   useResourceProfile();
+  useRecipeFocusReload();
+  useWorktreeDevServerStateSync();
 
   useEffect(() => {
     window.__DAINTREE_E2E_ERROR_STORE__ = () =>
@@ -396,6 +399,7 @@ function AppInner() {
   useMainProcessToastListener();
 
   useMcpBridge();
+  usePluginBridge();
   useSoundPlaybackListener();
   const { homeDir } = useHomeDir();
 
@@ -508,16 +512,23 @@ function AppInner() {
   }, [crashState.status]);
   useEffect(() => {
     void useNotificationSettingsStore.getState().hydrate();
+    // Subscribe to OS DND transitions before hydrate resolves so a transition
+    // mid-hydration cannot be missed. Push events from main are tolerant of
+    // an `undefined` namespace at preload (renderer harness in tests).
+    const unsubscribe = window.electron?.osDnd?.onStateChanged?.((payload) => {
+      useNotificationSettingsStore.getState().setOsDndActive(payload.osDndActive);
+    });
+    return () => unsubscribe?.();
   }, []);
   useProjectSwitchRehydration();
   useShortcutHints(isStateLoaded);
-  useHeldShortcutReveal();
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
   const onboardingOverlayActive = gettingStarted.visible || gettingStarted.showCelebration;
   useUpdateListener(onboardingOverlayActive);
   useStoreUpdateListener();
   useOrchestrationMilestones(isStateLoaded);
   useAgentWaitingNudge(isStateLoaded);
+  useNotificationHistoryPruning();
 
   useEffect(() => {
     if (!isStateLoaded) return;
@@ -537,9 +548,6 @@ function AppInner() {
       void preloadSendToAgentPalette();
       void preloadQuickCreatePalette();
       void preloadLogLevelPalette();
-      void preloadRecoveryBannerCoordinator();
-      void preloadGitHubTokenBanner();
-      void preloadCloudSyncBanner();
       import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
       // Warm the FileViewerModal/DiffViewer chunk split out of the eager
@@ -641,6 +649,7 @@ function AppInner() {
 
   usePluginActions();
   usePluginPanelKinds();
+  usePluginKeybindings();
 
   useMenuActions();
 
@@ -683,6 +692,13 @@ function AppInner() {
             onResolve={resolveCrash}
             onUpdateConfig={updateCrashConfig}
           />
+        </Suspense>
+        {/* Diagnostics host stays reachable while the crash dialog is blocking
+            the app — without this, the inline "Send diagnostics" action in
+            CrashRecoveryDialog (recovery-failed banner) has nothing to render
+            the dialog into. */}
+        <Suspense fallback={null}>
+          <LazyDiagnosticsReviewDialogHost />
         </Suspense>
       </div>
     );
@@ -730,15 +746,6 @@ function AppInner() {
             disableHoverableContent
           >
             <E2EFaultInjector />
-            <Suspense fallback={null}>
-              <LazyRecoveryBannerCoordinator />
-            </Suspense>
-            <Suspense fallback={null}>
-              <LazyGitHubTokenBanner />
-            </Suspense>
-            <Suspense fallback={null}>
-              <LazyCloudSyncBanner />
-            </Suspense>
             <DndProvider>
               <VoiceRecordingAnnouncer />
               <AccessibilityAnnouncer />
@@ -1236,6 +1243,17 @@ function AppInner() {
             {isStateLoaded && (
               <ErrorBoundary
                 variant="component"
+                componentName="PluginMcpConfirmDialog"
+                resetKeys={[Number(isStateLoaded)]}
+              >
+                <Suspense fallback={null}>
+                  <LazyPluginMcpConfirmDialog />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+            {isStateLoaded && (
+              <ErrorBoundary
+                variant="component"
                 componentName="FileViewerModalHost"
                 resetKeys={[Number(isStateLoaded)]}
               >
@@ -1309,6 +1327,18 @@ function AppInner() {
             {isStateLoaded && (
               <ErrorBoundary
                 variant="component"
+                componentName="DiagnosticsReviewDialogHost"
+                resetKeys={[Number(isStateLoaded)]}
+              >
+                <Suspense fallback={null}>
+                  <LazyDiagnosticsReviewDialogHost />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+
+            {isStateLoaded && (
+              <ErrorBoundary
+                variant="component"
                 componentName="GitPushConfirmDialog"
                 resetKeys={[Number(isStateLoaded)]}
               >
@@ -1326,6 +1356,18 @@ function AppInner() {
               >
                 <Suspense fallback={null}>
                   <LazyGitPullRebaseConfirmDialog />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+
+            {isStateLoaded && (
+              <ErrorBoundary
+                variant="component"
+                componentName="RecipeConflictDialog"
+                resetKeys={[Number(isStateLoaded)]}
+              >
+                <Suspense fallback={null}>
+                  <LazyRecipeConflictDialog />
                 </Suspense>
               </ErrorBoundary>
             )}

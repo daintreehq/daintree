@@ -9,6 +9,7 @@ const toolbarOverflowLabels: Record<string, string> = {
   "Open Browser": "Browser",
   "Open settings": "Settings",
   "Copy Context": "Copy Context",
+  Notifications: "Notifications",
 };
 
 const toolbarButtonIds: Record<string, string> = {
@@ -16,6 +17,7 @@ const toolbarButtonIds: Record<string, string> = {
   "Open Browser": "browser",
   "Open settings": "settings",
   "Copy Context": "copy-tree",
+  Notifications: "notification-center",
 };
 
 const toolbarShortcuts: Record<string, string> = {
@@ -25,8 +27,8 @@ const toolbarShortcuts: Record<string, string> = {
   "Copy Context": `${mod}+Shift+c`,
 };
 
-function extractExactAriaLabel(selector: string): string | null {
-  return selector.match(/aria-label="([^"]+)"/)?.[1] ?? null;
+function extractToolbarLabel(selector: string): string | null {
+  return selector.match(/aria-label(?:\^)?="([^"]+)"/)?.[1] ?? null;
 }
 
 type ToolbarCommandReachability = "visible" | "overflow" | "missing";
@@ -263,7 +265,7 @@ export async function clickToolbarButton(
   await dismissBlockingPalette(page);
 
   const toolbar = page.getByRole("toolbar", { name: "Main toolbar" });
-  const label = extractExactAriaLabel(selector);
+  const label = extractToolbarLabel(selector);
 
   for (const candidate of getToolbarButtonLocators(toolbar, selector, label)) {
     if (await clickFirstVisible(candidate, 3000, 1000)) {
@@ -296,7 +298,7 @@ export async function expectToolbarButtonReachable(
   await dismissBlockingPalette(page);
 
   const toolbar = page.getByRole("toolbar", { name: "Main toolbar" });
-  const label = extractExactAriaLabel(selector);
+  const label = extractToolbarLabel(selector);
   const deadline = Date.now() + timeout;
 
   while (Date.now() < deadline) {

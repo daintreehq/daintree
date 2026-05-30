@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceRecordingTarget } from "@/store/voiceRecordingStore";
+import type { VoiceInputError } from "@shared/types";
 
 type VoiceStatusCallback = (status: string) => void;
-type VoiceErrorCallback = (error: string) => void;
+type VoiceErrorCallback = (error: VoiceInputError) => void;
 type VoidCleanup = () => void;
 
 interface MockTrack {
@@ -20,7 +21,7 @@ interface MockPanelBuffer {
   completedSegments: string[];
   projectId?: string;
   sessionDraftStart: number;
-  draftLengthAtSegmentStart: number;
+  insertPoint: number;
   activeParagraphStart: number;
   transcriptPhase: string;
 }
@@ -46,7 +47,7 @@ function createPanelBuffer(overrides: Partial<MockPanelBuffer> = {}): MockPanelB
     liveText: "",
     completedSegments: [],
     sessionDraftStart: -1,
-    draftLengthAtSegmentStart: -1,
+    insertPoint: -1,
     activeParagraphStart: -1,
     transcriptPhase: "idle",
     ...overrides,
@@ -90,7 +91,7 @@ const runtime = vi.hoisted(() => ({
     isConfigured: false,
   },
   voiceFns: {
-    setError: vi.fn<(message: string | null) => void>(),
+    setLastError: vi.fn<(error: VoiceInputError | null) => void>(),
     announce: vi.fn<(text: string) => void>(),
     setStatus: vi.fn<(status: string) => void>(),
     setConfigured: vi.fn<(configured: boolean) => void>(),
@@ -102,7 +103,7 @@ const runtime = vi.hoisted(() => ({
     setElapsedSeconds: vi.fn<(seconds: number) => void>(),
     appendDelta: vi.fn<(delta: string) => void>(),
     completeSegment: vi.fn<(text: string) => void>(),
-    setDraftLengthAtSegmentStart: vi.fn<(panelId: string, length: number) => void>(),
+    setInsertPoint: vi.fn<(panelId: string, length: number) => void>(),
     setSessionDraftStart: vi.fn<(panelId: string, length: number) => void>(),
     setActiveParagraphStart: vi.fn<(panelId: string, length: number) => void>(),
     resetParagraphState: vi.fn<(panelId: string) => void>(),
@@ -111,7 +112,6 @@ const runtime = vi.hoisted(() => ({
   terminalInputFns: {
     getDraftInput: vi.fn<(panelId: string, projectId?: string) => string>(),
     setDraftInput: vi.fn<(panelId: string, value: string, projectId?: string) => void>(),
-    appendVoiceText: vi.fn<(panelId: string, value: string, projectId?: string) => void>(),
     bumpVoiceDraftRevision: vi.fn<() => void>(),
   },
   statusListeners: new Set<VoiceStatusCallback>(),
@@ -132,7 +132,10 @@ const runtime = vi.hoisted(() => ({
     audioWorklet: { addModule: ReturnType<typeof vi.fn> };
   }>,
   createdWorkletNodes: [] as Array<{
-    port: { onmessage: ((event: MessageEvent<ArrayBuffer>) => void) | null };
+    port: {
+      onmessage: ((event: MessageEvent<ArrayBuffer>) => void) | null;
+      postMessage: ReturnType<typeof vi.fn>;
+    };
     disconnect: ReturnType<typeof vi.fn>;
   }>,
   voiceInput: {
@@ -188,7 +191,7 @@ function resetRuntime(): void {
   runtime.createdWorkletNodes = [];
   Object.values(runtime.voiceInput).forEach((fn) => fn.mockReset());
 
-  runtime.voiceFns.setError.mockImplementation(() => undefined);
+  runtime.voiceFns.setLastError.mockImplementation(() => undefined);
   runtime.voiceFns.announce.mockImplementation(() => undefined);
   runtime.voiceFns.setStatus.mockImplementation((status) => {
     runtime.voiceState.status = status;
@@ -214,11 +217,11 @@ function resetRuntime(): void {
   runtime.voiceFns.setElapsedSeconds.mockImplementation(() => undefined);
   runtime.voiceFns.appendDelta.mockImplementation(() => undefined);
   runtime.voiceFns.completeSegment.mockImplementation(() => undefined);
-  runtime.voiceFns.setDraftLengthAtSegmentStart.mockImplementation((panelId, length) => {
+  runtime.voiceFns.setInsertPoint.mockImplementation((panelId, length) => {
     runtime.voiceState.panelBuffers[panelId] = createPanelBuffer(
       runtime.voiceState.panelBuffers[panelId]
     );
-    runtime.voiceState.panelBuffers[panelId].draftLengthAtSegmentStart = length;
+    runtime.voiceState.panelBuffers[panelId].insertPoint = length;
   });
   runtime.voiceFns.setSessionDraftStart.mockImplementation((panelId, length) => {
     runtime.voiceState.panelBuffers[panelId] = createPanelBuffer(
@@ -247,9 +250,6 @@ function resetRuntime(): void {
   );
   runtime.terminalInputFns.setDraftInput.mockImplementation((panelId, value) => {
     runtime.drafts[panelId] = value;
-  });
-  runtime.terminalInputFns.appendVoiceText.mockImplementation((panelId, value) => {
-    runtime.drafts[panelId] = `${runtime.drafts[panelId] ?? ""}${value}`;
   });
   runtime.terminalInputFns.bumpVoiceDraftRevision.mockImplementation(() => undefined);
 
@@ -341,6 +341,13 @@ vi.mock("@/utils/logger", () => ({
 
 vi.mock("@/lib/voiceInputSettingsEvents", () => ({
   VOICE_INPUT_SETTINGS_CHANGED_EVENT: "voice-input-settings-changed",
+}));
+
+vi.mock("@/services/KeybindingService", () => ({
+  keybindingService: {
+    getEffectiveCombo: vi.fn(() => undefined),
+    matchesEvent: vi.fn(() => false),
+  },
 }));
 
 function setupGlobals(): void {
@@ -435,7 +442,10 @@ function setupGlobals(): void {
 
   vi.stubGlobal("AudioWorkletNode", function () {
     const node = {
-      port: { onmessage: null as ((event: MessageEvent<ArrayBuffer>) => void) | null },
+      port: {
+        onmessage: null as ((event: MessageEvent<ArrayBuffer>) => void) | null,
+        postMessage: vi.fn(),
+      },
       connect: vi.fn(),
       disconnect: vi.fn(),
     };
@@ -458,7 +468,7 @@ function emitStatus(status: string): void {
   }
 }
 
-function emitError(error: string): void {
+function emitError(error: VoiceInputError): void {
   for (const listener of runtime.errorListeners) {
     listener(error);
   }
@@ -594,13 +604,195 @@ describe("VoiceRecordingService adversarial", () => {
       expect(runtime.voiceFns.setStatus).toHaveBeenCalledWith("finishing");
     });
     emitStatus("idle");
-    emitError("network lost");
+    // A late backend error arriving mid-drain (isStoppingSession === true) must be
+    // suppressed — it would otherwise clobber lastError and prematurely finalize
+    // a session that's already winding down gracefully.
+    emitError({ severity: "fatal", code: "ws_close_1006", message: "network lost" });
     stopDeferred.resolve();
     await stopPromise;
 
     expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
     expect(runtime.voiceFns.finishSession).toHaveBeenCalledTimes(1);
     expect(runtime.voiceFns.announce).toHaveBeenCalledTimes(1);
-    expect(runtime.voiceFns.setError).not.toHaveBeenCalled();
+    // The error is dropped while stopping, so the structured error never reaches
+    // the store — lastError stays whatever it was before the graceful stop.
+    expect(runtime.voiceFns.setLastError).not.toHaveBeenCalled();
+  });
+
+  it("TRANSIENT_ERROR_STORES_STRUCTURED_PAYLOAD_AND_KEEPS_SESSION", async () => {
+    runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+    runtime.voiceState.status = "recording";
+    runtime.voiceState.panelBuffers["panel-1"] = createPanelBuffer();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+
+    const transientError: VoiceInputError = {
+      severity: "transient",
+      code: "rate_limit_exceeded",
+      message: "Rate limited, reconnecting…",
+    };
+    emitError(transientError);
+
+    // The full structured payload — not just a string — is forwarded to the store
+    // so the renderer can branch on code/severity for tooltip and recovery copy.
+    expect(runtime.voiceFns.setLastError).toHaveBeenCalledTimes(1);
+    expect(runtime.voiceFns.setLastError).toHaveBeenCalledWith(transientError);
+    // Transient errors are recoverable: the main process is already reconnecting,
+    // so the session must stay alive (no teardown / no remote stop).
+    expect(runtime.voiceFns.finishSession).not.toHaveBeenCalled();
+    expect(runtime.voiceInput.stop).not.toHaveBeenCalled();
+    expect(runtime.voiceState.activeTarget?.panelId).toBe("panel-1");
+  });
+
+  it("PAUSE_AUTO_STOPS_AFTER_60S_WHEN_NOT_RESUMED", async () => {
+    vi.useFakeTimers();
+    try {
+      runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+      runtime.voiceState.status = "recording";
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      voiceRecordingService.initialize();
+      const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+      voiceRecordingService.pause();
+      expect(runtime.voiceFns.setStatus).toHaveBeenCalledWith("paused");
+
+      // Just before 60s: nothing happens.
+      vi.advanceTimersByTime(59_999);
+      expect(stopSpy).not.toHaveBeenCalled();
+
+      // At 60s the auto-stop fires and full teardown is requested.
+      vi.advanceTimersByTime(1);
+      expect(stopSpy).toHaveBeenCalledWith(
+        expect.stringContaining("60-second"),
+        expect.objectContaining({ preserveLiveText: true })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("RESUME_BEFORE_60S_CANCELS_AUTO_STOP", async () => {
+    vi.useFakeTimers();
+    try {
+      runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+      runtime.voiceState.status = "recording";
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      voiceRecordingService.initialize();
+      const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+      voiceRecordingService.pause();
+      vi.advanceTimersByTime(30_000);
+      voiceRecordingService.resume();
+
+      // Long past the original 60s mark: no auto-stop because resume cancelled it.
+      vi.advanceTimersByTime(60_000);
+      expect(stopSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("AUTO_STOP_CALLBACK_REREADS_STATE_NOT_STALE_CLOSURE", async () => {
+    vi.useFakeTimers();
+    try {
+      runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+      runtime.voiceState.status = "recording";
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      voiceRecordingService.initialize();
+      const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+      voiceRecordingService.pause();
+      expect(runtime.voiceState.status).toBe("paused");
+
+      // External transition before the timeout fires — e.g. session torn down by
+      // an error or a manual stop on a different code path. The callback must
+      // re-read state and bail out rather than calling stop() on a dead session.
+      runtime.voiceState.status = "idle";
+
+      vi.advanceTimersByTime(60_000);
+      expect(stopSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("PAUSE_IGNORES_BACKEND_RECORDING_STATUS", async () => {
+    runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+    runtime.voiceState.status = "recording";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+    runtime.voiceFns.setStatus.mockClear();
+
+    voiceRecordingService.pause();
+    expect(runtime.voiceFns.setStatus).toHaveBeenCalledWith("paused");
+    runtime.voiceFns.setStatus.mockClear();
+
+    // Backend re-emits "recording" or "reconnecting" while the renderer is
+    // locally paused — these must NOT overwrite the local pause state, or the
+    // worklet stays gated, the timer stays frozen, and togglePause routes to
+    // pause() again instead of resume().
+    emitStatus("recording");
+    expect(runtime.voiceFns.setStatus).not.toHaveBeenCalled();
+    emitStatus("reconnecting");
+    expect(runtime.voiceFns.setStatus).not.toHaveBeenCalled();
+
+    // Genuine teardown signals still flow through.
+    emitStatus("error");
+    expect(runtime.voiceFns.setStatus).toHaveBeenCalledWith("error");
+  });
+
+  it("DESTROY_WHILE_PAUSED_CLEARS_AUTO_STOP", async () => {
+    vi.useFakeTimers();
+    try {
+      runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+      runtime.voiceState.status = "recording";
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      voiceRecordingService.initialize();
+      const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+      voiceRecordingService.pause();
+      voiceRecordingService.destroy();
+
+      // The HMR-style destroy path must clear the 60s timer; if it doesn't, the
+      // orphaned callback can fire against the next singleton's session state.
+      vi.advanceTimersByTime(120_000);
+      expect(stopSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("STOP_DURING_PAUSE_CLEARS_AUTO_STOP_TIMER", async () => {
+    vi.useFakeTimers();
+    try {
+      runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+      runtime.voiceState.status = "recording";
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      voiceRecordingService.initialize();
+
+      voiceRecordingService.pause();
+      // Manual stop fires before the auto-stop deadline; let the user-driven
+      // teardown complete on the microtask queue under fake timers.
+      const stopPromise = voiceRecordingService.stop("Dictation stopped.", {
+        skipRemoteStop: true,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await stopPromise;
+      runtime.voiceFns.finishSession.mockClear();
+
+      // Advance well past the 60s mark — the timer must have been cleared, so
+      // no spurious second teardown happens.
+      vi.advanceTimersByTime(120_000);
+      expect(runtime.voiceFns.finishSession).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

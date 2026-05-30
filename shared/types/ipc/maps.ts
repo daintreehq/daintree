@@ -1,8 +1,14 @@
 import type { StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
-import type { VoiceInputStatus } from "../voice.js";
+import type { VoiceInputError, VoiceInputStatus } from "../voice.js";
 import type { WorktreeState } from "../worktree.js";
-import type { Project, ProjectSettings, RunCommand, TerminalRecipe } from "../project.js";
+import type {
+  Project,
+  ProjectSettings,
+  RecipeNameCollision,
+  RunCommand,
+  TerminalRecipe,
+} from "../project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type { PushProgressEvent } from "./gitPush.js";
 import type { AgentSettings } from "../agentSettings.js";
@@ -100,7 +106,7 @@ import type {
   FileReadPayload,
   FileReadResult,
 } from "./files.js";
-import type { DevPreviewStateChangedPayload } from "./devPreview.js";
+import type { DevPreviewStateChangedPayload, DevPreviewAllSessionsPayload } from "./devPreview.js";
 import type { ServiceConnectivityPayload } from "./connectivity.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
@@ -198,6 +204,12 @@ export interface MainProcessToastPayload {
   type: "success" | "error" | "info" | "warning";
   title?: string;
   message: string;
+  /**
+   * Auto-dismiss delay in milliseconds, threaded through to `notify({ duration })`.
+   * Omit to use the app's per-type default. Used by plugin-issued toasts that
+   * pass `durationMs`.
+   */
+  duration?: number;
   /**
    * Rate-limit bucket override threaded through to `notify({ rateLimitKey })`.
    * Without this, payloads share a bucket keyed only on `type` (e.g. all
@@ -371,6 +383,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "diagnostics:get-info": {
     args: [];
     result: DiagnosticsInfo;
+  };
+  "system:get-report-enrichment": {
+    args: [];
+    result: import("./system.js").ReportIssueEnrichment;
   };
   // Renderer reports process.getBlinkMemoryInfo() to ProcessMemoryMonitor.
   // The webContents id is taken from event.sender on the handler side, so
@@ -630,7 +646,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "project:get-recipes": {
     args: [projectId: string];
-    result: TerminalRecipe[];
+    result: { recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] };
   };
   "project:save-recipes": {
     args: [payload: { projectId: string; recipes: TerminalRecipe[] }];
@@ -1049,11 +1065,9 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
   "sound:play-ui-event": {
-    args: [eventId: string];
+    args: [soundId: string];
     result: void;
   };
-
-  // Sound channels
   "sound:get-dir": {
     args: [];
     result: string;
@@ -1385,7 +1399,14 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
   "project:update-inrepo-recipe": {
-    args: [payload: { projectId: string; recipe: TerminalRecipe; previousName?: string }];
+    args: [
+      payload: {
+        projectId: string;
+        recipe: TerminalRecipe;
+        previousName?: string;
+        force?: boolean;
+      },
+    ];
     result: void;
   };
   "project:delete-inrepo-recipe": {
@@ -1612,6 +1633,21 @@ export interface IpcEventMap {
   };
 
   /**
+   * Plugin-sourced action dispatch request. Main process emits this on the
+   * active project WebContents and awaits a renderer `ipcRenderer.send` reply
+   * on `CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE`, correlated by `requestId`.
+   * Unlike `mcp:dispatch-action-request` there is no `confirmed` or `context`:
+   * plugins cannot bypass confirm-gating and don't override the action context.
+   * The response channel is a renderer→main fire-and-forget send tracked in
+   * `DEAD_CHANNEL_ALLOWLIST` in channelDrift.test.ts.
+   */
+  "plugin:dispatch-action-request": {
+    requestId: string;
+    actionId: string;
+    args: unknown;
+  };
+
+  /**
    * Targeted push: a help-session tool call was denied because its tier
    * doesn't permit the tool. Sent to the pinned WebContents so the renderer
    * can surface an inline approval banner. Tier is `string` (not `McpTier`)
@@ -1673,6 +1709,10 @@ export interface IpcEventMap {
   "system-sleep:on-suspend": void;
   "system-sleep:on-wake": number;
 
+  // OS Do-Not-Disturb / Focus state transitions. Read-only; never used to
+  // suppress in-app toasts.
+  "os-dnd:state-changed": import("./osDnd.js").OsDndState;
+
   // Menu events
   "menu:action": { actionId: string; args?: unknown };
 
@@ -1721,6 +1761,7 @@ export interface IpcEventMap {
 
   // Dev Preview events
   "dev-preview:state-changed": DevPreviewStateChangedPayload;
+  "dev-preview:all-sessions-changed": DevPreviewAllSessionsPayload;
 
   // Webview console events
   "webview:console-message": import("./webviewConsole.js").SerializedConsoleRow;
@@ -1739,6 +1780,11 @@ export interface IpcEventMap {
   "webview:find-shortcut": {
     panelId: string;
     shortcut: "find" | "next" | "prev" | "close";
+  };
+
+  // Webview reload shortcut (Cmd/Ctrl+R) forwarded from focused guest
+  "webview:reload-shortcut": {
+    panelId: string;
   };
 
   // Webview navigation blocked — cross-origin navigation was prevented
@@ -1774,7 +1820,7 @@ export interface IpcEventMap {
     replacement: string;
     resolved: boolean;
   };
-  "voice-input:error": string;
+  "voice-input:error": VoiceInputError;
   "voice-input:status": VoiceInputStatus;
 
   // Demo mode events (main → renderer command forwarding)
@@ -1839,6 +1885,28 @@ export interface IpcEventMap {
     complete: boolean;
   };
 
+  // Plugin menu item registry events (main → renderer). Same `complete` flag
+  // semantics as toolbar buttons: true for an authoritative post-unload
+  // snapshot, false for partial/growing load-time broadcasts.
+  "plugin:menu-items-changed": {
+    items: Array<{ pluginId: string; item: import("../plugin.js").MenuItemContribution }>;
+    complete: boolean;
+  };
+
+  // Plugin keybinding registry events (main → renderer). Same `complete` flag
+  // semantics as toolbar buttons and menu items.
+  "plugin:keybindings-changed": {
+    keybindings: import("../plugin.js").PluginKeybindingDescriptor[];
+    complete: boolean;
+  };
+
+  // Plugin context-menu item registry events (main → renderer). Same `complete`
+  // flag semantics as menu items.
+  "plugin:context-menu-items-changed": {
+    items: Array<{ pluginId: string; item: import("../plugin.js").ContextMenuContribution }>;
+    complete: boolean;
+  };
+
   // Plugin file-decoration invalidation (main → renderer). Carries only the
   // changed scope (optionally narrowed to `paths`) — never decoration data.
   // The renderer re-pulls fresh decorations via `plugin:file-decorations-get`.
@@ -1846,6 +1914,10 @@ export interface IpcEventMap {
     scope: string;
     paths?: string[];
   };
+
+  // Plugin provenance record changed (main → renderer). Signal-only — the
+  // renderer re-pulls via `plugin:list` for the full data.
+  "plugin:provenance-changed": Record<string, never>;
 
   // Resource profile change (main → renderer)
   "resource:profile-changed": import("../resourceProfile.js").ResourceProfilePayload;
@@ -1922,8 +1994,16 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-kinds-changed"
   // Plugin toolbar button registry (global broadcast)
   | "plugin:toolbar-buttons-changed"
+  // Plugin menu item registry (global broadcast)
+  | "plugin:menu-items-changed"
+  // Plugin keybinding registry (global broadcast)
+  | "plugin:keybindings-changed"
+  // Plugin context-menu item registry (global broadcast)
+  | "plugin:context-menu-items-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
+  // Plugin provenance record changed (global broadcast)
+  | "plugin:provenance-changed"
   // Terminal lifecycle (non-data) — exit, spawn-result, backend crash/ready
   | "terminal:exit"
   | "terminal:backend-crashed"

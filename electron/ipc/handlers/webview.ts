@@ -669,8 +669,16 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     ) {
       throw new Error("Invalid arguments: webContentsId must be number, panelId must be string");
     }
-    const { webContentsId, panelId } = payload as { webContentsId: number; panelId: string };
-    getWebviewDialogService().registerPanel(webContentsId, panelId);
+    const { webContentsId, panelId, kind } = payload as {
+      webContentsId: number;
+      panelId: string;
+      kind?: unknown;
+    };
+    getWebviewDialogService().registerPanel(
+      webContentsId,
+      panelId,
+      typeof kind === "string" ? kind : undefined
+    );
   };
 
   const handleDialogResponse = async (payload: unknown): Promise<void> => {

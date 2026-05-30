@@ -11,9 +11,18 @@ import type {
   AppAgentConfig,
 } from "../shared/types/index.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
+import type { InstalledPluginRecord } from "../shared/types/plugin.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
 import type { AssistantTurnRecord, McpAuditRecord } from "../shared/types/ipc/mcpServer.js";
 import { MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/mcpServer.js";
+import type { PluginActionAuditRecord } from "../shared/types/ipc/pluginAudit.js";
+import { PLUGIN_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/pluginAudit.js";
+import type { PluginMcpAuditRecord } from "../shared/types/ipc/pluginMcpAudit.js";
+import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/pluginMcpAudit.js";
+import type { PluginMcpConsentRecord } from "../shared/types/pluginMcpConsent.js";
+import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pluginMcp.js";
+import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
+import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/forge.js";
 import type { BuiltInAgentId } from "../shared/config/agentIds.js";
 import type { AgentId } from "../shared/types/agent.js";
 import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
@@ -79,6 +88,12 @@ export interface StoreSchema {
       showStateDebug: boolean;
       autoOpenDiagnostics: boolean;
       focusEventsTab: boolean;
+      /**
+       * Persist raw (redacted) plugin-action args alongside the SHA-256 hash
+       * in the plugin audit log. Off by default — the audit log stores only
+       * the hash for privacy. Opt-in for plugin authors debugging dispatch.
+       */
+      pluginAuditPlaintext?: boolean;
     };
     terminals: Array<{
       id: string;
@@ -184,8 +199,10 @@ export interface StoreSchema {
   voiceInput: {
     enabled: boolean;
     openaiApiKey: string;
+    deepgramApiKey: string;
     language: string;
     customDictionary: string[];
+    transcriptionProvider: string;
     transcriptionModel: string;
     correctionEnabled: boolean;
     correctionModel: string;
@@ -193,6 +210,8 @@ export interface StoreSchema {
     paragraphingStrategy: string;
     resolveFileLinks: boolean;
     deviceId: string;
+    organizationId: string;
+    projectId: string;
   };
   mcpServer: {
     enabled: boolean;
@@ -275,6 +294,15 @@ export interface StoreSchema {
   dismissedUpdateAt?: number;
   lastUpdateCheck?: number | null;
   /**
+   * Persisted between `update-downloaded` and the next boot so we can detect
+   * silent install failures (e.g. macOS ShipIt aborting without surfacing an
+   * error, NSIS empty-directory races on Windows). Read-and-deleted on boot
+   * before any await; if the stored version doesn't match `app.getVersion()`
+   * the mismatch is reported via `trackEvent`. Absent means "no install
+   * pending" — no migration entry required (mirrors `dismissedUpdateVersion`).
+   */
+  pendingUpdateVersion?: string;
+  /**
    * Windows Store notifier state. All fields are optional and read with `??`
    * fallbacks at the call site so an absent value behaves like a default —
    * no migration entry required (mirrors `dismissedUpdateVersion` pattern).
@@ -290,13 +318,26 @@ export interface StoreSchema {
    */
   logLevelOverrides: Record<string, string>;
   /**
-   * Plugin runtime state. `disabledBuiltins` lists built-in plugin ids
-   * (manifest.name) the user has disabled from Preferences. PluginService
-   * filters these out at startup; built-ins cannot be uninstalled, only
-   * disabled — disable takes effect on next launch.
+   * Plugin runtime state. `disabled` lists plugin ids (manifest.name) the user
+   * has disabled from Preferences — covering both built-in and user-installed
+   * plugins. PluginService filters these out at startup; disabling takes effect
+   * on next launch (built-ins additionally cannot be uninstalled, only
+   * disabled). `disabledBuiltins` is the legacy built-ins-only field; kept as
+   * an optional `@deprecated` key so `clearInvalidConfig` doesn't strip a
+   * persisted value before migration021 merges it into `disabled` (the merge
+   * runs after `new Store()`). New code reads `disabled`.
    */
   plugins: {
-    disabledBuiltins: string[];
+    disabled: string[];
+    /** @deprecated Merged into `disabled` by migration021 (#9284). Read-only carryover. */
+    disabledBuiltins?: string[];
+    /** Master switch for the plugin-action audit log. Defaults to true. */
+    auditEnabled: boolean;
+    /** Ring-buffer cap for persisted plugin-action audit records. */
+    auditMaxRecords: number;
+    /** Persisted plugin-action audit ring buffer (oldest-first). */
+    auditLog?: PluginActionAuditRecord[];
+    installed: Record<string, InstalledPluginRecord>;
   };
   /**
    * Global default forge provider id for newly opened projects. `null` (or
@@ -317,6 +358,53 @@ export interface StoreSchema {
    * equivalent) — deliberately not encrypted.
    */
   forgeCredentials?: Record<string, string>;
+  /**
+   * Audit ring buffer for `ForgeProviderImpl` method calls. Parallel to
+   * `mcpServer.auditLog` but scoped to host-side forge invocations — slow
+   * providers, credential failures, and malformed responses leave a trail
+   * here. `auditLog` is the persisted ring (trimmed to `auditMaxRecords`);
+   * `auditEnabled` is the kill switch. Read defensively (`?? {}` defaults
+   * applied by electron-store) — the on-disk shape is owned by
+   * `ForgeAuditService`.
+   */
+  forgeAudit: {
+    auditEnabled: boolean;
+    auditMaxRecords: number;
+    auditLog?: ForgeAuditRecord[];
+  };
+  /**
+   * Inbound plugin-MCP `tools/call` audit ring buffer (#9234). Parallel to
+   * `plugins.auditLog` but scoped to *inbound* MCP tool calls — i.e. calls a
+   * plugin's stdio MCP server makes back into the host. Records never store
+   * raw args, raw tool descriptions, or raw input schemas; only SHA-256 hex
+   * digests. `auditLog` is the persisted ring (trimmed to `auditMaxRecords`);
+   * `auditEnabled` is the kill switch.
+   */
+  pluginMcpAudit: {
+    auditEnabled: boolean;
+    auditMaxRecords: number;
+    auditLog?: PluginMcpAuditRecord[];
+  };
+  /**
+   * Trust-on-first-use (TOFU) consent pins for plugin-MCP tool descriptions
+   * and schemas (#9234). Re-prompting is gated on the raw-bytes hash so a
+   * rug-pull payload hidden in invisible Unicode flips the pin even when the
+   * displayed text looks identical.
+   */
+  pluginMcpConsent: {
+    pins?: PluginMcpConsentRecord[];
+    revoked?: string[];
+  };
+  /**
+   * Advanced plugin-MCP tuning (#9235). `maxToolsPerSession` is the hard cap on
+   * the number of tools surfaced into agent context across ALL supervised
+   * servers per session — lazy tier-1 enumeration clips to this so a chatty
+   * server can't flood the agent's tool budget. Additive key; absence falls
+   * back to {@link PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION}.
+   */
+  pluginMcpConfig: {
+    maxToolsPerSession: number;
+  };
 }
 
 const storeOptions = {
@@ -401,8 +489,10 @@ const storeOptions = {
     voiceInput: {
       enabled: false,
       openaiApiKey: "",
+      deepgramApiKey: "",
       language: "en",
       customDictionary: [],
+      transcriptionProvider: "openai",
       transcriptionModel: "gpt-realtime-whisper",
       correctionEnabled: false,
       correctionModel: "gpt-5-mini",
@@ -410,6 +500,8 @@ const storeOptions = {
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,
       deviceId: "",
+      organizationId: "",
+      projectId: "",
     },
     mcpServer: {
       enabled: false,
@@ -466,7 +558,22 @@ const storeOptions = {
     lastUpdateCheck: null,
     logLevelOverrides: {},
     plugins: {
-      disabledBuiltins: [],
+      disabled: [],
+      auditEnabled: true,
+      auditMaxRecords: PLUGIN_AUDIT_DEFAULT_MAX_RECORDS,
+      installed: {},
+    },
+    forgeAudit: {
+      auditEnabled: true,
+      auditMaxRecords: FORGE_AUDIT_DEFAULT_MAX_RECORDS,
+    },
+    pluginMcpAudit: {
+      auditEnabled: true,
+      auditMaxRecords: PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS,
+    },
+    pluginMcpConsent: {},
+    pluginMcpConfig: {
+      maxToolsPerSession: PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION,
     },
   },
   cwd: process.env.DAINTREE_USER_DATA,

@@ -25,13 +25,12 @@
     "forceConsistentCasingInFileNames": true,
 
     /* Paths */
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
       "@shared/*": ["./shared/*"],
       "@github-renderer/*": ["./plugins/builtin/github/renderer/*"]
     }
   },
-  "include": ["src", "shared", "plugins/builtin/github/renderer"],
+  "include": ["src", "shared", "plugins/builtin/github/renderer", "packages/plugin-vite/src"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

@@ -29,7 +29,6 @@ import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AgentButton } from "./AgentButton";
 import { AgentTrayButton } from "./AgentTrayButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -263,8 +262,10 @@ export function Toolbar({
   const hasActiveVoiceRecording = useVoiceRecordingStore(
     (state) =>
       state.activeTarget !== null &&
-      (state.status === "connecting" ||
+      (state.status === "arming" ||
+        state.status === "connecting" ||
         state.status === "recording" ||
+        state.status === "paused" ||
         state.status === "finishing")
   );
 
@@ -513,7 +514,6 @@ export function Toolbar({
                 aria-keyshortcuts={sidebarAriaShortcut}
               >
                 {isFocusMode ? <PanelLeftOpen /> : <PanelLeftClose />}
-                <ShortcutRevealChip actionId="nav.toggleSidebar" />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
@@ -666,9 +666,6 @@ export function Toolbar({
                     aria-keyshortcuts={copyTreeAriaShortcut}
                   >
                     {showCopyingSpinner ? <Spinner /> : treeCopied ? <Check /> : <Folders />}
-                    {!treeCopied && !isCopyingTree && (
-                      <ShortcutRevealChip actionId="worktree.copyTree" />
-                    )}
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="font-medium">
@@ -971,7 +968,7 @@ export function Toolbar({
         void actionService.dispatch("devServer.start", undefined, { source: "user" });
       },
       "notification-center": () => {
-        useUIStore.getState().toggleNotificationCenter();
+        void actionService.dispatch("notifications.toggle", undefined, { source: "user" });
       },
       "copy-tree": () => {
         void handleCopyTreeClick();

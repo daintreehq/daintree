@@ -1818,4 +1818,112 @@ describe("KeybindingService", () => {
       expect(match).toBeUndefined();
     });
   });
+
+  describe("dynamic plugin binding listener notification", () => {
+    it("notifies subscribers when registerBinding adds a binding", () => {
+      const service = new KeybindingService();
+      const listener = vi.fn();
+      service.subscribe(listener);
+
+      service.registerBinding({
+        actionId: "p1.act",
+        combo: "Cmd+Shift+8",
+        scope: "global",
+        priority: 1,
+        pluginId: "p1",
+      });
+
+      expect(listener).toHaveBeenCalled();
+    });
+
+    it("notifies subscribers when removePluginBindings removes a binding", () => {
+      const service = new KeybindingService();
+      service.registerBinding({
+        actionId: "p1.act",
+        combo: "Cmd+Shift+8",
+        scope: "global",
+        priority: 1,
+        pluginId: "p1",
+      });
+
+      const listener = vi.fn();
+      service.subscribe(listener);
+      service.removePluginBindings("p1");
+
+      expect(listener).toHaveBeenCalled();
+    });
+
+    it("does not notify when removePluginBindings matches nothing", () => {
+      const service = new KeybindingService();
+      const listener = vi.fn();
+      service.subscribe(listener);
+
+      service.removePluginBindings("nonexistent");
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("does not clobber a built-in when a plugin binds the same action and combo", () => {
+      const service = new KeybindingService();
+      const builtIn = service
+        .getAllBindings()
+        .find((b) => b.actionId === "terminal.close" && !b.pluginId);
+      expect(builtIn).toBeDefined();
+      const beforeBuiltIns = service
+        .getAllBindings()
+        .filter((b) => b.actionId === builtIn!.actionId && !b.pluginId);
+
+      // Plugin contributes the same actionId + combo as the built-in.
+      service.registerBinding({
+        actionId: builtIn!.actionId,
+        combo: builtIn!.combo!,
+        scope: builtIn!.scope,
+        priority: 1,
+        pluginId: "p1",
+      });
+
+      service.removePluginBindings("p1");
+
+      // The original built-in must survive the plugin's load/unload cycle.
+      const after = service
+        .getAllBindings()
+        .filter((b) => b.actionId === "terminal.close" && !b.pluginId);
+      expect(after).toHaveLength(beforeBuiltIns.length);
+      expect(after.some((binding) => binding.combo === builtIn!.combo)).toBe(true);
+    });
+
+    it("rejects a plugin binding that collides with a user-overridden combo", async () => {
+      const prevWindow = (globalThis as { window?: unknown }).window;
+      (globalThis as { window?: unknown }).window = {
+        electron: { keybinding: { setOverride: vi.fn().mockResolvedValue(undefined) } },
+      };
+      try {
+        const service = new KeybindingService();
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        // User remaps a built-in to Cmd+Shift+8 (its stored combo is something else).
+        await service.setOverride("nav.quickSwitcher", ["Cmd+Shift+8"]);
+
+        const before = service.getAllBindings().length;
+        service.registerBinding({
+          actionId: "plugin.act",
+          combo: "Cmd+Shift+8",
+          scope: "global",
+          priority: 1,
+          pluginId: "p1",
+        });
+
+        // The plugin binding must be rejected — the effective (overridden) combo is taken.
+        expect(service.getAllBindings().length).toBe(before);
+        expect(warnSpy).toHaveBeenCalled();
+        warnSpy.mockRestore();
+      } finally {
+        if (prevWindow === undefined) {
+          delete (globalThis as { window?: unknown }).window;
+        } else {
+          (globalThis as { window?: unknown }).window = prevWindow;
+        }
+      }
+    });
+  });
 });

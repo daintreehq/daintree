@@ -189,6 +189,7 @@ export const BUILT_IN_ACTION_IDS = [
   "forge.openCommits",
   "forge.openIssue",
   "forge.assignIssue",
+  "forge.unassignIssue",
   "forge.validateToken",
 
   // -- githubActions --
@@ -251,6 +252,9 @@ export const BUILT_IN_ACTION_IDS = [
   "logs.clearLevelOverrides",
   "logs.getRegistry",
 
+  // -- diagnosticsActions --
+  "diagnostics.openReview",
+
   // -- errorActions --
   "errors.clearAll",
   "errors.openLogs",
@@ -258,6 +262,7 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- notificationActions --
   "notifications.recent",
+  "notifications.toggle",
 
   // -- eventInspectorActions --
   "eventInspector.getEvents",
@@ -413,6 +418,7 @@ export const BUILT_IN_ACTION_IDS = [
   "portal.links.reorder",
   "portal.tabs.reorder",
   "portal.listTabs",
+  "portal.toggleDevDashboard",
 
   // -- helpActions --
   "help.gettingStarted.show",
@@ -429,6 +435,7 @@ export const BUILT_IN_ACTION_IDS = [
   "devPreview.restart",
   "devPreview.restartAndClearCache",
   "devPreview.reinstallAndRestart",
+  "devPreview.promoteToPortal",
 
   // -- envActions --
   "env.global.get",

@@ -80,10 +80,11 @@ export {
 } from "./external.js";
 
 export {
-  PluginManifestSchema,
+  getPluginManifestSchema,
   PanelContributionSchema,
-  PluginPermissionSchema,
+  PluginCapabilitySchema,
+  SCOPED_PLUGIN_NAME_PATTERN,
   type PluginManifest,
   type PanelContribution,
-  type PluginPermission,
+  type PluginCapability,
 } from "./plugin.js";

@@ -144,6 +144,7 @@ export {
   getIssuesByNumbers,
   getIssueTooltip,
   assignIssue,
+  unassignIssue,
 } from "./GitHubIssues.js";
 export type { AssignIssueResult } from "./GitHubIssues.js";
 

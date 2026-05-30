@@ -29,18 +29,31 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
   // Host version compatibility. Optional but strongly recommended.
   // Uses semver range syntax.
   "engines": {
-    "daintree": "^0.8.0",
+    "daintree": "^0.11.0",
   },
 
   // Declared capabilities, shown to the user at install time.
-  // Disclosure only; not enforced at runtime. See "Capabilities" below.
+  // Disclosure-first with host-side policy effects (no Node sandbox).
+  // See "Capabilities" below and ./trust-model.md.
   "capabilities": ["fs:project-read", "network:fetch"],
+
+  // Per-capability allowlists that attenuate the capability lattice.
+  // Optional. scopes.network.allowedUrls and scopes.fs.allowedPaths reject
+  // wildcards and private/loopback targets. See ./trust-model.md.
+  "scopes": {
+    "network": { "allowedUrls": ["https://api.acme.com/v1"] },
+    "fs": { "allowedPaths": ["/Users/me/.acme/data"] },
+  },
+
+  // Activation triggers. Optional. Currently only "onStartupFinished" is
+  // recognised. In v1 every plugin with a `main` entry activates at startup —
+  // omitting this field (or passing an empty array) is treated the same as
+  // ["onStartupFinished"]. Lazy first-use activation is planned but not wired
+  // yet, so there is no way to opt out of startup activation today.
+  "activationEvents": ["onStartupFinished"],
 
   // The plugin's UI and functional contributions.
   "contributes": {
-    "commands": [
-      /* ... */
-    ],
     "panels": [
       /* ... */
     ],
@@ -50,29 +63,31 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     "menuItems": [
       /* ... */
     ],
-    "views": [
-      /* ... */
-    ],
-    "mcpServers": [
-      /* ... */
-    ],
-    "skills": [
-      /* ... */
-    ],
     "keybindings": [
-      /* ... */
-    ],
-    "settings": [
       /* ... */
     ],
     "contextMenus": [
       /* ... */
     ],
+    "commands": [
+      /* ... */
+    ],
+    "settings": [
+      /* ... */
+    ],
+    "experimental_views": [
+      /* ... */
+    ],
+    "experimental_mcpServers": [
+      /* ... */
+    ],
+    "forgeProviders": [
+      /* ... */
+    ],
+    "fileDecorationProviders": [
+      /* ... */
+    ],
   },
-
-  // Explicit activation. Optional. Only "onStartupFinished" is supported.
-  // Commands, panels, views etc. are activated implicitly when invoked.
-  "activationEvents": ["onStartupFinished"],
 }
 ```
 
@@ -124,19 +139,19 @@ Plugins with only static contributions (a theme pack, a standalone MCP server co
 
 ### `engines.daintree`
 
-Semver range expressing which Daintree versions the plugin supports. Examples:
+Semver range expressing which Daintree versions the plugin supports. Examples track the latest pre-1.0 minor; the scaffolder (`npx daintree-plugin new`) generates `"^0.11.0"`:
 
-- `"^0.8.0"` — 0.8.x or any 0.8+ patch/minor in the 0.x series (semver caret on a 0.x version)
-- `">=0.8.0 <2.0.0"` — explicit range
-- `"0.8.x"` — any 0.8 release
+- `"^0.11.0"` — compatible with 0.11 (scaffolder default)
+- `">=0.11.0 <0.13.0"` — explicit range
+- `"0.11.x"` — any 0.11 release
 
 If the running Daintree version doesn't satisfy the range, the plugin is rejected at load with a user-visible warning toast. If `engines.daintree` is omitted entirely, Daintree warns in the console but loads the plugin anyway.
 
-Daintree is pre-1.0. Pin tightly during this phase — a plugin that works on Daintree 0.8 may not work on 0.9 without changes.
+Daintree is pre-1.0. Pin to a current minor during this phase — a plugin that works on Daintree 0.11 may not work on 0.12 without changes.
 
 ### `capabilities`
 
-Array of capability tokens the plugin wants. This is a **disclosure mechanism** shown to the user at install time, not a runtime sandbox. The plugin is not prevented from doing anything it claims not to need, and is not prevented from doing things it declares.
+Array of capability tokens the plugin wants. The model is **disclosure-first with host-side policy effects** — there is no Node sandbox, so a plugin is not blocked from doing anything regardless of what it declares, but declared tokens are not purely advisory. Five high-risk tokens (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`) currently raise every action the plugin registers to a confirm dialog (`effectiveDanger: "confirm"`) via the host's `CONFIRM_TRIGGERING_CAPABILITIES` set. See the [trust model](./trust-model.md) for the full contract.
 
 | Token                | Intent                                                   |
 | -------------------- | -------------------------------------------------------- |
@@ -153,19 +168,33 @@ Array of capability tokens the plugin wants. This is a **disclosure mechanism** 
 | `clipboard:write`    | Write to the system clipboard                            |
 | `shell:exec`         | Spawn subprocesses                                       |
 
-Declare honestly even though it's not enforced — the install UI lists what you've declared, and users judge plugins by what they ask for. A plugin declaring `shell:exec` for no obvious reason looks suspicious. A plugin that silently executes shells without declaring it damages the ecosystem.
+Declare honestly. The install UI lists what you've declared and users judge plugins by what they ask for; the host also derives policy from the high-risk tokens above. A plugin declaring `shell:exec` for no obvious reason looks suspicious. A plugin that silently executes shells without declaring it damages the ecosystem — and nothing at runtime stops it, which is exactly why honest declaration matters.
 
-### `contributes`
+### `scopes`
 
-Object containing arrays for each contribution type. All fields are optional; unlisted contribution types default to empty arrays. See the full [Contribution points reference](./contribution-points.md) for every type.
+Per-capability allowlists that _attenuate_ the capability lattice — they narrow what a declared capability can reach, they never widen it. Two buckets:
+
+- `scopes.network.allowedUrls` — outbound request targets permitted under `network:fetch`. Wildcards and private/loopback targets are rejected.
+- `scopes.fs.allowedPaths` — paths the filesystem capabilities may touch.
+
+A misspelled bucket (e.g. `networking`) is rejected as a manifest error rather than silently failing to attenuate. See the [trust model](./trust-model.md) for the full scopes semantics and how they compose with capabilities.
 
 ### `activationEvents`
 
-Array of explicit activation triggers. Only `onStartupFinished` is supported.
+Activation triggers. The sole supported value is `"onStartupFinished"`, which activates the plugin once the app finishes starting.
 
-Daintree infers most activation events from contribution points automatically. A plugin declaring `commands[{ name: "foo" }]` implicitly activates when `foo` runs. You don't need to list `onCommand:foo` explicitly — and Daintree will reject it if you try.
+In v1, startup activation is the only behavior: any plugin with a `main` entry activates once the app finishes starting. Omitting `activationEvents` (or passing an empty array) is treated identically to `["onStartupFinished"]` — there is no way to opt out of startup activation yet. Lazy first-use triggers (`onCommand:*`, `onView:*`, …) are planned; once they land, a plugin will be able to drop `"onStartupFinished"` from a non-empty list to defer activation until a contribution is first used. Note that contributions (commands, panels, keybindings) are still registered eagerly from the manifest at startup regardless — only the plugin's `main` module import and `activate()` call are governed by activation.
 
-Use `onStartupFinished` only for plugins that need to do background work without any user-triggered entry point. Example: a plugin that watches a file and emits notifications. Most plugins don't need this.
+### `contributes`
+
+Object containing arrays for each contribution type. All fields are optional; unlisted contribution types default to empty arrays.
+
+Fields prefixed with `experimental_` **do** have runtime behavior — the prefix signals only that their shape may still change before it's locked, not that they're inert:
+
+- `experimental_views` — `location: "panel"` is wired today (the renderer host mounts the contributed component in a grid panel). `location: "sidebar"` logs a warning and is skipped until the sidebar host ships.
+- `experimental_mcpServers` — wired: the declared `command` is lazily spawned as a real subprocess the first time its tools are enumerated, and is supervised (restart-on-crash, killed on exit). Treat a contributed MCP server as trust-gated, not inert.
+
+The non-experimental `forgeProviders` and `fileDecorationProviders` contributions are also live at runtime. See the full [Contribution points reference](./contribution-points.md) for the per-point status of every type.
 
 ## Validation
 

@@ -28,19 +28,17 @@ export function FleetFailureBanner(): ReactElement | null {
       ? `${count} ${noun} rejected a keystroke. Single keystrokes can't be replayed.`
       : `${count} ${noun} rejected the write.`;
 
-  const actions: BannerAction[] =
+  const retryAction: BannerAction | undefined =
     payload === null
-      ? []
-      : [
-          {
-            id: "retry",
-            label: "Retry failed",
-            variant: "primary",
-            onClick: () => {
-              void actionService.dispatch("fleet.retryFailures", undefined, { source: "user" });
-            },
+      ? undefined
+      : {
+          id: "retry",
+          label: "Retry failed",
+          variant: "primary",
+          onClick: () => {
+            void actionService.dispatch("fleet.retryFailures", undefined, { source: "user" });
           },
-        ];
+        };
 
   return (
     <InlineStatusBanner
@@ -48,7 +46,7 @@ export function FleetFailureBanner(): ReactElement | null {
       severity="error"
       title="Broadcast failed"
       description={description}
-      actions={actions}
+      action={retryAction}
       role="alert"
       onClose={() => useFleetFailureStore.getState().clear()}
     />

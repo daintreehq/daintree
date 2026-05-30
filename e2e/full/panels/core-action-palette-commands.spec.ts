@@ -233,6 +233,11 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
           return false;
         });
       if (skipped) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Required element or state not available in this launch",
+        });
+
         test.skip();
         return;
       }
@@ -244,6 +249,11 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
           return !(await openPickerBtn.isVisible({ timeout: T_LONG }).catch(() => false));
         });
       if (pickerMissing) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Command picker button not visible in this launch state",
+        });
+
         test.skip();
         return;
       }
@@ -259,6 +269,11 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
 
     test("search filters commands and Escape closes", async () => {
       if (!commandPickerAvailable) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Required element or state not available in this launch",
+        });
+
         test.skip();
         return;
       }

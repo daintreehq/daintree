@@ -26,8 +26,10 @@ describe("VoiceTranscriptionService integration", () => {
       const result = await service.start({
         enabled: true,
         openaiApiKey: OPENAI_API_KEY,
+        deepgramApiKey: "",
         language: "en",
         customDictionary: [],
+        transcriptionProvider: "openai",
         transcriptionModel: "gpt-realtime-whisper",
         correctionEnabled: false,
         correctionModel: "gpt-5-mini",
@@ -35,6 +37,9 @@ describe("VoiceTranscriptionService integration", () => {
         paragraphingStrategy: "spoken-command",
         resolveFileLinks: true,
         deviceId: "",
+        organizationId: "",
+        projectId: "",
+        recordingMode: "toggle",
       });
 
       expect(result).toEqual({ ok: true });
@@ -45,7 +50,8 @@ describe("VoiceTranscriptionService integration", () => {
 
       const errors = events.filter((e) => e.type === "error");
       if (errors.length > 0) {
-        throw new Error(`Server returned error: ${(errors[0] as { message: string }).message}`);
+        const errEvent = errors[0] as { type: "error"; error: { message: string } };
+        throw new Error(`Server returned error: ${errEvent.error.message}`);
       }
 
       service.stop();

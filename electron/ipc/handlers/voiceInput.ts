@@ -1,5 +1,5 @@
 // eager-import-allow: reads voice-input settings via store.get synchronously in the IPC handler
-import { ipcMain, systemPreferences, shell } from "electron";
+import { ipcMain, systemPreferences } from "electron";
 import { spawn } from "child_process";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
@@ -7,12 +7,17 @@ import { projectStore } from "../../services/ProjectStore.js";
 import { VoiceTranscriptionService } from "../../services/VoiceTranscriptionService.js";
 import { VoiceCorrectionService } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
-import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
+import type {
+  VoiceInputSettings,
+  VoiceTranscriptionProvider,
+} from "../../../shared/types/ipc/api.js";
 import { logDebug } from "../../utils/logger.js";
+import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { applyDictationCommands } from "../../services/voiceDictationCommands.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
 import { typedHandle, typedHandleValidated, typedHandleWithContext } from "../utils.js";
+import { openExternalUrl } from "../../utils/openExternal.js";
 import {
   VoiceInputCorrectPayloadSchema,
   type VoiceInputCorrectPayload,
@@ -25,11 +30,15 @@ let correctionService: VoiceCorrectionService | null = null;
 let sessionController: AbortController | null = null;
 let sessionProjectInfo: { name?: string; path?: string } = {};
 
+const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = ["openai", "deepgram"];
+
 const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   enabled: false,
   openaiApiKey: "",
+  deepgramApiKey: "",
   language: "en",
   customDictionary: [],
+  transcriptionProvider: "openai",
   transcriptionModel: "gpt-realtime-whisper",
   correctionEnabled: false,
   correctionModel: "gpt-5-mini",
@@ -37,6 +46,9 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   paragraphingStrategy: "spoken-command",
   resolveFileLinks: true,
   deviceId: "",
+  organizationId: "",
+  projectId: "",
+  recordingMode: "toggle",
 };
 
 /** Read voiceInput settings with defaults for fields added after initial store creation. */
@@ -44,17 +56,17 @@ export function getVoiceSettings(): VoiceInputSettings {
   const stored = store.get("voiceInput") as
     | (Partial<VoiceInputSettings> & {
         apiKey?: string;
-        deepgramApiKey?: string;
         correctionApiKey?: string;
       })
     | undefined;
 
-  // Pluck legacy fields so they don't leak into the merged object via spread.
-  const { apiKey, deepgramApiKey, correctionApiKey, ...rest } = stored ?? {};
+  // Pluck truly-legacy key fields so they don't leak into the merged object via
+  // spread. `deepgramApiKey` is now a first-class field, so it flows through
+  // `rest` instead of being dropped.
+  const { apiKey, correctionApiKey, ...rest } = stored ?? {};
   const merged: VoiceInputSettings = { ...VOICE_INPUT_DEFAULTS, ...rest };
 
-  // Migrate prior OpenAI keys into the unified field. The Deepgram key is
-  // dropped — it belonged to a different provider.
+  // Migrate prior OpenAI keys into the unified field.
   if (!merged.openaiApiKey) {
     if (correctionApiKey?.startsWith("sk-")) {
       merged.openaiApiKey = correctionApiKey;
@@ -63,19 +75,47 @@ export function getVoiceSettings(): VoiceInputSettings {
     }
   }
 
-  // Migrate legacy Deepgram model values ('nova-3' / 'nova-2') to the unified OpenAI model.
+  // Default the provider to "openai" only when it's missing or unrecognized
+  // (e.g. settings written before the provider field existed). Crucially this
+  // does NOT reset a valid, user-chosen provider on every read — the prior
+  // migration's habit of force-resetting fields each launch is the #9175 bug.
+  const providerNeedsDefault = !VALID_TRANSCRIPTION_PROVIDERS.includes(
+    merged.transcriptionProvider
+  );
+  if (providerNeedsDefault) merged.transcriptionProvider = "openai";
+
+  // Normalize a stale/invalid transcription model to the only supported value.
+  // The model union is single-valued, so this is a one-shot cleanup of legacy
+  // Deepgram model strings ('nova-3' / 'nova-2'), not a user-choice revert —
+  // the provider, not the model, is what selects the backend now.
   const staleModel = merged.transcriptionModel !== "gpt-realtime-whisper";
   if (staleModel) merged.transcriptionModel = "gpt-realtime-whisper";
 
-  // Persist the cleaned object on first read after upgrade so the legacy
-  // fields disappear from disk. `store.set` with a full object replaces.
+  // Normalize malformed recordingMode values in memory only (no write-back).
+  if (merged.recordingMode !== "toggle" && merged.recordingMode !== "push-to-talk") {
+    merged.recordingMode = "toggle";
+  }
+
+  // Persist the cleaned object on first read after upgrade so the legacy key
+  // fields disappear from disk and any defaulted/normalized values are written
+  // through. `store.set` with a full object replaces.
   if (
     apiKey !== undefined ||
-    deepgramApiKey !== undefined ||
     correctionApiKey !== undefined ||
+    providerNeedsDefault ||
     staleModel
   ) {
     store.set("voiceInput", merged);
+  }
+
+  // Env-var overrides take absolute precedence over stored keys.
+  const envOpenAiKey = process.env.WHISPER_API_KEY?.trim();
+  if (envOpenAiKey) {
+    merged.openaiApiKey = envOpenAiKey;
+  }
+  const envDeepgramKey = process.env.DEEPGRAM_API_KEY?.trim();
+  if (envDeepgramKey) {
+    merged.deepgramApiKey = envDeepgramKey;
   }
 
   return merged;
@@ -123,12 +163,17 @@ async function requestMicPermission(): Promise<boolean> {
 }
 
 function openMicSettings(): void {
+  const logOpenFailure = (err: unknown) =>
+    logDebug("[VoiceInput] Failed to open mic settings", {
+      error: (err as Error)?.message ?? String(err),
+    });
+
   if (process.platform === "darwin") {
-    void shell.openExternal(
+    void openExternalUrl(
       "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-    );
+    ).catch(logOpenFailure);
   } else if (process.platform === "win32") {
-    void shell.openExternal("ms-settings:privacy-microphone");
+    void openExternalUrl("ms-settings:privacy-microphone").catch(logOpenFailure);
   } else {
     // Linux: try gnome-control-center, fall back silently
     try {
@@ -141,17 +186,43 @@ function openMicSettings(): void {
   }
 }
 
-async function validateOpenAIKey(apiKey: string): Promise<{ valid: boolean; error?: string }> {
-  if (!apiKey.trim()) {
+async function parseOpenAIErrorBody(
+  response: Response
+): Promise<{ message?: string; code?: string } | undefined> {
+  const contentType = response.headers.get("content-type");
+  if (!contentType?.includes("application/json")) {
+    return undefined;
+  }
+  try {
+    const body = (await response.json()) as {
+      error?: { message?: unknown; code?: unknown };
+    };
+    const err = body?.error;
+    if (err && typeof err === "object") {
+      return {
+        message: typeof err.message === "string" ? err.message : undefined,
+        code: typeof err.code === "string" ? err.code : undefined,
+      };
+    }
+  } catch {
+    // Non-JSON body or parse failure.
+  }
+  return undefined;
+}
+
+export async function validateOpenAIKey(
+  apiKey: string,
+  organizationId?: string,
+  projectId?: string
+): Promise<{ valid: boolean; error?: string }> {
+  if (typeof apiKey !== "string" || !apiKey.trim()) {
     return { valid: false, error: "API key is required" };
   }
 
   try {
     const response = await fetch("https://api.openai.com/v1/models", {
       method: "GET",
-      headers: {
-        Authorization: `Bearer ${apiKey.trim()}`,
-      },
+      headers: buildOpenAIHeaders(apiKey, organizationId, projectId),
       signal: AbortSignal.timeout(10_000),
     });
 
@@ -159,17 +230,37 @@ async function validateOpenAIKey(apiKey: string): Promise<{ valid: boolean; erro
       return { valid: true };
     }
 
+    const body = await parseOpenAIErrorBody(response);
+
     if (response.status === 401) {
-      return { valid: false, error: "Invalid API key" };
+      return { valid: false, error: body?.message || "Invalid API key" };
     }
 
     if (response.status === 429) {
+      if (body?.code === "insufficient_quota") {
+        return {
+          valid: false,
+          error:
+            "API key is valid but the OpenAI account has no credits. Add a payment method to continue.",
+        };
+      }
+      // rate_limit_exceeded and unknown 429 codes are transient — key is valid.
       return { valid: true };
     }
 
-    return { valid: false, error: `API returned status ${response.status}` };
+    if (response.status === 403) {
+      if (body?.code === "unsupported_country_region_territory") {
+        return {
+          valid: false,
+          error: body.message || "OpenAI is not available in your current region.",
+        };
+      }
+      return { valid: false, error: body?.message || "Access denied" };
+    }
+
+    return { valid: false, error: body?.message || `API returned status ${response.status}` };
   } catch (error) {
-    if (error instanceof Error && error.name === "TimeoutError") {
+    if (error instanceof Error && error.name === "AbortError") {
       return { valid: false, error: "Connection timed out" };
     }
     return { valid: false, error: "Failed to connect to OpenAI" };
@@ -278,12 +369,18 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             const signal = sessionController?.signal;
             const correctionSvc = correctionService;
             void (async () => {
-              const tokens = await correctionSvc.detectFileLinkTokens(rawText, { apiKey });
+              const tokens = await correctionSvc.detectFileLinkTokens(rawText, {
+                apiKey,
+                organizationId: liveSettings.organizationId,
+                projectId: liveSettings.projectId,
+              });
               for (const { description } of tokens) {
                 const resolved = await voiceFileLinkResolver.resolve({
                   cwd: projectPath,
                   description,
                   apiKey,
+                  organizationId: liveSettings.organizationId,
+                  projectId: liveSettings.projectId,
                   signal,
                 });
                 // Guard the IPC send: voiceFileLinkResolver may return on a
@@ -308,7 +405,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           rawText: null,
         });
       } else if (voiceEvent.type === "error") {
-        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.message);
+        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.error);
       } else if (voiceEvent.type === "status") {
         getAppWebContents(win).send(CHANNELS.VOICE_INPUT_STATUS, voiceEvent.status);
       }
@@ -393,7 +490,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   };
 
   const handleValidateApiKey = async (apiKey: string) => {
-    return validateOpenAIKey(apiKey);
+    const settings = getVoiceSettings();
+    return validateOpenAIKey(apiKey, settings.organizationId, settings.projectId);
   };
 
   // Whole-passage cleanup pass. The renderer calls this once after recording
@@ -425,6 +523,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         customInstructions: settings.correctionCustomInstructions,
         projectName: projectInfo.name,
         projectPath: projectInfo.path,
+        organizationId: settings.organizationId,
+        projectId: settings.projectId,
       }
     );
 

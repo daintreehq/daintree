@@ -5,6 +5,7 @@ import type {
   ProjectSettings,
   ProjectStatus,
   TerminalRecipe,
+  RecipeNameCollision,
 } from "../types/index.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import type { AgentPreset } from "../../shared/config/agentRegistry.js";
@@ -37,6 +38,7 @@ import {
   cleanupUserDataRootQuarantineFiles,
 } from "./projectQuarantineCleanup.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
+import { isInRepoRecipeId } from "../../shared/utils/recipeFilename.js";
 
 import { computeFrecencyScore, FRECENCY_COLD_START } from "./frecency.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
@@ -73,6 +75,13 @@ export class ProjectStore {
   private fileStore: ProjectFileStore;
   private globalFileStore: GlobalFileStore;
   private identityFiles: ProjectIdentityFiles;
+
+  // SHA-256 of the raw on-disk bytes for each in-repo recipe, captured on
+  // every successful read/write. Used by `writeInRepoRecipeChecked` to refuse
+  // a write when an external tool (git pull, branch switch, stash pop) changed
+  // the file since the renderer loaded it. Keyed by `${projectPath}|${recipeId}`
+  // so the same recipe id in two different project clones stays separate.
+  private inRepoRecipeHashes = new Map<string, string>();
 
   constructor() {
     this.userDataDir = app.getPath("userData");
@@ -119,16 +128,105 @@ export class ProjectStore {
     return this.identityFiles.writeInRepoSettings(projectPath, settings);
   }
 
+  private hashKey(projectPath: string, recipeId: string): string {
+    return `${projectPath}|${recipeId}`;
+  }
+
+  /**
+   * Unchecked write. Reserved for reconciliation paths that are authoritative
+   * by design (recipe promotion from ProjectFileStore, write-through on sync)
+   * and call sites that have already resolved any staleness conflict.
+   * Renderer-driven edits must go through {@link writeInRepoRecipeChecked}.
+   */
   async writeInRepoRecipe(projectPath: string, recipe: TerminalRecipe): Promise<void> {
-    return this.identityFiles.writeInRepoRecipe(projectPath, recipe);
+    const hash = await this.identityFiles.writeInRepoRecipe(projectPath, recipe);
+    this.inRepoRecipeHashes.set(this.hashKey(projectPath, recipe.id), hash);
+  }
+
+  /**
+   * Writes `recipe` to `.daintree/recipes/`, but first verifies the on-disk
+   * file hasn't drifted from the hash captured at load time. If it has, the
+   * write is refused with an `AppError({ code: "RECIPE_STALE_CONFLICT" })` so
+   * the renderer can surface a conflict dialog instead of silently clobbering
+   * newer disk content (#9186).
+   *
+   * On a rename, the `previousName` file is also checked — without that, a
+   * `Foo` → `Bar` rename would write `bar.json` (passes because the new file
+   * doesn't exist yet) and then delete an externally-modified `foo.json`,
+   * silently dropping the disk edits.
+   *
+   * `options.force === true` skips both comparisons and updates the cached
+   * hash after the write — the renderer uses this for the explicit
+   * "Overwrite" path.
+   *
+   * Brand-new recipes (file does not exist) are allowed unconditionally so
+   * `createRecipe` / `importRecipe` paths work without a special-case flag.
+   * If the file exists on disk but no cached hash exists, the file was added
+   * externally between load and write — treat that as a stale conflict so the
+   * user reconciles explicitly.
+   */
+  async writeInRepoRecipeChecked(
+    projectPath: string,
+    recipe: TerminalRecipe,
+    options: { force?: boolean; previousName?: string } = {}
+  ): Promise<void> {
+    if (!options.force) {
+      await this.assertRecipeFileNotStale(projectPath, recipe.id, recipe.name);
+      if (
+        options.previousName &&
+        safeRecipeFilename(options.previousName) !== safeRecipeFilename(recipe.name)
+      ) {
+        // The rename will delete the old-name file; the user's load-time hash
+        // is what we cached under this recipe's id. Since ids are now stable
+        // across renames, `recipe.id` is the same id the old-name file was
+        // cached under at load time — compare it against the current on-disk
+        // bytes of the old-name file before letting the rename proceed.
+        await this.assertRecipeFileNotStale(projectPath, recipe.id, options.previousName);
+      }
+    }
+    const hash = await this.identityFiles.writeInRepoRecipe(projectPath, recipe);
+    this.inRepoRecipeHashes.set(this.hashKey(projectPath, recipe.id), hash);
+  }
+
+  private async assertRecipeFileNotStale(
+    projectPath: string,
+    recipeId: string,
+    recipeName: string
+  ): Promise<void> {
+    const onDiskHash = await this.identityFiles.getInRepoRecipeFileHash(projectPath, recipeName);
+    if (onDiskHash === null) return;
+    const cached = this.inRepoRecipeHashes.get(this.hashKey(projectPath, recipeId));
+    if (cached === undefined || cached !== onDiskHash) {
+      throw new AppError({
+        code: "RECIPE_STALE_CONFLICT",
+        message: `Recipe '${recipeName}' changed on disk since it was loaded`,
+        userMessage: recipeName,
+        context: { recipeId, name: recipeName },
+      });
+    }
   }
 
   async readInRepoRecipes(projectPath: string): Promise<TerminalRecipe[]> {
-    return this.identityFiles.readInRepoRecipes(projectPath);
+    const { recipes, hashes } = await this.identityFiles.readInRepoRecipesWithHashes(projectPath);
+    // Replace this project's cached hashes with the freshly observed set so an
+    // externally deleted recipe doesn't leave a stale entry pointing at a hash
+    // for a file that no longer exists.
+    const prefix = `${projectPath}|`;
+    for (const key of this.inRepoRecipeHashes.keys()) {
+      if (key.startsWith(prefix)) this.inRepoRecipeHashes.delete(key);
+    }
+    for (const [recipeId, hash] of hashes) {
+      this.inRepoRecipeHashes.set(this.hashKey(projectPath, recipeId), hash);
+    }
+    return recipes;
   }
 
   async deleteInRepoRecipe(projectPath: string, recipeName: string): Promise<void> {
-    return this.identityFiles.deleteInRepoRecipe(projectPath, recipeName);
+    await this.identityFiles.deleteInRepoRecipe(projectPath, recipeName);
+    // Stale hash entries for the deleted file are harmless: a future write
+    // through `writeInRepoRecipeChecked` will see the file is missing and
+    // allow the write unconditionally, then refresh the cache. The cache is
+    // also fully repopulated on the next readInRepoRecipes call.
   }
 
   async readInRepoPresets(projectPath: string): Promise<Record<string, AgentPreset[]>> {
@@ -663,25 +761,43 @@ export class ProjectStore {
    *
    * 1. Recipe in both stores → in-repo wins (canonical), overrides ProjectFileStore
    * 2. Recipe only in .daintree/ → backfill to ProjectFileStore
-   * 3. Recipe only in ProjectFileStore, non-inrepo id → promote to .daintree/
+   * 3. Recipe only in ProjectFileStore, not in-repo → promote to .daintree/
    *    (legacy from migration 003), then backfill
-   * 4. Recipe only in ProjectFileStore, inrepo- id → remove stale copy
+   * 4. Recipe only in ProjectFileStore, in-repo scope → remove stale copy
    *    (was deleted from .daintree/ but lingered in ProjectFileStore)
    *
    * When backfilling to ProjectFileStore, runtime-only fields (env values,
    * projectId, worktreeId, lastUsedAt, usageHistory) are preserved from the
    * existing fileStore copy so that secrets and usage metadata survive.
    *
-   * Idempotent: running twice produces no additional writes.
+   * Returns any filename collisions encountered while promoting (case 3): two
+   * recipes whose names slugify to the same `.daintree/recipes/` filename. The
+   * un-promotable recipe is kept as a project-local recipe (never silently
+   * dropped — that was the #9195 bug) and the collision is returned so the
+   * renderer can surface it instead of logging to the console only.
+   *
+   * Idempotent: running twice produces no additional writes (aside from the
+   * rare persistent-collision case, where the un-promotable recipe is re-kept).
    */
-  async reconcileProjectRecipes(projectPath: string, projectId: string): Promise<void> {
-    const inRepoRecipes = await this.identityFiles.readInRepoRecipes(projectPath);
+  async reconcileProjectRecipes(
+    projectPath: string,
+    projectId: string
+  ): Promise<RecipeNameCollision[]> {
+    // Go through the cache-aware wrapper so the hash map is populated as a
+    // side effect — otherwise the first renderer-driven edit after a project
+    // load races the unrelated `getInRepoRecipes` call to populate the cache
+    // and may see a phantom RECIPE_STALE_CONFLICT.
+    const inRepoRecipes = await this.readInRepoRecipes(projectPath);
     const fileStoreRecipes = await this.fileStore.getRecipes(projectId);
 
     const inRepoById = new Map(inRepoRecipes.map((r) => [r.id, r]));
     const fileStoreById = new Map(fileStoreRecipes.map((r) => [r.id, r]));
 
     let promoted = false;
+    const collisions: RecipeNameCollision[] = [];
+    // Project-local recipes that couldn't be promoted (filename collision) but
+    // must survive in ProjectFileStore rather than being dropped.
+    const keptLocal: TerminalRecipe[] = [];
     const seenFilenames = new Map<string, string>();
     for (const recipe of inRepoById.values()) {
       seenFilenames.set(safeRecipeFilename(recipe.name), recipe.id);
@@ -689,33 +805,36 @@ export class ProjectStore {
 
     for (const recipe of fileStoreRecipes) {
       if (inRepoById.has(recipe.id)) continue;
-      if (recipe.id.startsWith("inrepo-")) continue; // stale, removed below
+      if (isInRepoRecipeId(recipe)) continue; // stale, removed below
 
       const filename = safeRecipeFilename(recipe.name);
       const ownerId = seenFilenames.get(filename);
       if (ownerId !== undefined && ownerId !== recipe.id) {
-        console.error(
-          `[ProjectStore] Skipping promotion of "${recipe.name}" (${recipe.id}): ` +
-            `filename "${filename}" collision with ${ownerId}`
-        );
+        // Can't promote: a different recipe already owns this filename. Keep
+        // it as a project-local recipe and report the collision upward.
+        collisions.push({
+          filename,
+          keptId: ownerId,
+          droppedId: recipe.id,
+          droppedName: recipe.name,
+        });
+        keptLocal.push(recipe);
         continue;
       }
 
-      await this.identityFiles.writeInRepoRecipe(projectPath, recipe);
+      await this.writeInRepoRecipe(projectPath, recipe);
       inRepoById.set(recipe.id, recipe);
       seenFilenames.set(filename, recipe.id);
       promoted = true;
     }
 
-    const hasStale = fileStoreRecipes.some(
-      (r) => r.id.startsWith("inrepo-") && !inRepoById.has(r.id)
-    );
+    const hasStale = fileStoreRecipes.some((r) => isInRepoRecipeId(r) && !inRepoById.has(r.id));
 
     const reconciledIds = new Set(inRepoById.keys());
     const sizeChanged = reconciledIds.size !== fileStoreById.size;
     const idsChanged = ![...reconciledIds].every((id) => fileStoreById.has(id));
 
-    if (!promoted && !hasStale && !sizeChanged && !idsChanged) {
+    if (!promoted && !hasStale && !sizeChanged && !idsChanged && collisions.length === 0) {
       // IDs match perfectly — check content before skipping
       let contentDiffers = false;
       for (const recipe of inRepoById.values()) {
@@ -736,7 +855,7 @@ export class ProjectStore {
           break;
         }
       }
-      if (!contentDiffers) return;
+      if (!contentDiffers) return collisions;
     }
 
     // Build reconciled list: start from in-repo canonical, merge fileStore-only
@@ -769,7 +888,12 @@ export class ProjectStore {
       });
     }
 
+    // Keep project-local recipes that couldn't be promoted (filename collision)
+    // so they survive the write-back rather than being silently dropped.
+    reconciled.push(...keptLocal);
+
     await this.fileStore.saveRecipes(projectId, reconciled);
+    return collisions;
   }
 
   async saveRecipes(projectId: string, recipes: TerminalRecipe[]): Promise<void> {

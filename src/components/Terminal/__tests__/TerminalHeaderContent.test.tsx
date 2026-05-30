@@ -741,3 +741,76 @@ describe("TerminalHeaderContent — paused / suspended tooltips", () => {
     expect(primary!.textContent).toBe("Output suspended");
   });
 });
+
+// #9204 — per-pane state badges must silence their implicit live region so the
+// global announcer (mounted once in App.tsx) is the single source of polite
+// announcements. `role="status"` carries an implicit `aria-live="polite"` per
+// ARIA spec, so simply removing the explicit attribute is insufficient — each
+// badge must opt out with `aria-live="off"`.
+describe("TerminalHeaderContent — per-pane badges silence implicit live region (#9204)", () => {
+  it("exit-code badge sets aria-live='off'", () => {
+    mockTerminal = { id: "t1" };
+    render(<TerminalHeaderContent id="t1" isExited={true} exitCode={1} />);
+    const badge = screen.getByRole("status");
+    expect(badge.getAttribute("aria-live")).toBe("off");
+  });
+
+  it("queue-count badge sets aria-live='off'", () => {
+    mockTerminal = { id: "t1" };
+    const { container } = render(<TerminalHeaderContent id="t1" queueCount={3} />);
+    const badge = container.querySelector('[role="status"][aria-live="off"]');
+    expect(badge).toBeTruthy();
+    expect(badge!.textContent).toContain("queued");
+  });
+
+  it("paused-backpressure badge sets aria-live='off'", () => {
+    mockTerminal = { id: "t1" };
+    const { container } = render(
+      <TerminalHeaderContent id="t1" flowStatus="paused-backpressure" />
+    );
+    const badge = container.querySelector('[role="status"][aria-live="off"]');
+    expect(badge).toBeTruthy();
+    expect(badge!.textContent).toContain("Paused");
+  });
+
+  it("paused-resource-governor badge sets aria-live='off'", () => {
+    mockTerminal = { id: "t1" };
+    const { container } = render(
+      <TerminalHeaderContent id="t1" flowStatus="paused-resource-governor" />
+    );
+    const badge = container.querySelector('[role="status"][aria-live="off"]');
+    expect(badge).toBeTruthy();
+    expect(badge!.textContent).toContain("memory");
+  });
+
+  it("suspended badge sets aria-live='off'", () => {
+    mockTerminal = { id: "t1" };
+    const { container } = render(<TerminalHeaderContent id="t1" flowStatus="suspended" />);
+    const badge = container.querySelector('[role="status"][aria-live="off"]');
+    expect(badge).toBeTruthy();
+    expect(badge!.textContent).toContain("Suspended");
+  });
+
+  it("hibernated badge sets aria-live='off'", () => {
+    mockTerminal = { id: "t1" };
+    render(<TerminalHeaderContent id="t1" isHibernated={true} />);
+    const badge = screen.getByTestId("terminal-hibernated-badge");
+    expect(badge.getAttribute("aria-live")).toBe("off");
+    expect(badge.getAttribute("role")).toBe("status");
+  });
+
+  it("no badge declares aria-live='polite'", () => {
+    mockTerminal = { id: "t1" };
+    const { container } = render(
+      <TerminalHeaderContent
+        id="t1"
+        isExited={true}
+        exitCode={1}
+        queueCount={3}
+        flowStatus="paused-backpressure"
+        isHibernated={true}
+      />
+    );
+    expect(container.querySelectorAll('[aria-live="polite"]').length).toBe(0);
+  });
+});

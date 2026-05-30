@@ -6,7 +6,7 @@ import type {
   AgentInstallProgressEvent,
 } from "../../shared/types/ipc/system.js";
 import { buildInstallEnv } from "../utils/spawnEnv.js";
-import { scrubSecrets } from "../utils/secretScrubber.js";
+import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 
 function isManualOnlyCommand(command: string): boolean {
   return /\|\s*(sudo\s+)?(bash|sh|zsh|pwsh)\b|\|\s*(iex|Invoke-Expression)\b/i.test(command);

@@ -6,7 +6,13 @@ import { generateProjectId } from "./projectStorePaths.js";
 import { createHardenedGit } from "../utils/hardenedGit.js";
 import { getForgeBridge } from "../workspace-host/forgeBridge.js";
 import { BatchLoader } from "../workspace-host/batchLoader.js";
-import type { RepoRef, PR as ForgePR, RateLimitInfo, CIStatus } from "../../shared/types/forge.js";
+import type {
+  RepoRef,
+  PR as ForgePR,
+  PRSnapshot,
+  RateLimitInfo,
+  CIStatus,
+} from "../../shared/types/forge.js";
 
 // Focus-aware polling cadence: faster when any Daintree window is focused so
 // users see PR transitions promptly, slower when fully blurred to conserve the
@@ -93,6 +99,12 @@ interface InternalLinkedPR {
   _ciStatus?: import("../../shared/types/forge.js").CIStatus;
   providerId: string;
   stagnantPollCount: number;
+  // REST change-detection markers for the open-PR-list revalidation probe.
+  // Only the REST probe populates these (the GraphQL PR shape carries neither
+  // head.sha nor a raw ISO updated_at), so they stay undefined until the first
+  // probe-driven revalidation cycle seeds them.
+  headSha?: string;
+  updatedAt?: string;
 }
 
 export interface PRDetectionResult {
@@ -1002,15 +1014,41 @@ class PullRequestService {
       return;
     }
 
-    // Collect resolved worktrees that need revalidation
+    // Per-project poll lease (#9055): only the elected window revalidates per
+    // cycle; siblings receive the resulting sys:pr:detected / sys:pr:cleared
+    // updates through main → renderer fan-out, exactly as checkForPRs relies on.
+    // Gating here is also what makes the open-PR-list ETag baseline single-owner:
+    // the cache is a main-process singleton keyed by owner/repo, so if every
+    // window committed it against its own tracked subset, one window's clean diff
+    // could advance the baseline past a change another window hasn't consumed and
+    // mask it behind a later 304. One revalidating window removes that race (and
+    // the redundant cross-window conditional GETs). Fails open on IPC timeout.
+    const leaseAcquired = await getForgeBridge().acquirePollLease();
+    if (!leaseAcquired) {
+      logDebug("Skipping PR revalidation — sibling window holds poll lease");
+      return;
+    }
+
+    // Collect resolved worktrees that need revalidation, plus a per-PR snapshot
+    // (state + REST change markers) for the cheap open-PR-list probe below.
     const lookupBranchByWorktreeId = new Map<string, string | undefined>();
     const uniquePRNumbers = new Set<number>();
+    const trackedByNumber = new Map<number, PRSnapshot>();
     for (const worktreeId of this.resolvedWorktrees) {
       const context = this.candidates.get(worktreeId);
       const detectedPR = this.detectedPRs.get(worktreeId);
       if (context && detectedPR) {
         lookupBranchByWorktreeId.set(worktreeId, context.branchName);
         uniquePRNumbers.add(detectedPR.number);
+        if (!trackedByNumber.has(detectedPR.number)) {
+          trackedByNumber.set(detectedPR.number, {
+            number: detectedPR.number,
+            headSha: detectedPR.headSha ?? null,
+            updatedAt: detectedPR.updatedAt ?? null,
+            state: detectedPR.state,
+            title: detectedPR.title,
+          });
+        }
       }
     }
 
@@ -1020,29 +1058,79 @@ class PullRequestService {
     const prByNumberLoader = this.prByNumberLoader;
     if (!prByNumberLoader) return;
 
+    // Cheap conditional probe of the repo's open-PR list. When the provider
+    // supports it, an authenticated 304 (or a clean diff) means none of the
+    // tracked PRs changed, so the per-PR GraphQL re-fetch fan-out is skipped
+    // entirely — the dominant steady-state quota cost this issue addresses. A
+    // `fallback` result or an absent capability re-fetches every tracked PR,
+    // preserving the pre-probe behavior. CI polling for in-flight PRs still runs
+    // below regardless, since a CI re-run doesn't bump the PR's updated_at.
+    let numbersToRefetch: number[];
+    const changedSnapshotByNumber = new Map<number, PRSnapshot>();
     try {
-      // Revalidate each known PR by number through the provider-scoped loader,
-      // coalescing the fan-out into one `findPRsByNumbers` batch when supported.
-      // The loader resolves null for a confirmed-missing PR but rejects on a
-      // transient error, which we map to `error: true` and skip so a flaky API
-      // call doesn't clear valid PR state.
-      const prNumbers = [...uniquePRNumbers];
-      const results = await Promise.all(
-        prNumbers.map((prNumber) =>
-          prByNumberLoader.load(prNumber).then(
-            (pr): { prNumber: number; pr: ForgePR | null; error: boolean } => ({
-              prNumber,
-              pr,
-              error: false,
-            }),
-            (): { prNumber: number; pr: ForgePR | null; error: boolean } => ({
-              prNumber,
-              pr: null,
-              error: true,
-            })
-          )
-        )
-      );
+      const probe = await bridge.probeOpenPRList(providerId, repo, [...trackedByNumber.values()]);
+      if (probe && probe.kind === "unchanged") {
+        numbersToRefetch = [];
+      } else if (probe && probe.kind === "changed") {
+        for (const snap of probe.changed) {
+          if (uniquePRNumbers.has(snap.number)) {
+            changedSnapshotByNumber.set(snap.number, snap);
+          }
+        }
+        numbersToRefetch = [...changedSnapshotByNumber.keys()];
+      } else {
+        // `fallback`, or a `null` result (capability absent) — re-fetch all.
+        numbersToRefetch = [...uniquePRNumbers];
+      }
+    } catch {
+      // A probe RPC failure must not stall revalidation — fall back to a full
+      // re-fetch, exactly as if the provider had no probe capability.
+      numbersToRefetch = [...uniquePRNumbers];
+    }
+
+    try {
+      // Revalidate the PRs the probe flagged (or all, on fallback) by number
+      // through the provider-scoped loader, coalescing the fan-out into one
+      // `findPRsByNumbers` batch when supported. The loader resolves null for a
+      // confirmed-missing PR but rejects on a transient error, which we map to
+      // `error: true` and skip so a flaky API call doesn't clear valid PR state.
+      const results =
+        numbersToRefetch.length === 0
+          ? []
+          : await Promise.all(
+              numbersToRefetch.map((prNumber) =>
+                prByNumberLoader.load(prNumber).then(
+                  (pr): { prNumber: number; pr: ForgePR | null; error: boolean } => ({
+                    prNumber,
+                    pr,
+                    error: false,
+                  }),
+                  (): { prNumber: number; pr: ForgePR | null; error: boolean } => ({
+                    prNumber,
+                    pr: null,
+                    error: true,
+                  })
+                )
+              )
+            );
+
+      // Stale-in-flight guard: if `setForgeSettings`/`refresh()` swapped the
+      // provider while the probe or the GraphQL re-fetch was in flight, the
+      // results (and the snapshots we'd seed) belong to the OLD provider.
+      // Abandon the cycle quietly — the next poll picks up the new provider's
+      // PRs. Mirrors the same guard in checkForPRs.
+      if (
+        this.providerNamespacedId !== providerId ||
+        this.repoRef?.host !== repo.host ||
+        this.repoRef?.owner !== repo.owner ||
+        this.repoRef?.repo !== repo.repo
+      ) {
+        logDebug("Discarding stale PR revalidation results — provider changed mid-cycle", {
+          fromProviderId: providerId,
+          toProviderId: this.providerNamespacedId,
+        });
+        return;
+      }
 
       const enrichedPRNumbers = new Set<number>();
 
@@ -1107,6 +1195,18 @@ class PullRequestService {
             });
           }
 
+          // Advance the change-detection snapshot from the probe's fresh REST
+          // data so the next probe tick resolves to a zero-cost 304. Only the
+          // REST probe carries head.sha / raw updated_at (the GraphQL PR shape
+          // does not), so seeding from anywhere else is impossible. This runs on
+          // the success path only — a transient error skips it above, leaving
+          // the stale snapshot so the next probe re-flags the PR (self-healing).
+          const snap = changedSnapshotByNumber.get(prNumber);
+          if (snap) {
+            detectedPR.headSha = snap.headSha ?? undefined;
+            detectedPR.updatedAt = snap.updatedAt ?? undefined;
+          }
+
           // Revalidate CI status once per unique PR number. Multiple
           // worktrees on the same branch share the same detectedPR object
           // reference — deduplicating avoids double-counting stagnant polls
@@ -1115,6 +1215,18 @@ class PullRequestService {
             enrichedPRNumbers.add(prNumber);
             this.enrichPRWithCIStatus(detectedPR, repo);
           }
+        }
+      }
+
+      // CI status can change without the PR's metadata changing — a re-run does
+      // not bump updated_at, so the probe reports those PRs unchanged. Keep
+      // polling CI for any in-flight PR not already enriched above, so green/red
+      // transitions still surface promptly even on an otherwise-quiet tick.
+      for (const detectedPR of this.detectedPRs.values()) {
+        if (enrichedPRNumbers.has(detectedPR.number)) continue;
+        if (detectedPR.ciStatus === "PENDING" || detectedPR.ciStatus === "EXPECTED") {
+          enrichedPRNumbers.add(detectedPR.number);
+          this.enrichPRWithCIStatus(detectedPR, repo);
         }
       }
 

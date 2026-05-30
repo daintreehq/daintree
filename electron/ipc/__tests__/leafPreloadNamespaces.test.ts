@@ -134,6 +134,7 @@ describe("leaf preload namespace bindings", () => {
 
     it("plugin matches (plugin:invoke intentionally excluded)", () => {
       expect(PLUGIN_METHOD_CHANNELS.list).toBe(CHANNELS.PLUGIN_LIST);
+      expect(PLUGIN_METHOD_CHANNELS.setEnabled).toBe(CHANNELS.PLUGIN_SET_ENABLED);
       expect(PLUGIN_METHOD_CHANNELS.toolbarButtons).toBe(CHANNELS.PLUGIN_TOOLBAR_BUTTONS);
       expect(PLUGIN_METHOD_CHANNELS.menuItems).toBe(CHANNELS.PLUGIN_MENU_ITEMS);
       expect(PLUGIN_METHOD_CHANNELS.validateActionIds).toBe(CHANNELS.PLUGIN_VALIDATE_ACTION_IDS);
@@ -141,6 +142,15 @@ describe("leaf preload namespace bindings", () => {
       expect(PLUGIN_METHOD_CHANNELS.registerAction).toBe(CHANNELS.PLUGIN_ACTIONS_REGISTER);
       expect(PLUGIN_METHOD_CHANNELS.unregisterAction).toBe(CHANNELS.PLUGIN_ACTIONS_UNREGISTER);
       expect(PLUGIN_METHOD_CHANNELS.getPanelKinds).toBe(CHANNELS.PLUGIN_PANEL_KINDS_GET);
+      expect(PLUGIN_METHOD_CHANNELS.getAuditRecords).toBe(CHANNELS.PLUGIN_GET_AUDIT_RECORDS);
+      expect(PLUGIN_METHOD_CHANNELS.getAuditConfig).toBe(CHANNELS.PLUGIN_GET_AUDIT_CONFIG);
+      expect(PLUGIN_METHOD_CHANNELS.clearAuditLog).toBe(CHANNELS.PLUGIN_CLEAR_AUDIT_LOG);
+      expect(PLUGIN_METHOD_CHANNELS.setAuditEnabled).toBe(CHANNELS.PLUGIN_SET_AUDIT_ENABLED);
+      expect(PLUGIN_METHOD_CHANNELS.setAuditMaxRecords).toBe(CHANNELS.PLUGIN_SET_AUDIT_MAX_RECORDS);
+      expect(PLUGIN_METHOD_CHANNELS.exportAuditLog).toBe(CHANNELS.PLUGIN_EXPORT_AUDIT_LOG);
+      expect(PLUGIN_METHOD_CHANNELS.getDiagnosticsSnapshot).toBe(
+        CHANNELS.PLUGIN_GET_DIAGNOSTICS_SNAPSHOT
+      );
     });
 
     it("scratch matches", () => {

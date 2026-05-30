@@ -7,7 +7,7 @@ import {
   getGroupAmbientAgentState,
   isGroupDeprioritized,
 } from "../useDockBlockedState";
-import type { AgentState } from "shared/types/agent";
+import type { AgentState } from "@shared/types/agent";
 
 describe("useDockBlockedState", () => {
   beforeEach(() => {

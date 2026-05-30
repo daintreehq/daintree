@@ -95,6 +95,8 @@ interface WorktreeActionsToolbarProps {
     onResourceConnect?: () => void;
     onResourceStatus?: () => void;
     onResourceTeardown?: () => void;
+    onStopDevServer?: (worktreeId: string) => void;
+    onRestartDevServer?: (worktreeId: string) => void;
   };
   worktree: WorktreeState;
   isPinned: boolean;
@@ -245,6 +247,8 @@ export function WorktreeActionsToolbar({
             onResourceConnect={menu.onResourceConnect}
             onResourceStatus={menu.onResourceStatus}
             onResourceTeardown={menu.onResourceTeardown}
+            onStopDevServer={menu.onStopDevServer}
+            onRestartDevServer={menu.onRestartDevServer}
           />
         </DropdownMenuContent>
       </DropdownMenu>

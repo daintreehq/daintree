@@ -36,9 +36,13 @@ describe("ProjectStore recipe reconciliation", () => {
     projectId = "a".repeat(64);
 
     // Override the userData path so ProjectFileStore writes into tmpDir
-    // rather than Electron's real userData.
+    // rather than Electron's real userData. The inner ProjectFileStore captures
+    // its dir at construction, so override it too — otherwise fileStore writes
+    // to the shared os.tmpdir()/projects path and leaks recipes across runs.
     store = new ProjectStore();
     (store as unknown as { projectsConfigDir: string }).projectsConfigDir = tmpDir;
+    (store as unknown as { fileStore: { projectsConfigDir: string } }).fileStore.projectsConfigDir =
+      tmpDir;
 
     await store.initialize();
   });
@@ -272,5 +276,279 @@ describe("ProjectStore recipe reconciliation", () => {
     const fs2 = await readFileStore();
     expect(fs2).toHaveLength(1);
     expect(fs2[0]!.id).toBe(recipe.id);
+  });
+
+  it("returns an empty collision list when nothing collides", async () => {
+    const recipe = makeRecipe({ id: "recipe-opaque-uuid", name: "Opaque", scope: "inrepo" });
+    await seedInRepo(recipe);
+
+    const collisions = await store.reconcileProjectRecipes(projectPath, projectId);
+    expect(collisions).toEqual([]);
+  });
+
+  it("tags loaded in-repo recipes with scope 'inrepo' (opaque-id recipe detected without prefix)", async () => {
+    const recipe = makeRecipe({ id: "recipe-opaque-uuid", name: "Opaque" });
+    await seedInRepo(recipe);
+
+    const inr = await readInRepo();
+    expect(inr).toHaveLength(1);
+    expect(inr[0]!.scope).toBe("inrepo");
+
+    // Reconcile must treat it as in-repo (case 1/2) via scope, not the id prefix.
+    await store.reconcileProjectRecipes(projectPath, projectId);
+    const fs2 = await readFileStore();
+    expect(fs2.map((r) => r.id)).toContain("recipe-opaque-uuid");
+  });
+
+  it("a legacy file with no id gets a deterministic inrepo- id and is not rewritten on read", async () => {
+    const recipesDir = path.join(projectPath, ".daintree", "recipes");
+    await fs.mkdir(recipesDir, { recursive: true });
+    const filePath = path.join(recipesDir, "legacy.json");
+    const raw =
+      JSON.stringify(
+        { name: "Legacy", terminals: [{ type: "terminal", command: "echo hi" }], createdAt: 1 },
+        null,
+        2
+      ) + "\n";
+    await fs.writeFile(filePath, raw, "utf-8");
+
+    const first = await store.readInRepoRecipes(projectPath);
+    expect(first).toHaveLength(1);
+    expect(first[0]!.id).toBe("inrepo-legacy");
+    expect(first[0]!.scope).toBe("inrepo");
+
+    // Deterministic across reads, and reading never rewrites the file (a random
+    // UUID per read would churn the id and dirty teammates' working trees).
+    const second = await store.readInRepoRecipes(projectPath);
+    expect(second[0]!.id).toBe("inrepo-legacy");
+    expect(await fs.readFile(filePath, "utf-8")).toBe(raw);
+  });
+
+  it("deduplicates two in-repo files that share the same opaque id (keeps one, no silent collapse)", async () => {
+    const recipesDir = path.join(projectPath, ".daintree", "recipes");
+    await fs.mkdir(recipesDir, { recursive: true });
+    const mk = (name: string, command: string) =>
+      JSON.stringify(
+        {
+          id: "recipe-dup",
+          name,
+          scope: "inrepo",
+          terminals: [{ type: "terminal", command }],
+          createdAt: 1,
+        },
+        null,
+        2
+      ) + "\n";
+    await fs.writeFile(path.join(recipesDir, "a.json"), mk("A", "echo a"), "utf-8");
+    await fs.writeFile(path.join(recipesDir, "b.json"), mk("B", "echo b"), "utf-8");
+
+    const inr = await store.readInRepoRecipes(projectPath);
+    // Only one entry survives — the shared id is not allowed to silently
+    // overwrite the hash map / collapse during reconciliation.
+    expect(inr).toHaveLength(1);
+    expect(inr[0]!.id).toBe("recipe-dup");
+  });
+
+  it("filename collision: the un-promotable recipe is kept (not dropped) and the collision is returned", async () => {
+    // Two distinct project-local recipes whose names slugify to the same
+    // filename — only one can own .daintree/recipes/my-recipe.json.
+    const a = makeRecipe({ id: "recipe-a", name: "My Recipe", projectId });
+    const b = makeRecipe({ id: "recipe-b", name: "my recipe", projectId });
+    await seedFileStore([a, b]);
+
+    const collisions = await store.reconcileProjectRecipes(projectPath, projectId);
+
+    expect(collisions).toHaveLength(1);
+    expect(collisions[0]!.filename).toBe("my-recipe.json");
+    expect([collisions[0]!.keptId, collisions[0]!.droppedId].sort()).toEqual([
+      "recipe-a",
+      "recipe-b",
+    ]);
+
+    // The loser is NOT silently dropped — both survive in ProjectFileStore.
+    const fs2 = await readFileStore();
+    expect(fs2.map((r) => r.id).sort()).toEqual(["recipe-a", "recipe-b"]);
+
+    // Exactly one was promoted to .daintree/.
+    const inr = await readInRepo();
+    expect(inr).toHaveLength(1);
+  });
+});
+
+describe("ProjectStore.writeInRepoRecipeChecked (in-repo recipe staleness guard, #9186)", () => {
+  let tmpDir: string;
+  let projectPath: string;
+  let store: ProjectStore;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-recipe-check-"));
+    projectPath = path.join(tmpDir, "repo");
+    store = new ProjectStore();
+    (store as unknown as { projectsConfigDir: string }).projectsConfigDir = tmpDir;
+    (store as unknown as { fileStore: { projectsConfigDir: string } }).fileStore.projectsConfigDir =
+      tmpDir;
+    await store.initialize();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("allows the write when the file does not exist (create path)", async () => {
+    const recipe = makeRecipe({ id: stableInRepoId("New"), name: "New" });
+    await expect(store.writeInRepoRecipeChecked(projectPath, recipe)).resolves.toBeUndefined();
+    const onDisk = await fs.readFile(
+      path.join(projectPath, ".daintree", "recipes", "new.json"),
+      "utf-8"
+    );
+    expect(JSON.parse(onDisk).name).toBe("New");
+  });
+
+  it("allows the write when the cached hash matches on-disk bytes", async () => {
+    const recipe = makeRecipe({ id: stableInRepoId("Stable"), name: "Stable" });
+    await store.writeInRepoRecipe(projectPath, recipe);
+
+    // Editing through the checked path should succeed because the cached
+    // hash matches what's on disk.
+    const updated = { ...recipe, terminals: [{ type: "terminal" as const, command: "echo new" }] };
+    await expect(store.writeInRepoRecipeChecked(projectPath, updated)).resolves.toBeUndefined();
+    const onDisk = await fs.readFile(
+      path.join(projectPath, ".daintree", "recipes", "stable.json"),
+      "utf-8"
+    );
+    expect(JSON.parse(onDisk).terminals[0].command).toBe("echo new");
+  });
+
+  it("throws RECIPE_STALE_CONFLICT when the file was changed externally", async () => {
+    const recipe = makeRecipe({ id: stableInRepoId("Drift"), name: "Drift" });
+    await store.writeInRepoRecipe(projectPath, recipe);
+
+    // Simulate an external change (git pull, branch switch, etc.).
+    const filePath = path.join(projectPath, ".daintree", "recipes", "drift.json");
+    const current = await fs.readFile(filePath, "utf-8");
+    await fs.writeFile(filePath, current.replace("Drift", "Drift!!"));
+
+    const updated = { ...recipe, terminals: [{ type: "terminal" as const, command: "mine" }] };
+    await expect(store.writeInRepoRecipeChecked(projectPath, updated)).rejects.toMatchObject({
+      code: "RECIPE_STALE_CONFLICT",
+    });
+    // On-disk content must be untouched after a rejected write.
+    expect(await fs.readFile(filePath, "utf-8")).toBe(current.replace("Drift", "Drift!!"));
+  });
+
+  it("force=true bypasses the staleness check and updates the cached hash", async () => {
+    const recipe = makeRecipe({ id: stableInRepoId("Forced"), name: "Forced" });
+    await store.writeInRepoRecipe(projectPath, recipe);
+
+    // External edit invalidates the cache.
+    const filePath = path.join(projectPath, ".daintree", "recipes", "forced.json");
+    const current = await fs.readFile(filePath, "utf-8");
+    await fs.writeFile(filePath, current.replace("Forced", "External Edit"));
+
+    const updated = {
+      ...recipe,
+      terminals: [{ type: "terminal" as const, command: "my own" }],
+    };
+    await expect(
+      store.writeInRepoRecipeChecked(projectPath, updated, { force: true })
+    ).resolves.toBeUndefined();
+    expect(JSON.parse(await fs.readFile(filePath, "utf-8")).terminals[0].command).toBe("my own");
+
+    // A follow-up checked write should now succeed because force-write
+    // refreshed the cache to match the new on-disk bytes.
+    const secondUpdate = {
+      ...recipe,
+      terminals: [{ type: "terminal" as const, command: "follow up" }],
+    };
+    await expect(
+      store.writeInRepoRecipeChecked(projectPath, secondUpdate)
+    ).resolves.toBeUndefined();
+  });
+
+  it("refuses a rename when the old-name file was externally modified", async () => {
+    const recipe = makeRecipe({ id: stableInRepoId("Old Name"), name: "Old Name" });
+    await store.writeInRepoRecipe(projectPath, recipe);
+
+    // External edit to the old file between load and rename.
+    const oldPath = path.join(projectPath, ".daintree", "recipes", "old-name.json");
+    const original = await fs.readFile(oldPath, "utf-8");
+    await fs.writeFile(oldPath, original.replace("Old Name", "External Old Name"));
+
+    // Ids are stable across renames now — only the name (and thus filename)
+    // changes. The old-name file's hash was cached under this same id.
+    const renamed = {
+      ...recipe,
+      name: "New Name",
+    };
+    await expect(
+      store.writeInRepoRecipeChecked(projectPath, renamed, { previousName: "Old Name" })
+    ).rejects.toMatchObject({ code: "RECIPE_STALE_CONFLICT" });
+
+    // New-name file must not be written, old-name file must be untouched.
+    const newPath = path.join(projectPath, ".daintree", "recipes", "new-name.json");
+    await expect(fs.access(newPath)).rejects.toThrow();
+    expect(await fs.readFile(oldPath, "utf-8")).toBe(
+      original.replace("Old Name", "External Old Name")
+    );
+  });
+
+  it("force=true allows a rename even when the old-name file was externally modified", async () => {
+    const recipe = makeRecipe({ id: stableInRepoId("Old Forced"), name: "Old Forced" });
+    await store.writeInRepoRecipe(projectPath, recipe);
+    const oldPath = path.join(projectPath, ".daintree", "recipes", "old-forced.json");
+    const original = await fs.readFile(oldPath, "utf-8");
+    await fs.writeFile(oldPath, original.replace("Old Forced", "External Edit"));
+
+    const renamed = {
+      ...recipe,
+      name: "New Forced",
+    };
+    await expect(
+      store.writeInRepoRecipeChecked(projectPath, renamed, {
+        previousName: "Old Forced",
+        force: true,
+      })
+    ).resolves.toBeUndefined();
+    const newPath = path.join(projectPath, ".daintree", "recipes", "new-forced.json");
+    expect(JSON.parse(await fs.readFile(newPath, "utf-8")).name).toBe("New Forced");
+  });
+
+  it("rename moves the file but persists the original stable id on disk", async () => {
+    const recipe = makeRecipe({ id: "recipe-stable-uuid", name: "Before", scope: "inrepo" });
+    await store.writeInRepoRecipe(projectPath, recipe);
+
+    const renamed = { ...recipe, name: "After" };
+    await store.writeInRepoRecipeChecked(projectPath, renamed, { previousName: "Before" });
+    // The IPC handler deletes the old-name file after a rename; emulate that.
+    await store.deleteInRepoRecipe(projectPath, "Before");
+
+    const oldPath = path.join(projectPath, ".daintree", "recipes", "before.json");
+    const newPath = path.join(projectPath, ".daintree", "recipes", "after.json");
+    await expect(fs.access(oldPath)).rejects.toThrow();
+    const onDisk = JSON.parse(await fs.readFile(newPath, "utf-8"));
+    expect(onDisk.id).toBe("recipe-stable-uuid");
+    expect(onDisk.name).toBe("After");
+    expect(onDisk.scope).toBe("inrepo");
+  });
+
+  it("readInRepoRecipes populates the hash cache so a follow-up edit can proceed", async () => {
+    // Simulate an existing in-repo recipe written by a previous session.
+    const recipe = makeRecipe({ id: stableInRepoId("Loaded"), name: "Loaded" });
+    await store.writeInRepoRecipe(projectPath, recipe);
+
+    // A fresh store doesn't know about the file yet.
+    const fresh = new ProjectStore();
+    (fresh as unknown as { projectsConfigDir: string }).projectsConfigDir = tmpDir;
+    await fresh.initialize();
+
+    // Without loading first, a write would see the file exists but no cached
+    // hash → conflict.
+    await expect(fresh.writeInRepoRecipeChecked(projectPath, recipe)).rejects.toMatchObject({
+      code: "RECIPE_STALE_CONFLICT",
+    });
+
+    // After loading, the cache is populated and the same write succeeds.
+    await fresh.readInRepoRecipes(projectPath);
+    await expect(fresh.writeInRepoRecipeChecked(projectPath, recipe)).resolves.toBeUndefined();
   });
 });

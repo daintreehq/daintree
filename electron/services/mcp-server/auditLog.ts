@@ -225,6 +225,8 @@ export class AuditService {
     ttlMs: number;
     expiresAt?: number;
     revokedReason?: McpGrantRevokedReason;
+    tier?: McpTier;
+    previousTier?: McpTier;
   }): void {
     if (this.readConfig().auditEnabled === false) return;
     this.hydrate();
@@ -239,6 +241,8 @@ export class AuditService {
     };
     if (input.expiresAt !== undefined) record.expiresAt = input.expiresAt;
     if (input.revokedReason !== undefined) record.revokedReason = input.revokedReason;
+    if (input.tier !== undefined) record.tier = input.tier;
+    if (input.previousTier !== undefined) record.previousTier = input.previousTier;
 
     this.enqueueAndTrim(record);
   }

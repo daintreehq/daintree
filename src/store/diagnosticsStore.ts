@@ -1,6 +1,6 @@
 import { create, type StateCreator } from "zustand";
 
-export type DiagnosticsTab = "problems" | "logs" | "events" | "telemetry";
+export type DiagnosticsTab = "problems" | "logs" | "events" | "telemetry" | "perf";
 
 interface DiagnosticsState {
   isOpen: boolean;

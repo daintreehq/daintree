@@ -4,6 +4,19 @@ export interface BrowserHistory {
   future: string[];
 }
 
+export interface BrowserNavigationHistoryEntry {
+  index: number;
+  url: string;
+  title: string;
+}
+
+export interface BrowserNavigationHistorySnapshot {
+  entries: BrowserNavigationHistoryEntry[];
+  activeIndex: number;
+  canGoBack: boolean;
+  canGoForward: boolean;
+}
+
 export interface UrlHistoryEntry {
   url: string;
   title: string;

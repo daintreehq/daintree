@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRecipeStore } from "@/store/recipeStore";
+import { useRecipeEditorActivityStore } from "@/store/recipeEditorActivityStore";
 import type { RecipeTerminal } from "@/types";
 import type { TerminalRecipe } from "@/types";
 
@@ -30,6 +31,21 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
   >(undefined);
   const [isRecipeManagerOpen, setIsRecipeManagerOpen] = useState(false);
   const [recipeManagerEdit, setRecipeManagerEdit] = useState<TerminalRecipe | undefined>(undefined);
+
+  // Mirror the open/close transitions of the two recipe surfaces into the
+  // shared activity store so the focus-reload hook can suppress its silent
+  // reload while the user is mid-edit (#9186).
+  useEffect(() => {
+    if (!isRecipeEditorOpen) return;
+    useRecipeEditorActivityStore.getState().enter();
+    return () => useRecipeEditorActivityStore.getState().leave();
+  }, [isRecipeEditorOpen]);
+
+  useEffect(() => {
+    if (!isRecipeManagerOpen) return;
+    useRecipeEditorActivityStore.getState().enter();
+    return () => useRecipeEditorActivityStore.getState().leave();
+  }, [isRecipeManagerOpen]);
 
   const handleOpenRecipeEditor = useCallback(
     (worktreeId: string, initialTerminals?: RecipeTerminal[]) => {

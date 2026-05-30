@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { ActionDanger } from "@shared/types/actions";
 
 /**
  * User decision on a plugin-action confirmation. Unlike the MCP confirm
@@ -20,6 +21,10 @@ export interface PendingPluginConfirm {
   actionId: string;
   actionTitle: string;
   actionDescription: string;
+  /** Host-authoritative danger classification. Always `"confirm"` in practice (the dialog only fires for destructive actions) but stored for the provenance line and test assertions. */
+  effectiveDanger: ActionDanger;
+  /** Redacted single-level JSON summary of the action's invocation args, produced by `summarizeMcpArgs`. */
+  argsSummary: string;
   enqueuedAt: number;
 }
 

@@ -8,6 +8,7 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { actionService } from "@/services/ActionService";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { detectUnresolvedVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { getAgentConfig } from "@/config/agents";
 import { logError } from "@/utils/logger";
@@ -52,6 +53,10 @@ export interface UseRecipeRunnerResult {
   handlePin: (recipeId: string) => void;
   handleUnpin: (recipeId: string) => void;
   handleDelete: (recipeId: string) => void;
+  pendingDeleteId: string | null;
+  deleteError: string | null;
+  confirmDelete: () => void;
+  cancelDelete: () => void;
   handleCreate: () => void;
   handleRunSuggestion: (suggestion: RunCommand) => void;
   handleRetryFailed: () => void;
@@ -98,7 +103,6 @@ export function useRecipeRunner({
   const allRecipes = useRecipeStore((s) => s.recipes);
   const runRecipeWithResults = useRecipeStore((s) => s.runRecipeWithResults);
   const updateRecipe = useRecipeStore((s) => s.updateRecipe);
-  const deleteRecipe = useRecipeStore((s) => s.deleteRecipe);
   const createRecipe = useRecipeStore((s) => s.createRecipe);
   const getRecipeById = useRecipeStore((s) => s.getRecipeById);
 
@@ -110,9 +114,12 @@ export function useRecipeRunner({
   const [spawnFailureSummary, setSpawnFailureSummary] = useState<SpawnFailureSummary | null>(null);
   const [unresolvedVars, setUnresolvedVars] = useState<string[]>([]);
   const [isRetryingFailed, setIsRetryingFailed] = useState(false);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const isRunningRef = useRef(false);
   const isSpawningSuggestionRef = useRef(false);
+  const isConfirmingDeleteRef = useRef(false);
   const lastRunRecipeIdRef = useRef<string | null>(null);
   // Generation counter: every run/retry captures the current value, then any
   // resolved async work checks the latest value before calling setState. If a
@@ -159,6 +166,11 @@ export function useRecipeRunner({
   useEffect(() => {
     setSpawnFailureSummary(null);
     setUnresolvedVars([]);
+    // Drop any in-flight delete confirmation — a pending recipe id belongs to
+    // the previous worktree's filtered list; confirming it after the switch
+    // would delete a recipe out of its original context.
+    setPendingDeleteId(null);
+    setDeleteError(null);
     lastRunRecipeIdRef.current = null;
     runGenerationRef.current += 1;
   }, [activeWorktreeId]);
@@ -359,10 +371,11 @@ export function useRecipeRunner({
     (recipeId: string) => {
       const recipe = getRecipeById(recipeId);
       if (!recipe) return;
-      // Pick a name whose stableInRepoId doesn't collide with any existing recipe —
-      // otherwise duplicating an in-repo recipe twice silently overwrites the first.
-      const existingIds = new Set(allRecipes.map((r) => r.id));
-      const copyName = nextDuplicateName(recipe.name, existingIds);
+      // Pick a name that doesn't collide with any existing recipe name —
+      // otherwise duplicating a recipe twice produces two same-named copies
+      // that slug to the same on-disk filename and overwrite each other.
+      const existingNames = new Set(allRecipes.map((r) => r.name));
+      const copyName = nextDuplicateName(recipe.name, existingNames);
       void createRecipe(
         recipe.projectId,
         copyName,
@@ -389,12 +402,48 @@ export function useRecipeRunner({
     [updateRecipe]
   );
 
-  const handleDelete = useCallback(
-    (recipeId: string) => {
-      void deleteRecipe(recipeId);
-    },
-    [deleteRecipe]
-  );
+  // Route deletes through the `recipe.delete` action (danger:"confirm") behind
+  // a ConfirmDialog rendered in RecipeRunner.tsx, matching RecipeManager and
+  // RecipesTab — never call the store's deleteRecipe directly (Tier D1 gate).
+  const handleDelete = useCallback((recipeId: string) => {
+    setDeleteError(null);
+    setPendingDeleteId(recipeId);
+  }, []);
+
+  const confirmDelete = useCallback(() => {
+    const recipeId = pendingDeleteId;
+    if (!recipeId) return;
+    // Guard with a ref (not state) — dispatch is async and a double-click would
+    // otherwise fire recipe.delete twice, the second failing with a transient
+    // "already gone" error.
+    if (isConfirmingDeleteRef.current) return;
+    isConfirmingDeleteRef.current = true;
+    void (async () => {
+      setDeleteError(null);
+      try {
+        const result = await actionService.dispatch(
+          "recipe.delete",
+          { recipeId },
+          { source: "user", confirmed: true }
+        );
+        if (result.ok) {
+          setPendingDeleteId(null);
+        } else {
+          // Keep the dialog open with retry copy rather than closing on a silent
+          // failure (the action surface is the user's only recovery path here).
+          logError("Failed to delete recipe", result.error);
+          setDeleteError(formatErrorMessage(result.error, "Failed to delete recipe"));
+        }
+      } finally {
+        isConfirmingDeleteRef.current = false;
+      }
+    })();
+  }, [pendingDeleteId]);
+
+  const cancelDelete = useCallback(() => {
+    setPendingDeleteId(null);
+    setDeleteError(null);
+  }, []);
 
   const handleCreate = useCallback(() => {
     void actionService.dispatch(
@@ -499,6 +548,10 @@ export function useRecipeRunner({
     handlePin,
     handleUnpin,
     handleDelete,
+    pendingDeleteId,
+    deleteError,
+    confirmDelete,
+    cancelDelete,
     handleCreate,
     handleRunSuggestion,
     handleRetryFailed,

@@ -25,6 +25,17 @@ class PCMProcessor extends AudioWorkletProcessor {
     this.phase = 0.0;
     // Last sample of the previous input block, needed for cross-block interpolation
     this.prevSample = 0.0;
+
+    // When paused, process() short-circuits before downsampling/postMessage so
+    // no PCM chunks cross the IPC boundary. The worklet stays alive (returns
+    // true) so resume restores forwarding without rebuilding the audio graph.
+    this.isPaused = false;
+    this.port.onmessage = (event) => {
+      const data = event.data;
+      if (data && data.type === "setPaused") {
+        this.isPaused = !!data.value;
+      }
+    };
   }
 
   process(inputs) {
@@ -33,6 +44,8 @@ class PCMProcessor extends AudioWorkletProcessor {
 
     const src = input[0];
     if (!src || src.length === 0) return true;
+
+    if (this.isPaused) return true;
 
     // Walk through output samples using the phase accumulator
     while (this.phase < src.length) {

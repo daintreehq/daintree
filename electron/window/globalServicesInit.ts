@@ -16,6 +16,11 @@ import { secureStorage } from "../services/SecureStorage.js";
 import { notificationService } from "../services/NotificationService.js";
 import { preAgentSnapshotService } from "../services/PreAgentSnapshotService.js";
 import { getActionBreadcrumbService } from "../services/ActionBreadcrumbService.js";
+import { getPluginActionAuditService } from "../services/PluginActionAuditService.js";
+import {
+  getPluginMcpAuditService,
+  getPluginMcpConsentService,
+} from "../services/plugin-mcp/instances.js";
 import {
   initializeHibernationService,
   getHibernationService,
@@ -26,6 +31,7 @@ import {
   SESSION_EVICTION_MAX_BYTES,
 } from "../services/pty/terminalSessionPersistence.js";
 import { initializeSystemSleepService } from "../services/SystemSleepService.js";
+import { initializeOsDndService } from "../services/OsDndService.js";
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import {
@@ -46,6 +52,7 @@ import type { WindowRegistry } from "./WindowRegistry.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import { getProjectStatsService } from "../ipc/handlers/projectCrud/index.js";
 import { registerDeferredTask } from "./deferredInitQueue.js";
+import { isSmokeTest } from "../setup/environment.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { store } from "../store.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -227,6 +234,21 @@ export async function initGlobalServices(
   // window still covers the actual agent startup interval.
   getActionBreadcrumbService().initialize();
 
+  // Plugin-action audit log: subscribes to action:dispatched and records every
+  // plugin-contributed dispatch. Plaintext args are persisted only when the
+  // developer has opted in via appState.developerMode.pluginAuditPlaintext.
+  getPluginActionAuditService().initialize({
+    isPlaintextEnabled: () => store.get("appState")?.developerMode?.pluginAuditPlaintext === true,
+  });
+
+  // Plugin-MCP inbound audit + TOFU consent stores (#9234). Hydrate eagerly so
+  // the first plugin-MCP tool call from the supervisor (#9233, TODO) does not
+  // race the lazy store read. The consent service has no subscribers itself —
+  // it's invoked synchronously from the supervisor's tools/call interception
+  // path once that lands.
+  getPluginMcpAuditService().hydrate();
+  getPluginMcpConsentService();
+
   registerDeferredTask({
     name: "agent-notification-service",
     run: async () => {
@@ -294,8 +316,36 @@ export async function initGlobalServices(
       } catch (err) {
         console.error("[MAIN] PluginService initialization failed:", err);
       }
+      // Fire-and-forget — activations fan out in parallel and report errors
+      // via the per-plugin `loadError` provenance record. Awaiting here would
+      // delay subsequent deferred tasks behind the slowest plugin's activate().
+      void pluginService.activateStartupFinishedPlugins();
     },
   });
+
+  // CLI control socket (F32) — lets the `daintree-plugin` CLI install/uninstall
+  // into this running instance. Registered after `plugin-service` and gated
+  // internally on `pluginService.waitForInit()`, so the socket only accepts a
+  // `plugin.install` once activation has settled. Skipped under smoke test (no
+  // CLI driving a headless boot) to avoid leaving a socket behind.
+  if (!isSmokeTest) {
+    registerDeferredTask({
+      name: "plugin-cli-server",
+      run: async () => {
+        // Fire-and-forget: startPluginCliServer() internally awaits
+        // pluginService.waitForInit() (which only settles after startup
+        // activation), so awaiting it here would stall every later deferred
+        // task behind plugin activation. The waitForReady gate guarantees no
+        // CLI request is serviced before init settles, so binding async is safe.
+        const { startPluginCliServer } = await import("../services/PluginCliServer.js");
+        void startPluginCliServer()
+          .then(() => console.log("[MAIN] Plugin CLI control socket listening"))
+          .catch((err) =>
+            console.warn("[MAIN] Plugin CLI control socket failed to start (non-fatal):", err)
+          );
+      },
+    });
+  }
 
   // ── Deferred global service starts ──
   // These were previously run on the same tick as loadRenderer(), contending
@@ -331,6 +381,13 @@ export async function initGlobalServices(
     name: "system-sleep-service",
     run: () => {
       initializeSystemSleepService();
+    },
+  });
+
+  registerDeferredTask({
+    name: "os-dnd-service",
+    run: () => {
+      initializeOsDndService();
     },
   });
 

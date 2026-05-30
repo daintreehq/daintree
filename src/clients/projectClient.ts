@@ -6,6 +6,7 @@ import type {
   ProjectStats,
   BulkProjectStats,
   TerminalRecipe,
+  RecipeNameCollision,
   TerminalSnapshot,
   TabGroup,
 } from "@shared/types";
@@ -253,7 +254,9 @@ export const projectClient = {
     return window.electron.project.cancelClone();
   },
 
-  getRecipes: (projectId: string): Promise<TerminalRecipe[]> => {
+  getRecipes: (
+    projectId: string
+  ): Promise<{ recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] }> => {
     return window.electron.project.getRecipes(projectId);
   },
 
@@ -296,9 +299,10 @@ export const projectClient = {
   updateInRepoRecipe: (
     projectId: string,
     recipe: TerminalRecipe,
-    previousName?: string
+    previousName?: string,
+    options?: { force?: boolean }
   ): Promise<void> => {
-    return window.electron.project.updateInRepoRecipe(projectId, recipe, previousName);
+    return window.electron.project.updateInRepoRecipe(projectId, recipe, previousName, options);
   },
 
   deleteInRepoRecipe: (projectId: string, recipeName: string): Promise<void> => {

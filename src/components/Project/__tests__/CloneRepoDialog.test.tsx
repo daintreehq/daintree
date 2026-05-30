@@ -110,34 +110,34 @@ vi.mock("@/components/Terminal/InlineStatusBanner", () => ({
   InlineStatusBanner: ({
     title,
     description,
+    action,
     actions,
     onClose,
   }: {
     title: ReactNode;
     description?: ReactNode;
+    action?: MockBannerAction;
     actions?: MockBannerAction[];
     onClose?: () => void;
-  }) => (
-    <div data-testid="cleanup-banner">
-      <span>{title}</span>
-      <span>{description}</span>
-      {actions?.map((action) => (
-        <button
-          key={action.id}
-          type="button"
-          aria-label={action.ariaLabel}
-          onClick={action.onClick}
-        >
-          {action.label}
-        </button>
-      ))}
-      {onClose && (
-        <button type="button" onClick={onClose}>
-          banner-dismiss
-        </button>
-      )}
-    </div>
-  ),
+  }) => {
+    const actionList = actions ?? (action ? [action] : []);
+    return (
+      <div data-testid="cleanup-banner">
+        <span>{title}</span>
+        <span>{description}</span>
+        {actionList.map((a) => (
+          <button key={a.id} type="button" aria-label={a.ariaLabel} onClick={a.onClick}>
+            {a.label}
+          </button>
+        ))}
+        {onClose && (
+          <button type="button" onClick={onClose}>
+            banner-dismiss
+          </button>
+        )}
+      </div>
+    );
+  },
 }));
 
 import { CloneRepoDialog } from "../CloneRepoDialog";

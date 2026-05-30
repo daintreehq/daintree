@@ -14,6 +14,8 @@ import {
   computeChipCounts,
   emptyChipCounts,
   compareWorktreeNames,
+  matchesDevServerFilter,
+  isLiveDevServerStatus,
   type DerivedWorktreeMeta,
   type FilterState,
 } from "../worktreeFilters";
@@ -24,6 +26,25 @@ import type {
   SessionFilter,
   ActivityFilter,
 } from "@/store/worktreeFilterStore";
+import type { DevPreviewSessionState, DevPreviewSessionStatus } from "@shared/types/ipc/devPreview";
+
+const makeDevSession = (
+  status: DevPreviewSessionStatus,
+  overrides: Partial<DevPreviewSessionState> = {}
+): DevPreviewSessionState => ({
+  panelId: "p1",
+  projectId: "proj",
+  worktreeId: "test-id",
+  status,
+  url: null,
+  predictedUrl: null,
+  error: null,
+  terminalId: null,
+  isRestarting: false,
+  generation: 0,
+  updatedAt: 1,
+  ...overrides,
+});
 
 const createMockWorktree = (overrides: Partial<Worktree> = {}): Worktree => {
   const num = overrides.prNumber;
@@ -68,6 +89,7 @@ const createEmptyFilters = (): FilterState => ({
   prIssueFilters: new Set(),
   sessionFilters: new Set(),
   activityFilters: new Set(),
+  devServerFilters: new Set(),
 });
 
 const createEmptyMeta = (): DerivedWorktreeMeta => ({
@@ -1445,6 +1467,7 @@ describe("computeChipCounts", () => {
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
       activityFilters: new Set(),
+      devServerFilters: new Set(),
     };
     const counts = computeChipCounts(worktrees, new Map(), null, filters);
     // Status chips count against base set excluding status (all 3 worktrees)
@@ -1469,6 +1492,7 @@ describe("computeChipCounts", () => {
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
       activityFilters: new Set(),
+      devServerFilters: new Set(),
     };
     const counts = computeChipCounts(worktrees, new Map(), null, filters);
     // Branch type chips show absolute totals (sibling group excluded from base set)
@@ -1505,6 +1529,7 @@ describe("computeChipCounts", () => {
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
       activityFilters: new Set<ActivityFilter>(["last15m"]),
+      devServerFilters: new Set(),
     };
     const counts = computeChipCounts(worktrees, new Map(), null, filters);
     // Type chips count against base set excluding type filters (activity=last15m → w1 and w2)
@@ -1529,6 +1554,7 @@ describe("computeChipCounts", () => {
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
       activityFilters: new Set(),
+      devServerFilters: new Set(),
     };
     const counts = computeChipCounts(worktrees, new Map(), null, filters);
     // Only w1 and w3 match "login" query — all chips counted against this subset
@@ -1555,6 +1581,7 @@ describe("computeChipCounts", () => {
       prIssueFilters: new Set(),
       sessionFilters: new Set<SessionFilter>(["working"]),
       activityFilters: new Set(),
+      devServerFilters: new Set(),
     };
     const counts = computeChipCounts(worktrees, map, null, filters);
     // Session chips: base set = type=bugfix → only w3
@@ -1579,6 +1606,7 @@ describe("computeChipCounts", () => {
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
       activityFilters: new Set(),
+      devServerFilters: new Set(),
     };
     const counts = computeChipCounts(worktrees, new Map(), null, filters);
     // Type chips ignore their own active filter — show absolute totals
@@ -1599,6 +1627,7 @@ describe("computeChipCounts", () => {
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
       activityFilters: new Set(),
+      devServerFilters: new Set(),
     };
     const counts = computeChipCounts(worktrees, new Map(), null, filters);
     // Only w1 matches the exact-number query — all chips counted against it
@@ -1619,5 +1648,116 @@ describe("computeChipCounts", () => {
     expect(counts.activity.last15m).toBe(1);
     expect(counts.activity.last1h).toBe(1);
     expect(counts.activity.last24h).toBe(1);
+  });
+});
+
+describe("isLiveDevServerStatus", () => {
+  it("treats starting/installing/running/error as live", () => {
+    expect(isLiveDevServerStatus("starting")).toBe(true);
+    expect(isLiveDevServerStatus("installing")).toBe(true);
+    expect(isLiveDevServerStatus("running")).toBe(true);
+    expect(isLiveDevServerStatus("error")).toBe(true);
+  });
+
+  it("treats stopped/restored-stopped/stopping as not live", () => {
+    expect(isLiveDevServerStatus("stopped")).toBe(false);
+    expect(isLiveDevServerStatus("restored-stopped")).toBe(false);
+    expect(isLiveDevServerStatus("stopping")).toBe(false);
+  });
+});
+
+describe("matchesDevServerFilter", () => {
+  it("never matches when there is no session", () => {
+    expect(matchesDevServerFilter("hasDevServer", undefined)).toBe(false);
+    expect(matchesDevServerFilter("running", undefined)).toBe(false);
+    expect(matchesDevServerFilter("starting", undefined)).toBe(false);
+    expect(matchesDevServerFilter("error", undefined)).toBe(false);
+  });
+
+  it("matches 'running' only for running sessions", () => {
+    expect(matchesDevServerFilter("running", makeDevSession("running"))).toBe(true);
+    expect(matchesDevServerFilter("running", makeDevSession("starting"))).toBe(false);
+    expect(matchesDevServerFilter("running", makeDevSession("stopped"))).toBe(false);
+  });
+
+  it("matches 'starting' for both starting and installing", () => {
+    expect(matchesDevServerFilter("starting", makeDevSession("starting"))).toBe(true);
+    expect(matchesDevServerFilter("starting", makeDevSession("installing"))).toBe(true);
+    expect(matchesDevServerFilter("starting", makeDevSession("running"))).toBe(false);
+  });
+
+  it("matches 'error' only for error sessions", () => {
+    expect(matchesDevServerFilter("error", makeDevSession("error"))).toBe(true);
+    expect(matchesDevServerFilter("error", makeDevSession("running"))).toBe(false);
+  });
+
+  it("matches 'hasDevServer' for any live status but not stopped variants", () => {
+    expect(matchesDevServerFilter("hasDevServer", makeDevSession("running"))).toBe(true);
+    expect(matchesDevServerFilter("hasDevServer", makeDevSession("installing"))).toBe(true);
+    expect(matchesDevServerFilter("hasDevServer", makeDevSession("error"))).toBe(true);
+    expect(matchesDevServerFilter("hasDevServer", makeDevSession("stopped"))).toBe(false);
+    expect(matchesDevServerFilter("hasDevServer", makeDevSession("restored-stopped"))).toBe(false);
+  });
+});
+
+describe("matchesFilters — dev-server facet", () => {
+  it("excludes worktrees with no live session when a dev-server filter is active", () => {
+    const worktree = createMockWorktree({ id: "w1" });
+    const filters = createEmptyFilters();
+    filters.devServerFilters.add("running");
+    expect(matchesFilters(worktree, filters, createEmptyMeta(), false, {})).toBe(false);
+  });
+
+  it("includes a worktree whose session matches the active dev-server filter", () => {
+    const worktree = createMockWorktree({ id: "w1" });
+    const filters = createEmptyFilters();
+    filters.devServerFilters.add("running");
+    const sessions = { w1: makeDevSession("running", { worktreeId: "w1" }) };
+    expect(matchesFilters(worktree, filters, createEmptyMeta(), false, sessions)).toBe(true);
+  });
+
+  it("OR-matches within the dev-server category", () => {
+    const worktree = createMockWorktree({ id: "w1" });
+    const filters = createEmptyFilters();
+    filters.devServerFilters.add("running");
+    filters.devServerFilters.add("error");
+    const sessions = { w1: makeDevSession("error", { worktreeId: "w1" }) };
+    expect(matchesFilters(worktree, filters, createEmptyMeta(), false, sessions)).toBe(true);
+  });
+
+  it("treats a missing session map as no match when a dev-server filter is active", () => {
+    const worktree = createMockWorktree({ id: "w1" });
+    const filters = createEmptyFilters();
+    filters.devServerFilters.add("hasDevServer");
+    expect(matchesFilters(worktree, filters, createEmptyMeta(), false)).toBe(false);
+  });
+});
+
+describe("computeChipCounts — dev-server counts", () => {
+  it("counts each dev-server facet from the session map", () => {
+    const worktrees = [
+      createMockWorktree({ id: "w1" }),
+      createMockWorktree({ id: "w2" }),
+      createMockWorktree({ id: "w3" }),
+      createMockWorktree({ id: "w4" }),
+    ];
+    const sessions: Record<string, DevPreviewSessionState> = {
+      w1: makeDevSession("running", { worktreeId: "w1" }),
+      w2: makeDevSession("installing", { worktreeId: "w2" }),
+      w3: makeDevSession("error", { worktreeId: "w3" }),
+      w4: makeDevSession("stopped", { worktreeId: "w4" }),
+    };
+    const counts = computeChipCounts(worktrees, new Map(), null, createEmptyFilters(), sessions);
+    expect(counts.devServer.running).toBe(1);
+    expect(counts.devServer.starting).toBe(1); // installing counts under "starting"
+    expect(counts.devServer.error).toBe(1);
+    expect(counts.devServer.hasDevServer).toBe(3); // running + installing + error, not stopped
+  });
+
+  it("reports zero dev-server counts when no session map is provided", () => {
+    const worktrees = [createMockWorktree({ id: "w1" })];
+    const counts = computeChipCounts(worktrees, new Map(), null, createEmptyFilters());
+    expect(counts.devServer.running).toBe(0);
+    expect(counts.devServer.hasDevServer).toBe(0);
   });
 });

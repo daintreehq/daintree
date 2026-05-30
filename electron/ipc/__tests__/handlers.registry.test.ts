@@ -73,6 +73,7 @@ const registerMocks = vi.hoisted(() => ({
   registerRecoveryHandlers: vi.fn(),
   registerSafeModeHandlers: vi.fn(),
   registerPluginHandlers: vi.fn(),
+  registerPluginMcpHandlers: vi.fn(),
   registerPerfHandlers: vi.fn(),
   registerConnectivityHandlers: vi.fn(),
   registerScratchHandlers: vi.fn(),
@@ -240,6 +241,9 @@ vi.mock("../handlers/safeMode.js", () => ({
 }));
 vi.mock("../handlers/plugin.js", () => ({
   registerPluginHandlers: registerMocks.registerPluginHandlers,
+}));
+vi.mock("../handlers/pluginMcp.js", () => ({
+  registerPluginMcpHandlers: registerMocks.registerPluginMcpHandlers,
 }));
 vi.mock("../handlers/perf.js", () => ({
   registerPerfHandlers: registerMocks.registerPerfHandlers,

@@ -16,6 +16,8 @@ function nextV(epoch: string = TEST_EPOCH): WorktreeEventVersion {
 
 const {
   worktreeClientDeleteMock,
+  worktreeClientAttachIssueMock,
+  worktreeClientDetachIssueMock,
   closeTerminalsForWorktreeMock,
   notifyMock,
   devPreviewGetByWorktreeMock,
@@ -25,6 +27,9 @@ const {
     vi.fn<
       (id: string, force?: boolean, deleteBranch?: boolean, mutationId?: string) => Promise<void>
     >(),
+  worktreeClientAttachIssueMock:
+    vi.fn<(payload: import("@shared/types").AttachIssuePayload) => Promise<void>>(),
+  worktreeClientDetachIssueMock: vi.fn<(worktreeId: string) => Promise<void>>(),
   closeTerminalsForWorktreeMock: vi.fn<(id: string) => Promise<void>>(),
   notifyMock: vi.fn(),
   devPreviewGetByWorktreeMock: vi.fn().mockResolvedValue(null),
@@ -47,6 +52,8 @@ vi.mock("@/clients", async () => {
     worktreeClient: {
       ...actual.worktreeClient,
       delete: worktreeClientDeleteMock,
+      attachIssue: worktreeClientAttachIssueMock,
+      detachIssue: worktreeClientDetachIssueMock,
     },
   };
 });
@@ -84,9 +91,13 @@ function flushPromises(): Promise<void> {
 describe("createWorktreeStore — mutation outbox (#8405)", () => {
   beforeEach(() => {
     worktreeClientDeleteMock.mockReset();
+    worktreeClientAttachIssueMock.mockReset();
+    worktreeClientDetachIssueMock.mockReset();
     closeTerminalsForWorktreeMock.mockReset();
     notifyMock.mockReset();
     worktreeClientDeleteMock.mockResolvedValue();
+    worktreeClientAttachIssueMock.mockResolvedValue();
+    worktreeClientDetachIssueMock.mockResolvedValue();
     closeTerminalsForWorktreeMock.mockResolvedValue();
   });
 
@@ -113,6 +124,7 @@ describe("createWorktreeStore — mutation outbox (#8405)", () => {
       expect(entry.type).toBe("delete-worktree");
       expect(entry.status).toBe("in-flight");
       expect(entry.retryCount).toBe(0);
+      if (entry.type !== "delete-worktree") throw new Error("expected delete entry");
       expect(entry.options).toEqual({ force: true, deleteBranch: false });
       expect(typeof entry.mutationId).toBe("string");
       expect(entry.mutationId.length).toBeGreaterThan(0);
@@ -590,6 +602,401 @@ describe("createWorktreeStore — mutation outbox (#8405)", () => {
       expect(store.getState().mutationOutbox.size).toBe(0);
       expect(store.getState().deleteErrors.has("wt-1")).toBe(false);
       expect(store.getState().deleteErrorArgs.has("wt-1")).toBe(false);
+    });
+  });
+
+  describe("issue-association mutations (#9163)", () => {
+    const attachPayload = (worktreeId: string, issueNumber = 42) => ({
+      worktreeId,
+      issueNumber,
+      issueTitle: `Issue ${issueNumber}`,
+      issueState: "OPEN" as const,
+      issueUrl: `https://example.com/${issueNumber}`,
+    });
+
+    describe("entry creation + success path", () => {
+      it("startAttachIssue creates one in-flight attach entry", () => {
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+        store.getState().startAttachIssue(attachPayload("wt-1"));
+
+        const outbox = store.getState().mutationOutbox;
+        expect(outbox.size).toBe(1);
+        const entry = [...outbox.values()][0]!;
+        expect(entry.type).toBe("attach-issue");
+        expect(entry.worktreeId).toBe("wt-1");
+        expect(entry.status).toBe("in-flight");
+        expect(store.getState().issueMutatingIds.has("wt-1")).toBe(true);
+        // The local association is NOT applied yet — pessimistic ordering means
+        // the renderer never gets ahead of the Electron-store write.
+        expect(store.getState().manualAssociations.has("wt-1")).toBe(false);
+      });
+
+      it("on resolved attach IPC, applies the association and prunes the entry", async () => {
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+        store.getState().startAttachIssue(attachPayload("wt-1", 7));
+        await flushPromises();
+        await flushPromises();
+
+        expect(worktreeClientAttachIssueMock).toHaveBeenCalledWith(attachPayload("wt-1", 7));
+        expect(store.getState().mutationOutbox.size).toBe(0);
+        expect(store.getState().issueMutatingIds.has("wt-1")).toBe(false);
+        // Now the association is applied (post-success).
+        expect(store.getState().manualAssociations.get("wt-1")).toEqual({
+          issueNumber: 7,
+          issueTitle: "Issue 7",
+        });
+        expect(store.getState().worktrees.get("wt-1")?.issueNumber).toBe(7);
+      });
+
+      it("on resolved detach IPC, clears the association and prunes the entry", async () => {
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+        // Seed an attached issue.
+        store.getState().startAttachIssue(attachPayload("wt-1", 9));
+        await flushPromises();
+        await flushPromises();
+        expect(store.getState().worktrees.get("wt-1")?.issueNumber).toBe(9);
+
+        store.getState().startDetachIssue("wt-1");
+        await flushPromises();
+        await flushPromises();
+
+        expect(worktreeClientDetachIssueMock).toHaveBeenCalledWith("wt-1");
+        expect(store.getState().mutationOutbox.size).toBe(0);
+        expect(store.getState().manualAssociations.has("wt-1")).toBe(false);
+        expect(store.getState().worktrees.get("wt-1")?.issueNumber).toBeUndefined();
+      });
+    });
+
+    describe("single-flight guard", () => {
+      it("blocks a second attach while one is in flight", async () => {
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+        let resolveFirst: () => void = () => {};
+        worktreeClientAttachIssueMock.mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveFirst = resolve;
+            })
+        );
+        store.getState().startAttachIssue(attachPayload("wt-1", 1));
+        await flushPromises();
+        store.getState().startAttachIssue(attachPayload("wt-1", 2));
+
+        // Second call is a no-op — still one in-flight entry, one IPC.
+        expect(store.getState().mutationOutbox.size).toBe(1);
+        expect(worktreeClientAttachIssueMock).toHaveBeenCalledTimes(1);
+
+        resolveFirst();
+        await flushPromises();
+      });
+
+      it("shares the key with detach so attach then detach can't interleave", async () => {
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+        let resolveAttach: () => void = () => {};
+        worktreeClientAttachIssueMock.mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveAttach = resolve;
+            })
+        );
+        store.getState().startAttachIssue(attachPayload("wt-1"));
+        await flushPromises();
+        store.getState().startDetachIssue("wt-1");
+
+        // Detach is blocked while the attach is in flight.
+        expect(worktreeClientDetachIssueMock).not.toHaveBeenCalled();
+        const entry = [...store.getState().mutationOutbox.values()][0]!;
+        expect(entry.type).toBe("attach-issue");
+
+        resolveAttach();
+        await flushPromises();
+      });
+    });
+
+    describe("error classification", () => {
+      it("connectivity errors leave the entry pending with no banner", async () => {
+        worktreeClientAttachIssueMock.mockRejectedValueOnce(
+          new Error("HOST_EXITED: Worktree port disconnected")
+        );
+
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+        store.getState().startAttachIssue(attachPayload("wt-1"));
+        await flushPromises();
+        await flushPromises();
+
+        const entry = [...store.getState().mutationOutbox.values()][0]!;
+        expect(entry.status).toBe("pending");
+        expect(entry.retryCount).toBe(0);
+        expect(store.getState().issueMutatingIds.has("wt-1")).toBe(false);
+        expect(store.getState().issueErrors.has("wt-1")).toBe(false);
+      });
+
+      it("generic errors retry up to the cap then flip to failed with a banner", async () => {
+        worktreeClientAttachIssueMock.mockRejectedValue(new Error("network blip"));
+
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+        store.getState().startAttachIssue(attachPayload("wt-1"));
+        await flushPromises();
+        await flushPromises();
+
+        let entry = [...store.getState().mutationOutbox.values()][0]!;
+        expect(entry.status).toBe("pending");
+        expect(entry.retryCount).toBe(1);
+        // Banner shows immediately, even while still retry-eligible.
+        expect(store.getState().issueErrors.get("wt-1")?.type).toBe("attach-issue");
+
+        store.getState().retryOutboxEntry(entry.mutationId);
+        await flushPromises();
+        await flushPromises();
+        // Banner-driven retry resets the budget to 0, so this counts as 1.
+        entry = [...store.getState().mutationOutbox.values()][0]!;
+        expect(entry.retryCount).toBe(1);
+        expect(entry.status).toBe("pending");
+      });
+
+      it("flips to failed once the retry cap is reached", async () => {
+        worktreeClientAttachIssueMock.mockRejectedValue(new Error("network blip"));
+
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+        // Drive cap consecutive failures via reconnect replays (which keep the
+        // budget — only user retries reset it).
+        store.getState().startAttachIssue(attachPayload("wt-1"));
+        await flushPromises();
+        await flushPromises();
+        for (let i = 1; i < OUTBOX_RETRY_CAP; i++) {
+          store.getState().replayOutboxAfterReconnect();
+          await flushPromises();
+          await flushPromises();
+        }
+
+        const entry = [...store.getState().mutationOutbox.values()][0]!;
+        expect(entry.retryCount).toBe(OUTBOX_RETRY_CAP);
+        expect(entry.status).toBe("failed");
+        expect(store.getState().issueErrors.get("wt-1")?.message).toContain("network blip");
+      });
+    });
+
+    describe("setFatalError + replay", () => {
+      it("preserves issue entries across setFatalError", async () => {
+        worktreeClientAttachIssueMock.mockRejectedValueOnce(
+          new Error("HOST_EXITED: Worktree port disconnected")
+        );
+
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+        store.getState().startAttachIssue(attachPayload("wt-1"));
+        await flushPromises();
+        await flushPromises();
+
+        const before = [...store.getState().mutationOutbox.values()][0]!;
+        store.getState().setFatalError("Workspace service crashed");
+
+        const after = store.getState().mutationOutbox.get(before.mutationId);
+        expect(after).toBeDefined();
+        expect(after?.type).toBe("attach-issue");
+        expect(after?.status).toBe("pending");
+      });
+
+      it("replays a pending issue entry whose target still exists", async () => {
+        worktreeClientAttachIssueMock.mockRejectedValueOnce(
+          new Error("HOST_EXITED: Worktree port disconnected")
+        );
+
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+        store.getState().startAttachIssue(attachPayload("wt-1", 5));
+        await flushPromises();
+        await flushPromises();
+        expect([...store.getState().mutationOutbox.values()][0]!.status).toBe("pending");
+
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV(OTHER_EPOCH));
+        worktreeClientAttachIssueMock.mockResolvedValueOnce();
+        store.getState().replayOutboxAfterReconnect();
+        await flushPromises();
+        await flushPromises();
+
+        // Replay succeeded — entry pruned, association applied.
+        expect(store.getState().mutationOutbox.size).toBe(0);
+        expect(store.getState().worktrees.get("wt-1")?.issueNumber).toBe(5);
+      });
+
+      it("reconciles (prunes) a pending issue entry whose target is gone", async () => {
+        worktreeClientAttachIssueMock.mockRejectedValueOnce(
+          new Error("HOST_EXITED: Worktree port disconnected")
+        );
+
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+        store.getState().startAttachIssue(attachPayload("wt-1"));
+        await flushPromises();
+        await flushPromises();
+
+        store.getState().applySnapshot([], nextV(OTHER_EPOCH));
+        store.getState().replayOutboxAfterReconnect();
+
+        expect(store.getState().mutationOutbox.size).toBe(0);
+        // Only the original failed call — no replay was fired for the gone target.
+        expect(worktreeClientAttachIssueMock).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    describe("retry / dismiss / removal", () => {
+      it("retryOutboxEntry re-fires a failed issue entry", async () => {
+        worktreeClientAttachIssueMock.mockRejectedValue(new Error("network blip"));
+
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+        store.getState().startAttachIssue(attachPayload("wt-1"));
+        await flushPromises();
+        await flushPromises();
+        const entry = [...store.getState().mutationOutbox.values()][0]!;
+
+        worktreeClientAttachIssueMock.mockResolvedValueOnce();
+        store.getState().retryOutboxEntry(entry.mutationId);
+        expect(store.getState().mutationOutbox.get(entry.mutationId)?.status).toBe("in-flight");
+        await flushPromises();
+        await flushPromises();
+
+        expect(store.getState().mutationOutbox.size).toBe(0);
+        expect(store.getState().issueErrors.has("wt-1")).toBe(false);
+      });
+
+      it("dismissOutboxEntry removes the issue entry and clears the banner", async () => {
+        worktreeClientAttachIssueMock.mockRejectedValue(new Error("network blip"));
+
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+        store.getState().startAttachIssue(attachPayload("wt-1"));
+        await flushPromises();
+        await flushPromises();
+        const entry = [...store.getState().mutationOutbox.values()][0]!;
+        expect(store.getState().issueErrors.has("wt-1")).toBe(true);
+
+        store.getState().dismissOutboxEntry(entry.mutationId);
+
+        expect(store.getState().mutationOutbox.size).toBe(0);
+        expect(store.getState().issueErrors.has("wt-1")).toBe(false);
+        expect(store.getState().issueMutatingIds.has("wt-1")).toBe(false);
+      });
+
+      it("applyRemove prunes issue entries and clears issue state", async () => {
+        worktreeClientAttachIssueMock.mockRejectedValueOnce(new Error("network blip"));
+
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+        store.getState().startAttachIssue(attachPayload("wt-1"));
+        await flushPromises();
+        await flushPromises();
+        expect(store.getState().issueErrors.has("wt-1")).toBe(true);
+
+        store.getState().applyRemove("wt-1", nextV());
+
+        expect(store.getState().mutationOutbox.size).toBe(0);
+        expect(store.getState().issueErrors.has("wt-1")).toBe(false);
+        expect(store.getState().issueMutatingIds.has("wt-1")).toBe(false);
+      });
+
+      it("prunes both a delete and an issue entry for the same worktree", async () => {
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+        // A connectivity-failed attach left pending, plus an in-flight delete.
+        worktreeClientAttachIssueMock.mockRejectedValueOnce(
+          new Error("HOST_EXITED: Worktree port disconnected")
+        );
+        store.getState().startAttachIssue(attachPayload("wt-1"));
+        await flushPromises();
+        await flushPromises();
+        let resolveDelete: () => void = () => {};
+        worktreeClientDeleteMock.mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveDelete = resolve;
+            })
+        );
+        store.getState().startDelete("wt-1", { force: false });
+        await flushPromises();
+        expect(store.getState().mutationOutbox.size).toBe(2);
+
+        store.getState().applyRemove("wt-1", nextV());
+
+        expect(store.getState().mutationOutbox.size).toBe(0);
+        expect(store.getState().deletingIds.has("wt-1")).toBe(false);
+        expect(store.getState().issueMutatingIds.has("wt-1")).toBe(false);
+
+        resolveDelete();
+        await flushPromises();
+      });
+    });
+
+    describe("supersession race (#9163 review)", () => {
+      it("attach resolving after applyRemove leaves no orphaned manualAssociation", async () => {
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+        let resolveAttach: () => void = () => {};
+        worktreeClientAttachIssueMock.mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveAttach = resolve;
+            })
+        );
+        store.getState().startAttachIssue(attachPayload("wt-1"));
+        await flushPromises();
+
+        // Worktree removed while the attach IPC is still outstanding.
+        store.getState().applyRemove("wt-1", nextV());
+        expect(store.getState().mutationOutbox.size).toBe(0);
+
+        // The IPC now resolves — the success path must NOT resurrect state.
+        resolveAttach();
+        await flushPromises();
+        await flushPromises();
+
+        expect(store.getState().manualAssociations.has("wt-1")).toBe(false);
+        expect(store.getState().mutationOutbox.size).toBe(0);
+        expect(store.getState().issueMutatingIds.has("wt-1")).toBe(false);
+      });
+
+      it("attach rejecting after applyRemove leaves no orphaned issueError", async () => {
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+        let rejectAttach: (e: Error) => void = () => {};
+        worktreeClientAttachIssueMock.mockImplementationOnce(
+          () =>
+            new Promise<void>((_resolve, reject) => {
+              rejectAttach = reject;
+            })
+        );
+        store.getState().startAttachIssue(attachPayload("wt-1"));
+        await flushPromises();
+
+        store.getState().applyRemove("wt-1", nextV());
+        expect(store.getState().mutationOutbox.size).toBe(0);
+
+        rejectAttach(new Error("network blip"));
+        await flushPromises();
+        await flushPromises();
+
+        expect(store.getState().issueErrors.has("wt-1")).toBe(false);
+        expect(store.getState().mutationOutbox.size).toBe(0);
+        expect(store.getState().issueMutatingIds.has("wt-1")).toBe(false);
+      });
     });
   });
 });

@@ -2,7 +2,7 @@ import type { BuiltInKeyAction } from "./keymap.js";
 import type { BuiltInRuntimeActionId } from "../config/actionIds.js";
 import type { z } from "zod";
 
-export type ActionSource = "user" | "keybinding" | "menu" | "agent" | "context-menu";
+export type ActionSource = "user" | "keybinding" | "menu" | "agent" | "context-menu" | "plugin";
 
 export type ActionKind = "command" | "query";
 
@@ -210,7 +210,8 @@ export type ActionErrorCode =
   | "USER_REJECTED"
   | "CONFIRMATION_TIMEOUT"
   | "ELICITATION_FAILED"
-  | "BINDING_STALE";
+  | "BINDING_STALE"
+  | "PLUGIN_UNLOADED";
 
 export interface ActionError {
   code: ActionErrorCode;

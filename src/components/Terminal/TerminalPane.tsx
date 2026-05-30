@@ -33,6 +33,7 @@ import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
 import { ReconnectErrorBanner } from "./ReconnectErrorBanner";
 import { ScrollbackRestoreErrorBanner } from "./ScrollbackRestoreErrorBanner";
+import { useShouldSuppressLocalError } from "@/components/Recovery/useShouldSuppressLocalError";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { ErrorBanner } from "../Errors/ErrorBanner";
 import { AgentCompletionBanner } from "./AgentCompletionBanner";
@@ -49,6 +50,7 @@ import {
   useTerminalInputStore,
 } from "@/store";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { errorsClient } from "@/clients";
@@ -187,11 +189,20 @@ export function BannerSlot({ visible, children }: BannerSlotProps) {
 }
 
 function TerminalStartupPlaceholder({ agentId }: { agentId?: string }) {
+  const agentName = agentId ? getAgentConfig(agentId)?.name : undefined;
+  const label = agentName ? `Starting ${agentName}…` : "Starting terminal…";
+
   return (
-    <div className="flex h-full min-h-0 items-center justify-center bg-daintree-bg text-sm text-daintree-text/60">
-      <div className="flex items-center gap-2">
-        <Spinner size="sm" className="text-daintree-text/45" />
-        <span>{agentId ? "Starting agent" : "Starting terminal"}</span>
+    <div
+      className="flex flex-1 min-h-0 w-full items-center justify-center bg-daintree-bg px-4"
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+    >
+      <span className="sr-only">{label}</span>
+      <div className="flex max-w-[28ch] flex-col items-center gap-3 text-center" aria-hidden="true">
+        <Spinner size="xl" className="text-daintree-text/45" />
+        <p className="text-sm text-daintree-text/60 break-words">{label}</p>
       </div>
     </div>
   );
@@ -420,9 +431,14 @@ function TerminalPaneComponent({
 
   const isBackendDisconnected = backendStatus === "disconnected";
   const isBackendRecovering = backendStatus === "recovering";
-  const isHostConnected = backendStatus === "connected";
 
   const isHibernated = useIsHibernated(id);
+
+  // Pre-audio confirmation cue. Subscribes to both fields so a target swap
+  // mid-arming repaints the right pane on the next render.
+  const isVoiceArming = useVoiceRecordingStore(
+    (s) => s.status === "arming" && s.activeTarget?.panelId === id
+  );
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const preferredTerminalFocusTarget = usePanelStore((state) => state.preferredTerminalFocusTarget);
@@ -1082,15 +1098,22 @@ function TerminalPaneComponent({
     spawnError,
     backendStatus,
   });
-  const showRestartError = isHostConnected && Boolean(restartError);
-  const showSpawnError = isHostConnected && Boolean(spawnError) && !restartError;
+  // Backend-dependent banners (restart / spawn / reconnect) describe failures
+  // whose only recovery path runs through the host, so they're hidden while
+  // any global recovery cause is active. The parse-error category covers
+  // scrollback-restore failures, which are independent of host connectivity
+  // (terminal still works) and stay visible during a backend flap.
+  const suppressBackendDependent = useShouldSuppressLocalError("backend-dependent");
+  const suppressParseError = useShouldSuppressLocalError("parse-error");
+  const showRestartError = !suppressBackendDependent && Boolean(restartError);
+  const showSpawnError = !suppressBackendDependent && Boolean(spawnError) && !restartError;
   const showReconnectError =
-    isHostConnected && Boolean(reconnectError) && !restartError && !spawnError;
+    !suppressBackendDependent && Boolean(reconnectError) && !restartError && !spawnError;
   // Scrollback restore is independent of PTY launch state (spawn/reconnect),
   // so it can co-exist with those banners. Only restartError, which already
   // implies a destroyed-and-respawning PTY, suppresses it.
   const showScrollbackRestoreError =
-    isHostConnected && Boolean(scrollbackRestoreError) && !restartError;
+    !suppressParseError && Boolean(scrollbackRestoreError) && !restartError;
   const showRestartStatus = restartBannerVariant.type !== "none";
 
   return (
@@ -1134,6 +1157,7 @@ function TerminalPaneComponent({
       isSelected={isSelected}
       isFleetFollower={isFleetFollower}
       isHibernated={isHibernated}
+      isVoiceArming={isVoiceArming}
       tabs={tabs}
       onTabClick={onTabClick}
       onTabClose={onTabClose}
@@ -1251,6 +1275,10 @@ function TerminalPaneComponent({
           />
         ) : spawnStatus === "spawning" ? (
           <TerminalStartupPlaceholder agentId={agentId} />
+        ) : spawnStatus === "failed" ? (
+          <div className="flex-1 min-h-0 bg-daintree-bg flex items-center justify-center">
+            <p className="text-sm text-daintree-text/50">Terminal failed to start</p>
+          </div>
         ) : (
           <>
             <div className="flex-1 relative min-h-0">
@@ -1350,7 +1378,9 @@ function TerminalPaneComponent({
                 <LazyHybridInputBar
                   ref={inputBarRef}
                   terminalId={id}
-                  disabled={isBackendDisconnected || isBackendRecovering || isInputLocked}
+                  disabled={
+                    isBackendDisconnected || isBackendRecovering || isInputLocked || isRestarting
+                  }
                   cwd={cwd}
                   agentId={effectiveAgentId}
                   agentHasLifecycleEvent={stateChangeTrigger !== undefined}
@@ -1358,7 +1388,7 @@ function TerminalPaneComponent({
                   restartKey={restartKey}
                   onActivate={handleClick}
                   onSend={({ trackerData, text }) => {
-                    if (!isInputLocked) {
+                    if (!isInputLocked && !isRestarting) {
                       terminalInstanceService.notifyUserInput(id);
                       // submit now rejects when the PTY is gone (#8706); the
                       // single-pane path has no recovery UI for that, so
@@ -1371,7 +1401,7 @@ function TerminalPaneComponent({
                     }
                   }}
                   onSendKey={(key) => {
-                    if (!isInputLocked) {
+                    if (!isInputLocked && !isRestarting) {
                       terminalInstanceService.notifyUserInput(id);
                       terminalClient.sendKey(id, key);
                     }

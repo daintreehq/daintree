@@ -21,4 +21,5 @@ export type AppErrorCode =
   | "PERMISSION"
   | "ARG_COUNT_EXCEEDED"
   | "PAYLOAD_TOO_LARGE"
+  | "RECIPE_STALE_CONFLICT"
   | "INTERNAL";

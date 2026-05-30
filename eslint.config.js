@@ -4,6 +4,7 @@ import reactHooks from "eslint-plugin-react-hooks";
 import reactCompiler from "eslint-plugin-react-compiler";
 import unicorn from "eslint-plugin-unicorn";
 import prettier from "eslint-config-prettier";
+import structuredTestSkipAnnotations from "./scripts/eslint-rules/structured-test-skip-annotations.js";
 
 export default tseslint.config(
   // Base JS recommended rules
@@ -984,6 +985,46 @@ export default tseslint.config(
     },
   },
 
+  // SDK boundary guard: forge.js imports in shared/types/plugin.ts must
+  // be classified in shared/types/plugin-sdk.ts. This is the single gate
+  // that prevents forge-internal types from leaking into the public SDK
+  // surface unclassified. Existing imports are grandfathered; new ones
+  // must be accompanied by a corresponding re-export in plugin-sdk.ts.
+  // See #9269, docs/plugins/architecture.md#sdk-surface.
+  {
+    files: ["shared/types/plugin.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "warn",
+        {
+          patterns: [
+            {
+              group: ["./forge.js"],
+              message:
+                "Forge types imported here become part of the public SDK surface via PluginManifest/PluginHostApi. New forge imports must be classified and re-exported from shared/types/plugin-sdk.ts. See docs/plugins/architecture.md#sdk-surface and #9269.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // E2E structured test-skip annotations — enforce that every test.skip()
+  // is preceded by test.info().annotations.push({ type, description })
+  // with a valid type and, for quarantine, a YYYY-MM-DD date prefix.
+  // See #9120.
+  {
+    files: ["e2e/**/*.spec.ts"],
+    plugins: {
+      "e2e-structured-skip": {
+        rules: { "structured-test-skip-annotations": structuredTestSkipAnnotations },
+      },
+    },
+    rules: {
+      "e2e-structured-skip/structured-test-skip-annotations": "error",
+    },
+  },
+
   // Prettier must be last to override conflicting rules
   prettier,
 
@@ -993,6 +1034,9 @@ export default tseslint.config(
       "dist/**",
       "dist-electron/**",
       "dist-typecheck/**",
+      // Built output of the workspace CLI packages (tsup). Bundled JS isn't
+      // source and trips no-undef on Node globals when linted locally.
+      "packages/*/dist/**",
       "release/**",
       "node_modules/**",
       "*.config.js",

@@ -15,16 +15,14 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("../../utils.js", () => ({
-  checkRateLimit: checkRateLimitMock,
-  waitForRateLimitSlot: waitForRateLimitSlotMock,
-  typedHandle: (channel: string, handler: unknown) => {
+vi.mock("../../utils.js", () => {
+  const typedHandle = (channel: string, handler: unknown) => {
     ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
       (handler as (...a: unknown[]) => unknown)(...args)
     );
     return () => ipcMainMock.removeHandler(channel);
-  },
-  typedHandleWithContext: (channel: string, handler: unknown) => {
+  };
+  const typedHandleWithContext = (channel: string, handler: unknown) => {
     ipcMainMock.handle(
       channel,
       (event: { sender?: { id?: number } } | null | undefined, ...args: unknown[]) => {
@@ -38,8 +36,45 @@ vi.mock("../../utils.js", () => ({
       }
     );
     return () => ipcMainMock.removeHandler(channel);
-  },
-}));
+  };
+  const parseOrThrow = (
+    channel: string,
+    schema: { safeParse: (input: unknown) => { success: boolean } },
+    input: unknown
+  ) => {
+    const result = schema.safeParse(input);
+    if (!result.success) {
+      const err = new Error(`IPC validation failed: ${channel}`);
+      (err as Error & { name: string }).name = "ValidationError";
+      throw err;
+    }
+    return (result as { success: true; data: unknown }).data;
+  };
+  return {
+    checkRateLimit: checkRateLimitMock,
+    waitForRateLimitSlot: waitForRateLimitSlotMock,
+    typedHandle,
+    typedHandleWithContext,
+    typedHandleValidated: (
+      channel: string,
+      schema: { safeParse: (input: unknown) => { success: boolean } },
+      handler: unknown
+    ) =>
+      typedHandle(channel, async (...args: unknown[]) => {
+        const parsed = parseOrThrow(channel, schema, args[0]);
+        return (handler as (payload: unknown) => unknown)(parsed);
+      }),
+    typedHandleWithContextValidated: (
+      channel: string,
+      schema: { safeParse: (input: unknown) => { success: boolean } },
+      handler: unknown
+    ) =>
+      typedHandleWithContext(channel, async (ctx: unknown, ...args: unknown[]) => {
+        const parsed = parseOrThrow(channel, schema, args[0]);
+        return (handler as (ctx: unknown, payload: unknown) => unknown)(ctx, parsed);
+      }),
+  };
+});
 
 vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: {

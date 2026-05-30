@@ -48,7 +48,7 @@ export function deriveEffectiveTier(
   ctx: WorktreeDeleteTierCtx
 ): DestructiveTier;
 export function deriveEffectiveTier(
-  actionId: "portal.closeAllTabs" | "portal.closeOthers",
+  actionId: "portal.closeAllTabs" | "portal.closeOthers" | "portal.closeToRight",
   ctx: PortalCloseTierCtx
 ): DestructiveTier;
 export function deriveEffectiveTier(
@@ -63,7 +63,9 @@ export function deriveEffectiveTier(
       : "D2";
   }
   if (
-    (actionId === "portal.closeAllTabs" || actionId === "portal.closeOthers") &&
+    (actionId === "portal.closeAllTabs" ||
+      actionId === "portal.closeOthers" ||
+      actionId === "portal.closeToRight") &&
     "tabCount" in ctx
   ) {
     return ctx.tabCount >= PORTAL_BULK_CLOSE_TIER_THRESHOLD ? "D1" : "D0";

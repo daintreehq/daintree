@@ -28,12 +28,23 @@ vi.mock("../EventsContent", () => ({
 vi.mock("../TelemetryContent", () => ({
   TelemetryContent: () => <div data-testid="telemetry-content" />,
 }));
+vi.mock("../PerfContent", () => ({
+  PerfContent: () => <div data-testid="perf-content" />,
+}));
 vi.mock("../DiagnosticsActions", () => ({
   ProblemsActions: () => null,
   LogsActions: () => null,
   EventsActions: () => null,
   TelemetryActions: () => null,
+  PerfActions: () => null,
 }));
+
+vi.mock("@/store/perfMetricsStore", () => {
+  const state = { failedBudgetCount: 0 };
+  return {
+    usePerfMetricsStore: (selector: (s: typeof state) => unknown) => selector(state),
+  };
+});
 
 vi.mock("@/clients", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
@@ -106,7 +117,7 @@ describe("DiagnosticsDock — roving tabindex on the tab strip", () => {
   it("gives only the active tab tabIndex=0", () => {
     const { container } = render(<DiagnosticsDock />);
     const tabs = container.querySelectorAll('[role="tab"]');
-    expect(tabs.length).toBe(4);
+    expect(tabs.length).toBe(5);
     const active = container.querySelector('[role="tab"][aria-selected="true"]');
     expect(active?.getAttribute("tabindex")).toBe("0");
     container.querySelectorAll('[role="tab"][aria-selected="false"]').forEach((el) => {
@@ -130,7 +141,7 @@ describe("DiagnosticsDock — roving tabindex on the tab strip", () => {
     const tabs = Array.from(tablist.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
     tabs[0]!.focus();
     fireEvent.keyDown(tablist, { key: "ArrowLeft" });
-    expect(useDiagnosticsStore.getState().activeTab).toBe("telemetry");
+    expect(useDiagnosticsStore.getState().activeTab).toBe("perf");
     expect(document.activeElement).toBe(tabs[tabs.length - 1]);
   });
 
@@ -147,7 +158,7 @@ describe("DiagnosticsDock — roving tabindex on the tab strip", () => {
 
     tabs.find((t) => t.dataset.tab === "problems")!.focus();
     fireEvent.keyDown(tablist, { key: "End" });
-    expect(useDiagnosticsStore.getState().activeTab).toBe("telemetry");
+    expect(useDiagnosticsStore.getState().activeTab).toBe("perf");
   });
 });
 
@@ -229,6 +240,48 @@ describe("DiagnosticsDock — separator keyboard resize", () => {
     const separator = container.querySelector('[role="separator"]') as HTMLDivElement;
     fireEvent.keyDown(separator, { key: " " });
     expect(useDiagnosticsStore.getState().height).toBe(DIAGNOSTICS_DEFAULT_HEIGHT);
+  });
+});
+
+describe("DiagnosticsDock — badge cap", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+
+  function setErrors(count: number) {
+    useErrorStore.setState({
+      errors: Array.from({ length: count }, (_, i) => ({
+        id: `err-${i}`,
+        type: "unknown" as const,
+        message: `Error ${i}`,
+        retryability: "none" as const,
+        source: "test",
+        timestamp: Date.now(),
+        dismissed: false,
+        fromPreviousSession: false,
+      })),
+    });
+  }
+
+  it("shows exact count when errors <= 99", () => {
+    setErrors(99);
+    const { container } = render(<DiagnosticsDock />);
+    const badge = container.querySelector('[id="diagnostics-problems-tab"] span');
+    expect(badge?.textContent).toBe("99");
+  });
+
+  it("caps at 99+ when errors >= 100", () => {
+    setErrors(100);
+    const { container } = render(<DiagnosticsDock />);
+    const badge = container.querySelector('[id="diagnostics-problems-tab"] span');
+    expect(badge?.textContent).toBe("99+");
+  });
+
+  it("shows no badge when error count is zero", () => {
+    setErrors(0);
+    const { container } = render(<DiagnosticsDock />);
+    const badge = container.querySelector('[id="diagnostics-problems-tab"] span');
+    expect(badge).toBeNull();
   });
 });
 

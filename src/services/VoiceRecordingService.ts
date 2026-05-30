@@ -4,12 +4,14 @@ import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
-import { isActiveVoiceSession } from "@shared/types";
+import { isActiveVoiceSession, type VoiceInputError, type VoiceRecordingMode } from "@shared/types";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
+import { keybindingService } from "@/services/KeybindingService";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { notify } from "@/lib/notify";
 
 const LOG_PREFIX = "[VoiceRecording]";
 
@@ -45,6 +47,11 @@ class VoiceRecordingService {
   private elapsedTimer: ReturnType<typeof setInterval> | null = null;
   private sessionStartedAt = 0;
   private selectedDeviceId = "";
+  private recordingMode: VoiceRecordingMode = "toggle";
+  // KeyboardEvent.code of the physical key (e.g. "KeyV") that started the
+  // current PTT session. `null` when no PTT session is active. Cleared on stop,
+  // window blur, or Escape.
+  private pttActiveKeyCode: string | null = null;
   private unsubscribers: Array<() => void> = [];
   private isStoppingSession = false;
   private stopPromise: Promise<void> | null = null;
@@ -55,6 +62,13 @@ class VoiceRecordingService {
   private sessionPeakRms = 0;
   private sessionRmsSum = 0;
   private sessionChunkCount = 0;
+  // Pause-state tracking. The worklet suppresses PCM emission while paused, the
+  // elapsed counter freezes, and a 60s auto-stop terminates the session if the
+  // user never resumes — prevents idle Realtime keep-alive charges.
+  private pauseStartedAt = 0;
+  private totalPausedMs = 0;
+  private pauseTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private static readonly PAUSE_AUTO_STOP_MS = 60_000;
 
   initialize(): void {
     if (this.initialized) return;
@@ -81,24 +95,18 @@ class VoiceRecordingService {
               .getDraftInput(target.panelId, target.projectId);
             const { insertStart } = getVoiceInsertMetadata(draft);
             useVoiceRecordingStore.getState().setSessionDraftStart(target.panelId, insertStart);
-            // Snapshot where dictated text actually begins, including any separator
-            // inserted between existing draft text and the first dictated token.
+            // Snapshot where dictated text will begin once the final commit runs,
+            // including any leading separator inserted between existing draft and
+            // the first dictated token. Stable for the lifetime of the utterance.
             useVoiceRecordingStore
               .getState()
               .setDraftLengthAtSegmentStart(target.panelId, insertStart);
             // Track paragraph start for the first utterance in a new paragraph.
             useVoiceRecordingStore.getState().setActiveParagraphStart(target.panelId, insertStart);
-            // First delta of a new utterance — use appendVoiceText for separator logic.
-            useTerminalInputStore
-              .getState()
-              .appendVoiceText(target.panelId, delta, target.projectId);
-          } else {
-            // Subsequent deltas — append raw to keep length in sync with liveText.
-            const store = useTerminalInputStore.getState();
-            const existing = store.getDraftInput(target.panelId, target.projectId);
-            store.setDraftInput(target.panelId, existing + delta, target.projectId);
-            store.bumpVoiceDraftRevision();
           }
+          // Interim deltas accumulate in liveText only — the ghost-widget
+          // decoration renders them outside the doc model so the editor's
+          // history records a single transaction per utterance (#9172).
         }
         useVoiceRecordingStore.getState().appendDelta(delta);
       })
@@ -113,16 +121,18 @@ class VoiceRecordingService {
         if (panelId) {
           const buffer = voiceState.panelBuffers[panelId];
           const segmentStart = buffer?.draftLengthAtSegmentStart ?? -1;
-          if (segmentStart >= 0 || text.trim()) {
+          const finalText = text.trim();
+          if (finalText) {
             const inputStore = useTerminalInputStore.getState();
             const draft = inputStore.getDraftInput(panelId, projectId);
             // Slice back to where this segment started and replace with final transcript.
+            // In the new flow the doc carries no interim text, so the slice is a no-op
+            // when nothing has been written — the separator still re-fixes spacing.
             const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
             const { separator, insertStart } = getVoiceInsertMetadata(base);
-            if ((buffer?.activeParagraphStart ?? -1) < 0 && text.trim()) {
+            if ((buffer?.activeParagraphStart ?? -1) < 0) {
               useVoiceRecordingStore.getState().setActiveParagraphStart(panelId, insertStart);
             }
-            const finalText = text.trim();
             inputStore.setDraftInput(panelId, base + separator + finalText, projectId);
             inputStore.bumpVoiceDraftRevision();
           }
@@ -181,15 +191,38 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onError((error) => {
+      voiceInput.onError((error: VoiceInputError) => {
         // During graceful stop, the main process suppresses drain errors.
         // If one leaks through, ignore it to avoid prematurely finalizing.
         if (this.isStoppingSession) {
           logWarn(`${LOG_PREFIX} Ignoring error during stop`, { error });
           return;
         }
-        logError(`${LOG_PREFIX} Received error from backend`, { error });
-        useVoiceRecordingStore.getState().setError(error);
+        logError(`${LOG_PREFIX} Received error from backend`, {
+          severity: error.severity,
+          code: error.code,
+          message: error.message,
+        });
+        useVoiceRecordingStore.getState().setLastError(error);
+
+        // Transient errors (rate-limit, transport drop) are recoverable — the
+        // main process is already reconnecting. Store the error for tooltip
+        // context but keep the session alive; the reconnecting status update
+        // arriving on the same channel will update the UI.
+        if (error.severity === "transient") {
+          return;
+        }
+
+        // Fatal error — tear down the session and surface a toast so the user
+        // knows action is needed (check API key, network, etc.).
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Dictation stopped",
+          // eslint-disable-next-line no-restricted-syntax -- raw error.message: VoiceInputError is constructed internally with well-formed user copy
+          message: error.message,
+          context: { eventKind: "connectivity" },
+        });
         void this.stop("Dictation stopped because the connection failed.", {
           skipRemoteStop: true,
           nextStatus: "error",
@@ -205,7 +238,24 @@ class VoiceRecordingService {
           isStoppingSession: this.isStoppingSession,
         });
         if (status !== "idle") {
+          const prevStatus = useVoiceRecordingStore.getState().status;
+          // Local "paused" is a renderer-only override that gates worklet PCM
+          // emission. The backend doesn't know about it and will continue to
+          // emit "recording" / "reconnecting" on its own schedule. Letting those
+          // overwrite the store would silently exit pause: the worklet stays
+          // gated, the elapsed timer stays frozen, and togglePause() routes to
+          // pause() again instead of resume(). Genuine teardown signals
+          // ("error") still flow through; "idle" is handled below.
+          const isBenignBackendTick = status === "recording" || status === "reconnecting";
+          if (prevStatus === "paused" && isBenignBackendTick) {
+            return;
+          }
           useVoiceRecordingStore.getState().setStatus(status);
+          // Announce the reconnect once on entry — the backend re-emits
+          // "reconnecting" on every retry, so guard against repeat announcements.
+          if (status === "reconnecting" && prevStatus !== "reconnecting") {
+            useVoiceRecordingStore.getState().announce("Reconnecting dictation…");
+          }
         }
 
         if (this.isStoppingSession) {
@@ -245,7 +295,8 @@ class VoiceRecordingService {
 
     this.unsubscribers.push(
       usePanelStore.subscribe((state) => {
-        const activeTarget = useVoiceRecordingStore.getState().activeTarget;
+        const voiceState = useVoiceRecordingStore.getState();
+        const activeTarget = voiceState.activeTarget;
         if (!activeTarget) return;
 
         // If the recording target belongs to a different project than the
@@ -257,6 +308,13 @@ class VoiceRecordingService {
         const panel = found && found.location !== "trash" ? found : undefined;
 
         if (!panel) {
+          // No microphone has opened yet during arming — fall back to
+          // cancelArming() so we don't drive stop() through a non-existent
+          // session.
+          if (voiceState.status === "arming") {
+            this.cancelArming();
+            return;
+          }
           const panelId = activeTarget.panelId;
           void this.stop("Dictation stopped because its panel was closed.", {
             preserveLiveText: true,
@@ -270,9 +328,25 @@ class VoiceRecordingService {
     const handleEscapeKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       const state = useVoiceRecordingStore.getState();
-      if (state.status !== "connecting" && state.status !== "recording") return;
+      if (
+        state.status !== "arming" &&
+        state.status !== "connecting" &&
+        state.status !== "recording" &&
+        state.status !== "paused" &&
+        state.status !== "reconnecting"
+      )
+        return;
       e.preventDefault();
       e.stopPropagation();
+      // Arming is the pre-audio confirmation window. No session has begun
+      // yet, so route abort through cancelArming() instead of stop() —
+      // stop() would log "no active session" warnings and skip the cleanup
+      // path that resets activeTarget back to null.
+      if (state.status === "arming") {
+        this.cancelArming();
+        return;
+      }
+      this.pttActiveKeyCode = null;
       void this.stop("Dictation cancelled.", { preserveLiveText: true });
     };
     window.addEventListener("keydown", handleEscapeKey, { capture: true });
@@ -280,18 +354,79 @@ class VoiceRecordingService {
       window.removeEventListener("keydown", handleEscapeKey, { capture: true })
     );
 
+    // Push-to-talk: a capture-phase keydown listener records the physical key
+    // code of the voice shortcut press so the keyup listener can match it. The
+    // actual `start()` call happens via the normal action dispatch chain
+    // (`toggleFocusedPanel` / `toggleAssistant`), which calls `start()`
+    // directly when `recordingMode === "push-to-talk"`. Recording only the
+    // code here avoids racing the action dispatcher.
+    const handlePttKeyDown = (e: KeyboardEvent) => {
+      if (this.recordingMode !== "push-to-talk") return;
+      if (e.repeat) return;
+      const focusedCombo = keybindingService.getEffectiveCombo("voiceInput.toggle");
+      const assistantCombo = keybindingService.getEffectiveCombo("voiceInput.toggleAssistant");
+      const matches =
+        (focusedCombo && keybindingService.matchesEvent(e, focusedCombo)) ||
+        (assistantCombo && keybindingService.matchesEvent(e, assistantCombo));
+      if (!matches) return;
+      this.pttActiveKeyCode = e.code;
+    };
+    window.addEventListener("keydown", handlePttKeyDown, { capture: true });
+    this.unsubscribers.push(() =>
+      window.removeEventListener("keydown", handlePttKeyDown, { capture: true })
+    );
+
+    // Push-to-talk: stop recording on keyup of the trigger key. macOS swallows
+    // the trigger keyup if a modifier (Cmd/Meta) is still held, so MetaLeft/
+    // MetaRight keyup also ends the session as a safety net. Modifier-only
+    // releases (Shift, Alt, Ctrl) do not stop — only the physical trigger key
+    // or Meta release.
+    const handlePttKeyUp = (e: KeyboardEvent) => {
+      if (this.pttActiveKeyCode === null) return;
+      const isTriggerRelease = e.code === this.pttActiveKeyCode;
+      const isMetaRelease = e.code === "MetaLeft" || e.code === "MetaRight";
+      if (!isTriggerRelease && !isMetaRelease) return;
+      this.pttActiveKeyCode = null;
+      void this.stop("Dictation stopped.", { preserveLiveText: true });
+    };
+    window.addEventListener("keyup", handlePttKeyUp, { capture: true });
+    this.unsubscribers.push(() =>
+      window.removeEventListener("keyup", handlePttKeyUp, { capture: true })
+    );
+
+    // Push-to-talk: window blur safety net. Chromium does NOT dispatch a
+    // synthetic keyup when the window loses focus, so a Cmd+Tab mid-press
+    // would otherwise leave the session running indefinitely. Stops the
+    // session if a PTT press was active.
+    const handlePttBlur = () => {
+      if (this.pttActiveKeyCode === null) return;
+      this.pttActiveKeyCode = null;
+      void this.stop("Dictation stopped.", { preserveLiveText: true });
+    };
+    window.addEventListener("blur", handlePttBlur);
+    this.unsubscribers.push(() => window.removeEventListener("blur", handlePttBlur));
+
     void this.refreshConfiguration();
   }
 
   async refreshConfiguration(): Promise<boolean> {
     const settings = await window.electron.voiceInput.getSettings();
-    const isConfigured = settings.enabled && !!settings.openaiApiKey;
+    // "Configured" means the selected provider has its own API key — Deepgram
+    // uses deepgramApiKey, every other provider uses openaiApiKey.
+    const hasProviderKey =
+      settings.transcriptionProvider === "deepgram"
+        ? !!settings.deepgramApiKey
+        : !!settings.openaiApiKey;
+    const isConfigured = settings.enabled && hasProviderKey;
     this.selectedDeviceId = settings.deviceId ?? "";
+    this.recordingMode = settings.recordingMode ?? "toggle";
     logDebug(`${LOG_PREFIX} refreshConfiguration`, {
       enabled: settings.enabled,
-      hasApiKey: !!settings.openaiApiKey,
+      provider: settings.transcriptionProvider,
+      hasProviderKey,
       isConfigured,
       correctionEnabled: settings.correctionEnabled,
+      recordingMode: this.recordingMode,
     });
     // Keep correction state in sync for live-segment dimming
     useVoiceRecordingStore
@@ -314,12 +449,52 @@ class VoiceRecordingService {
       status: state.status,
     });
 
+    // A second press during the pre-audio arming window aborts back to idle.
+    // No microphone has been opened yet, so there is nothing for stop() to
+    // unwind — incrementing startRequestId via cancelArming() is enough to
+    // make the in-flight start() bail at its next staleness check.
+    if (isActiveTarget && state.status === "arming") {
+      this.cancelArming();
+      return;
+    }
+
     if (isActiveTarget && isActive) {
       await this.stop("Dictation stopped.", { preserveLiveText: true });
       return;
     }
 
+    // Refresh recent-targets MRU on confirmed routing (before any await so the
+    // entry reflects the user's intent even if start() bails later — recent
+    // targets are a navigation aid, not a session log).
+    useVoiceRecordingStore.getState().recordRecentTarget(target);
+
+    // Synchronous pre-audio cue. setArming() resolves under 1ms (Zustand set);
+    // the first await inside start() then carries us to "connecting" within
+    // ~50–200ms, by which point beginSession() has overwritten this state.
+    useVoiceRecordingStore.getState().setArming(target);
     await this.start(target);
+  }
+
+  /**
+   * Abort an in-flight arming window before audio init begins. Bumping
+   * startRequestId invalidates any pending start() so it bails at its next
+   * staleness check; finishSession() returns the store to idle without
+   * touching panel buffers (no transcript exists yet).
+   */
+  private cancelArming(): void {
+    this.startRequestId++;
+    useVoiceRecordingStore.getState().finishSession({ nextStatus: "idle" });
+  }
+
+  /**
+   * Roll the store off the "arming" status when a `start()` call has set
+   * an error and is about to return. Without this, the store would stay
+   * `{ status: "arming", activeTarget: T }` indefinitely — the toolbar and
+   * panel border would keep showing the pre-recording cue with no mic to
+   * back it up.
+   */
+  private failArming(): void {
+    useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
   }
 
   async start(target: VoiceRecordingTarget): Promise<void> {
@@ -335,18 +510,39 @@ class VoiceRecordingService {
     if (!isConfigured || this.isStartRequestStale(startRequestId)) {
       logWarn(`${LOG_PREFIX} Not configured, aborting start`);
       if (!this.isStartRequestStale(startRequestId)) {
-        useVoiceRecordingStore.getState().setError("Voice input is not configured.");
+        useVoiceRecordingStore.getState().setLastError({
+          severity: "fatal",
+          code: "renderer_error",
+          message: "Voice input is not configured.",
+        });
         useVoiceRecordingStore
           .getState()
           .announce("Voice dictation is not configured. Open Voice settings to continue.");
+        this.failArming();
       }
       return;
     }
 
     // Check and request OS-level microphone permission (macOS requires this
     // from the main process before getUserMedia will succeed in the renderer).
+    // The IPC call is wrapped so a rejection (main-process crash, channel
+    // teardown) doesn't leak past start() and leave the store armed forever.
     logDebug(`${LOG_PREFIX} Checking microphone permission`);
-    const micStatus = await window.electron.voiceInput.checkMicPermission();
+    let micStatus: Awaited<ReturnType<typeof window.electron.voiceInput.checkMicPermission>>;
+    try {
+      micStatus = await window.electron.voiceInput.checkMicPermission();
+    } catch (err) {
+      logError(`${LOG_PREFIX} checkMicPermission IPC rejected`, err);
+      if (!this.isStartRequestStale(startRequestId)) {
+        useVoiceRecordingStore.getState().setLastError({
+          severity: "fatal",
+          code: "mic_permission_check_failed",
+          message: "Could not check microphone permission. Try again.",
+        });
+        this.failArming();
+      }
+      return;
+    }
     if (this.isStartRequestStale(startRequestId)) {
       return;
     }
@@ -355,8 +551,11 @@ class VoiceRecordingService {
     if (micStatus === "denied" || micStatus === "restricted") {
       const message = "Microphone permission denied. Enable it in System Settings and try again.";
       logError(`${LOG_PREFIX} Microphone permission denied at OS level`, { micStatus });
-      useVoiceRecordingStore.getState().setError(message);
+      useVoiceRecordingStore
+        .getState()
+        .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
       useVoiceRecordingStore.getState().announce(message);
+      this.failArming();
       safeFireAndForget(window.electron.voiceInput.openMicSettings(), {
         context: "Opening OS microphone settings",
       });
@@ -365,15 +564,32 @@ class VoiceRecordingService {
 
     if (micStatus === "not-determined") {
       logDebug(`${LOG_PREFIX} Requesting OS microphone permission`);
-      const granted = await window.electron.voiceInput.requestMicPermission();
+      let granted: boolean;
+      try {
+        granted = await window.electron.voiceInput.requestMicPermission();
+      } catch (err) {
+        logError(`${LOG_PREFIX} requestMicPermission IPC rejected`, err);
+        if (!this.isStartRequestStale(startRequestId)) {
+          useVoiceRecordingStore.getState().setLastError({
+            severity: "fatal",
+            code: "mic_permission_request_failed",
+            message: "Could not request microphone permission. Try again.",
+          });
+          this.failArming();
+        }
+        return;
+      }
       if (this.isStartRequestStale(startRequestId)) {
         return;
       }
       logDebug(`${LOG_PREFIX} OS microphone permission result`, { granted });
       if (!granted) {
         const message = "Microphone permission denied. Enable it in System Settings and try again.";
-        useVoiceRecordingStore.getState().setError(message);
+        useVoiceRecordingStore
+          .getState()
+          .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
         useVoiceRecordingStore.getState().announce(message);
+        this.failArming();
         return;
       }
     }
@@ -395,8 +611,17 @@ class VoiceRecordingService {
         name: error instanceof DOMException ? error.name : "unknown",
         message,
       });
-      useVoiceRecordingStore.getState().setError(message);
-      useVoiceRecordingStore.getState().announce(message);
+      if (!this.isStartRequestStale(startRequestId)) {
+        const micCode =
+          error instanceof DOMException && error.name === "NotAllowedError"
+            ? "mic_permission_denied"
+            : "mic_access_failed";
+        useVoiceRecordingStore
+          .getState()
+          .setLastError({ severity: "fatal", code: micCode, message });
+        useVoiceRecordingStore.getState().announce(message);
+        this.failArming();
+      }
       return;
     }
 
@@ -446,7 +671,13 @@ class VoiceRecordingService {
       return;
     }
 
-    if (useVoiceRecordingStore.getState().activeTarget) {
+    // Only an actually-started session (open mic stream) needs to be torn
+    // down here. `this.stream` is the canonical "audio is open" flag and is
+    // independent of store status — using store.activeTarget here would
+    // false-positive during the arming window (we seeded it ourselves) and
+    // status alone would miss a cross-panel switch where the new "arming"
+    // status has already overwritten the prior session's "recording".
+    if (this.stream) {
       logDebug(`${LOG_PREFIX} Stopping existing session before starting new one`);
       await this.stop(undefined, {
         preserveLiveText: true,
@@ -464,6 +695,9 @@ class VoiceRecordingService {
 
     const generation = ++this.generation;
     logDebug(`${LOG_PREFIX} Beginning session`, { generation });
+    this.pauseStartedAt = 0;
+    this.totalPausedMs = 0;
+    this.clearPauseTimeout();
     useVoiceRecordingStore.getState().beginSession(target);
 
     this.stream = stream;
@@ -523,7 +757,11 @@ class VoiceRecordingService {
     } catch (err) {
       if (this.generation !== generation || this.isStartRequestStale(startRequestId)) return;
       logError(`${LOG_PREFIX} Failed to load pcm-processor worklet`, err);
-      useVoiceRecordingStore.getState().setError("Failed to load the audio processor.");
+      useVoiceRecordingStore.getState().setLastError({
+        severity: "fatal",
+        code: "renderer_error",
+        message: "Failed to load the audio processor.",
+      });
       await this.stop(undefined, { nextStatus: "error", announce: false });
       useVoiceRecordingStore.getState().announce("Voice dictation failed to initialize.");
       return;
@@ -619,7 +857,9 @@ class VoiceRecordingService {
 
     if (!result.ok) {
       logError(`${LOG_PREFIX} Backend start failed`, { error: result.error });
-      useVoiceRecordingStore.getState().setError(result.error);
+      useVoiceRecordingStore
+        .getState()
+        .setLastError({ severity: "fatal", code: "backend_start_failed", message: result.error });
       await this.cleanupAudioCapture();
       useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
       useVoiceRecordingStore.getState().announce("Voice dictation failed to start.");
@@ -656,6 +896,10 @@ class VoiceRecordingService {
       this.initialize();
       const { skipRemoteStop = false, preserveLiveText = true, nextStatus = "idle" } = options;
       const shouldAnnounce = options.announce ?? true;
+
+      // Clear any PTT key tracking — the keyup safety net should not fire stop
+      // again on a session that's already winding down.
+      this.pttActiveKeyCode = null;
 
       if (!options.preservePendingStart) {
         this.startRequestId++;
@@ -710,17 +954,24 @@ class VoiceRecordingService {
       }
 
       if (hasSession) {
-        // Flush any remaining delta text (liveText) to the draft store before
-        // finishSession clears it — this handles the case where recording stops
-        // mid-utterance with un-committed delta text in the editor.
+        // Flush any remaining interim text (liveText) into the draft as a final
+        // commit before finishSession clears it. In the ghost-widget flow the
+        // doc carries no interim text, so without this flush a mid-utterance
+        // stop would silently drop the partial transcription.
         if (preserveLiveText) {
           const currentTarget = useVoiceRecordingStore.getState().activeTarget;
           if (currentTarget) {
-            const { panelId } = currentTarget;
+            const { panelId, projectId } = currentTarget;
             const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
             const remaining = buffer?.liveText?.trim();
+            const segmentStart = buffer?.draftLengthAtSegmentStart ?? -1;
             if (remaining) {
-              useTerminalInputStore.getState().bumpVoiceDraftRevision();
+              const inputStore = useTerminalInputStore.getState();
+              const draft = inputStore.getDraftInput(panelId, projectId);
+              const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
+              const { separator } = getVoiceInsertMetadata(base);
+              inputStore.setDraftInput(panelId, base + separator + remaining, projectId);
+              inputStore.bumpVoiceDraftRevision();
             }
           }
         }
@@ -836,6 +1087,21 @@ class VoiceRecordingService {
   async toggleFocusedPanel(): Promise<void> {
     this.initialize();
 
+    // Locked target overrides focus routing entirely — synchronous read before
+    // any await so the value reflects the user's pin at the moment the hotkey
+    // fired (mirrors the assistant-focus pattern below for #6959). When the
+    // locked panel has been trashed or removed, clear the stale lock and fall
+    // through to normal focus-based resolution rather than failing silently.
+    const lockedTarget = useVoiceRecordingStore.getState().lockedTarget;
+    if (lockedTarget) {
+      const lockedPanel = usePanelStore.getState().panelsById[lockedTarget.panelId];
+      if (lockedPanel && lockedPanel.location !== "trash") {
+        await this.toggle(lockedTarget);
+        return;
+      }
+      useVoiceRecordingStore.getState().clearLockedTarget(lockedTarget.panelId);
+    }
+
     // Assistant focus is tracked by macroFocusStore, not panelStore.focusedId,
     // so check it synchronously (before any await — #6959) and route dictation
     // to the assistant when its input owns focus. Otherwise the last-active grid
@@ -843,28 +1109,34 @@ class VoiceRecordingService {
     if (isAssistantFocused()) {
       const assistantTarget = this.getAssistantTarget();
       if (!assistantTarget) {
-        useVoiceRecordingStore
-          .getState()
-          .setError("Daintree Assistant is starting — try again in a moment.");
+        useVoiceRecordingStore.getState().setLastError({
+          severity: "fatal",
+          code: "renderer_error",
+          message: "Daintree Assistant is starting — try again in a moment.",
+        });
         useVoiceRecordingStore
           .getState()
           .announce("Daintree Assistant is starting. Try dictation again in a moment.");
         return;
       }
-      await this.toggle(assistantTarget);
+      await this.startOrToggle(assistantTarget);
       return;
     }
 
     const target = this.getFocusedPanelTarget();
     if (!target) {
-      useVoiceRecordingStore.getState().setError("No focused terminal is available for dictation.");
+      useVoiceRecordingStore.getState().setLastError({
+        severity: "fatal",
+        code: "renderer_error",
+        message: "No focused terminal is available for dictation.",
+      });
       useVoiceRecordingStore
         .getState()
         .announce("Focus a terminal input before starting dictation.");
       return;
     }
 
-    await this.toggle(target);
+    await this.startOrToggle(target);
   }
 
   /**
@@ -887,12 +1159,40 @@ class VoiceRecordingService {
     // the user to retry once the session exists.
     const assistantTarget = this.getAssistantTarget();
     if (!assistantTarget) {
-      useVoiceRecordingStore.getState().setError("Start the Daintree Assistant before dictating.");
+      useVoiceRecordingStore.getState().setLastError({
+        severity: "fatal",
+        code: "renderer_error",
+        message: "Start the Daintree Assistant before dictating.",
+      });
       useVoiceRecordingStore.getState().announce("Start the Daintree Assistant before dictating.");
       return;
     }
 
-    await this.toggle(assistantTarget);
+    await this.startOrToggle(assistantTarget);
+  }
+
+  // In push-to-talk mode the keyboard shortcut starts recording; the keyup
+  // listener stops it. But the same action is also reachable from the command
+  // palette, the menu, and agent automation — none of which produce a keyup.
+  // Falling back to stop-on-second-invoke for an active session of the same
+  // target keeps those entry points usable without affecting the held-key
+  // flow (a held-key second press is suppressed by the e.repeat guard, and a
+  // release-then-press cycle has already cleared the active session).
+  // In toggle mode the shortcut behaves as before. Toolbar callers should
+  // keep using `toggle()` directly — they have no keyup analog and must not
+  // be affected by the recording-mode setting.
+  private async startOrToggle(target: VoiceRecordingTarget): Promise<void> {
+    if (this.recordingMode === "push-to-talk") {
+      const state = useVoiceRecordingStore.getState();
+      const isActiveTarget = state.activeTarget?.panelId === target.panelId;
+      if (isActiveTarget && isActiveVoiceSession(state.status)) {
+        await this.stop("Dictation stopped.", { preserveLiveText: true });
+        return;
+      }
+      await this.start(target);
+      return;
+    }
+    await this.toggle(target);
   }
 
   async focusActiveTarget(): Promise<boolean> {
@@ -1001,12 +1301,15 @@ class VoiceRecordingService {
 
   private startElapsedTimer(): void {
     this.clearElapsedTimer();
-    useVoiceRecordingStore.getState().setElapsedSeconds(0);
+    useVoiceRecordingStore.getState().setElapsedSeconds(this.computeElapsedSeconds());
     this.elapsedTimer = setInterval(() => {
-      useVoiceRecordingStore
-        .getState()
-        .setElapsedSeconds(Math.floor((Date.now() - this.sessionStartedAt) / 1000));
+      useVoiceRecordingStore.getState().setElapsedSeconds(this.computeElapsedSeconds());
     }, 1000);
+  }
+
+  private computeElapsedSeconds(): number {
+    const wallMs = Date.now() - this.sessionStartedAt;
+    return Math.max(0, Math.floor((wallMs - this.totalPausedMs) / 1000));
   }
 
   private clearElapsedTimer(): void {
@@ -1015,13 +1318,99 @@ class VoiceRecordingService {
     this.elapsedTimer = null;
   }
 
+  private clearPauseTimeout(): void {
+    if (this.pauseTimeoutId === null) return;
+    clearTimeout(this.pauseTimeoutId);
+    this.pauseTimeoutId = null;
+  }
+
   private clearTimers(): void {
     this.clearElapsedTimer();
+    this.clearPauseTimeout();
     useVoiceRecordingStore.getState().setElapsedSeconds(0);
+  }
+
+  /**
+   * Suspend audio capture without tearing down the OpenAI Realtime session.
+   * The PCM worklet stops forwarding chunks, the elapsed counter freezes, and
+   * a 60-second auto-stop timer prevents the session from idling forever.
+   * No-op unless the current status is "recording" — paused-on-paused, resume
+   * on idle, and pause during connect/reconnect/finish are all ignored.
+   */
+  pause(): void {
+    this.initialize();
+    const state = useVoiceRecordingStore.getState();
+    if (state.status !== "recording") {
+      logDebug(`${LOG_PREFIX} pause() ignored`, { status: state.status });
+      return;
+    }
+    logDebug(`${LOG_PREFIX} Pausing dictation`);
+    this.workletNode?.port.postMessage({ type: "setPaused", value: true });
+    this.pauseStartedAt = Date.now();
+    this.clearElapsedTimer();
+    state.setStatus("paused");
+    state.announce("Dictation paused.");
+    this.clearPauseTimeout();
+    this.pauseTimeoutId = setTimeout(() => {
+      this.pauseTimeoutId = null;
+      // Re-read status inside the callback — the session may have ended,
+      // been resumed, or even restarted on another panel between pause and
+      // timeout (#5087 pattern: never close over store state in timers).
+      const current = useVoiceRecordingStore.getState();
+      if (current.status !== "paused") return;
+      logInfo(`${LOG_PREFIX} Auto-stopping after 60s pause`);
+      void this.stop("Dictation stopped after 60-second pause.", {
+        preserveLiveText: true,
+      });
+    }, VoiceRecordingService.PAUSE_AUTO_STOP_MS);
+  }
+
+  /**
+   * Resume audio capture after a pause. Re-enables the worklet PCM pipeline,
+   * accumulates the paused duration into the elapsed-time offset so the
+   * displayed counter reflects only speaking time, and clears the auto-stop
+   * timer. No-op unless the current status is "paused".
+   */
+  resume(): void {
+    this.initialize();
+    const state = useVoiceRecordingStore.getState();
+    if (state.status !== "paused") {
+      logDebug(`${LOG_PREFIX} resume() ignored`, { status: state.status });
+      return;
+    }
+    logDebug(`${LOG_PREFIX} Resuming dictation`);
+    this.clearPauseTimeout();
+    if (this.pauseStartedAt > 0) {
+      this.totalPausedMs += Date.now() - this.pauseStartedAt;
+      this.pauseStartedAt = 0;
+    }
+    this.workletNode?.port.postMessage({ type: "setPaused", value: false });
+    state.setStatus("recording");
+    state.announce("Dictation resumed.");
+    this.startElapsedTimer();
+  }
+
+  /**
+   * Toggle between recording and paused. No-op when no session is active or
+   * the session is in a transitional phase (connecting, reconnecting, finishing).
+   */
+  togglePause(): void {
+    const status = useVoiceRecordingStore.getState().status;
+    if (status === "recording") {
+      this.pause();
+    } else if (status === "paused") {
+      this.resume();
+    } else {
+      logDebug(`${LOG_PREFIX} togglePause() ignored`, { status });
+    }
   }
 
   destroy(): void {
     this.startRequestId++;
+    // Vite HMR disposes and re-evaluates this module; the old singleton's
+    // timers must be cleared or they fire against the new singleton's state.
+    this.clearPauseTimeout();
+    this.clearElapsedTimer();
     for (const unsub of this.unsubscribers) {
       unsub();
     }

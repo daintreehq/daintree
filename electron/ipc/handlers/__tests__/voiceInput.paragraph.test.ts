@@ -126,7 +126,7 @@ vi.mock("../../channels.js", () => ({
 }));
 
 // ── Module import (once) ───────────────────────────────────────────────────
-import { registerVoiceInputHandlers, getVoiceSettings } from "../voiceInput.js";
+import { registerVoiceInputHandlers, getVoiceSettings, validateOpenAIKey } from "../voiceInput.js";
 import { ValidationError } from "../../validationError.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -458,8 +458,10 @@ describe("getVoiceSettings migration", () => {
       vi.mocked(store.set).mock.calls[0] as unknown as [string, Record<string, unknown>]
     )[1];
     expect(persisted).not.toHaveProperty("correctionApiKey");
-    expect(persisted).not.toHaveProperty("deepgramApiKey");
     expect(persisted).not.toHaveProperty("apiKey");
+    // deepgramApiKey and transcriptionProvider are now first-class fields.
+    expect(persisted).toHaveProperty("deepgramApiKey", "");
+    expect(persisted).toHaveProperty("transcriptionProvider", "openai");
   });
 
   it("migrates first-generation apiKey (sk-*) into openaiApiKey", async () => {
@@ -475,7 +477,7 @@ describe("getVoiceSettings migration", () => {
     expect(vi.mocked(store.set)).toHaveBeenCalledOnce();
   });
 
-  it("drops deepgramApiKey without carrying it into openaiApiKey", async () => {
+  it("preserves a stored deepgramApiKey as a first-class field", async () => {
     const { store } = await import("../../../store.js");
     vi.mocked(store.get).mockReturnValueOnce({
       enabled: true,
@@ -484,13 +486,41 @@ describe("getVoiceSettings migration", () => {
 
     const settings = getVoiceSettings();
 
+    // deepgramApiKey now flows through; it does not bleed into openaiApiKey and
+    // is no longer dropped on read.
+    expect(settings.deepgramApiKey).toBe("dg-xxx");
     expect(settings.openaiApiKey).toBe("");
-    // Cleanup is still persisted so the dropped key disappears from disk.
+    // No legacy keys and a valid (defaulted) provider — nothing to persist.
+    expect(vi.mocked(store.set)).not.toHaveBeenCalled();
+  });
+
+  it("defaults an unrecognized transcriptionProvider to openai and persists it", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-present",
+      transcriptionProvider: "bogus-provider",
+    });
+
+    const settings = getVoiceSettings();
+
+    expect(settings.transcriptionProvider).toBe("openai");
     expect(vi.mocked(store.set)).toHaveBeenCalledOnce();
-    const persisted = (
-      vi.mocked(store.set).mock.calls[0] as unknown as [string, Record<string, unknown>]
-    )[1];
-    expect(persisted).not.toHaveProperty("deepgramApiKey");
+  });
+
+  it("keeps a stored deepgram provider choice without resetting it", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      deepgramApiKey: "dg-xxx",
+      transcriptionProvider: "deepgram",
+    });
+
+    const settings = getVoiceSettings();
+
+    expect(settings.transcriptionProvider).toBe("deepgram");
+    // A valid stored provider with no legacy keys triggers no write.
+    expect(vi.mocked(store.set)).not.toHaveBeenCalled();
   });
 
   it("does not overwrite an existing openaiApiKey when legacy fields are present", async () => {
@@ -516,5 +546,279 @@ describe("getVoiceSettings migration", () => {
     getVoiceSettings();
 
     expect(vi.mocked(store.set)).not.toHaveBeenCalled();
+  });
+
+  it("overrides stored openaiApiKey when WHISPER_API_KEY env var is set", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-stored",
+    });
+
+    process.env.WHISPER_API_KEY = "sk-env-override";
+    try {
+      const settings = getVoiceSettings();
+      expect(settings.openaiApiKey).toBe("sk-env-override");
+    } finally {
+      delete process.env.WHISPER_API_KEY;
+    }
+  });
+
+  it("env override is NOT persisted to store", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-stored",
+    });
+
+    process.env.WHISPER_API_KEY = "sk-env";
+    try {
+      getVoiceSettings();
+      // The store.set call path only fires when legacy fields or stale model exist;
+      // the env override itself must never call store.set.
+      const setCalls = vi.mocked(store.set).mock.calls as unknown as Array<
+        [string, Record<string, unknown>?]
+      >;
+      const envPersistCall = setCalls.some(([, value]) => value?.openaiApiKey === "sk-env");
+      expect(envPersistCall).toBe(false);
+    } finally {
+      delete process.env.WHISPER_API_KEY;
+    }
+  });
+
+  it("returns recordingMode='toggle' when the field is missing from the store", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-present",
+      // recordingMode intentionally absent.
+    });
+
+    const settings = getVoiceSettings();
+
+    expect(settings.recordingMode).toBe("toggle");
+  });
+
+  it("preserves recordingMode='push-to-talk' when stored", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-present",
+      recordingMode: "push-to-talk",
+    });
+
+    const settings = getVoiceSettings();
+
+    expect(settings.recordingMode).toBe("push-to-talk");
+  });
+
+  it("normalizes malformed recordingMode values to 'toggle' without writing to disk", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-present",
+      recordingMode: "hold" as unknown,
+    });
+
+    const settings = getVoiceSettings();
+
+    expect(settings.recordingMode).toBe("toggle");
+    // Normalization must not persist back to the store.
+    expect(vi.mocked(store.set)).not.toHaveBeenCalled();
+  });
+
+  it("skips env override when WHISPER_API_KEY is empty string", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-stored",
+    });
+
+    process.env.WHISPER_API_KEY = "";
+    try {
+      const settings = getVoiceSettings();
+      expect(settings.openaiApiKey).toBe("sk-stored");
+    } finally {
+      delete process.env.WHISPER_API_KEY;
+    }
+  });
+});
+
+describe("validateOpenAIKey", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns invalid for empty key", async () => {
+    const result = await validateOpenAIKey("");
+    expect(result).toEqual({ valid: false, error: "API key is required" });
+  });
+
+  it("returns valid for a 200 OK response", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: [] }), { status: 200 })
+    );
+
+    const result = await validateOpenAIKey("sk-valid");
+    expect(result).toEqual({ valid: true });
+  });
+
+  it("returns invalid for 401 with JSON body", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { message: "Incorrect API key provided", code: null } }),
+        { status: 401, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const result = await validateOpenAIKey("sk-bad");
+    expect(result).toEqual({ valid: false, error: "Incorrect API key provided" });
+  });
+
+  it("falls back to default message for 401 with HTML body", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("<html>Unauthorized</html>", {
+        status: 401,
+        headers: { "content-type": "text/html" },
+      })
+    );
+
+    const result = await validateOpenAIKey("sk-bad");
+    expect(result).toEqual({ valid: false, error: "Invalid API key" });
+  });
+
+  it("returns invalid for 429 insufficient_quota", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "You exceeded your current quota, please check your plan and billing details.",
+            type: "insufficient_quota",
+            code: "insufficient_quota",
+          },
+        }),
+        { status: 429, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const result = await validateOpenAIKey("sk-no-credits");
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("no credits");
+  });
+
+  it("returns valid for 429 rate_limit_exceeded", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "Rate limit reached for requests",
+            type: "tokens",
+            code: "rate_limit_exceeded",
+          },
+        }),
+        { status: 429, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const result = await validateOpenAIKey("sk-ratelimited");
+    expect(result).toEqual({ valid: true });
+  });
+
+  it("returns valid for 429 with unknown code", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { message: "Too many requests", code: "unknown_429_code" } }),
+        { status: 429, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const result = await validateOpenAIKey("sk-whatever");
+    expect(result).toEqual({ valid: true });
+  });
+
+  it("returns valid for 429 with HTML body (proxy gateway)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("<html>429 Too Many Requests</html>", {
+        status: 429,
+        headers: { "content-type": "text/html" },
+      })
+    );
+
+    const result = await validateOpenAIKey("sk-proxy");
+    expect(result).toEqual({ valid: true });
+  });
+
+  it("returns invalid for 403 unsupported_country_region_territory", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "Country, region, or territory not supported",
+            type: "request_forbidden",
+            code: "unsupported_country_region_territory",
+          },
+        }),
+        { status: 403, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const result = await validateOpenAIKey("sk-blocked-region");
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("region");
+  });
+
+  it("returns invalid for 403 with JSON body and unknown code", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { message: "Access denied by policy", code: "policy_violation" } }),
+        { status: 403, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const result = await validateOpenAIKey("sk-policy");
+    expect(result).toEqual({ valid: false, error: "Access denied by policy" });
+  });
+
+  it("surfaces server error message for 500", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { message: "The server had an error processing your request" } }),
+        { status: 500, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const result = await validateOpenAIKey("sk-500");
+    expect(result).toEqual({
+      valid: false,
+      error: "The server had an error processing your request",
+    });
+  });
+
+  it("falls back to status text for 500 with HTML body", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("<html>Server Error</html>", {
+        status: 500,
+        headers: { "content-type": "text/html" },
+      })
+    );
+
+    const result = await validateOpenAIKey("sk-500-html");
+    expect(result).toEqual({ valid: false, error: "API returned status 500" });
+  });
+
+  it("returns timeout error on AbortError", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(
+      Object.defineProperty(new Error("Timeout"), "name", { value: "AbortError" })
+    );
+
+    const result = await validateOpenAIKey("sk-timeout");
+    expect(result).toEqual({ valid: false, error: "Connection timed out" });
+  });
+
+  it("returns connection error on generic fetch failure", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("ENOTFOUND"));
+
+    const result = await validateOpenAIKey("sk-no-net");
+    expect(result).toEqual({ valid: false, error: "Failed to connect to OpenAI" });
   });
 });

@@ -41,12 +41,14 @@ export function PortalVisibilityController(): null {
         const needsCreation = !state.createdTabs.has(tabId);
 
         if (needsCreation) {
-          await window.electron.portal.create({ tabId, url: tabUrl });
+          // Re-create on the tab's own partition so a promoted dev-preview tab
+          // keeps its shared session after eviction/restart instead of silently
+          // reverting to the default portal session.
+          const partition = state.tabs.find((t) => t.id === tabId)?.partition;
+          await window.electron.portal.create({ tabId, url: tabUrl, partition });
           const postCreateState = usePortalStore.getState();
           const stillExists = postCreateState.tabs.some((t) => t.id === tabId);
-          if (stillExists) {
-            markTabCreated(tabId);
-          } else {
+          if (!stillExists) {
             isRestoringRef.current = false;
             return;
           }
@@ -86,6 +88,16 @@ export function PortalVisibilityController(): null {
         }
 
         await window.electron.portal.show({ tabId, bounds });
+
+        // Mark created only after the full create + show pipeline completes so
+        // PortalDock can derive `isTabRestoring = !createdTabs.has(activeTabId)`
+        // as a single signal for "tab is being restored to visibility". Marking
+        // earlier (post-create) would clear the skeleton before bounds polling +
+        // show resolve. PortalManager.createTab is idempotent, so a later retry
+        // for an already-shown tab is harmless.
+        if (needsCreation) {
+          markTabCreated(tabId);
+        }
       } catch (error) {
         logError("Failed to restore tab", error);
       } finally {

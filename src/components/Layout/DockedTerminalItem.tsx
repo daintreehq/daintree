@@ -19,9 +19,13 @@ import {
 } from "@/components/Worktree/terminalStateConfig";
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
+import { useDockPanelPortal } from "./dockPanelPortalContext";
 import { getDockDisplayAgentState, useDockBlockedState } from "./useDockBlockedState";
-import { handleDockInteractOutside, handleDockEscapeKeyDown } from "./dockPopoverGuard";
+import {
+  handleDockInteractOutside,
+  handleDockEscapeKeyDown,
+  handleDockFocusOutside,
+} from "./dockPopoverGuard";
 import { usePreferencesStore } from "@/store";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
@@ -41,22 +45,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
 
   // Derive isOpen from store state
   const isOpen = activeDockTerminalId === terminal.id;
-
-  // Track when popover was just programmatically opened to ignore immediate close events.
-  // Initialized to `isOpen` so a component that mounts already-open is armed before Radix's
-  // DismissableLayer can fire a spurious mount-time onOpenChange(false).
-  const wasJustOpenedRef = useRef(isOpen);
-
-  useEffect(() => {
-    if (!isOpen) return;
-
-    wasJustOpenedRef.current = true;
-    // Clear the flag after a short delay to allow the popover to stabilize
-    const timer = setTimeout(() => {
-      wasJustOpenedRef.current = false;
-    }, 100);
-    return () => clearTimeout(timer);
-  }, [isOpen]);
 
   // Tracks whether the worktree sidebar is hidden by the chrome gesture, so
   // popover collision padding can extend left when there's no sidebar there.
@@ -85,6 +73,39 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     portalContainerElementRef.current = node;
     setPortalContainer(node);
   }, []);
+
+  // True once this terminal's host has actually migrated into the popover portal
+  // (its `data-dock-panel-id` node is a live DOM descendant of PopoverContent).
+  // The terminal is rendered offscreen and portaled in asynchronously, so we
+  // focus it off this signal — observing the specific node's insertion — rather
+  // than a fixed timer that races a cold xterm mount. Matching the panel id (not
+  // a bare child count) keeps the signal correct when the portal child is
+  // swapped rather than added.
+  const [migrated, setMigrated] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen || !portalContainer) {
+      setMigrated(false);
+      return;
+    }
+    const isPresent = () =>
+      Array.from(portalContainer.querySelectorAll("[data-dock-panel-id]")).some(
+        (el) => el.getAttribute("data-dock-panel-id") === terminal.id
+      );
+    if (isPresent()) {
+      setMigrated(true);
+      return;
+    }
+    setMigrated(false);
+    const observer = new MutationObserver(() => {
+      if (isPresent()) {
+        setMigrated(true);
+        observer.disconnect();
+      }
+    });
+    observer.observe(portalContainer, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [isOpen, portalContainer, terminal.id]);
 
   // Toggle buffering based on popover open state. The terminal stays mounted
   // in DockPanelOffscreenContainer across open/close cycles; the popover only
@@ -145,10 +166,8 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
       if (open) {
         openDockTerminal(terminal.id);
       } else {
-        // Ignore close events immediately after programmatic open
-        if (wasJustOpenedRef.current) {
-          return;
-        }
+        // Focus-driven dismissals are blocked upstream by onFocusOutside, so a
+        // close here is a genuine pointer-outside or Escape and is honored.
         closeDockTerminal();
       }
     },
@@ -231,6 +250,33 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
       brandColor,
     ]
   );
+
+  // Focus the terminal once it has migrated into the popover portal — keyboard
+  // focus lands on a live DOM descendant of PopoverContent, never the offscreen
+  // host. Honors the focus-preserve and hybrid-input skips (see #6959).
+  useEffect(() => {
+    if (!isOpen || !migrated) return;
+    if (terminal.focusPolicy === "preserve") return;
+
+    const focusTarget = getTerminalFocusTarget({
+      preferredTarget: preferredTerminalFocusTarget,
+      hasHybridInputSurface: chrome.isAgent,
+      isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
+      hybridInputEnabled,
+    });
+    if (focusTarget === "hybridInput") return;
+
+    terminalInstanceService.focus(terminal.id);
+  }, [
+    isOpen,
+    migrated,
+    terminal.id,
+    terminal.focusPolicy,
+    preferredTerminalFocusTarget,
+    chrome.isAgent,
+    backendStatus,
+    hybridInputEnabled,
+  ]);
 
   const agentState = getDockDisplayAgentState(terminal);
   const isWorking = agentState === "working";
@@ -344,24 +390,12 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
           collisionPadding={collisionPadding}
           onInteractOutside={(e) => handleDockInteractOutside(e, portalContainerElementRef.current)}
           onEscapeKeyDown={(e) => handleDockEscapeKeyDown(e, portalContainerElementRef.current)}
+          onFocusOutside={handleDockFocusOutside}
           onOpenAutoFocus={(event) => {
+            // Block Radix's own auto-focus; we focus the terminal once it has
+            // migrated into the portal (see the migration-focus effect), not on
+            // a fixed timer that races a cold xterm mount.
             event.preventDefault();
-            if (terminal.focusPolicy === "preserve") {
-              return;
-            }
-            const focusTarget = getTerminalFocusTarget({
-              preferredTarget: preferredTerminalFocusTarget,
-              hasHybridInputSurface: chrome.isAgent,
-              isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
-              hybridInputEnabled,
-            });
-
-            if (focusTarget === "hybridInput") {
-              return;
-            }
-
-            // Small delay to ensure xterm is fully mounted before focusing
-            setTimeout(() => terminalInstanceService.focus(terminal.id), 50);
           }}
         >
           <div className="relative w-full h-full group">

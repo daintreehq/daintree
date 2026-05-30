@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { WorktreeState } from "../../types";
 import type { GitHubIssue } from "@shared/types/github";
 import { logError } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
 
 import { useDroppable } from "@dnd-kit/core";
@@ -33,6 +34,7 @@ import { FocusedSubLine } from "./WorktreeCard/FocusedSubLine";
 import {
   WorktreeDetailsSection,
   WorktreeDeleteErrorBanner,
+  WorktreeIssueErrorBanner,
 } from "./WorktreeCard/WorktreeDetailsSection";
 import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
@@ -48,8 +50,12 @@ import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { CONTEXT_COMPONENTS, WorktreeMenuItems } from "./WorktreeMenuItems";
+import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
+import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
+import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { isAgentFleetActionEligible, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
+import { useWorktreeDevServerSession } from "@/hooks/app/useWorktreeDevServerSession";
 import { computeChipState } from "./utils/computeChipState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
@@ -209,6 +215,14 @@ export function WorktreeCard({
     dominantAgentState,
   } = useWorktreeTerminals(worktree.id);
 
+  const devServerSession = useWorktreeDevServerSession(worktree.id);
+
+  const pluginMenuContext = useMemo<WhenClauseContext>(
+    () => ({ worktreeId: worktree.id }),
+    [worktree.id]
+  );
+  const pluginItems = usePluginContextMenuItems("worktree", pluginMenuContext);
+
   // Border accent flash — fires once when the dominant *execution* state for
   // this card meaningfully changes. `directing` is excluded because it's
   // driven by the user's local typing cycle (start typing → directing,
@@ -278,6 +292,7 @@ export function WorktreeCard({
 
   const isBeingDeleted = useWorktreeStore((state) => state.deletingIds.has(worktree.id));
   const deleteError = useWorktreeStore((state) => state.deleteErrors.get(worktree.id) ?? null);
+  const issueError = useWorktreeStore((state) => state.issueErrors.get(worktree.id) ?? null);
 
   const handleRetryDelete = () => {
     getCurrentViewStore().getState().retryDelete(worktree.id);
@@ -285,6 +300,16 @@ export function WorktreeCard({
 
   const handleDismissDeleteError = () => {
     getCurrentViewStore().getState().clearDeleteError(worktree.id);
+  };
+
+  const handleRetryIssue = () => {
+    if (!issueError) return;
+    getCurrentViewStore().getState().retryOutboxEntry(issueError.mutationId);
+  };
+
+  const handleDismissIssueError = () => {
+    if (!issueError) return;
+    getCurrentViewStore().getState().dismissOutboxEntry(issueError.mutationId);
   };
 
   const handleErrorRetry = async (
@@ -374,6 +399,18 @@ export function WorktreeCard({
       { source: "user" }
     );
   };
+
+  const handleStopDevServer = useCallback((worktreeId: string) => {
+    safeFireAndForget(window.electron.devPreview.stopDevServerByWorktree({ worktreeId }), {
+      context: "Stop dev server for worktree",
+    });
+  }, []);
+
+  const handleRestartDevServer = useCallback((worktreeId: string) => {
+    safeFireAndForget(window.electron.devPreview.restartByWorktree({ worktreeId }), {
+      context: "Restart dev server for worktree",
+    });
+  }, []);
 
   const handleResourceResume = () => {
     void actionService.dispatch(
@@ -472,38 +509,22 @@ export function WorktreeCard({
 
   const aiNoteFirstLine = effectiveNote?.split("\n")[0]?.trim() ?? "";
 
-  const handleAttachIssue = async (issue: GitHubIssue) => {
-    await worktreeClient.attachIssue({
+  // Route attach/detach through the resilient mutation outbox (#9163) instead
+  // of a fire-and-forget IPC. The store applies the local association only once
+  // the Electron-store write lands, replays a mutation that was in flight when
+  // the host crashed, and surfaces failures via `WorktreeIssueErrorBanner`.
+  const handleAttachIssue = (issue: GitHubIssue) => {
+    getCurrentViewStore().getState().startAttachIssue({
       worktreeId: worktree.id,
       issueNumber: issue.number,
       issueTitle: issue.title,
       issueState: issue.state,
       issueUrl: issue.url,
     });
-    // Record the manual association in the store so it survives subsequent
-    // `worktree-update` events (which carry only auto-detected issue state).
-    // This also optimistically re-merges the snapshot for immediate feedback.
-    getCurrentViewStore().getState().setManualAssociation(worktree.id, {
-      issueNumber: issue.number,
-      issueTitle: issue.title,
-    });
   };
 
-  const handleDetachIssue = async () => {
-    await worktreeClient.detachIssue(worktree.id);
-    const store = getCurrentViewStore();
-    store.getState().clearManualAssociation(worktree.id);
-    store.setState((prev) => {
-      const existing = prev.worktrees.get(worktree.id);
-      if (!existing) return prev;
-      const next = new Map(prev.worktrees);
-      next.set(worktree.id, {
-        ...existing,
-        issueNumber: undefined,
-        issueTitle: undefined,
-      });
-      return { worktrees: next };
-    });
+  const handleDetachIssue = () => {
+    getCurrentViewStore().getState().startDetachIssue(worktree.id);
   };
 
   const handleTerminalSelect = (terminal: PtyPanelData) => {
@@ -868,6 +889,7 @@ export function WorktreeCard({
                 resourceLastOutput={worktree.resourceStatus?.lastOutput}
                 resourceEndpoint={worktree.resourceStatus?.endpoint}
                 resourceLastCheckedAt={worktree.resourceStatus?.lastCheckedAt}
+                devServerSession={devServerSession}
                 lastGitStatusCheckedAt={worktree.lastGitStatusCheckedAt}
                 onRevalidateGitStatus={handleRevalidate}
                 onCheckResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
@@ -951,6 +973,8 @@ export function WorktreeCard({
                     : undefined,
                   onResourceStatus: hasStatusCommand ? handleResourceStatus : undefined,
                   onResourceTeardown: hasTeardownCommand ? handleResourceTeardown : undefined,
+                  onStopDevServer: handleStopDevServer,
+                  onRestartDevServer: handleRestartDevServer,
                 }}
               />
 
@@ -1024,6 +1048,15 @@ export function WorktreeCard({
                 />
               )}
 
+              {issueError && (
+                <WorktreeIssueErrorBanner
+                  message={issueError.message}
+                  mutationType={issueError.type}
+                  onRetry={handleRetryIssue}
+                  onDismiss={handleDismissIssueError}
+                />
+              )}
+
               <WorktreeDialogs
                 worktree={worktree}
                 confirmDialog={confirmDialog}
@@ -1032,8 +1065,8 @@ export function WorktreeCard({
                 onCloseDeleteDialog={() => setShowDeleteDialog(false)}
                 showIssuePicker={showIssuePicker}
                 onCloseIssuePicker={() => setShowIssuePicker(false)}
-                onAttachIssue={(issue) => void handleAttachIssue(issue)}
-                onDetachIssue={() => void handleDetachIssue()}
+                onAttachIssue={handleAttachIssue}
+                onDetachIssue={handleDetachIssue}
                 showReviewHub={showReviewHub}
                 onCloseReviewHub={onCloseReviewHub}
                 reviewHubInitialCommitMessage={aiNoteFirstLine}
@@ -1105,7 +1138,10 @@ export function WorktreeCard({
           onResourceConnect={worktree.resourceConnectCommand ? handleResourceConnect : undefined}
           onResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
           onResourceTeardown={hasTeardownCommand ? handleResourceTeardown : undefined}
+          onStopDevServer={handleStopDevServer}
+          onRestartDevServer={handleRestartDevServer}
         />
+        <PluginContextMenuSection items={pluginItems} />
       </ContextMenuContent>
     </ContextMenu>
   );

@@ -18,8 +18,14 @@ on:
         required: false
         type: boolean
         default: false
+      smoke_artifact_run_id:
+        description: "Optional existing release-windows run ID whose release-daintree-windows-latest artifact should be smoke-tested without rebuilding"
+        required: false
+        type: string
+        default: ""
 
 permissions:
+  actions: read
   contents: read
   issues: write
 
@@ -32,67 +38,53 @@ env:
 
 jobs:
   checks:
+    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
     name: Checks
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --prune --no-recurse-submodules --depth=1 origin "$GITHUB_SHA"
-          git -C "$GITHUB_WORKSPACE" checkout --force FETCH_HEAD
-          git -C "$GITHUB_WORKSPACE" clean -ffdx
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - uses: actions/setup-node@v6
+        uses: actions/checkout@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          clean: true
+          fetch-depth: 1
 
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libarchive-tools
 
-      - name: Install dependencies
-        run: node scripts/ci/npm-ci-retry.mjs
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
 
       - name: Check
         run: npm run check
 
   unit-tests:
+    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
     name: Unit Tests (Windows)
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
       - name: Check out repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --prune --no-recurse-submodules --depth=1 origin "$GITHUB_SHA"
-          git -C "$GITHUB_WORKSPACE" checkout --force FETCH_HEAD
-          git -C "$GITHUB_WORKSPACE" clean -ffdx
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - uses: actions/setup-node@v6
+        uses: actions/checkout@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          clean: true
+          fetch-depth: 1
 
-      - name: Install dependencies
-        run: node scripts/ci/npm-ci-retry.mjs
-        env:
-          npm_config_msvs_version: "2022"
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
+          msvs_version: "2022"
 
       - name: Test
         run: npm run test
 
   e2e-core-gate:
+    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
     needs: [checks, unit-tests]
     uses: ./.github/workflows/e2e.yml
     with:
@@ -106,6 +98,7 @@ jobs:
   # extra Windows slices to keep restart-heavy shards under the reusable
   # workflow timeout.
   e2e-full-gate:
+    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
     needs: [checks, unit-tests]
     strategy:
       fail-fast: false
@@ -122,7 +115,11 @@ jobs:
       suite: ${{ matrix.suite }}
       platform: windows
 
+  # Online E2E runs for signal only — nothing `needs:` it, so it never gates
+  # build or publish. Do NOT add job-level continue-on-error here: it is invalid
+  # on reusable-workflow (`uses:`) jobs and makes the whole workflow fail to start.
   e2e-online-gate:
+    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
     needs: [checks, unit-tests]
     uses: ./.github/workflows/e2e.yml
     with:
@@ -130,34 +127,21 @@ jobs:
       platform: windows
     secrets: inherit
 
-  build-daintree:
-    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate, e2e-online-gate]
-    name: Build Daintree (Windows)
+  build-daintree-x64:
+    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
+    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
+    name: Build Daintree (Windows x64)
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
       - name: Check out repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --prune --no-recurse-submodules --depth=1 origin "$GITHUB_SHA"
-          git -C "$GITHUB_WORKSPACE" checkout --force FETCH_HEAD
-          git -C "$GITHUB_WORKSPACE" clean -ffdx
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Resolve update metadata prefix
-        shell: bash
-        run: |
-          PKG_VERSION=$(node -p "require('./package.json').version")
-          if [[ "$PKG_VERSION" == *-rc* ]]; then
-            echo "UPDATE_METADATA_PREFIX=rc" >> "$GITHUB_ENV"
-          elif [[ "$PKG_VERSION" == *-beta* ]]; then
-            echo "UPDATE_METADATA_PREFIX=beta" >> "$GITHUB_ENV"
-          else
-            echo "UPDATE_METADATA_PREFIX=latest" >> "$GITHUB_ENV"
-          fi
+        uses: ./.github/actions/resolve-update-metadata-prefix
 
       - name: Verify version matches tag
         if: startsWith(github.ref, 'refs/tags/v')
@@ -170,41 +154,24 @@ jobs:
             exit 1
           fi
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          node_version: ${{ env.NODE_VERSION }}
+          msvs_version: "2022"
 
-      - name: Install dependencies
-        run: node scripts/ci/npm-ci-retry.mjs
-        env:
-          npm_config_msvs_version: "2022"
-
-      # Cross-compile win-job-object (source-only N-API addon) for arm64 so the
-      # NSIS combined installer can ship both archs. node-pty and better-sqlite3
-      # have arm64 prebuilts; electron-builder pulls those via npmRebuild during
-      # packaging. The post-install copy of node-pty's conpty win10-arm64 DLLs
-      # is recovered by `scripts/afterPack.cjs` based on `context.arch`.
-      - name: Cross-compile arm64 native modules (Windows)
-        shell: bash
-        env:
-          npm_config_msvs_version: "2022"
-        run: npm run rebuild:win-arm64
-
-      - name: Build
+      - name: Build (x64)
         shell: bash
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DEBUG: electron-builder,electron-notarize*,electron-osx-sign*
+          BUILD_NUMBER: ${{ github.run_number }}
         run: |
           npm run build
-          # Windows binaries are published via the R2 upload in the publish
-          # job (and the Microsoft Store step below), never by electron-builder
-          # directly — so --publish is always "never" here.
-          npx electron-builder --config electron-builder.config.cjs --publish never
+          npm run check:preload-backdoors
+          npx electron-builder --config electron-builder.config.cjs --win appx nsis --x64 --publish never
 
-      - name: Verify Windows Store package was built
+      - name: Verify Windows Store package was built (x64)
         shell: pwsh
         run: |
           $packages = @(Get-ChildItem -Path 'release\*.appx', 'release\*.msix' -ErrorAction SilentlyContinue)
@@ -215,7 +182,7 @@ jobs:
           }
           Write-Host "Found $($packages.Count) Store package(s) in release/"
 
-      - name: Verify Windows NSIS installer was built
+      - name: Verify Windows NSIS installer was built (x64)
         shell: pwsh
         run: |
           $installers = @(Get-ChildItem -Path 'release\*.exe' -ErrorAction SilentlyContinue)
@@ -225,6 +192,31 @@ jobs:
             exit 1
           }
           Write-Host "Found NSIS installer: $($installers[0].Name) ($([math]::Round($installers[0].Length / 1MB, 1)) MB)"
+
+      - name: Smoke test (packaged Windows)
+        shell: pwsh
+        timeout-minutes: 12
+        env:
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          SMOKE_TIMEOUT_MS: "210000"
+        run: |
+          $setup = Get-ChildItem -Path 'release\*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $setup) { Write-Error "No NSIS .exe found in release/"; exit 1 }
+          $extractDir = Join-Path $env:RUNNER_TEMP "daintree-packaged-smoke"
+          Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+          # 7-Zip extraction (preinstalled on windows-latest) is faster than an
+          # NSIS silent install and avoids registry/shortcut side effects.
+          7z x $setup.FullName -o"$extractDir" -y | Out-Null
+          $nested = Get-ChildItem -Path $extractDir -Filter 'app-64.7z' -Recurse | Select-Object -First 1
+          if ($nested) {
+            7z x $nested.FullName -o"$extractDir\app" -y | Out-Null
+          }
+          $binary = Get-ChildItem -Path $extractDir -Filter 'Daintree.exe' -Recurse | Select-Object -First 1
+          if (-not $binary) { Write-Error "Daintree.exe not found after extracting installer"; exit 1 }
+          $env:PACKAGED_BINARY = $binary.FullName
+          node scripts/run-packaged-smoke.mjs
 
       - name: Run WACK (Windows, best-effort)
         shell: pwsh
@@ -279,6 +271,7 @@ jobs:
 
       - name: Submit to Microsoft Store (Windows)
         if: inputs.dry_run != true && steps.store-secrets.outputs.configured == 'true'
+        continue-on-error: true
         shell: pwsh
         env:
           PARTNER_CENTER_TENANT_ID: ${{ secrets.PARTNER_CENTER_TENANT_ID }}
@@ -293,23 +286,135 @@ jobs:
             --clientId $env:PARTNER_CENTER_CLIENT_ID `
             --clientSecret $env:PARTNER_CENTER_CLIENT_SECRET
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::msstore reconfigure failed (exit $LASTEXITCODE)"
+            Write-Host "::warning::msstore reconfigure failed (exit $LASTEXITCODE)"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ":warning: Microsoft Store submission skipped — msstore reconfigure failed (exit $LASTEXITCODE)"
             exit $LASTEXITCODE
           }
           msstore publish . --appId $env:STORE_PRODUCT_ID --inputDirectory .\release
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::msstore publish failed (exit $LASTEXITCODE). If the failure is 'unknown command,' the CLI grammar may have shifted — run 'msstore --help' on the runner and update this step."
+            Write-Host "::warning::msstore publish failed (exit $LASTEXITCODE). If the failure is 'unknown command,' the CLI grammar may have shifted — run 'msstore --help' on the runner and update this step."
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ":warning: Microsoft Store submission skipped — msstore publish failed (exit $LASTEXITCODE)"
             exit $LASTEXITCODE
           }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ":rocket: Microsoft Store submission published (product $env:STORE_PRODUCT_ID)"
 
-      - name: Validate update metadata (Windows NSIS)
+      - name: Upload build artifacts (x64)
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-daintree-windows-x64
+          path: |
+            release/*.appx
+            release/*.msix
+            release/*.exe
+            release/*.blockmap
+            release/*.yml
+          retention-days: 7
+          if-no-files-found: error
+
+  build-daintree-arm64:
+    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
+    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
+    name: Build Daintree (Windows arm64)
+    runs-on: windows-11-arm
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: Verify version matches tag
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
-          # electron-updater on Windows polls `<channel>.yml` (no platform
-          # suffix) — Provider.js getChannelFilePrefix() returns "" for win32.
-          # This is the canonical filename installed clients fetch, so we
-          # generate (and validate) it here even though electron-builder's
-          # packaging step already wrote a copy.
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+            exit 1
+          fi
+
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
+          msvs_version: "2022"
+
+      - name: Build (arm64)
+        shell: bash
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          DEBUG: electron-builder,electron-notarize*,electron-osx-sign*
+        run: |
+          npm run build
+          npm run check:preload-backdoors
+          # arm64 builds NSIS only (no AppX/Store target).
+          npx electron-builder --config electron-builder.config.cjs --win nsis --arm64 --publish never
+
+      - name: Verify Windows NSIS installer was built (arm64)
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem -Path 'release\*.exe' -ErrorAction SilentlyContinue)
+          if ($installers.Count -ne 1) {
+            Write-Host "::error::Expected exactly 1 NSIS .exe in release/, found $($installers.Count). Confirm electron-builder.config.cjs lists the nsis target."
+            Get-ChildItem -Path release -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.Name }
+            exit 1
+          }
+          Write-Host "Found NSIS installer: $($installers[0].Name) ($([math]::Round($installers[0].Length / 1MB, 1)) MB)"
+
+      - name: Upload build artifacts (arm64)
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-daintree-windows-arm64
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/*.yml
+          retention-days: 7
+          if-no-files-found: error
+
+  assemble-windows-release:
+    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
+    needs: [build-daintree-x64, build-daintree-arm64]
+    name: Assemble Windows release
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
+
+      - name: Resolve update metadata prefix
+        uses: ./.github/actions/resolve-update-metadata-prefix
+
+      - name: Download x64 artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: release-daintree-windows-x64
+          path: release/
+
+      - name: Download arm64 artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: release-daintree-windows-arm64
+          path: release/
+
+      - name: Generate and validate update metadata
+        shell: bash
+        run: |
           node scripts/ci/generate-update-metadata.mjs windows "release/${UPDATE_METADATA_PREFIX}.yml"
           if [ ! -f "release/${UPDATE_METADATA_PREFIX}.yml" ]; then
             echo "::error::Missing release/${UPDATE_METADATA_PREFIX}.yml - Windows auto-update metadata was not generated"
@@ -317,7 +422,7 @@ jobs:
           fi
           node scripts/ci/validate-update-metadata.mjs "release/${UPDATE_METADATA_PREFIX}.yml"
 
-      - name: Upload build artifacts
+      - name: Upload combined build artifacts
         uses: actions/upload-artifact@v7
         with:
           name: release-daintree-windows-latest
@@ -330,117 +435,139 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  # Packaged-artifact smoke (#9246) — runs the freshly-built NSIS installer
+  # silently, locates the installed Daintree.exe via the per-user uninstall
+  # registry entry (with a fixed-path fallback), and launches it in
+  # --smoke-test mode. Validates the four native modules including
+  # win-job-object (asar.unpacked native that doesn't ship a prebuilt and so
+  # is uniquely at risk if cross-compile for arm64 fails silently). Gates
+  # publish.
+  smoke-packaged:
+    if: always() && (github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id != '' || needs.assemble-windows-release.result == 'success')
+    needs: [assemble-windows-release]
+    name: Smoke (packaged NSIS)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
+          msvs_version: "2022"
+
+      - name: Download build artifact
+        if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
+        uses: actions/download-artifact@v7
+        with:
+          name: release-daintree-windows-latest
+          path: ${{ runner.temp }}/release-artifact
+
+      - name: Download build artifact from existing run
+        if: github.event_name == 'workflow_dispatch' && inputs.smoke_artifact_run_id != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SMOKE_ARTIFACT_RUN_ID: ${{ inputs.smoke_artifact_run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $artifactDir = Join-Path $env:RUNNER_TEMP 'release-artifact'
+          Remove-Item -Recurse -Force $artifactDir -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+          gh run download $env:SMOKE_ARTIFACT_RUN_ID --name release-daintree-windows-latest --dir $artifactDir
+
+      - name: Install NSIS package
+        id: extract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installers = @(Get-ChildItem -Path "$env:RUNNER_TEMP\release-artifact" -Recurse -Filter '*.exe' |
+            Where-Object { $_.Name -match '-setup\.exe$' } |
+            Sort-Object Name)
+          $runnerArch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+          $installer = $installers |
+            Where-Object { $_.Name -match "-$runnerArch-setup\.exe$" } |
+            Select-Object -First 1
+          if (-not $installer -and $runnerArch -eq 'x64') {
+            $installer = $installers |
+              Where-Object { $_.Name -notmatch '-arm64-setup\.exe$' } |
+              Select-Object -First 1
+          }
+          if (-not $installer) {
+            Write-Host "::error::No NSIS installer matching runner architecture '$runnerArch' found in downloaded artifact"
+            Get-ChildItem -Path "$env:RUNNER_TEMP\release-artifact" -Recurse | Select-Object -First 30 | ForEach-Object { Write-Host $_.FullName }
+            exit 1
+          }
+          Write-Host "Selected installer: $($installer.FullName)"
+          # /S — silent NSIS install. perMachine=false in electron-builder
+          # config means the installer lands under %LOCALAPPDATA%\Programs.
+          $proc = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -PassThru -Wait
+          if ($proc.ExitCode -ne 0) {
+            Write-Host "::error::Silent NSIS install failed with exit code $($proc.ExitCode)"
+            exit $proc.ExitCode
+          }
+          # Locate the install via the per-user uninstall registry entry; fall
+          # back to the default path electron-builder uses when the user
+          # doesn't change it.
+          $entry = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue |
+            ForEach-Object { Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue } |
+            Where-Object { $_.DisplayName -eq 'Daintree' } |
+            Select-Object -First 1
+          $installDir = $null
+          if ($entry -and $entry.InstallLocation) {
+            $installDir = $entry.InstallLocation
+          }
+          if (-not $installDir -or -not (Test-Path $installDir)) {
+            $fallback = Join-Path $env:LOCALAPPDATA 'Programs\Daintree'
+            if (Test-Path $fallback) {
+              $installDir = $fallback
+            }
+          }
+          if (-not $installDir) {
+            Write-Host "::error::Could not locate Daintree install directory after silent NSIS install"
+            exit 1
+          }
+          $bin = Join-Path $installDir 'Daintree.exe'
+          if (-not (Test-Path $bin)) {
+            Write-Host "::error::Expected Daintree.exe missing at $bin"
+            Get-ChildItem $installDir -Recurse -Depth 2 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
+            exit 1
+          }
+          Write-Host "Resolved packaged binary: $bin"
+          "packaged_binary=$bin" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Run packaged smoke
+        env:
+          PACKAGED_BINARY: ${{ steps.extract.outputs.packaged_binary }}
+        run: node scripts/run-packaged-smoke.mjs
+
   publish-daintree:
     if: startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true
-    needs: [build-daintree]
+    needs: [assemble-windows-release, smoke-packaged]
     runs-on: ubuntu-22.04
     timeout-minutes: 15
 
     steps:
-      - name: Checkout repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --prune --no-recurse-submodules --depth=1 origin "$GITHUB_SHA"
-          git -C "$GITHUB_WORKSPACE" checkout --force FETCH_HEAD
-          git -C "$GITHUB_WORKSPACE" clean -ffdx
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - name: Check out repository
+        uses: actions/checkout@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          clean: true
+          fetch-depth: 1
 
-      - name: Install dependencies
-        run: node scripts/ci/npm-ci-retry.mjs --ignore-scripts
-
-      - name: Resolve update metadata prefix
-        shell: bash
-        run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          if [[ "$TAG_VERSION" == *-rc* ]]; then
-            echo "UPDATE_METADATA_PREFIX=rc" >> "$GITHUB_ENV"
-          elif [[ "$TAG_VERSION" == *-beta* ]]; then
-            echo "UPDATE_METADATA_PREFIX=beta" >> "$GITHUB_ENV"
-          else
-            echo "UPDATE_METADATA_PREFIX=latest" >> "$GITHUB_ENV"
-          fi
-
-      - name: Download Windows artifacts
-        uses: actions/download-artifact@v8
+      - name: Publish Daintree (Windows)
+        uses: ./.github/actions/publish-daintree
         with:
-          name: release-daintree-windows-latest
-          path: release/
-
-      - name: List release files
-        run: ls -lah release/
-
-      - name: Install gate dependencies
-        shell: bash
-        run: npm install --no-save --no-audit --no-fund --ignore-scripts js-yaml semver
-
-      - name: Check version is monotonically increasing
-        shell: bash
-        env:
-          UPDATE_METADATA_PREFIX: ${{ env.UPDATE_METADATA_PREFIX }}
-          RELEASE_PLATFORMS: win
-        run: node scripts/ci/check-version-monotonic.mjs
-
-      - name: Upload binaries to R2
-        shell: bash
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_BUCKET: ${{ secrets.DAINTREE_R2_BUCKET }}
-        run: |
-          aws s3 sync release/ "s3://${R2_BUCKET}/releases/" \
-            --endpoint-url "${R2_ENDPOINT}" \
-            --no-progress \
-            --exclude "*" \
-            --include "*.appx" \
-            --include "*.msix" \
-            --include "*.exe" \
-            --include "*.blockmap" \
-            --cache-control "public, max-age=31536000, immutable"
-
-      - name: Verify binaries reachable on R2
-        shell: bash
-        env:
-          PUBLISH_URL: https://updates.daintree.org/releases/
-        run: node scripts/ci/verify-r2-uploads.mjs
-
-      - name: Upload metadata to R2
-        shell: bash
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_BUCKET: ${{ secrets.DAINTREE_R2_BUCKET }}
-        run: |
-          aws s3 sync release/ "s3://${R2_BUCKET}/releases/" \
-            --endpoint-url "${R2_ENDPOINT}" \
-            --no-progress \
-            --exclude "*" \
-            --include "${UPDATE_METADATA_PREFIX}.yml" \
-            --cache-control "no-cache, no-store, must-revalidate"
-
-      - name: Notify website of new release
-        shell: bash
-        env:
-          WEBSITE_WEBHOOK_SECRET: ${{ secrets.WEBSITE_WEBHOOK_SECRET }}
-        run: |
-          sleep 1
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://daintree.org/api/refresh-releases \
-            -H "Authorization: Bearer ${WEBSITE_WEBHOOK_SECRET}")
-          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          BODY=$(echo "$RESPONSE" | sed '$d')
-          echo "Response (HTTP ${HTTP_CODE}): ${BODY}"
-          if [ "$HTTP_CODE" -ne 200 ]; then
-            echo "::warning::Website refresh failed (HTTP ${HTTP_CODE})"
-          fi
+          artifact_name: release-daintree-windows-latest
+          include_globs: "*.appx *.msix *.exe *.blockmap"
+          metadata_suffix: ""
+          release_platforms: win
+          r2_access_key_id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2_secret_access_key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          r2_endpoint: ${{ secrets.R2_ENDPOINT }}
+          r2_bucket: ${{ secrets.DAINTREE_R2_BUCKET }}
+          website_webhook_secret: ${{ secrets.WEBSITE_WEBHOOK_SECRET }}

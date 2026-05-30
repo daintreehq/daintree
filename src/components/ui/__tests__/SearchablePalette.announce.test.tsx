@@ -27,10 +27,27 @@ vi.mock("@/store/paletteStore", () => ({
   usePaletteStore: { getState: () => ({ activePaletteId: null }) },
 }));
 
-const announceMock = vi.fn();
-vi.mock("@/store/accessibilityAnnouncerStore", () => ({
-  useAnnouncerStore: { getState: () => ({ announce: announceMock }) },
-}));
+const announceMock = vi.hoisted(() => vi.fn());
+vi.mock("@/store/accessibilityAnnouncerStore", () => {
+  // Match the real Zustand hook shape: callable selector + static `getState`,
+  // plus the named `isDelivered`/`markDelivered` helpers that
+  // `AccessibilityAnnouncer` imports alongside the hook.
+  const state = { polite: null, assertive: null, nextId: 1, announce: announceMock };
+  const useAnnouncerStore = Object.assign(
+    (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state),
+    {
+      getState: () => state,
+      setState: () => {},
+      subscribe: () => () => {},
+    }
+  );
+  return {
+    useAnnouncerStore,
+    isDelivered: () => false,
+    markDelivered: () => {},
+    _resetAnnouncerDeliveryForTests: () => {},
+  };
+});
 
 import { SearchablePalette } from "../SearchablePalette";
 

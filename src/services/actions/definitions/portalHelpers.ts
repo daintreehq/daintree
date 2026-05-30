@@ -55,7 +55,7 @@ export const activatePortalTab = async (tabId: string): Promise<void> => {
 
   try {
     if (!state.createdTabs.has(tabId)) {
-      await window.electron.portal.create({ tabId, url: tab.url });
+      await window.electron.portal.create({ tabId, url: tab.url, partition: tab.partition });
       state.markTabCreated(tabId);
     }
     await window.electron.portal.show({ tabId, bounds });

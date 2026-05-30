@@ -68,4 +68,42 @@ describe("computeDevServerUrl", () => {
   it("falls forward to the detected URL when the detected URL cannot be parsed", () => {
     expect(computeDevServerUrl("not-a-url", "http://localhost:3000/dashboard")).toBe("not-a-url");
   });
+
+  describe("proxy mode (#9100)", () => {
+    const PROXY = "http://dp-proj-panel.localhost:43000";
+
+    it("returns false when there is no detected URL even with a proxy origin", () => {
+      expect(computeDevServerUrl("", "", PROXY)).toBe(false);
+    });
+
+    it("navigates onto the proxy origin root on first detection", () => {
+      expect(computeDevServerUrl("http://localhost:3000/", "", PROXY)).toBe(`${PROXY}/`);
+    });
+
+    it("returns false once the pane is already on the proxy origin (stable restart)", () => {
+      // Dev server restarted on a new upstream port; the proxy follows it transparently,
+      // so the webview must NOT re-navigate.
+      expect(computeDevServerUrl("http://localhost:3001/", `${PROXY}/dashboard`, PROXY)).toBe(
+        false
+      );
+    });
+
+    it("ignores the upstream port entirely — same proxy origin regardless of detected port", () => {
+      expect(computeDevServerUrl("http://localhost:9999/", `${PROXY}/`, PROXY)).toBe(false);
+    });
+
+    it("migrates off a stale direct-localhost URL onto the proxy origin, preserving the route", () => {
+      expect(
+        computeDevServerUrl("http://localhost:3000/", "http://localhost:3000/settings?tab=x", PROXY)
+      ).toBe(`${PROXY}/settings?tab=x`);
+    });
+
+    it("honors a non-root base path the dev server advertises when first adopting the proxy", () => {
+      expect(computeDevServerUrl("http://localhost:5174/app/", "", PROXY)).toBe(`${PROXY}/app/`);
+    });
+
+    it("returns false when the proxy origin string cannot be parsed", () => {
+      expect(computeDevServerUrl("http://localhost:3000/", "", "not-a-url")).toBe(false);
+    });
+  });
 });

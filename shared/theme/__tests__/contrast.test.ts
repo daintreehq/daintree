@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   accentOverrideHasLowContrast,
   contrastRatio,
+  deltaEOK,
   getThemeContrastWarnings,
   isHexColor,
 } from "../contrast.js";
@@ -284,7 +285,7 @@ describe("getThemeContrastWarnings", () => {
     }
   });
 
-  it("emits no warnings when status-* tokens meet 3.0:1 against surface-panel", () => {
+  it("emits no warnings when status-* tokens meet 3.0:1 against all surfaces", () => {
     // Pure black on white is 21:1 — well above any threshold.
     const scheme = makeScheme({
       "status-success": "#000000" as AppColorSchemeTokens["status-success"],
@@ -292,6 +293,13 @@ describe("getThemeContrastWarnings", () => {
       "status-danger": "#000000" as AppColorSchemeTokens["status-danger"],
       "status-info": "#000000" as AppColorSchemeTokens["status-info"],
       "surface-panel": "#ffffff" as AppColorSchemeTokens["surface-panel"],
+      "surface-grid": "#ffffff" as AppColorSchemeTokens["surface-grid"],
+      "surface-sidebar": "#ffffff" as AppColorSchemeTokens["surface-sidebar"],
+      "surface-canvas": "#ffffff" as AppColorSchemeTokens["surface-canvas"],
+      "surface-panel-elevated": "#ffffff" as AppColorSchemeTokens["surface-panel-elevated"],
+      "search-highlight-background":
+        "#fffde0" as AppColorSchemeTokens["search-highlight-background"],
+      "search-highlight-text": "#333333" as AppColorSchemeTokens["search-highlight-text"],
     });
     const warnings = getThemeContrastWarnings(scheme);
     // Catch both ratio failures (start with "status-") and unevaluable warnings
@@ -370,6 +378,69 @@ describe("getThemeContrastWarnings", () => {
       ).toHaveLength(0);
     }
   });
+
+  it("emits contrast warning when search-highlight-background rgba is composited over a surface", () => {
+    const scheme = makeScheme({
+      "search-highlight-text": "#cccccc" as AppColorSchemeTokens["search-highlight-text"],
+      "search-highlight-background":
+        "rgba(0,0,0,0.1)" as AppColorSchemeTokens["search-highlight-background"],
+      "surface-grid": "#ffffff" as AppColorSchemeTokens["surface-grid"],
+      "surface-sidebar": "#ffffff" as AppColorSchemeTokens["surface-sidebar"],
+      "surface-canvas": "#ffffff" as AppColorSchemeTokens["surface-canvas"],
+      "surface-panel": "#ffffff" as AppColorSchemeTokens["surface-panel"],
+      "surface-panel-elevated": "#ffffff" as AppColorSchemeTokens["surface-panel-elevated"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const compositedWarnings = warnings.filter(
+      (w) =>
+        w.message.includes("search-highlight-text on search-highlight-background (over") &&
+        w.message.includes("target is 3.0:1")
+    );
+    expect(compositedWarnings.length).toBeGreaterThan(0);
+  });
+
+  it("treats opaque rgba as direct hex check", () => {
+    const scheme = makeScheme({
+      "search-highlight-text": "#999999" as AppColorSchemeTokens["search-highlight-text"],
+      "search-highlight-background":
+        "rgba(136,136,136,1)" as AppColorSchemeTokens["search-highlight-background"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const opaqueWarnings = warnings.filter(
+      (w) =>
+        w.message.includes("search-highlight-text on search-highlight-background") &&
+        !w.message.includes("(over")
+    );
+    expect(opaqueWarnings.length).toBeGreaterThan(0);
+  });
+
+  it("emits unevaluable warning for malformed rgba in a pair", () => {
+    const scheme = makeScheme({
+      "search-highlight-background":
+        "rgba(0,0,0,)" as AppColorSchemeTokens["search-highlight-background"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const unevaluable = warnings.filter(
+      (w) =>
+        w.message.includes("Cannot evaluate contrast") &&
+        w.message.includes("search-highlight-background")
+    );
+    expect(unevaluable.length).toBe(1);
+    expect(unevaluable[0]!.message).toContain("rgba(0,0,0,)");
+  });
+
+  it("produces zero accent-secondary outline warnings across all built-in themes", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      const warnings = getThemeContrastWarnings(scheme);
+      const outlineFailures = warnings.filter((w) =>
+        w.message.includes("accent-secondary outline on")
+      );
+      expect(
+        outlineFailures,
+        `${scheme.id}: accent-secondary must hit 3:1 against all surfaces`
+      ).toHaveLength(0);
+    }
+  });
 });
 
 describe("accentOverrideHasLowContrast", () => {
@@ -426,5 +497,241 @@ describe("accentOverrideHasLowContrast", () => {
       "accent-primary": "oklch(0.5 0.1 200)" as AppColorSchemeTokens["accent-primary"],
     });
     expect(accentOverrideHasLowContrast(scheme)).toBe(false);
+  });
+});
+
+describe("deltaEOK", () => {
+  it("returns 0 for identical colors", () => {
+    expect(deltaEOK("#ff0000", "#ff0000")).toBeCloseTo(0, 5);
+    expect(deltaEOK("#000000", "#000000")).toBeCloseTo(0, 5);
+    expect(deltaEOK("#123456", "#123456")).toBeCloseTo(0, 5);
+  });
+
+  it("returns a large value for black vs white", () => {
+    const d = deltaEOK("#000000", "#ffffff");
+    expect(d).toBeGreaterThan(0.5);
+    expect(d).toBeLessThan(1.0);
+  });
+
+  it("returns a small value for similar colors", () => {
+    const d = deltaEOK("#ff0000", "#ee0000");
+    expect(d).toBeGreaterThan(0);
+    expect(d).toBeLessThan(0.05);
+  });
+
+  it("is symmetric", () => {
+    expect(deltaEOK("#112233", "#aabbcc")).toBeCloseTo(deltaEOK("#aabbcc", "#112233"), 10);
+  });
+
+  it("handles 3-digit hex", () => {
+    const d = deltaEOK("#f00", "#ff0000");
+    expect(d).toBeCloseTo(0, 5);
+  });
+});
+
+describe("terminal/syntax validation", () => {
+  it("emits legibility warning when an ANSI color is too close to terminal-background", () => {
+    const scheme = makeScheme({
+      "terminal-background": "#111111" as AppColorSchemeTokens["terminal-background"],
+      "terminal-yellow": "#151515" as AppColorSchemeTokens["terminal-yellow"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const failure = warnings.find(
+      (w) =>
+        w.message.includes("terminal-yellow on terminal-background") &&
+        w.message.includes("OKLab lightness diff")
+    );
+    expect(failure).toBeDefined();
+  });
+
+  it("emits legibility warning when a syntax role is too close to terminal-background", () => {
+    const scheme = makeScheme({
+      "terminal-background": "#111111" as AppColorSchemeTokens["terminal-background"],
+      "syntax-keyword": "#111111" as AppColorSchemeTokens["syntax-keyword"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const failure = warnings.find(
+      (w) =>
+        w.message.includes("syntax-keyword on terminal-background") &&
+        w.message.includes("OKLab lightness diff")
+    );
+    expect(failure).toBeDefined();
+  });
+
+  it("uses softer floor for syntax-comment", () => {
+    // #101010 on #000000 → OKLab ΔL ≈ 0.14, fails SOFT (0.22) but is above STANDARD (0.18)? No...
+    // Actually #101010 on #000000 ΔL ≈ 0.14, which fails both. Let's use #111111.
+    // #111111 on #000000 → ΔL ≈ 0.17, fails SOFT (0.22) and STANDARD (0.18).
+    const scheme = makeScheme({
+      "terminal-background": "#000000" as AppColorSchemeTokens["terminal-background"],
+      "syntax-comment": "#080808" as AppColorSchemeTokens["syntax-comment"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const commentFailure = warnings.find((w) => w.message.includes("syntax-comment on"));
+    expect(commentFailure).toBeDefined();
+    expect(commentFailure!.message).toContain("floor is 0.18");
+  });
+
+  it("uses softer floor for syntax-quote", () => {
+    const scheme = makeScheme({
+      "terminal-background": "#000000" as AppColorSchemeTokens["terminal-background"],
+      "syntax-quote": "#080808" as AppColorSchemeTokens["syntax-quote"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const quoteFailure = warnings.find((w) => w.message.includes("syntax-quote on"));
+    expect(quoteFailure).toBeDefined();
+    expect(quoteFailure!.message).toContain("floor is 0.18");
+  });
+
+  it("uses primary floor for terminal-foreground", () => {
+    const scheme = makeScheme({
+      "terminal-background": "#000000" as AppColorSchemeTokens["terminal-background"],
+      "terminal-foreground": "#666666" as AppColorSchemeTokens["terminal-foreground"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const fgFailure = warnings.find((w) => w.message.includes("terminal-foreground on"));
+    expect(fgFailure).toBeDefined();
+    expect(fgFailure!.message).toContain("floor is 0.55");
+  });
+
+  it("skips legibility check for terminal-black", () => {
+    // terminal-black = same as background → should NOT produce legibility warning
+    const scheme = makeScheme({
+      "terminal-background": "#111111" as AppColorSchemeTokens["terminal-background"],
+      "terminal-black": "#111111" as AppColorSchemeTokens["terminal-black"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const blackLegibility = warnings.find(
+      (w) =>
+        w.message.includes("terminal-black on terminal-background") &&
+        w.message.includes("OKLab lightness diff")
+    );
+    expect(blackLegibility).toBeUndefined();
+  });
+
+  it("emits distinctness warning when base and bright colors are too similar", () => {
+    const scheme = makeScheme({
+      "terminal-background": "#111111" as AppColorSchemeTokens["terminal-background"],
+      "terminal-green": "#00aa55" as AppColorSchemeTokens["terminal-green"],
+      "terminal-bright-green": "#00aa55" as AppColorSchemeTokens["terminal-bright-green"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const failure = warnings.find(
+      (w) => w.message.includes("green vs bright-green") && w.message.includes("deltaEOK")
+    );
+    expect(failure).toBeDefined();
+  });
+
+  it("emits distinctness warning for blue vs cyan", () => {
+    const scheme = makeScheme({
+      "terminal-background": "#111111" as AppColorSchemeTokens["terminal-background"],
+      "terminal-blue": "#4488cc" as AppColorSchemeTokens["terminal-blue"],
+      "terminal-cyan": "#4488cc" as AppColorSchemeTokens["terminal-cyan"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const failure = warnings.find(
+      (w) => w.message.includes("blue vs cyan") && w.message.includes("deltaEOK")
+    );
+    expect(failure).toBeDefined();
+  });
+
+  it("emits distinctness warning for keyword vs function", () => {
+    const scheme = makeScheme({
+      "terminal-background": "#111111" as AppColorSchemeTokens["terminal-background"],
+      "syntax-keyword": "#8866cc" as AppColorSchemeTokens["syntax-keyword"],
+      "syntax-function": "#8866cc" as AppColorSchemeTokens["syntax-function"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const failure = warnings.find(
+      (w) => w.message.includes("keyword vs function") && w.message.includes("deltaEOK")
+    );
+    expect(failure).toBeDefined();
+  });
+
+  it("emits distinctness warning for string vs number", () => {
+    const scheme = makeScheme({
+      "terminal-background": "#111111" as AppColorSchemeTokens["terminal-background"],
+      "syntax-string": "#aaaa66" as AppColorSchemeTokens["syntax-string"],
+      "syntax-number": "#aaaa66" as AppColorSchemeTokens["syntax-number"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const failure = warnings.find(
+      (w) => w.message.includes("string vs number") && w.message.includes("deltaEOK")
+    );
+    expect(failure).toBeDefined();
+  });
+
+  it("emits unevaluable warning when terminal-background is non-hex", () => {
+    const scheme = makeScheme({
+      "terminal-background": "oklch(0.2 0.01 250)" as AppColorSchemeTokens["terminal-background"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const failure = warnings.find(
+      (w) =>
+        w.message.includes("Cannot evaluate terminal/syntax legibility") &&
+        w.message.includes("terminal-background")
+    );
+    expect(failure).toBeDefined();
+  });
+
+  it("emits unevaluable warning when a checked token is non-hex", () => {
+    const scheme = makeScheme({
+      "terminal-background": "#111111" as AppColorSchemeTokens["terminal-background"],
+      "terminal-blue": "oklch(0.5 0.1 250)" as AppColorSchemeTokens["terminal-blue"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const failure = warnings.find(
+      (w) =>
+        w.message.includes("Cannot evaluate legibility for terminal-blue") &&
+        w.message.includes("non-hex")
+    );
+    expect(failure).toBeDefined();
+  });
+
+  it("emits unevaluable distinctness warning when one of a pair is non-hex", () => {
+    const scheme = makeScheme({
+      "terminal-background": "#111111" as AppColorSchemeTokens["terminal-background"],
+      "terminal-blue": "oklch(0.5 0.1 250)" as AppColorSchemeTokens["terminal-blue"],
+      "terminal-cyan": "#22d3ee" as AppColorSchemeTokens["terminal-cyan"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const failure = warnings.find(
+      (w) =>
+        w.message.includes("Cannot evaluate distinctness for blue vs cyan") &&
+        w.message.includes("non-hex")
+    );
+    expect(failure).toBeDefined();
+  });
+
+  it("produces zero terminal/syntax warnings across all built-in themes", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      const warnings = getThemeContrastWarnings(scheme);
+      const terminalWarnings = warnings.filter(
+        (w) =>
+          w.message.includes("terminal-") ||
+          w.message.includes("syntax-") ||
+          w.message.includes("OKLab") ||
+          w.message.includes("deltaEOK")
+      );
+      expect(
+        terminalWarnings,
+        `${scheme.id}: terminal/syntax validation must produce zero warnings, got: ${terminalWarnings.map((w) => w.message).join("; ")}`
+      ).toHaveLength(0);
+    }
+  });
+
+  it("handles 8-digit alpha hex in terminal tokens", () => {
+    const scheme = makeScheme({
+      "terminal-background": "#111111ff" as AppColorSchemeTokens["terminal-background"],
+      "terminal-red": "#ff6666ff" as AppColorSchemeTokens["terminal-red"],
+      "terminal-bright-red": "#ff8888ff" as AppColorSchemeTokens["terminal-bright-red"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const unevaluable = warnings.filter(
+      (w) =>
+        w.message.includes("Cannot evaluate") &&
+        (w.message.includes("terminal-red") || w.message.includes("terminal-bright-red"))
+    );
+    expect(unevaluable).toHaveLength(0);
   });
 });

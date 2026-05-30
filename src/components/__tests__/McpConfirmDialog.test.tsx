@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { McpConfirmDialog } from "../McpConfirmDialog";
 import { __resetMcpConfirmStoreForTesting, requestMcpConfirmation } from "@/store/mcpConfirmStore";
 import type { ActionDanger } from "@shared/types/actions";
+import type { McpBearerIdentity } from "@shared/types/ipc/mcpServer";
 
 vi.mock("zustand/react/shallow", () => ({
   useShallow: (fn: unknown) => fn,
@@ -35,7 +36,12 @@ vi.stubGlobal(
 );
 
 function enqueue(
-  overrides: { requestId?: string; actionTitle?: string; danger?: ActionDanger } = {}
+  overrides: {
+    requestId?: string;
+    actionTitle?: string;
+    danger?: ActionDanger;
+    callerInfo?: McpBearerIdentity;
+  } = {}
 ) {
   return requestMcpConfirmation({
     requestId: overrides.requestId ?? "req-1",
@@ -44,6 +50,7 @@ function enqueue(
     actionDescription: "Permanently delete a worktree.",
     argsSummary: '{"worktreeId":"wt-1"}',
     danger: overrides.danger ?? "confirm",
+    callerInfo: overrides.callerInfo,
   });
 }
 
@@ -83,6 +90,24 @@ describe("McpConfirmDialog", () => {
 
     expect(screen.getByRole("button", { name: "Delete worktree" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^run action$/i })).toBeNull();
+  });
+
+  it("shows the requesting-bearer identity for external dispatches (#9157)", () => {
+    void enqueue({
+      actionTitle: "Delete worktree",
+      callerInfo: { token4LastChars: "1234", userAgent: "Claude Code" },
+    });
+    render(<McpConfirmDialog />);
+
+    expect(screen.getByText("Requested by")).toBeTruthy();
+    expect(screen.getByText(/…1234 · Claude Code/)).toBeTruthy();
+  });
+
+  it("omits the requesting-bearer row when callerInfo is absent (pinned help-session)", () => {
+    void enqueue({ actionTitle: "Delete worktree" });
+    render(<McpConfirmDialog />);
+
+    expect(screen.queryByText("Requested by")).toBeNull();
   });
 
   it("renders destructive styling only for danger:confirm dispatches", () => {

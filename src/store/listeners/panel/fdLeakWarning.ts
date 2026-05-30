@@ -1,5 +1,6 @@
 import type { FdLeakWarningPayload } from "@shared/types/pty-host";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
+import { logWarn } from "@/utils/logger";
 
 let lastWarningTimestamp = 0;
 const REARM_MS = 5 * 60 * 1000; // 5 min cooldown before logging again
@@ -34,7 +35,7 @@ export function setupFdLeakWarningListeners(): DisposableStore {
         if (now - lastWarningTimestamp < REARM_MS) return;
         lastWarningTimestamp = now;
 
-        console.warn(formatFdLeakWarning(data));
+        logWarn(formatFdLeakWarning(data), { data });
       })
     )
   );

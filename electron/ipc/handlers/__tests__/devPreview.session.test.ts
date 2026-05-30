@@ -19,6 +19,16 @@ vi.mock("../../utils.js", () => ({
     );
     return () => ipcMainMock.removeHandler(channel);
   },
+  typedHandleValidated: (
+    channel: string,
+    schema: { parse: (v: unknown) => unknown },
+    handler: unknown
+  ) => {
+    ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
+      (handler as (...a: unknown[]) => unknown)(schema.parse(args[0]))
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
   typedHandleWithContext: (channel: string, handler: unknown) => {
     ipcMainMock.handle(
       channel,
@@ -41,6 +51,7 @@ vi.mock("electron", () => ({
 }));
 
 const scanOutputMock = vi.fn();
+const DEV_PREVIEW_READY_WAIT_MS = 5000;
 
 vi.mock("../../../services/HibernationService.js", () => ({
   getHibernationService: () => ({
@@ -220,18 +231,27 @@ describe("dev preview session handlers", () => {
     scanOutputMock.mockReturnValue({ buffer: "", url: "http://localhost:5173/", error: null });
     ptyClient.emitData(ensureResult.terminalId!, "ready");
 
-    await vi.waitFor(() => {
-      const lastCall = broadcastMock.mock.calls.at(-1);
-      expect(lastCall?.[0]).toBe(CHANNELS.DEV_PREVIEW_STATE_CHANGED);
-      expect(lastCall?.[1]).toEqual({
-        state: expect.objectContaining({
-          panelId: "panel-1",
-          projectId: "project-1",
-          status: "running",
-          url: "http://localhost:5173/",
-        }),
-      });
-    });
+    await vi.waitFor(
+      () => {
+        // emitStateChanged now fires both DEV_PREVIEW_STATE_CHANGED and the
+        // cross-worktree DEV_PREVIEW_ALL_SESSIONS_CHANGED, so the running
+        // single-session payload is no longer guaranteed to be the last call.
+        const runningStateCall = broadcastMock.mock.calls.find(
+          ([channel, payload]) =>
+            channel === CHANNELS.DEV_PREVIEW_STATE_CHANGED &&
+            (payload as { state?: { status?: string } })?.state?.status === "running"
+        );
+        expect(runningStateCall?.[1]).toEqual({
+          state: expect.objectContaining({
+            panelId: "panel-1",
+            projectId: "project-1",
+            status: "running",
+            url: "http://localhost:5173/",
+          }),
+        });
+      },
+      { timeout: DEV_PREVIEW_READY_WAIT_MS }
+    );
   });
 
   it("keeps concurrent panel ensures isolated in the same project and worktree", async () => {
@@ -271,28 +291,31 @@ describe("dev preview session handlers", () => {
     scanOutputMock.mockReturnValue({ buffer: "", url: "http://localhost:4102/", error: null });
     ptyClient.emitData(second.terminalId!, "ready");
 
-    await vi.waitFor(() => {
-      const stateEvents = broadcastMock.mock.calls
-        .filter(([channel]) => channel === CHANNELS.DEV_PREVIEW_STATE_CHANGED)
-        .map(([, payload]) => (payload as { state: Record<string, unknown> }).state);
+    await vi.waitFor(
+      () => {
+        const stateEvents = broadcastMock.mock.calls
+          .filter(([channel]) => channel === CHANNELS.DEV_PREVIEW_STATE_CHANGED)
+          .map(([, payload]) => (payload as { state: Record<string, unknown> }).state);
 
-      expect(stateEvents).toContainEqual(
-        expect.objectContaining({
-          panelId: "panel-a",
-          projectId: "project-1",
-          status: "running",
-          url: "http://localhost:4101/",
-        })
-      );
-      expect(stateEvents).toContainEqual(
-        expect.objectContaining({
-          panelId: "panel-b",
-          projectId: "project-1",
-          status: "running",
-          url: "http://localhost:4102/",
-        })
-      );
-    });
+        expect(stateEvents).toContainEqual(
+          expect.objectContaining({
+            panelId: "panel-a",
+            projectId: "project-1",
+            status: "running",
+            url: "http://localhost:4101/",
+          })
+        );
+        expect(stateEvents).toContainEqual(
+          expect.objectContaining({
+            panelId: "panel-b",
+            projectId: "project-1",
+            status: "running",
+            url: "http://localhost:4102/",
+          })
+        );
+      },
+      { timeout: DEV_PREVIEW_READY_WAIT_MS }
+    );
   });
 
   it("restart kills previous terminal and spawns a fresh generation", async () => {
@@ -628,16 +651,19 @@ describe("dev preview session handlers", () => {
     scanOutputMock.mockReturnValue({ buffer: "", url: "http://localhost:5174/", error: null });
     ptyClient.emitData(ensured.terminalId!, "ready");
 
-    await vi.waitFor(async () => {
-      const state = await getByWorktreeHandler!({} as Electron.IpcMainInvokeEvent, {
-        worktreeId: "wt-lookup",
-      });
-      expect(state?.status).toBe("running");
-      expect(state?.panelId).toBe("panel-wt-lookup");
-      expect(state?.worktreeId).toBe("wt-lookup");
-      expect(state?.url).toBe("http://localhost:5174/");
-      expect(state?.predictedUrl).toMatch(/^http:\/\/localhost:\d+/);
-    });
+    await vi.waitFor(
+      async () => {
+        const state = await getByWorktreeHandler!({} as Electron.IpcMainInvokeEvent, {
+          worktreeId: "wt-lookup",
+        });
+        expect(state?.status).toBe("running");
+        expect(state?.panelId).toBe("panel-wt-lookup");
+        expect(state?.worktreeId).toBe("wt-lookup");
+        expect(state?.url).toBe("http://localhost:5174/");
+        expect(state?.predictedUrl).toMatch(/^http:\/\/localhost:\d+/);
+      },
+      { timeout: DEV_PREVIEW_READY_WAIT_MS }
+    );
   });
 
   it("returns null from get-by-worktree for an unknown worktree", async () => {

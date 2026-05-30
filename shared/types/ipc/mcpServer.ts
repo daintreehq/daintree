@@ -157,12 +157,36 @@ export interface McpAuditRecord {
  *   periodic sweep also drives this when an idle session's grant ages out
  *   without a follow-up read.
  * - `grant.revoked`: an explicit `revokeSessionGrants` IPC, a session
- *   teardown, or an idle reaper firing wiped the grant before its TTL
- *   elapsed. `revokedReason` distinguishes those sources.
+ *   teardown, an idle reaper firing, or the hard max-lifetime ceiling being
+ *   reached wiped the grant before its sliding TTL elapsed. `revokedReason`
+ *   distinguishes those sources.
+ * - `tier.elevated`: a renderer-approved session-tier elevation
+ *   (`HttpLifecycle.setSessionTier`) raised the session above its
+ *   token-resolved baseline. `tier` is the new tier, `previousTier` the
+ *   pre-elevation tier, `ttlMs`/`expiresAt` the bounded elevation window.
+ *   `toolId` is `"*"` — the elevation is session-scoped, not tool-scoped.
+ * - `tier.decayed`: a bounded elevation aged out (`SessionStore.decayTier`)
+ *   and the session silently fell back to its baseline. `tier` is the
+ *   baseline it decayed to, `previousTier` the elevated tier it left.
  */
-export type McpGrantRecordType = "grant.issued" | "grant.expired" | "grant.revoked";
+export type McpGrantRecordType =
+  | "grant.issued"
+  | "grant.expired"
+  | "grant.revoked"
+  | "tier.elevated"
+  | "tier.decayed";
 
-export type McpGrantRevokedReason = "user" | "session-ended" | "session-idle";
+/**
+ * Source of a `grant.revoked` transition.
+ * - `user`: explicit user-initiated revoke.
+ * - `session-ended`: the session was torn down.
+ * - `session-idle`: the idle reaper collected the session.
+ * - `grant-ceiling`: the hard max-lifetime ceiling from `issuedAt` elapsed
+ *   while the grant was still being actively refreshed; the user must
+ *   re-approve (#9161). Distinct from `grant.expired`, which is a passive
+ *   sliding-TTL timeout with no recent use.
+ */
+export type McpGrantRevokedReason = "user" | "session-ended" | "session-idle" | "grant-ceiling";
 
 export interface McpGrantRecord {
   type: McpGrantRecordType;
@@ -180,6 +204,16 @@ export interface McpGrantRecord {
   expiresAt?: number;
   /** Source of the revocation; only set on `grant.revoked`. */
   revokedReason?: McpGrantRevokedReason;
+  /**
+   * Tier context for `tier.elevated`/`tier.decayed` records. `tier` is the
+   * tier the session moved *to* (the elevated tier on elevation, the
+   * baseline on decay); `previousTier` is the tier it moved *from*. Both are
+   * absent on the `grant.*` variants so existing on-disk rows deserialize
+   * unchanged. Typed as `string` to keep this shared shape free of the
+   * main-process `McpTier` union.
+   */
+  tier?: string;
+  previousTier?: string;
 }
 
 /**
@@ -433,6 +467,19 @@ export interface ActiveBearerRecord {
   userAgent: string;
   lastActiveAt: number;
   requestsSinceLaunch: number;
+}
+
+/**
+ * Display-only provenance for the external bearer behind a `danger: "confirm"`
+ * dispatch, threaded into the MCP confirm dialog so the user can see which
+ * client is asking before approving (#9157). Carries only the non-sensitive
+ * fields — the 4-char token suffix and the client user-agent. Absent for
+ * pinned help-session dispatch (the assistant's own panel is the context), so
+ * the dialog stays provenance-free there.
+ */
+export interface McpBearerIdentity {
+  token4LastChars: string;
+  userAgent: string;
 }
 
 /**

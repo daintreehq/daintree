@@ -92,8 +92,7 @@ test.describe.serial("Presets: Custom Add (13–24)", () => {
     });
     const submenuVisible = await submenuTrigger.isVisible({ timeout: T_MEDIUM }).catch(() => false);
     if (submenuVisible) {
-      await submenuTrigger.hover();
-      await ctx.window.waitForTimeout(T_SETTLE);
+      await submenuTrigger.press("ArrowRight");
       const submenuContent = ctx.window.locator('[data-testid="submenu-content"]');
       await expect(submenuContent).toBeVisible({ timeout: T_SHORT });
       // Preset name renders as a text node inside DropdownMenuItem (not inside
