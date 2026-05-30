@@ -89,7 +89,6 @@ describe("TerminalInstanceService - options", () => {
     expect(managed.terminal.options).toEqual(
       expect.objectContaining({
         rescaleOverlappingGlyphs: true,
-        customGlyphs: true,
         reflowCursorLine: true,
       })
     );
@@ -120,7 +119,6 @@ describe("TerminalInstanceService - options", () => {
       expect.objectContaining({
         cursorBlink: false,
         rescaleOverlappingGlyphs: true,
-        customGlyphs: true,
         reflowCursorLine: true,
       })
     );

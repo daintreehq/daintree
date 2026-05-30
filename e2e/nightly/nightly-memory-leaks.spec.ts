@@ -1,11 +1,11 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { getGridPanelCount, getGridPanelIds, getPanelById, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_LONG, T_MEDIUM } from "../helpers/timeouts";
-import { measureMainMemory } from "../helpers/stress";
+import { measureMainMemory, measureRendererMemory } from "../helpers/stress";
 
 const HEAP_CYCLE_COUNT = 20;
 const HEAP_THRESHOLD_MB = 20;
@@ -137,5 +137,237 @@ test.describe.serial("Nightly: Memory Leak Detection", () => {
       const errors = await window.evaluate(() => window.__DAINTREE_E2E_ERROR_STORE__?.() ?? []);
       expect(errors.length).toBe(0);
     });
+  });
+});
+
+// ── xterm WebGL dispose leak (#9540) ──────────────────────
+//
+// xterm 6.0.0 leaked the whole Terminal object graph on every dispose() because
+// WebglRenderer._cursorBlinkStateManager and RenderService._pausedResizeTask were
+// never registered as disposables (upstream xterm.js #5818). The fix shipped in
+// the 6.1.0 beta line, which Daintree now pins. These regressions guard against
+// a reintroduction by exercising the close path and the hibernate path with the
+// WebGL renderer actually attached (the WebglRenderer leak only materializes when
+// the addon is loaded) and asserting the WebGL "wants" pool returns to baseline
+// and the renderer JS heap stays flat across many cycles.
+//
+// Requires a real GPU, so these are skipped on CI runners (which launch with
+// --disable-gpu); they run on the bare-metal nightly macOS/Linux runners.
+
+const WEBGL_CYCLE_COUNT = 20;
+// A reintroduced per-dispose Terminal-graph leak retains buffers, render layers
+// and the WebGL renderer on every cycle — easily tens of MB across 20 cycles.
+// 35MB clears normal V8 / performance.memory noise while still catching a
+// multi-MB-per-cycle regression.
+const WEBGL_HEAP_THRESHOLD_MB = 35;
+const WEBGL_WARMUP_CYCLES = 3;
+const WEBGL_AGENT_ID = "claude";
+
+interface WebGLState {
+  wantsSize: number;
+  active: boolean;
+  mode: string;
+  hibernated: boolean;
+}
+
+async function getWebGLState(page: Page, panelId: string): Promise<WebGLState | null> {
+  return page.evaluate((id) => {
+    const fn = (
+      window as unknown as {
+        __daintreeGetTerminalWebGLState?: (panelId: string) => WebGLState | null;
+      }
+    ).__daintreeGetTerminalWebGLState;
+    return typeof fn === "function" ? fn(id) : null;
+  }, panelId);
+}
+
+async function promoteToAgent(page: Page, panelId: string): Promise<boolean> {
+  return page.evaluate(
+    ({ id, agentId }) => {
+      const fn = (
+        window as unknown as {
+          __daintreePromoteTerminalToAgentForE2E?: (panelId: string, agentId: string) => boolean;
+        }
+      ).__daintreePromoteTerminalToAgentForE2E;
+      return typeof fn === "function" ? fn(id, agentId) : false;
+    },
+    { id: panelId, agentId: WEBGL_AGENT_ID }
+  );
+}
+
+async function hibernateTerminal(page: Page, panelId: string): Promise<boolean> {
+  return page.evaluate((id) => {
+    const fn = (
+      window as unknown as {
+        __daintreeHibernateTerminalForE2E?: (panelId: string) => boolean;
+      }
+    ).__daintreeHibernateTerminalForE2E;
+    return typeof fn === "function" ? fn(id) : false;
+  }, panelId);
+}
+
+// Open a terminal, promote it to a WebGL-eligible agent terminal, and wait for
+// the WebGL context to actually attach (addon load is async). Returns the new
+// panel id.
+async function openAgentTerminalWithWebGL(window: AppContext["window"]): Promise<string> {
+  const idsBefore = await getGridPanelIds(window);
+  await openTerminal(window);
+  await expect
+    .poll(() => getGridPanelCount(window), { timeout: T_LONG })
+    .toBe(idsBefore.length + 1);
+
+  const idsAfter = await getGridPanelIds(window);
+  const newId = idsAfter.find((id) => !idsBefore.includes(id));
+  expect(newId, "new terminal panel id").toBeTruthy();
+  const id = newId as string;
+
+  await expect(getPanelById(window, id)).toBeVisible({ timeout: T_MEDIUM });
+  await promoteToAgent(window, id);
+  await expect
+    .poll(async () => (await getWebGLState(window, id))?.active ?? false, { timeout: T_LONG })
+    .toBe(true);
+  return id;
+}
+
+async function closePanel(window: AppContext["window"], id: string): Promise<void> {
+  const idsBefore = await getGridPanelIds(window);
+  const panel = getPanelById(window, id);
+  const closeBtn = panel.locator(SEL.panel.close);
+  await closeBtn.click({ modifiers: ["Alt"], force: true, timeout: T_MEDIUM });
+  await expect
+    .poll(() => getGridPanelCount(window), { timeout: T_MEDIUM })
+    .toBe(idsBefore.length - 1);
+}
+
+const WEBGL_GPU_SKIP_REASON =
+  "WebGL renderer needs a real GPU; CI runners launch with --disable-gpu";
+
+function skipWithoutGpu(): void {
+  test.info().annotations.push({ type: "conditional-skip", description: WEBGL_GPU_SKIP_REASON });
+  test.skip(Boolean(process.env.CI), WEBGL_GPU_SKIP_REASON);
+}
+
+test.describe.serial("Nightly: xterm WebGL dispose leak (#9540)", () => {
+  let webglCtx: AppContext;
+  let webglFixtureDir: string;
+  let webglFixtureCleanup: (() => void) | undefined;
+
+  test.beforeAll(async () => {
+    const { dir, cleanup } = createFixtureRepo({ name: "webgl-leaks" });
+    webglFixtureDir = dir;
+    webglFixtureCleanup = cleanup;
+    webglCtx = await launchApp({ enableWebgl: true });
+    webglCtx.window = await openAndOnboardProject(
+      webglCtx.app,
+      webglCtx.window,
+      webglFixtureDir,
+      "WebGL Leak Test"
+    );
+  });
+
+  test.afterAll(async () => {
+    if (webglCtx?.app) await closeApp(webglCtx.app);
+    webglFixtureCleanup?.();
+  });
+
+  test("Terminal graph released after agent terminal close (WebGL)", async () => {
+    skipWithoutGpu();
+    test.setTimeout(600_000);
+    const { window } = webglCtx;
+
+    await test.step("confirm WebGL actually attaches", async () => {
+      const id = await openAgentTerminalWithWebGL(window);
+      const state = await getWebGLState(window, id);
+      expect(state?.mode).toBe("webgl");
+      expect(state?.wantsSize).toBeGreaterThan(0);
+      await closePanel(window, id);
+      await expect
+        .poll(async () => (await getWebGLState(window, id))?.wantsSize ?? -1, { timeout: T_MEDIUM })
+        .toBe(0);
+    });
+
+    await test.step("warmup cycles", async () => {
+      for (let i = 0; i < WEBGL_WARMUP_CYCLES; i++) {
+        const id = await openAgentTerminalWithWebGL(window);
+        await closePanel(window, id);
+        await window.waitForTimeout(500);
+      }
+      await window.waitForTimeout(2000);
+    });
+
+    const baseline = await measureRendererMemory(window, { forceGc: true });
+    expect(baseline, "performance.memory available in renderer").not.toBeNull();
+    console.log(`[webgl-close] baseline: ${toMB(baseline!.usedJSHeapSize).toFixed(2)} MB`);
+
+    await test.step(`run ${WEBGL_CYCLE_COUNT} open/promote/close cycles`, async () => {
+      for (let i = 0; i < WEBGL_CYCLE_COUNT; i++) {
+        const id = await openAgentTerminalWithWebGL(window);
+        await closePanel(window, id);
+        // pool wants must return to baseline every cycle — a retained Terminal
+        // graph would leave a stale "wants" entry behind.
+        await expect
+          .poll(async () => (await getWebGLState(window, id))?.wantsSize ?? -1, {
+            timeout: T_MEDIUM,
+          })
+          .toBe(0);
+        await window.waitForTimeout(300);
+      }
+    });
+
+    await window.waitForTimeout(2000);
+    const final = await measureRendererMemory(window, { forceGc: true });
+    const growthMB = toMB(final!.usedJSHeapSize - baseline!.usedJSHeapSize);
+    console.log(
+      `[webgl-close] final: ${toMB(final!.usedJSHeapSize).toFixed(2)} MB, growth: ${growthMB.toFixed(2)} MB`
+    );
+
+    expect(growthMB).toBeLessThan(WEBGL_HEAP_THRESHOLD_MB);
+  });
+
+  test("Terminal graph released after hibernate (WebGL)", async () => {
+    skipWithoutGpu();
+    test.setTimeout(600_000);
+    const { window } = webglCtx;
+
+    await test.step("warmup cycles", async () => {
+      for (let i = 0; i < WEBGL_WARMUP_CYCLES; i++) {
+        const id = await openAgentTerminalWithWebGL(window);
+        expect(await hibernateTerminal(window, id)).toBe(true);
+        await closePanel(window, id);
+        await window.waitForTimeout(500);
+      }
+      await window.waitForTimeout(2000);
+    });
+
+    const baseline = await measureRendererMemory(window, { forceGc: true });
+    expect(baseline, "performance.memory available in renderer").not.toBeNull();
+    console.log(`[webgl-hibernate] baseline: ${toMB(baseline!.usedJSHeapSize).toFixed(2)} MB`);
+
+    await test.step(`run ${WEBGL_CYCLE_COUNT} open/promote/hibernate cycles`, async () => {
+      for (let i = 0; i < WEBGL_CYCLE_COUNT; i++) {
+        const id = await openAgentTerminalWithWebGL(window);
+        const wantsBefore = (await getWebGLState(window, id))?.wantsSize ?? 0;
+        // hibernate() calls terminal.dispose() — the path that leaked the graph.
+        expect(await hibernateTerminal(window, id)).toBe(true);
+        await expect
+          .poll(async () => (await getWebGLState(window, id))?.active ?? true, {
+            timeout: T_MEDIUM,
+          })
+          .toBe(false);
+        const wantsAfter = (await getWebGLState(window, id))?.wantsSize ?? -1;
+        expect(wantsAfter).toBeLessThan(wantsBefore);
+        await closePanel(window, id);
+        await window.waitForTimeout(300);
+      }
+    });
+
+    await window.waitForTimeout(2000);
+    const final = await measureRendererMemory(window, { forceGc: true });
+    const growthMB = toMB(final!.usedJSHeapSize - baseline!.usedJSHeapSize);
+    console.log(
+      `[webgl-hibernate] final: ${toMB(final!.usedJSHeapSize).toFixed(2)} MB, growth: ${growthMB.toFixed(2)} MB`
+    );
+
+    expect(growthMB).toBeLessThan(WEBGL_HEAP_THRESHOLD_MB);
   });
 });

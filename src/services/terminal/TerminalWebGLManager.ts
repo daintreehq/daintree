@@ -62,7 +62,7 @@ function loadWebglAddon(): Promise<WebglAddonConstructor> {
 }
 
 // Force synchronous GPU-side context release. Reaches into @xterm/addon-webgl
-// 0.19's renderer internals to get the WebGL context and call loseContext()
+// 0.20's renderer internals to get the WebGL context and call loseContext()
 // before addon.dispose() — without this, Chromium's 16-context budget is not
 // freed until garbage collection runs the WebGL teardown. Wrapped in try/catch
 // so a future addon shape change degrades gracefully rather than throwing.

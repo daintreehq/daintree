@@ -2637,4 +2637,46 @@ if (typeof window !== "undefined") {
     terminalInstanceService["linkHandler"].openLink(url, panelId, syntheticEvent);
     return "ok";
   };
+
+  // Test-only: introspect WebGL pool state for a panel so the nightly xterm
+  // memory-leak regression can assert that the WebGL "wants" set and the active
+  // context return to baseline after a terminal is closed or hibernated.
+  // Reaches the private manager via bracket access (E2E-only, harmless in prod).
+  (window as unknown as Record<string, unknown>).__daintreeGetTerminalWebGLState = (
+    panelId: string
+  ): { wantsSize: number; active: boolean; mode: string; hibernated: boolean } | null => {
+    const webGLManager = terminalInstanceService["webGLManager"] as TerminalWebGLManager;
+    if (!webGLManager) return null;
+    return {
+      wantsSize: webGLManager.getWantsSize(),
+      active: webGLManager.isActive(panelId),
+      mode: webGLManager.getMode(),
+      hibernated: terminalInstanceService.isHibernated(panelId),
+    };
+  };
+
+  // Test-only: promote a plain terminal to an agent terminal on a WebGL-eligible
+  // (FOCUSED) tier so the WebGL addon actually attaches. Mirrors the production
+  // parser-detected promotion path without a real agent process. Returns whether
+  // WebGL became active for the panel.
+  (window as unknown as Record<string, unknown>).__daintreePromoteTerminalToAgentForE2E = (
+    panelId: string,
+    agentId: string
+  ): boolean => {
+    if (!terminalInstanceService.getInstanceForE2E(panelId)) return false;
+    terminalInstanceService.applyRendererPolicy(panelId, TerminalRefreshTier.FOCUSED);
+    terminalInstanceService.applyAgentPromotion(panelId, agentId);
+    return (terminalInstanceService["webGLManager"] as TerminalWebGLManager).isActive(panelId);
+  };
+
+  // Test-only: hibernate a terminal (the path that calls terminal.dispose()) so
+  // the nightly leak test can exercise the hibernate teardown directly without
+  // waiting on agent-completion heuristics. Returns the resulting state.
+  (window as unknown as Record<string, unknown>).__daintreeHibernateTerminalForE2E = (
+    panelId: string
+  ): boolean => {
+    if (!terminalInstanceService.getInstanceForE2E(panelId)) return false;
+    terminalInstanceService.hibernate(panelId);
+    return terminalInstanceService.isHibernated(panelId);
+  };
 }
