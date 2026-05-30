@@ -15,6 +15,7 @@ const config: KnipConfig = {
     "electron/watchdog-host.ts",
     "electron/watchdog-host-bootstrap.ts",
     "electron/preload.cts",
+    "electron/services/voice/openaiVadWorker.ts",
 
     // Web workers instantiated via `new Worker(new URL(...))`. Static analysis
     // can't follow those URLs, so workers read as unreachable without
@@ -86,6 +87,34 @@ const config: KnipConfig = {
     // electron/services/github/index.ts.
     "electron/services/github/GitHubRateLimitService.ts",
     "electron/services/github/types.ts",
+
+    // why: local native packages expose package-level declarations through
+    // their own package.json "main" entries and are consumed via createRequire.
+    // Knip walks the app source graph and does not treat local file:
+    // dependency declaration files as package entry points.
+    "electron/native/posix-pty-reaper/index.d.ts",
+    "electron/native/win-job-object/index.d.ts",
+
+    // why: legacy one-shot migration helpers kept for auditability of the
+    // structured E2E skip migration. They are not part of the build graph.
+    "scripts/fix-skip-locations.mjs",
+    "scripts/migrate-test-skips.mjs",
+
+    // why: plugin-facing renderer helper documented in docs/plugins/host-api.md.
+    // Plugin views import this surface dynamically through the SDK path, so the
+    // app's static graph does not reach the hook directly.
+    "src/hooks/useHostChannel.ts",
+
+    // why: planned reactive `when` context backing for plugin menu/keybinding
+    // predicates. The current fail-closed menu path documents that producers
+    // are not wired yet; keep this as deliberate feature scaffolding.
+    "src/services/WhenClauseStore.ts",
+  ],
+
+  ignoreBinaries: [
+    // why: Windows system command used for process-tree cleanup. It is not an
+    // npm-provided binary and must not be declared as a package dependency.
+    "taskkill",
   ],
 
   // why: these packages are consumed via mechanisms Knip can't trace:
@@ -116,6 +145,19 @@ const config: KnipConfig = {
     "@types/trusted-types",
     "@octokit/request-error",
     "@octokit/types",
+    // CJS-only runtime dependencies loaded through createRequire so the ESM
+    // bundles can keep narrow interop types at the call sites.
+    "ajv",
+    "ajv-formats",
+    "proper-lockfile",
+    // packages/daintree-plugin reuses host archive/schema code outside the
+    // package workspace and bundles those imports with tsup. Knip checks
+    // package-local source only, so these bundled runtime dependencies look
+    // unused from that workspace.
+    "archiver",
+    "semver",
+    "yauzl",
+    "zod",
     // Native addon support, consumed only from electron/native/win-job-object/
     // binding.gyp (#7526). Knip walks JS/TS imports, not gyp files.
     "node-addon-api",

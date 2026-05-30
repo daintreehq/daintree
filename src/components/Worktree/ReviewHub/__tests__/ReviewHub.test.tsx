@@ -2993,6 +2993,44 @@ describe("ReviewHub", () => {
       );
     });
 
+    it("keeps cycling history after the first recalled message even when the caret moved", async () => {
+      listCommitsMock.mockResolvedValue({
+        items: [
+          {
+            hash: "abc1234",
+            shortHash: "abc1234",
+            message: "feat: most recent commit",
+            author: { name: "Test", email: "test@example.com" },
+            date: "2026-05-10",
+          },
+          {
+            hash: "def5678",
+            shortHash: "def5678",
+            message: "fix: older commit",
+            author: { name: "Test", email: "test@example.com" },
+            date: "2026-05-09",
+          },
+        ],
+        hasMore: false,
+        total: 2,
+      });
+
+      renderOpen();
+      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+
+      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+
+      focusTextareaAt(textarea, 0);
+      fireEvent.keyDown(textarea, { key: "ArrowUp" });
+      await waitFor(() => expect(textarea.value).toBe("feat: most recent commit"), {
+        timeout: 3000,
+      });
+
+      focusTextareaAt(textarea, textarea.value.length);
+      fireEvent.keyDown(textarea, { key: "ArrowUp" });
+      await waitFor(() => expect(textarea.value).toBe("fix: older commit"), { timeout: 3000 });
+    });
+
     it("ArrowDown unwinds through history and restores original draft", async () => {
       listCommitsMock.mockResolvedValue({
         items: [

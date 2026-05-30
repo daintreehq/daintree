@@ -129,6 +129,11 @@ function readMarker(key: string): unknown {
   return (globalThis as Record<string, unknown>)[key];
 }
 
+async function initializeAndActivate(service: PluginService): Promise<void> {
+  await service.initialize();
+  await service.activateStartupFinishedPlugins();
+}
+
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-plugin-int-"));
 });
@@ -520,7 +525,7 @@ describe("PluginService integration — file decoration provider contributions",
     );
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
 
     const impls = getFileDecorationImpls("my-scope:/x");
     expect(impls).toHaveLength(1);
@@ -575,7 +580,7 @@ describe("PluginService integration — file decoration provider contributions",
     );
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
 
     expect(String(readMarker(markerKey))).toContain("is not declared in contributes");
     expect(getFileDecorationImpls("s:/x")).toEqual([]);
@@ -612,7 +617,7 @@ describe("PluginService integration — file decoration provider contributions",
     );
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
 
     expect(String(readMarker(markerKey))).toContain("is not covered by any declared");
   });
@@ -672,7 +677,7 @@ describe("PluginService integration — file decoration provider contributions",
     );
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
     const host = (globalThis as Record<string, unknown>).__postUnloadHost as {
       invalidateFileDecorations: (scope: string) => void;
     };
@@ -711,7 +716,7 @@ describe("PluginService integration — main entry execution", () => {
     expect(readMarker(markerKey)).toBeUndefined();
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
 
     expect(readMarker(markerKey)).toBe(1);
   });
@@ -743,7 +748,7 @@ describe("PluginService integration — main entry execution", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const service = new PluginService(tmpDir, "0.0.0");
-      await service.initialize();
+      await initializeAndActivate(service);
 
       expect(service.hasPlugin("acme.bad-main")).toBe(true);
       expect(errorSpy).toHaveBeenCalledWith(
@@ -860,7 +865,7 @@ describe("PluginService integration — activate() lifecycle", () => {
     );
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
 
     const marker = readMarker(markerKey) as { pluginId: string; called: boolean } | undefined;
     expect(marker).toBeDefined();
@@ -959,7 +964,7 @@ describe("PluginService integration — activate() lifecycle", () => {
     );
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
 
     const marker = readMarker(markerKey) as
       | { pluginId: string; called: boolean; cleaned?: boolean }
@@ -998,7 +1003,7 @@ describe("PluginService integration — activate() lifecycle", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const service = new PluginService(tmpDir, "0.0.0");
-      await service.initialize();
+      await initializeAndActivate(service);
 
       expect(service.hasPlugin("acme.no-activate")).toBe(true);
       expect(readMarker(markerKey)).toBe(true);
@@ -1030,7 +1035,7 @@ describe("PluginService integration — activate() lifecycle", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const service = new PluginService(tmpDir, "0.0.0");
-      await service.initialize();
+      await initializeAndActivate(service);
 
       expect(service.hasPlugin("acme.throwing-activate")).toBe(true);
       expect(errorSpy).toHaveBeenCalledWith(
@@ -1067,7 +1072,7 @@ describe("PluginService integration — activate() lifecycle", () => {
     );
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
 
     const marker = readMarker(markerKey) as { pluginId: string } | undefined;
     expect(marker?.pluginId).toBe("acme.namespace-plugin");
@@ -1108,7 +1113,7 @@ describe("PluginService integration — full contribution fan-out", () => {
     );
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
 
     expect(getPanelKindConfig("acme.all-in-one.v")?.extensionId).toBe("acme.all-in-one");
     expect(getToolbarButtonConfig("acme.all-in-one.b")?.priority).toBe(2);
@@ -1215,7 +1220,7 @@ describe("PluginService integration — built-in plugin loading", () => {
     );
 
     const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
-    await service.initialize();
+    await initializeAndActivate(service);
 
     expect(readMarker(markerKey)).toBe(1);
     expect(service.listPlugins()[0].isBuiltin).toBe(true);

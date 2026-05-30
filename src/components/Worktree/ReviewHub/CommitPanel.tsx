@@ -214,14 +214,13 @@ export function CommitPanel({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (
-        (e.key === "ArrowUp" || e.key === "ArrowDown") &&
-        !e.altKey &&
-        !e.metaKey &&
-        !e.ctrlKey &&
-        e.currentTarget.selectionStart === 0 &&
-        e.currentTarget.selectionEnd === 0
-      ) {
+      const isHistoryKey = e.key === "ArrowUp" || e.key === "ArrowDown";
+      const hasModifier = e.altKey || e.metaKey || e.ctrlKey;
+      const isCaretAtStart =
+        e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0;
+      const isCyclingHistory = historyIndexRef.current >= 0 || pendingFirstApplyRef.current;
+
+      if (isHistoryKey && !hasModifier && (isCaretAtStart || isCyclingHistory)) {
         e.preventDefault();
 
         if (e.key === "ArrowUp") {

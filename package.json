@@ -190,6 +190,7 @@
     "@eslint/js": "^10.0.1",
     "@fast-check/vitest": "^0.4.1",
     "@fontsource/jetbrains-mono": "^5.2.8",
+    "@lezer/common": "^1.5.2",
     "@lezer/highlight": "^1.2.3",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@octokit/graphql": "^9.0.3",

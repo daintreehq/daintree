@@ -18,7 +18,7 @@ export default defineConfig(({ mode }) => {
       environment: "node",
       // Only include integration tests
       include: ["**/*.integration.test.{js,ts}"],
-      exclude: ["node_modules", "dist", "dist-electron", "build", "release"],
+      exclude: ["node_modules", "dist", "dist-electron", "dist-typecheck", "build", "release"],
       // Higher timeout for API calls (60 seconds per test)
       testTimeout: 60000,
       // Hook timeout for setup/teardown
