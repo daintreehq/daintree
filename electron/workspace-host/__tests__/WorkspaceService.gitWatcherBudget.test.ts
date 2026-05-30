@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 import { resolve as pathResolve } from "path";
-import type { SimpleGit } from "simple-git";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { Worktree } from "../../../shared/types/worktree.js";
