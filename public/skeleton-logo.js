@@ -9,9 +9,14 @@
  *
  * Mechanism: each filled shape (trunk, two legs, two canopy arches) is wiped
  * into view by animating the stroke-dash of a centreline path inside its own
- * alpha mask. Trunk + legs draw together as one "foundation" gesture; the two
- * arch halves then grow from opposite ends and meet in the middle. The fill
- * paths also morph subtly as they draw so each line settles into shape.
+ * alpha mask. It plays as one flowing growth cascade: the central trunk shoots
+ * up from the base first, then the two side branches and the two canopy halves
+ * relay in — each starting while the previous is only ~half drawn (overlapping
+ * action, so something is always growing and there's never a dead pause), and
+ * all settling together in a tight window at the end so the parts resolve into
+ * one mark. Every stroke uses an ease-out curve, an organic growth spurt that
+ * decelerates into place. The fill paths also morph subtly as they draw so each
+ * line settles into shape.
  *
  * Loaded as a same-origin classic script like the other skeleton-*.js helpers
  * (production CSP forbids inline JS). The startup skeleton is gated invisible
@@ -26,13 +31,26 @@
   if (typeof document === "undefined") return;
 
   var OUT_FRAME = 46;
-  var FOUNDATION_OUT_FRAME = 20;
-  var CANOPY_START_FRAME = 15;
+  // Staggered "growing tree" cascade. Starts are offset ~4 frames apart so each
+  // element begins while the previous is only about half drawn (overlapping
+  // action); the two branches settle a touch before the two canopy halves, so
+  // everything lands in a tight window (frames ~40–46) and resolves as one mark.
+  // Spans are deliberately wide and overlapping rather than sequential — with
+  // the ease-out "draw" curve the bulk of each stroke happens just after its
+  // start, so the wide spans read as a continuous relay, not slow individual
+  // draws.
+  var TRUNK_OUT_FRAME = 22;
+  var LEFT_LEG_START_FRAME = 6;
+  var RIGHT_LEG_START_FRAME = 10;
+  var BRANCH_OUT_FRAME = 44;
+  var ARCH_LEFT_START_FRAME = 14;
+  var ARCH_RIGHT_START_FRAME = 18;
 
-  // Slowed vs the site (~550ms there) for a calmer, more intentional boot
-  // reveal. Delayed to the 400ms Doherty gate so the first strokes land as the
-  // skeleton appears.
-  var DURATION_MS = 1500;
+  // Slowed well past the site (~550ms there) for a calm, deliberate boot reveal
+  // — the staggered relay needs room to read as growth rather than a flash.
+  // Delayed to the 400ms Doherty gate so the first strokes land as the skeleton
+  // appears.
+  var DURATION_MS = 1700;
   var START_DELAY_MS = 400;
   // Lifted from the 0.08 resting opacity so the draw reads against the muted
   // ghost screen, then settled back to the CSS resting value when it completes.
@@ -42,8 +60,8 @@
 
   var SHAPES = {
     trunk: {
-      t0: 14,
-      t1: 26,
+      t0: 6,
+      t1: 20,
       ease: "morph",
       from: {
         v: [
@@ -125,8 +143,8 @@
       },
     },
     leftLeg: {
-      t0: 18,
-      t1: 22,
+      t0: 22,
+      t1: 40,
       ease: "morph",
       from: {
         v: [
@@ -232,8 +250,8 @@
       },
     },
     rightLeg: {
-      t0: 18,
-      t1: 22,
+      t0: 26,
+      t1: 44,
       ease: "morph",
       from: {
         v: [
@@ -339,7 +357,7 @@
       },
     },
     archLeft: {
-      t0: 15,
+      t0: 24,
       t1: 44,
       ease: "morph",
       from: {
@@ -494,7 +512,7 @@
       },
     },
     archRight: {
-      t0: 15,
+      t0: 24,
       t1: 44,
       ease: "morph",
       from: {
@@ -701,8 +719,11 @@
   }
 
   var EASES = {
-    trunkReveal: cubicBezier(0.333, 0, 0.168, 1),
-    reveal: cubicBezier(0.167, 0.167, 0.168, 1),
+    // Ease-out (≈ GSAP power-out): an organic growth spurt that decelerates and
+    // settles. Used for every stroke so staggered starts overlap into one
+    // continuous gesture, with no slow-start dead zones (an ease-in start would
+    // make the first frames after each stagger imperceptible — a fake pause).
+    draw: cubicBezier(0.33, 1, 0.68, 1),
     morph: cubicBezier(0.333, 0, 0.153, 1),
   };
 
@@ -842,13 +863,19 @@
         fills[name].setAttribute("d", shapeToD(shapeAt(SHAPES[name], frame)));
       }
     }
-    // Phase 1 — foundation: trunk + legs draw in parallel from one end.
-    setDraw(masks.trunk, 0, tween(frame, 0, FOUNDATION_OUT_FRAME, 0, 100, "trunkReveal"));
-    setDraw(masks.leftLeg, 0, tween(frame, 0, FOUNDATION_OUT_FRAME, 0, 100, "reveal"));
-    setDraw(masks.rightLeg, 0, tween(frame, 0, FOUNDATION_OUT_FRAME, 0, 100, "reveal"));
-    // Phase 2 — canopy: arch halves grow from opposite ends and meet centre.
-    setDraw(masks.archLeft, 0, tween(frame, CANOPY_START_FRAME, OUT_FRAME, 0, 50, "reveal"));
-    setDraw(masks.archRight, tween(frame, CANOPY_START_FRAME, OUT_FRAME, 100, 50, "reveal"), 100);
+    // Beat 1 — the central trunk shoots up from the base.
+    setDraw(masks.trunk, 0, tween(frame, 0, TRUNK_OUT_FRAME, 0, 100, "draw"));
+    // Beat 2 — the side branches grow in and up from the trunk, just behind it.
+    setDraw(masks.leftLeg, 0, tween(frame, LEFT_LEG_START_FRAME, BRANCH_OUT_FRAME, 0, 100, "draw"));
+    setDraw(
+      masks.rightLeg,
+      0,
+      tween(frame, RIGHT_LEG_START_FRAME, BRANCH_OUT_FRAME, 0, 100, "draw")
+    );
+    // Beat 3 — the canopy halves grow from opposite ends and meet at the crown,
+    // settling just after the branches so the whole mark resolves together.
+    setDraw(masks.archLeft, 0, tween(frame, ARCH_LEFT_START_FRAME, OUT_FRAME, 0, 50, "draw"));
+    setDraw(masks.archRight, tween(frame, ARCH_RIGHT_START_FRAME, OUT_FRAME, 100, 50, "draw"), 100);
   }
 
   function resolve(idMap) {
