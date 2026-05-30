@@ -151,8 +151,12 @@ test.describe.serial("Nightly: Memory Leak Detection", () => {
 // the addon is loaded) and asserting the WebGL "wants" pool returns to baseline
 // and the renderer JS heap stays flat across many cycles.
 //
-// Requires a real GPU, so these are skipped on CI runners (which launch with
-// --disable-gpu); they run on the bare-metal nightly macOS/Linux runners.
+// The WebGL renderer needs a real GPU, which the default managed CI runners
+// lack (they launch with --disable-gpu). So these run locally by default and
+// are skipped on CI — unless DAINTREE_E2E_ENABLE_WEBGL=1 is set, which a
+// GPU-equipped runner can use to opt the regression back in as a real gate.
+// When skipped, beforeAll early-returns so no Electron is launched.
+const RUN_WEBGL_LEAK_TESTS = !process.env.CI || process.env.DAINTREE_E2E_ENABLE_WEBGL === "1";
 
 const WEBGL_CYCLE_COUNT = 20;
 // A reintroduced per-dispose Terminal-graph leak retains buffers, render layers
@@ -240,11 +244,11 @@ async function closePanel(window: AppContext["window"], id: string): Promise<voi
 }
 
 const WEBGL_GPU_SKIP_REASON =
-  "WebGL renderer needs a real GPU; CI runners launch with --disable-gpu";
+  "WebGL renderer needs a real GPU; skipped on CI unless DAINTREE_E2E_ENABLE_WEBGL=1";
 
 function skipWithoutGpu(): void {
   test.info().annotations.push({ type: "conditional-skip", description: WEBGL_GPU_SKIP_REASON });
-  test.skip(Boolean(process.env.CI), WEBGL_GPU_SKIP_REASON);
+  test.skip(!RUN_WEBGL_LEAK_TESTS, WEBGL_GPU_SKIP_REASON);
 }
 
 test.describe.serial("Nightly: xterm WebGL dispose leak (#9540)", () => {
@@ -253,6 +257,9 @@ test.describe.serial("Nightly: xterm WebGL dispose leak (#9540)", () => {
   let webglFixtureCleanup: (() => void) | undefined;
 
   test.beforeAll(async () => {
+    // Don't launch Electron when the suite will skip — saves a wasted
+    // ~60-120s GPU-less launch on every managed CI nightly run.
+    if (!RUN_WEBGL_LEAK_TESTS) return;
     const { dir, cleanup } = createFixtureRepo({ name: "webgl-leaks" });
     webglFixtureDir = dir;
     webglFixtureCleanup = cleanup;
