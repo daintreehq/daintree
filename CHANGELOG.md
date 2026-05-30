@@ -1,5 +1,95 @@
 # Changelog
 
+## [0.15.0] - 2026-05-30
+
+Daintree gains a plugin platform. The `.dntr` archive format, an atomic install/uninstall pipeline, a `daintree-plugin` CLI, the `@daintreehq/plugin-sdk`, a compound-capability lattice, and an MCP supervisor together let third-party plugins contribute commands, menus, keybindings, settings forms, and experimental views — all sandboxed behind manifest-declared capabilities. Voice input matured with client-side VAD, push-to-talk, and dictation target locking; dev preview now persists sessions across relaunch and surfaces a cross-worktree dashboard; and notifications gained a persistent inbox with OS Do-Not-Disturb awareness.
+
+### Features
+
+**Plugin system**
+
+- `.dntr` archive format specified with a reference implementation
+- Atomic plugin install — temp-extract, validate, swap, rollback — with install provenance persisted
+- `daintree-plugin` CLI for new/validate/package/install/uninstall
+- `@daintreehq/plugin-sdk` public export boundary defined
+- Compound-capability lattice with manifest scopes (#9247) and per-boundary exception containment
+- Drag-and-drop `.dntr` install in the settings tab; sideload from Windows/Linux second-instance and macOS `.dntr` file association
+- Bounded fetch for install-from-URL; manual update check with settings-preserving reinstall
+- Uninstall with dispose cascade and secret-preservation prompt; enable/disable for user-installed plugins
+- `contributes` wired end to end — commands, context menus (with `when` evaluation), keybindings, generated settings forms, and `experimental_views` as panel kinds (#9229, #9289)
+- Inline renderer host for plugin views; `plugin://` static-asset protocol and `plugin:` CSP scheme
+- Host API — `host.settings`, `host.dispatch`, `host.registerAction`, `host.showToast`, host import map
+- `daintree.*` namespace locked to first-party plugins; typed `plugin.invoke` channels with Zod schema + capability gate
+- Structured audit log for plugin-action dispatch and `plugin:invoke` failures
+- `PluginMcpSupervisor` spawns stdio MCP subprocesses with inbound consent, permission gating, and lazy two-tier tool discovery (#9171)
+- Plugin diagnostics export and a host contract test harness with sample plugin
+
+**Voice input**
+
+- Client-side VAD replaces the blind 2s commit timer
+- Push-to-talk recording mode and a pre-recording arming state for target confirmation
+- Dictation target lock with recent-targets memory; pause state (#9191); interim text rendered as a ghost widget to preserve undo (#9172)
+- `TranscriptionProvider` abstraction with a Deepgram backend; WebSocket resilience
+- Structured error model with severity-based recovery (#9171); data-flow disclosure in Voice Settings
+
+**Dev preview**
+
+- Running sessions persist across relaunch (#9094) with a PTY-layer crash-loop guard
+- Promoted into a Portal tab; cross-worktree dev-server dashboard
+- Framework-aware npm script detection with cached dirs; script picker in the running pane header
+- Stable `*.localhost` proxy origin so cookies/localStorage survive restarts; sign-in token handoff for open-in-real-browser
+- `Cmd+R` reloads the focused dev preview (#9497); cert/SSL failures get a distinct error overlay
+
+**Notifications**
+
+- Persistent inbox with age-based retention; OS-level Do-Not-Disturb awareness (#9188)
+- Per-thread snooze with Linear-parity keybindings; "what will fire" gate summary
+- Diagnostic row actions and a toggle action routed through `ActionService`
+
+**Browser & file viewer**
+
+- Back/forward sourced from Chromium NavigationHistory; webview crash and unresponsive state surfaced
+- Match-case toggle in the find bar
+- Diff-mode hunk position indicator and sticky scope header in the code viewer
+
+**Recipes, themes & worktree**
+
+- Batch-spawn recipe panels in a single layout commit; live variable-resolution preview in the editor; shadowed recipes surfaced (#9195)
+- Cross-theme accent distinctness restored (#9225); contrast validator extended to rgba tokens; ANSI/syntax colors validated across all built-in themes; surface elevation ramps evened out
+- Issue assignment made visible and reversible (#9181); dev-server state surfaced on the dashboard; focus restore and file-stepping in change viewers
+
+**Diagnostics & recovery**
+
+- Perf tab with live metrics and CI budget status; prebuilt redactions, time window, and GitHub handoff
+- Pre-crash action trail and report preview in the crash dialog; central demotion hook with category opt-out
+- macOS silent-install-failure detection for auto-update; bounded notarization wait with a recovery path
+
+### Bug Fixes
+
+**Security & privacy**
+
+- Every `shell.openExternal` funneled through the `openExternalUrl` allowlist; renderer `authUrl` validated before side effects
+- E2E test backdoors stripped from production builds
+- PII leaks closed in crash report titles and Windows arg paths; scrubbed stack surfaced in the production crash fallback
+- Path-bearing IPC handlers hardened, clipboard image bytes capped, and a symlink-extension bypass closed
+
+**Terminal**
+
+- Failed spawn state persisted and retry deadlock prevented; manual restart banner with locked input and parallelized IPCs (#9164)
+- Hybrid input bar and voice-active guard gated on reconnecting/restarting state
+- Single-action rule enforced on error banners
+
+**Windows, portal & persistence**
+
+- `win.show()` gated on dom-ready to eliminate the blank-window flash; show-fallback timer cleared on close
+- Portal white flash eliminated and embedded state preserved across overlay cycles; focus returned on hide; drag listeners cleaned up on unmount
+- User config preserved on corruption and write failure; backup kept consistent with the durable primary write
+
+**Dock & accessibility**
+
+- Empty dock stays interactive; spurious-close guard replaced with a migration-aware focus guard
+- VoiceOver announcements kept alive while modals are open; close-then-announce formalized; correct `ariaNotify` priority with stale-replay prevention
+
 ## [0.14.1] - 2026-05-27
 
 Bugfix follow-up to 0.14.0. Terminal regressions around Tab passthrough, F11 in screen-reader mode, and suspended process kill are fixed; dev preview now coordinates port release, Vite port injection, destructive-confirm content previews, and stuck-tier thresholds; worktree delete waits for a running dev preview to stop.
