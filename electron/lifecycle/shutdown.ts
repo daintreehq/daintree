@@ -16,6 +16,7 @@ import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
 import { getPanelSuspectLedger } from "../services/PanelSuspectLedgerService.js";
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
+import { getPeriodicCleanupService } from "../services/PeriodicCleanupService.js";
 import { getHibernationService } from "../services/HibernationService.js";
 import { getIdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
 import { getSystemSleepService } from "../services/SystemSleepService.js";
@@ -416,6 +417,14 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         if (stopDisk) {
           stopDisk();
           deps.setStopDiskSpaceMonitor(null);
+        }
+
+        // Stop the periodic cleanup timer before DB maintenance so no in-flight
+        // tick races the final WAL checkpoint (#9537).
+        try {
+          getPeriodicCleanupService().dispose();
+        } catch (error) {
+          console.warn("[MAIN] Periodic cleanup dispose failed:", error);
         }
 
         try {

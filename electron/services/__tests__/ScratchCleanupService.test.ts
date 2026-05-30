@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import { runScratchCleanup } from "../ScratchCleanupService.js";
+import { setWritesSuppressed, resetWritesSuppressedForTesting } from "../diskPressureState.js";
 import { SCRATCH_CLEANUP_TTL_MS as SCRATCH_TTL_MS } from "../../../shared/config/scratchCleanup.js";
 import type { ScratchRow } from "../persistence/schema.js";
 
@@ -78,6 +79,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  resetWritesSuppressedForTesting();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -308,5 +310,66 @@ describe("runScratchCleanup", () => {
     expect(second.directoriesFailed).toBe(0);
     expect(store.rows).toHaveLength(0);
     await expect(fs.access(dir)).rejects.toBeDefined();
+  });
+
+  it("reclaims the directory but skips the tombstone DB write while suppressed (#9537)", async () => {
+    const dir = path.join(tmpDir, "suppressed");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "a.txt"), "data");
+    const store = makeStore([
+      row({ id: "suppressed", path: dir, lastOpened: NOW - 2 * SCRATCH_TTL_MS }),
+    ]);
+    const tombstoneSpy = vi.spyOn(store, "tombstoneScratch");
+    const hardDeleteSpy = vi.spyOn(store, "hardDeleteScratch");
+
+    setWritesSuppressed(true);
+    const result = await runScratchCleanup(
+      NOW,
+      store as unknown as Parameters<typeof runScratchCleanup>[1]
+    );
+
+    // No DB writes while suppressed...
+    expect(tombstoneSpy).not.toHaveBeenCalled();
+    expect(hardDeleteSpy).not.toHaveBeenCalled();
+    expect(result.tombstoned).toBe(0);
+    expect(store.rows).toHaveLength(1);
+    expect(store.rows[0]!.deletedAt).toBeNull();
+    // ...but the directory was still reclaimed.
+    expect(result.directoriesRemoved).toBe(1);
+    await expect(fs.access(dir)).rejects.toBeDefined();
+  });
+
+  it("skips hard-delete of an already-tombstoned row while suppressed but still removes the directory (#9537)", async () => {
+    const dir = path.join(tmpDir, "tombstoned-suppressed");
+    await fs.mkdir(dir, { recursive: true });
+    const store = makeStore([
+      row({
+        id: "tombstoned-suppressed",
+        path: dir,
+        lastOpened: NOW - 2 * SCRATCH_TTL_MS,
+        deletedAt: NOW - 1000,
+      }),
+    ]);
+    const hardDeleteSpy = vi.spyOn(store, "hardDeleteScratch");
+
+    setWritesSuppressed(true);
+    const result = await runScratchCleanup(
+      NOW,
+      store as unknown as Parameters<typeof runScratchCleanup>[1]
+    );
+
+    expect(hardDeleteSpy).not.toHaveBeenCalled();
+    expect(store.rows).toHaveLength(1);
+    expect(result.directoriesRemoved).toBe(1);
+    await expect(fs.access(dir)).rejects.toBeDefined();
+
+    // Once writes resume, the lingering row is finished on the next sweep.
+    resetWritesSuppressedForTesting();
+    const second = await runScratchCleanup(
+      NOW + 1,
+      store as unknown as Parameters<typeof runScratchCleanup>[1]
+    );
+    expect(second.candidates).toBe(1);
+    expect(store.rows).toHaveLength(0);
   });
 });

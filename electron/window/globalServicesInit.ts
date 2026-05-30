@@ -42,7 +42,10 @@ import {
 import { startAppMetricsMonitor } from "../services/ProcessMemoryMonitor.js";
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
-import { pruneOldLogs } from "../utils/logger.js";
+import { runScratchCleanup } from "../services/ScratchCleanupService.js";
+import { runAssistantScratchCleanup } from "../services/AssistantScratchService.js";
+import { getPeriodicCleanupService } from "../services/PeriodicCleanupService.js";
+import { pruneOldLogs, logError } from "../utils/logger.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -437,6 +440,26 @@ export async function initGlobalServices(
             if (isCritical) {
               getCrashRecoveryService().stopBackupTimer();
               ptyClient?.suppressSessionPersistence(true);
+              // Disk just crossed the critical threshold — proactively reclaim
+              // space instead of waiting for the next boot or idle sweep
+              // (#9537). This callback runs synchronously on the event loop, so
+              // every reclamation routine is fire-and-forget and must never
+              // block or throw. The scratch sweep checks `getWritesSuppressed()`
+              // internally, so it deletes directories without writing the DB.
+              runScratchCleanup().catch((err) => {
+                logError("[DiskSpaceMonitor] scratch cleanup threw", err);
+              });
+              runAssistantScratchCleanup().catch((err) => {
+                logError("[DiskSpaceMonitor] assistant scratch cleanup threw", err);
+              });
+              try {
+                const retentionDays = store.get("privacy")?.logRetentionDays ?? 30;
+                if (retentionDays > 0) {
+                  pruneOldLogs(app.getPath("userData"), retentionDays);
+                }
+              } catch (err) {
+                logError("[DiskSpaceMonitor] log prune threw", err);
+              }
             } else {
               getCrashRecoveryService().startBackupTimer();
               ptyClient?.suppressSessionPersistence(false);
@@ -815,6 +838,16 @@ export async function initGlobalServices(
       const { startAssistantScratchCleanup } =
         await import("../services/AssistantScratchService.js");
       await startAssistantScratchCleanup();
+    },
+  });
+
+  // Low-frequency re-invocation of the boot cleanup routines so on-disk state
+  // doesn't grow unbounded across a long session (#9537). Gated on system idle
+  // internally; disposed in shutdown.ts before the DB closes.
+  registerDeferredTask({
+    name: "periodic-cleanup",
+    run: () => {
+      getPeriodicCleanupService().start();
     },
   });
 
