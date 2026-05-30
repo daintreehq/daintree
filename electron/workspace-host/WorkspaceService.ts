@@ -585,83 +585,89 @@ export class WorkspaceService {
       }
     }
 
-    // Create or update monitors
-    for (const wt of worktrees) {
-      const existingMonitor = this.monitors.get(wt.id);
-      const isActive = wt.id === activeWorktreeId;
+    // Create or update monitors. The watcher-budget reconciliation runs in a
+    // finally so a mid-loop throw (e.g. a failed stat/note-file write in
+    // addNewWorktreeMonitor) still grants the deferred new monitors their
+    // watcher and re-asserts the cap, rather than leaving them poll-only until
+    // the next sync.
+    try {
+      for (const wt of worktrees) {
+        const existingMonitor = this.monitors.get(wt.id);
+        const isActive = wt.id === activeWorktreeId;
 
-      if (existingMonitor) {
-        const branchChanged = existingMonitor.branch !== wt.branch;
-        const isCurrentChanged = existingMonitor.isCurrent !== isActive;
-        existingMonitor.branch = wt.branch;
-        existingMonitor.name = wt.name;
-        existingMonitor.isCurrent = isActive;
-        existingMonitor.isMainWorktree = wt.isMainWorktree ?? false;
-        // Keep the base-branch divergence fallback fresh if the main worktree
-        // switched branches since this monitor was created.
-        existingMonitor.setMainBranch(this.mainBranch);
+        if (existingMonitor) {
+          const branchChanged = existingMonitor.branch !== wt.branch;
+          const isCurrentChanged = existingMonitor.isCurrent !== isActive;
+          existingMonitor.branch = wt.branch;
+          existingMonitor.name = wt.name;
+          existingMonitor.isCurrent = isActive;
+          existingMonitor.isMainWorktree = wt.isMainWorktree ?? false;
+          // Keep the base-branch divergence fallback fresh if the main worktree
+          // switched branches since this monitor was created.
+          existingMonitor.setMainBranch(this.mainBranch);
 
-        const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
-        existingMonitor.updateConfig({
-          basePollingInterval: interval,
-          adaptiveBackoff: this.adaptiveBackoff,
-          pollIntervalMax: this.pollIntervalMax,
-          circuitBreakerThreshold: this.circuitBreakerThreshold,
-          gitWatchEnabled: this.gitWatchEnabled,
-          gitWatchDebounceMs: this.gitWatchDebounceMs,
-          fetchIntervalActiveMs: this.throttledFetchActiveMs,
-          fetchIntervalBackgroundMs: this.throttledFetchBackgroundMs,
-        });
+          const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
+          existingMonitor.updateConfig({
+            basePollingInterval: interval,
+            adaptiveBackoff: this.adaptiveBackoff,
+            pollIntervalMax: this.pollIntervalMax,
+            circuitBreakerThreshold: this.circuitBreakerThreshold,
+            gitWatchEnabled: this.gitWatchEnabled,
+            gitWatchDebounceMs: this.gitWatchDebounceMs,
+            fetchIntervalActiveMs: this.throttledFetchActiveMs,
+            fetchIntervalBackgroundMs: this.throttledFetchBackgroundMs,
+          });
 
-        existingMonitor.ensureWatcherState();
+          existingMonitor.ensureWatcherState();
 
-        if (branchChanged && existingMonitor.hasWatcher) {
-          existingMonitor.restartWatcherIfRunning();
-        }
+          if (branchChanged && existingMonitor.hasWatcher) {
+            existingMonitor.restartWatcherIfRunning();
+          }
 
-        // Skip this emit when the branch also changed — the branch-change
-        // block below emits the full snapshot (with updated isCurrent and
-        // cleared PR) anyway. Emitting here first would surface an
-        // intermediate frame carrying the new branch with the old PR (#8079).
-        if (isCurrentChanged && !branchChanged && existingMonitor.hasInitialStatus) {
-          this.emitUpdate(existingMonitor);
-        }
+          // Skip this emit when the branch also changed — the branch-change
+          // block below emits the full snapshot (with updated isCurrent and
+          // cleared PR) anyway. Emitting here first would surface an
+          // intermediate frame carrying the new branch with the old PR (#8079).
+          if (isCurrentChanged && !branchChanged && existingMonitor.hasInitialStatus) {
+            this.emitUpdate(existingMonitor);
+          }
 
-        if (branchChanged && wt.branch) {
-          const syncIssueNumber = extractIssueNumberSync(wt.branch, wt.name);
-          if (syncIssueNumber) {
-            existingMonitor.setIssueNumber(syncIssueNumber);
-          } else {
+          if (branchChanged && wt.branch) {
+            const syncIssueNumber = extractIssueNumberSync(wt.branch, wt.name);
+            if (syncIssueNumber) {
+              existingMonitor.setIssueNumber(syncIssueNumber);
+            } else {
+              existingMonitor.setIssueNumber(undefined);
+              void this.extractIssueNumberAsync(existingMonitor, wt.branch, wt.name);
+            }
+            existingMonitor.setIssueTitle(undefined);
+            // Bundle the PR clear into this same branch-change emit so the
+            // renderer never renders the new branch with the old PR (#8079).
+            existingMonitor.clearPRInfo();
+            existingMonitor.clearLinked();
+            if (existingMonitor.hasInitialStatus) {
+              this.emitUpdate(existingMonitor);
+            }
+          } else if (branchChanged && !wt.branch) {
             existingMonitor.setIssueNumber(undefined);
-            void this.extractIssueNumberAsync(existingMonitor, wt.branch, wt.name);
+            existingMonitor.setIssueTitle(undefined);
+            existingMonitor.clearPRInfo();
+            existingMonitor.clearLinked();
+            if (existingMonitor.hasInitialStatus) {
+              this.emitUpdate(existingMonitor);
+            }
           }
-          existingMonitor.setIssueTitle(undefined);
-          // Bundle the PR clear into this same branch-change emit so the
-          // renderer never renders the new branch with the old PR (#8079).
-          existingMonitor.clearPRInfo();
-          existingMonitor.clearLinked();
-          if (existingMonitor.hasInitialStatus) {
-            this.emitUpdate(existingMonitor);
-          }
-        } else if (branchChanged && !wt.branch) {
-          existingMonitor.setIssueNumber(undefined);
-          existingMonitor.setIssueTitle(undefined);
-          existingMonitor.clearPRInfo();
-          existingMonitor.clearLinked();
-          if (existingMonitor.hasInitialStatus) {
-            this.emitUpdate(existingMonitor);
-          }
+        } else {
+          await this.addNewWorktreeMonitor(wt, isActive, skipInitialGitStatus, true);
         }
-      } else {
-        await this.addNewWorktreeMonitor(wt, isActive, skipInitialGitStatus, true);
       }
+    } finally {
+      // Final reconciliation pass (#9538): enforce the watcher budget after the
+      // whole create/update loop. This is the authoritative override of any
+      // `ensureWatcherState()` call above that re-armed an evicted background
+      // watcher, and the single budget application for the deferred new monitors.
+      this.applyWatcherBudget();
     }
-
-    // Final reconciliation pass (#9538): enforce the watcher budget after the
-    // whole create/update loop. This is the authoritative override of any
-    // `ensureWatcherState()` call above that re-armed an evicted background
-    // watcher, and the single budget application for the deferred new monitors.
-    this.applyWatcherBudget();
   }
 
   /**
@@ -2761,6 +2767,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       monitor.stop();
     }
     this.monitors.clear();
+    this.backgroundGitWatcherLru.clear();
     // Drop in-flight fetch chains and per-repo failure state — the next
     // project's monitors get a clean coordinator and stale completions are
     // discarded by the generation guard.

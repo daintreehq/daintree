@@ -1422,6 +1422,26 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
 
+    it("granting budget never arms a watcher when git watching is disabled", async () => {
+      const monitor = new WorktreeMonitor(
+        TEST_WORKTREE,
+        { ...TEST_CONFIG, gitWatchEnabled: false },
+        makeCallbacks(),
+        "main"
+      );
+      await monitor.start();
+      expect(monitor.hasWatcher).toBe(false);
+
+      // The combined gate is AND, not OR: budget alone must not arm a watcher
+      // the user disabled.
+      monitor.setGitWatchBudgetAllowed(false);
+      monitor.setGitWatchBudgetAllowed(true);
+      expect(watcherStartCallCount).toBe(0);
+      expect(monitor.hasWatcher).toBe(false);
+
+      monitor.stop();
+    });
+
     it("ensureWatcherState does not re-arm an evicted watcher", async () => {
       const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, makeCallbacks(), "main");
       await monitor.start();

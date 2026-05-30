@@ -6,14 +6,28 @@ import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { Worktree } from "../../../shared/types/worktree.js";
 
+// Tracks live watcher instances + the peak ever held concurrently, so a test
+// can assert the budget never lets the live handle count exceed the cap even
+// mid-reconcile (evict-before-grant ordering).
+const watcherLive = { current: 0, peak: 0 };
+
 // Each git-only watcher arms successfully in these tests so `hasWatcher`
 // directly reflects the budget decision.
 vi.mock("../../utils/gitFileWatcher.js", () => ({
   GitFileWatcher: class {
+    private armed = false;
     start() {
+      this.armed = true;
+      watcherLive.current++;
+      watcherLive.peak = Math.max(watcherLive.peak, watcherLive.current);
       return true;
     }
-    dispose() {}
+    dispose() {
+      if (this.armed) {
+        this.armed = false;
+        watcherLive.current--;
+      }
+    }
   },
 }));
 
@@ -145,6 +159,8 @@ describe("WorkspaceService background git-watcher budget (#9538)", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    watcherLive.current = 0;
+    watcherLive.peak = 0;
     const WorkspaceServiceModule = await import("../WorkspaceService.js");
     service = new WorkspaceServiceModule.WorkspaceService(vi.fn() as any);
     const WorktreeMonitorModule = await import("../WorktreeMonitor.js");
@@ -322,6 +338,24 @@ describe("WorkspaceService background git-watcher budget (#9538)", () => {
 
     expect(service["backgroundGitWatcherLru"].has(b.id)).toBe(false);
     expect(a.hasWatcher).toBe(true);
+  });
+
+  it("cold-start via addNewWorktreeMonitor never arms beyond the cap", async () => {
+    service["backgroundGitWatcherCap"] = 3;
+    service["activeWorktreeId"] = null;
+
+    // Add 12 background worktrees through the real path. The pre-gate keeps a
+    // new background monitor from arming a watcher before applyWatcherBudget
+    // evicts the oldest, so the live count never spikes above the cap — the
+    // O(N) cold-start handle peak the issue is about.
+    for (let i = 0; i < 12; i++) {
+      await service["addNewWorktreeMonitor"](createTestWorktree(`bg-${i}`), false, true);
+    }
+
+    expect(watcherLive.peak).toBeLessThanOrEqual(3);
+    expect(watcherLive.current).toBe(3);
+    const armed = [...service["monitors"].values()].filter((m) => m.hasWatcher).length;
+    expect(armed).toBe(3);
   });
 
   it("normalizes junk cap values without throwing", () => {
