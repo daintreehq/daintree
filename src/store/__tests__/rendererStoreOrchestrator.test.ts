@@ -78,6 +78,7 @@ const { usePanelStore } = await import("../panelStore");
 const { useWorktreeSelectionStore, persistMruList } = await import("../worktreeStore");
 const { useTerminalInputStore } = await import("../terminalInputStore");
 const { useConsoleCaptureStore } = await import("../consoleCaptureStore");
+const { useResourceMonitoringStore } = await import("../resourceMonitoringStore");
 const { useVoiceRecordingStore } = await import("../voiceRecordingStore");
 const { unregisterInputController } = await import("../terminalInputStore");
 const { semanticAnalysisService } = await import("@/services/SemanticAnalysisService");
@@ -107,6 +108,7 @@ describe("rendererStoreOrchestrator", () => {
     });
     useWorktreeSelectionStore.getState().reset();
     useConsoleCaptureStore.setState({ messages: new Map() });
+    useResourceMonitoringStore.setState({ metrics: new Map() });
     useVoiceRecordingStore.setState({ panelBuffers: {} });
   });
 
@@ -561,6 +563,66 @@ describe("rendererStoreOrchestrator", () => {
     usePanelStore.getState().removePanel(panelId);
 
     expect(useVoiceRecordingStore.getState().panelBuffers[panelId]).toBeUndefined();
+  });
+
+  it("prunes resource-monitoring metrics for the removed panel only", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "term-a": {
+          id: "term-a",
+          title: "A",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+        "term-b": {
+          id: "term-b",
+          title: "B",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: ["term-a", "term-b"],
+    });
+
+    useResourceMonitoringStore.getState().updateMetrics({
+      "term-a": { cpuPercent: 5, memoryKb: 1000, breakdown: [] },
+      "term-b": { cpuPercent: 7, memoryKb: 2000, breakdown: [] },
+    });
+    expect(useResourceMonitoringStore.getState().metrics.has("term-a")).toBe(true);
+    expect(useResourceMonitoringStore.getState().metrics.has("term-b")).toBe(true);
+
+    usePanelStore.getState().removePanel("term-a");
+
+    expect(useResourceMonitoringStore.getState().metrics.has("term-a")).toBe(false);
+    expect(useResourceMonitoringStore.getState().metrics.has("term-b")).toBe(true);
+  });
+
+  it("does not error when removing a panel without resource metrics", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "term-no-metrics": {
+          id: "term-no-metrics",
+          title: "T1",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: ["term-no-metrics"],
+    });
+
+    expect(useResourceMonitoringStore.getState().metrics.has("term-no-metrics")).toBe(false);
+
+    expect(() => usePanelStore.getState().removePanel("term-no-metrics")).not.toThrow();
+    expect(useResourceMonitoringStore.getState().metrics.size).toBe(0);
   });
 
   it("does not error when removing terminal without voice buffer", () => {
