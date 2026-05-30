@@ -72,6 +72,25 @@ export function handleDockEscapeKeyDown(
 }
 
 /**
+ * Blocks Radix's focus-driven dismissal of a dock popover outright. The hosted
+ * terminal/editor is rendered offscreen and portaled into the popover
+ * asynchronously, so right after open the focused node is not yet a DOM
+ * descendant of the layer — Radix's DismissableLayer would fire a
+ * FocusOutsideEvent and dismiss the just-opened popover (the
+ * flash-open-then-minimise bug). Preventing default on the focus path
+ * short-circuits that dismissal (react-dismissable-layer runs
+ * `onFocusOutside → onInteractOutside → if (!defaultPrevented) onDismiss`),
+ * while `onPointerDownOutside` and `onEscapeKeyDown` stay independent — so
+ * clicking outside or pressing Escape still dismisses immediately. Dock
+ * popovers intentionally never close just because focus moved (mirrors the
+ * #8368 intent), so this is unconditional rather than time-windowed: a windowed
+ * guard reintroduces the migration race the prior fixes lost.
+ */
+export function handleDockFocusOutside(event: RadixOutsideEvent): void {
+  event.preventDefault();
+}
+
+/**
  * Returns `true` when focus currently lives inside the dock panel's portal
  * container (the xterm surface or the hybrid input editor). Used by
  * `handleDockInteractOutside`'s focus-event guard to suppress the spurious

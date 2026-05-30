@@ -1,16 +1,16 @@
 // @vitest-environment jsdom
 /**
- * DockedTerminalItem — mount-time spurious-close guard (#6602).
+ * DockedTerminalItem — focus-driven dismissal guard (#6602).
  *
- * Radix's DismissableLayer fires onOpenChange(false) synchronously during the
- * mount commit when PopoverContent mounts with open=true. That happens before
- * the useEffect that arms wasJustOpenedRef can run. The fix initializes
- * useRef(isOpen) so the guard is armed at first render and the spurious close
- * is ignored.
+ * Radix's DismissableLayer fires a focus-outside dismissal while a just-opened
+ * dock popover's terminal is still migrating into the portal (focus transiently
+ * leaves the layer). The fix blocks that path at PopoverContent's onFocusOutside
+ * (preventDefault), so genuine pointer-outside / Escape closes still reach
+ * onOpenChange and are honored. Focus is moved into the terminal once it has
+ * migrated into the portal (observed child insertion), not on a fixed timer.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render } from "@testing-library/react";
-import { useEffect } from "react";
 import type { PtyPanelData } from "@shared/types/panel";
 
 const openDockTerminalMock = vi.fn();
@@ -20,6 +20,7 @@ const moveTerminalToGridMock = vi.fn();
 let mockActiveDockTerminalId: string | null = null;
 let capturedOnOpenChange: ((open: boolean) => void) | null = null;
 let capturedOnOpenAutoFocus: ((event: { preventDefault: () => void }) => void) | null = null;
+let capturedOnFocusOutside: ((event: { preventDefault: () => void }) => void) | null = null;
 
 vi.mock("@/store", () => ({
   usePanelStore: (selector: (s: Record<string, unknown>) => unknown) =>
@@ -70,7 +71,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
-vi.mock("../DockPanelOffscreenContainer", () => ({
+vi.mock("../dockPanelPortalContext", () => ({
   useDockPanelPortal: () => vi.fn(),
 }));
 
@@ -82,6 +83,7 @@ vi.mock("../useDockBlockedState", () => ({
 vi.mock("../dockPopoverGuard", () => ({
   handleDockInteractOutside: vi.fn(),
   handleDockEscapeKeyDown: vi.fn(),
+  handleDockFocusOutside: vi.fn(),
 }));
 
 vi.mock("@/utils/terminalChrome", () => ({
@@ -113,14 +115,14 @@ vi.mock("@/lib/tooltipShortcut", () => ({
   createTooltipContent: () => null,
 }));
 
-// Active Popover mock: simulates Radix DismissableLayer firing onOpenChange(false)
-// synchronously after mount when open=true. A useEffect runs after commit/paint, which
-// matches the timing of native focusin events arriving from the same commit. The
-// callback is also captured so tests can invoke it manually after the guard window.
+// Popover mock: captures the Radix callbacks (onOpenChange, onOpenAutoFocus,
+// onFocusOutside) so tests can invoke them directly. Focus-driven dismissal is
+// blocked at onFocusOutside, so the mock does not simulate a mount-time
+// onOpenChange(false) — a close through onOpenChange now models a genuine
+// pointer-outside / Escape dismissal.
 vi.mock("@/components/ui/popover", () => ({
   Popover: ({
     children,
-    open,
     onOpenChange,
   }: {
     children: React.ReactNode;
@@ -128,24 +130,20 @@ vi.mock("@/components/ui/popover", () => ({
     onOpenChange?: (open: boolean) => void;
   }) => {
     capturedOnOpenChange = onOpenChange ?? null;
-    useEffect(() => {
-      if (open && onOpenChange) {
-        onOpenChange(false);
-      }
-      // Only simulate the spurious mount close once.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
     return <>{children}</>;
   },
   PopoverTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   PopoverContent: ({
     children,
     onOpenAutoFocus,
+    onFocusOutside,
   }: {
     children: React.ReactNode;
     onOpenAutoFocus?: (event: { preventDefault: () => void }) => void;
+    onFocusOutside?: (event: { preventDefault: () => void }) => void;
   }) => {
     capturedOnOpenAutoFocus = onOpenAutoFocus ?? null;
+    capturedOnFocusOutside = onFocusOutside ?? null;
     return <div>{children}</div>;
   },
 }));
@@ -161,6 +159,7 @@ vi.mock("@dnd-kit/core", () => ({
 }));
 
 import { DockedTerminalItem } from "../DockedTerminalItem";
+import { handleDockFocusOutside } from "../dockPopoverGuard";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 
@@ -186,6 +185,7 @@ describe("DockedTerminalItem mount-time close guard (#6602)", () => {
     mockActiveDockTerminalId = null;
     capturedOnOpenChange = null;
     capturedOnOpenAutoFocus = null;
+    capturedOnFocusOutside = null;
     vi.mocked(terminalInstanceService.focus).mockClear();
   });
 
@@ -193,29 +193,28 @@ describe("DockedTerminalItem mount-time close guard (#6602)", () => {
     vi.useRealTimers();
   });
 
-  it("ignores spurious onOpenChange(false) when mounted already-open", () => {
+  it("wires onFocusOutside to the focus-dismissal guard and never closes on mount", () => {
     mockActiveDockTerminalId = "t-1";
 
     render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
 
+    // Focus-driven dismissal is blocked at the PopoverContent boundary, not by a
+    // timer/ref in handleOpenChange — so the just-opened popover never closes.
     expect(closeDockTerminalMock).not.toHaveBeenCalled();
+    expect(capturedOnFocusOutside).toBe(handleDockFocusOutside);
   });
 
-  it("allows close once the guard window drains", () => {
+  it("honors a genuine onOpenChange(false) close immediately", () => {
     mockActiveDockTerminalId = "t-1";
 
     render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
-    expect(closeDockTerminalMock).not.toHaveBeenCalled();
     expect(capturedOnOpenChange).not.toBeNull();
 
-    act(() => {
-      vi.advanceTimersByTime(150);
-    });
-
+    // A pointer-outside / Escape close reaches onOpenChange (focus closes are
+    // intercepted upstream) and is honored with no delay or swallow window.
     act(() => {
       capturedOnOpenChange?.(false);
     });
-
     expect(closeDockTerminalMock).toHaveBeenCalledTimes(1);
   });
 
@@ -242,22 +241,34 @@ describe("DockedTerminalItem mount-time close guard (#6602)", () => {
     expect(closeDockTerminalMock).toHaveBeenCalledTimes(1);
   });
 
-  it("focuses a normally opened dock terminal after Radix open autofocus", () => {
+  it("suppresses Radix auto-focus and focuses the terminal once it migrates into the portal", async () => {
     mockActiveDockTerminalId = "t-1";
     render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
     expect(capturedOnOpenAutoFocus).not.toBeNull();
 
+    // Radix's own auto-focus is blocked; nothing is focused until migration.
     const preventDefault = vi.fn();
     act(() => {
       capturedOnOpenAutoFocus?.({ preventDefault });
-      vi.advanceTimersByTime(50);
+    });
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(terminalInstanceService.focus).not.toHaveBeenCalled();
+
+    // Simulate the terminal host being portaled into the popover target — the
+    // MutationObserver detects the child insertion and focus follows.
+    const portal = document.querySelector('[data-dock-portal-target="t-1"]');
+    expect(portal).not.toBeNull();
+    await act(async () => {
+      const child = document.createElement("div");
+      child.setAttribute("data-dock-panel-id", "t-1");
+      portal!.appendChild(child);
+      await Promise.resolve();
     });
 
-    expect(preventDefault).toHaveBeenCalledOnce();
     expect(terminalInstanceService.focus).toHaveBeenCalledWith("t-1");
   });
 
-  it("does not focus an MCP-created dock terminal from Radix open autofocus", () => {
+  it("does not focus an MCP-created dock terminal even after it migrates", async () => {
     mockActiveDockTerminalId = "t-1";
     render(
       <DockedTerminalItem
@@ -269,10 +280,17 @@ describe("DockedTerminalItem mount-time close guard (#6602)", () => {
     const preventDefault = vi.fn();
     act(() => {
       capturedOnOpenAutoFocus?.({ preventDefault });
-      vi.advanceTimersByTime(50);
+    });
+    expect(preventDefault).toHaveBeenCalledOnce();
+
+    const portal = document.querySelector('[data-dock-portal-target="t-1"]');
+    await act(async () => {
+      const child = document.createElement("div");
+      child.setAttribute("data-dock-panel-id", "t-1");
+      portal!.appendChild(child);
+      await Promise.resolve();
     });
 
-    expect(preventDefault).toHaveBeenCalledOnce();
     expect(terminalInstanceService.focus).not.toHaveBeenCalled();
   });
 });

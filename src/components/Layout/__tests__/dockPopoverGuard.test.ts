@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   handleDockInteractOutside,
   handleDockEscapeKeyDown,
+  handleDockFocusOutside,
   shouldSuppressDockClose,
 } from "../dockPopoverGuard";
 
@@ -308,6 +309,24 @@ describe("handleDockInteractOutside — focus-driven guard (#8368)", () => {
     expect(event.preventDefault).not.toHaveBeenCalled();
     container.remove();
     canvas.remove();
+  });
+});
+
+describe("handleDockFocusOutside", () => {
+  it("always prevents focus-driven dismissal", () => {
+    const event = makeEvent(null);
+    handleDockFocusOutside(event);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("prevents dismissal regardless of where focus currently lives", () => {
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    outside.focus();
+    const event = makeEvent(outside);
+    handleDockFocusOutside(event);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    outside.remove();
   });
 });
 
