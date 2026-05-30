@@ -31,6 +31,7 @@ const IDLE_THRESHOLD_S = 60; // 60 seconds of system idle
 class PeriodicCleanupService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private inFlight = false;
+  private inFlightPromise: Promise<void> | null = null;
   private disposed = false;
 
   /** Idempotent. Installs the low-frequency tick; no-op once disposed. */
@@ -43,12 +44,21 @@ class PeriodicCleanupService {
     console.log("[PeriodicCleanup] Started");
   }
 
-  dispose(): void {
+  async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+    // Await any in-flight pass so shutdown doesn't close the DB while a sweep
+    // is mid-`hardDeleteScratch` — mirrors DatabaseMaintenanceService.dispose().
+    if (this.inFlightPromise) {
+      try {
+        await this.inFlightPromise;
+      } catch {
+        // already logged per-routine in runAll()
+      }
     }
     console.log("[PeriodicCleanup] Disposed");
   }
@@ -69,10 +79,12 @@ class PeriodicCleanupService {
     }
 
     this.inFlight = true;
+    this.inFlightPromise = this.runAll();
     try {
-      await this.runAll();
+      await this.inFlightPromise;
     } finally {
       this.inFlight = false;
+      this.inFlightPromise = null;
     }
   }
 

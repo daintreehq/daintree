@@ -339,6 +339,32 @@ describe("runScratchCleanup", () => {
     await expect(fs.access(dir)).rejects.toBeDefined();
   });
 
+  it("re-reads suppression at each write point, not once at function entry (#9537)", async () => {
+    const dir = path.join(tmpDir, "flip");
+    await fs.mkdir(dir, { recursive: true });
+    const store = makeStore([row({ id: "flip", path: dir, lastOpened: NOW - 2 * SCRATCH_TTL_MS })]);
+    const hardDeleteSpy = vi.spyOn(store, "hardDeleteScratch");
+
+    // Start suppressed so the tombstone is skipped, then lift suppression
+    // during the async fs.rm — exactly the event-loop yield the guard re-read
+    // is designed to catch. The post-fs.rm hard-delete must see the new value.
+    setWritesSuppressed(true);
+    const rmSpy = vi.spyOn(fs, "rm").mockImplementationOnce(async () => {
+      setWritesSuppressed(false);
+    });
+
+    const result = await runScratchCleanup(
+      NOW,
+      store as unknown as Parameters<typeof runScratchCleanup>[1]
+    );
+
+    expect(result.tombstoned).toBe(0); // tombstone skipped while suppressed
+    expect(hardDeleteSpy).toHaveBeenCalledWith("flip"); // hard-delete sees the lift
+    expect(store.rows).toHaveLength(0);
+
+    rmSpy.mockRestore();
+  });
+
   it("skips hard-delete of an already-tombstoned row while suppressed but still removes the directory (#9537)", async () => {
     const dir = path.join(tmpDir, "tombstoned-suppressed");
     await fs.mkdir(dir, { recursive: true });

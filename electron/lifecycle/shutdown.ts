@@ -419,10 +419,10 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           deps.setStopDiskSpaceMonitor(null);
         }
 
-        // Stop the periodic cleanup timer before DB maintenance so no in-flight
-        // tick races the final WAL checkpoint (#9537).
+        // Stop the periodic cleanup timer and drain any in-flight sweep before
+        // DB maintenance, so no tick races the final WAL checkpoint (#9537).
         try {
-          getPeriodicCleanupService().dispose();
+          await getPeriodicCleanupService().dispose();
         } catch (error) {
           console.warn("[MAIN] Periodic cleanup dispose failed:", error);
         }

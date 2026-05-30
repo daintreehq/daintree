@@ -147,10 +147,37 @@ describe("PeriodicCleanupService", () => {
     service.dispose();
   });
 
+  it("drains an in-flight pass before dispose resolves", async () => {
+    let resolveScratch: () => void = () => {};
+    mockRunScratchCleanup.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveScratch = resolve;
+      })
+    );
+
+    const service = new PeriodicCleanupService();
+    const tickPromise = service.tick();
+    await Promise.resolve(); // let tick() enter inFlight
+
+    let disposeResolved = false;
+    const disposePromise = service.dispose().then(() => {
+      disposeResolved = true;
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(disposeResolved).toBe(false); // still draining the pending sweep
+
+    resolveScratch();
+    await tickPromise;
+    await disposePromise;
+    expect(disposeResolved).toBe(true);
+  });
+
   it("does not tick after dispose", async () => {
     const service = new PeriodicCleanupService();
     service.start();
-    service.dispose();
+    await service.dispose();
 
     await vi.advanceTimersByTimeAsync(8 * 60 * 60 * 1000);
     expectNoRoutinesRan();
