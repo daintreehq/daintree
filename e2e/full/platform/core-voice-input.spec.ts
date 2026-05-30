@@ -125,7 +125,7 @@ interface CapturedEvents {
   deltas: string[];
   completes: Array<{ text: string; willCorrect: boolean }>;
   paragraphBoundaries: Array<{ rawText: string | null }>;
-  errors: string[];
+  errors: Array<string | { message?: string }>;
 }
 
 async function installEventCapture(window: Page): Promise<void> {
@@ -137,7 +137,7 @@ async function installEventCapture(window: Page): Promise<void> {
       deltas: [] as string[],
       completes: [] as Array<{ text: string; willCorrect: boolean }>,
       paragraphBoundaries: [] as Array<{ rawText: string | null }>,
-      errors: [] as string[],
+      errors: [] as Array<string | { message?: string }>,
     };
     w.__voiceCapture__ = captured;
     const v = w.electron.voiceInput;
@@ -149,7 +149,7 @@ async function installEventCapture(window: Page): Promise<void> {
     v.onParagraphBoundary((payload: { rawText: string | null }) =>
       captured.paragraphBoundaries.push(payload)
     );
-    v.onError((error: string) => captured.errors.push(error));
+    v.onError((error: string | { message?: string }) => captured.errors.push(error));
   });
 }
 
@@ -277,7 +277,9 @@ test.describe.serial("E2E: Voice Input — Settings UI", () => {
 
     await expect(window.getByText("Speech-to-text", { exact: true })).toBeVisible();
     await expect(
-      window.getByText("Real-time transcription. Requires an OpenAI API key and microphone access.")
+      window.getByText(
+        "Real-time transcription. Requires a provider API key and microphone access."
+      )
     ).toBeVisible();
 
     // While disabled, the API key field is not rendered.
@@ -689,7 +691,13 @@ test.describe.serial("E2E: Voice Input — OpenAI Realtime IPC Lifecycle", () =>
     await ipcStart(ctx.window);
 
     await expect
-      .poll(async () => (await getCapturedEvents(ctx.window)).errors, { timeout: T_LONG })
+      .poll(
+        async () =>
+          (await getCapturedEvents(ctx.window)).errors.map((error) =>
+            typeof error === "string" ? error : (error.message ?? "")
+          ),
+        { timeout: T_LONG }
+      )
       .toContain("Invalid auth token");
 
     // No throw — handler tolerates stop() on an already-cleaned session.

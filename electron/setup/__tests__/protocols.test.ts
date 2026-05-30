@@ -1440,7 +1440,7 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
 describe("createPluginProtocolHandler", () => {
   type ProtocolHandler = (request: GlobalRequest) => Promise<Response>;
 
-  const PLUGIN_ROOT = path.normalize("/plugins/installed/my-plugin");
+  const PLUGIN_ROOT = path.resolve("/plugins/installed/my-plugin");
 
   function makeFileHandle(content: string | Buffer = "data") {
     const buffer = typeof content === "string" ? Buffer.from(content) : content;
@@ -1484,7 +1484,7 @@ describe("createPluginProtocolHandler", () => {
     // realpath is rejected with ELOOP.
     expect(fs.open).toHaveBeenCalledTimes(1);
     const openArgs = vi.mocked(fs.open).mock.calls[0];
-    expect(openArgs[0]).toBe(path.normalize("/plugins/installed/my-plugin/dist/index.js"));
+    expect(openArgs[0]).toBe(path.join(PLUGIN_ROOT, "dist", "index.js"));
     expect(openArgs[1]).toBe(fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   });
 
@@ -1551,7 +1551,7 @@ describe("createPluginProtocolHandler", () => {
     await handler(makeRequest("plugin://my-plugin/../../etc/passwd"));
 
     const openArgs = vi.mocked(fs.open).mock.calls[0];
-    expect(openArgs?.[0]).toBe(path.normalize("/plugins/installed/my-plugin/etc/passwd"));
+    expect(openArgs?.[0]).toBe(path.join(PLUGIN_ROOT, "etc", "passwd"));
   });
 
   it("normalizes URL-encoded ../ segments after decode without escaping root", async () => {
@@ -1562,7 +1562,7 @@ describe("createPluginProtocolHandler", () => {
 
     const openArgs = vi.mocked(fs.open).mock.calls[0];
     // The path is normalized to plugin-root/secret — never reaches the parent dir.
-    expect(openArgs?.[0]).toBe(path.normalize("/plugins/installed/my-plugin/secret"));
+    expect(openArgs?.[0]).toBe(path.join(PLUGIN_ROOT, "secret"));
   });
 
   it("rejects backslash separators in the pathname (Windows traversal vector)", async () => {
@@ -1600,7 +1600,7 @@ describe("createPluginProtocolHandler", () => {
   it("blocks a symlink whose target resolves outside the plugin root", async () => {
     const fs = await import("fs/promises");
     const realpath = vi.mocked(fs.realpath);
-    const escapeIn = path.normalize("/plugins/installed/my-plugin/escape");
+    const escapeIn = path.join(PLUGIN_ROOT, "escape");
     realpath.mockImplementation((p) => {
       if (p === PLUGIN_ROOT) return Promise.resolve(PLUGIN_ROOT);
       if (p === escapeIn) return Promise.resolve("/etc/passwd");

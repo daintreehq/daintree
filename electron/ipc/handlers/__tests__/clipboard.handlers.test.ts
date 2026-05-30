@@ -560,8 +560,9 @@ describe("clipboard:thumbnail-from-path handler", () => {
   });
 
   it("reads a drag-dropped image contained in a project root", async () => {
-    projectStoreMock.getAllProjects.mockReturnValue([{ path: "/repo" }]);
-    const filePath = "/repo/assets/photo.png";
+    const projectRoot = path.join(path.parse(process.cwd()).root, "repo");
+    projectStoreMock.getAllProjects.mockReturnValue([{ path: projectRoot }]);
+    const filePath = path.join(projectRoot, "assets", "photo.png");
     const handle = makeFileHandle(() => Promise.resolve(Buffer.from([0x89, 0x50])));
     fsPromisesMock.open.mockResolvedValue(handle);
     nativeImageMock.createFromBuffer.mockReturnValue(makeFakeImage());

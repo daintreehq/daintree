@@ -1,5 +1,4 @@
 import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
-import { createRequire } from "module";
 import { mkdtempSync, mkdirSync, unlinkSync, readdirSync, appendFileSync } from "fs";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
@@ -16,11 +15,10 @@ import {
   dispose as disposeTelemetry,
 } from "./launchTelemetry";
 
-const require = createRequire(import.meta.url);
-const electronPath = require("electron") as unknown as string;
 const ROOT = path.resolve(import.meta.dirname, "../..");
 
 const fallbackGraceMs = 1_500;
+const INITIAL_PROJECT_ID_EXPRESSION = "window.__DAINTREE_INITIAL_PROJECT__?.id ?? null";
 
 export interface AppContext {
   app: ElectronApplication;
@@ -72,11 +70,72 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function getPageInitialProjectId(page: Page): Promise<string | null> {
+  return await page
+    .evaluate(() => {
+      const initialProject = (
+        window as unknown as {
+          __DAINTREE_INITIAL_PROJECT__?: { id?: unknown };
+        }
+      ).__DAINTREE_INITIAL_PROJECT__;
+      return typeof initialProject?.id === "string" ? initialProject.id : null;
+    })
+    .catch(() => null);
+}
+
+interface AttachedProjectInfo {
+  projectId: string | null;
+  url: string | null;
+}
+
+async function getAttachedProjectInfo(
+  app: ElectronApplication,
+  windowId?: number
+): Promise<AttachedProjectInfo> {
+  try {
+    return await app.evaluate(
+      async ({ BrowserWindow }, payload) => {
+        const win =
+          typeof payload.windowId === "number"
+            ? BrowserWindow.fromId(payload.windowId)
+            : BrowserWindow.getAllWindows()[0];
+        if (!win || win.isDestroyed()) return { projectId: null, url: null };
+
+        const views = win.contentView?.children ?? [];
+        let fallbackUrl: string | null = null;
+        // The welcome appView is permanently added to contentView and is
+        // typically first. Project views are added on top — iterate from
+        // last to first and prefer the topmost project-id-bearing view.
+        for (let i = views.length - 1; i >= 0; i--) {
+          const wc = (views[i] as Electron.WebContentsView).webContents;
+          if (!wc || wc.isDestroyed()) continue;
+
+          const url = wc.getURL();
+          if (fallbackUrl === null) fallbackUrl = url;
+
+          const projectId = await wc
+            .executeJavaScript(payload.projectIdExpression, true)
+            .catch(() => null);
+          if (typeof projectId === "string" && projectId.length > 0) {
+            return { projectId, url };
+          }
+        }
+        return { projectId: null, url: fallbackUrl };
+      },
+      { windowId: windowId ?? null, projectIdExpression: INITIAL_PROJECT_ID_EXPRESSION }
+    );
+  } catch {
+    return { projectId: null, url: null };
+  }
+}
+
 async function pollForAppWindow(app: ElectronApplication, timeoutMs: number): Promise<Page> {
-  // Prefer a project view (URL with `projectId=`) when it appears — this handles
-  // session-2 relaunches where the previously-active project auto-opens into a
-  // separate WebContentsView. Falls back to any app page after a short grace
-  // period so first-run launches (no projects) still succeed.
+  // Prefer a project view when it appears — this handles session-2 relaunches
+  // where the previously-active project auto-opens into a separate
+  // WebContentsView. Modern project views use a static URL and expose their
+  // identity through preload; keep the URL query fallback for older views.
+  // Falls back to any app page after a short grace period so first-run launches
+  // (no projects) still succeed.
   const deadline = Date.now() + timeoutMs;
   let fallbackSeenAt = 0;
   while (Date.now() < deadline) {
@@ -84,7 +143,7 @@ async function pollForAppWindow(app: ElectronApplication, timeoutMs: number): Pr
     for (const w of app.windows()) {
       const url = w.url();
       if (url.startsWith("app://daintree/") || url.includes("localhost")) {
-        if (url.includes("projectId=")) return w;
+        if (url.includes("projectId=") || (await getPageInitialProjectId(w))) return w;
         fallback = w;
       }
     }
@@ -110,9 +169,11 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
   // (services start, agent connectivity probes complete). Subsequent launches
   // in the same worker succeed immediately. Allow a single retry so a flaky
   // first launch doesn't fail the spec.
-  const isWindowsCI = process.env.CI && process.platform === "win32";
+  const isCI = Boolean(process.env.CI);
+  const isWindowsCI = isCI && process.platform === "win32";
+  const isNonWindowsCI = isCI && process.platform !== "win32";
   const isMacOSLocal = process.platform === "darwin" && !process.env.CI;
-  const launchTimeout = isWindowsCI ? 75_000 : 60_000;
+  const launchTimeout = isWindowsCI ? 75_000 : isNonWindowsCI ? 120_000 : 60_000;
   const maxAttempts = isWindowsCI ? 3 : isMacOSLocal ? 3 : 1;
   // On macOS local dev, the first 1–2 launches in a Playwright worker can
   // hang through the full launch window before recovering on retry. Cap each
@@ -188,14 +249,17 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS:
           options.env?.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS ?? "1",
         DAINTREE_DISABLE_WEBGL: "1",
-        // E2E now exercises the production early-renderer path. The
-        // win.show() call is gated on appWebContents `dom-ready` in
-        // createWindow.ts, so Playwright sees the WebContentsView page in
-        // app.windows() before the BrowserWindow is mapped — no boot-path
-        // divergence is needed for macOS/Linux determinism.
-        ...(isWindowsCI
+        // CI E2E keeps the BrowserWindow sentinel as the only early CDP target
+        // until Playwright's electron.launch handshake resolves. Under runner
+        // load, concurrent WebContentsView target creation can leave launch
+        // waiting even after the app reaches steady state.
+        ...(isCI
           ? {
               DAINTREE_E2E_DEFER_RENDERER_LOAD: "1",
+            }
+          : {}),
+        ...(isWindowsCI
+          ? {
               // Playwright already owns CDP sessions for WebContentsView
               // targets on Windows CI. Cached-view CPU throttling is a memory
               // optimization only; skip it in e2e so LRU tests don't collide
@@ -226,8 +290,12 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       launchEnv.DAINTREE_E2E_CRASH_DUMPS_DIR = crashDumpsDir;
       args.push("--enable-logging=file", `--log-file=${logFile}`);
 
+      // Do not pass executablePath here. Playwright only injects its Electron
+      // loader on the default path; the loader holds app.whenReady() until the
+      // Node and browser CDP sessions are attached. Supplying the path manually
+      // lets Daintree create WebContentsView targets while launch is still
+      // connecting, which flakes under release-runner fanout.
       app = await electron.launch({
-        executablePath: electronPath,
         args,
         env: launchEnv,
         timeout: attemptTimeout(attempt),
@@ -338,13 +406,13 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
  * Re-acquire the active app window after a project switch.
  * The ProjectViewManager creates new WebContentsViews, so the Playwright
  * page reference from launchApp() becomes stale. This returns the latest
- * app page (preferring one with a projectId query param).
+ * app page, matching project views by their preload-seeded project identity.
  */
 export interface GetActiveAppWindowOptions {
   /**
-   * If true, wait the full timeout for a project view (URL with `projectId=`)
-   * to appear before returning. Use this after operations that should result
-   * in a project view being created/activated (e.g., onboarding, project switch).
+   * If true, wait the full timeout for a project view identity to appear before
+   * returning. Use this after operations that should result in a project view
+   * being created/activated (e.g., onboarding, project switch).
    */
   requireProject?: boolean;
 }
@@ -363,69 +431,59 @@ export async function getActiveAppWindow(
   const options = typeof timeoutMsOrOptions === "number" ? maybeOptions : timeoutMsOrOptions;
   const requireProject = options.requireProject ?? false;
 
-  // Ask the main process for the URL of the WebContentsView currently
-  // attached to the BrowserWindow's contentView tree (the visible project
-  // view). With more than one cached project view alive at a time, URL
-  // matching alone is ambiguous — Playwright's `app.windows()` returns all
-  // alive pages including cached/inactive views.
-  const getActiveAttachedUrl = async (): Promise<string | null> => {
-    try {
-      return await app.evaluate(({ BrowserWindow }) => {
-        const win = BrowserWindow.getAllWindows()[0];
-        if (!win || win.isDestroyed()) return null;
-        const views = win.contentView?.children ?? [];
-        // The welcome appView is permanently added to contentView and is
-        // typically first. Project views are added on top — iterate from
-        // last to first and prefer the topmost projectId-bearing view.
-        // Fall back to the welcome view URL only if no project view is found.
-        let fallbackUrl: string | null = null;
-        for (let i = views.length - 1; i >= 0; i--) {
-          const wc = (views[i] as Electron.WebContentsView).webContents;
-          if (!wc || wc.isDestroyed()) continue;
-          const url = wc.getURL();
-          if (url.includes("projectId=")) return url;
-          if (fallbackUrl === null) fallbackUrl = url;
-        }
-        return fallbackUrl;
-      });
-    } catch {
-      return null;
-    }
-  };
-
   const deadline = Date.now() + timeoutMs;
   // Grace period before returning a non-project fallback: after a project
-  // operation, the project WebContentsView may take a moment to load its
-  // URL. Returning the welcome page too early causes tests to grab the
-  // wrong renderer.
+  // operation, the project WebContentsView may take a moment to expose its
+  // preload-seeded identity. Returning the welcome page too early causes tests
+  // to grab the wrong renderer.
   let fallback: Page | null = null;
   let fallbackSeenAt = 0;
   while (Date.now() < deadline) {
     fallback = null;
-    const activeUrl = await getActiveAttachedUrl();
+    const activeProjectId = (await getAttachedProjectInfo(app)).projectId;
     let projectFallback: Page | null = null;
+    let projectPageCount = 0;
 
     for (const w of app.windows()) {
       const url = w.url();
       if (!(url.startsWith("app://daintree/") || url.includes("localhost"))) continue;
 
-      // Best match: a project view that the main process currently has
-      // attached to the BrowserWindow.
-      if (activeUrl && url === activeUrl && url.includes("projectId=")) {
+      const pageProjectId = await getPageInitialProjectId(w);
+
+      // Best match: a project view that the main process currently has attached
+      // to the BrowserWindow.
+      if (activeProjectId && pageProjectId === activeProjectId) {
         return w;
       }
 
-      if (url.includes("projectId=")) {
+      if (pageProjectId) {
+        projectPageCount++;
         if (projectFallback === null) projectFallback = w;
       } else {
         fallback = w;
       }
     }
 
-    if (projectFallback && !requireProject) return projectFallback;
+    if (projectFallback && (!requireProject || (!activeProjectId && projectPageCount === 1))) {
+      return projectFallback;
+    }
 
     if (fallback) {
-      if (!requireProject) {
+      if (requireProject) {
+        if (activeProjectId) {
+          await wait(200);
+          continue;
+        }
+        // With Playwright's Electron loader, the active WebContentsView can be
+        // exposed as app://daintree/index.html even after project state hydrates.
+        // Treat it as a project page only after the renderer reports a project.
+        // For scoped static-URL views, project:get-current can briefly return
+        // null while the visible toolbar already reflects the hydrated project.
+        const projectName = await getCurrentProjectName(fallback);
+        if (projectName) return fallback;
+        const projectLabel = await getProjectSwitcherLabel(fallback);
+        if (projectLabel) return fallback;
+      } else {
         if (fallbackSeenAt === 0) fallbackSeenAt = Date.now();
         if (Date.now() - fallbackSeenAt >= fallbackGraceMs) return fallback;
       }
@@ -488,11 +546,13 @@ export async function waitForActiveProject(
       lastUrl = current.url();
       lastName = await getCurrentProjectName(current);
       lastLabel = await getProjectSwitcherLabel(current);
-      if (lastName?.includes(projectName) && lastLabel?.includes(projectName)) {
+      if (lastLabel?.includes(projectName) && (lastName?.includes(projectName) ?? true)) {
         const ready = await refreshActiveWindow(app);
         const readyName = await getCurrentProjectName(ready);
         const readyLabel = await getProjectSwitcherLabel(ready);
-        if (readyName?.includes(projectName) && readyLabel?.includes(projectName)) return ready;
+        if (readyLabel?.includes(projectName) && (readyName?.includes(projectName) ?? true)) {
+          return ready;
+        }
         current = ready;
         lastName = readyName;
         lastLabel = readyLabel;
@@ -526,31 +586,13 @@ export async function refreshActiveWindow(app: ElectronApplication, oldPage?: Pa
   // return the still-active outgoing view.
   const refreshTimeout = getRefreshTimeout();
 
-  const oldUrl = oldPage?.url() ?? null;
-  if (oldUrl && oldUrl.includes("projectId=")) {
+  const oldProjectId = oldPage ? await getPageInitialProjectId(oldPage) : null;
+
+  if (oldProjectId) {
     const deadline = Date.now() + refreshTimeout;
     while (Date.now() < deadline) {
-      try {
-        const attached = await app.evaluate(({ BrowserWindow }) => {
-          const win = BrowserWindow.getAllWindows()[0];
-          if (!win || win.isDestroyed()) return null;
-          const views = win.contentView?.children ?? [];
-          // The welcome appView is permanently added to contentView and is
-          // typically first. Project views are added on top — iterate from
-          // last to first and prefer the topmost projectId-bearing view.
-          for (let i = views.length - 1; i >= 0; i--) {
-            const wc = (views[i] as Electron.WebContentsView).webContents;
-            if (wc && !wc.isDestroyed()) {
-              const url = wc.getURL();
-              if (url.includes("projectId=")) return url;
-            }
-          }
-          return null;
-        });
-        if (attached && attached !== oldUrl) break;
-      } catch {
-        // ignore and retry
-      }
+      const activeProjectId = (await getAttachedProjectInfo(app)).projectId;
+      if (activeProjectId && activeProjectId !== oldProjectId) break;
       await wait(150);
     }
   }
@@ -597,24 +639,37 @@ export async function refreshActiveWindow(app: ElectronApplication, oldPage?: Pa
   // dropped — manifesting as flaky/failed shortcut tests.
   try {
     // 1. Tell the main process to focus this project's WebContentsView.
-    const url = newWindow.url();
-    const match = url.match(/[?&]projectId=([^&]+)/);
-    const projectId = match ? decodeURIComponent(match[1]) : null;
-    if (projectId) {
-      await app.evaluate(({ BrowserWindow }, pid) => {
-        const win = BrowserWindow.getAllWindows()[0];
-        if (!win || win.isDestroyed()) return;
-        win.focus();
-        const views = win.contentView?.children ?? [];
-        for (const child of views) {
-          const wc = (child as Electron.WebContentsView).webContents;
-          if (!wc || wc.isDestroyed()) continue;
-          if (wc.getURL().includes(`projectId=${encodeURIComponent(pid)}`)) {
-            wc.focus();
-            break;
+    const projectId = await newWindow
+      .evaluate(() => {
+        const initialProject = (
+          window as unknown as {
+            __DAINTREE_INITIAL_PROJECT__?: { id?: unknown };
           }
-        }
-      }, projectId);
+        ).__DAINTREE_INITIAL_PROJECT__;
+        return typeof initialProject?.id === "string" ? initialProject.id : null;
+      })
+      .catch(() => null);
+    if (projectId) {
+      await app.evaluate(
+        async ({ BrowserWindow }, payload) => {
+          const win = BrowserWindow.getAllWindows()[0];
+          if (!win || win.isDestroyed()) return;
+          win.focus();
+          const views = win.contentView?.children ?? [];
+          for (const child of views) {
+            const wc = (child as Electron.WebContentsView).webContents;
+            if (!wc || wc.isDestroyed()) continue;
+            const childProjectId = await wc
+              .executeJavaScript(payload.projectIdExpression, true)
+              .catch(() => null);
+            if (childProjectId === payload.projectId) {
+              wc.focus();
+              break;
+            }
+          }
+        },
+        { projectId, projectIdExpression: INITIAL_PROJECT_ID_EXPRESSION }
+      );
     }
 
     // 2. Bring the Playwright CDP target for this page to the front so that
@@ -774,30 +829,6 @@ async function listKnownWindowIds(app: ElectronApplication): Promise<number[]> {
   });
 }
 
-async function getAttachedProjectUrlForWindow(
-  app: ElectronApplication,
-  windowId: number
-): Promise<string | null> {
-  try {
-    return await app.evaluate(({ BrowserWindow }, id) => {
-      const win = BrowserWindow.fromId(id);
-      if (!win || win.isDestroyed()) return null;
-      const views = win.contentView?.children ?? [];
-      let fallback: string | null = null;
-      for (let i = views.length - 1; i >= 0; i--) {
-        const wc = (views[i] as Electron.WebContentsView).webContents;
-        if (!wc || wc.isDestroyed()) continue;
-        const url = wc.getURL();
-        if (url.includes("projectId=")) return url;
-        if (fallback === null) fallback = url;
-      }
-      return fallback;
-    }, windowId);
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Resolve the active appView Page for a specific BrowserWindow id.
  * Use after opening a second window — the global `getActiveAppWindow`
@@ -811,21 +842,28 @@ export async function getWindowPage(
 ): Promise<Page> {
   const deadline = Date.now() + timeoutMs;
   let lastUrl: string | null = null;
+  let lastProjectId: string | null = null;
   while (Date.now() < deadline) {
-    const attachedUrl = await getAttachedProjectUrlForWindow(app, windowId);
-    if (attachedUrl && attachedUrl.includes("projectId=")) {
+    const attached = await getAttachedProjectInfo(app, windowId);
+    lastUrl = attached.url;
+    lastProjectId = attached.projectId;
+
+    if (attached.projectId) {
       for (const w of app.windows()) {
-        if (w.url() === attachedUrl) return w;
+        if ((await getPageInitialProjectId(w)) === attached.projectId) return w;
       }
-      lastUrl = attachedUrl;
-    } else if (attachedUrl) {
-      lastUrl = attachedUrl;
+    } else if (attached.url?.includes("projectId=")) {
+      for (const w of app.windows()) {
+        if (w.url() === attached.url) return w;
+      }
     }
     await wait(150);
   }
   const urls = app.windows().map((w) => w.url());
   throw new Error(
-    `No project view found for windowId=${windowId}. Last attached URL: ${lastUrl ?? "none"}. Available pages: ${urls.join(", ")}`
+    `No project view found for windowId=${windowId}. Last attached project: ${
+      lastProjectId ?? "none"
+    }. Last attached URL: ${lastUrl ?? "none"}. Available pages: ${urls.join(", ")}`
   );
 }
 
@@ -919,27 +957,28 @@ export async function focusWindow(
   page: Page
 ): Promise<void> {
   try {
-    const url = page.url();
-    const match = url.match(/[?&]projectId=([^&]+)/);
-    const projectId = match ? decodeURIComponent(match[1]) : null;
+    const projectId = await getPageInitialProjectId(page);
 
     await app.evaluate(
-      ({ BrowserWindow }, { id, pid }) => {
-        const win = BrowserWindow.fromId(id);
+      async ({ BrowserWindow }, payload) => {
+        const win = BrowserWindow.fromId(payload.id);
         if (!win || win.isDestroyed()) return;
         win.focus();
-        if (!pid) return;
+        if (!payload.projectId) return;
         const views = win.contentView?.children ?? [];
         for (const child of views) {
           const wc = (child as Electron.WebContentsView).webContents;
           if (!wc || wc.isDestroyed()) continue;
-          if (wc.getURL().includes(`projectId=${encodeURIComponent(pid)}`)) {
+          const childProjectId = await wc
+            .executeJavaScript(payload.projectIdExpression, true)
+            .catch(() => null);
+          if (childProjectId === payload.projectId) {
             wc.focus();
             break;
           }
         }
       },
-      { id: windowId, pid: projectId }
+      { id: windowId, projectId, projectIdExpression: INITIAL_PROJECT_ID_EXPRESSION }
     );
 
     await page.bringToFront().catch(() => {});

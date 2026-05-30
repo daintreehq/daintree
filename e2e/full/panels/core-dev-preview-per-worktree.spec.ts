@@ -11,8 +11,9 @@
  * Design notes:
  *   - Uses a real Electron app with a real fixture git repo + worktree.
  *   - dev-server.cjs reads PORT from the env injected by DevPreviewSessionService,
- *     binds to it, and prints "http://localhost:{PORT}" — the standard URL
- *     detection pattern the service watches for.
+ *     binds to it, and prints "http://localhost:{PORT}" — the upstream URL the
+ *     service watches for. The panel address bar displays the stable
+ *     `dp-*.localhost:{proxyPort}` proxy origin.
  *   - devServerCommand is set via IPC before any panels are opened so both
  *     panels auto-start without a page reload.
  */
@@ -29,6 +30,8 @@ import { SEL } from "../../helpers/selectors";
 import { T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
 const FEATURE_BRANCH = "feature/test-branch";
+const DEV_PREVIEW_ADDRESS_BAR_RE = /^(?:https?:\/\/)?(?:localhost|dp-[a-z0-9-]+\.localhost):\d+$/;
+const DEV_PREVIEW_PROXY_HOST_RE = /^(?:localhost|dp-[a-z0-9-]+\.localhost)$/;
 
 /** Minimal HTTP server that binds to the PORT env var and prints its URL. */
 const DEV_SERVER_SCRIPT = `
@@ -48,13 +51,32 @@ let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
 let featureWorktreeDir: string;
 
-// URLs read from address bars during tests — shared across assertions.
+// Origins read from address bars during tests — shared across assertions.
 let urlMain = "";
 let urlFeature = "";
+let upstreamUrlMain = "";
+let upstreamUrlFeature = "";
 
 // Worktree IDs resolved via IPC — used for getByWorktree assertions.
 let mainWorktreeId = "";
 let featureWorktreeId = "";
+
+function parseDisplayOrigin(displayUrl: string): string {
+  const parsed = new URL(displayUrl.includes("://") ? displayUrl : `http://${displayUrl}`);
+  expect(parsed.protocol).toBe("http:");
+  expect(parsed.hostname).toMatch(DEV_PREVIEW_PROXY_HOST_RE);
+  expect(parsed.port).toMatch(/^\d+$/);
+  return parsed.origin;
+}
+
+function parseUpstreamOrigin(predictedUrl: string | null | undefined): string {
+  expect(predictedUrl).toBeTruthy();
+  const parsed = new URL(predictedUrl ?? "");
+  expect(parsed.protocol).toBe("http:");
+  expect(parsed.hostname).toBe("localhost");
+  expect(parsed.port).toMatch(/^\d+$/);
+  return parsed.origin;
+}
 
 test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
   test.beforeAll(async () => {
@@ -139,16 +161,13 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
     const statusBadge = consoleBar.locator('[role="status"]');
     await expect(statusBadge).toContainText("Running", { timeout: T_LONG });
 
-    // Read the address bar URL and store for later comparison.
-    // Note: the address bar displays a host-port form (e.g. "localhost:7514")
-    // — protocol is stripped via getDisplayUrl(). Reconstruct the canonical
-    // URL so it matches the IPC `predictedUrl` shape later.
+    // Read the address bar origin and store it for later comparison.
+    // Note: the address bar displays a host-port form (for example,
+    // "dp-*.localhost:43000") — protocol is stripped via getDisplayUrl().
     const addressBar = window.locator(SEL.browser.addressBar).first();
-    await expect(addressBar).toHaveValue(/localhost:\d+/, { timeout: T_MEDIUM });
+    await expect(addressBar).toHaveValue(DEV_PREVIEW_ADDRESS_BAR_RE, { timeout: T_MEDIUM });
     const displayUrl = (await addressBar.inputValue()).trim();
-    expect(displayUrl).toMatch(/^localhost:\d+$/);
-    urlMain = displayUrl.startsWith("http") ? displayUrl : `http://${displayUrl}`;
-    expect(urlMain).toMatch(/^http:\/\/localhost:\d+$/);
+    urlMain = parseDisplayOrigin(displayUrl);
   });
 
   // ── Test 2 ─────────────────────────────────────────────────────────────────
@@ -182,15 +201,14 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
 
     // Read the feature panel's URL.
     const addressBars = window.locator(SEL.browser.addressBar);
-    await expect(addressBars.last()).toHaveValue(/localhost:\d+/, { timeout: T_MEDIUM });
+    await expect(addressBars.last()).toHaveValue(DEV_PREVIEW_ADDRESS_BAR_RE, {
+      timeout: T_MEDIUM,
+    });
     const displayUrlFeature = (await addressBars.last().inputValue()).trim();
-    expect(displayUrlFeature).toMatch(/^localhost:\d+$/);
-    urlFeature = displayUrlFeature.startsWith("http")
-      ? displayUrlFeature
-      : `http://${displayUrlFeature}`;
-    expect(urlFeature).toMatch(/^http:\/\/localhost:\d+$/);
+    urlFeature = parseDisplayOrigin(displayUrlFeature);
 
-    // The two panels MUST be on different ports.
+    // The two panels MUST have different stable origins. They may share the
+    // same reverse-proxy port, so compare the whole origin, not just the port.
     expect(urlFeature).not.toBe(urlMain);
   });
 
@@ -222,10 +240,14 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
     // Both sessions must be running.
     expect(mainSession?.status).toBe("running");
     expect(featureSession?.status).toBe("running");
+    expect(mainSession?.worktreeId).toBe(mainWorktreeId);
+    expect(featureSession?.worktreeId).toBe(featureWorktreeId);
 
-    // Each session's predictedUrl must match what we observed in the address bar.
-    expect(mainSession?.predictedUrl).toBe(urlMain);
-    expect(featureSession?.predictedUrl).toBe(urlFeature);
+    // The IPC session tracks the upstream localhost URL printed by the dev server.
+    // The UI address bar uses the stable dev-preview proxy origin.
+    upstreamUrlMain = parseUpstreamOrigin(mainSession?.predictedUrl);
+    upstreamUrlFeature = parseUpstreamOrigin(featureSession?.predictedUrl);
+    expect(upstreamUrlFeature).not.toBe(upstreamUrlMain);
 
     // Sanity: the two sessions must have different panel IDs.
     expect(mainSession?.panelId).not.toBe(featureSession?.panelId);
@@ -282,6 +304,6 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
       mainWorktreeId
     );
     expect(mainAfter?.status).toBe("running");
-    expect(mainAfter?.predictedUrl).toBe(urlMain);
+    expect(mainAfter?.predictedUrl).toBe(upstreamUrlMain);
   });
 });

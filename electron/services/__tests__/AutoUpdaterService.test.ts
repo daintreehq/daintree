@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import path from "node:path";
 
 const appMock = vi.hoisted(() => ({
   isPackaged: true,
@@ -553,7 +554,7 @@ describe("AutoUpdaterService", () => {
 
       autoUpdaterService.initialize();
 
-      expect(fsMock.existsSync).toHaveBeenCalledWith("/mock/resources/package-type");
+      expect(fsMock.existsSync).toHaveBeenCalledWith(path.join("/mock/resources", "package-type"));
     });
 
     it("skips filesystem probe when APPIMAGE is set", () => {

@@ -19,6 +19,10 @@ let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
 
 async function ensureProjectIsOpen(): Promise<void> {
+  if (ctx.window.isClosed()) {
+    ctx.window = await refreshActiveWindow(ctx.app);
+  }
+
   const worktreeCard = ctx.window.locator("[data-worktree-branch]").first();
   if (await worktreeCard.isVisible({ timeout: 1000 }).catch(() => false)) {
     return;

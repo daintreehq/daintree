@@ -569,19 +569,33 @@ describe("extractDntrPaths", () => {
     expect(extractDntrPaths(["daintree"], "/work")).toEqual([]);
   });
 
-  it("decodes file:// URIs passed by Linux file managers (electron-builder %U)", async () => {
-    const { extractDntrPaths } = await import("../appLifecycle.js");
-    expect(extractDntrPaths(["daintree", "file:///home/alice/plugin.dntr"], "/")).toEqual([
-      "/home/alice/plugin.dntr",
-    ]);
-  });
+  it.skipIf(process.platform === "win32")(
+    "decodes file:// URIs passed by Linux file managers (electron-builder %U)",
+    async () => {
+      const { extractDntrPaths } = await import("../appLifecycle.js");
+      expect(extractDntrPaths(["daintree", "file:///home/alice/plugin.dntr"], "/")).toEqual([
+        "/home/alice/plugin.dntr",
+      ]);
+    }
+  );
 
-  it("decodes percent-encoded characters in a file:// URI", async () => {
-    const { extractDntrPaths } = await import("../appLifecycle.js");
-    expect(extractDntrPaths(["daintree", "file:///home/a%20b/my%20plugin.dntr"], "/")).toEqual([
-      "/home/a b/my plugin.dntr",
-    ]);
-  });
+  it.skipIf(process.platform === "win32")(
+    "decodes percent-encoded characters in a file:// URI",
+    async () => {
+      const { extractDntrPaths } = await import("../appLifecycle.js");
+      expect(extractDntrPaths(["daintree", "file:///home/a%20b/my%20plugin.dntr"], "/")).toEqual([
+        "/home/a b/my plugin.dntr",
+      ]);
+    }
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "ignores Linux-style file:// URIs on Windows because they do not map to drive paths",
+    async () => {
+      const { extractDntrPaths } = await import("../appLifecycle.js");
+      expect(extractDntrPaths(["daintree", "file:///home/alice/plugin.dntr"], "C:\\")).toEqual([]);
+    }
+  );
 });
 
 describe("installDntrPath / drainPendingDntrPaths", () => {

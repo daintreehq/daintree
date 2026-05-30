@@ -34,7 +34,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: ./.github/actions/checkout-shallow
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Install Linux dependencies
         run: |
@@ -55,7 +58,10 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Check out repository
-        uses: ./.github/actions/checkout-shallow
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Install Linux dependencies
         run: |
@@ -112,7 +118,10 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Check out repository
-        uses: ./.github/actions/checkout-shallow
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Resolve update metadata prefix
         uses: ./.github/actions/resolve-update-metadata-prefix
@@ -231,7 +240,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: ./.github/actions/checkout-shallow
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Set up Node.js and install dependencies
         uses: ./.github/actions/setup-node-install
@@ -274,9 +286,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/appimage-work"
           cd "$RUNNER_TEMP/appimage-work"
           # --appimage-extract avoids FUSE, which is unavailable on GitHub
-          # Actions hosted runners. Produces ./squashfs-root with an AppRun
-          # entry point that sets LD_LIBRARY_PATH and APPDIR before exec'ing
-          # the real binary.
+          # Actions hosted runners. The packaged smoke runner supplies APPDIR
+          # when invoking the extracted AppRun entry point; the AppImage
+          # runtime would normally do that when mounting the image.
           "$APPIMAGE" --appimage-extract
           BIN="$RUNNER_TEMP/appimage-work/squashfs-root/AppRun"
           if [ ! -x "$BIN" ]; then
@@ -298,6 +310,12 @@ jobs:
     timeout-minutes: 15
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
+
       - name: Publish Daintree (Linux)
         uses: ./.github/actions/publish-daintree
         with:

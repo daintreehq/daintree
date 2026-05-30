@@ -101,7 +101,16 @@ async function bootProject(
   ctx.window = page;
 
   // Inject anti-flake CSS once per scene.
-  await page.addStyleTag({ content: POLISH_CSS });
+  try {
+    await page.addStyleTag({ content: POLISH_CSS });
+  } catch (error) {
+    if (!String(error).includes("Target page, context or browser has been closed")) {
+      throw error;
+    }
+    page = await refreshActiveWindow(ctx.app, page);
+    ctx.window = page;
+    await page.addStyleTag({ content: POLISH_CSS });
+  }
 
   // Configure Claude auth if available, even for scenes that don't launch
   // agents — keeps the env consistent and lets us iterate by extending a

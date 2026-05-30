@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -86,19 +87,31 @@ function getHandler(channel: string): Handler {
 }
 
 const fakeEvent = {};
-const PROJECT_ROOT = "/Users/me/project";
+const TEST_ROOT = path.parse(process.cwd()).root;
+const PROJECT_ROOT = path.join(TEST_ROOT, "Users", "me", "project");
 // Derived from the default pattern `{parent-dir}/{base-folder}-worktrees/{branch-slug}`
 // applied to PROJECT_ROOT.
-const WORKTREE_PARENT = "/Users/me/project-worktrees";
+const WORKTREE_PARENT = path.join(
+  path.dirname(PROJECT_ROOT),
+  `${path.basename(PROJECT_ROOT)}-worktrees`
+);
+const USERDATA_PARENT = path.join(TEST_ROOT, "userdata");
+const deniedLauncherName =
+  process.platform === "win32"
+    ? "launcher.exe"
+    : process.platform === "darwin"
+      ? "Evil.app"
+      : "launcher.desktop";
+const realpathEcho = (p: string) => Promise.resolve(path.normalize(p));
 
 describe("system:open-path containment", () => {
   let cleanup: () => void;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    fsMock.promises.realpath.mockImplementation((p: string) => Promise.resolve(p));
+    fsMock.promises.realpath.mockImplementation(realpathEcho);
     projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
-    appMock.getPath.mockImplementation((name: string) => `/userdata/${name}`);
+    appMock.getPath.mockImplementation((name: string) => path.join(USERDATA_PARENT, name));
     storeMock.get.mockReturnValue(undefined);
     cleanup = registerSystemShellHandlers({} as HandlerDependencies);
   });
@@ -109,14 +122,16 @@ describe("system:open-path containment", () => {
 
   it("opens a path contained in a project root", async () => {
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
-    await handler(fakeEvent, { path: `${PROJECT_ROOT}/src/index.ts` });
-    expect(shellMock.openPath).toHaveBeenCalledWith(`${PROJECT_ROOT}/src/index.ts`);
+    const sourcePath = path.join(PROJECT_ROOT, "src", "index.ts");
+    await handler(fakeEvent, { path: sourcePath });
+    expect(shellMock.openPath).toHaveBeenCalledWith(sourcePath);
   });
 
   it("opens a path contained in the userData dir (crash logs)", async () => {
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
-    await handler(fakeEvent, { path: "/userdata/userData/crashes/log.txt" });
-    expect(shellMock.openPath).toHaveBeenCalledWith("/userdata/userData/crashes/log.txt");
+    const crashLog = path.join(USERDATA_PARENT, "userData", "crashes", "log.txt");
+    await handler(fakeEvent, { path: crashLog });
+    expect(shellMock.openPath).toHaveBeenCalledWith(crashLog);
   });
 
   it("rejects a path outside all roots with OUTSIDE_ROOT", async () => {
@@ -130,7 +145,7 @@ describe("system:open-path containment", () => {
   it("rejects a sibling-prefix path that is not actually contained", async () => {
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
     await expect(
-      handler(fakeEvent, { path: `${PROJECT_ROOT}-evil/secret.txt` })
+      handler(fakeEvent, { path: `${PROJECT_ROOT}-evil${path.sep}secret.txt` })
     ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
     expect(shellMock.openPath).not.toHaveBeenCalled();
   });
@@ -146,16 +161,16 @@ describe("system:open-path containment", () => {
   it("rejects an executable extension (.desktop) even inside a root", async () => {
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
     await expect(
-      handler(fakeEvent, { path: `${PROJECT_ROOT}/launcher.desktop` })
+      handler(fakeEvent, { path: path.join(PROJECT_ROOT, deniedLauncherName) })
     ).rejects.toMatchObject({ code: "INVALID_PATH" });
     expect(shellMock.openPath).not.toHaveBeenCalled();
   });
 
   it("rejects a safe-named symlink that resolves to a denied extension", async () => {
-    const link = `${PROJECT_ROOT}/notes.txt`;
-    const payload = `${PROJECT_ROOT}/Evil.desktop`;
+    const link = path.join(PROJECT_ROOT, "notes.txt");
+    const payload = path.join(PROJECT_ROOT, deniedLauncherName);
     fsMock.promises.realpath.mockImplementation((p: string) =>
-      Promise.resolve(p === link ? payload : p)
+      Promise.resolve(path.normalize(p) === path.normalize(link) ? payload : path.normalize(p))
     );
 
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
@@ -166,10 +181,10 @@ describe("system:open-path containment", () => {
   });
 
   it("opens the realpath-resolved target, not the original path", async () => {
-    const link = `${PROJECT_ROOT}/link.png`;
-    const resolved = `${PROJECT_ROOT}/real.png`;
+    const link = path.join(PROJECT_ROOT, "link.png");
+    const resolved = path.join(PROJECT_ROOT, "real.png");
     fsMock.promises.realpath.mockImplementation((p: string) =>
-      Promise.resolve(p === link ? resolved : p)
+      Promise.resolve(path.normalize(p) === path.normalize(link) ? resolved : path.normalize(p))
     );
 
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
@@ -180,7 +195,7 @@ describe("system:open-path containment", () => {
   it("propagates a non-empty error string from shell.openPath", async () => {
     shellMock.openPath.mockResolvedValueOnce("no app associated");
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
-    await expect(handler(fakeEvent, { path: `${PROJECT_ROOT}/index.ts` })).rejects.toThrow(
+    await expect(handler(fakeEvent, { path: path.join(PROJECT_ROOT, "index.ts") })).rejects.toThrow(
       /no app associated/
     );
   });
@@ -191,9 +206,9 @@ describe("system:open-in-editor containment", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    fsMock.promises.realpath.mockImplementation((p: string) => Promise.resolve(p));
+    fsMock.promises.realpath.mockImplementation(realpathEcho);
     projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
-    appMock.getPath.mockImplementation((name: string) => `/userdata/${name}`);
+    appMock.getPath.mockImplementation((name: string) => path.join(USERDATA_PARENT, name));
     storeMock.get.mockReturnValue(undefined);
     cleanup = registerSystemShellHandlers({} as HandlerDependencies);
   });
@@ -204,8 +219,9 @@ describe("system:open-in-editor containment", () => {
 
   it("opens a contained file in the editor", async () => {
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
-    await handler(fakeEvent, { path: `${PROJECT_ROOT}/src/app.ts`, line: 5, col: 2 });
-    expect(openFileMock).toHaveBeenCalledWith(`${PROJECT_ROOT}/src/app.ts`, 5, 2, null);
+    const filePath = path.join(PROJECT_ROOT, "src", "app.ts");
+    await handler(fakeEvent, { path: filePath, line: 5, col: 2 });
+    expect(openFileMock).toHaveBeenCalledWith(filePath, 5, 2, null);
   });
 
   it("rejects an out-of-root file without invoking the editor", async () => {
@@ -225,8 +241,8 @@ describe("system:open-in-editor containment", () => {
     // both darwin and linux; `.ps1` is denied on win32.
     const scriptPath =
       process.platform === "win32"
-        ? `${PROJECT_ROOT}/scripts/deploy.ps1`
-        : `${PROJECT_ROOT}/scripts/setup.desktop`;
+        ? path.join(PROJECT_ROOT, "scripts", "deploy.ps1")
+        : path.join(PROJECT_ROOT, "scripts", "setup.desktop");
     await handler(fakeEvent, { path: scriptPath });
     expect(openFileMock).toHaveBeenCalledWith(scriptPath, undefined, undefined, null);
   });
@@ -237,9 +253,9 @@ describe("system path-allowlist: worktree parent dirs", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    fsMock.promises.realpath.mockImplementation((p: string) => Promise.resolve(p));
+    fsMock.promises.realpath.mockImplementation(realpathEcho);
     projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
-    appMock.getPath.mockImplementation((name: string) => `/userdata/${name}`);
+    appMock.getPath.mockImplementation((name: string) => path.join(USERDATA_PARENT, name));
     storeMock.get.mockReturnValue(undefined);
     cleanup = registerSystemShellHandlers({} as HandlerDependencies);
   });
@@ -250,14 +266,14 @@ describe("system path-allowlist: worktree parent dirs", () => {
 
   it("opens a path inside the default worktree parent dir (Reveal in Finder on worktree card)", async () => {
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
-    const worktreePath = `${WORKTREE_PARENT}/feature-issue-9149`;
+    const worktreePath = path.join(WORKTREE_PARENT, "feature-issue-9149");
     await handler(fakeEvent, { path: worktreePath });
     expect(shellMock.openPath).toHaveBeenCalledWith(worktreePath);
   });
 
   it("opens a file inside a worktree (ReviewHub file-open click)", async () => {
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
-    const filePath = `${WORKTREE_PARENT}/feature-issue-9149/src/index.ts`;
+    const filePath = path.join(WORKTREE_PARENT, "feature-issue-9149", "src", "index.ts");
     await handler(fakeEvent, { path: filePath, line: 1, col: 1 });
     expect(openFileMock).toHaveBeenCalledWith(filePath, 1, 1, null);
   });
@@ -278,14 +294,14 @@ describe("system path-allowlist: worktree parent dirs", () => {
     cleanup = registerSystemShellHandlers({} as HandlerDependencies);
 
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
-    const customParent = "/Users/me/project.wt";
-    const customWorktree = `${customParent}/feature-x`;
+    const customParent = path.join(path.dirname(PROJECT_ROOT), `${path.basename(PROJECT_ROOT)}.wt`);
+    const customWorktree = path.join(customParent, "feature-x");
     await handler(fakeEvent, { path: customWorktree });
     expect(shellMock.openPath).toHaveBeenCalledWith(customWorktree);
 
     // The default parent stays admitted too.
     shellMock.openPath.mockClear();
-    const legacyWorktree = `${WORKTREE_PARENT}/legacy-branch`;
+    const legacyWorktree = path.join(WORKTREE_PARENT, "legacy-branch");
     await handler(fakeEvent, { path: legacyWorktree });
     expect(shellMock.openPath).toHaveBeenCalledWith(legacyWorktree);
   });
@@ -296,7 +312,7 @@ describe("system path-allowlist: worktree parent dirs", () => {
     // worktree parent dir but isn't actually contained — the realpath +
     // separator check in pathGuard must still reject it.
     await expect(
-      handler(fakeEvent, { path: `${WORKTREE_PARENT}-evil/secret.txt` })
+      handler(fakeEvent, { path: `${WORKTREE_PARENT}-evil${path.sep}secret.txt` })
     ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
     expect(shellMock.openPath).not.toHaveBeenCalled();
   });

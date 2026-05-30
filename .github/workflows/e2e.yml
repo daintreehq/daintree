@@ -119,7 +119,7 @@ jobs:
   # split their spec list across SHARD_TOTAL parallel runners via Playwright's
   # native `--shard`. A 39-minute serial Windows bucket becomes ~10min
   # wall-time, and a hung shard takes out 1/N of the bucket instead of the
-  # whole thing. The heaviest Windows full-platform/full-worktree/full-panels buckets use
+  # whole thing. The heaviest Windows full-platform/full-worktree/full-resilience/full-panels buckets use
   # extra slices so restart/persistence-heavy shards do not own enough serial
   # tests to hit the job timeout. core/online/nightly stay unsharded —
   # online hits real APIs (3 specs), and nightly's leak heuristic depends on serialized launches
@@ -149,20 +149,33 @@ jobs:
 
           # Only the full-* buckets and the `full` meta-suite fan out. N=4 is
           # the tuned starting point from #8053 (39min → ~10min on Windows).
-          # Windows full-platform contains restart/persistence-heavy tests
-          # that still form a >45m shard at 8 slices, so use 16 slices there.
-          # full-worktree/full-panels are lighter but still need more than the
-          # default 4. full-presets also needs extra Windows slices after
-          # Windows 2/4 exceeded the nightly shard window in run 26445552027.
+          # Windows full-platform/full-terminal contain restart/persistence-heavy
+          # and PTY stress tests that still form >45m shards at smaller splits,
+          # so use 16 slices there.
+          # full-worktree has restart-heavy cross-project and deletion-cleanup
+          # specs that can still exceed the 45m reusable workflow timeout at
+          # 8 slices, so match full-platform's 16-slice Windows split. full-presets
+          # has context-menu/custom-preset shards that also exceed the release
+          # window at 8 slices, so it uses the same 16-slice Windows split.
+          # full-panels is lighter but still needs more than the default 4.
+          # full-resilience's crash/error-recovery specs also need extra Windows
+          # slices after shard 2/4 exceeded the release gate in run 26672763326.
           case "$SUITE" in
-            full-platform)
+            full-platform|full-terminal)
               if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
                 SHARD_TOTAL=16
               else
                 SHARD_TOTAL=4
               fi
               ;;
-            full-worktree|full-presets|full-panels)
+            full-worktree|full-presets)
+              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
+                SHARD_TOTAL=16
+              else
+                SHARD_TOTAL=4
+              fi
+              ;;
+            full-resilience|full-panels)
               if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
                 SHARD_TOTAL=8
               else
@@ -254,7 +267,10 @@ jobs:
           }
 
       - name: Check out repository
-        uses: ./.github/actions/checkout-shallow
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Cache Playwright browsers
         id: cache-playwright
@@ -327,6 +343,7 @@ jobs:
         run: fc-cache -fv
 
       - name: Install dependencies
+        shell: bash
         run: |
           ELECTRON_VERSION=$(node scripts/ci/resolve-electron-version.mjs) || exit 1
           export npm_config_runtime=electron
@@ -334,7 +351,7 @@ jobs:
           node scripts/ci/npm-ci-retry.mjs
 
       - name: Build app
-        run: npm run build
+        run: npm run build:e2e
 
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code

@@ -177,7 +177,7 @@ describe("PluginSettingsForm", () => {
     expect(input.value).toBe("");
     expect(input.type).toBe("password");
 
-    fireEvent.click(screen.getByRole("button", { name: "Reveal Token" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Reveal Token" }));
     await waitFor(() => expect(input.value).toBe("sekret"));
     expect(input.type).toBe("text");
 

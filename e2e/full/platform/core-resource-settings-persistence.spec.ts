@@ -143,8 +143,11 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
   test("settings round-trip: added environment persists after close/reopen", async () => {
     const { window } = ctx;
 
-    // Verify we're on the project view, not the welcome page
-    expect(window.url()).toContain("projectId=");
+    // Verify we're on the project view, not the welcome page. Project views now
+    // use a static app:// URL, so the worktree UI is the stable readiness signal.
+    await expect(window.locator("[data-worktree-branch]").first()).toBeVisible({
+      timeout: T_LONG,
+    });
 
     await openSettings(window);
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });

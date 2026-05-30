@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "fs/promises";
 import os from "os";
 import path from "path";
 import { promisify } from "util";
-import type { BrowserWindow } from "electron";
+import type { BrowserWindow, Event as ElectronEvent, WebContents } from "electron";
 import type { ProjectState, TerminalSnapshot } from "../types/index.js";
 import type { PtyClient } from "./PtyClient.js";
 import { projectStore } from "./ProjectStore.js";
@@ -14,14 +14,19 @@ const execFileAsync = promisify(execFile);
 
 export const SMOKE_BOOT_TIMEOUT_MS = 90_000;
 const IS_WIN32 = process.platform === "win32";
-const SMOKE_RENDERER_TIMEOUT_MS = IS_WIN32 ? 45_000 : 20_000;
-const SMOKE_RENDERER_MOUNT_POLL_MS = IS_WIN32 ? 30_000 : 15_000;
-const SMOKE_TERMINAL_TIMEOUT_MS = IS_WIN32 ? 30_000 : 20_000;
-const SMOKE_PROJECT_TIMEOUT_MS = IS_WIN32 ? 75_000 : 45_000;
-const SMOKE_GIT_TIMEOUT_MS = IS_WIN32 ? 30_000 : 15_000;
-const SMOKE_STABILITY_SOAK_MS = IS_WIN32 ? 20_000 : 12_000;
-const SMOKE_TERMINAL_ROUNDS = IS_WIN32 ? 3 : 2;
-const SMOKE_PERSISTENCE_ITERATIONS = IS_WIN32 ? 48 : 24;
+const IS_DARWIN_X64 = process.platform === "darwin" && process.arch === "x64";
+// The macOS release workflow runs the x64 package under Rosetta on arm64
+// runners. Its renderer can cold-start as slowly as the Windows smoke path.
+const USE_SLOW_SMOKE_TIMEOUTS = IS_WIN32 || IS_DARWIN_X64;
+const SMOKE_RENDERER_LOAD_TIMEOUT_MS = USE_SLOW_SMOKE_TIMEOUTS ? 90_000 : 45_000;
+const SMOKE_RENDERER_TIMEOUT_MS = USE_SLOW_SMOKE_TIMEOUTS ? 45_000 : 20_000;
+const SMOKE_RENDERER_MOUNT_POLL_MS = USE_SLOW_SMOKE_TIMEOUTS ? 30_000 : 15_000;
+const SMOKE_TERMINAL_TIMEOUT_MS = USE_SLOW_SMOKE_TIMEOUTS ? 30_000 : 20_000;
+const SMOKE_PROJECT_TIMEOUT_MS = USE_SLOW_SMOKE_TIMEOUTS ? 75_000 : 45_000;
+const SMOKE_GIT_TIMEOUT_MS = USE_SLOW_SMOKE_TIMEOUTS ? 30_000 : 15_000;
+const SMOKE_STABILITY_SOAK_MS = USE_SLOW_SMOKE_TIMEOUTS ? 20_000 : 12_000;
+const SMOKE_TERMINAL_ROUNDS = USE_SLOW_SMOKE_TIMEOUTS ? 3 : 2;
+const SMOKE_PERSISTENCE_ITERATIONS = USE_SLOW_SMOKE_TIMEOUTS ? 48 : 24;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -74,8 +79,56 @@ interface SmokeRendererCheckResult {
   projectCount: number;
 }
 
+async function waitForSmokeRendererLoad(appWc: WebContents): Promise<void> {
+  if (!appWc.isLoading()) return;
+
+  await withTimeout(
+    new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        appWc.removeListener("did-finish-load", onFinish);
+        appWc.removeListener("did-fail-load", onFail);
+        appWc.removeListener("destroyed", onDestroyed);
+      };
+      const onFinish = () => {
+        cleanup();
+        resolve();
+      };
+      const onFail = (
+        _event: ElectronEvent,
+        errorCode: number,
+        errorDescription: string,
+        validatedURL: string
+      ) => {
+        cleanup();
+        reject(
+          new Error(
+            `renderer did-fail-load (${errorCode}): ${errorDescription || "unknown"}${
+              validatedURL ? ` (${validatedURL})` : ""
+            }`
+          )
+        );
+      };
+      const onDestroyed = () => {
+        cleanup();
+        reject(new Error("renderer webContents was destroyed before did-finish-load"));
+      };
+
+      appWc.once("did-finish-load", onFinish);
+      appWc.once("did-fail-load", onFail);
+      appWc.once("destroyed", onDestroyed);
+
+      if (!appWc.isLoading()) {
+        onFinish();
+      }
+    }),
+    SMOKE_RENDERER_LOAD_TIMEOUT_MS,
+    "[SMOKE] Renderer did-finish-load timed out"
+  );
+}
+
 async function runSmokeRendererChecks(window: BrowserWindow): Promise<void> {
   const appWc = getAppWebContents(window);
+  await waitForSmokeRendererLoad(appWc);
   const script = `(async () => {
     const root = document.getElementById("root");
     const hasRoot = Boolean(root);

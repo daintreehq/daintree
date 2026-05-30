@@ -8,6 +8,7 @@ import {
   spawnTerminalAndVerify,
 } from "../../helpers/workflows";
 import { getGridPanelCount, getDockPanelCount, openTerminal } from "../../helpers/panels";
+import { dismissBlockingPalette } from "../../helpers/overlays";
 import { getPtyPid, waitForProcessDeath } from "../../helpers/stress";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
@@ -219,7 +220,7 @@ test.describe.serial("Deletion Cleanup: Active project close clears UI", () => {
       timeout: T_SHORT,
     });
 
-    await window.keyboard.press("Escape");
+    await dismissBlockingPalette(window);
     await expect(palette).not.toBeVisible({ timeout: T_SHORT });
   });
 });
@@ -329,7 +330,7 @@ test.describe.serial("Deletion Cleanup: Background project removal isolation", (
       timeout: T_SHORT,
     });
 
-    await window.keyboard.press("Escape");
+    await dismissBlockingPalette(window);
     await expect(palette).not.toBeVisible({ timeout: T_SHORT });
   });
 
@@ -410,7 +411,7 @@ test.describe.serial("Deletion Cleanup: Background removal persists across resta
     await expect(palette1.getByText(PROJECT_B, { exact: false })).not.toBeVisible({
       timeout: T_SHORT,
     });
-    await ctx.window.keyboard.press("Escape");
+    await dismissBlockingPalette(ctx.window);
 
     // Graceful close
     const pid = ctx.app.process().pid!;
@@ -435,6 +436,6 @@ test.describe.serial("Deletion Cleanup: Background removal persists across resta
       timeout: T_SHORT,
     });
 
-    await w2.keyboard.press("Escape");
+    await dismissBlockingPalette(w2);
   });
 });
