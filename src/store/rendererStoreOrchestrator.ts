@@ -9,6 +9,7 @@ import { useFleetArmingStore, subscribeFleetArmingPanelPruning } from "./fleetAr
 import { useTerminalInputStore, unregisterInputController } from "./terminalInputStore";
 import { semanticAnalysisService } from "@/services/SemanticAnalysisService";
 import { useConsoleCaptureStore } from "./consoleCaptureStore";
+import { useResourceMonitoringStore } from "./resourceMonitoringStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
@@ -189,6 +190,13 @@ export function initStoreOrchestrator(): () => void {
           for (const removedId of removedIds) {
             useTerminalInputStore.getState().clearTerminalState(removedId);
             useConsoleCaptureStore.getState().removePane(removedId);
+            // Prune the panel's resource-metrics entry. The PTY `onExit` path
+            // (lifecycle.ts) already calls this for terminals that exit cleanly,
+            // but force-removal (browser/dev-preview panels, or worktree teardown
+            // shrinking `panelIds` without a PTY exit) bypasses that path and
+            // would otherwise leak the `metrics` Map entry. `removePanel` is a
+            // no-op when the id is absent, so the double-call is safe (#9536).
+            useResourceMonitoringStore.getState().removePanel(removedId);
             useVoiceRecordingStore.getState().clearPanelBuffer(removedId);
             // Drop the dictation lock if it was pinned to this panel — panelIds
             // are ephemeral and a stale lock would silently break routing.
