@@ -1,71 +1,53 @@
-import { useEffect, useRef, useState } from "react";
-import {
-  Plug,
-  AlertCircle,
-  FilePlus,
-  Link2,
-  Trash2,
-  RefreshCw,
-  Info,
-  Download,
-} from "lucide-react";
+import { Plug, FilePlus, Link2, Info, Download, AlertCircle } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
-import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { cn } from "@/lib/utils";
 import { usePluginManager } from "./usePluginManager";
-import type {
-  LoadedPluginInfo,
-  PluginDeepLinkIntent,
-  PluginInstallSource,
-} from "@shared/types/plugin";
+import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDetailPane";
+import type { LoadedPluginInfo, PluginDeepLinkIntent } from "@shared/types/plugin";
 
-/** Provenance source → short badge label (built-in / file / URL / catalog). */
-const SOURCE_BADGE_LABELS: Record<PluginInstallSource, string> = {
-  builtin: "Built-in",
-  sideload: "File",
-  url: "URL",
-  catalog: "Catalog",
-};
-
-function pluginLabel(plugin: LoadedPluginInfo): string {
-  return plugin.manifest.displayName ?? plugin.manifest.name;
-}
+const ROW_BADGE_CLASS =
+  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 uppercase tracking-wide";
 
 interface PluginRowProps {
   plugin: LoadedPluginInfo;
+  selected: boolean;
   toggling: boolean;
-  checkingUpdate: boolean;
-  upToDate: boolean;
+  onSelect: () => void;
   onToggle: () => void;
-  onUninstall: () => void;
-  onCheckForUpdate: () => void;
-  /** Attached to the row root so a deep-link `open` can scroll it into view. */
+  /** Attached to the row root so a deep-link `open` (#9559) can scroll it into view. */
   innerRef?: (el: HTMLDivElement | null) => void;
   /** Transient neutral highlight when a deep-link `open` targets this row. */
   highlighted?: boolean;
 }
 
 /**
- * One installed-plugin row: provenance metadata + per-row actions. Not built on
- * `SettingsSwitchCard` because that card has no slot for the uninstall /
- * check-for-update buttons — this row reuses `SettingsSwitch` directly and
- * extends the same visual language (bordered card, icon, title + subtitle).
- * Row expansion (capabilities, contributed actions, load-error stack trace) is
- * left as a follow-up slot per the issue.
+ * One installed-plugin row in the master list (#9555): a compact, selectable
+ * entry showing name, version, provenance, and the enable toggle. Selecting it
+ * populates the detail pane on the right — the full metadata, actions, and
+ * settings live there now, so the row stays scannable and never shifts layout.
+ *
+ * The selection target is a `<button role="option">` covering the info area;
+ * the enable toggle is a sibling control (not nested) so it keeps its own click
+ * target. Selected styling follows the master-detail precedent (`bg-overlay-soft`
+ * + a single 2px accent bar via `before:*`), reserving the accent for the one
+ * load-bearing selection signal.
+ *
+ * A deep-link `open` (#9559) scrolls the row into view via `innerRef` and flags
+ * it with a transient neutral `highlighted` outline — distinct from the accent
+ * selection stripe so the two signals never collide.
  */
 function PluginRow({
   plugin,
+  selected,
   toggling,
-  checkingUpdate,
-  upToDate,
+  onSelect,
   onToggle,
-  onUninstall,
-  onCheckForUpdate,
   innerRef,
   highlighted,
 }: PluginRowProps) {
@@ -73,163 +55,79 @@ function PluginRow({
   const enabled = plugin.disabled !== true;
   const restartRequired = plugin.pendingRestart === true;
   const sourceLabel = SOURCE_BADGE_LABELS[plugin.source] ?? plugin.source;
-  // URL-installed plugins have an upstream to re-fetch and compare against;
-  // file-installed plugins and built-ins don't, so the button stays disabled
-  // with an explanatory tooltip.
-  const canCheckUpdate = plugin.originalUrl !== null;
-  const updateTooltip = canCheckUpdate
-    ? checkingUpdate
-      ? "Checking for a new version…"
-      : "Check for a new version"
-    : plugin.isBuiltin
-      ? "Built-in plugins update with Daintree"
-      : "No update URL — reinstall from a file to update";
 
   return (
     <div
       ref={innerRef}
-      className={`relative w-full p-4 rounded-[var(--radius-lg)] border text-daintree-text transition-colors ${
-        highlighted ? "border-daintree-text/40 bg-overlay-subtle" : "border-daintree-border"
-      }`}
+      className={cn(
+        "relative flex items-center gap-2 rounded-[var(--radius-md)] border text-daintree-text transition-colors",
+        selected
+          ? "bg-overlay-soft border-overlay before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
+          : highlighted
+            ? "border-daintree-text/40 bg-overlay-subtle"
+            : "border-transparent hover:bg-overlay-subtle"
+      )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3 min-w-0">
-          <Plug
-            className={enabled ? "w-5 h-5 text-daintree-text/70" : "w-5 h-5 text-daintree-text/40"}
-            aria-hidden="true"
-          />
-          <div className="min-w-0 text-left">
-            <div className="text-sm font-medium flex items-center gap-1.5 flex-wrap">
-              <span className="truncate">{label}</span>
-              <span className="text-xs font-normal text-daintree-text/40">
-                v{plugin.manifest.version}
+      <button
+        type="button"
+        role="option"
+        aria-selected={selected}
+        onClick={onSelect}
+        className="flex items-start gap-2.5 min-w-0 flex-1 py-2.5 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+      >
+        <Plug
+          className={
+            enabled
+              ? "w-4 h-4 mt-0.5 text-daintree-text/70"
+              : "w-4 h-4 mt-0.5 text-daintree-text/40"
+          }
+          aria-hidden="true"
+        />
+        <span className="min-w-0">
+          <span className="text-sm font-medium flex items-center gap-1.5 flex-wrap">
+            <span className="truncate">{label}</span>
+            <span className="text-[11px] font-normal text-daintree-text/40">
+              v{plugin.manifest.version}
+            </span>
+          </span>
+          <span className="mt-1 flex items-center gap-1 flex-wrap">
+            <span className={ROW_BADGE_CLASS}>{sourceLabel}</span>
+            {plugin.devMode && <span className={ROW_BADGE_CLASS}>Dev</span>}
+            {restartRequired && (
+              <span className={`${ROW_BADGE_CLASS} text-daintree-text/50`}>Restart required</span>
+            )}
+            {plugin.loadError && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-status-danger uppercase tracking-wide">
+                <AlertCircle className="w-3 h-3" aria-hidden="true" />
+                Failed
               </span>
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 uppercase tracking-wide">
-                {sourceLabel}
-              </span>
-              {plugin.devMode && (
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 uppercase tracking-wide">
-                  Dev
-                </span>
-              )}
-              {restartRequired && (
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/50 uppercase tracking-wide">
-                  Restart required
-                </span>
-              )}
-            </div>
-            {plugin.manifest.description && (
-              <div className="text-xs text-daintree-text/70 mt-0.5">
-                {plugin.manifest.description}
-              </div>
             )}
-            {!plugin.isBuiltin && plugin.installedAt > 0 && (
-              <div className="text-[11px] text-daintree-text/40 mt-1">
-                {plugin.updatedAt
-                  ? `Updated ${formatRelativeTime(plugin.updatedAt)}`
-                  : `Installed ${formatRelativeTime(plugin.installedAt)}`}
-              </div>
-            )}
-            {upToDate && (
-              <div className="text-[11px] text-daintree-text/50 mt-1" role="status">
-                Already up to date
-              </div>
-            )}
-          </div>
-        </div>
+          </span>
+        </span>
+      </button>
 
-        <div className="flex items-center gap-1 shrink-0">
-          {canCheckUpdate ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={onCheckForUpdate}
-                  disabled={checkingUpdate}
-                  aria-label={`Check ${label} for updates`}
-                >
-                  <RefreshCw className={checkingUpdate ? "animate-spin" : undefined} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{updateTooltip}</TooltipContent>
-            </Tooltip>
-          ) : (
-            // A native `disabled` button emits no pointer events, so the
-            // tooltip wouldn't show — wrap it in a focusable span trigger.
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span tabIndex={0} className="inline-flex">
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    disabled
-                    tabIndex={-1}
-                    aria-label={`Check ${label} for updates`}
-                  >
-                    <RefreshCw />
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{updateTooltip}</TooltipContent>
-            </Tooltip>
-          )}
-
-          {!plugin.isBuiltin && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={onUninstall}
-                  aria-label={`Uninstall ${label}`}
-                  className="text-daintree-text/50 hover:text-status-error"
-                >
-                  <Trash2 />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Uninstall plugin</TooltipContent>
-            </Tooltip>
-          )}
-
-          <SettingsSwitch
-            checked={enabled}
-            onCheckedChange={onToggle}
-            disabled={toggling}
-            aria-label={`Enable ${label}`}
-          />
-        </div>
-      </div>
-
-      {plugin.loadError && (
-        <div className="flex items-start gap-2 mt-3 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-          <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-          <p className="text-[11px] text-status-danger break-words">
-            Failed to load: {plugin.loadError.message}
-          </p>
-        </div>
-      )}
-
-      {/* Settings render whether or not the plugin is enabled — values persist
-          independently of the plugin's runtime, so users can pre-configure a
-          plugin before turning it on, or keep editing it while it's off. */}
-      {(plugin.manifest.contributes.settings?.length ?? 0) > 0 && (
-        <PluginSettingsForm plugin={plugin} />
-      )}
+      <span className="shrink-0 pr-2.5">
+        <SettingsSwitch
+          checked={enabled}
+          onCheckedChange={onToggle}
+          disabled={toggling}
+          aria-label={`Enable ${label}`}
+        />
+      </span>
     </div>
   );
 }
 
 function RowSkeleton() {
   return (
-    <div className="w-full p-4 rounded-[var(--radius-lg)] border border-daintree-border">
-      <div className="flex items-center gap-3 animate-pulse-delayed">
-        <div className="w-5 h-5 rounded bg-daintree-text/10" />
+    <div className="w-full flex items-center gap-2.5 py-2.5 px-3 rounded-[var(--radius-md)]">
+      <div className="flex items-center gap-2.5 w-full animate-pulse-delayed">
+        <div className="w-4 h-4 rounded bg-daintree-text/10" />
         <div className="flex-1 space-y-2">
-          <div className="h-3.5 w-32 rounded bg-daintree-text/10" />
-          <div className="h-2.5 w-48 rounded bg-daintree-text/10" />
+          <div className="h-3 w-24 rounded bg-daintree-text/10" />
+          <div className="h-2 w-16 rounded bg-daintree-text/10" />
         </div>
-        <div className="w-11 h-6 rounded-full bg-daintree-text/10" />
+        <div className="w-9 h-5 rounded-full bg-daintree-text/10" />
       </div>
     </div>
   );
@@ -270,19 +168,42 @@ export function PluginManagerDialog({
     intent: deepLinkIntent ?? null,
     onConsumed: onDeepLinkConsumed,
   });
+  // Selection is pure UI state owned by the dialog — `usePluginManager` stays
+  // data/IPC only. The detail pane derives from the selected id.
+  const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
+  const selectedPlugin =
+    selectedPluginId === null
+      ? null
+      : (pm.plugins.find((p) => p.manifest.name === selectedPluginId) ?? null);
 
-  // Row elements keyed by plugin name, so a `daintree://plugin/open` can scroll
-  // its target into view.
+  // Row elements keyed by plugin name, so a `daintree://plugin/open` (#9559) can
+  // scroll its target into view.
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const [highlightedPluginId, setHighlightedPluginId] = useState<string | null>(null);
 
-  // When the hook resolves a deep-link `open` target to an installed plugin,
-  // scroll its row into view and apply a transient neutral highlight, then clear
-  // the focus request so it doesn't re-trigger on the next render.
+  // Re-validate the selection after every list refresh (reopen, uninstall,
+  // cross-window provenance change). A single effect keyed on the list nulls a
+  // selection whose plugin is gone — kept here rather than in a second reset
+  // effect that could race the hook's `isOpen` reset (#4958).
+  useEffect(() => {
+    if (
+      selectedPluginId !== null &&
+      !pm.plugins.some((p) => p.manifest.name === selectedPluginId)
+    ) {
+      setSelectedPluginId(null);
+    }
+  }, [pm.plugins, selectedPluginId]);
+
+  // When the hook resolves a deep-link `open` target to an installed plugin
+  // (#9559), select it, scroll its row into view, and apply a transient neutral
+  // highlight, then clear the focus request so it doesn't re-trigger on the next
+  // render.
   const focusPluginId = pm.focusPluginId;
   const clearFocusPluginId = pm.clearFocusPluginId;
   useEffect(() => {
     if (!focusPluginId) return;
+    if (!pm.plugins.some((p) => p.manifest.name === focusPluginId)) return;
+    setSelectedPluginId(focusPluginId);
     const row = rowRefs.current.get(focusPluginId);
     if (!row) return; // Row not rendered yet — the not-found notice path handles misses.
     row.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -292,37 +213,49 @@ export function PluginManagerDialog({
     return () => clearTimeout(timer);
   }, [focusPluginId, clearFocusPluginId, pm.plugins]);
 
+  const hasPlugins = pm.plugins.length > 0;
+
   return (
-    <AppDialog isOpen={isOpen} onClose={onClose} size="lg" data-testid="plugin-manager-dialog">
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      size="2xl"
+      maxHeight="h-[75vh]"
+      className="min-h-[480px] max-h-[800px]"
+      data-testid="plugin-manager-dialog"
+    >
       <AppDialog.Header>
         <AppDialog.Title icon={<Plug className="w-5 h-5 text-daintree-text/70" />}>
           Plugins
         </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
-      <AppDialog.Body>
-        <div
-          className="relative space-y-6"
-          onDragEnter={pm.handleDragEnter}
-          onDragOver={pm.handleDragOver}
-          onDragLeave={pm.handleDragLeave}
-          onDrop={pm.handleDrop}
-        >
-          {pm.isDragOverFiles && (
-            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-[var(--radius-lg)] bg-daintree-bg/80 border-2 border-dashed border-daintree-border pointer-events-none">
-              <Download className="w-6 h-6 text-daintree-text/60" aria-hidden="true" />
-              <p className="text-sm font-medium text-daintree-text">Drop a .dntr file to install</p>
-            </div>
-          )}
-          <div className="flex items-start justify-between gap-4">
+
+      <div
+        className="relative flex flex-1 min-h-0 overflow-hidden"
+        onDragEnter={pm.handleDragEnter}
+        onDragOver={pm.handleDragOver}
+        onDragLeave={pm.handleDragLeave}
+        onDrop={pm.handleDrop}
+      >
+        {pm.isDragOverFiles && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-daintree-bg/80 border-2 border-dashed border-daintree-border pointer-events-none">
+            <Download className="w-6 h-6 text-daintree-text/60" aria-hidden="true" />
+            <p className="text-sm font-medium text-daintree-text">Drop a .dntr file to install</p>
+          </div>
+        )}
+
+        {/* Master: installed-plugin list + install controls. */}
+        <div className="w-72 shrink-0 border-r border-daintree-border flex flex-col overflow-hidden">
+          <div className="p-4 border-b border-daintree-border shrink-0 space-y-3">
             <div>
               <h3 className="text-sm font-medium text-daintree-text">Installed plugins</h3>
               <p className="text-xs text-daintree-text/50 mt-1 select-text">
-                Install plugins to extend Daintree with panels, commands, and integrations. Turn one
-                off to keep its settings without loading it — changes take effect after you restart.
+                Extend Daintree with panels, commands, and integrations. Turn one off to keep its
+                settings without loading it.
               </p>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex flex-col gap-2">
               <Button
                 variant="outline"
                 size="sm"
@@ -337,47 +270,53 @@ export function PluginManagerDialog({
                 Install from URL
               </Button>
             </div>
+            {pm.notice && (
+              <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-daintree-border">
+                <Info className="w-3.5 h-3.5 text-daintree-text/50 shrink-0 mt-0.5" />
+                <p className="text-[11px] text-daintree-text/70">{pm.notice}</p>
+              </div>
+            )}
+            {pm.error && (
+              <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
+                <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
+                <p className="text-[11px] text-status-danger">{pm.error}</p>
+              </div>
+            )}
           </div>
-
-          {pm.notice && (
-            <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-overlay-subtle border border-daintree-border">
-              <Info className="w-4 h-4 text-daintree-text/50 shrink-0 mt-0.5" />
-              <p className="text-xs text-daintree-text/70">{pm.notice}</p>
-            </div>
-          )}
 
           {pm.loading ? (
             pm.showInlineLoading ? (
-              <div className="grid grid-cols-[minmax(0,1fr)] gap-2">
+              <div className="p-2 space-y-1">
                 <RowSkeleton />
                 <RowSkeleton />
                 <RowSkeleton />
               </div>
             ) : null
-          ) : pm.plugins.length === 0 && !pm.error ? (
+          ) : !hasPlugins && !pm.error ? (
             // Suppress the empty state when a load error is showing — the error
-            // banner below owns that case so we don't invite a redundant install.
-            <div className="border border-dashed border-daintree-border rounded-[var(--radius-md)]">
-              <EmptyState
-                variant="zero-data"
-                scale="canvas"
-                icon={<Plug />}
-                title="No plugins installed"
-                description="Install one from a file or URL to add panels, commands, and integrations."
-              />
-            </div>
-          ) : pm.plugins.length === 0 ? null : (
-            <div className="grid grid-cols-[minmax(0,1fr)] gap-2">
+            // banner above owns that case so we don't invite a redundant install.
+            <EmptyState
+              variant="zero-data"
+              scale="canvas"
+              icon={<Plug />}
+              title="No plugins installed"
+              description="Install one from a file or URL to add panels, commands, and integrations."
+            />
+          ) : !hasPlugins ? null : (
+            <ScrollShadow
+              className="flex-1 min-h-0"
+              scrollClassName="p-2 space-y-1"
+              role="listbox"
+              aria-label="Installed plugins"
+            >
               {pm.plugins.map((plugin) => (
                 <PluginRow
                   key={plugin.manifest.name}
                   plugin={plugin}
+                  selected={plugin.manifest.name === selectedPluginId}
                   toggling={pm.pending.has(plugin.manifest.name)}
-                  checkingUpdate={pm.checkingUpdate.has(plugin.manifest.name)}
-                  upToDate={pm.upToDateId === plugin.manifest.name}
+                  onSelect={() => setSelectedPluginId(plugin.manifest.name)}
                   onToggle={() => void pm.handleToggle(plugin)}
-                  onUninstall={() => pm.armUninstall(plugin)}
-                  onCheckForUpdate={() => void pm.handleCheckForUpdate(plugin)}
                   highlighted={highlightedPluginId === plugin.manifest.name}
                   innerRef={(el) => {
                     if (el) rowRefs.current.set(plugin.manifest.name, el);
@@ -385,20 +324,39 @@ export function PluginManagerDialog({
                   }}
                 />
               ))}
-            </div>
+            </ScrollShadow>
           )}
-
-          {pm.error && (
-            <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-              <AlertCircle className="w-4 h-4 text-status-danger shrink-0 mt-0.5" />
-              <p className="text-xs text-status-danger">{pm.error}</p>
-            </div>
-          )}
-
-          {/* Browse / discovery surface (marketplace) is reserved for #9305 —
-              it slots in below the installed list. Intentionally unrendered. */}
         </div>
-      </AppDialog.Body>
+
+        {/* Detail: selected plugin's metadata, actions, and settings. */}
+        <ScrollShadow className="flex-1 min-h-0" scrollClassName="p-6">
+          {selectedPlugin ? (
+            <PluginDetailPane
+              // Remount on plugin switch so PluginSettingsForm re-initializes
+              // its drafts from the new plugin's stored values.
+              key={selectedPlugin.manifest.name}
+              plugin={selectedPlugin}
+              checkingUpdate={pm.checkingUpdate.has(selectedPlugin.manifest.name)}
+              upToDate={pm.upToDateId === selectedPlugin.manifest.name}
+              onUninstall={() => pm.armUninstall(selectedPlugin)}
+              onCheckForUpdate={() => void pm.handleCheckForUpdate(selectedPlugin)}
+            />
+          ) : (
+            <div className="h-full flex items-center justify-center">
+              <EmptyState
+                variant="filtered-empty"
+                scale="canvas"
+                title={hasPlugins ? "Select a plugin" : "No plugin selected"}
+                description={
+                  hasPlugins
+                    ? "Choose a plugin from the list to view its details and settings."
+                    : "Install a plugin to view its details and settings here."
+                }
+              />
+            </div>
+          )}
+        </ScrollShadow>
+      </div>
 
       <ConfirmDialog
         isOpen={pm.pendingUninstall !== null}
