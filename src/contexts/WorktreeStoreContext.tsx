@@ -380,7 +380,10 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         // Full-replace semantics for prCiStatus mirror the backend
         // (WorktreeMonitor.setPRInfo): undefined means "no checks", not
         // "preserve prior value." Merging with ?? would let stale CI rollups
-        // linger after checks disappear.
+        // linger after checks disappear. The transient phase-1 "no CI yet"
+        // case is handled in the workspace host (it preserves the prior rollup
+        // before emitting), so the renderer never sees a flicker-inducing
+        // undefined here — see WorkspaceService.onPRDetected (#9551).
         store.getState().applyUpdate(
           {
             ...existing,
