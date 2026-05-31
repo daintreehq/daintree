@@ -34,6 +34,12 @@ function createMockPty(overrides?: Partial<IPty>): IPty {
     onExit: () => ({ dispose: () => {} }),
     ...overrides,
   };
+  // destroy() exists on the concrete UnixTerminal/WindowsTerminal but is absent
+  // from the exported IPty type; destroyPty() accesses it structurally (#9539).
+  const withDestroy = pty as Partial<IPty> & { destroy: () => void };
+  if (!withDestroy.destroy) {
+    withDestroy.destroy = vi.fn();
+  }
   return pty as IPty;
 }
 
@@ -147,6 +153,27 @@ describe("TerminalProcess.kill — agent state event", () => {
     // Each agent-state hook fires exactly once even though kill() was called twice.
     expect(updateAgentStateSpy).toHaveBeenCalledTimes(1);
     expect(emitAgentKilledSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("TerminalProcess.kill — master fd release (#9539)", () => {
+  it("calls destroy() on the pty to release the master fd when killed", () => {
+    const destroy = vi.fn();
+    const terminal = createTerminal(undefined, undefined, { destroy } as Partial<IPty>);
+
+    terminal.kill("user requested");
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls destroy() exactly once even when kill() is called twice", () => {
+    const destroy = vi.fn();
+    const terminal = createTerminal(undefined, undefined, { destroy } as Partial<IPty>);
+
+    terminal.kill("first");
+    terminal.kill("second");
+
+    expect(destroy).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -27,7 +27,7 @@ import {
 import { WriteQueue } from "./WriteQueue.js";
 import { events } from "../events.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
-import type { PooledPtyDataHandoff, PtyPool } from "../PtyPool.js";
+import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
 import { installHeadlessResponder } from "./headlessResponder.js";
 import { handleOscColorQueries } from "./OscResponder.js";
 import { Osc94Parser } from "./Osc94Parser.js";
@@ -592,6 +592,13 @@ export class TerminalProcess {
 
     this.writeQueue.dispose();
     this.processTreeKiller.abort();
+
+    // Release the master PTY fd. Pooled terminals already do this via
+    // destroyPty() on pool teardown; live terminals never called destroy(),
+    // leaking the /dev/ptmx fd on every kill/exit/dispose (#9539). teardown()
+    // is reached by all three paths and is idempotent (lifecycle.transition
+    // guards re-entry), so destroyPty() fires exactly once per terminal.
+    destroyPty(this.terminalInfo.ptyProcess);
 
     return true;
   }
