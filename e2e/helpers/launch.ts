@@ -44,6 +44,17 @@ export interface LaunchOptions {
    * 1280x720 so scale=3 yields a 3840x2160 framebuffer.
    */
   windowSize?: { width: number; height: number };
+  /**
+   * Opt out of the default `DAINTREE_DISABLE_WEBGL=1` so the WebGL renderer
+   * (and its addon) actually loads. Required by the nightly xterm memory-leak
+   * regression — the WebglRenderer-side leak only materializes when the WebGL
+   * addon is attached. Also suppresses the CI `--disable-gpu` /
+   * `--disable-software-rasterizer` flags (which would kill WebGL context
+   * creation). Defaults to `false` so every existing spec keeps WebGL off.
+   * Only meaningful on a host with a real GPU; callers should skip on
+   * `process.env.CI` runners where GPU is unavailable.
+   */
+  enableWebgl?: boolean;
 }
 
 function cleanupWindowsElectronProcesses(): void {
@@ -194,9 +205,10 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       // CI runners lack real GPUs — disable GPU to prevent hangs.
       // Force scale factor 1 so the window uses full pixel resolution
       // (prevents display scaling from shrinking effective toolbar width).
+      // When enableWebgl is requested, keep the GPU on: --disable-gpu would
+      // prevent WebGL context creation and make the WebGL leak test inert.
       args.unshift(
-        "--disable-gpu",
-        "--disable-software-rasterizer",
+        ...(options.enableWebgl ? [] : ["--disable-gpu", "--disable-software-rasterizer"]),
         "--noerrdialogs",
         "--force-device-scale-factor=1"
       );
@@ -248,7 +260,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         DAINTREE_E2E_MODE: "1",
         DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS:
           options.env?.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS ?? "1",
-        DAINTREE_DISABLE_WEBGL: "1",
+        DAINTREE_DISABLE_WEBGL: options.enableWebgl ? "0" : "1",
         // CI E2E keeps the BrowserWindow sentinel as the only early CDP target
         // until Playwright's electron.launch handshake resolves. Under runner
         // load, concurrent WebContentsView target creation can leave launch

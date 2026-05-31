@@ -124,9 +124,22 @@ export async function measureMainMemory(
 }
 
 export async function measureRendererMemory(
-  page: Page
+  page: Page,
+  opts: { forceGc?: boolean } = {}
 ): Promise<{ usedJSHeapSize: number; totalJSHeapSize: number } | null> {
-  return page.evaluate(() => {
+  return page.evaluate(async (forceGc) => {
+    if (forceGc) {
+      // window.gc is exposed via the renderer `--expose-gc` js-flag
+      // (electron/main.ts). Run twice — the first pass frees the bulk, the
+      // second collects objects whose finalizers were queued by the first.
+      const gcFn = (window as unknown as { gc?: () => void }).gc;
+      if (gcFn) {
+        gcFn();
+        await new Promise((r) => setTimeout(r, 50));
+        gcFn();
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
     const perf = performance as unknown as {
       memory?: { usedJSHeapSize: number; totalJSHeapSize: number };
     };
@@ -135,7 +148,7 @@ export async function measureRendererMemory(
       usedJSHeapSize: perf.memory.usedJSHeapSize,
       totalJSHeapSize: perf.memory.totalJSHeapSize,
     };
-  });
+  }, opts.forceGc ?? false);
 }
 
 // ── OS-Level Process Verification ────────────────────────
