@@ -5,6 +5,7 @@ import { getAllPluginToolbarButtonConfigs } from "../../../shared/config/toolbar
 import { getPluginMenuItems } from "../pluginMenuRegistry.js";
 import { getPluginKeybindings } from "../pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../pluginContextMenuRegistry.js";
+import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import type { PluginActionDescriptor } from "../../../shared/types/plugin.js";
 
 interface PluginContributionBroadcasterDeps {
@@ -65,6 +66,14 @@ export class PluginContributionBroadcaster {
   private contextMenuItemsBroadcastPending = false;
   /** Mirrors {@link menuItemsBroadcastComplete} for context-menu items. */
   private contextMenuItemsBroadcastComplete = false;
+  /**
+   * Same coalescing rationale as {@link menuItemsBroadcastPending}. Plugin
+   * agents are mutated only from `loadPlugin()` / `unloadPlugin()`, so the two
+   * call sites invoke {@link scheduleAgentsBroadcast} directly.
+   */
+  private agentsBroadcastPending = false;
+  /** Mirrors {@link menuItemsBroadcastComplete} for plugin agents. */
+  private agentsBroadcastComplete = false;
 
   constructor(deps: PluginContributionBroadcasterDeps) {
     this.deps = deps;
@@ -208,6 +217,32 @@ export class PluginContributionBroadcaster {
   }
 
   /**
+   * Same shape as {@link scheduleMenuItemsBroadcast}; see that method for the
+   * coalescing and `complete`-OR-accumulation rationale. Plugin agents are
+   * mutated only from `loadPlugin()` / `unloadPlugin()`.
+   */
+  scheduleAgentsBroadcast(complete: boolean): void {
+    if (this.deps.isDisposed()) return;
+    if (complete) this.agentsBroadcastComplete = true;
+    if (this.agentsBroadcastPending) return;
+    this.agentsBroadcastPending = true;
+    queueMicrotask(() => {
+      this.agentsBroadcastPending = false;
+      const drained = this.agentsBroadcastComplete;
+      this.agentsBroadcastComplete = false;
+      if (this.deps.isDisposed()) return;
+      this.broadcastPluginAgents(drained);
+    });
+  }
+
+  private broadcastPluginAgents(complete: boolean): void {
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+      name: "plugin:agents-changed",
+      payload: { agents: getPluginAgentRegistry(), complete },
+    });
+  }
+
+  /**
    * Replay the current actions / panel-kinds / toolbar-button snapshots to a
    * single target webContents. Used by the cold-start view-ready hook so a
    * freshly-restored WebContentsView (post-LRU eviction or first cold load on
@@ -249,6 +284,10 @@ export class PluginContributionBroadcaster {
       {
         name: "plugin:context-menu-items-changed",
         payload: { items: getPluginContextMenuItems(), complete: false },
+      },
+      {
+        name: "plugin:agents-changed",
+        payload: { agents: getPluginAgentRegistry(), complete: false },
       },
     ];
     for (const event of events) {

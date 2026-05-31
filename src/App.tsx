@@ -28,6 +28,7 @@ import { useGitHubRateLimit } from "./hooks/useGitHubRateLimit";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { usePluginActions } from "./hooks/usePluginActions";
 import { usePluginPanelKinds } from "./hooks/usePluginPanelKinds";
+import { usePluginAgents } from "./hooks/usePluginAgents";
 import { usePluginKeybindings } from "./hooks/usePluginKeybindings";
 import { useUpdateListener } from "./hooks/useUpdateListener";
 import { useStoreUpdateListener } from "./hooks/useStoreUpdateListener";
@@ -670,6 +671,7 @@ function AppInner() {
 
   usePluginActions();
   usePluginPanelKinds();
+  usePluginAgents();
   usePluginKeybindings();
 
   useMenuActions();

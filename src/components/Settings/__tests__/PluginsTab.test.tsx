@@ -36,6 +36,7 @@ function makePlugin(name: string): LoadedPluginInfo {
         contextMenus: [],
         forgeProviders: [],
         fileDecorationProviders: [],
+        agents: [],
       },
     },
     dir: `/plugins/${name}`,

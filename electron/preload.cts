@@ -2489,6 +2489,12 @@ const api: ElectronAPI = {
       _eventBusOn("plugin:provenance-changed", callback),
     onPanelKindsChanged: (callback: (payload: { kinds: PanelKindConfig[] }) => void) =>
       _eventBusOn("plugin:panel-kinds-changed", callback),
+    onAgentsChanged: (
+      callback: (payload: {
+        agents: Record<string, import("../shared/config/agentRegistry.js").AgentConfig>;
+        complete: boolean;
+      }) => void
+    ) => _eventBusOn("plugin:agents-changed", callback),
     onToolbarButtonsChanged: (
       callback: (payload: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void
     ) => _eventBusOn("plugin:toolbar-buttons-changed", callback),

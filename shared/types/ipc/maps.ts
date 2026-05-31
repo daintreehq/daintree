@@ -1907,6 +1907,16 @@ export interface IpcEventMap {
     complete: boolean;
   };
 
+  // Plugin agent registry events (main → renderer). Carries the flattened
+  // plugin-agent record so the renderer can mirror main's effective registry.
+  // Same `complete` flag semantics as toolbar buttons / menu items: true for an
+  // authoritative post-unload snapshot, false for partial/growing load-time
+  // broadcasts.
+  "plugin:agents-changed": {
+    agents: Record<string, import("../../config/agentRegistry.js").AgentConfig>;
+    complete: boolean;
+  };
+
   // Plugin file-decoration invalidation (main → renderer). Carries only the
   // changed scope (optionally narrowed to `paths`) — never decoration data.
   // The renderer re-pulls fresh decorations via `plugin:file-decorations-get`.
@@ -2000,6 +2010,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:keybindings-changed"
   // Plugin context-menu item registry (global broadcast)
   | "plugin:context-menu-items-changed"
+  // Plugin agent registry (global broadcast)
+  | "plugin:agents-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
   // Plugin provenance record changed (global broadcast)

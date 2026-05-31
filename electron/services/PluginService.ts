@@ -97,6 +97,10 @@ import {
   unregisterFileDecorationProviderImpls,
   unregisterFileDecorationProviders,
 } from "./fileDecorationRegistry.js";
+import {
+  registerPluginAgents,
+  unregisterPluginAgents,
+} from "../../shared/config/pluginAgentRegistry.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
@@ -153,6 +157,10 @@ const CONFIRM_TRIGGERING_CAPABILITIES: ReadonlySet<BuiltInPluginCapability> = ne
   "fs:project-write",
   "fs:user-data-write",
   "agent:invoke",
+  // Registering a launchable agent CLI (with its own command/args, and a
+  // detection config in the full tier) is a runtime side effect on par with
+  // `agent:invoke` — a plugin holding it elevates its actions to "confirm".
+  "agent:register",
 ]);
 
 /**
@@ -1049,6 +1057,11 @@ export class PluginService {
 
     if (manifest.contributes.fileDecorationProviders.length > 0) {
       registerFileDecorationProviders(manifest.name, manifest.contributes.fileDecorationProviders);
+    }
+
+    if (manifest.contributes.agents.length > 0) {
+      registerPluginAgents(manifest.name, manifest.contributes.agents);
+      this.broadcaster.scheduleAgentsBroadcast(false);
     }
 
     // Insert the plugin into the registry BEFORE importing its main module so
@@ -2382,6 +2395,10 @@ export class PluginService {
     );
     runUnloadStep(pluginId, "unregisterFileDecorationProviderImpls", () =>
       unregisterFileDecorationProviderImpls(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterPluginAgents", () => unregisterPluginAgents(pluginId));
+    runUnloadStep(pluginId, "scheduleAgentsBroadcast", () =>
+      this.broadcaster.scheduleAgentsBroadcast(true)
     );
     // Subscriber disposers already fired in flushPluginEventCleanups() above;
     // this drops any leftover subscriber-set entry and the in-memory settings

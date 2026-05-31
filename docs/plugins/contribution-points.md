@@ -481,11 +481,49 @@ Registers a forge backend — issues, pull/merge requests, reviews, CI roll-up, 
 
 The manifest entry is read eagerly so the provider populates Preferences and the remote-routing table before any plugin code runs; the implementation binds lazily in `activate()` via [`registerForgeProvider`](./host-api.md#registerforgeprovider). For the end-to-end walkthrough — implementing `ForgeProviderImpl`, state normalization, capabilities, and tests — see [Implementing a forge provider](./forge-provider.md).
 
+## Agents — _Shipped (minimal tier)_
+
+Teaches Daintree about a launchable agent CLI it doesn't ship in-tree, so the CLI shows up as a named, selectable agent rather than a generic shell. Requires the `agent:register` capability, which is surfaced to the user at install time.
+
+```json
+{
+  "capabilities": ["agent:register"],
+  "contributes": {
+    "agents": [
+      {
+        "id": "acme",
+        "name": "Acme Agent",
+        "command": "acme",
+        "args": ["--interactive"],
+        "color": "#3366ff",
+        "iconId": "terminal",
+        "supportsContextInjection": true
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Bare agent id (alphanumerics, `.`, `-`, `_`; ≤64 chars). Additive for **new** IDs only — a collision with a built-in agent id is rejected at the manifest gate, and built-in entries always shadow plugin entries. Cross-plugin id conflicts resolve first-registered-wins. |
+| `name` | yes | Display label for the agent. |
+| `command` | yes | CLI binary to launch. Same safe-id pattern as `id` (no shell metacharacters). |
+| `args` | no | Default launch arguments (≤20 entries; no control characters). |
+| `color` | yes | Brand color as a 6-digit hex (`#rrggbb`). |
+| `iconId` | yes | Icon id used for the agent. |
+| `supportsContextInjection` | no | Whether copy-tree context injection targets this agent. Defaults to `false`. |
+| `detection` | no | Reserved for the full-tracking tier. The shape (bounded, well-formed detection patterns) is **validated** at manifest-parse time but not yet wired into the live PTY matcher — minimal-tier agents launch as named, untracked terminals. |
+
+The **minimal tier** (shipped) makes the agent launchable and selectable as a named entry in the effective registry. The **full tier** (planned) will relax the built-in-only gate in output detection so a plugin-supplied, validated `detection` config drives working/waiting state, resume, and MCP wiring. Bad or malformed detection input degrades gracefully to a generic shell and never breaks detection for other terminals.
+
 ## What's missing and why
 
 A few surfaces I've decided **not** to expose as dedicated contribution points:
 
-- **Agent provider plugins.** Adding a new model backend is handled via OpenAI-compatible base URL configuration in Daintree's settings, not a plugin API. The complexity of a full provider SDK isn't justified when 95% of users just need to point Daintree at a different endpoint.
+- **Agent provider SDKs.** Registering a launchable agent CLI is a contribution point (see [Agents](#agents--shipped-minimal-tier)), but a full model-provider SDK is not. Adding a new model backend is handled via OpenAI-compatible base URL configuration in Daintree's settings — the complexity of a full provider SDK isn't justified when 95% of users just need to point Daintree at a different endpoint.
 - **Agent lifecycle hooks (PreToolUse, PostToolUse, Stop).** Use an MCP server instead. A plugin that wants to intercept tool calls ships an MCP server that the agent talks to; the server can refuse or annotate tool calls. This is simpler than a dedicated hook API and reuses the MCP ecosystem.
 - **Subagents.** Daintree spawns fresh agents natively. Plugins that want to compose agents use skills + MCP to drive the orchestration, not a dedicated subagent contribution.
 - **Status bar items, tree views, editor decorations.** Daintree isn't an editor; these surfaces don't map cleanly to what we render. Revisit if a specific need emerges.

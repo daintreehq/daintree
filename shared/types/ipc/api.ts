@@ -1514,6 +1514,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         kinds: import("../../config/panelKindRegistry.js").PanelKindConfig[];
       }) => void
     ): () => void;
+    /** Subscribe to plugin agent registry changes. Returns a cleanup. */
+    onAgentsChanged(
+      callback: (payload: {
+        agents: Record<string, import("../../config/agentRegistry.js").AgentConfig>;
+        complete: boolean;
+      }) => void
+    ): () => void;
     /** Subscribe to plugin toolbar button registry changes. Returns a cleanup. */
     onToolbarButtonsChanged(
       callback: (payload: {
