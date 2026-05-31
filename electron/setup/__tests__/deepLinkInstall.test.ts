@@ -24,17 +24,20 @@ vi.mock("../../schemas/plugin.js", () => ({
 type FakeWebContents = {
   id: number;
   send: ReturnType<typeof vi.fn>;
+  on: ReturnType<typeof vi.fn>;
   once: ReturnType<typeof vi.fn>;
   isDestroyed: () => boolean;
 };
 
 function makeWebContents(id: number): FakeWebContents {
-  return { id, send: vi.fn(), once: vi.fn(), isDestroyed: () => false };
+  return { id, send: vi.fn(), on: vi.fn(), once: vi.fn(), isDestroyed: () => false };
 }
 
-function makeRegistry(wc: FakeWebContents | null) {
+// The registry resolves the primary window to whichever webContents
+// `getAppWebContents` is mocked to return.
+function makeRegistry(primary: boolean) {
   return {
-    getPrimary: () => (wc ? { browserWindow: { isDestroyed: () => false } } : undefined),
+    getPrimary: () => (primary ? { browserWindow: { isDestroyed: () => false } } : undefined),
   };
 }
 
@@ -130,7 +133,7 @@ describe("handleDaintreeUrl / notifyAppViewPainted", () => {
     mod._resetDeepLinkStateForTest();
     const wc = makeWebContents(7);
     registryMock.getAppWebContents.mockReturnValue(wc);
-    mod.activateDeepLinkHandler(makeRegistry(wc) as never);
+    mod.activateDeepLinkHandler(makeRegistry(true) as never);
 
     // Paint first (warm), then the deep link arrives.
     mod.notifyAppViewPainted(wc as never);
@@ -147,7 +150,7 @@ describe("handleDaintreeUrl / notifyAppViewPainted", () => {
     mod._resetDeepLinkStateForTest();
     const wc = makeWebContents(9);
     registryMock.getAppWebContents.mockReturnValue(wc);
-    mod.activateDeepLinkHandler(makeRegistry(wc) as never);
+    mod.activateDeepLinkHandler(makeRegistry(true) as never);
 
     // Deep link arrives before paint — nothing delivered yet.
     mod.handleDaintreeUrl("daintree://plugin/install?url=https://example.com/p.dntr");
@@ -171,7 +174,7 @@ describe("handleDaintreeUrl / notifyAppViewPainted", () => {
     mod._resetDeepLinkStateForTest();
     const wc = makeWebContents(11);
     registryMock.getAppWebContents.mockReturnValue(wc);
-    mod.activateDeepLinkHandler(makeRegistry(wc) as never);
+    mod.activateDeepLinkHandler(makeRegistry(true) as never);
     mod.notifyAppViewPainted(wc as never);
 
     mod.handleDaintreeUrl("daintree://plugin/install?url=javascript:alert(1)");
@@ -185,7 +188,7 @@ describe("handleDaintreeUrl / notifyAppViewPainted", () => {
     const wc = makeWebContents(13);
     registryMock.getAppWebContents.mockReturnValue(wc);
 
-    mod.activateDeepLinkHandler(makeRegistry(wc) as never);
+    mod.activateDeepLinkHandler(makeRegistry(true) as never);
     expect(envMock.clearPendingDaintreeUrls).toHaveBeenCalledOnce();
 
     // Held until paint, then delivered.
@@ -194,5 +197,51 @@ describe("handleDaintreeUrl / notifyAppViewPainted", () => {
       name: "plugin:deep-link",
       payload: { action: "open", pluginId: "acme.notes" },
     });
+  });
+
+  it("does not deliver to a non-primary view that paints first (lesson #9533)", async () => {
+    const mod = await import("../deepLinkInstall.js");
+    mod._resetDeepLinkStateForTest();
+    const primary = makeWebContents(1);
+    const secondary = makeWebContents(2);
+    registryMock.getAppWebContents.mockReturnValue(primary);
+    mod.activateDeepLinkHandler(makeRegistry(true) as never);
+
+    mod.handleDaintreeUrl("daintree://plugin/open?id=acme.notes");
+    // A non-primary view paints first — the intent stays queued for the primary.
+    mod.notifyAppViewPainted(secondary as never);
+    expect(secondary.send).not.toHaveBeenCalled();
+    expect(primary.send).not.toHaveBeenCalled();
+
+    // The primary paints — now it delivers, to the primary only.
+    mod.notifyAppViewPainted(primary as never);
+    expect(primary.send).toHaveBeenCalledTimes(1);
+    expect(secondary.send).not.toHaveBeenCalled();
+  });
+
+  it("re-holds the intent after a reload drops the painted id", async () => {
+    const mod = await import("../deepLinkInstall.js");
+    mod._resetDeepLinkStateForTest();
+    const wc = makeWebContents(5);
+    registryMock.getAppWebContents.mockReturnValue(wc);
+    mod.activateDeepLinkHandler(makeRegistry(true) as never);
+
+    // Paint, then capture the `did-start-loading` handler wired on first paint.
+    mod.notifyAppViewPainted(wc as never);
+    const didStartLoading = wc.on.mock.calls.find(([evt]) => evt === "did-start-loading")?.[1] as
+      | (() => void)
+      | undefined;
+    expect(didStartLoading).toBeTypeOf("function");
+
+    // Reload: the renderer's listener unmounts; the id leaves the painted set.
+    didStartLoading?.();
+
+    // A deep link now is held (not delivered to the unmounted renderer)…
+    mod.handleDaintreeUrl("daintree://plugin/open?id=acme.notes");
+    expect(wc.send).not.toHaveBeenCalled();
+
+    // …until the fresh paint flushes it.
+    mod.notifyAppViewPainted(wc as never);
+    expect(wc.send).toHaveBeenCalledTimes(1);
   });
 });

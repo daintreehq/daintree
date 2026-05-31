@@ -109,6 +109,11 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const [focusPluginId, setFocusPluginId] = useState<string | null>(null);
   const deepLinkConsumedRef = useRef<(() => void) | undefined>(undefined);
   deepLinkConsumedRef.current = deepLink?.onConsumed;
+  // Mirror `showUrlDialog` so the deep-link effect can read the latest value
+  // without taking it as a dependency — otherwise opening the dialog would
+  // re-run the effect and fire `onConsumed` twice for one intent.
+  const showUrlDialogRef = useRef(showUrlDialog);
+  showUrlDialogRef.current = showUrlDialog;
   // Update-check state. `checkingUpdate` drives the per-row spinner; the ref is
   // the synchronous reentrancy guard (state batches, leaving a double-click
   // window — #4703). `upToDateId` shows the transient "Already up to date" note;
@@ -202,8 +207,13 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   useEffect(() => {
     if (!isOpen || !deepLinkIntent) return;
     if (deepLinkIntent.action === "install") {
-      setUrlInput(deepLinkIntent.url);
-      setShowUrlDialog(true);
+      // Don't clobber an install dialog the user already has open — they may be
+      // mid-edit, and silently swapping in a fresh (attacker-supplied) URL is a
+      // social-engineering risk. Skip the pre-fill; the user can paste it.
+      if (!showUrlDialogRef.current) {
+        setUrlInput(deepLinkIntent.url);
+        setShowUrlDialog(true);
+      }
     } else {
       setFocusPluginId(deepLinkIntent.pluginId);
     }

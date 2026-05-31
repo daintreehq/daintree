@@ -97,6 +97,9 @@ let pendingIntent: PluginDeepLinkIntent | null = null;
 // signal guarantees the listener is live — delivering earlier would race it
 // onto the floor (#8465).
 const paintedWebContentsIds = new Set<number>();
+// Ids whose lifecycle listeners are already attached, so re-paints don't stack
+// duplicate `did-start-loading` / `destroyed` handlers.
+const wiredWebContentsIds = new Set<number>();
 
 function primaryAppWebContents(): Electron.WebContents | null {
   const win = windowRegistry?.getPrimary()?.browserWindow;
@@ -105,12 +108,35 @@ function primaryAppWebContents(): Electron.WebContents | null {
   return wc && !wc.isDestroyed() ? wc : null;
 }
 
-function deliver(webContents: Electron.WebContents, intent: PluginDeepLinkIntent): void {
+/**
+ * Send the intent to a renderer. Returns whether the send succeeded so the
+ * caller only clears `pendingIntent` on success — a teardown-race failure keeps
+ * the intent queued for the next paint rather than silently dropping it.
+ */
+function deliver(webContents: Electron.WebContents, intent: PluginDeepLinkIntent): boolean {
   try {
     webContents.send(CHANNELS.EVENTS_PUSH, { name: "plugin:deep-link", payload: intent });
+    return true;
   } catch {
-    // Send can fail mid-teardown — drop silently, the intent is non-critical.
+    return false;
   }
+}
+
+/**
+ * Attach lifecycle listeners (once per id) that drop the id from the painted
+ * set: a reload restarts loading (the renderer's listener unmounts and must
+ * re-register), and destroy removes the view entirely. Without this a deep link
+ * after a reload would deliver to a not-yet-mounted renderer.
+ */
+function wireWebContentsLifecycle(webContents: Electron.WebContents): void {
+  const id = webContents.id;
+  if (wiredWebContentsIds.has(id)) return;
+  wiredWebContentsIds.add(id);
+  webContents.on("did-start-loading", () => paintedWebContentsIds.delete(id));
+  webContents.once("destroyed", () => {
+    paintedWebContentsIds.delete(id);
+    wiredWebContentsIds.delete(id);
+  });
 }
 
 /**
@@ -127,8 +153,7 @@ export function handleDaintreeUrl(raw: string): void {
   }
 
   const wc = primaryAppWebContents();
-  if (wc && paintedWebContentsIds.has(wc.id)) {
-    deliver(wc, intent);
+  if (wc && paintedWebContentsIds.has(wc.id) && deliver(wc, intent)) {
     pendingIntent = null;
   } else {
     pendingIntent = intent;
@@ -136,22 +161,23 @@ export function handleDaintreeUrl(raw: string): void {
 }
 
 /**
- * Record that an app view has painted and flush any pending deep-link intent to
- * it. Called from the `app:view-painted` IPC handler. Delivering on paint (not
- * on window creation) ensures the renderer's deep-link listener is mounted.
+ * Record that an app view has painted and flush any pending deep-link intent.
+ * Called from the `app:view-painted` IPC handler. Delivering on paint (not on
+ * window creation) ensures the renderer's deep-link listener is mounted.
+ *
+ * Delivery always targets the primary window (lesson #9533): if a non-primary
+ * view paints first while the primary hasn't, the intent stays queued for the
+ * primary rather than opening the Plugin Manager in the wrong window.
  */
 export function notifyAppViewPainted(webContents: Electron.WebContents): void {
-  const id = webContents.id;
-  paintedWebContentsIds.add(id);
-  webContents.once("destroyed", () => paintedWebContentsIds.delete(id));
+  wireWebContentsLifecycle(webContents);
+  paintedWebContentsIds.add(webContents.id);
 
   if (!pendingIntent) return;
-  // Prefer the primary view; fall back to the view that just painted if the
-  // primary hasn't painted yet (rare multi-window cold launch).
   const primary = primaryAppWebContents();
-  const target = primary && paintedWebContentsIds.has(primary.id) ? primary : webContents;
-  deliver(target, pendingIntent);
-  pendingIntent = null;
+  if (primary && paintedWebContentsIds.has(primary.id) && deliver(primary, pendingIntent)) {
+    pendingIntent = null;
+  }
 }
 
 /**
@@ -182,4 +208,5 @@ export function _resetDeepLinkStateForTest(): void {
   windowRegistry = null;
   pendingIntent = null;
   paintedWebContentsIds.clear();
+  wiredWebContentsIds.clear();
 }

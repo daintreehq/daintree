@@ -705,6 +705,42 @@ describe("PluginManagerDialog", () => {
       expect(onConsumed).toHaveBeenCalledOnce();
     });
 
+    it("does not clobber a URL dialog the user already has open", async () => {
+      const { rerender } = render(
+        <TooltipProvider>
+          <PluginManagerDialog
+            isOpen
+            onClose={() => {}}
+            deepLinkIntent={{ action: "install", url: "https://first.example/p.dntr" }}
+            onDeepLinkConsumed={() => {}}
+          />
+        </TooltipProvider>
+      );
+      await waitFor(() =>
+        expect((screen.getByLabelText("Plugin URL") as HTMLInputElement).value).toBe(
+          "https://first.example/p.dntr"
+        )
+      );
+      // User edits the field…
+      fireEvent.change(screen.getByLabelText("Plugin URL"), {
+        target: { value: "https://user-typed.example/p.dntr" },
+      });
+      // …a second deep link arrives while the dialog is open — it must not win.
+      rerender(
+        <TooltipProvider>
+          <PluginManagerDialog
+            isOpen
+            onClose={() => {}}
+            deepLinkIntent={{ action: "install", url: "https://second.example/p.dntr" }}
+            onDeepLinkConsumed={() => {}}
+          />
+        </TooltipProvider>
+      );
+      expect((screen.getByLabelText("Plugin URL") as HTMLInputElement).value).toBe(
+        "https://user-typed.example/p.dntr"
+      );
+    });
+
     it("shows a notice when an open intent targets an uninstalled plugin", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
       render(
