@@ -255,6 +255,92 @@ describe("PluginManagerDialog", () => {
     expect(screen.queryByText("Settings")).toBeNull();
   });
 
+  it("renders settings in the detail pane, not inside the list row", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePluginWithSettings(),
+    ]);
+    renderDialog();
+    await selectPlugin();
+    await screen.findByText("Settings");
+    // The settings form and its fields must live outside the listbox — the
+    // whole point of the master-detail split (#9555) is that the list row
+    // never expands inline.
+    const listbox = within(screen.getByRole("listbox"));
+    expect(listbox.queryByText("Settings")).toBeNull();
+    expect(listbox.queryByLabelText("API key")).toBeNull();
+  });
+
+  it("toggling the enable switch does not select the row", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+
+    // The switch is a sibling of the selection button, not nested — clicking it
+    // must not populate the detail pane.
+    fireEvent.click(screen.getByRole("switch", { name: "Enable Acme Demo" }));
+    await waitFor(() =>
+      expect(window.electron.plugin.setEnabled).toHaveBeenCalledWith("acme.demo", false)
+    );
+    expect(screen.getByRole("option", { name: /Acme Demo/i }).getAttribute("aria-selected")).toBe(
+      "false"
+    );
+    expect(screen.getByText("Select a plugin")).toBeTruthy();
+  });
+
+  it("re-hydrates settings for the newly selected plugin when switching", async () => {
+    const pluginA = makePluginWithSettings();
+    const pluginB = makePluginWithSettings({
+      manifest: {
+        ...makePlugin().manifest,
+        name: "beta.demo",
+        displayName: "Beta Demo",
+        contributes: { ...makePlugin().manifest.contributes, settings: SETTINGS_FIXTURE },
+      },
+    });
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([pluginA, pluginB]);
+    renderDialog();
+
+    await selectPlugin("Acme Demo");
+    await waitFor(() =>
+      expect(window.electron.plugin.getSettingValues).toHaveBeenCalledWith(
+        "acme.demo",
+        "user",
+        null
+      )
+    );
+
+    await selectPlugin("Beta Demo");
+    await waitFor(() =>
+      expect(window.electron.plugin.getSettingValues).toHaveBeenCalledWith(
+        "beta.demo",
+        "user",
+        null
+      )
+    );
+  });
+
+  it("closes an armed uninstall confirm on a cross-window provenance change", async () => {
+    let fireProvenance: (() => void) | undefined;
+    (window.electron.plugin.onProvenanceChanged as ReturnType<typeof vi.fn>).mockImplementation(
+      (cb: () => void) => {
+        fireProvenance = cb;
+        return () => {};
+      }
+    );
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
+    renderDialog();
+    await selectPlugin();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Uninstall Acme Demo" }));
+    await waitFor(() => expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy());
+
+    // Another window mutated the list — the stale confirm must close so it can't
+    // fire uninstall against a record that may have changed underneath it.
+    fireProvenance?.();
+    await waitFor(() => expect(screen.queryByText("Uninstall 'Acme Demo'?")).toBeNull());
+    expect(window.electron.plugin.uninstall).not.toHaveBeenCalled();
+  });
+
   it("calls setEnabled(false) and shows a restart badge when disabling", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderDialog();

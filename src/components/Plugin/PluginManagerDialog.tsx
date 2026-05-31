@@ -328,13 +328,18 @@ export function PluginManagerDialog({
           )}
         </div>
 
-        {/* Detail: selected plugin's metadata, actions, and settings. */}
-        <ScrollShadow className="flex-1 min-h-0" scrollClassName="p-6">
+        {/* Detail: selected plugin's metadata, actions, and settings. The key
+            is on the scroll container (not the pane) so switching plugins
+            remounts the whole subtree — resetting scrollTop to the top and
+            re-initializing PluginSettingsForm drafts from the new plugin's
+            stored values. */}
+        <ScrollShadow
+          key={selectedPlugin?.manifest.name ?? "empty"}
+          className="flex-1 min-h-0"
+          scrollClassName="p-6"
+        >
           {selectedPlugin ? (
             <PluginDetailPane
-              // Remount on plugin switch so PluginSettingsForm re-initializes
-              // its drafts from the new plugin's stored values.
-              key={selectedPlugin.manifest.name}
               plugin={selectedPlugin}
               checkingUpdate={pm.checkingUpdate.has(selectedPlugin.manifest.name)}
               upToDate={pm.upToDateId === selectedPlugin.manifest.name}
