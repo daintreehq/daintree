@@ -528,7 +528,7 @@ function AppInner() {
     // while Settings is open (mirrors the `onOpenPluginManager` action).
     setIsSettingsOpen(false);
     setIsPluginManagerOpen(true);
-  }, [pluginDeepLink.intent]);
+  }, [pluginDeepLink.intent, setIsSettingsOpen, setIsPluginManagerOpen]);
   // The skeleton is z-index 9999 and intercepts pointer events. The crash
   // recovery dialog is rendered before hydration completes, so without this
   // the dialog would be visible but unclickable until hydration finishes
