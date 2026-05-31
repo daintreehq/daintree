@@ -20,6 +20,8 @@ export { useActiveWorktreeSync } from "./useActiveWorktreeSync";
 export { useOrchestrationMilestones } from "./useOrchestrationMilestones";
 export { useAgentWaitingNudge } from "./useAgentWaitingNudge";
 export { useFocusOnActivateIntent } from "./useFocusOnActivateIntent";
+export { usePluginDeepLink } from "./usePluginDeepLink";
+export type { PluginDeepLinkState } from "./usePluginDeepLink";
 export { useNotificationHistoryPruning } from "./useNotificationHistoryPruning";
 export { useRecipeFocusReload } from "./useRecipeFocusReload";
 export { useWorktreeDevServerStateSync } from "./useWorktreeDevServerStateSync";

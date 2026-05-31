@@ -11,6 +11,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { setSignalShutdown, setSafetyBeltTimer } from "./signalShutdownState.js";
 import { isWindowRecreating } from "./windowRecreationState.js";
 import { SAFETY_BELT_TIMEOUT_MS } from "./shutdownConfig.js";
+import { extractDaintreeUrl, handleDaintreeUrl } from "../setup/deepLinkInstall.js";
 
 let pendingCliPath: string | null = null;
 
@@ -221,6 +222,13 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
     const liveWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
     const cliPath = extractCliPath(commandLine);
     const dntrPaths = extractDntrPaths(commandLine, workingDirectory);
+    // Windows/Linux: a warm `daintree://` deep link arrives as an argv entry on
+    // the relaunched second instance. Route it through the same handler as the
+    // macOS `open-url` path — it targets the primary window itself.
+    const daintreeUrl = extractDaintreeUrl(commandLine);
+    if (daintreeUrl) {
+      handleDaintreeUrl(daintreeUrl);
+    }
 
     if (cliPath) {
       if (liveWindow && opts.onCreateWindowForPath) {

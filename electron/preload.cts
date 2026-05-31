@@ -139,6 +139,7 @@ import type {
   MenuItemContribution,
   PluginKeybindingDescriptor,
   ContextMenuContribution,
+  PluginDeepLinkIntent,
 } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
 import type { ToolbarButtonConfig } from "../shared/config/toolbarButtonRegistry.js";
@@ -2515,6 +2516,8 @@ const api: ElectronAPI = {
     ) => _eventBusOn("plugin:context-menu-items-changed", callback),
     onDecorationsChanged: (callback: (payload: { scope: string; paths?: string[] }) => void) =>
       _eventBusOn("plugin:decorations-changed", callback),
+    onDeepLink: (callback: (intent: PluginDeepLinkIntent) => void) =>
+      _eventBusOn("plugin:deep-link", callback),
   },
 
   pluginMcp: buildPluginMcpPreloadBindings(_unwrappingInvoke),

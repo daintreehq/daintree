@@ -59,6 +59,7 @@ import {
   useOrchestrationMilestones,
   useAgentWaitingNudge,
   useFocusOnActivateIntent,
+  usePluginDeepLink,
   useNotificationHistoryPruning,
   useRecipeFocusReload,
   useUnloadCleanup,
@@ -518,6 +519,16 @@ function AppInner() {
   // paint signal arrives before panel state is loaded — a direct dispatch
   // would silently no-op against an empty panelStore).
   useFocusOnActivateIntent(isStateLoaded);
+  // `daintree://` deep-link receiver (#9559). Surfaces the intent once hydration
+  // settles; the effect below opens the Plugin Manager, which consumes it.
+  const pluginDeepLink = usePluginDeepLink(isStateLoaded);
+  useEffect(() => {
+    if (!pluginDeepLink.intent) return;
+    // Close Settings so the two modals don't stack when the deep link arrives
+    // while Settings is open (mirrors the `onOpenPluginManager` action).
+    setIsSettingsOpen(false);
+    setIsPluginManagerOpen(true);
+  }, [pluginDeepLink.intent]);
   // The skeleton is z-index 9999 and intercepts pointer events. The crash
   // recovery dialog is rendered before hydration completes, so without this
   // the dialog would be visible but unclickable until hydration finishes
@@ -1244,6 +1255,8 @@ function AppInner() {
                   <LazyPluginManagerDialog
                     isOpen={isPluginManagerOpen}
                     onClose={() => setIsPluginManagerOpen(false)}
+                    deepLinkIntent={pluginDeepLink.intent}
+                    onDeepLinkConsumed={pluginDeepLink.clear}
                   />
                 </Suspense>
               )}

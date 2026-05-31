@@ -655,4 +655,72 @@ describe("PluginManagerDialog", () => {
     await waitFor(() => expect(screen.getByText(/backend down/)).toBeTruthy());
     expect(screen.queryByText("No plugins installed")).toBeNull();
   });
+
+  describe("deep links (#9559)", () => {
+    // jsdom lacks scrollIntoView; the open-route effect calls it.
+    beforeEach(() => {
+      Element.prototype.scrollIntoView = vi.fn();
+    });
+
+    it("pre-fills the URL dialog for an install intent without installing", async () => {
+      const onConsumed = vi.fn();
+      render(
+        <TooltipProvider>
+          <PluginManagerDialog
+            isOpen
+            onClose={() => {}}
+            deepLinkIntent={{ action: "install", url: "https://example.com/p.dntr" }}
+            onDeepLinkConsumed={onConsumed}
+          />
+        </TooltipProvider>
+      );
+
+      await waitFor(() =>
+        expect((screen.getByLabelText("Plugin URL") as HTMLInputElement).value).toBe(
+          "https://example.com/p.dntr"
+        )
+      );
+      // Never auto-installs — the user must press install (gates stay intact).
+      expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+      expect(onConsumed).toHaveBeenCalledOnce();
+    });
+
+    it("scrolls to and highlights the target row for an open intent", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makePlugin({ manifest: { ...makePlugin().manifest, name: "acme.demo" } }),
+      ]);
+      const onConsumed = vi.fn();
+      render(
+        <TooltipProvider>
+          <PluginManagerDialog
+            isOpen
+            onClose={() => {}}
+            deepLinkIntent={{ action: "open", pluginId: "acme.demo" }}
+            onDeepLinkConsumed={onConsumed}
+          />
+        </TooltipProvider>
+      );
+
+      await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalled());
+      expect(onConsumed).toHaveBeenCalledOnce();
+    });
+
+    it("shows a notice when an open intent targets an uninstalled plugin", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      render(
+        <TooltipProvider>
+          <PluginManagerDialog
+            isOpen
+            onClose={() => {}}
+            deepLinkIntent={{ action: "open", pluginId: "missing.plugin" }}
+            onDeepLinkConsumed={() => {}}
+          />
+        </TooltipProvider>
+      );
+
+      await waitFor(() =>
+        expect(screen.getByText(/Plugin "missing\.plugin" isn't installed/)).toBeTruthy()
+      );
+    });
+  });
 });

@@ -64,6 +64,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:agents-changed": "external",
   "plugin:decorations-changed": "external",
   "plugin:provenance-changed": "external",
+  "plugin:deep-link": "external",
   "terminal:exit": "external",
   "terminal:spawn-result": "external",
 } as const satisfies Record<keyof IpcEventBusMap, "bus" | "external">;

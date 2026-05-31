@@ -386,6 +386,23 @@ export interface SettingsApi {
 export type PluginInstallSource = "builtin" | "sideload" | "url" | "catalog";
 
 /**
+ * Parsed intent of a `daintree://` deep link (#9559). The OS hands the raw URI
+ * to the main process via `open-url` (macOS) or `second-instance` / `process.argv`
+ * (Windows/Linux); `parseDaintreeUrl` validates and narrows it to one of these
+ * shapes before it crosses to the renderer.
+ *
+ * - `install` — `daintree://plugin/install?url=<https-or-http-archive-url>`: opens
+ *   the Plugin Manager with the URL pre-filled in the install dialog. The user
+ *   still presses install, so the existing HTTP-warning and security gates fire;
+ *   a deep link never installs silently.
+ * - `open` — `daintree://plugin/open?id=<publisher.name>`: opens the Plugin
+ *   Manager scrolled to the named plugin.
+ */
+export type PluginDeepLinkIntent =
+  | { action: "install"; url: string }
+  | { action: "open"; pluginId: string };
+
+/**
  * Discriminant for {@link PluginCheckUpdateResult}. A manual update check
  * (`plugin:check-for-update`) re-fetches the plugin's `originalUrl`, hashes the
  * archive, and compares it against the installed `archiveHash` — the check is

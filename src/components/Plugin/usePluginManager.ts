@@ -3,7 +3,11 @@ import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
-import type { LoadedPluginInfo, PluginInstallError } from "@shared/types/plugin";
+import type {
+  LoadedPluginInfo,
+  PluginDeepLinkIntent,
+  PluginInstallError,
+} from "@shared/types/plugin";
 
 /** Enabled plugins first, then alphabetically by display name. */
 function sortPlugins(list: readonly LoadedPluginInfo[]): LoadedPluginInfo[] {
@@ -57,7 +61,14 @@ type PendingUpdate = {
  * counter rather than splitting into a second list-fetching effect that would
  * cross-cancel the initial load (#4958).
  */
-export function usePluginManager(isOpen: boolean) {
+export interface PluginManagerDeepLink {
+  /** The pending `daintree://` intent, or `null` when none. */
+  intent: PluginDeepLinkIntent | null;
+  /** Called once the intent has been applied so the source can clear it. */
+  onConsumed?: () => void;
+}
+
+export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLink) {
   const [plugins, setPlugins] = useState<LoadedPluginInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const showInlineLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
@@ -92,6 +103,12 @@ export function usePluginManager(isOpen: boolean) {
   const [showUrlDialog, setShowUrlDialog] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [isInstalling, setIsInstalling] = useState(false);
+  // `daintree://plugin/open` target — the dialog scrolls to and highlights the
+  // matching row, then clears it. Held in a ref for the consumption effect so
+  // `onConsumed` isn't a reactive dependency that re-fires the effect.
+  const [focusPluginId, setFocusPluginId] = useState<string | null>(null);
+  const deepLinkConsumedRef = useRef<(() => void) | undefined>(undefined);
+  deepLinkConsumedRef.current = deepLink?.onConsumed;
   // Update-check state. `checkingUpdate` drives the per-row spinner; the ref is
   // the synchronous reentrancy guard (state batches, leaving a double-click
   // window — #4703). `upToDateId` shows the transient "Already up to date" note;
@@ -173,6 +190,36 @@ export function usePluginManager(isOpen: boolean) {
     setIsDragOverFiles(false);
     setRefreshKey((k) => k + 1);
   }, [isOpen]);
+
+  // Apply a pending `daintree://` deep-link intent. Defined after the reopen
+  // reset above so that on a reopen it runs second and its writes win — the
+  // reset clears `urlInput`/`showUrlDialog`, then this re-applies them. For an
+  // install the URL is pre-filled and the dialog opened (the user still presses
+  // install, so the HTTP-warning and security gates fire — never silent). For
+  // an open the target row is flagged for scroll/highlight. `onConsumed` clears
+  // the source intent so it can't re-fire on the next reopen.
+  const deepLinkIntent = deepLink?.intent ?? null;
+  useEffect(() => {
+    if (!isOpen || !deepLinkIntent) return;
+    if (deepLinkIntent.action === "install") {
+      setUrlInput(deepLinkIntent.url);
+      setShowUrlDialog(true);
+    } else {
+      setFocusPluginId(deepLinkIntent.pluginId);
+    }
+    deepLinkConsumedRef.current?.();
+  }, [isOpen, deepLinkIntent]);
+
+  // A `daintree://plugin/open` for a plugin that isn't installed gets a quiet
+  // inline notice rather than a silent no-op. Waits for the list to settle so a
+  // mid-load check doesn't false-negative.
+  useEffect(() => {
+    if (!focusPluginId || loading) return;
+    if (!plugins.some((p) => p.manifest.name === focusPluginId)) {
+      setNotice(`Plugin "${focusPluginId}" isn't installed.`);
+      setFocusPluginId(null);
+    }
+  }, [focusPluginId, loading, plugins]);
 
   // Re-pull when any view installs or uninstalls a plugin (#9285 cross-view
   // propagation). The event carries no payload, so always re-fetch the full
@@ -557,5 +604,7 @@ export function usePluginManager(isOpen: boolean) {
     handleDragOver,
     handleDragLeave,
     handleDrop,
+    focusPluginId,
+    clearFocusPluginId: () => setFocusPluginId(null),
   };
 }
