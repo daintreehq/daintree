@@ -194,7 +194,10 @@ function PluginRow({
         </div>
       )}
 
-      {enabled && (plugin.manifest.contributes.settings?.length ?? 0) > 0 && (
+      {/* Settings render whether or not the plugin is enabled — values persist
+          independently of the plugin's runtime, so users can pre-configure a
+          plugin before turning it on, or keep editing it while it's off. */}
+      {(plugin.manifest.contributes.settings?.length ?? 0) > 0 && (
         <PluginSettingsForm plugin={plugin} />
       )}
     </div>

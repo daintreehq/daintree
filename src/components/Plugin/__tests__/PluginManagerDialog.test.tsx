@@ -4,13 +4,19 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PluginManagerDialog } from "../PluginManagerDialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { LoadedPluginInfo } from "@shared/types/plugin";
+import type { LoadedPluginInfo, SettingDefinition } from "@shared/types/plugin";
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
   logWarn: vi.fn(),
   logInfo: vi.fn(),
   logDebug: vi.fn(),
+}));
+
+// PluginSettingsForm reads the active project via this selector.
+vi.mock("@/store/projectStore", () => ({
+  useProjectStore: (selector: (s: { currentProject: { id: string } | null }) => unknown) =>
+    selector({ currentProject: null }),
 }));
 
 // AppDialog observes its scroll container, which jsdom lacks.
@@ -70,9 +76,28 @@ beforeEach(() => {
       uninstall: vi.fn().mockResolvedValue(undefined),
       checkForUpdate: vi.fn().mockResolvedValue({ status: "up-to-date" }),
       onProvenanceChanged: vi.fn().mockReturnValue(() => {}),
+      // PluginSettingsForm hydrates stored values for any plugin that
+      // contributes settings — stub the full surface so those rows render.
+      getSettingValues: vi.fn().mockResolvedValue({ values: {}, secretsSet: [] }),
+      setSettingValue: vi.fn().mockResolvedValue(undefined),
+      deleteSettingValue: vi.fn().mockResolvedValue(undefined),
+      revealSecretSetting: vi.fn().mockResolvedValue(null),
     },
   } as unknown as typeof window.electron;
 });
+
+const SETTINGS_FIXTURE: SettingDefinition[] = [{ id: "apiKey", type: "string", label: "API key" }];
+
+function makePluginWithSettings(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo {
+  const base = makePlugin(overrides);
+  return {
+    ...base,
+    manifest: {
+      ...base.manifest,
+      contributes: { ...base.manifest.contributes, settings: SETTINGS_FIXTURE },
+    },
+  };
+}
 
 function renderDialog() {
   return render(
@@ -115,6 +140,44 @@ describe("PluginManagerDialog", () => {
     });
     const toggle = screen.getByRole("switch", { name: "Enable Acme Demo" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("renders a plugin's settings form inline when it contributes settings", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePluginWithSettings(),
+    ]);
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    expect(screen.getByText("Settings")).toBeTruthy();
+    expect(screen.getByLabelText("API key")).toBeTruthy();
+    await waitFor(() =>
+      expect(window.electron.plugin.getSettingValues).toHaveBeenCalledWith(
+        "acme.demo",
+        "user",
+        null
+      )
+    );
+  });
+
+  it("renders the settings form for a disabled plugin too", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePluginWithSettings({ disabled: true }),
+    ]);
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    // Settings persist independently of the plugin's runtime, so the form is
+    // available even with the plugin toggled off.
+    const toggle = screen.getByRole("switch", { name: "Enable Acme Demo" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByText("Settings")).toBeTruthy();
+    expect(screen.getByLabelText("API key")).toBeTruthy();
+  });
+
+  it("renders no settings section when a plugin contributes none", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    expect(screen.queryByText("Settings")).toBeNull();
   });
 
   it("calls setEnabled(false) and shows a restart badge when disabling", async () => {
