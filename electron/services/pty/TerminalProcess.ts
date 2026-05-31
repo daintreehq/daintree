@@ -593,12 +593,27 @@ export class TerminalProcess {
     this.writeQueue.dispose();
     this.processTreeKiller.abort();
 
-    // Release the master PTY fd. Pooled terminals already do this via
-    // destroyPty() on pool teardown; live terminals never called destroy(),
-    // leaking the /dev/ptmx fd on every kill/exit/dispose (#9539). teardown()
-    // is reached by all three paths and is idempotent (lifecycle.transition
-    // guards re-entry), so destroyPty() fires exactly once per terminal.
-    destroyPty(this.terminalInfo.ptyProcess);
+    // Release the master /dev/ptmx fd on Unix. Pooled terminals already do this
+    // via destroyPty() on pool teardown; live terminals never called destroy(),
+    // leaking the fd on every kill/exit/dispose (#9539). teardown() is reached
+    // by all three paths and is idempotent (lifecycle.transition guards
+    // re-entry), so destroyPty() fires exactly once per terminal.
+    //
+    // Windows is excluded (#9551): there is no ptmx fd to release, and node-pty's
+    // WindowsTerminal.kill()/destroy() are *deferred* native kills that race the
+    // taskkill-driven natural exit run by processTreeKiller above. Adding a
+    // pty.kill() here can land on an already-freed pseudoconsole handle and
+    // crash the pty-host with STATUS_HEAP_CORRUPTION (0xC0000374). Skipping it
+    // restores the proven pre-#9539 Windows teardown, where processTreeKiller +
+    // node-pty's own exit handling do all the cleanup. Test mocks expose no
+    // `_agent`, so they still run destroyPty() and existing assertions hold.
+    const ptyProcess = this.terminalInfo.ptyProcess;
+    const isRealWindowsPty =
+      process.platform === "win32" &&
+      (ptyProcess as unknown as { _agent?: unknown })._agent !== undefined;
+    if (!isRealWindowsPty) {
+      destroyPty(ptyProcess);
+    }
 
     return true;
   }

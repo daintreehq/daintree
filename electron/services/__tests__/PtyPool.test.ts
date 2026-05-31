@@ -922,13 +922,15 @@ describe("destroyPty — Windows ConPTY double-free guard (#9551)", () => {
     expect(kill).not.toHaveBeenCalled();
   });
 
-  it("still tears down a live Windows pty whose agent has not exited", () => {
+  it("issues a single kill() on a live Windows pty and never destroy() (avoids the double native kill)", () => {
     setPlatform("win32");
     const { pty, destroy, kill } = fakePty({ _agent: { exitCode: undefined } });
 
     destroyPty(pty);
 
-    expect(destroy).toHaveBeenCalledTimes(1);
+    // destroy() + kill() would both route to _ptyNative.kill, double-freeing the
+    // pseudoconsole. Exactly one native kill is the safe maximum on Windows.
+    expect(destroy).not.toHaveBeenCalled();
     expect(kill).toHaveBeenCalledTimes(1);
   });
 
