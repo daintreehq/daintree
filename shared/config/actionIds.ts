@@ -233,6 +233,7 @@ export const BUILT_IN_ACTION_IDS = [
   "project.cloneRepo",
 
   // -- appActions --
+  "app.pluginManager",
   "app.reloadConfig",
   "app.developerMode.set",
   "app.theme.pick",

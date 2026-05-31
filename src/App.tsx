@@ -207,6 +207,13 @@ const LazyShortcutReferenceDialog = lazy(() =>
   preloadShortcutReferenceDialog().then((m) => ({ default: m.ShortcutReferenceDialog }))
 );
 
+function preloadPluginManagerDialog() {
+  return import("./components/Plugin/PluginManagerDialog");
+}
+const LazyPluginManagerDialog = lazy(() =>
+  preloadPluginManagerDialog().then((m) => ({ default: m.PluginManagerDialog }))
+);
+
 function preloadOnboardingFlow() {
   return import("./components/Onboarding/OnboardingFlow");
 }
@@ -455,6 +462,13 @@ function AppInner() {
 
   useThemeBrowserSettingsBridge(isSettingsOpen, setIsSettingsOpen);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  const [isPluginManagerOpen, setIsPluginManagerOpen] = useState(false);
+  // Keep the dialog mounted after its first open so the plugin list and any
+  // pending operation state survive a close/reopen (mirrors SettingsDialog).
+  const [hasOpenedPluginManager, setHasOpenedPluginManager] = useState(false);
+  useEffect(() => {
+    if (isPluginManagerOpen) setHasOpenedPluginManager(true);
+  }, [isPluginManagerOpen]);
   const isThemePaletteOpen = usePaletteStore((state) => state.activePaletteId === "theme");
   const isLogLevelPaletteOpen = usePaletteStore((state) => state.activePaletteId === "log-level");
   const {
@@ -548,6 +562,7 @@ function AppInner() {
       void preloadSendToAgentPalette();
       void preloadQuickCreatePalette();
       void preloadLogLevelPalette();
+      void preloadPluginManagerDialog();
       import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
       // Warm the FileViewerModal/DiffViewer chunk split out of the eager
@@ -632,6 +647,12 @@ function AppInner() {
       void projectSwitcherPalette.removeProject(projectId);
     },
     onOpenShortcuts: () => setIsShortcutsOpen(true),
+    onOpenPluginManager: () => {
+      // Closing Settings keeps the two modals from stacking when the manager is
+      // opened from the Plugins settings tab; it's a no-op from the app menu.
+      setIsSettingsOpen(false);
+      setIsPluginManagerOpen(true);
+    },
     onLaunchAgent: async (agentId, options) => {
       return launchAgent(agentId, options);
     },
@@ -1206,6 +1227,21 @@ function AppInner() {
                   <LazyShortcutReferenceDialog
                     isOpen={isShortcutsOpen}
                     onClose={() => setIsShortcutsOpen(false)}
+                  />
+                </Suspense>
+              )}
+            </ErrorBoundary>
+
+            <ErrorBoundary
+              variant="component"
+              componentName="PluginManagerDialog"
+              resetKeys={[Number(isPluginManagerOpen)]}
+            >
+              {(isPluginManagerOpen || hasOpenedPluginManager) && (
+                <Suspense fallback={null}>
+                  <LazyPluginManagerDialog
+                    isOpen={isPluginManagerOpen}
+                    onClose={() => setIsPluginManagerOpen(false)}
                   />
                 </Suspense>
               )}

@@ -37,6 +37,7 @@ export function useActionRegistry(options: ActionCallbacks): void {
     const callbackProxy: ActionCallbacks = {
       onOpenSettings: () => callbacksRef.current.onOpenSettings(),
       onOpenSettingsTab: (target) => callbacksRef.current.onOpenSettingsTab(target),
+      onOpenPluginManager: () => callbacksRef.current.onOpenPluginManager(),
       onToggleSidebar: () => callbacksRef.current.onToggleSidebar(),
       onToggleFocusMode: () => callbacksRef.current.onToggleFocusMode(),
       onFocusRegionNext: () => callbacksRef.current.onFocusRegionNext(),

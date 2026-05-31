@@ -57,6 +57,7 @@ function createStubCallbacks(): ActionCallbacks {
   return {
     onOpenSettings: () => {},
     onOpenSettingsTab: () => {},
+    onOpenPluginManager: () => {},
     onToggleSidebar: () => {},
     onToggleFocusMode: () => {},
     onFocusRegionNext: () => {},

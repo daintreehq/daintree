@@ -77,6 +77,21 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     },
   }));
 
+  actions.set("app.pluginManager", () => ({
+    id: "app.pluginManager",
+    title: "Open Plugin Manager",
+    description: "Open the plugin manager to install, enable, disable, and update plugins",
+    category: "app",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["plugins", "extensions", "addons", "install", "manage"],
+    nonRepeatable: true,
+    run: async () => {
+      callbacks.onOpenPluginManager();
+    },
+  }));
+
   actions.set("app.settings.openTab", () => ({
     id: "app.settings.openTab",
     title: "Open Settings Tab",
