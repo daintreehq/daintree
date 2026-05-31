@@ -23,6 +23,7 @@ import { scratchStore as defaultScratchStore } from "./ScratchStore.js";
 import { logError, logInfo } from "../utils/logger.js";
 import { SCRATCH_CLEANUP_TTL_MS } from "../../shared/config/scratchCleanup.js";
 import { getScratchDir, getScratchesRoot } from "./scratchStorePaths.js";
+import { getWritesSuppressed } from "./diskPressureState.js";
 
 export interface ScratchCleanupResult {
   /** Total rows examined as candidates (live-stale plus already-tombstoned). */
@@ -68,12 +69,21 @@ export async function runScratchCleanup(
     if (!row.lastOpened && row.deletedAt == null) continue;
 
     if (row.deletedAt == null) {
-      try {
-        store.tombstoneScratch(row.id, now);
-        result.tombstoned += 1;
-      } catch (error) {
-        logError(`[ScratchCleanup] Failed to tombstone scratch ${row.id}`, error);
-        continue;
+      // Under disk-pressure write suppression (#9537), skip the tombstone DB
+      // write but still fall through to the `fs.rm` below — reclaiming the
+      // directory is the whole point of running cleanup while suppressed.
+      // `getWritesSuppressed()` is re-read here (not cached at function entry)
+      // because the async `fs.rm` of a prior candidate yields the event loop,
+      // letting the disk monitor flip the flag mid-sweep. The live row stays a
+      // candidate and is finished on a later sweep once writes resume.
+      if (!getWritesSuppressed()) {
+        try {
+          store.tombstoneScratch(row.id, now);
+          result.tombstoned += 1;
+        } catch (error) {
+          logError(`[ScratchCleanup] Failed to tombstone scratch ${row.id}`, error);
+          continue;
+        }
       }
     }
 
@@ -89,6 +99,10 @@ export async function runScratchCleanup(
     }
 
     result.directoriesRemoved += 1;
+    // Same suppression guard as the tombstone above: the directory delete has
+    // already freed the disk space, so skip the hard-delete DB write while
+    // suppressed. The row is reclaimed on a later sweep once writes resume.
+    if (getWritesSuppressed()) continue;
     try {
       store.hardDeleteScratch(row.id);
       if (row.id === currentScratchId) {
