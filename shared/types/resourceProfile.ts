@@ -5,6 +5,16 @@ export interface ResourceProfileConfig {
   pollIntervalActive: number;
   /** Workspace-host background worktree polling interval (ms) */
   pollIntervalBackground: number;
+  /**
+   * Maximum number of background worktrees allowed to hold a `git-only`
+   * file watcher concurrently, per workspace-host (per project view). The
+   * focused worktree always gets its (recursive) watcher and is excluded
+   * from this budget. Background worktrees beyond the cap fall back to the
+   * adaptive poll path. Bounds the O(N) inotify/FSEvents/fd growth that long
+   * sessions with many worktrees would otherwise produce. Smaller under
+   * efficiency to maximize headroom on constrained hardware.
+   */
+  backgroundGitWatcherCap: number;
   /** ProcessTreeCache polling interval (ms) */
   processTreePollInterval: number;
   /** ProjectStatsService polling interval (ms) */
@@ -78,6 +88,7 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
   performance: {
     pollIntervalActive: 1500,
     pollIntervalBackground: 5000,
+    backgroundGitWatcherCap: 20,
     processTreePollInterval: 2000,
     projectStatsPollInterval: 5000,
     // Performance pushes closer to Chromium's 16-context cap. Higher upper +
@@ -95,6 +106,7 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
   balanced: {
     pollIntervalActive: 2000,
     pollIntervalBackground: 10000,
+    backgroundGitWatcherCap: 12,
     processTreePollInterval: 2500,
     projectStatsPollInterval: 5000,
     webglUpperThreshold: 12,
@@ -113,6 +125,7 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
   efficiency: {
     pollIntervalActive: 4000,
     pollIntervalBackground: 20000,
+    backgroundGitWatcherCap: 6,
     processTreePollInterval: 5000,
     projectStatsPollInterval: 25000,
     // Efficiency kicks to DOM-mode sooner on constrained hardware where each

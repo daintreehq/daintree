@@ -259,6 +259,13 @@ export interface MonitorConfig {
   circuitBreakerThreshold?: number;
   gitWatchEnabled?: boolean;
   gitWatchDebounceMs?: number;
+  /**
+   * Profile-aware cap on the number of background worktrees allowed to hold a
+   * `git-only` file watcher concurrently (per workspace-host). The focused
+   * worktree is excluded from this budget. Background worktrees beyond the cap
+   * fall back to the adaptive poll path. See `ResourceProfileConfig`.
+   */
+  backgroundGitWatcherCap?: number;
 }
 
 /**
