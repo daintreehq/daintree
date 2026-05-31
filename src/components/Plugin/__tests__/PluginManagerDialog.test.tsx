@@ -544,4 +544,42 @@ describe("PluginManagerDialog", () => {
     fireProvenance?.();
     await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
   });
+
+  it("routes an http reinstall through the HTTP warning gate before installing", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      urlPlugin({ originalUrl: "http://example.com/p.dntr" }),
+    ]);
+    (window.electron.plugin.checkForUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: "available",
+      name: "acme.demo",
+      version: "2.0.0",
+      capabilities: [],
+    });
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Check Acme Demo for updates" }));
+    await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    // The HTTP gate must intercept the reinstall — installFromUrl stays unfired.
+    await waitFor(() => expect(screen.getByText("Install over HTTP?")).toBeTruthy());
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Install over HTTP" }));
+    await waitFor(() =>
+      expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
+        "http://example.com/p.dntr"
+      )
+    );
+  });
+
+  it("hides the empty state when the initial list load fails", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("backend down")
+    );
+    renderDialog();
+    await waitFor(() => expect(screen.getByText(/backend down/)).toBeTruthy());
+    expect(screen.queryByText("No plugins installed")).toBeNull();
+  });
 });

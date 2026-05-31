@@ -65,6 +65,14 @@ export function usePluginManager(isOpen: boolean) {
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [refreshKey, setRefreshKey] = useState(0);
+  // Mirror of `refreshKey` for async staleness checks. A list refresh (reopen,
+  // mutation, or cross-window provenance change) bumps the key; an update check
+  // that started before the bump must discard its result rather than surface a
+  // confirm for a plugin that may no longer exist.
+  const refreshKeyRef = useRef(0);
+  useEffect(() => {
+    refreshKeyRef.current = refreshKey;
+  }, [refreshKey]);
   const [pendingUninstall, setPendingUninstall] = useState<LoadedPluginInfo | null>(null);
   // Defaults off so stored secrets survive a reinstall — the user opts in to
   // wiping them. Reset whenever a new uninstall is armed so a prior tick can't
@@ -158,6 +166,11 @@ export function usePluginManager(isOpen: boolean) {
     setPendingHttpUrl(null);
     setShowUrlDialog(false);
     setUrlInput("");
+    // Reset the drop overlay so a drag-enter that was interrupted by a
+    // close (leaving the depth counter non-zero) doesn't suppress the overlay
+    // on the next open.
+    dragDepthRef.current = 0;
+    setIsDragOverFiles(false);
     setRefreshKey((k) => k + 1);
   }, [isOpen]);
 
@@ -423,9 +436,14 @@ export function usePluginManager(isOpen: boolean) {
     setCheckingUpdate((prev) => new Set(prev).add(id));
     // A fresh check supersedes any lingering "up to date" note for this plugin.
     if (upToDateId === id) setUpToDateId(null);
+    // Snapshot the list generation. If the list refreshes mid-check (a reopen,
+    // a mutation, or a cross-window uninstall), the response references a plugin
+    // that may no longer exist — discard it rather than surface a stale confirm.
+    const startKey = refreshKeyRef.current;
     try {
       setError(null);
       const result = await window.electron.plugin.checkForUpdate(id);
+      if (refreshKeyRef.current !== startKey) return;
       switch (result.status) {
         case "up-to-date":
           if (upToDateTimerRef.current) clearTimeout(upToDateTimerRef.current);
@@ -465,6 +483,21 @@ export function usePluginManager(isOpen: boolean) {
     const url = pendingUpdate.plugin.originalUrl;
     if (!url) {
       setPendingUpdate(null);
+      return;
+    }
+    // Tier D2: a plugin first installed over http:// keeps an http upstream, so
+    // reinstalling re-fetches it unencrypted. Route it through the same HTTP
+    // warning gate as a manual install rather than downloading silently.
+    let protocol: string | null = null;
+    try {
+      protocol = new URL(url).protocol;
+    } catch {
+      // A malformed stored URL falls through to installFromUrl, which returns
+      // invalid-url and surfaces a consistent message.
+    }
+    if (protocol === "http:") {
+      setPendingUpdate(null);
+      setPendingHttpUrl(url);
       return;
     }
     setIsReinstalling(true);

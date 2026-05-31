@@ -299,7 +299,9 @@ export function PluginManagerDialog({ isOpen, onClose }: PluginManagerDialogProp
                 <RowSkeleton />
               </div>
             ) : null
-          ) : pm.plugins.length === 0 ? (
+          ) : pm.plugins.length === 0 && !pm.error ? (
+            // Suppress the empty state when a load error is showing — the error
+            // banner below owns that case so we don't invite a redundant install.
             <div className="border border-dashed border-daintree-border rounded-[var(--radius-md)]">
               <EmptyState
                 variant="zero-data"
@@ -309,7 +311,7 @@ export function PluginManagerDialog({ isOpen, onClose }: PluginManagerDialogProp
                 description="Install one from a file or URL to add panels, commands, and integrations."
               />
             </div>
-          ) : (
+          ) : pm.plugins.length === 0 ? null : (
             <div className="grid grid-cols-[minmax(0,1fr)] gap-2">
               {pm.plugins.map((plugin) => (
                 <PluginRow
