@@ -115,7 +115,7 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(31);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(32);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:install", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:set-enabled", expect.any(Function));
@@ -149,6 +149,7 @@ describe("registerPluginHandlers", () => {
       expect.any(Function)
     );
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:panel-kinds-get", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:agents-get", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
       "plugin:forge-providers-get",
       expect.any(Function)
@@ -215,6 +216,7 @@ describe("registerPluginHandlers", () => {
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:actions-register");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:actions-unregister");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:panel-kinds-get");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:agents-get");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:forge-providers-get");
   });
 
