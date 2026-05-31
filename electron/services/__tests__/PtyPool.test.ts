@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PtyPool } from "../PtyPool.js";
+import { PtyPool, destroyPty } from "../PtyPool.js";
+import type { IPty } from "node-pty";
 
 const spawnMock = vi.fn();
 
@@ -886,5 +887,61 @@ describe("PtyPool", () => {
       expect(pool.acquireByKey("/repo", "env-c")?.process).toBe(procs[2]);
       pool.dispose();
     });
+  });
+});
+
+describe("destroyPty — Windows ConPTY double-free guard (#9551)", () => {
+  const realPlatform = process.platform;
+
+  function setPlatform(platform: NodeJS.Platform): void {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  }
+
+  afterEach(() => {
+    setPlatform(realPlatform);
+  });
+
+  function fakePty(overrides: Record<string, unknown> = {}): IPty {
+    return { kill: vi.fn(), destroy: vi.fn(), ...overrides } as unknown as IPty;
+  }
+
+  it("skips destroy()/kill() on Windows once the pty agent has recorded an exit", () => {
+    setPlatform("win32");
+    const p = fakePty({ _agent: { exitCode: 0 } });
+
+    destroyPty(p);
+
+    expect(p.destroy).not.toHaveBeenCalled();
+    expect(p.kill).not.toHaveBeenCalled();
+  });
+
+  it("still tears down a live Windows pty whose agent has not exited", () => {
+    setPlatform("win32");
+    const p = fakePty({ _agent: { exitCode: undefined } });
+
+    destroyPty(p);
+
+    expect(p.destroy).toHaveBeenCalledTimes(1);
+    expect(p.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("always tears down on non-Windows even after exit (releases the master fd)", () => {
+    setPlatform("linux");
+    const p = fakePty({ _agent: { exitCode: 0 } });
+
+    destroyPty(p);
+
+    expect(p.destroy).toHaveBeenCalledTimes(1);
+    expect(p.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("tears down mocks without an agent on Windows (no exit signal available)", () => {
+    setPlatform("win32");
+    const p = fakePty();
+
+    destroyPty(p);
+
+    expect(p.destroy).toHaveBeenCalledTimes(1);
+    expect(p.kill).toHaveBeenCalledTimes(1);
   });
 });

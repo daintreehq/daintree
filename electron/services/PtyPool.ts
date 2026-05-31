@@ -97,6 +97,19 @@ export function shouldEnablePtyPool(platform: NodeJS.Platform = process.platform
  * try/catch because either may throw on an already-dead handle.
  */
 export function destroyPty(p: pty.IPty): void {
+  // Windows ConPTY hazard (#9551): once the child exits, node-pty's native
+  // agent has already freed the pseudoconsole (its `_$onProcessExit` fired and
+  // recorded an exit code before our JS `onExit` handler runs). Calling
+  // destroy()/kill() again re-enters the native kill on a freed handle and
+  // corrupts the process heap (exit 0xC0000374 STATUS_HEAP_CORRUPTION), which
+  // crashed the pty-host Utility process and failed the Windows smoke build.
+  // Unix has no equivalent hazard — there destroy() after exit merely closes
+  // the leaked master /dev/ptmx socket (#9539) and SIGHUPs a now-dead pid,
+  // which node-pty swallows — so the guard is Windows-only. Test mocks have no
+  // `_agent`, so `ptyAlreadyExited` is false for them and behavior is unchanged.
+  if (process.platform === "win32" && ptyAlreadyExited(p)) {
+    return;
+  }
   const withDestroy = p as pty.IPty & { destroy?: () => void };
   try {
     withDestroy.destroy?.();
@@ -109,6 +122,18 @@ export function destroyPty(p: pty.IPty): void {
   } catch {
     // Already dead — ESRCH on Unix, similar on Windows.
   }
+}
+
+/**
+ * True once node-pty's WindowsTerminal has observed its ConPTY child exit.
+ * The exit code is stored on the private agent (`_agent.exitCode`); there is no
+ * public getter, so read it structurally. Returns false for non-Windows ptys
+ * and for any object lacking the agent (e.g. test mocks), so callers must pair
+ * this with a `process.platform === "win32"` check.
+ */
+function ptyAlreadyExited(p: pty.IPty): boolean {
+  const agent = (p as unknown as { _agent?: { exitCode?: number } })._agent;
+  return typeof agent?.exitCode === "number";
 }
 
 export interface AcquiredPty {
