@@ -4,6 +4,7 @@ function createCallbacks() {
   return {
     onOpenSettings: () => {},
     onOpenSettingsTab: () => {},
+    onOpenPluginManager: () => {},
     onToggleSidebar: () => {},
     onToggleFocusMode: () => {},
     onFocusRegionNext: () => {},
