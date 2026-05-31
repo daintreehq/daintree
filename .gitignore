@@ -111,3 +111,4 @@ planning/
 
 # Claude scratch / working notes (private, ephemeral)
 .claude-scratch/
+.lessons-build/
