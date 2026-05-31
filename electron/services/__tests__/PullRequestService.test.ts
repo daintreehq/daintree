@@ -713,6 +713,101 @@ describe("PullRequestService", () => {
     pullRequestService.destroy();
   });
 
+  it("flags the phase-1 emit as loading and lands the enriched status on phase-2 (#9551)", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+
+    const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+      const map = new Map<string, ForgePR | null>();
+      for (const branch of branches)
+        map.set(branch, makeMockForgePR({ number: 7, headRef: branch }));
+      return map;
+    });
+    const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+    const getCIStatuses = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+      const map = new Map<number, CIStatus | null>();
+      for (const n of prNumbers) map.set(n, makeMockCIStatus());
+      return map;
+    });
+    mockImpl.batchLookups = { getCIStatuses };
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+
+    await pullRequestService.refresh();
+    await flushLoaders();
+
+    // Phase-1: the emit before enrichment carries the loading flag and no CI
+    // status, so the renderer/host preserves the prior dot.
+    const phase1 = detected.find((d) => d.isCiStatusLoading === true);
+    expect(phase1).toBeDefined();
+    expect(phase1?.prCiStatus).toBeUndefined();
+
+    // Phase-2: enriched emit carries the resolved status and NOT the flag.
+    const phase2 = detected.find((d) => d.prCiStatus === "SUCCESS");
+    expect(phase2).toBeDefined();
+    expect(phase2?.isCiStatusLoading).toBeFalsy();
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
+  it("emits a phase-2 clear when CI checks have genuinely disappeared (#9551)", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+
+    const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+      const map = new Map<string, ForgePR | null>();
+      for (const branch of branches)
+        map.set(branch, makeMockForgePR({ number: 7, headRef: branch }));
+      return map;
+    });
+    const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+    // Authoritative "no checks": a present key with a null value (distinct from a
+    // transient miss, which the batch contract surfaces as a rejection).
+    const getCIStatuses = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+      const map = new Map<number, CIStatus | null>();
+      for (const n of prNumbers) map.set(n, null);
+      return map;
+    });
+    mockImpl.batchLookups = { getCIStatuses };
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+
+    await pullRequestService.refresh();
+    await flushLoaders();
+
+    expect(getCIStatuses).toHaveBeenCalledTimes(1);
+    expect(mockImpl.getCIStatus).not.toHaveBeenCalled();
+    // The enrichment re-emits (phase-2) with no CI status and no loading flag,
+    // so the host full-replaces the preserved dot away. Without this, a vanished
+    // check would leave a stale dot forever.
+    const phase2Clear = detected.find(
+      (d) => !d.isCiStatusLoading && d.prCiStatus === undefined && d.ciStatus === undefined
+    );
+    expect(phase2Clear).toBeDefined();
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
   it("does not bump consecutiveErrors when the provider is invalidated mid-check", async () => {
     vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
 

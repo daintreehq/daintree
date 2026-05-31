@@ -236,7 +236,21 @@ export class WorkspaceService {
         // `linked` is the source of truth — built from the canonical
         // provider/owner/repo carried by the detection event. Flat fields are
         // derived compatibility values written alongside it.
-        const existingIssue = monitor.getSnapshot().linked?.issue;
+        const prevSnapshot = monitor.getSnapshot();
+        const existingIssue = prevSnapshot.linked?.issue;
+        // Phase-1 detection carries no CI status yet (enrichment is a
+        // fire-and-forget tail). For the same PR, keep the prior CI rollup so
+        // neither the worktree-update snapshot nor the pr-detected overlay
+        // blinks the dot to "no checks" before the phase-2 emit lands (#9551).
+        // A genuine "checks disappeared" clear arrives with the flag absent and
+        // full-replaces, preserving the prior design intent. The same-PR guard
+        // avoids carrying a stale dot across a PR reassignment.
+        const preserveCiStatus =
+          data.isCiStatusLoading === true && prevSnapshot.prNumber === data.prNumber;
+        const resolvedCiStatus = preserveCiStatus
+          ? prevSnapshot.linked?.pr?.ciStatus
+          : data.ciStatus;
+        const resolvedPrCiStatus = preserveCiStatus ? prevSnapshot.prCiStatus : data.prCiStatus;
         const linked = this.composeLinked({
           providerId: data.providerId,
           owner: data.owner,
@@ -246,7 +260,7 @@ export class WorkspaceService {
             title: data.prTitle,
             url: data.prUrl,
             state: data.prState,
-            ciStatus: data.ciStatus,
+            ciStatus: resolvedCiStatus,
             baseRef: data.baseRef,
           },
           issue:
@@ -263,7 +277,7 @@ export class WorkspaceService {
           prNumber: data.prNumber,
           prUrl: data.prUrl,
           prState: data.prState,
-          prCiStatus: data.prCiStatus,
+          prCiStatus: resolvedPrCiStatus,
           prTitle: data.prTitle,
           issueTitle: data.issueTitle,
           prLastUpdatedAt: data.prLastUpdatedAt,
@@ -280,8 +294,7 @@ export class WorkspaceService {
           prNumber: data.prNumber,
           prUrl: data.prUrl,
           prState: data.prState,
-          prCiStatus: data.prCiStatus,
-          isCiStatusLoading: data.isCiStatusLoading,
+          prCiStatus: resolvedPrCiStatus,
           prTitle: data.prTitle,
           issueNumber: data.issueNumber,
           issueTitle: data.issueTitle,

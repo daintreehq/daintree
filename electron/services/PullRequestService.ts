@@ -1602,21 +1602,27 @@ class PullRequestService {
     loader
       .load(pr.number)
       .then((ciStatus) => {
-        if (!ciStatus) return;
         const prevCiStatus = pr.ciStatus;
-        pr.ciStatus =
-          ciStatus.state === "success"
+        // A resolved value is authoritative: the batch contract surfaces a
+        // transient miss as a rejection (→ .catch below), so a `null` here is a
+        // confirmed "no CI checks." Map it to undefined and still re-emit so a
+        // dot the phase-1 emit preserved is actually cleared once checks
+        // genuinely disappear, rather than lingering stale (#9551).
+        pr.ciStatus = ciStatus
+          ? ciStatus.state === "success"
             ? "SUCCESS"
             : ciStatus.state === "failure"
               ? "FAILURE"
               : ciStatus.state === "pending"
                 ? "PENDING"
-                : undefined;
-        pr._ciStatus = ciStatus;
+                : undefined
+          : undefined;
+        pr._ciStatus = ciStatus ?? undefined;
         if (pr.ciStatus !== undefined) {
           pr.stagnantPollCount = prevCiStatus === pr.ciStatus ? pr.stagnantPollCount + 1 : 0;
         }
-        // Re-emit for each worktree that has this PR
+        // Re-emit (phase-2) for each worktree that has this PR — including the
+        // confirmed "no checks" case so a preserved phase-1 dot is cleared.
         for (const [worktreeId, detected] of this.detectedPRs) {
           if (detected.number === pr.number) {
             events.emit("sys:pr:detected", {

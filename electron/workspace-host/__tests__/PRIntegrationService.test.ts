@@ -142,6 +142,29 @@ describe("PRIntegrationService", () => {
       );
     });
 
+    it("forwards isCiStatusLoading from a phase-1 sys:pr:detected event to onPRDetected (#9551)", async () => {
+      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
+      await service.initialize("/repo", () => []);
+
+      eventBus.emit("sys:pr:detected", {
+        worktreeId: "wt-1",
+        prNumber: 42,
+        prUrl: "https://example.test/pr/42",
+        prState: "open",
+        isCiStatusLoading: true,
+        branchName: "feature/x",
+        providerId: "daintree.github.github",
+        owner: "o",
+        repo: "r",
+        timestamp: Date.now(),
+      });
+
+      expect(callbacks.onPRDetected).toHaveBeenCalledWith(
+        "wt-1",
+        expect.objectContaining({ isCiStatusLoading: true })
+      );
+    });
+
     it("threads owner/repo from a non-GitHub sys:issue:detected event to onIssueDetected", async () => {
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
       await service.initialize("/repo", () => []);

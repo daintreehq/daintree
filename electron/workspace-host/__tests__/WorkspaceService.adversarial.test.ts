@@ -442,4 +442,129 @@ describe("WorkspaceService adversarial", () => {
       }
     });
   });
+
+  describe("onPRDetected CI-status preservation (#9551)", () => {
+    type OnPRDetected = (worktreeId: string, data: Record<string, unknown>) => void;
+
+    function getOnPRDetected(): OnPRDetected {
+      return (service as unknown as { prService: { callbacks: { onPRDetected: OnPRDetected } } })
+        .prService.callbacks.onPRDetected;
+    }
+
+    function installStubMonitor(opts: {
+      worktreeId: string;
+      branch: string;
+      prNumber: number;
+      prCiStatus: string | undefined;
+    }): { setPRInfo: Mock } {
+      let prCiStatus = opts.prCiStatus;
+      let linked: unknown = {
+        providerId: "p",
+        pr: {
+          ref: { providerId: "p", owner: "o", repo: "r", number: opts.prNumber, rawData: null },
+          url: "https://example.test/pr",
+          state: "open",
+          ciStatus: opts.prCiStatus ? { state: "success" } : undefined,
+        },
+      };
+      const setPRInfo = vi.fn((info: { prCiStatus?: string }) => {
+        prCiStatus = info.prCiStatus;
+      });
+      const monitor = {
+        branch: opts.branch,
+        get hasInitialStatus() {
+          return true;
+        },
+        getSnapshot() {
+          return {
+            worktreeId: opts.worktreeId,
+            prNumber: opts.prNumber,
+            prCiStatus,
+            linked,
+            branch: opts.branch,
+          };
+        },
+        setLinked(l: unknown) {
+          linked = l;
+        },
+        setPRInfo,
+      };
+      (service as unknown as { monitors: Map<string, unknown> }).monitors.set(
+        opts.worktreeId,
+        monitor
+      );
+      return { setPRInfo };
+    }
+
+    function baseEvent(overrides: Record<string, unknown>): Record<string, unknown> {
+      return {
+        prNumber: 42,
+        prUrl: "https://example.test/pr",
+        prState: "open",
+        prCiStatus: undefined,
+        prTitle: "PR",
+        branchName: "feature/x",
+        providerId: "p",
+        owner: "o",
+        repo: "r",
+        ...overrides,
+      };
+    }
+
+    it("keeps the prior CI rollup on a phase-1 loading emit for the same PR", () => {
+      const { setPRInfo } = installStubMonitor({
+        worktreeId: "/repo/wt",
+        branch: "feature/x",
+        prNumber: 42,
+        prCiStatus: "SUCCESS",
+      });
+
+      getOnPRDetected()("/repo/wt", baseEvent({ isCiStatusLoading: true, prCiStatus: undefined }));
+
+      // The monitor write and both outbound events keep SUCCESS — no blink.
+      expect(setPRInfo).toHaveBeenCalledWith(expect.objectContaining({ prCiStatus: "SUCCESS" }));
+      const prDetected = sentEvents.find((e) => e.type === "pr-detected") as
+        | (WorkspaceHostEvent & { prCiStatus?: string })
+        | undefined;
+      expect(prDetected?.prCiStatus).toBe("SUCCESS");
+      const wtUpdate = sentEvents.find((e) => e.type === "worktree-update") as
+        | (WorkspaceHostEvent & { worktree: { prCiStatus?: string } })
+        | undefined;
+      expect(wtUpdate?.worktree.prCiStatus).toBe("SUCCESS");
+    });
+
+    it("full-replaces to undefined when no loading flag is set (checks genuinely gone)", () => {
+      const { setPRInfo } = installStubMonitor({
+        worktreeId: "/repo/wt",
+        branch: "feature/x",
+        prNumber: 42,
+        prCiStatus: "SUCCESS",
+      });
+
+      getOnPRDetected()("/repo/wt", baseEvent({ prCiStatus: undefined }));
+
+      expect(setPRInfo).toHaveBeenCalledWith(expect.objectContaining({ prCiStatus: undefined }));
+      const prDetected = sentEvents.find((e) => e.type === "pr-detected") as
+        | (WorkspaceHostEvent & { prCiStatus?: string })
+        | undefined;
+      expect(prDetected?.prCiStatus).toBeUndefined();
+    });
+
+    it("does not preserve across a PR reassignment even when loading", () => {
+      const { setPRInfo } = installStubMonitor({
+        worktreeId: "/repo/wt",
+        branch: "feature/x",
+        prNumber: 41,
+        prCiStatus: "SUCCESS",
+      });
+
+      // New PR number 42 arrives loading — prior PR #41's dot must not carry over.
+      getOnPRDetected()(
+        "/repo/wt",
+        baseEvent({ prNumber: 42, isCiStatusLoading: true, prCiStatus: undefined })
+      );
+
+      expect(setPRInfo).toHaveBeenCalledWith(expect.objectContaining({ prCiStatus: undefined }));
+    });
+  });
 });
