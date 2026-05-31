@@ -123,4 +123,13 @@ describe("pluginAgentRegistry (issue #9560)", () => {
     expect(registry["acme-agent"]).toBeDefined();
     expect(registry["claude"]).toBeDefined();
   });
+
+  it("does not let a reserved id pollute the snapshot prototype", () => {
+    // The manifest schema rejects reserved ids, but the registry must also be
+    // defensive: a `__proto__` id must not reassign the snapshot's prototype.
+    registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, id: "__proto__" }]);
+    const snapshot = getPluginAgentRegistry();
+    expect(Object.getPrototypeOf(snapshot)).toBeNull();
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
 });

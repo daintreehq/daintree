@@ -212,8 +212,29 @@ const MAX_DETECTION_PATTERNS_PER_FIELD = 8;
 const BACKREFERENCE_RE = /\\[1-9]/;
 /** Lookahead/lookbehind: `(?=`, `(?!`, `(?<=`, `(?<!`. */
 const LOOKAROUND_RE = /\(\?<?[=!]/;
-/** Quantified group whose body is itself quantified, e.g. `(a+)+`, `(.*)*`. */
-const NESTED_QUANTIFIER_RE = /\([^)]*[+*][^)]*\)[+*]/;
+/**
+ * A group whose body contains a quantifier (`* + ? {`) or an alternation (`|`)
+ * and that is itself quantified with an unbounded outer quantifier
+ * (`* + {`). Catches the classic catastrophic-backtracking families
+ * `(a+)+`, `(.*)*`, `(a?)+`, and quantified-alternation `(a|aa)+`. Outer `?`
+ * is excluded because an optional group does not repeat unboundedly.
+ */
+const QUANTIFIED_COMPLEX_GROUP_RE = /\([^)]*[*+?{|][^)]*\)[*+{]/;
+/**
+ * Two nested quantified groups, e.g. `((a)*)*` — the inner group is closed and
+ * quantified, then re-closed and quantified again. The single-group regex above
+ * can't span the inner `)`, so this catches the nesting separately.
+ */
+const NESTED_QUANTIFIED_GROUP_RE = /\)[*+?][^(]*\)[*+{]/;
+
+function hasCatastrophicBacktrackingRisk(pattern: string): boolean {
+  return (
+    BACKREFERENCE_RE.test(pattern) ||
+    LOOKAROUND_RE.test(pattern) ||
+    QUANTIFIED_COMPLEX_GROUP_RE.test(pattern) ||
+    NESTED_QUANTIFIED_GROUP_RE.test(pattern)
+  );
+}
 
 const BoundedDetectionPatternSchema = z
   .string()
@@ -232,16 +253,10 @@ const BoundedDetectionPatternSchema = z
     },
     { message: "Detection pattern is not a valid regular expression" }
   )
-  .refine(
-    (pattern) =>
-      !BACKREFERENCE_RE.test(pattern) &&
-      !LOOKAROUND_RE.test(pattern) &&
-      !NESTED_QUANTIFIER_RE.test(pattern),
-    {
-      message:
-        "Detection pattern may not use backreferences, lookarounds, or nested quantifiers (catastrophic-backtracking risk)",
-    }
-  );
+  .refine((pattern) => !hasCatastrophicBacktrackingRisk(pattern), {
+    message:
+      "Detection pattern may not use backreferences, lookarounds, quantified alternation, or nested quantifiers (catastrophic-backtracking risk)",
+  });
 
 const BoundedDetectionPatternArraySchema = z
   .array(BoundedDetectionPatternSchema)
@@ -275,9 +290,18 @@ export const AgentDetectionContributionSchema = z
  * required — also enforced at the manifest level so the message can reference
  * the whole contribution set.
  */
+const RESERVED_AGENT_IDS = new Set(["__proto__", "constructor", "prototype"]);
+
 export const AgentContributionSchema = z
   .object({
-    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    id: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(SAFE_ID_PATTERN)
+      .refine((id) => !RESERVED_AGENT_IDS.has(id), {
+        message: "Agent id cannot be a reserved key (__proto__, constructor, prototype)",
+      }),
     name: z.string().min(1).max(100),
     command: z.string().min(1).max(256).regex(SAFE_ID_PATTERN),
     args: z

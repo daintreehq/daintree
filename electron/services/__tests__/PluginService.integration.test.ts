@@ -493,16 +493,35 @@ describe("PluginService integration — agent contributions (issue #9560)", () =
 
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
+    // Flush the coalesced microtask broadcast scheduled on load.
+    await Promise.resolve();
 
     expect(getPluginAgentRegistry()["acme-agent"]).toBeDefined();
     const config = getEffectiveAgentConfig("acme-agent");
     expect(config?.name).toBe("Acme Agent");
     expect(config?.command).toBe("acme");
 
+    expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledWith("events:push", {
+      name: "plugin:agents-changed",
+      payload: {
+        agents: expect.objectContaining({ "acme-agent": expect.anything() }),
+        complete: false,
+      },
+    });
+
+    vi.mocked(broadcastToRenderer).mockClear();
     service.unloadPlugin("acme.agent-plugin");
+    await Promise.resolve();
 
     expect(getPluginAgentRegistry()["acme-agent"]).toBeUndefined();
     expect(getEffectiveAgentConfig("acme-agent")).toBeUndefined();
+    expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledWith(
+      "events:push",
+      expect.objectContaining({
+        name: "plugin:agents-changed",
+        payload: expect.objectContaining({ complete: true }),
+      })
+    );
   });
 
   it("does not register agents when the manifest omits the agent:register capability", async () => {

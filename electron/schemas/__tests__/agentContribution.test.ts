@@ -60,6 +60,12 @@ describe("AgentContributionSchema (issue #9560)", () => {
     ).toBe(false);
   });
 
+  it("rejects reserved ids that could pollute the registry object", () => {
+    for (const id of ["__proto__", "constructor", "prototype"]) {
+      expect(AgentContributionSchema.safeParse({ ...VALID_AGENT, id }).success).toBe(false);
+    }
+  });
+
   it("rejects control characters in args and caps arg count at 20", () => {
     expect(
       AgentContributionSchema.safeParse({ ...VALID_AGENT, args: ["ok", "bad\nflag"] }).success
@@ -90,6 +96,22 @@ describe("AgentDetectionContributionSchema bounded-regex contract (issue #9560)"
     expect(AgentDetectionContributionSchema.safeParse({ primaryPatterns: ["(a+)+"] }).success).toBe(
       false
     );
+  });
+
+  it("rejects ReDoS families that a naive nested-quantifier check would miss", () => {
+    // Quantified alternation, optional-quantified group, and doubly-nested
+    // quantified groups all backtrack catastrophically.
+    for (const pattern of ["(a|aa)+", "(a?)+", "((a)*)*", "(.*)*", "(a+){2,}"]) {
+      expect(
+        AgentDetectionContributionSchema.safeParse({ primaryPatterns: [pattern] }).success
+      ).toBe(false);
+    }
+  });
+
+  it("accepts a plain quantified group with no risky body", () => {
+    expect(
+      AgentDetectionContributionSchema.safeParse({ primaryPatterns: ["(foo)+", "bar*"] }).success
+    ).toBe(true);
   });
 
   it("rejects a pattern longer than 250 chars and more than 8 patterns", () => {
@@ -141,5 +163,17 @@ describe("manifest-level agent contribution gates (issue #9560)", () => {
     if (result.success) {
       expect(result.data.contributes.agents).toEqual([]);
     }
+  });
+
+  it("rejects the whole manifest when an agent's detection config is malformed", () => {
+    const result = schema.safeParse(
+      manifestWith({
+        capabilities: ["agent:register"],
+        contributes: {
+          agents: [{ ...VALID_AGENT, detection: { primaryPatterns: ["("] } }],
+        },
+      })
+    );
+    expect(result.success).toBe(false);
   });
 });

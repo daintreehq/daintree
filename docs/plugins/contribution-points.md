@@ -517,7 +517,9 @@ Teaches Daintree about a launchable agent CLI it doesn't ship in-tree, so the CL
 | `supportsContextInjection` | no | Whether copy-tree context injection targets this agent. Defaults to `false`. |
 | `detection` | no | Reserved for the full-tracking tier. The shape (bounded, well-formed detection patterns) is **validated** at manifest-parse time but not yet wired into the live PTY matcher — minimal-tier agents launch as named, untracked terminals. |
 
-The **minimal tier** (shipped) makes the agent launchable and selectable as a named entry in the effective registry. The **full tier** (planned) will relax the built-in-only gate in output detection so a plugin-supplied, validated `detection` config drives working/waiting state, resume, and MCP wiring. Bad or malformed detection input degrades gracefully to a generic shell and never breaks detection for other terminals.
+The **minimal tier** (shipped) makes the agent launchable and selectable as a named entry in the effective registry; detection is not run, so the agent always launches as a named terminal. The **full tier** (planned) will relax the built-in-only gate in output detection so a plugin-supplied `detection` config drives working/waiting state, resume, and MCP wiring.
+
+A malformed `detection` config (an un-compilable pattern, an over-long or over-numerous pattern set, or a construct prone to catastrophic backtracking) is rejected at manifest validation — the plugin fails to load loudly rather than silently shipping a bad matcher. Once the full tier lands, a _well-formed_ config that simply never matches at runtime leaves the agent launching as a named terminal and never affects detection for other terminals.
 
 ## What's missing and why
 

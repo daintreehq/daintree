@@ -45,7 +45,10 @@ function contributionToAgentConfig(contribution: PluginAgentContribution): Agent
  * warning rather than silently clobbering.
  */
 function rebuildSnapshot(): void {
-  const next: Record<string, AgentConfig> = {};
+  // Null-prototype object so a reserved id like `__proto__` is written as an own
+  // property rather than reassigning the prototype (defense in depth — the
+  // manifest schema also rejects reserved ids before they reach here).
+  const next: Record<string, AgentConfig> = Object.create(null) as Record<string, AgentConfig>;
   for (const [pluginId, agents] of byPlugin) {
     for (const [agentId, config] of agents) {
       if (Object.prototype.hasOwnProperty.call(next, agentId)) {
