@@ -171,6 +171,15 @@ describe("PluginManagerDialog", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(screen.getByText("Settings")).toBeTruthy();
     expect(screen.getByLabelText("API key")).toBeTruthy();
+    // Hydration must run for disabled plugins too — the values are stored
+    // independently of the plugin's runtime.
+    await waitFor(() =>
+      expect(window.electron.plugin.getSettingValues).toHaveBeenCalledWith(
+        "acme.demo",
+        "user",
+        null
+      )
+    );
   });
 
   it("renders no settings section when a plugin contributes none", async () => {
