@@ -444,6 +444,12 @@ export type DaintreeEventMap = {
     prUrl: string;
     prState: "open" | "merged" | "closed";
     prCiStatus?: GitHubPRCIStatus;
+    /**
+     * True on the synchronous phase-1 emit that precedes a fire-and-forget CI
+     * enrichment; signals the receiver to keep its prior `prCiStatus` rather
+     * than blink it to `undefined` before the phase-2 emit lands.
+     */
+    isCiStatusLoading?: boolean;
     prTitle?: string;
     issueNumber?: number;
     issueTitle?: string;

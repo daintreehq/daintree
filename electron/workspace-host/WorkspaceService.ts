@@ -281,6 +281,7 @@ export class WorkspaceService {
           prUrl: data.prUrl,
           prState: data.prState,
           prCiStatus: data.prCiStatus,
+          isCiStatusLoading: data.isCiStatusLoading,
           prTitle: data.prTitle,
           issueNumber: data.issueNumber,
           issueTitle: data.issueTitle,

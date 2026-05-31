@@ -1523,6 +1523,10 @@ class PullRequestService {
             prNumber: pr.number,
             prUrl: pr.url,
             prState: internalPR.state,
+            // CI status is omitted here and resolved by the fire-and-forget
+            // enrichment below; flag it so the renderer keeps its prior dot
+            // instead of blinking to "no checks" between the two emits.
+            isCiStatusLoading: true,
             prTitle: pr.title,
             issueNumber,
             branchName: lookupBranch,

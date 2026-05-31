@@ -40,6 +40,7 @@ interface PRDetectedEvent {
   prUrl: string;
   prState: "open" | "merged" | "closed";
   prCiStatus?: GitHubPRCIStatus;
+  isCiStatusLoading?: boolean;
   prTitle?: string;
   issueNumber?: number;
   issueTitle?: string;
@@ -380,14 +381,17 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         // Full-replace semantics for prCiStatus mirror the backend
         // (WorktreeMonitor.setPRInfo): undefined means "no checks", not
         // "preserve prior value." Merging with ?? would let stale CI rollups
-        // linger after checks disappear.
+        // linger after checks disappear. The one exception: when
+        // isCiStatusLoading is true, this is the phase-1 emit and a phase-2
+        // enrichment carrying the real CI status is already in flight — keep
+        // the prior value so the dot doesn't blink to "no checks" in between.
         store.getState().applyUpdate(
           {
             ...existing,
             prNumber: event.prNumber,
             prUrl: event.prUrl,
             prState: event.prState,
-            prCiStatus: event.prCiStatus,
+            prCiStatus: event.isCiStatusLoading ? existing.prCiStatus : event.prCiStatus,
             prTitle: event.prTitle ?? existing.prTitle,
             issueNumber: event.issueNumber ?? existing.issueNumber,
             issueTitle: event.issueTitle ?? existing.issueTitle,
@@ -430,6 +434,13 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             // the generation bump in mutateCacheEntries.
             if (isFilteredSlot && pr.state && pr.state.toLowerCase() !== event.prState) {
               changed = true;
+              continue;
+            }
+            // Phase-1 emit: event.prCiStatus is undefined and the real value
+            // is still in flight. Leave the cached CI status untouched so the
+            // dropdown doesn't blink alongside the sidebar badge.
+            if (event.isCiStatusLoading) {
+              items.push(item);
               continue;
             }
             if (pr.ciStatus === event.prCiStatus) {

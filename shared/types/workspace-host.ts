@@ -596,6 +596,8 @@ export type WorkspaceHostEvent =
       prUrl: string;
       prState: "open" | "merged" | "closed";
       prCiStatus?: GitHubPRCIStatus;
+      /** True while a phase-2 CI enrichment is in flight — receiver keeps its prior `prCiStatus` instead of blinking it to `undefined`. */
+      isCiStatusLoading?: boolean;
       prTitle?: string;
       issueNumber?: number;
       issueTitle?: string;
