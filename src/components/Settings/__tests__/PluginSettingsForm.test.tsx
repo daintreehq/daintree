@@ -34,6 +34,7 @@ function makePlugin(settings: SettingDefinition[]): LoadedPluginInfo {
         experimental_mcpServers: [],
         forgeProviders: [],
         fileDecorationProviders: [],
+        agents: [],
         settings,
       },
     },
