@@ -901,47 +901,54 @@ describe("destroyPty — Windows ConPTY double-free guard (#9551)", () => {
     setPlatform(realPlatform);
   });
 
-  function fakePty(overrides: Record<string, unknown> = {}): IPty {
-    return { kill: vi.fn(), destroy: vi.fn(), ...overrides } as unknown as IPty;
+  function fakePty(overrides: Record<string, unknown> = {}): {
+    pty: IPty;
+    destroy: ReturnType<typeof vi.fn>;
+    kill: ReturnType<typeof vi.fn>;
+  } {
+    const destroy = vi.fn();
+    const kill = vi.fn();
+    const pty = { kill, destroy, ...overrides } as unknown as IPty;
+    return { pty, destroy, kill };
   }
 
   it("skips destroy()/kill() on Windows once the pty agent has recorded an exit", () => {
     setPlatform("win32");
-    const p = fakePty({ _agent: { exitCode: 0 } });
+    const { pty, destroy, kill } = fakePty({ _agent: { exitCode: 0 } });
 
-    destroyPty(p);
+    destroyPty(pty);
 
-    expect(p.destroy).not.toHaveBeenCalled();
-    expect(p.kill).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+    expect(kill).not.toHaveBeenCalled();
   });
 
   it("still tears down a live Windows pty whose agent has not exited", () => {
     setPlatform("win32");
-    const p = fakePty({ _agent: { exitCode: undefined } });
+    const { pty, destroy, kill } = fakePty({ _agent: { exitCode: undefined } });
 
-    destroyPty(p);
+    destroyPty(pty);
 
-    expect(p.destroy).toHaveBeenCalledTimes(1);
-    expect(p.kill).toHaveBeenCalledTimes(1);
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(kill).toHaveBeenCalledTimes(1);
   });
 
   it("always tears down on non-Windows even after exit (releases the master fd)", () => {
     setPlatform("linux");
-    const p = fakePty({ _agent: { exitCode: 0 } });
+    const { pty, destroy, kill } = fakePty({ _agent: { exitCode: 0 } });
 
-    destroyPty(p);
+    destroyPty(pty);
 
-    expect(p.destroy).toHaveBeenCalledTimes(1);
-    expect(p.kill).toHaveBeenCalledTimes(1);
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(kill).toHaveBeenCalledTimes(1);
   });
 
   it("tears down mocks without an agent on Windows (no exit signal available)", () => {
     setPlatform("win32");
-    const p = fakePty();
+    const { pty, destroy, kill } = fakePty();
 
-    destroyPty(p);
+    destroyPty(pty);
 
-    expect(p.destroy).toHaveBeenCalledTimes(1);
-    expect(p.kill).toHaveBeenCalledTimes(1);
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(kill).toHaveBeenCalledTimes(1);
   });
 });
