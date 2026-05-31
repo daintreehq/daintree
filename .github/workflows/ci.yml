@@ -28,11 +28,11 @@ env:
   NODE_VERSION: "22"
 
 jobs:
-  # Combined typecheck + lint + format + unit-test job. Previously these were
-  # two separate jobs (check + test) running in parallel; folding them into
-  # one amortises the per-job setup cost (checkout, Node, npm ci) at the cost
-  # of slightly higher wall-clock per run. At this commit volume that's the
-  # right trade — we run a lot of pushes and pay setup once instead of twice.
+  # Typecheck + lint + format. These are whole-repo operations that can't be
+  # sharded, so they stay in one job. Unit tests used to live here too, but the
+  # suite ballooned (~1,400 files) and dominated wall-clock, so they were split
+  # out into the sharded `test` matrix below — the per-job `npm ci` setup cost
+  # is now small relative to the test runtime it parallelises away.
   check:
     # Push/PR runs ubuntu only. Manual dispatch can opt into windows or both
     # via `gh workflow run CI --ref <branch> -f os=windows` (or `os=both`).
@@ -65,8 +65,41 @@ jobs:
       - name: Check (typecheck + lint + format)
         run: npm run check
 
-      - name: Test (vitest unit)
-        run: npm run test
+  # Unit tests, sharded across 4 runners via vitest's native --shard. Vitest
+  # splits test files deterministically across shards with no merge step (we
+  # don't collect coverage in CI). Each shard pays its own npm ci, but they run
+  # in parallel so the test phase wall-clock drops to ~1/4. To change the shard
+  # count, update both the `shard:` matrix list and the `/4` denominator below.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON((inputs.os || 'ubuntu') == 'both' && '["ubuntu-latest","windows-latest"]' || (inputs.os || 'ubuntu') == 'windows' && '["windows-latest"]' || '["ubuntu-latest"]') }}
+        shard: [1, 2, 3, 4]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test (vitest unit, shard ${{ matrix.shard }}/4)
+        run: npm run test -- --shard=${{ matrix.shard }}/4
 
   build:
     runs-on: ubuntu-latest
@@ -140,7 +173,7 @@ jobs:
   # Insulates against matrix/job name changes breaking required checks.
   ci-ok:
     if: always()
-    needs: [check, build]
+    needs: [check, test, build]
     runs-on: ubuntu-latest
     timeout-minutes: 2
 
