@@ -583,7 +583,11 @@ export class PluginService {
 
     this.settings = new PluginSettingsManager({
       getPluginsRoot: () => this.pluginsRoot,
-      getManifest: (pluginId) => this.plugins.get(pluginId)?.manifest,
+      // Fall back to disabledPlugins so settings for a launch-disabled plugin
+      // still resolve its declared fields — its row in the manager dialog now
+      // renders a settings form whether or not the plugin is running.
+      getManifest: (pluginId) =>
+        (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest,
     });
 
     this.channels = new PluginChannelRegistry({
