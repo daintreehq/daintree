@@ -932,7 +932,11 @@ describe("PluginManagerDialog", () => {
     // Distinct manifest names + display names so each plugin is uniquely
     // addressable across sections. "Built-in" also appears as a per-row source
     // badge, so section assertions scope queries with role="group".
-    const named = (overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo => {
+    const named = (
+      overrides: Partial<Omit<LoadedPluginInfo, "manifest">> & {
+        manifest?: Partial<LoadedPluginInfo["manifest"]>;
+      } = {}
+    ): LoadedPluginInfo => {
       const { manifest: manifestOverride, ...rest } = overrides;
       const base = makePlugin(rest);
       return {
@@ -1009,6 +1013,19 @@ describe("PluginManagerDialog", () => {
       expect(within(builtinGroup()).getByText("Core Tools")).toBeTruthy();
       expect(within(installedGroup()).getByText("Acme Demo")).toBeTruthy();
       expect(within(disabledGroup()).getByText("Old Thing")).toBeTruthy();
+      // Each plugin lands in exactly one section.
+      expect(screen.getAllByText("Core Tools").length).toBe(1);
+      expect(screen.getAllByText("Acme Demo").length).toBe(1);
+      expect(screen.getAllByText("Old Thing").length).toBe(1);
+      // Sections render in the order Built-in → Installed → Disabled.
+      const ids = Array.from(document.querySelectorAll("[role='group']")).map((el) =>
+        el.getAttribute("aria-labelledby")
+      );
+      expect(ids).toEqual([
+        "plugin-group-builtin",
+        "plugin-group-installed",
+        "plugin-group-disabled",
+      ]);
     });
 
     it("omits the Disabled section when every plugin is enabled", async () => {
