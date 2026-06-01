@@ -1,4 +1,14 @@
-import { Plug, FilePlus, Link2, Info, Download, AlertCircle, AlertTriangle, X } from "lucide-react";
+import {
+  Plug,
+  FilePlus,
+  Link2,
+  Info,
+  Download,
+  AlertCircle,
+  AlertTriangle,
+  ChevronLeft,
+  X,
+} from "lucide-react";
 import { useState, useEffect, useRef, useMemo, useDeferredValue } from "react";
 import { createPortal } from "react-dom";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
@@ -422,6 +432,15 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               )}
             />
           )}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={close}
+            aria-label="Back"
+            className="app-no-drag shrink-0"
+          >
+            <ChevronLeft />
+          </Button>
           <Plug className="w-5 h-5 text-daintree-text/70 shrink-0" aria-hidden="true" />
           <h2 className="text-sm font-medium text-daintree-text truncate">Plugins</h2>
         </div>
