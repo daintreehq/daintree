@@ -10,6 +10,7 @@ export interface GitHubStatPillProps {
   count: number | null;
   animKey: number;
   ariaLabel: string;
+  testId?: string;
   tooltipContent: React.ReactNode;
 
   icon: React.ComponentType<{ className?: string }>;
@@ -35,6 +36,7 @@ export function GitHubStatPill({
   count,
   animKey,
   ariaLabel,
+  testId,
   tooltipContent,
   icon: Icon,
   iconClassName,
@@ -71,6 +73,7 @@ export function GitHubStatPill({
                 )
             )}
             aria-label={ariaLabel}
+            data-testid={testId}
           >
             <Icon className={cn("h-4 w-4", iconClassName)} />
             <span
