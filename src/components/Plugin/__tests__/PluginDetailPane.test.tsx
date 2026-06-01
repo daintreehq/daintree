@@ -146,7 +146,8 @@ describe("PluginDetailPane capabilities", () => {
     renderPane(withCapabilities(["shell:exec", "fs:project-read"]));
     const list = screen.getByText("Read project files").closest("ul");
     expect(list).toBeTruthy();
-    const labels = within(list as HTMLElement)
+    if (!list) return;
+    const labels = within(list)
       .getAllByText(/Read project files|Run shell commands/)
       .map((el) => el.textContent);
     expect(labels[0]).toBe("Read project files");

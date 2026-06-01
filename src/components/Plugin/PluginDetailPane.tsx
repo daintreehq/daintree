@@ -357,7 +357,11 @@ export function PluginDetailPane({
         <SettingsSubtabBar
           subtabs={tabs}
           activeId={activeTab}
-          onChange={(id) => setActiveTab(id as PluginDetailTab)}
+          onChange={(id) => {
+            if (id === "overview" || id === "settings" || id === "capabilities") {
+              setActiveTab(id);
+            }
+          }}
         />
       </div>
 
