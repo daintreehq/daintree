@@ -335,8 +335,13 @@ test.describe.serial("Core: Settings Advanced", () => {
     });
 
     test.afterAll(async () => {
+      // Restore a no-op handler rather than leaving the channel unhandled:
+      // the real production handler was already removed in beforeAll, and an
+      // unhandled invoke would throw for any later test that plays a sound.
       await ctx.app.evaluate(({ ipcMain }) => {
-        ipcMain.removeHandler("notification:play-sound");
+        const channel = "notification:play-sound";
+        ipcMain.removeHandler(channel);
+        ipcMain.handle(channel, () => null);
       });
     });
 
@@ -418,6 +423,9 @@ test.describe.serial("Core: Settings Advanced", () => {
       await window.locator(SEL.settings.mcpServerEnableButton).click();
       await expect(connectionMarker).toBeVisible({ timeout: T_MEDIUM });
       await expect(emptyState).not.toBeVisible({ timeout: T_SHORT });
+      // The "Running on port" line only renders once the server actually binds,
+      // proving the enable path started the server (not just flipped a flag).
+      await expect(window.locator("text=Running on port")).toBeVisible({ timeout: T_MEDIUM });
 
       // Cleanup — turn the server back off so the bound port is released.
       await window.locator(SEL.settings.mcpServerToggle).click();

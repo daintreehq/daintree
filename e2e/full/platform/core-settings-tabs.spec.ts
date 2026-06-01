@@ -114,9 +114,10 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await targetOption.click();
     await expect(targetOption).toHaveAttribute("aria-selected", "true", { timeout: T_SHORT });
 
-    // The data-theme attribute flips to the newly applied scheme (RAF-coalesced).
+    // The data-theme attribute flips to the newly applied scheme (RAF-coalesced;
+    // allow generous time for the write under CI CPU pressure).
     await expect
-      .poll(async () => html.getAttribute("data-theme"), { timeout: T_SHORT })
+      .poll(async () => html.getAttribute("data-theme"), { timeout: T_MEDIUM })
       .not.toBe(initialTheme);
 
     // A representative theme token is written inline on <html> as a CSS custom
@@ -155,6 +156,10 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     const surface = await html.evaluate((el) =>
       (el as HTMLElement).style.getPropertyValue("--theme-surface-canvas").trim()
     );
+    // The active theme must have written its surface token inline; a missing
+    // value would silently fall back to a mid-grey that isn't guaranteed to
+    // fail contrast on a very dark theme, so surface a clear failure instead.
+    expect(surface).not.toBe("");
     const lowContrastHex = /^#[0-9a-f]{3,6}$/i.test(surface) ? surface : "#808080";
 
     await accentInput.evaluate((el, color) => {
@@ -192,14 +197,16 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
 
     const initialTheme = await html.getAttribute("data-theme");
 
+    // The button only renders when more than one scheme exists; guard so the
+    // test fails loudly rather than silently no-op if that ever changes.
     const randomButton = window.locator(SEL.settings.randomThemeButton);
-    await expect(randomButton).toBeVisible({ timeout: T_SHORT });
+    await expect(randomButton).toBeEnabled({ timeout: T_SHORT });
     await randomButton.click();
 
     // Shuffle dequeues a different scheme; the applied data-theme changes
     // (RAF-coalesced write).
     await expect
-      .poll(async () => html.getAttribute("data-theme"), { timeout: T_SHORT })
+      .poll(async () => html.getAttribute("data-theme"), { timeout: T_MEDIUM })
       .not.toBe(initialTheme);
 
     await window.keyboard.press("Escape");
