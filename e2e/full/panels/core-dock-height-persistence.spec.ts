@@ -75,6 +75,12 @@ test.describe.serial("Persistence: Dock popover height across restart", () => {
     await firstGridPanel.locator(SEL.panel.minimize).click();
     await expect.poll(() => getDockPanelCount(w1), { timeout: T_MEDIUM }).toBe(1);
 
+    // Out-of-range values are rejected by the handler's validation (300–2000),
+    // so the state stays unset before a valid value is written.
+    await setDockedPopoverHeight(w1, 299);
+    await setDockedPopoverHeight(w1, 2001);
+    expect(await getDockedPopoverHeight(w1)).toBeNull();
+
     await setDockedPopoverHeight(w1, PERSISTED_HEIGHT);
     await expect
       .poll(() => getDockedPopoverHeight(w1), { timeout: T_MEDIUM })

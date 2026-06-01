@@ -33,7 +33,14 @@ export const useDockStore = create<DockState>()((set) => ({
   },
 
   hydrate: (state) => {
-    set({ ...state, isHydrated: true });
+    // A fresh profile has no persisted height; ignore an undefined value so the
+    // POPOVER_DEFAULT_HEIGHT default survives rather than being clobbered with
+    // undefined (which would violate the `popoverHeight: number` contract).
+    set((prev) => ({
+      popoverHeight:
+        typeof state.popoverHeight === "number" ? state.popoverHeight : prev.popoverHeight,
+      isHydrated: true,
+    }));
   },
 }));
 
