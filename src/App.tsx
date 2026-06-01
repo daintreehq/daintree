@@ -45,6 +45,10 @@ import { usePluginBridge } from "./hooks/usePluginBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { useSoundPlaybackListener } from "./hooks/useSoundPlaybackListener";
 import { notifyViewPainted, removeStartupSkeleton } from "./utils/removeStartupSkeleton";
+// Side-effect import: attaches the notification E2E backdoor when launched with
+// DAINTREE_E2E_MODE=1. The module self-gates on `__DAINTREE_E2E_MODE__`, so this
+// is inert in production sessions.
+import "./lib/e2eNotificationBackdoor";
 import { useAppBoot } from "./hooks/app/useAppBoot";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
 import {

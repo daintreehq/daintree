@@ -327,6 +327,7 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
               Number.isFinite(notification.count) &&
               notification.count > 1 && (
                 <span
+                  data-testid="toast-coalesce-badge"
                   aria-label={formatNotificationCountAriaLabel(notification.count)}
                   className={cn(
                     "shrink-0 rounded-full bg-tint/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[3.5ch] text-center",
@@ -346,6 +347,7 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
           notification.count > 1 ? (
           <div>
             <span
+              data-testid="toast-coalesce-badge"
               aria-label={formatNotificationCountAriaLabel(notification.count)}
               className={cn(
                 "inline-block rounded-full bg-tint/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[3.5ch] text-center",
@@ -481,12 +483,18 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
                     disabled={activeActionIndex !== null}
                   >
                     {isActive && showLoading ? (
-                      <span className="inline-flex items-center gap-1.5">
+                      <span
+                        data-testid="toast-action-spinner"
+                        className="inline-flex items-center gap-1.5"
+                      >
                         <Spinner size="xs" />
                         {action.label}
                       </span>
                     ) : isActive && isSuccess ? (
-                      <span className="inline-flex items-center gap-1">
+                      <span
+                        data-testid="toast-action-checkmark"
+                        className="inline-flex items-center gap-1"
+                      >
                         <Check className="h-3 w-3" />
                         {action.successLabel}
                       </span>
