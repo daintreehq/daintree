@@ -1,5 +1,6 @@
-import { Plug, FilePlus, Link2, Info, Download, AlertCircle, AlertTriangle } from "lucide-react";
+import { Plug, FilePlus, Link2, Info, Download, AlertCircle, AlertTriangle, X } from "lucide-react";
 import { useState, useEffect, useRef, useMemo, useDeferredValue } from "react";
+import { createPortal } from "react-dom";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -7,6 +8,9 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { usePluginManagerStore } from "@/store/pluginManagerStore";
+import { useOverlayClaim } from "@/hooks";
+import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { logError } from "@/utils/logger";
 import { cn } from "@/lib/utils";
 import { usePluginManager } from "./usePluginManager";
@@ -16,6 +20,12 @@ import type { LoadedPluginInfo, PluginDeepLinkIntent } from "@shared/types/plugi
 
 const ROW_BADGE_CLASS =
   "inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 uppercase tracking-wide";
+
+// Disabled-option separator class for section headers inside the listbox.
+// role="group" inside role="listbox" is broken under Chromium 146 + VoiceOver
+// (LESSON #9006), so headers masquerade as non-interactive options instead.
+const SECTION_HEADER_CLASS =
+  "px-3 text-[10px] font-medium uppercase tracking-wider text-daintree-text/40 select-none";
 
 // Below this many installed plugins the search box adds noise without value, so
 // it stays hidden and the grouped list is shown directly (#9557).
@@ -180,9 +190,7 @@ function RowSkeleton() {
   );
 }
 
-interface PluginManagerDialogProps {
-  isOpen: boolean;
-  onClose: () => void;
+interface PluginManagerViewProps {
   /** Pending `daintree://` deep-link intent (#9559), or `null` when none. */
   deepLinkIntent?: PluginDeepLinkIntent | null;
   /** Called once the intent has been applied so the source can clear it. */
@@ -193,29 +201,42 @@ interface PluginManagerDialogProps {
 const DEEP_LINK_HIGHLIGHT_MS = 2000;
 
 /**
- * Dedicated plugin manager dialog (#9548) — the primary surface for plugin
+ * Dedicated plugin manager view (#9558) — the primary surface for plugin
  * lifecycle: install from file or URL (#9290), enable/disable (#9284),
- * uninstall, provenance, and the manual check-for-update flow (#9297). It owns
- * the full management UI lifted out of the former Settings `PluginsTab`, which
- * is now a thin entry point. Files can be dropped anywhere on the body to
- * install. The browse/discovery surface (#9305) ships separately — the body
- * reserves room for it below the installed list.
+ * uninstall, provenance, and the manual check-for-update flow (#9297). Graduated
+ * out of the former `PluginManagerDialog` modal into a first-class full-screen
+ * overlay modelled on VS Code's Extensions view: a master list of installed
+ * plugins on the left, a tabbed detail pane on the right. It owns the full
+ * management UI lifted out of the former Settings `PluginsTab`, which is now a
+ * thin entry point. Files can be dropped anywhere on the body to install. The
+ * browse/discovery catalog (#9305) ships separately — the master column reserves
+ * a footer slot for it below the installed list.
+ *
+ * Visibility is driven by `usePluginManagerStore` (mirrors `themeBrowserStore`);
+ * `AppLayout` reads the `plugin-manager` overlay claim to mark its chrome
+ * `inert` while this is open. The overlay is `role="region"` (not a modal
+ * dialog) — it's a persistent first-class view, so it doesn't trap focus or
+ * announce as a modal. Escape closes it via the LIFO escape stack, which also
+ * lets nested confirm/URL dialogs close first (#2828).
  *
  * Nested confirm dialogs (uninstall, update, HTTP install) and the URL-input
- * dialog render at `zIndex="nested"` so the LIFO escape backstop closes the
- * inner surface before this dialog (#2828).
+ * dialog render at `zIndex="nested"` so they layer above this view and the LIFO
+ * escape backstop closes the inner surface first.
  */
-export function PluginManagerDialog({
-  isOpen,
-  onClose,
-  deepLinkIntent,
-  onDeepLinkConsumed,
-}: PluginManagerDialogProps) {
+export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: PluginManagerViewProps) {
+  const isOpen = usePluginManagerStore((s) => s.isOpen);
+  const close = usePluginManagerStore((s) => s.close);
+
+  // Register the viewport claim so AppLayout can `inert` the app chrome while
+  // the view is open, and wire Escape-to-close through the shared LIFO stack.
+  useOverlayClaim("plugin-manager", isOpen);
+  useEscapeStack(isOpen, close);
+
   const pm = usePluginManager(isOpen, {
     intent: deepLinkIntent ?? null,
     onConsumed: onDeepLinkConsumed,
   });
-  // Selection is pure UI state owned by the dialog — `usePluginManager` stays
+  // Selection is pure UI state owned by the view — `usePluginManager` stays
   // data/IPC only. The detail pane derives from the selected id.
   const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
   const selectedPlugin =
@@ -232,6 +253,7 @@ export function PluginManagerDialog({
   // `query`; the expensive filter pass runs against the deferred value so typing
   // stays responsive (LESSON #3726 — useDeferredValue, not setTimeout debounce).
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const isSearchVisible = pm.plugins.length >= PLUGIN_SEARCH_MIN_ITEMS;
@@ -254,12 +276,24 @@ export function PluginManagerDialog({
     searchInputRef.current?.focus();
   };
 
-  // Reset the query when the dialog closes (so a stale filter doesn't hide rows
+  // Reset the query when the view closes (so a stale filter doesn't hide rows
   // on reopen) or when the list drops back below the search threshold (so the
   // filter can't silently reactivate if the count later climbs again).
   useEffect(() => {
     if (!isOpen || !isSearchVisible) setQuery("");
   }, [isOpen, isSearchVisible]);
+
+  // Move focus into the view when it opens. Unlike the former modal dialog, a
+  // role="region" view doesn't trap focus, so without this the keyboard focus
+  // can stay on a background grid terminal — and `terminal.close` (Cmd+W) skips
+  // the escape stack while a grid panel is focused, closing the terminal
+  // instead of the view. Prefer the filter input when shown, else the close
+  // button. Mirrors ThemeBrowser's open-focus behaviour.
+  useEffect(() => {
+    if (!isOpen) return;
+    const target = searchInputRef.current ?? closeButtonRef.current;
+    target?.focus();
+  }, [isOpen]);
 
   // Re-validate the selection after every list refresh (reopen, uninstall,
   // cross-window provenance change). A single effect keyed on the list nulls a
@@ -302,13 +336,23 @@ export function PluginManagerDialog({
     setQuery("");
     setSelectedPluginId(focusPluginId);
     const row = rowRefs.current.get(focusPluginId);
-    if (!row) return; // Row not rendered yet — the not-found notice path handles misses.
+    if (!row) return; // Row not rendered yet — leave focusPluginId set so a
+    // subsequent list/filter refresh retries the scroll.
     row.scrollIntoView({ block: "center", behavior: "smooth" });
     setHighlightedPluginId(focusPluginId);
     clearFocusPluginId();
+  }, [focusPluginId, clearFocusPluginId, pm.plugins]);
+
+  // Fade the deep-link highlight after a beat. Kept separate from the consume
+  // effect above: clearing focusPluginId there flips that effect's own
+  // dependency, so an inline timer would be torn down a render later before it
+  // ever fired. Keying this on `highlightedPluginId` lets the timer live until
+  // it actually clears the highlight (or the view unmounts).
+  useEffect(() => {
+    if (!highlightedPluginId) return;
     const timer = setTimeout(() => setHighlightedPluginId(null), DEEP_LINK_HIGHLIGHT_MS);
     return () => clearTimeout(timer);
-  }, [focusPluginId, clearFocusPluginId, pm.plugins]);
+  }, [highlightedPluginId]);
 
   const hasPlugins = pm.plugins.length > 0;
   // Any enabled/disabled toggle this session that hasn't taken effect yet leaves
@@ -346,21 +390,30 @@ export function PluginManagerDialog({
     }
   };
 
-  return (
-    <AppDialog
-      isOpen={isOpen}
-      onClose={onClose}
-      size="2xl"
-      maxHeight="h-[75vh]"
-      className="min-h-[480px] max-h-[800px]"
-      data-testid="plugin-manager-dialog"
+  if (!isOpen) return null;
+
+  return createPortal(
+    <div
+      role="region"
+      aria-label="Plugin manager"
+      data-testid="plugin-manager-view"
+      className="fixed inset-0 z-[var(--z-modal)] flex flex-col bg-daintree-bg motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
     >
-      <AppDialog.Header>
-        <AppDialog.Title icon={<Plug className="w-5 h-5 text-daintree-text/70" />}>
-          Plugins
-        </AppDialog.Title>
-        <AppDialog.CloseButton />
-      </AppDialog.Header>
+      <header className="flex items-center justify-between gap-3 px-6 h-12 shrink-0 border-b border-daintree-border">
+        <div className="flex items-center gap-2 min-w-0">
+          <Plug className="w-5 h-5 text-daintree-text/70 shrink-0" aria-hidden="true" />
+          <h2 className="text-sm font-medium text-daintree-text truncate">Plugins</h2>
+        </div>
+        <Button
+          ref={closeButtonRef}
+          variant="ghost"
+          size="icon-sm"
+          onClick={close}
+          aria-label="Close plugin manager"
+        >
+          <X />
+        </Button>
+      </header>
 
       {restartRequired && (
         <InlineStatusBanner
@@ -395,7 +448,7 @@ export function PluginManagerDialog({
         )}
 
         {/* Master: installed-plugin list + install controls. */}
-        <div className="w-72 shrink-0 border-r border-daintree-border flex flex-col overflow-hidden">
+        <div className="w-80 shrink-0 border-r border-daintree-border flex flex-col overflow-hidden">
           <div className="p-4 border-b border-daintree-border shrink-0 space-y-3">
             <div>
               <h3 className="text-sm font-medium text-daintree-text">Installed plugins</h3>
@@ -477,8 +530,6 @@ export function PluginManagerDialog({
             />
           ) : !hasPlugins ? null : isSearchActive && filteredPlugins.length === 0 ? (
             // Filtered to nothing — offer a one-tap escape back to the full list.
-            // No section headers here, so LESSON #9006 (role="group" + VoiceOver
-            // on Chromium 146) never applies to the filtered view.
             <div className="flex-1 min-h-0 flex items-center justify-center">
               <EmptyState
                 variant="filtered-empty"
@@ -505,7 +556,7 @@ export function PluginManagerDialog({
               {isSearchActive
                 ? // Flat filtered list — grouping is meaningless across filters
                   // like @installed, and a flat list keeps the listbox free of
-                  // role="group" section labels (LESSON #9006).
+                  // section labels.
                   filteredPlugins.map((plugin) => (
                     <PluginRow
                       key={plugin.manifest.name}
@@ -528,14 +579,22 @@ export function PluginManagerDialog({
                 : PLUGIN_GROUPS.map(({ id, label, match }) => {
                     const groupPlugins = pm.plugins.filter(match);
                     if (groupPlugins.length === 0) return null;
+                    // role="presentation" makes this wrapper transparent to the
+                    // accessibility tree, so its option children re-parent to the
+                    // listbox. The header is a disabled option, not a role="group"
+                    // label (LESSON #9006 — group labels drop under Chromium 146 +
+                    // VoiceOver); arrow-key nav still skips it.
                     return (
-                      <div key={id} role="group" aria-labelledby={id} className="space-y-1">
-                        <p
-                          id={id}
-                          className="px-3 text-[10px] font-medium uppercase tracking-wider text-daintree-text/40 select-none"
+                      <div key={id} role="presentation" className="space-y-1">
+                        <div
+                          className={SECTION_HEADER_CLASS}
+                          role="option"
+                          aria-disabled="true"
+                          aria-selected="false"
+                          aria-label={label}
                         >
                           {label}
-                        </p>
+                        </div>
                         {groupPlugins.map((plugin) => (
                           <PluginRow
                             key={plugin.manifest.name}
@@ -560,17 +619,27 @@ export function PluginManagerDialog({
                   })}
             </ScrollShadow>
           )}
+
+          {/* Reserved footer for the browse/discovery catalog (#9305). The
+              network-backed catalog ships separately; the slot keeps its place
+              in the master column so the layout doesn't shift when it lands. */}
+          <div className="px-4 py-3 border-t border-daintree-border shrink-0">
+            <p className="text-[10px] font-medium uppercase tracking-wider text-daintree-text/40 select-none">
+              Browse
+            </p>
+            <p className="text-[11px] text-daintree-text/40 mt-1">Plugin catalog coming soon.</p>
+          </div>
         </div>
 
         {/* Detail: selected plugin's metadata, actions, and settings. The key
             is on the scroll container (not the pane) so switching plugins
-            remounts the whole subtree — resetting scrollTop to the top and
+            remounts the whole subtree — resetting scrollTop to the top,
             re-initializing PluginSettingsForm drafts from the new plugin's
-            stored values. */}
+            stored values, and resetting the detail subtab to Overview. */}
         <ScrollShadow
           key={selectedPlugin?.manifest.name ?? "empty"}
           className="flex-1 min-h-0"
-          scrollClassName="p-6"
+          scrollClassName="p-6 max-w-3xl"
         >
           {selectedPlugin ? (
             <PluginDetailPane
@@ -734,6 +803,7 @@ export function PluginManagerDialog({
         variant="destructive"
         zIndex="nested"
       />
-    </AppDialog>
+    </div>,
+    document.body
   );
 }

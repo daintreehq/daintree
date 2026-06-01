@@ -274,7 +274,6 @@ function createCallbacks(overrides: Partial<ActionCallbacks> = {}): ActionCallba
   return {
     onOpenSettings: vi.fn(),
     onOpenSettingsTab: vi.fn(),
-    onOpenPluginManager: vi.fn(),
     onToggleSidebar: vi.fn(),
     onToggleFocusMode: vi.fn(),
     onFocusRegionNext: vi.fn(),

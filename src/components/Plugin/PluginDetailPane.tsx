@@ -1,6 +1,11 @@
+import { useState } from "react";
 import { AlertCircle, AlertTriangle, RefreshCw, Trash2 } from "lucide-react";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
 import { Button } from "@/components/ui/button";
+import {
+  SettingsSubtabBar,
+  type SettingsSubtabItem,
+} from "@/components/Settings/SettingsSubtabBar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import {
@@ -203,6 +208,8 @@ function PluginCapabilityList({ plugin }: { plugin: LoadedPluginInfo }) {
   );
 }
 
+type PluginDetailTab = "overview" | "settings" | "capabilities";
+
 interface PluginDetailPaneProps {
   plugin: LoadedPluginInfo;
   checkingUpdate: boolean;
@@ -212,15 +219,23 @@ interface PluginDetailPaneProps {
 }
 
 /**
- * Detail pane for the selected plugin (#9555). Owns the full provenance and
- * metadata surface — name, version, source, install time, load error — plus the
- * per-plugin actions (check-for-update, uninstall) and the generated settings
- * form. Lifting this out of the list row removes the inline-expansion layout
- * shift: selecting a plugin populates this pane instead of pushing rows down.
+ * Detail pane for the selected plugin (#9555, #9558). Owns the full provenance
+ * and metadata surface — name, version, source, install time, load error — plus
+ * the per-plugin actions (check-for-update, uninstall) and the generated
+ * settings form. Lifting this out of the list row removes the inline-expansion
+ * layout shift: selecting a plugin populates this pane instead of pushing rows
+ * down.
  *
- * The settings form is keyed on `plugin.manifest.name` by the parent's pane
- * wrapper, so switching plugins reinitializes its drafts from the new plugin's
- * stored values.
+ * The graduated view (#9558) splits the body into a tabbed master-detail layout
+ * modelled on VS Code's Extensions view: a persistent identity header (name,
+ * version, provenance, lifecycle actions) sits above an Overview / Settings /
+ * Permissions subtab bar, so the plugin you're inspecting stays named no matter
+ * which facet you're viewing.
+ *
+ * Tab state is local and resets to Overview whenever the plugin changes, because
+ * the view's scroll wrapper is keyed on `plugin.manifest.name` and remounts this
+ * subtree — which also reinitializes `PluginSettingsForm` drafts from the new
+ * plugin's stored values.
  */
 export function PluginDetailPane({
   plugin,
@@ -233,6 +248,8 @@ export function PluginDetailPane({
   const restartRequired = plugin.pendingRestart === true;
   const sourceLabel = SOURCE_BADGE_LABELS[plugin.source] ?? plugin.source;
   const hasSettings = (plugin.manifest.contributes.settings?.length ?? 0) > 0;
+  const [activeTab, setActiveTab] = useState<PluginDetailTab>("overview");
+
   // URL-installed plugins have an upstream to re-fetch and compare against;
   // file-installed plugins and built-ins don't, so the button stays disabled
   // with an explanatory tooltip.
@@ -245,8 +262,14 @@ export function PluginDetailPane({
       ? "Built-in plugins update with Daintree"
       : "No update URL — reinstall from a file to update";
 
+  const tabs: SettingsSubtabItem[] = [
+    { id: "overview", label: "Overview" },
+    { id: "settings", label: "Settings" },
+    { id: "capabilities", label: "Permissions" },
+  ];
+
   return (
-    <div className="space-y-4 text-daintree-text">
+    <div className="text-daintree-text">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -330,29 +353,50 @@ export function PluginDetailPane({
         </div>
       </div>
 
-      {plugin.manifest.description && (
-        <p className="text-xs text-daintree-text/70 select-text">{plugin.manifest.description}</p>
-      )}
+      <div className="mt-4">
+        <SettingsSubtabBar
+          subtabs={tabs}
+          activeId={activeTab}
+          onChange={(id) => {
+            if (id === "overview" || id === "settings" || id === "capabilities") {
+              setActiveTab(id);
+            }
+          }}
+        />
+      </div>
 
-      {plugin.loadError && (
-        <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-          <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-          <p className="text-[11px] text-status-danger break-words">
-            Failed to load: {plugin.loadError.message}
-          </p>
+      {activeTab === "overview" && (
+        <div className="space-y-4">
+          {plugin.manifest.description ? (
+            <p className="text-xs text-daintree-text/70 select-text">
+              {plugin.manifest.description}
+            </p>
+          ) : (
+            <p className="text-xs text-daintree-text/40">No description provided.</p>
+          )}
+
+          {plugin.loadError && (
+            <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
+              <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
+              <p className="text-[11px] text-status-danger break-words">
+                Failed to load: {plugin.loadError.message}
+              </p>
+            </div>
+          )}
         </div>
       )}
-
-      <PluginCapabilityList plugin={plugin} />
 
       {/* Settings render whether or not the plugin is enabled — values persist
           independently of the plugin's runtime, so users can pre-configure a
           plugin before turning it on, or keep editing it while it's off. */}
-      {hasSettings ? (
-        <PluginSettingsForm plugin={plugin} />
-      ) : (
-        <p className="text-xs text-daintree-text/40 pt-1">This plugin has no settings.</p>
-      )}
+      {activeTab === "settings" &&
+        (hasSettings ? (
+          <PluginSettingsForm plugin={plugin} />
+        ) : (
+          <p className="text-xs text-daintree-text/40">This plugin has no settings.</p>
+        ))}
+
+      {activeTab === "capabilities" && <PluginCapabilityList plugin={plugin} />}
     </div>
   );
 }

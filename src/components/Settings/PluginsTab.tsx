@@ -8,9 +8,10 @@ import { logError } from "@/utils/logger";
 
 /**
  * Plugins settings tab — a thin entry point into the dedicated plugin manager
- * (#9548). The full management surface (install, enable/disable, uninstall,
- * update check, drag-drop) now lives in `PluginManagerDialog`; this tab shows
- * the installed count and opens the manager via the `app.pluginManager` action.
+ * (#9548, #9558). The full management surface (install, enable/disable,
+ * uninstall, update check, drag-drop) now lives in the graduated first-class
+ * `PluginManagerView`; this tab shows the installed count and opens the manager
+ * via the `app.pluginManager` action.
  */
 export function PluginsTab() {
   const [count, setCount] = useState<number | null>(null);

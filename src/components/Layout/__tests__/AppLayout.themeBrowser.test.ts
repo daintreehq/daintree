@@ -27,8 +27,12 @@ describe("AppLayout theme browser mount gate — issue #5738", () => {
     // The overlay claim is the correct signal for inert because it fires after
     // ThemeBrowser has mounted — intended PR #5721 behavior. inert on the
     // toolbar + main-content wrappers prevents interaction with blocked UI.
+    // Since #9558 the inert guard ORs the theme-browser and plugin-manager
+    // claims into a single `chromeInert` signal, so both full-screen overlays
+    // block the chrome the same way.
     expect(source).toContain('const isThemeBrowserOpen = useOverlayOpen("theme-browser")');
-    expect(source).toContain("isThemeBrowserOpen ? { inert: true } : {}");
+    expect(source).toContain("const chromeInert = isThemeBrowserOpen || isPluginManagerOpen");
+    expect(source).toContain("chromeInert ? { inert: true } : {}");
   });
 });
 
