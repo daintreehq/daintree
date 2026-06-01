@@ -390,6 +390,7 @@ export const SEL = {
     tabSettings: '[role="tab"][data-tab="settings"]',
     tabPermissions: '[role="tab"][data-tab="capabilities"]',
     installFromUrlButton: 'button:has-text("Install from URL")',
+    urlDialog: '[role="dialog"]:has-text("Install from URL")',
     httpWarningDialog: '[role="dialog"]:has-text("Install over HTTP?")',
   },
   fleet: {

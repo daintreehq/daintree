@@ -37,19 +37,20 @@ test.describe.serial("Core: Plugin install-from-URL dialog", () => {
 
     await window.locator(SEL.plugin.installFromUrlButton).click();
 
+    const urlDialog = window.locator(SEL.plugin.urlDialog);
     const urlInput = window.locator(SEL.plugin.urlInput);
     await expect(urlInput).toBeVisible({ timeout: T_MEDIUM });
 
-    // Empty URL → Install disabled (footer button, matched exactly so it doesn't
-    // collide with the "Install from file"/"Install from URL" trigger buttons).
-    const installButton = window.getByRole("button", { name: "Install", exact: true });
+    // Empty URL → Install disabled. Scope to the dialog so the footer button
+    // doesn't collide with the "Install from file"/"Install from URL" triggers.
+    const installButton = urlDialog.getByRole("button", { name: "Install", exact: true });
     await expect(installButton).toBeDisabled();
 
     await urlInput.fill("https://example.com/plugin.dntr");
     await expect(installButton).toBeEnabled();
 
     // Close without installing.
-    await window.getByRole("button", { name: "Cancel" }).click();
+    await urlDialog.getByRole("button", { name: "Cancel" }).click();
     await expect(urlInput).toBeHidden({ timeout: T_SHORT });
 
     await closePluginManager(window);
@@ -61,11 +62,12 @@ test.describe.serial("Core: Plugin install-from-URL dialog", () => {
 
     await window.locator(SEL.plugin.installFromUrlButton).click();
 
+    const urlDialog = window.locator(SEL.plugin.urlDialog);
     const urlInput = window.locator(SEL.plugin.urlInput);
     await expect(urlInput).toBeVisible({ timeout: T_MEDIUM });
     await urlInput.fill("http://example.com/plugin.dntr");
 
-    await window.getByRole("button", { name: "Install", exact: true }).click();
+    await urlDialog.getByRole("button", { name: "Install", exact: true }).click();
 
     // The non-HTTPS URL surfaces the "Install over HTTP?" confirm before any
     // download starts.
@@ -78,7 +80,7 @@ test.describe.serial("Core: Plugin install-from-URL dialog", () => {
 
     // The URL dialog stays open behind the dismissed gate — close it before the
     // manager so its focus trap doesn't swallow the manager-close click.
-    const urlDialogCancel = window.getByRole("button", { name: "Cancel" });
+    const urlDialogCancel = urlDialog.getByRole("button", { name: "Cancel" });
     if (await urlDialogCancel.isVisible().catch(() => false)) {
       await urlDialogCancel.click();
       await expect(urlInput).toBeHidden({ timeout: T_SHORT });
