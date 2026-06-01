@@ -107,6 +107,7 @@ function zodSchemaToJsonSchema(
       unrepresentable: "any",
       reused: "inline",
       cycles: "ref",
+      target: "draft-2020-12",
     }) as Record<string, unknown>;
   } catch (err) {
     logWarn("Failed to convert zod schema to JSON Schema", { error: err });
@@ -179,18 +180,37 @@ function computeRequiresArgs(definition: AnyActionDefinition): boolean {
     : rawSchemaRequiresArgs(definition.rawInputSchema);
 }
 
+/**
+ * Recursively freezes a value in DEV so any consumer that mutates a cached
+ * schema — including nested `properties`/`items`/`$defs` that a shallow
+ * `Object.freeze` leaves writable — fails loudly in tests rather than silently
+ * poisoning the shared cache (issue #9569). No-op in production. Bounded by
+ * JSON Schema nesting depth, so no stack-overflow risk.
+ */
+function deepFreeze(val: unknown): void {
+  if (!import.meta.env.DEV || val === null || typeof val !== "object") return;
+  Object.freeze(val);
+  for (const child of Object.values(val as Record<string, unknown>)) {
+    deepFreeze(child);
+  }
+}
+
 function computeSchemas(definition: AnyActionDefinition): CachedSchemas {
-  return {
-    inputSchema: definition.argsSchema
-      ? zodSchemaToJsonSchema(definition.argsSchema)
-      : definition.rawInputSchema,
-    outputSchema:
-      definition.mcpOutputSchema && definition.resultSchema
-        ? zodSchemaToJsonSchema(definition.resultSchema, "output")
-        : definition.mcpOutputSchema
-          ? definition.rawOutputSchema
-          : undefined,
-  };
+  const inputSchema = definition.argsSchema
+    ? zodSchemaToJsonSchema(definition.argsSchema)
+    : definition.rawInputSchema;
+  const outputSchema =
+    definition.mcpOutputSchema && definition.resultSchema
+      ? zodSchemaToJsonSchema(definition.resultSchema, "output")
+      : definition.mcpOutputSchema
+        ? definition.rawOutputSchema
+        : undefined;
+  // Freeze the cached copies only (DEV). toManifestEntry hands consumers a
+  // fresh structuredClone, so this never restricts callers that legitimately
+  // mutate their own manifest entry — it only catches writes back into the cache.
+  deepFreeze(inputSchema);
+  deepFreeze(outputSchema);
+  return { inputSchema, outputSchema };
 }
 
 export class ActionService {
@@ -476,10 +496,13 @@ export class ActionService {
       this.schemaCache.set(definition.id, schemas);
     }
 
-    // Shallow-copy the cached schemas so that if a downstream consumer
-    // (e.g. an MCP adapter normalizing in place) mutates entry.inputSchema
-    // at the top level, it can't poison subsequent list()/get() reads.
-    // Mirrors the mcpAnnotations isolation pattern below.
+    // Deep-clone the cached schemas so a downstream consumer (e.g. an MCP
+    // adapter normalizing in place) that mutates entry.inputSchema — including
+    // nested `properties`/`items`/`$defs`, which Zod v4's `reused: "inline"`
+    // physically shares — can't poison subsequent list()/get() reads. A shallow
+    // spread only isolated the top level (issue #9569). structuredClone is safe
+    // here: z.toJSONSchema finalizes through a JSON round-trip, so the cached
+    // value has no cycles or non-cloneable shapes.
     return {
       id: definition.id,
       name: definition.id,
@@ -493,8 +516,8 @@ export class ActionService {
         danger: definition.danger,
         category: definition.category,
       }),
-      inputSchema: schemas?.inputSchema ? { ...schemas.inputSchema } : undefined,
-      outputSchema: schemas?.outputSchema ? { ...schemas.outputSchema } : undefined,
+      inputSchema: schemas?.inputSchema ? structuredClone(schemas.inputSchema) : undefined,
+      outputSchema: schemas?.outputSchema ? structuredClone(schemas.outputSchema) : undefined,
       enabled,
       disabledReason,
       requiresArgs,
@@ -502,7 +525,7 @@ export class ActionService {
       ...(definition.mcpAnnotations ? { mcpAnnotations: { ...definition.mcpAnnotations } } : {}),
       ...(definition.mcpVisibility ? { mcpVisibility: definition.mcpVisibility } : {}),
       ...(definition.pluginId ? { pluginId: definition.pluginId } : {}),
-      ...(definition.examples ? { examples: [...definition.examples] } : {}),
+      ...(definition.examples ? { examples: structuredClone(definition.examples) } : {}),
       ...(definition.dangerRationale ? { dangerRationale: definition.dangerRationale } : {}),
     };
   }
