@@ -57,6 +57,11 @@ export function FixedDropdown({
   const [mounted, setMounted] = useState(false);
   const [position, setPosition] = useState<{ top: number; right: string } | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  // rAF-coalesce scroll/resize re-positions: a single in-flight frame, latest
+  // wins, and `lastPositionRef` diff-gates so an unchanged anchor never fires a
+  // redundant React commit (issue #9580). Mirrors `useVerticalScrollShadows`.
+  const positionRafRef = useRef<number | null>(null);
+  const lastPositionRef = useRef<{ top: number; right: string } | null>(null);
   const { isVisible, shouldRender } = useAnimatedPresence({
     isOpen: open,
     animationDuration: getUiTransitionDuration("exit"),
@@ -104,20 +109,37 @@ export function FixedDropdown({
     if (!anchorRef.current || typeof window === "undefined") return;
     const rect = anchorRef.current.getBoundingClientRect();
     const buttonRightGap = Math.max(window.innerWidth - rect.right, 8);
-    setPosition({
+    const next = {
       top: rect.bottom + sideOffset,
       right: `max(${buttonRightGap}px, calc(var(--portal-right-offset, 0px) + 8px))`,
-    });
+    };
+    const last = lastPositionRef.current;
+    if (last && last.top === next.top && last.right === next.right) return;
+    lastPositionRef.current = next;
+    setPosition(next);
   }, [anchorRef, sideOffset]);
 
   useLayoutEffect(() => {
     if (!open) return;
+    // Open-time positioning stays synchronous so first paint isn't a frame
+    // late; only the scroll/resize re-positions defer to rAF.
     updatePosition();
-    window.addEventListener("resize", updatePosition);
-    window.addEventListener("scroll", updatePosition, true);
+    const scheduleUpdatePosition = () => {
+      if (positionRafRef.current !== null) return;
+      positionRafRef.current = requestAnimationFrame(() => {
+        positionRafRef.current = null;
+        updatePosition();
+      });
+    };
+    window.addEventListener("resize", scheduleUpdatePosition);
+    window.addEventListener("scroll", scheduleUpdatePosition, true);
     return () => {
-      window.removeEventListener("resize", updatePosition);
-      window.removeEventListener("scroll", updatePosition, true);
+      if (positionRafRef.current !== null) {
+        cancelAnimationFrame(positionRafRef.current);
+        positionRafRef.current = null;
+      }
+      window.removeEventListener("resize", scheduleUpdatePosition);
+      window.removeEventListener("scroll", scheduleUpdatePosition, true);
     };
   }, [open, updatePosition]);
 

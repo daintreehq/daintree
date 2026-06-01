@@ -753,3 +753,167 @@ describe("FixedDropdown source-level guards (issue #6800)", () => {
     expect(source).not.toContain("--right-obstruction-offset");
   });
 });
+
+describe("FixedDropdown rAF re-position throttle (issue #9580)", () => {
+  // A controllable rAF queue so we can assert coalescing: a burst of scroll
+  // events must schedule exactly one frame. Real timers (not fake) so the
+  // existing fake-timer suites stay isolated — Vitest fake timers don't fake
+  // requestAnimationFrame unless explicitly told to.
+  let rafQueue: Map<number, FrameRequestCallback>;
+  let nextRafId: number;
+  let rafSpy: ReturnType<typeof vi.spyOn>;
+  let cancelSpy: ReturnType<typeof vi.spyOn>;
+  let onOpenChange: ReturnType<typeof vi.fn<(open: boolean) => void>>;
+
+  function flushFrames() {
+    const pending = [...rafQueue.values()];
+    rafQueue.clear();
+    act(() => {
+      for (const cb of pending) cb(0);
+    });
+  }
+
+  function createMutableAnchor(bottom: number, right: number) {
+    const rect = { top: 0, right, bottom, left: 0, width: right, height: bottom };
+    const el = document.createElement("button");
+    el.getBoundingClientRect = () => rect as DOMRect;
+    document.body.appendChild(el);
+    return {
+      ref: { current: el } as React.RefObject<HTMLElement | null>,
+      setRect: (next: { bottom?: number; right?: number }) => Object.assign(rect, next),
+    };
+  }
+
+  function fireScroll() {
+    act(() => {
+      window.dispatchEvent(new Event("scroll"));
+    });
+  }
+
+  function portalTop() {
+    const body = document.querySelector('[data-testid="dropdown-body"]');
+    return body?.parentElement?.style.top ?? "";
+  }
+
+  beforeEach(() => {
+    _resetForTests();
+    setOverlayStackLength(0);
+    onOpenChange = vi.fn();
+    rafQueue = new Map();
+    nextRafId = 0;
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+    rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      const id = ++nextRafId;
+      rafQueue.set(id, cb);
+      return id;
+    });
+    cancelSpy = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+      rafQueue.delete(id as number);
+    });
+  });
+
+  afterEach(() => {
+    _resetForTests();
+    vi.restoreAllMocks();
+  });
+
+  it("positions synchronously on open without waiting for a frame", () => {
+    const { ref } = createMutableAnchor(40, 100);
+    render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+        <div data-testid="dropdown-body">Content</div>
+      </FixedDropdown>
+    );
+    // bottom(40) + sideOffset(8) = 48 — set before any rAF is flushed.
+    expect(portalTop()).toBe("48px");
+    expect(rafQueue.size).toBe(0);
+  });
+
+  it("coalesces a burst of scroll events into a single frame", () => {
+    const { ref } = createMutableAnchor(40, 100);
+    render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+        <div data-testid="dropdown-body">Content</div>
+      </FixedDropdown>
+    );
+    rafSpy.mockClear();
+
+    fireScroll();
+    fireScroll();
+    fireScroll();
+
+    // Single in-flight frame for the whole burst.
+    expect(rafSpy).toHaveBeenCalledTimes(1);
+    expect(rafQueue.size).toBe(1);
+  });
+
+  it("applies the latest measurement when the frame flushes", () => {
+    const { ref, setRect } = createMutableAnchor(40, 100);
+    render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+        <div data-testid="dropdown-body">Content</div>
+      </FixedDropdown>
+    );
+    expect(portalTop()).toBe("48px");
+
+    setRect({ bottom: 60 });
+    fireScroll();
+    flushFrames();
+    expect(portalTop()).toBe("68px");
+  });
+
+  it("re-arms scheduling after a frame flushes", () => {
+    const { ref, setRect } = createMutableAnchor(40, 100);
+    render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+        <div data-testid="dropdown-body">Content</div>
+      </FixedDropdown>
+    );
+
+    setRect({ bottom: 60 });
+    fireScroll();
+    flushFrames();
+    expect(portalTop()).toBe("68px");
+
+    rafSpy.mockClear();
+    setRect({ bottom: 80 });
+    fireScroll();
+    expect(rafSpy).toHaveBeenCalledTimes(1);
+    flushFrames();
+    expect(portalTop()).toBe("88px");
+  });
+
+  it("does not regress position when the anchor rect is unchanged across frames", () => {
+    const { ref } = createMutableAnchor(40, 100);
+    render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+        <div data-testid="dropdown-body">Content</div>
+      </FixedDropdown>
+    );
+
+    fireScroll();
+    flushFrames();
+    expect(portalTop()).toBe("48px");
+    fireScroll();
+    flushFrames();
+    expect(portalTop()).toBe("48px");
+  });
+
+  it("cancels a pending re-position frame on unmount", () => {
+    const { ref } = createMutableAnchor(40, 100);
+    const { unmount } = render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+        <div data-testid="dropdown-body">Content</div>
+      </FixedDropdown>
+    );
+
+    fireScroll();
+    expect(rafQueue.size).toBe(1);
+    cancelSpy.mockClear();
+    act(() => {
+      unmount();
+    });
+    expect(cancelSpy).toHaveBeenCalled();
+    expect(rafQueue.size).toBe(0);
+  });
+});
