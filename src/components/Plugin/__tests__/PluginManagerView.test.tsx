@@ -106,6 +106,11 @@ beforeEach(() => {
     app: {
       resetAndRelaunch: vi.fn().mockResolvedValue(undefined),
     },
+    // The header reserves space for OS window controls and subscribes to
+    // fullscreen changes to collapse that reservation.
+    window: {
+      onFullscreenChange: vi.fn().mockReturnValue(() => {}),
+    },
   } as unknown as typeof window.electron;
 });
 

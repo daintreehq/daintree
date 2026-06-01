@@ -13,6 +13,7 @@ import { useOverlayClaim } from "@/hooks";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { logError } from "@/utils/logger";
 import { cn } from "@/lib/utils";
+import { isMac, isWindows } from "@/lib/platform";
 import { usePluginManager } from "./usePluginManager";
 import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDetailPane";
 import { filterPlugins, isQueryActive, parsePluginQuery } from "@/lib/pluginSearch";
@@ -232,6 +233,16 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   useOverlayClaim("plugin-manager", isOpen);
   useEscapeStack(isOpen, close);
 
+  // This view is `fixed inset-0` at z-modal, so it paints over the Toolbar and
+  // its OS-window-control reservations. Mirror the Toolbar's traffic-light /
+  // window-controls spacers in our own header so the title and close button
+  // never sit under the macOS lights (top-left) or Windows controls (top-right).
+  // Both collapse in fullscreen, where the OS chrome is gone.
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    return window.electron.window.onFullscreenChange(setIsFullscreen);
+  }, []);
+
   const pm = usePluginManager(isOpen, {
     intent: deepLinkIntent ?? null,
     onConsumed: onDeepLinkConsumed,
@@ -399,20 +410,48 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
       data-testid="plugin-manager-view"
       className="fixed inset-0 z-[var(--z-modal)] flex flex-col bg-daintree-bg motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
     >
-      <header className="flex items-center justify-between gap-3 px-6 h-12 shrink-0 border-b border-daintree-border">
+      <header className="flex items-center justify-between gap-3 px-6 h-12 shrink-0 border-b border-daintree-border app-drag-region">
         <div className="flex items-center gap-2 min-w-0">
+          {isMac() && (
+            <div
+              aria-hidden="true"
+              data-fullscreen={isFullscreen ? "true" : undefined}
+              className={cn(
+                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-[120ms]",
+                isFullscreen ? "w-0" : "w-16"
+              )}
+            />
+          )}
           <Plug className="w-5 h-5 text-daintree-text/70 shrink-0" aria-hidden="true" />
           <h2 className="text-sm font-medium text-daintree-text truncate">Plugins</h2>
         </div>
-        <Button
-          ref={closeButtonRef}
-          variant="ghost"
-          size="icon-sm"
-          onClick={close}
-          aria-label="Close plugin manager"
-        >
-          <X />
-        </Button>
+        <div className="flex items-center gap-3 shrink-0">
+          <Button
+            ref={closeButtonRef}
+            variant="ghost"
+            size="icon-sm"
+            onClick={close}
+            aria-label="Close plugin manager"
+            className="app-no-drag"
+          >
+            <X />
+          </Button>
+          {isWindows() && (
+            <div
+              aria-hidden="true"
+              data-fullscreen={isFullscreen ? "true" : undefined}
+              className={cn(
+                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-[120ms]",
+                isFullscreen && "w-0"
+              )}
+              style={
+                isFullscreen
+                  ? undefined
+                  : { width: "calc(100vw - env(titlebar-area-width, calc(100vw - 138px)))" }
+              }
+            />
+          )}
+        </div>
       </header>
 
       {restartRequired && (
@@ -639,7 +678,11 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         <ScrollShadow
           key={selectedPlugin?.manifest.name ?? "empty"}
           className="flex-1 min-h-0"
-          scrollClassName="p-6 max-w-3xl"
+          // The `max-w-3xl` readable-width cap is left-pinned, which is right for
+          // the detail content but would push the centered empty-state placeholder
+          // off-center in the wide pane. Drop the cap when nothing is selected so
+          // the placeholder centers across the full pane.
+          scrollClassName={cn("p-6", selectedPlugin && "max-w-3xl")}
         >
           {selectedPlugin ? (
             <PluginDetailPane
