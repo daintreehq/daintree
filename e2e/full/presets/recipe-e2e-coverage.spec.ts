@@ -290,6 +290,7 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
         await window.electron.project.addRecipe(project.id, {
           id: "recipe-local-shadow",
           name: "Shared Dev",
+          projectId: project.id,
           terminals: [{ type: "terminal" as const, title: "", command: "echo local", env: {} }],
           createdAt: 1_700_000_000_000,
         });
