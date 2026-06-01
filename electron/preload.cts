@@ -139,6 +139,7 @@ import type {
   MenuItemContribution,
   PluginKeybindingDescriptor,
   ContextMenuContribution,
+  PluginDeepLinkIntent,
 } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
 import type { ToolbarButtonConfig } from "../shared/config/toolbarButtonRegistry.js";
@@ -669,6 +670,17 @@ type EventBusSubscriber = (payload: unknown) => void;
 const _eventBusSubscribers = new Map<keyof IpcEventBusMap, Set<EventBusSubscriber>>();
 let _eventBusWired = false;
 
+// Events safe to replay to a late first subscriber. A `daintree://` deep link
+// (#9559) is delivered by main on the primary view's first paint — which fires
+// from the Suspense *parent* before `AppInner` (the component that owns the
+// subscription) has mounted past its `app:boot` gate. Without a replay buffer
+// the intent would land with no subscriber and be dropped on a slow cold
+// launch. Only latest-wins, single-shot, low-frequency signals belong here —
+// replaying a high-frequency or stale state event to a late subscriber would be
+// wrong.
+const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set(["plugin:deep-link"]);
+const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown>();
+
 function _ensureEventBusWired(): void {
   if (_eventBusWired) return;
   _eventBusWired = true;
@@ -676,7 +688,14 @@ function _ensureEventBusWired(): void {
     if (!envelope || typeof envelope !== "object") return;
     if (typeof envelope.name !== "string") return;
     const subs = _eventBusSubscribers.get(envelope.name);
-    if (!subs || subs.size === 0) return;
+    if (!subs || subs.size === 0) {
+      // No subscriber yet: buffer replayable events so a late-mounting
+      // subscriber (e.g. one behind a Suspense boundary) still receives them.
+      if (_eventBusReplayable.has(envelope.name)) {
+        _eventBusBuffered.set(envelope.name, envelope.payload);
+      }
+      return;
+    }
     // Snapshot before iterating: a subscriber may unsubscribe itself or
     // another subscriber during dispatch; iterating the live Set would make
     // delivery to surviving subscribers depend on insertion order.
@@ -702,6 +721,17 @@ function _eventBusOn<K extends keyof IpcEventBusMap>(
   }
   const wrapped = callback as EventBusSubscriber;
   set.add(wrapped);
+  // Replay a buffered event to the first subscriber (see _eventBusReplayable) so
+  // a signal delivered before this subscriber mounted isn't lost.
+  if (_eventBusBuffered.has(name)) {
+    const buffered = _eventBusBuffered.get(name);
+    _eventBusBuffered.delete(name);
+    try {
+      wrapped(buffered);
+    } catch (err) {
+      console.error("[Preload] events:push replay threw for", name, err);
+    }
+  }
   return () => {
     const current = _eventBusSubscribers.get(name);
     if (!current) return;
@@ -2515,6 +2545,8 @@ const api: ElectronAPI = {
     ) => _eventBusOn("plugin:context-menu-items-changed", callback),
     onDecorationsChanged: (callback: (payload: { scope: string; paths?: string[] }) => void) =>
       _eventBusOn("plugin:decorations-changed", callback),
+    onDeepLink: (callback: (intent: PluginDeepLinkIntent) => void) =>
+      _eventBusOn("plugin:deep-link", callback),
   },
 
   pluginMcp: buildPluginMcpPreloadBindings(_unwrappingInvoke),

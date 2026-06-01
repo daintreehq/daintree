@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import {
   Plug,
   AlertCircle,
@@ -17,7 +18,11 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { usePluginManager } from "./usePluginManager";
-import type { LoadedPluginInfo, PluginInstallSource } from "@shared/types/plugin";
+import type {
+  LoadedPluginInfo,
+  PluginDeepLinkIntent,
+  PluginInstallSource,
+} from "@shared/types/plugin";
 
 /** Provenance source → short badge label (built-in / file / URL / catalog). */
 const SOURCE_BADGE_LABELS: Record<PluginInstallSource, string> = {
@@ -39,6 +44,10 @@ interface PluginRowProps {
   onToggle: () => void;
   onUninstall: () => void;
   onCheckForUpdate: () => void;
+  /** Attached to the row root so a deep-link `open` can scroll it into view. */
+  innerRef?: (el: HTMLDivElement | null) => void;
+  /** Transient neutral highlight when a deep-link `open` targets this row. */
+  highlighted?: boolean;
 }
 
 /**
@@ -57,6 +66,8 @@ function PluginRow({
   onToggle,
   onUninstall,
   onCheckForUpdate,
+  innerRef,
+  highlighted,
 }: PluginRowProps) {
   const label = pluginLabel(plugin);
   const enabled = plugin.disabled !== true;
@@ -75,7 +86,12 @@ function PluginRow({
       : "No update URL — reinstall from a file to update";
 
   return (
-    <div className="relative w-full p-4 rounded-[var(--radius-lg)] border border-daintree-border text-daintree-text">
+    <div
+      ref={innerRef}
+      className={`relative w-full p-4 rounded-[var(--radius-lg)] border text-daintree-text transition-colors ${
+        highlighted ? "border-daintree-text/40 bg-overlay-subtle" : "border-daintree-border"
+      }`}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
           <Plug
@@ -222,7 +238,14 @@ function RowSkeleton() {
 interface PluginManagerDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  /** Pending `daintree://` deep-link intent (#9559), or `null` when none. */
+  deepLinkIntent?: PluginDeepLinkIntent | null;
+  /** Called once the intent has been applied so the source can clear it. */
+  onDeepLinkConsumed?: () => void;
 }
+
+// How long the deep-link `open` target row stays highlighted before fading back.
+const DEEP_LINK_HIGHLIGHT_MS = 2000;
 
 /**
  * Dedicated plugin manager dialog (#9548) — the primary surface for plugin
@@ -237,8 +260,37 @@ interface PluginManagerDialogProps {
  * dialog render at `zIndex="nested"` so the LIFO escape backstop closes the
  * inner surface before this dialog (#2828).
  */
-export function PluginManagerDialog({ isOpen, onClose }: PluginManagerDialogProps) {
-  const pm = usePluginManager(isOpen);
+export function PluginManagerDialog({
+  isOpen,
+  onClose,
+  deepLinkIntent,
+  onDeepLinkConsumed,
+}: PluginManagerDialogProps) {
+  const pm = usePluginManager(isOpen, {
+    intent: deepLinkIntent ?? null,
+    onConsumed: onDeepLinkConsumed,
+  });
+
+  // Row elements keyed by plugin name, so a `daintree://plugin/open` can scroll
+  // its target into view.
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const [highlightedPluginId, setHighlightedPluginId] = useState<string | null>(null);
+
+  // When the hook resolves a deep-link `open` target to an installed plugin,
+  // scroll its row into view and apply a transient neutral highlight, then clear
+  // the focus request so it doesn't re-trigger on the next render.
+  const focusPluginId = pm.focusPluginId;
+  const clearFocusPluginId = pm.clearFocusPluginId;
+  useEffect(() => {
+    if (!focusPluginId) return;
+    const row = rowRefs.current.get(focusPluginId);
+    if (!row) return; // Row not rendered yet — the not-found notice path handles misses.
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    setHighlightedPluginId(focusPluginId);
+    clearFocusPluginId();
+    const timer = setTimeout(() => setHighlightedPluginId(null), DEEP_LINK_HIGHLIGHT_MS);
+    return () => clearTimeout(timer);
+  }, [focusPluginId, clearFocusPluginId, pm.plugins]);
 
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="lg" data-testid="plugin-manager-dialog">
@@ -326,6 +378,11 @@ export function PluginManagerDialog({ isOpen, onClose }: PluginManagerDialogProp
                   onToggle={() => void pm.handleToggle(plugin)}
                   onUninstall={() => pm.armUninstall(plugin)}
                   onCheckForUpdate={() => void pm.handleCheckForUpdate(plugin)}
+                  highlighted={highlightedPluginId === plugin.manifest.name}
+                  innerRef={(el) => {
+                    if (el) rowRefs.current.set(plugin.manifest.name, el);
+                    else rowRefs.current.delete(plugin.manifest.name);
+                  }}
                 />
               ))}
             </div>

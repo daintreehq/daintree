@@ -1929,6 +1929,12 @@ export interface IpcEventMap {
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
 
+  // `daintree://` deep-link intent (main → renderer, #9559). Delivered to the
+  // primary window once it has painted; the renderer opens the Plugin Manager
+  // (URL pre-filled for install, or scrolled to the plugin for open). Routing
+  // installs through the existing manager flow keeps every security gate intact.
+  "plugin:deep-link": import("../plugin.js").PluginDeepLinkIntent;
+
   // Resource profile change (main → renderer)
   "resource:profile-changed": import("../resourceProfile.js").ResourceProfilePayload;
 
@@ -2016,6 +2022,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:decorations-changed"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
+  // Plugin deep-link intent (targeted at the primary window)
+  | "plugin:deep-link"
   // Terminal lifecycle (non-data) — exit, spawn-result, backend crash/ready
   | "terminal:exit"
   | "terminal:backend-crashed"

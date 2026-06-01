@@ -32,6 +32,13 @@ module.exports = async function () {
     asar: true,
     appId: "org.daintree.app",
     productName: "Daintree",
+    // Register the `daintree://` deep-link scheme at the OS level (#9559).
+    // electron-builder injects `CFBundleURLTypes` on macOS, an HKCU registry
+    // write in the NSIS installer (per-user, no elevation), and
+    // `x-scheme-handler/daintree` into the Linux `.desktop` entry. External
+    // pages and catalog entries deep-link into the plugin install / open flow;
+    // installs still route through the in-app confirm + security gates.
+    protocols: [{ name: "Daintree", schemes: ["daintree"] }],
     publish: [publishEntry],
     electronUpdaterCompatibility: ">=2.16",
     npmRebuild: true,

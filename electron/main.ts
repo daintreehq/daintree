@@ -21,9 +21,11 @@ import { enforceIpcSenderValidation, setupPermissionLockdown } from "./setup/sec
 import {
   registerAppProtocol,
   registerDaintreeFileProtocol,
+  registerDeepLinkProtocolClient,
   registerPluginProtocol,
   setupWebviewCSP,
 } from "./setup/protocols.js";
+import { activateDeepLinkHandler } from "./setup/deepLinkInstall.js";
 import {
   registerAppLifecycleHandlers,
   registerWindowSessionEndHandler,
@@ -448,6 +450,7 @@ if (!gotTheLock) {
         markPerformance(PERF_MARKS.EARLY_PATH_REFRESH_COMPLETE);
       });
       setupPermissionLockdown();
+      registerDeepLinkProtocolClient();
       registerAppProtocol(distPath);
       registerDaintreeFileProtocol();
       const { pluginService } = await import("./services/PluginService.js");
@@ -457,6 +460,12 @@ if (!gotTheLock) {
       // that PluginService can install them. Fire-and-forget — install runs
       // concurrently with the rest of startup. #9293
       void activateOpenFileInstaller(pluginService);
+      // Wire the `daintree://` deep-link path (#9559): take over live macOS
+      // `open-url` events and drain any cold-launch URL (queued `open-url` on
+      // macOS, `process.argv` on Windows/Linux). Routed to the primary window
+      // once it paints, where the Plugin Manager opens — installs still go
+      // through the existing confirm/security gates, never silently.
+      activateDeepLinkHandler(windowRegistry);
       setupWebviewCSP();
       // Prime the hydrate prefetch cache for the last-active project so the
       // renderer's first `app:boot` invoke resolves as a cache hit instead of
