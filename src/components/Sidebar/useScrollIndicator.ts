@@ -21,6 +21,10 @@ function useScrollIndicator({ itemCount }: UseScrollIndicatorParams): UseScrollI
   const [hiddenBelow, setHiddenBelow] = useState(0);
   const scrollerElRef = useRef<HTMLElement | null>(null);
   const [scrollerEl, setScrollerEl] = useState<HTMLElement | null>(null);
+  // rAF-coalesce Virtuoso scroll callbacks into a single in-flight frame so a
+  // burst of scroll events triggers one layout read, not one per event (issue
+  // #9580). The ResizeObserver path already throttles via `useResizeObserverRaf`.
+  const scrollRafIdRef = useRef<number | null>(null);
 
   const updateScrollIndicators = useCallback(() => {
     const scroller = scrollerElRef.current;
@@ -59,9 +63,33 @@ function useScrollIndicator({ itemCount }: UseScrollIndicatorParams): UseScrollI
 
   useResizeObserverRaf(scrollerEl, () => updateScrollIndicators());
 
-  const handleScroll = useCallback(() => {
-    updateScrollIndicators();
+  // Always invoke the latest `updateScrollIndicators` from the deferred frame.
+  // A frame scheduled before `itemCount` changes would otherwise fire after the
+  // corrective effect above and overwrite the counts with a stale measurement.
+  const updateScrollIndicatorsRef = useRef(updateScrollIndicators);
+  useEffect(() => {
+    updateScrollIndicatorsRef.current = updateScrollIndicators;
   }, [updateScrollIndicators]);
+
+  // Cancel any pending re-position frame on unmount so the coalesced callback
+  // never reads a detached scroller or sets state after teardown.
+  useEffect(
+    () => () => {
+      if (scrollRafIdRef.current !== null) {
+        cancelAnimationFrame(scrollRafIdRef.current);
+        scrollRafIdRef.current = null;
+      }
+    },
+    []
+  );
+
+  const handleScroll = useCallback(() => {
+    if (scrollRafIdRef.current !== null) return;
+    scrollRafIdRef.current = requestAnimationFrame(() => {
+      scrollRafIdRef.current = null;
+      updateScrollIndicatorsRef.current();
+    });
+  }, []);
 
   const scrollerRef = useCallback((el: HTMLElement | Window | null) => {
     // Virtuoso forwards either the scroller element or window. We only support
@@ -71,8 +99,13 @@ function useScrollIndicator({ itemCount }: UseScrollIndicatorParams): UseScrollI
     setScrollerEl(next);
     // When Virtuoso unmounts (filter clears to an empty state), reset the
     // indicator counts so stale "5 above" badges don't briefly remain over
-    // the empty state placeholder.
+    // the empty state placeholder, and drop any pending scroll frame that
+    // would otherwise read the now-detached scroller.
     if (next === null) {
+      if (scrollRafIdRef.current !== null) {
+        cancelAnimationFrame(scrollRafIdRef.current);
+        scrollRafIdRef.current = null;
+      }
       setHiddenAbove(0);
       setHiddenBelow(0);
     }
