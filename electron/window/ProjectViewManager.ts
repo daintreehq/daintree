@@ -1216,6 +1216,42 @@ export class ProjectViewManager {
         this.onViewCrashed?.(wc);
       }
 
+      // "oom" is Windows-specific (pagefile exhaustion). On macOS/Linux, V8
+      // heap exhaustion surfaces as "crashed" and the OS OOM-killer surfaces
+      // as "killed". We detect probable OOM by checking available memory
+      // against the profile threshold. exitCode is intentionally not used —
+      // sources disagree on its value for V8 heap OOM (5 vs 132).
+      // Performance profile sets the threshold to null to disable the
+      // heuristic for memory-unconstrained sessions.
+      const availableMb = this.getAvailableMemoryMb();
+      const isProbableOom =
+        details.reason === "oom" ||
+        ((details.reason === "crashed" || details.reason === "killed") &&
+          this.lowMemoryFreeThresholdMb !== null &&
+          availableMb !== null &&
+          availableMb < this.lowMemoryFreeThresholdMb);
+
+      // OS-pressure memory eviction is distinct from a crash: the renderer is
+      // reclaimed by the OS without a V8 abort. The view goes blank and does
+      // not auto-reload, so an explicit reload is required. It does not count
+      // toward the crash-loop guard because repeated OS evictions under memory
+      // pressure are not a sign of a looping crash bug.
+      if (details.reason === "memory-eviction") {
+        if (projectId && projectId === this.activeProjectId) {
+          notifyError(new Error("A project view was reloaded due to memory pressure."), {
+            source: "renderer-crash",
+          });
+        } else {
+          console.warn(
+            `[ProjectViewManager] Cached view reloaded due to memory pressure (project: ${projectId})`
+          );
+        }
+        setImmediate(() => {
+          if (!wc.isDestroyed()) wc.reload();
+        });
+        return;
+      }
+
       const crashTimestamps = crashEntry?.crashTimestamps ?? [];
       const now = Date.now();
       while (crashTimestamps.length > 0 && now - crashTimestamps[0] > CRASH_LOOP_WINDOW_MS) {
@@ -1249,7 +1285,7 @@ export class ProjectViewManager {
             wc.loadURL(`app://daintree/recovery.html?${params}`);
           }
         });
-      } else if (details.reason === "oom" && this.onRecreateWindow) {
+      } else if (isProbableOom && this.onRecreateWindow) {
         console.warn("[ProjectViewManager] OOM crash, destroying and recreating window");
         notifyError(new Error("A project view ran out of memory and the window was recreated."), {
           source: "renderer-crash",

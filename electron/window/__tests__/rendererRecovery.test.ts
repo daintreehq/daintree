@@ -80,13 +80,20 @@ function createMockWindow() {
 interface CrashRecoveryOptions {
   onRecreateWindow?: () => Promise<void>;
   backupTimestamp?: number | null;
+  lowMemoryFreeThresholdMb?: number | null;
+  getAvailableMemoryMb?: () => number | null;
 }
 
 function setupCrashRecovery(
   win: ReturnType<typeof createMockWindow>,
   options: CrashRecoveryOptions = {}
 ) {
-  const { onRecreateWindow, backupTimestamp = null } = options;
+  const {
+    onRecreateWindow,
+    backupTimestamp = null,
+    lowMemoryFreeThresholdMb = null,
+    getAvailableMemoryMb = () => null,
+  } = options;
   const rendererCrashTimestamps: number[] = [];
   const oomRecreationTimestamps: number[] = [];
   const recordCrash = vi.fn();
@@ -106,6 +113,25 @@ function setupCrashRecovery(
 
     if (win.isDestroyed()) return;
 
+    if (details.reason === "memory-eviction") {
+      notifyError(new Error("A project view was reloaded due to memory pressure."), {
+        source: "renderer-crash",
+      });
+      setImmediate(() => {
+        if (win.isDestroyed()) return;
+        win.webContents.reload();
+      });
+      return;
+    }
+
+    const availableMb = getAvailableMemoryMb();
+    const isProbableOom =
+      details.reason === "oom" ||
+      ((details.reason === "crashed" || details.reason === "killed") &&
+        lowMemoryFreeThresholdMb !== null &&
+        availableMb !== null &&
+        availableMb < lowMemoryFreeThresholdMb);
+
     const now = Date.now();
     while (
       rendererCrashTimestamps.length > 0 &&
@@ -115,14 +141,12 @@ function setupCrashRecovery(
     }
     rendererCrashTimestamps.push(now);
 
-    const isOom = details.reason === "oom";
-
     if (rendererCrashTimestamps.length >= CRASH_LOOP_THRESHOLD) {
       setImmediate(() => {
         if (win.isDestroyed()) return;
         win.webContents.loadURL(getRecoveryUrl(details.reason, details.exitCode));
       });
-    } else if (isOom && onRecreateWindow) {
+    } else if (isProbableOom && onRecreateWindow) {
       const now2 = Date.now();
       while (
         oomRecreationTimestamps.length > 0 &&
@@ -544,6 +568,93 @@ describe("renderer crash recovery", () => {
     const url = win.webContents.loadURL.mock.calls[0][0] as string;
     expect(url).toContain("reason=killed");
     expect(url).toContain("exitCode=137");
+  });
+
+  it('"crashed" with low available memory routes to OOM path (#9572)', () => {
+    const win = createMockWindow();
+    const onRecreateWindow = vi.fn().mockResolvedValue(undefined);
+    setupCrashRecovery(win, {
+      onRecreateWindow,
+      lowMemoryFreeThresholdMb: 768,
+      getAvailableMemoryMb: () => 500,
+    });
+
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 5 });
+    vi.advanceTimersByTime(0);
+
+    expect(win.destroy).toHaveBeenCalledOnce();
+    expect(onRecreateWindow).toHaveBeenCalledOnce();
+    expect(win.webContents.reload).not.toHaveBeenCalled();
+    const errorArg = vi.mocked(notifyError).mock.calls[0][0] as Error;
+    expect(errorArg.message).toContain("out of memory");
+  });
+
+  it('"killed" with low available memory routes to OOM path (#9572)', () => {
+    const win = createMockWindow();
+    const onRecreateWindow = vi.fn().mockResolvedValue(undefined);
+    setupCrashRecovery(win, {
+      onRecreateWindow,
+      lowMemoryFreeThresholdMb: 768,
+      getAvailableMemoryMb: () => 200,
+    });
+
+    win._emitWc("render-process-gone", { reason: "killed", exitCode: 9 });
+    vi.advanceTimersByTime(0);
+
+    expect(win.destroy).toHaveBeenCalledOnce();
+    expect(onRecreateWindow).toHaveBeenCalledOnce();
+    expect(win.webContents.reload).not.toHaveBeenCalled();
+    const errorArg = vi.mocked(notifyError).mock.calls[0][0] as Error;
+    expect(errorArg.message).toContain("out of memory");
+  });
+
+  it('"crashed" with high available memory routes to regular crash path (#9572)', () => {
+    const win = createMockWindow();
+    const onRecreateWindow = vi.fn().mockResolvedValue(undefined);
+    setupCrashRecovery(win, {
+      onRecreateWindow,
+      lowMemoryFreeThresholdMb: 768,
+      getAvailableMemoryMb: () => 2048,
+    });
+
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    vi.advanceTimersByTime(0);
+
+    expect(win.webContents.reload).toHaveBeenCalledOnce();
+    expect(onRecreateWindow).not.toHaveBeenCalled();
+    expect(win.destroy).not.toHaveBeenCalled();
+    const errorArg = vi.mocked(notifyError).mock.calls[0][0] as Error;
+    expect(errorArg.message).toContain("crashed");
+  });
+
+  it('"memory-eviction" reloads without counting toward crash-loop guard (#9572)', () => {
+    const win = createMockWindow();
+    setupCrashRecovery(win);
+
+    win._emitWc("render-process-gone", { reason: "memory-eviction", exitCode: 0 });
+    vi.advanceTimersByTime(0);
+    expect(win.webContents.reload).toHaveBeenCalledOnce();
+
+    win._emitWc("render-process-gone", { reason: "memory-eviction", exitCode: 0 });
+    vi.advanceTimersByTime(0);
+    expect(win.webContents.reload).toHaveBeenCalledTimes(2);
+
+    win._emitWc("render-process-gone", { reason: "memory-eviction", exitCode: 0 });
+    vi.advanceTimersByTime(0);
+    expect(win.webContents.reload).toHaveBeenCalledTimes(3);
+    expect(win.webContents.loadURL).not.toHaveBeenCalled();
+  });
+
+  it('"memory-eviction" fires memory-pressure notification, not crash toast (#9572)', () => {
+    const win = createMockWindow();
+    setupCrashRecovery(win);
+
+    win._emitWc("render-process-gone", { reason: "memory-eviction", exitCode: 0 });
+
+    expect(notifyError).toHaveBeenCalledOnce();
+    const errorArg = vi.mocked(notifyError).mock.calls[0][0] as Error;
+    expect(errorArg.message).not.toContain("crashed");
+    expect(errorArg.message).toContain("memory pressure");
   });
 });
 
