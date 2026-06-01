@@ -20,6 +20,7 @@ import {
   _resetCoalesceMap,
   _resetPendingSuppressedForTest,
   _resetEscalationTrackers,
+  _resetOverflowAnnouncements,
 } from "@/lib/notify";
 import { usePanelStore, type BackendStatus, type WatchdogStatus } from "@/store/panelStore";
 import { useSafeModeStore } from "@/store/safeModeStore";
@@ -122,6 +123,7 @@ function buildApi(): NotificationsE2EApi {
       _resetCoalesceMap();
       _resetPendingSuppressedForTest();
       _resetEscalationTrackers();
+      _resetOverflowAnnouncements();
       _setQuietUntil(0);
     },
     setBackendStatus: (status) => usePanelStore.setState({ backendStatus: status }),
@@ -131,7 +133,16 @@ function buildApi(): NotificationsE2EApi {
     setRestoreConfirmation: (visible) => useRestoreConfirmationStore.setState({ visible }),
     resetBanners: () => {
       usePanelStore.setState({ backendStatus: "connected", watchdogStatus: "active" });
-      useSafeModeStore.setState({ safeMode: false, dismissed: false });
+      // Clear the full safe-mode shape (not just safeMode/dismissed) so a prior
+      // test's crash metadata can't leak into a later SafeModeBanner render.
+      useSafeModeStore.setState({
+        safeMode: false,
+        dismissed: false,
+        crashCount: undefined,
+        skippedPanelCount: undefined,
+        lastCrashAt: undefined,
+        quarantinedPanels: undefined,
+      });
       useRestoreConfirmationStore.setState({ visible: false });
     },
   };

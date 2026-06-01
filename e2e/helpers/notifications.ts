@@ -145,10 +145,13 @@ export async function resetNotifications(page: Page): Promise<void> {
         };
       }
     ).__daintreeNotificationsE2E;
-    a?.resetToasts();
-    a?.clearHistory();
-    a?.resetNotifyInternals();
-    a?.resetBanners();
+    // Throw on a missing backdoor so a misconfigured launch fails loudly in
+    // beforeEach instead of surfacing as a delayed positive-assertion timeout.
+    if (!a) throw new Error("__daintreeNotificationsE2E backdoor not attached");
+    a.resetToasts();
+    a.clearHistory();
+    a.resetNotifyInternals();
+    a.resetBanners();
   });
 }
 
@@ -205,5 +208,18 @@ export async function getMaxVisibleToasts(page: Page): Promise<number> {
     ).__daintreeNotificationsE2E;
     if (!a) throw new Error("__daintreeNotificationsE2E backdoor not attached");
     return a.MAX_VISIBLE_TOASTS;
+  });
+}
+
+/** Reads GRID_BAR_DWELL_FLOOR_MS from the renderer so dwell-floor tests track the store constant. */
+export async function getGridBarDwellFloorMs(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const a = (
+      window as unknown as {
+        __daintreeNotificationsE2E?: { GRID_BAR_DWELL_FLOOR_MS: number };
+      }
+    ).__daintreeNotificationsE2E;
+    if (!a) throw new Error("__daintreeNotificationsE2E backdoor not attached");
+    return a.GRID_BAR_DWELL_FLOOR_MS;
   });
 }

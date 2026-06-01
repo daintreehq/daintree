@@ -9,6 +9,7 @@ import { T_SHORT, T_MEDIUM } from "../../helpers/timeouts";
 import {
   injectGridNotification,
   backdateNotification,
+  getGridBarDwellFloorMs,
   resetNotifications,
   setBackendStatus,
   setWatchdogStatus,
@@ -93,8 +94,10 @@ test.describe.serial("Panels: Grid-bar & global banners", () => {
       await expect(status).toContainText("Stale grid event", { timeout: T_MEDIUM });
 
       // Backdate past the dwell floor so the lock is already expired, then a
-      // higher-severity newcomer can take the slot.
-      await backdateNotification(window, firstId, 6_000);
+      // higher-severity newcomer can take the slot. Read the floor from the
+      // store constant so the test tracks it if the value changes.
+      const dwellFloorMs = await getGridBarDwellFloorMs(window);
+      await backdateNotification(window, firstId, dwellFloorMs + 1_000);
       await injectGridNotification(window, {
         type: "error",
         priority: "watch",

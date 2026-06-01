@@ -100,6 +100,10 @@ test.describe.serial("Panels: Notification center", () => {
 
   test("snoozed threads move to the Snoozed tab and out of All", async () => {
     const { window } = ctx;
+    // A non-snoozed sentinel keeps the All list rendered (the list only carries
+    // role="list" when rowCount > 0) so the "snoozed item is absent" assertion
+    // is non-vacuous — it runs against a present, populated list.
+    await injectHistoryEntry(window, { type: "info", message: "Active sibling" });
     await injectHistoryEntry(window, {
       type: "info",
       message: "Snoozed item",
@@ -109,11 +113,13 @@ test.describe.serial("Panels: Notification center", () => {
 
     await openCenter(window);
     const list = window.locator(SEL.notifications.centerList);
-    // Hidden from All while snoozed.
+    // All still renders the sibling; the snoozed item is hidden from it.
+    await expect(list).toContainText("Active sibling", { timeout: T_MEDIUM });
     await expect(list).not.toContainText("Snoozed item");
 
     await window.locator(SEL.notifications.centerFilter("Snoozed")).click();
     await expect(list).toContainText("Snoozed item", { timeout: T_MEDIUM });
+    await expect(list).not.toContainText("Active sibling");
   });
 
   test("Mark all read clears the unread state", async () => {
