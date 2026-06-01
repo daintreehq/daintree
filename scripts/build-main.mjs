@@ -192,6 +192,9 @@ async function run() {
       // Sideloaded via `DAINTREE_E2E_SIDELOAD_PLUGIN_DIR`; absent in prod
       // because no `pluginsRoot` defaults to this directory.
       "plugins/sample/hello-daintree/main/index.ts",
+      // Capability- and settings-rich sample for the full-plugins E2E bucket
+      // (#9592). Sideloaded from the same dir as hello-daintree.
+      "plugins/sample/rich-daintree/main/index.ts",
     ],
     outdir: "dist-electron",
     outbase: ".",

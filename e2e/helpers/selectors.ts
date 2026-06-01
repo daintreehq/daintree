@@ -389,6 +389,8 @@ export const SEL = {
     tabOverview: '[role="tab"][data-tab="overview"]',
     tabSettings: '[role="tab"][data-tab="settings"]',
     tabPermissions: '[role="tab"][data-tab="capabilities"]',
+    installFromUrlButton: 'button:has-text("Install from URL")',
+    httpWarningDialog: '[role="dialog"]:has-text("Install over HTTP?")',
   },
   fleet: {
     ribbon: '[data-testid="fleet-arming-ribbon"]',

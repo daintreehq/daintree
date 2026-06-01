@@ -21,6 +21,13 @@ export const SAMPLE_PLUGINS_DIR = path.join(ROOT, "dist-electron/plugins/sample"
 /** Display label the sample plugin's manifest resolves to. */
 export const SAMPLE_PLUGIN_LABEL = "Hello Daintree";
 
+/**
+ * Display label for the capability- and settings-rich sample (#9592). Loaded
+ * from the same sideload dir as `hello-daintree`, so both appear under the
+ * manager's "Built-in" group in the same session.
+ */
+export const RICH_PLUGIN_LABEL = "Rich Daintree";
+
 const PLUGIN_READY_TIMEOUT = process.env.CI ? 60_000 : T_LONG;
 
 async function getPluginActionIds(page: Page): Promise<string[]> {
@@ -47,6 +54,18 @@ export async function waitForSamplePluginReady(page: Page): Promise<void> {
   await expect
     .poll(() => getPluginActionIds(page), { timeout: PLUGIN_READY_TIMEOUT })
     .toContain("daintree.hello.greet");
+}
+
+/**
+ * Poll until the rich sample plugin has activated and registered its sentinel
+ * `ready` action. The rich plugin sideloads alongside `hello-daintree`, but its
+ * activation is independent — specs that assert against its capabilities or
+ * settings must gate on this rather than `waitForSamplePluginReady`.
+ */
+export async function waitForRichPluginReady(page: Page): Promise<void> {
+  await expect
+    .poll(() => getPluginActionIds(page), { timeout: PLUGIN_READY_TIMEOUT })
+    .toContain("daintree.rich.ready");
 }
 
 /**
