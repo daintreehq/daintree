@@ -124,9 +124,12 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       await closeAppDialog(window);
     });
 
-    test("import from clipboard adds a project recipe", async () => {
+    test("import from clipboard adds a recipe under team scope", async () => {
       const { window } = ctx;
       const manager = await openRecipeManager(window);
+      // The plain fixture has no in-repo recipes yet, so the Team section is
+      // absent until the project-scoped import writes one to .daintree/recipes/.
+      await expect(manager.locator(SEL.recipeManager.teamSection)).toHaveCount(0);
 
       await manager.locator(SEL.recipeManager.importButton).first().click({ force: true });
       const importDialog = window.locator(SEL.recipeManager.importDialog);
@@ -140,10 +143,12 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       await importDialog.locator(SEL.recipeManager.importConfirmButton).click();
       await expect(importDialog).not.toBeVisible({ timeout: T_MEDIUM });
 
-      // The recipe row appears in the still-open manager once the store settles.
-      await expect(manager.locator(SEL.recipeManager.exportButton("Imported Recipe"))).toBeAttached(
-        { timeout: T_LONG }
-      );
+      // A project-scoped import persists to the repo (scope: "inrepo"), so the
+      // Team Recipes section appears with the imported recipe.
+      await expect(manager.locator(SEL.recipeManager.teamSection)).toBeVisible({ timeout: T_LONG });
+      await expect(manager.getByText("Imported Recipe", { exact: true })).toBeVisible({
+        timeout: T_SHORT,
+      });
 
       await closeAppDialog(window);
     });
