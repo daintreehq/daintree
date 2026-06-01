@@ -25,3 +25,20 @@ export async function keyboardReorderElement(
   await page.keyboard.press("Space");
   await page.waitForTimeout(T_SETTLE);
 }
+
+/**
+ * Reorder a dock-rail chip by a single step through the keyboard sensor.
+ *
+ * Dock chips are sortable through the global `DndProvider`, which — unlike
+ * `DockedTabGroup`'s own `DndContext` (PointerSensor/TouchSensor only) —
+ * registers a `KeyboardSensor`. A single arrow step avoids the autoscroll-driven
+ * source unmount that long keyboard drags can hit (#8478), and keeps the drag
+ * short enough for framer-motion's FLIP to settle before assertions (#9029).
+ */
+export async function keyboardReorderDockChip(
+  page: Page,
+  chip: Locator,
+  direction: "ArrowRight" | "ArrowLeft" = "ArrowRight"
+): Promise<void> {
+  await keyboardReorderElement(page, chip, [direction]);
+}

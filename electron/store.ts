@@ -82,6 +82,7 @@ export interface StoreSchema {
       diagnosticsOpen: boolean;
     };
     diagnosticsHeight?: number;
+    dockedPopoverHeight?: number;
     hasSeenWelcome?: boolean;
     developerMode?: {
       enabled: boolean;

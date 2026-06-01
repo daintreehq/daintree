@@ -135,6 +135,12 @@ export const SEL = {
   },
   dock: {
     container: "#dock-container",
+    rail: '[role="toolbar"][aria-label="Docked terminals"]',
+    chip: "[data-dock-item]",
+    chipByTitle: (title: string) => `[data-dock-item][aria-label^="${title}"]`,
+    tablist: '[role="tablist"][aria-label="Dock panel tabs"]',
+    tabByPanelId: (id: string) => `[data-tab-id="${id}"]`,
+    overflowMenu: '[data-testid="dock-tabs-overflow"]',
   },
   browser: {
     addressBar: '[data-testid="browser-address-bar"]',
@@ -377,5 +383,14 @@ export const SEL = {
     savedRow: '[data-testid="fleet-saved-row"]',
     savedRowDelete: '[data-testid="fleet-saved-row-delete"]',
     failureBanner: '[role="alert"]:has-text("Broadcast failed")',
+  events: {
+    timeline: '[role="log"][aria-label="Event timeline"]',
+    row: '[role="log"][aria-label="Event timeline"] button',
+    emptyState: 'text="No events captured yet"',
+    detailPlaceholder: 'text="Select an event to view details"',
+    searchInput: 'input[placeholder="Search events..."]',
+    traceInput: 'input[placeholder="Filter by trace ID..."]',
+    clearSearch: '[aria-label="Clear search"]',
+    clearTraceId: '[aria-label="Clear trace ID filter"]',
   },
 } as const;

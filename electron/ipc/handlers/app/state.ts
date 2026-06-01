@@ -507,6 +507,14 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         }
       }
 
+      if ("dockedPopoverHeight" in partialState) {
+        // Mirrors dockStore's clamp (min 300, up to 80% of a large viewport).
+        const height = Number(partialState.dockedPopoverHeight);
+        if (!isNaN(height) && height >= 300 && height <= 2000) {
+          updates.dockedPopoverHeight = height;
+        }
+      }
+
       if ("hasSeenWelcome" in partialState) {
         updates.hasSeenWelcome = Boolean(partialState.hasSeenWelcome);
       }
