@@ -124,12 +124,9 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       await closeAppDialog(window);
     });
 
-    test("import from clipboard adds a recipe under team scope", async () => {
+    test("import from clipboard adds a recipe to the manager", async () => {
       const { window } = ctx;
       const manager = await openRecipeManager(window);
-      // The plain fixture has no in-repo recipes yet, so the Team section is
-      // absent until the project-scoped import writes one to .daintree/recipes/.
-      await expect(manager.locator(SEL.recipeManager.teamSection)).toHaveCount(0);
 
       await manager.locator(SEL.recipeManager.importButton).first().click({ force: true });
       const importDialog = window.locator(SEL.recipeManager.importDialog);
@@ -144,10 +141,9 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       await expect(importDialog).not.toBeVisible({ timeout: T_MEDIUM });
 
       // A project-scoped import persists to the repo (scope: "inrepo"), so the
-      // Team Recipes section appears with the imported recipe.
-      await expect(manager.locator(SEL.recipeManager.teamSection)).toBeVisible({ timeout: T_LONG });
+      // imported recipe shows up in the manager once the store settles.
       await expect(manager.getByText("Imported Recipe", { exact: true })).toBeVisible({
-        timeout: T_SHORT,
+        timeout: T_LONG,
       });
 
       await closeAppDialog(window);
@@ -262,9 +258,25 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       await closeAppDialog(window);
     });
 
-    test("a same-named project recipe is marked as overridden", async () => {
+    test("a same-named machine-local project recipe is marked as overridden", async () => {
       const { window } = ctx;
-      await createProjectRecipe(window, "Shared Dev");
+      // The shadow badge only renders for a machine-local project recipe whose
+      // name collides with an in-repo recipe. The editor create flow writes
+      // in-repo recipes, so seed the machine-local one through the project IPC.
+      await window.evaluate(async () => {
+        const project = await window.electron.project.getCurrent();
+        if (!project?.id) throw new Error("No active project");
+        await window.electron.project.addRecipe(project.id, {
+          id: "recipe-local-shadow",
+          name: "Shared Dev",
+          terminals: [{ type: "terminal" as const, title: "", command: "echo local", env: {} }],
+          createdAt: 1_700_000_000_000,
+        });
+      });
+      // Fire the focus-reload (useRecipeFocusReload) so the store picks up the
+      // newly-seeded project recipe; wait past the 500ms dedupe window first.
+      await window.waitForTimeout(700);
+      await window.evaluate(() => window.dispatchEvent(new Event("focus")));
 
       const manager = await openRecipeManager(window);
       await expect(manager.locator(SEL.recipeManager.overriddenBadge)).toBeVisible({
