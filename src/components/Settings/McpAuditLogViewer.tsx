@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Check, Clock, Copy, Download, Layers, RefreshCw, ShieldOff } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import type {
@@ -45,8 +46,6 @@ const TIME_RANGE_MS: Record<Exclude<TimeRange, "all">, number> = {
   "1h": 3_600_000,
   "24h": 86_400_000,
 };
-
-const RELATIVE_TIMESTAMP_REFRESH_MS = 30_000;
 
 const OUTCOME_LABEL: Record<string, string> = {
   answered: "Answered",
@@ -161,14 +160,14 @@ export function McpAuditLogViewer({
   const [resultFilter, setResultFilter] = useState<AuditResultFilter>("all");
   const [timeRange, setTimeRange] = useState<TimeRange>("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [nowTick, setNowTick] = useState(Date.now());
   const [groupByTurn, setGroupByTurn] = useState(false);
   const [ignoreLastHour, setIgnoreLastHour] = useState(false);
 
-  useEffect(() => {
-    const id = setInterval(() => setNowTick(Date.now()), RELATIVE_TIMESTAMP_REFRESH_MS);
-    return () => clearInterval(id);
-  }, []);
+  const tick = useGlobalMinuteTicker();
+  const now = useMemo(() => {
+    void tick;
+    return Date.now();
+  }, [tick]);
 
   const visibleRecords = useMemo(() => {
     if (!includeRecord) return records;
@@ -183,7 +182,7 @@ export function McpAuditLogViewer({
   const filteredRecords = useMemo(() => {
     const needle = toolFilter.trim().toLowerCase();
     const searchNeedle = searchQuery.trim().toLowerCase();
-    const cutoffMs = timeRange !== "all" ? nowTick - TIME_RANGE_MS[timeRange] : undefined;
+    const cutoffMs = timeRange !== "all" ? now - TIME_RANGE_MS[timeRange] : undefined;
     return visibleRecords.filter((record) => {
       if (cutoffMs !== undefined && record.timestamp < cutoffMs) return false;
       if (resultFilter !== "all" && record.result !== resultFilter) return false;
@@ -195,7 +194,7 @@ export function McpAuditLogViewer({
         return false;
       return true;
     });
-  }, [visibleRecords, resultFilter, toolFilter, timeRange, searchQuery, nowTick]);
+  }, [visibleRecords, resultFilter, toolFilter, timeRange, searchQuery, now]);
 
   const turnGroups = useMemo(() => {
     if (!groupByTurn || !turnRecords || turnRecords.length === 0) return null;
@@ -204,7 +203,7 @@ export function McpAuditLogViewer({
 
   const showCopyAll = filteredRecords.length === visibleRecords.length;
 
-  const oneHourAgo = Date.now() - 3_600_000;
+  const oneHourAgo = now - 3_600_000;
   const visibleSignals = useMemo(() => {
     if (anomalySuppressed) return [];
     return ignoreLastHour
@@ -382,7 +381,7 @@ export function McpAuditLogViewer({
                     {OUTCOME_LABEL[group.turnRecord.outcome] ?? group.turnRecord.outcome}
                   </span>
                   <span className="text-daintree-text/40">
-                    {formatRelativeTimestamp(group.turnRecord.timestamp, nowTick)}
+                    {formatRelativeTimestamp(group.turnRecord.timestamp, now)}
                   </span>
                   <span className="text-daintree-text/40">
                     {group.callCount} call{group.callCount !== 1 ? "s" : ""}
@@ -520,7 +519,7 @@ export function McpAuditLogViewer({
                   )}
                 </div>
                 <div className="text-right text-daintree-text/40 whitespace-nowrap">
-                  <div>{formatRelativeTimestamp(record.timestamp, nowTick)}</div>
+                  <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
                   <div>{record.durationMs}ms</div>
                 </div>
               </li>
