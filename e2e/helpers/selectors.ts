@@ -424,4 +424,49 @@ export const SEL = {
     clearSearch: '[aria-label="Clear search"]',
     clearTraceId: '[aria-label="Clear trace ID filter"]',
   },
+  newTerminalPalette: {
+    dialog: '[role="dialog"][aria-label="New terminal palette"]',
+    searchInput: '[aria-label="Select terminal type"]',
+    list: "#new-terminal-list",
+    options: '#new-terminal-list [role="option"]',
+    terminalOption: "#new-terminal-option-terminal",
+    browserOption: "#new-terminal-option-browser",
+    // Hardcoded count live region inside the dialog (reliable, not announcer-driven).
+    liveRegion:
+      '[role="dialog"][aria-label="New terminal palette"] [role="status"][aria-live="polite"]',
+  },
+  panelPalette: {
+    dialog: '[role="dialog"][aria-label="Panel palette"]',
+    searchInput: '[aria-label="Select panel type"]',
+    list: "#panel-list",
+    options: '#panel-list [role="option"]',
+  },
+  themePalette: {
+    dialog: '[role="dialog"][aria-label="Theme palette"]',
+    searchInput: '[aria-label="Search themes"]',
+    list: "#theme-palette-list",
+    options: '#theme-palette-list [role="option"]',
+  },
+  logLevelPalette: {
+    // Two-step picker. Both steps reuse SearchablePalette's default listId.
+    step1Dialog: '[role="dialog"][aria-label="Set log level — choose a module"]',
+    step2Dialog: '[role="dialog"][aria-label="Set log level — choose a level"]',
+    searchInput: '[aria-label="Search log modules"]',
+    list: "#searchable-palette-list",
+    // LogLevelPalette rows render as plain row divs (no role="option"), so the
+    // listbox's direct children are the result rows.
+    rows: "#searchable-palette-list > div",
+  },
+  palettePrefix: {
+    // Footer affordance listing the @/#/:/> prefixes; rendered only on empty query.
+    discoverabilityRow: '[aria-label="Prefix shortcuts"]',
+    // Mode chip (e.g. "Commands") rendered as the action-palette input prefix.
+    modeChip: '[role="dialog"][aria-label="Action palette"] [role="status"][aria-live="polite"]',
+    // Sectioned-body header in the action palette MRU rail.
+    recentlyUsedHeader: '#action-palette-list [aria-label="Recently used"]',
+    // Non-divider rows in the action-palette listbox (excludes aria-disabled headers).
+    actionEnabledOptions: '#action-palette-list [role="option"]:not([aria-disabled="true"])',
+    // Worktree palette reached via the `@` prefix.
+    worktreeDialog: '[role="dialog"][aria-label="Worktree palette"]',
+  },
 } as const;

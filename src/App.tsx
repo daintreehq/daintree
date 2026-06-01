@@ -631,7 +631,7 @@ function AppInner() {
 
   const overviewWorktreeActions = useWorktreeActions();
 
-  useAppEventListeners();
+  useAppEventListeners({ onOpenNewTerminalPalette: newTerminalPalette.open });
 
   const { handleErrorRetry, handleCancelRetry } = useErrorRetry();
 
