@@ -123,6 +123,20 @@ test.describe.serial("Core: Review Hub Git Confirm Dialogs", () => {
     await textarea.fill("");
   });
 
+  test("ArrowUp does not load history when the caret is not at the start", async () => {
+    const { window } = ctx;
+    const hub = window.locator(SEL.reviewHub.container);
+
+    const textarea = hub.locator(SEL.reviewHub.commitMessageInput);
+    // `fill` leaves the caret at the end, so the isCaretAtStart guard should
+    // suppress history navigation and leave the draft untouched.
+    await textarea.fill("draft: in-progress message");
+    await textarea.press("ArrowUp");
+    await expect(textarea).toHaveValue("draft: in-progress message", { timeout: T_SHORT });
+
+    await textarea.fill("");
+  });
+
   test("Commit & Push opens push confirm dialog with message preview", async () => {
     const { window } = ctx;
     const hub = window.locator(SEL.reviewHub.container);

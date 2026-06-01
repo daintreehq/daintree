@@ -114,6 +114,7 @@ test.describe.serial("Core: Review Hub Conflict Resolution", () => {
       await window.locator(SEL.confirmDialog.confirm).click();
 
       await expect(hub.locator(SEL.reviewHub.conflictPanel)).toBeHidden({ timeout: T_LONG });
+      await expect(hub.locator(SEL.reviewHub.cleanState)).toBeVisible({ timeout: T_MEDIUM });
     });
   });
 
@@ -158,6 +159,7 @@ test.describe.serial("Core: Review Hub Conflict Resolution", () => {
       await continueBtn.click();
 
       await expect(hub.locator(SEL.reviewHub.conflictPanel)).toBeHidden({ timeout: T_LONG });
+      await expect(hub.locator(SEL.reviewHub.cleanState)).toBeVisible({ timeout: T_MEDIUM });
     });
   });
 });

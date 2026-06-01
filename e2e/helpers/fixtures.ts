@@ -187,12 +187,18 @@ export function createDivergedRemoteFixture(name = "review-hub-diverged"): Fixtu
   git("add -A", dir);
   git('commit -m "chore: scaffold baseline"', dir);
 
-  git(`init --bare "${bareDir}"`, dir);
-  git(`remote add origin "file://${bareDir}"`, dir);
+  // `-b main` keeps the bare HEAD on `main`; without it the bare defaults to
+  // `master` on runners where init.defaultBranch is unset (Ubuntu/Windows CI),
+  // so the clone below would check out nothing and its `push origin main` would
+  // fail with "src refspec main does not match any". Local paths work directly
+  // as git remotes cross-platform — no `file://` URL (which mangles Windows
+  // backslash paths into a bogus host segment).
+  git(`init --bare -b main "${bareDir}"`, dir);
+  git(`remote add origin "${bareDir}"`, dir);
   git("push -u origin main", dir);
 
   // Second clone advances the remote so origin/main diverges from local.
-  git(`clone "file://${bareDir}" "${cloneDir}"`, dir);
+  git(`clone "${bareDir}" "${cloneDir}"`, dir);
   git('config user.email "test@daintree.dev"', cloneDir);
   git('config user.name "Daintree Test"', cloneDir);
   writeFileSync(path.join(cloneDir, "remote-only.txt"), "added on the remote\n");
