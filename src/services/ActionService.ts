@@ -184,26 +184,34 @@ function computeRequiresArgs(definition: AnyActionDefinition): boolean {
  * Recursively freezes a value in DEV so any consumer that mutates a cached
  * schema — including nested `properties`/`items`/`$defs` that a shallow
  * `Object.freeze` leaves writable — fails loudly in tests rather than silently
- * poisoning the shared cache (issue #9569). No-op in production. Bounded by
- * JSON Schema nesting depth, so no stack-overflow risk.
+ * poisoning the shared cache (issue #9569). No-op in production. The `seen`
+ * guard keeps it safe against a cyclic `rawInputSchema` (an unconstrained
+ * plugin-supplied object), which would otherwise overflow the stack.
  */
-function deepFreeze(val: unknown): void {
+function deepFreeze(val: unknown, seen: WeakSet<object> = new WeakSet()): void {
   if (!import.meta.env.DEV || val === null || typeof val !== "object") return;
+  if (seen.has(val)) return;
+  seen.add(val);
   Object.freeze(val);
   for (const child of Object.values(val as Record<string, unknown>)) {
-    deepFreeze(child);
+    deepFreeze(child, seen);
   }
 }
 
 function computeSchemas(definition: AnyActionDefinition): CachedSchemas {
+  // Zod-derived schemas are fresh objects per call, but raw plugin-supplied
+  // schemas are the definition's live reference — clone them so the cache (and
+  // the DEV freeze below) never aliases or mutates the plugin's own object.
   const inputSchema = definition.argsSchema
     ? zodSchemaToJsonSchema(definition.argsSchema)
-    : definition.rawInputSchema;
+    : definition.rawInputSchema
+      ? structuredClone(definition.rawInputSchema)
+      : undefined;
   const outputSchema =
     definition.mcpOutputSchema && definition.resultSchema
       ? zodSchemaToJsonSchema(definition.resultSchema, "output")
-      : definition.mcpOutputSchema
-        ? definition.rawOutputSchema
+      : definition.mcpOutputSchema && definition.rawOutputSchema
+        ? structuredClone(definition.rawOutputSchema)
         : undefined;
   // Freeze the cached copies only (DEV). toManifestEntry hands consumers a
   // fresh structuredClone, so this never restricts callers that legitimately

@@ -1982,6 +1982,61 @@ describe("ActionService", () => {
       expect((second.properties as Record<string, unknown>).poisoned).toBeUndefined();
     });
 
+    it("isolates a raw plugin inputSchema from source-object mutation", () => {
+      const rawInputSchema = {
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+      };
+      const action = {
+        id: "acme.plugin.raw" as ActionId,
+        title: "Raw",
+        description: "Plugin action with a raw input schema for mutation-isolation testing of the cache.",
+        category: "plugin",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        rawInputSchema,
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+      service.register(action as unknown as ActionDefinition);
+
+      // Trigger schema compilation, then mutate the plugin's own source object.
+      service.get("acme.plugin.raw" as ActionId);
+      (rawInputSchema.properties as Record<string, unknown>).poisoned = { type: "string" };
+
+      const entry = service.get("acme.plugin.raw" as ActionId);
+      expect(
+        (entry!.inputSchema as { properties: Record<string, unknown> }).properties.poisoned
+      ).toBeUndefined();
+    });
+
+    it("does not freeze a plugin's own raw schema object (clones before DEV freeze)", () => {
+      const rawInputSchema = {
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+      };
+      const action = {
+        id: "acme.plugin.raw" as ActionId,
+        title: "Raw",
+        description: "Plugin action with a raw input schema, verifying the source object stays writable.",
+        category: "plugin",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        rawInputSchema,
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+      service.register(action as unknown as ActionDefinition);
+
+      // Compilation must clone before the DEV freeze, leaving the source writable.
+      service.get("acme.plugin.raw" as ActionId);
+      expect(() => {
+        (rawInputSchema.properties as Record<string, unknown>).extra = { type: "number" };
+      }).not.toThrow();
+    });
+
     it("evicts cache entry on unregister so re-register picks up new schema", () => {
       const schemaA = z.object({ a: z.string() });
       service.register({
