@@ -108,6 +108,15 @@ function renderDialog() {
   );
 }
 
+/**
+ * Click a plugin's list row to populate the detail pane. Metadata, actions, and
+ * settings live in the detail pane now (#9555), so most assertions need the
+ * plugin selected first.
+ */
+async function selectPlugin(name = "Acme Demo") {
+  fireEvent.click(await screen.findByRole("option", { name: new RegExp(name, "i") }));
+}
+
 describe("PluginManagerDialog", () => {
   it("renders the section header immediately", async () => {
     renderDialog();
@@ -143,13 +152,19 @@ describe("PluginManagerDialog", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("false");
   });
 
-  it("renders a plugin's settings form inline when it contributes settings", async () => {
+  it("renders a plugin's settings form in the detail pane once selected", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
       makePluginWithSettings(),
     ]);
     renderDialog();
+    // Settings are not rendered until the plugin is selected — no layout shift
+    // from inline expansion (#9555).
     await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-    expect(screen.getByText("Settings")).toBeTruthy();
+    expect(screen.queryByText("Settings")).toBeNull();
+    expect(window.electron.plugin.getSettingValues).not.toHaveBeenCalled();
+
+    await selectPlugin();
+    expect(await screen.findByText("Settings")).toBeTruthy();
     expect(screen.getByLabelText("API key")).toBeTruthy();
     await waitFor(() =>
       expect(window.electron.plugin.getSettingValues).toHaveBeenCalledWith(
@@ -170,7 +185,9 @@ describe("PluginManagerDialog", () => {
     // available even with the plugin toggled off.
     const toggle = screen.getByRole("switch", { name: "Enable Acme Demo" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
-    expect(screen.getByText("Settings")).toBeTruthy();
+
+    await selectPlugin();
+    expect(await screen.findByText("Settings")).toBeTruthy();
     expect(screen.getByLabelText("API key")).toBeTruthy();
     // Hydration must run for disabled plugins too — the values are stored
     // independently of the plugin's runtime.
@@ -183,11 +200,145 @@ describe("PluginManagerDialog", () => {
     );
   });
 
-  it("renders no settings section when a plugin contributes none", async () => {
+  it("shows a no-settings note in the detail pane when a plugin contributes none", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderDialog();
     await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+
+    await selectPlugin();
+    expect(await screen.findByText("This plugin has no settings.")).toBeTruthy();
     expect(screen.queryByText("Settings")).toBeNull();
+  });
+
+  it("shows an empty detail pane before any plugin is selected", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePluginWithSettings(),
+    ]);
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    expect(screen.getByText("Select a plugin")).toBeTruthy();
+    expect(screen.queryByText("Settings")).toBeNull();
+  });
+
+  it("marks the selected row with aria-selected", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+
+    const option = screen.getByRole("option", { name: /Acme Demo/i });
+    expect(option.getAttribute("aria-selected")).toBe("false");
+    fireEvent.click(option);
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: /Acme Demo/i }).getAttribute("aria-selected")).toBe(
+        "true"
+      )
+    );
+  });
+
+  it("clears the detail pane when the selected plugin is uninstalled elsewhere", async () => {
+    let fireProvenance: (() => void) | undefined;
+    (window.electron.plugin.onProvenanceChanged as ReturnType<typeof vi.fn>).mockImplementation(
+      (cb: () => void) => {
+        fireProvenance = cb;
+        return () => {};
+      }
+    );
+    const listMock = window.electron.plugin.list as ReturnType<typeof vi.fn>;
+    listMock.mockResolvedValueOnce([makePluginWithSettings()]).mockResolvedValueOnce([]);
+    renderDialog();
+    await selectPlugin();
+    expect(await screen.findByText("Settings")).toBeTruthy();
+
+    // The plugin disappears from the refreshed list — selection must reset.
+    fireProvenance?.();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+    expect(screen.queryByText("Settings")).toBeNull();
+  });
+
+  it("renders settings in the detail pane, not inside the list row", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePluginWithSettings(),
+    ]);
+    renderDialog();
+    await selectPlugin();
+    await screen.findByText("Settings");
+    // The settings form and its fields must live outside the listbox — the
+    // whole point of the master-detail split (#9555) is that the list row
+    // never expands inline.
+    const listbox = within(screen.getByRole("listbox"));
+    expect(listbox.queryByText("Settings")).toBeNull();
+    expect(listbox.queryByLabelText("API key")).toBeNull();
+  });
+
+  it("toggling the enable switch does not select the row", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+
+    // The switch is a sibling of the selection button, not nested — clicking it
+    // must not populate the detail pane.
+    fireEvent.click(screen.getByRole("switch", { name: "Enable Acme Demo" }));
+    await waitFor(() =>
+      expect(window.electron.plugin.setEnabled).toHaveBeenCalledWith("acme.demo", false)
+    );
+    expect(screen.getByRole("option", { name: /Acme Demo/i }).getAttribute("aria-selected")).toBe(
+      "false"
+    );
+    expect(screen.getByText("Select a plugin")).toBeTruthy();
+  });
+
+  it("re-hydrates settings for the newly selected plugin when switching", async () => {
+    const pluginA = makePluginWithSettings();
+    const pluginB = makePluginWithSettings({
+      manifest: {
+        ...makePlugin().manifest,
+        name: "beta.demo",
+        displayName: "Beta Demo",
+        contributes: { ...makePlugin().manifest.contributes, settings: SETTINGS_FIXTURE },
+      },
+    });
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([pluginA, pluginB]);
+    renderDialog();
+
+    await selectPlugin("Acme Demo");
+    await waitFor(() =>
+      expect(window.electron.plugin.getSettingValues).toHaveBeenCalledWith(
+        "acme.demo",
+        "user",
+        null
+      )
+    );
+
+    await selectPlugin("Beta Demo");
+    await waitFor(() =>
+      expect(window.electron.plugin.getSettingValues).toHaveBeenCalledWith(
+        "beta.demo",
+        "user",
+        null
+      )
+    );
+  });
+
+  it("closes an armed uninstall confirm on a cross-window provenance change", async () => {
+    let fireProvenance: (() => void) | undefined;
+    (window.electron.plugin.onProvenanceChanged as ReturnType<typeof vi.fn>).mockImplementation(
+      (cb: () => void) => {
+        fireProvenance = cb;
+        return () => {};
+      }
+    );
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
+    renderDialog();
+    await selectPlugin();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Uninstall Acme Demo" }));
+    await waitFor(() => expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy());
+
+    // Another window mutated the list — the stale confirm must close so it can't
+    // fire uninstall against a record that may have changed underneath it.
+    fireProvenance?.();
+    await waitFor(() => expect(screen.queryByText("Uninstall 'Acme Demo'?")).toBeNull());
+    expect(window.electron.plugin.uninstall).not.toHaveBeenCalled();
   });
 
   it("calls setEnabled(false) and shows a restart badge when disabling", async () => {
@@ -265,14 +416,17 @@ describe("PluginManagerDialog", () => {
     expect(screen.getByRole("button", { name: "Install from URL" })).toBeTruthy();
   });
 
-  it("shows a source badge and install time for a file-installed plugin", async () => {
+  it("shows a source badge in the row and install time in the detail pane", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
       makePlugin({ source: "sideload", installedAt: Date.now() - 60_000 }),
     ]);
     renderDialog();
     await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    // Source badge is scannable in the list row.
     expect(screen.getByText("File")).toBeTruthy();
-    expect(screen.getByText(/Installed.*ago/)).toBeTruthy();
+    // Install time lives in the detail pane.
+    await selectPlugin();
+    expect(await screen.findByText(/Installed.*ago/)).toBeTruthy();
   });
 
   it("shows a Dev badge for a dev-mode plugin", async () => {
@@ -283,12 +437,14 @@ describe("PluginManagerDialog", () => {
     await waitFor(() => expect(screen.getByText("Dev")).toBeTruthy());
   });
 
-  it("renders a load-error indicator when loadError is set", async () => {
+  it("renders a load-error indicator in the detail pane when loadError is set", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
       makePlugin({ loadError: { message: "boom", at: 1 } }),
     ]);
     renderDialog();
-    await waitFor(() => expect(screen.getByText(/Failed to load: boom/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    await selectPlugin();
+    expect(await screen.findByText(/Failed to load: boom/)).toBeTruthy();
   });
 
   it("does not offer uninstall for a built-in plugin", async () => {
@@ -297,17 +453,21 @@ describe("PluginManagerDialog", () => {
     ]);
     renderDialog();
     await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-    expect(screen.queryByRole("button", { name: "Uninstall Acme Demo" })).toBeNull();
     expect(screen.getByText("Built-in")).toBeTruthy();
+    // Uninstall lives in the detail pane now — select and confirm it's absent
+    // for a built-in.
+    await selectPlugin();
+    expect(await screen.findByText("This plugin has no settings.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Uninstall Acme Demo" })).toBeNull();
   });
 
   it("opens a confirm dialog and uninstalls (settings preserved by default), then re-fetches the list", async () => {
     const listMock = window.electron.plugin.list as ReturnType<typeof vi.fn>;
     listMock.mockResolvedValueOnce([makePlugin()]).mockResolvedValueOnce([]);
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    await selectPlugin();
 
-    fireEvent.click(screen.getByRole("button", { name: "Uninstall Acme Demo" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Uninstall Acme Demo" }));
     await waitFor(() => expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
@@ -322,9 +482,9 @@ describe("PluginManagerDialog", () => {
     const listMock = window.electron.plugin.list as ReturnType<typeof vi.fn>;
     listMock.mockResolvedValueOnce([makePlugin()]).mockResolvedValueOnce([]);
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    await selectPlugin();
 
-    fireEvent.click(screen.getByRole("button", { name: "Uninstall Acme Demo" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Uninstall Acme Demo" }));
     await waitFor(() => expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy());
 
     fireEvent.click(
@@ -339,10 +499,10 @@ describe("PluginManagerDialog", () => {
   it("resets the secrets checkbox after cancelling and re-arming uninstall", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    await selectPlugin();
 
     // Arm, tick the box, then cancel.
-    fireEvent.click(screen.getByRole("button", { name: "Uninstall Acme Demo" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Uninstall Acme Demo" }));
     await waitFor(() => expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy());
     fireEvent.click(
       screen.getByRole("checkbox", { name: "Also delete this plugin's saved settings" })
@@ -361,8 +521,8 @@ describe("PluginManagerDialog", () => {
   it("disables the check-for-update button for a file-installed plugin", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-    const checkBtn = screen.getByRole("button", { name: "Check Acme Demo for updates" });
+    await selectPlugin();
+    const checkBtn = await screen.findByRole("button", { name: "Check Acme Demo for updates" });
     expect(checkBtn.hasAttribute("disabled")).toBe(true);
   });
 
@@ -377,8 +537,8 @@ describe("PluginManagerDialog", () => {
   it("enables the check-for-update button for a URL-installed plugin", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([urlPlugin()]);
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-    const checkBtn = screen.getByRole("button", { name: "Check Acme Demo for updates" });
+    await selectPlugin();
+    const checkBtn = await screen.findByRole("button", { name: "Check Acme Demo for updates" });
     expect(checkBtn.hasAttribute("disabled")).toBe(false);
   });
 
@@ -388,9 +548,9 @@ describe("PluginManagerDialog", () => {
       status: "up-to-date",
     });
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    await selectPlugin();
 
-    fireEvent.click(screen.getByRole("button", { name: "Check Acme Demo for updates" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
 
     await waitFor(() =>
       expect(window.electron.plugin.checkForUpdate).toHaveBeenCalledWith("acme.demo")
@@ -407,9 +567,9 @@ describe("PluginManagerDialog", () => {
       capabilities: ["network:fetch"],
     });
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    await selectPlugin();
 
-    fireEvent.click(screen.getByRole("button", { name: "Check Acme Demo for updates" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
 
     await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
     expect(screen.getByText("v2.0.0")).toBeTruthy();
@@ -430,9 +590,9 @@ describe("PluginManagerDialog", () => {
       new Promise(() => {})
     );
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    await selectPlugin();
 
-    const btn = screen.getByRole("button", { name: "Check Acme Demo for updates" });
+    const btn = await screen.findByRole("button", { name: "Check Acme Demo for updates" });
     fireEvent.click(btn);
     fireEvent.click(btn);
 
@@ -446,9 +606,9 @@ describe("PluginManagerDialog", () => {
       message: "HTTP 500",
     });
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    await selectPlugin();
 
-    fireEvent.click(screen.getByRole("button", { name: "Check Acme Demo for updates" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
 
     await waitFor(() => expect(screen.getByText(/HTTP 500/)).toBeTruthy());
   });
@@ -629,9 +789,9 @@ describe("PluginManagerDialog", () => {
       capabilities: [],
     });
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    await selectPlugin();
 
-    fireEvent.click(screen.getByRole("button", { name: "Check Acme Demo for updates" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
     await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
