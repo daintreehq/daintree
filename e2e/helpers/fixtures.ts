@@ -272,6 +272,80 @@ export function createConflictFixtureRepo(
   }
 
   return { dir, cleanup: makeFixtureCleanup(dir) };
+export interface InRepoRecipeSeed {
+  /** Recipe name; the file is written as `.daintree/recipes/<slug>.json`. */
+  name: string;
+  /** Terminal definitions; defaults to a single terminal slot when omitted. */
+  terminals?: Array<Record<string, unknown>>;
+  showInEmptyState?: boolean;
+}
+
+interface FixtureRepoWithRecipesOptions extends FixtureRepoOptions {
+  /** Team (in-repo) recipes to seed under `.daintree/recipes/` before opening. */
+  inRepoRecipes?: InRepoRecipeSeed[];
+  /** `package.json` scripts so RecipeRunner can surface suggestion pills. */
+  packageScripts?: Record<string, string>;
+}
+
+function recipeSlug(name: string): string {
+  // Mirrors safeRecipeFilename's slug rules (sans the diacritics strip, which
+  // the ASCII recipe names used in E2E never need).
+  return (
+    name
+      .replace(/[\\/:*?"<>|]/g, "")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .toLowerCase()
+      .replace(/^[-.]+|[-.]+$/g, "") || "recipe"
+  );
+}
+
+/**
+ * Like createFixtureRepo, but seeds tracked `.daintree/recipes/*.json` team
+ * recipes (and optional package.json scripts) and commits them, so the project
+ * loads in-repo recipes on open. Used by recipe-coverage E2E to exercise the
+ * Team scope section, shadowing badges, and RecipeRunner suggestion pills.
+ */
+export function createFixtureRepoWithRecipes(
+  options: FixtureRepoWithRecipesOptions = {}
+): FixtureRepo {
+  const { inRepoRecipes = [], packageScripts, ...repoOptions } = options;
+  const repo = createFixtureRepo(repoOptions);
+
+  if (packageScripts) {
+    writeFileSync(
+      path.join(repo.dir, "package.json"),
+      JSON.stringify(
+        { name: repoOptions.name ?? "test-project", version: "1.0.0", scripts: packageScripts },
+        null,
+        2
+      ) + "\n"
+    );
+  }
+
+  if (inRepoRecipes.length > 0) {
+    const recipesDir = path.join(repo.dir, ".daintree", "recipes");
+    mkdirSync(recipesDir, { recursive: true });
+    for (const seed of inRepoRecipes) {
+      const slug = recipeSlug(seed.name);
+      const recipe = {
+        id: `inrepo-${slug}`,
+        name: seed.name,
+        terminals: seed.terminals ?? [{ type: "terminal", title: "", command: "", env: {} }],
+        createdAt: 1_700_000_000_000,
+        showInEmptyState: seed.showInEmptyState ?? false,
+        autoAssign: "always",
+      };
+      writeFileSync(path.join(recipesDir, `${slug}.json`), JSON.stringify(recipe, null, 2) + "\n");
+    }
+  }
+
+  if (packageScripts || inRepoRecipes.length > 0) {
+    git("add -A", repo.dir);
+    git('commit -m "seed recipes and scripts"', repo.dir);
+  }
+
+  return repo;
 }
 
 export function createFixtureRepos(count: number): FixtureRepo[] {

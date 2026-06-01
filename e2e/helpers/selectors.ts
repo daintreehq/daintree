@@ -471,4 +471,32 @@ export const SEL = {
     // Prompt-history palette reached via the `:` prefix (agent input bar gated).
     promptHistoryDialog: '[role="dialog"][aria-label="Prompt history search"]',
   },
+  recipeManager: {
+    dialog: '[role="dialog"]:has-text("Recipe Manager")',
+    teamSection: 'h3:has-text("Team Recipes")',
+    globalSection: 'h3:has-text("Global Recipes")',
+    newProjectRecipeButton: 'button:has-text("New project recipe")',
+    importButton: 'button:has-text("Import from clipboard")',
+    importDialog: '[role="dialog"]:has-text("Import recipe")',
+    importTextarea: '[data-testid="recipe-import-textarea"]',
+    importConfirmButton: '[role="dialog"]:has-text("Import recipe") button:has-text("Import")',
+    overriddenBadge: 'text="Overridden by team recipe"',
+    exportButton: (name: string) => `[aria-label="Export recipe ${name} to clipboard"]`,
+    exportedButton: (name: string) => `[aria-label="Recipe ${name} exported to clipboard"]`,
+  },
+  recipeConflict: {
+    dialog: '[role="dialog"]:has-text("changed on disk")',
+    reloadButton: '[data-testid="recipe-conflict-reload"]',
+    overwriteButton: '[data-testid="recipe-conflict-overwrite"]',
+  },
+  recipeRunner: {
+    emptyState: '[data-testid="recipe-runner-empty"]',
+    suggestionPill: '[data-testid="recipe-suggestion-pill"]',
+  },
+  checklist: {
+    panel: "[data-getting-started-checklist]",
+    dismissButton: 'button[aria-label="Dismiss checklist"]',
+    toggleButton: "[data-getting-started-checklist] button[aria-expanded]",
+    item: (id: string) => `[data-checklist-item="${id}"]`,
+  },
 } as const;

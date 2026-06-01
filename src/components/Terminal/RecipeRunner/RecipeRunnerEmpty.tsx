@@ -18,13 +18,17 @@ export function RecipeRunnerEmpty({
   const hasSuggestions = suggestions.length > 0;
 
   return (
-    <div className="flex flex-col items-stretch gap-3 py-6 w-full max-w-md mx-auto">
+    <div
+      data-testid="recipe-runner-empty"
+      className="flex flex-col items-stretch gap-3 py-6 w-full max-w-md mx-auto"
+    >
       {hasSuggestions ? (
         <div className="flex flex-col gap-2">
           {suggestions.map((suggestion) => (
             <button
               key={suggestion.id}
               type="button"
+              data-testid="recipe-suggestion-pill"
               onClick={() => onRunSuggestion(suggestion)}
               disabled={disabled}
               className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle"
