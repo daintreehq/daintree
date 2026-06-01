@@ -1,4 +1,4 @@
-import { Plug, FilePlus, Link2, Info, Download, AlertCircle } from "lucide-react";
+import { Plug, FilePlus, Link2, Info, Download, AlertCircle, AlertTriangle } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { Button } from "@/components/ui/button";
@@ -6,6 +6,8 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { logError } from "@/utils/logger";
 import { cn } from "@/lib/utils";
 import { usePluginManager } from "./usePluginManager";
 import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDetailPane";
@@ -244,6 +246,40 @@ export function PluginManagerDialog({
   }, [focusPluginId, clearFocusPluginId, pm.plugins]);
 
   const hasPlugins = pm.plugins.length > 0;
+  // Any enabled/disabled toggle this session that hasn't taken effect yet leaves
+  // its plugin flagged `pendingRestart`. Surface a single header bar while at
+  // least one is outstanding — the changes only load or unload on relaunch.
+  const restartRequired = pm.plugins.some((p) => p.pendingRestart === true);
+  const [isRestartConfirmOpen, setIsRestartConfirmOpen] = useState(false);
+  const [isRestarting, setIsRestarting] = useState(false);
+  // Synchronous mutex: `isRestarting` lags a render, so a same-frame double
+  // activation could fire two relaunch requests before the disabled state
+  // commits. The ref flips immediately to serialize this destructive IPC.
+  const restartingRef = useRef(false);
+
+  // If the pending-restart condition clears while the confirm is open (e.g. a
+  // cross-window provenance refresh, or the user toggling everything back),
+  // close the orphaned dialog so it can't relaunch — and kill agent work — for
+  // a restart that's no longer needed. Skip while a relaunch is already in
+  // flight (the toggle stays pending until the app actually exits).
+  useEffect(() => {
+    if (!restartRequired && !isRestarting) setIsRestartConfirmOpen(false);
+  }, [restartRequired, isRestarting]);
+
+  const handleRestart = async () => {
+    if (restartingRef.current || !restartRequired) return;
+    restartingRef.current = true;
+    setIsRestarting(true);
+    try {
+      await window.electron.app.resetAndRelaunch();
+    } catch (err) {
+      // A failed relaunch leaves the app running — re-enable the button so the
+      // user can retry rather than stranding them on a dead control.
+      logError("Failed to restart Daintree for plugin changes", err);
+      restartingRef.current = false;
+      setIsRestarting(false);
+    }
+  };
 
   return (
     <AppDialog
@@ -260,6 +296,24 @@ export function PluginManagerDialog({
         </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
+
+      {restartRequired && (
+        <InlineStatusBanner
+          icon={AlertTriangle}
+          title="Restart required to apply plugin changes"
+          severity="warning"
+          role="status"
+          actions={[
+            {
+              id: "restart",
+              label: isRestarting ? "Restarting…" : "Restart",
+              variant: "primary",
+              onClick: () => setIsRestartConfirmOpen(true),
+              disabled: isRestarting,
+            },
+          ]}
+        />
+      )}
 
       <div
         className="relative flex flex-1 min-h-0 overflow-hidden"
@@ -355,7 +409,11 @@ export function PluginManagerDialog({
                         plugin={plugin}
                         selected={plugin.manifest.name === selectedPluginId}
                         toggling={pm.pending.has(plugin.manifest.name)}
-                        onSelect={() => setSelectedPluginId(plugin.manifest.name)}
+                        onSelect={() =>
+                          setSelectedPluginId((prev) =>
+                            prev === plugin.manifest.name ? null : plugin.manifest.name
+                          )
+                        }
                         onToggle={() => void pm.handleToggle(plugin)}
                         highlighted={highlightedPluginId === plugin.manifest.name}
                         innerRef={(el) => {
@@ -390,17 +448,20 @@ export function PluginManagerDialog({
               onCheckForUpdate={() => void pm.handleCheckForUpdate(selectedPlugin)}
             />
           ) : (
-            <div className="h-full flex items-center justify-center">
-              <EmptyState
-                variant="filtered-empty"
-                scale="canvas"
-                title={hasPlugins ? "Select a plugin" : "No plugin selected"}
-                description={
-                  hasPlugins
-                    ? "Choose a plugin from the list to view its details and settings."
-                    : "Install a plugin to view its details and settings here."
-                }
-              />
+            // Master-detail placeholder, not a "filtered-empty" state — it reads
+            // as a roomy, centered single column (icon + prompt) rather than the
+            // compact muted EmptyState, which looked cramped here. Click any row
+            // to fill it; clicking the selected row again returns to this prompt.
+            <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center">
+              <Plug className="w-8 h-8 text-daintree-text/30" aria-hidden="true" />
+              <p className="text-base font-medium text-daintree-text/80">
+                {hasPlugins ? "Select a plugin" : "No plugin selected"}
+              </p>
+              <p className="text-sm text-daintree-text/50 max-w-sm">
+                {hasPlugins
+                  ? "Choose a plugin from the list to view its details and settings."
+                  : "Install a plugin to view its details and settings here."}
+              </p>
             </div>
           )}
         </ScrollShadow>
@@ -527,6 +588,19 @@ export function PluginManagerDialog({
           }}
         />
       </AppDialog>
+
+      <ConfirmDialog
+        isOpen={isRestartConfirmOpen}
+        onClose={isRestarting ? undefined : () => setIsRestartConfirmOpen(false)}
+        title="Restart Daintree now?"
+        description="All running terminals and agent sessions will be closed, and any in-flight agent work and scrollback will be lost."
+        confirmLabel="Restart Daintree"
+        cancelLabel="Not now"
+        onConfirm={() => void handleRestart()}
+        isConfirmLoading={isRestarting}
+        variant="destructive"
+        zIndex="nested"
+      />
     </AppDialog>
   );
 }

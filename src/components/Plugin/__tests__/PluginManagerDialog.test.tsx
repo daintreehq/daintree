@@ -27,6 +27,21 @@ class StubResizeObserver {
 }
 vi.stubGlobal("ResizeObserver", StubResizeObserver);
 
+// The restart-required bar renders InlineStatusBanner, which reads
+// prefers-reduced-motion; jsdom has no matchMedia.
+vi.stubGlobal("matchMedia", (query: string) => ({
+  matches: false,
+  media: query,
+  onchange: null,
+  addListener() {},
+  removeListener() {},
+  addEventListener() {},
+  removeEventListener() {},
+  dispatchEvent() {
+    return false;
+  },
+}));
+
 function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo {
   return {
     manifest: {
@@ -83,6 +98,10 @@ beforeEach(() => {
       setSettingValue: vi.fn().mockResolvedValue(undefined),
       deleteSettingValue: vi.fn().mockResolvedValue(undefined),
       revealSecretSetting: vi.fn().mockResolvedValue(null),
+    },
+    // The restart-required bar relaunches via this app IPC.
+    app: {
+      resetAndRelaunch: vi.fn().mockResolvedValue(undefined),
     },
   } as unknown as typeof window.electron;
 });
@@ -233,6 +252,31 @@ describe("PluginManagerDialog", () => {
         "true"
       )
     );
+  });
+
+  it("deselects the plugin when its already-selected row is clicked again", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePluginWithSettings(),
+    ]);
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+
+    // First click selects and fills the detail pane.
+    await selectPlugin();
+    expect(await screen.findByText("Settings")).toBeTruthy();
+    expect(screen.getByRole("option", { name: /Acme Demo/i }).getAttribute("aria-selected")).toBe(
+      "true"
+    );
+
+    // Clicking the same row again clears the selection and restores the prompt.
+    await selectPlugin();
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: /Acme Demo/i }).getAttribute("aria-selected")).toBe(
+        "false"
+      )
+    );
+    expect(screen.getByText("Select a plugin")).toBeTruthy();
+    expect(screen.queryByText("Settings")).toBeNull();
   });
 
   it("clears the detail pane when the selected plugin is uninstalled elsewhere", async () => {
@@ -925,6 +969,146 @@ describe("PluginManagerDialog", () => {
       await waitFor(() =>
         expect(screen.getByText(/Plugin "missing\.plugin" isn't installed/)).toBeTruthy()
       );
+    });
+  });
+
+  describe("restart-required bar", () => {
+    it("hides the bar when no plugin is pending a restart", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
+      renderDialog();
+      await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+      expect(screen.queryByText("Restart required to apply plugin changes")).toBeNull();
+    });
+
+    it("shows the bar when a plugin reports pendingRestart", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makePlugin({ disabled: true, pendingRestart: true }),
+      ]);
+      renderDialog();
+      await waitFor(() =>
+        expect(screen.getByText("Restart required to apply plugin changes")).toBeTruthy()
+      );
+      expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy();
+    });
+
+    it("appears after a toggle flips a plugin into the pending-restart state", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
+      renderDialog();
+      await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+      expect(screen.queryByText("Restart required to apply plugin changes")).toBeNull();
+
+      fireEvent.click(screen.getByRole("switch", { name: "Enable Acme Demo" }));
+      await waitFor(() =>
+        expect(screen.getByText("Restart required to apply plugin changes")).toBeTruthy()
+      );
+    });
+
+    it("confirms before relaunching and does not restart until confirmed", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makePlugin({ disabled: true, pendingRestart: true }),
+      ]);
+      renderDialog();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy());
+
+      fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+      await waitFor(() => expect(screen.getByText("Restart Daintree now?")).toBeTruthy());
+      expect(window.electron.app.resetAndRelaunch).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: "Restart Daintree" }));
+      await waitFor(() => expect(window.electron.app.resetAndRelaunch).toHaveBeenCalledTimes(1));
+    });
+
+    it("does not relaunch when the restart confirm is cancelled", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makePlugin({ disabled: true, pendingRestart: true }),
+      ]);
+      renderDialog();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy());
+
+      fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+      await waitFor(() => expect(screen.getByText("Restart Daintree now?")).toBeTruthy());
+
+      const confirm = within(screen.getByRole("alertdialog"));
+      fireEvent.click(confirm.getByRole("button", { name: "Not now" }));
+      await waitFor(() => expect(screen.queryByText("Restart Daintree now?")).toBeNull());
+      expect(window.electron.app.resetAndRelaunch).not.toHaveBeenCalled();
+    });
+
+    it("relaunches once and keeps the confirm open while the relaunch is in flight", async () => {
+      // A never-resolving relaunch keeps `isRestarting` latched so we can probe
+      // the in-flight UI (blocked close) and the double-invoke guard.
+      (window.electron.app.resetAndRelaunch as ReturnType<typeof vi.fn>).mockReturnValue(
+        new Promise(() => {})
+      );
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makePlugin({ disabled: true, pendingRestart: true }),
+      ]);
+      renderDialog();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy());
+
+      fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+      await waitFor(() => expect(screen.getByText("Restart Daintree now?")).toBeTruthy());
+
+      // Double-click the confirm before the in-flight state commits — only one
+      // relaunch request must go out.
+      const confirmBtn = within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "Restart Daintree",
+      });
+      fireEvent.click(confirmBtn);
+      fireEvent.click(confirmBtn);
+      await waitFor(() => expect(window.electron.app.resetAndRelaunch).toHaveBeenCalledTimes(1));
+
+      // The confirm stays open (close is blocked) while the relaunch is pending.
+      expect(screen.getByText("Restart Daintree now?")).toBeTruthy();
+    });
+
+    it("re-enables the restart flow when resetAndRelaunch rejects", async () => {
+      (window.electron.app.resetAndRelaunch as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error("EROFS")
+      );
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makePlugin({ disabled: true, pendingRestart: true }),
+      ]);
+      renderDialog();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy());
+
+      fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+      await waitFor(() => expect(screen.getByText("Restart Daintree now?")).toBeTruthy());
+      fireEvent.click(
+        within(screen.getByRole("alertdialog")).getByRole("button", { name: "Restart Daintree" })
+      );
+      await waitFor(() => expect(window.electron.app.resetAndRelaunch).toHaveBeenCalledTimes(1));
+
+      // After the rejection the confirm is dismissible again and a second
+      // attempt fires a fresh relaunch request — the user isn't stranded.
+      await waitFor(() =>
+        expect(
+          within(screen.getByRole("alertdialog"))
+            .getByRole("button", { name: "Restart Daintree" })
+            .hasAttribute("disabled")
+        ).toBe(false)
+      );
+      fireEvent.click(
+        within(screen.getByRole("alertdialog")).getByRole("button", { name: "Restart Daintree" })
+      );
+      await waitFor(() => expect(window.electron.app.resetAndRelaunch).toHaveBeenCalledTimes(2));
+    });
+
+    it("keeps the bar visible across selecting and deselecting a row", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makePlugin({ disabled: true, pendingRestart: true }),
+      ]);
+      renderDialog();
+      await waitFor(() =>
+        expect(screen.getByText("Restart required to apply plugin changes")).toBeTruthy()
+      );
+
+      // The bar derives from plugin state, not the detail-pane selection
+      // lifecycle — it must survive a select then deselect.
+      await selectPlugin();
+      expect(screen.getByText("Restart required to apply plugin changes")).toBeTruthy();
+      await selectPlugin();
+      expect(screen.getByText("Restart required to apply plugin changes")).toBeTruthy();
     });
   });
 
