@@ -413,8 +413,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // 1Hz tick that drives the escalated "Reconnecting… last updated X ago"
   // copy. The store holds the start timestamp; this state forces a render so
   // `formatRelativeTime(reconnectingAt)` recomputes against the latest clock.
-  // Effect re-runs on every new disconnect via `reconnectingAt` dep, so the
-  // baseline is always fresh — no stale-closure risk.
+  // Visibility-gated so the tick pauses while the window is hidden (Chromium
+  // throttles hidden-tab intervals to ~1/min) and snaps back on restore. The
+  // callback reads no captured timestamp, so there's no stale-closure risk
+  // despite the hook only depending on [intervalMs, enabled].
   const [, setReconnectTick] = useState(0);
   useVisibilityAwareInterval(
     () => setReconnectTick((n) => n + 1),
