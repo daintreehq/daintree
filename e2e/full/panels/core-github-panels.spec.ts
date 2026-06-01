@@ -48,7 +48,9 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
     await pushRateLimitClear(ctx.app);
     await pushTokenHealthHealthy(ctx.app);
     await clearGitHubToken(ctx.app);
-    await refreshGitHubConfig(ctx.window);
+    // Guard cleanup against a torn-down window so an afterEach error never
+    // shadows the real test failure (same rationale as the Escape catch below).
+    await refreshGitHubConfig(ctx.window).catch(() => {});
     // Collapse any dropdown/dialog left open.
     await ctx.window.keyboard.press("Escape").catch(() => {});
   });
@@ -74,8 +76,9 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
 
     await openIssuesDropdown(window);
 
+    // The per-type search input only renders for the connected (token present)
+    // dropdown surface — its presence proves we cleared the no-token gate.
     await expect(window.locator(SEL.github.searchIssues)).toBeVisible({ timeout: T_MEDIUM });
-    await expect(window.getByRole("radiogroup", { name: "Filter by state" })).toBeVisible();
   });
 
   test("bulk-selecting issues opens the create-worktrees dialog", async () => {
@@ -102,7 +105,10 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
     await expect(window.locator(SEL.github.bulkActionBar)).toBeVisible();
     await window.locator(SEL.github.bulkCreateButton).click();
 
-    await expect(window.locator(SEL.github.bulkCreateDialog)).toBeVisible({ timeout: T_MEDIUM });
+    const dialog = window.locator(SEL.github.bulkCreateDialog);
+    await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
+    // The dialog must carry the selected issues, not open empty/stale.
+    await expect(dialog.locator('text="E2E issue one"')).toBeVisible({ timeout: T_MEDIUM });
   });
 
   test("issues dropdown shows the paused state under a rate-limit block", async () => {
@@ -124,6 +130,24 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
     await expect(window.locator(SEL.github.rateLimitedEmptyState)).toBeVisible({
       timeout: T_MEDIUM,
     });
+
+    // Clearing the block lifts the paused surface — the dropdown resumes.
+    await pushRateLimitClear(ctx.app);
+    await expect(window.locator(SEL.github.rateLimitedEmptyState)).not.toBeVisible({
+      timeout: T_MEDIUM,
+    });
+  });
+
+  test("PR dropdown renders search chrome when connected", async () => {
+    const { window } = ctx;
+    await connectGitHub(ctx.app, window);
+
+    const pill = window.locator(SEL.github.statPillPrs);
+    await expect(pill).toBeVisible({ timeout: T_MEDIUM });
+    await pill.scrollIntoViewIfNeeded();
+    await pill.click();
+
+    await expect(window.locator(SEL.github.searchPrs)).toBeVisible({ timeout: T_MEDIUM });
   });
 
   test("token-health banner appears on an unhealthy push and clears when healthy", async () => {

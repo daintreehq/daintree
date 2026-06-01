@@ -164,7 +164,10 @@ export async function stubListIssues(
     ({ ipcMain }, { channel, response }) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- private Electron API
       const handlers = (ipcMain as any)._invokeHandlers as Map<string, unknown> | undefined;
-      if (handlers && handlers.has(channel)) {
+      // Only stash on the FIRST stub — a double-stub (without an intervening
+      // restore) must not overwrite the real handler reference with a stub.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- stash for restore
+      if (handlers && handlers.has(channel) && !(globalThis as any).__e2eOrigListIssuesHandler) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- stash for restore
         (globalThis as any).__e2eOrigListIssuesHandler = handlers.get(channel);
       }
