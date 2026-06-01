@@ -59,10 +59,12 @@ import { isSmokeTest } from "../setup/environment.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { store } from "../store.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import {
   setCcrConfigService,
   getResourceProfileService,
   setResourceProfileService,
+  getMainProcessWatchdogClientRef,
   getStopAppMetricsMonitor,
   setStopAppMetricsMonitor,
   getStopDiskSpaceMonitor,
@@ -227,6 +229,24 @@ export async function initGlobalServices(
     };
     (globalThis as Record<string, unknown>).__daintreeClearGitHubToken = () => {
       GitHubAuth.setMemoryToken(null);
+    };
+
+    // Adaptive-recovery + watchdog E2E seams (#9599). Drive a synthetic
+    // resource-profile transition and a synthetic watchdog cap-hit so the
+    // full-resilience specs can assert the side-effects (PVM fan-out, the
+    // `watchdog:disabled` broadcast) without real memory pressure or three
+    // genuine watchdog crashes. Same gating as the GitHub-token seams above.
+    (globalThis as Record<string, unknown>).__daintreeForceResourceProfile = (
+      profile: ResourceProfile
+    ) => {
+      const svc = getResourceProfileService();
+      if (!svc) throw new Error("ResourceProfileService not initialized");
+      svc._forceProfileForTesting(profile);
+    };
+    (globalThis as Record<string, unknown>).__daintreeSimulateWatchdogDisabled = () => {
+      const client = getMainProcessWatchdogClientRef();
+      if (!client) throw new Error("MainProcessWatchdogClient not initialized");
+      client._emitDisabledForTesting();
     };
   }
 

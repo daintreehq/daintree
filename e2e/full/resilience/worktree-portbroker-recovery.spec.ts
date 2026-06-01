@@ -1,0 +1,129 @@
+import { test, expect } from "@playwright/test";
+import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
+import { createFixtureRepos } from "../../helpers/fixtures";
+import { openAndOnboardProject } from "../../helpers/project";
+import { T_LONG } from "../../helpers/timeouts";
+
+// Exercises WorktreePortBroker recovery after a workspace-host crash. Killing
+// the host's UtilityProcess (`__daintreeCrashWorkspaceHostForWindow`) drives the
+// real exit → auto-restart → `host-restarted` → `reBrokerForHost` path wired in
+// windowServices.ts. The view must end up with a live MessagePort again, and the
+// per-port webContents listeners (`did-start-navigation`, `destroyed`,
+// port-close) must NOT accumulate across the crash — `closePortsForView` runs
+// `cleanupListeners()` before each re-broker, so the count returns to baseline.
+
+let ctx: AppContext;
+let fixtureCleanups: Array<() => void> = [];
+
+async function getWindowId(app: AppContext["app"]): Promise<number> {
+  const id = await app.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
+    return win?.id ?? null;
+  });
+  if (id === null) throw new Error("No BrowserWindow found");
+  return id;
+}
+
+// Find the webContents id the broker actually holds a port for, rather than
+// assuming the active view's id — the initial broker target (`appWc` in
+// windowServices.ts) is the safest source of truth across the WebContentsView
+// architecture.
+async function findPortedWebContentsId(app: AppContext["app"]): Promise<number | null> {
+  return app.evaluate(() => {
+    const g = globalThis as Record<string, unknown>;
+    const getPvm = g.__daintreeGetPvm as (() => unknown) | undefined;
+    const has = g.__daintreeWorktreeHasPort as ((id: number) => boolean) | undefined;
+    const pvm = getPvm?.() as { getAllWebContentsIds?: () => number[] } | null | undefined;
+    if (!pvm?.getAllWebContentsIds || !has) return null;
+    for (const id of pvm.getAllWebContentsIds()) {
+      if (has(id)) return id;
+    }
+    return null;
+  });
+}
+
+async function hasPort(app: AppContext["app"], wcId: number): Promise<boolean> {
+  return app.evaluate((_electron, id) => {
+    const g = globalThis as Record<string, unknown>;
+    const fn = g.__daintreeWorktreeHasPort as ((x: number) => boolean) | undefined;
+    if (!fn) throw new Error("__daintreeWorktreeHasPort not present");
+    return fn(id);
+  }, wcId);
+}
+
+async function navigationListenerCount(app: AppContext["app"], wcId: number): Promise<number> {
+  return app.evaluate(({ webContents }, id) => {
+    const wc = webContents.fromId(id);
+    return wc && !wc.isDestroyed() ? wc.listenerCount("did-start-navigation") : -1;
+  }, wcId);
+}
+
+async function crashWorkspaceHost(app: AppContext["app"], windowId: number): Promise<boolean> {
+  return app.evaluate((_electron, id) => {
+    const g = globalThis as Record<string, unknown>;
+    const fn = g.__daintreeCrashWorkspaceHostForWindow as ((x: number) => boolean) | undefined;
+    if (!fn) throw new Error("__daintreeCrashWorkspaceHostForWindow not present");
+    return fn(id);
+  }, windowId);
+}
+
+test.describe.serial("Resilience: worktree port broker recovery after host crash", () => {
+  test.beforeAll(async () => {
+    test.setTimeout(180_000);
+    const [repo] = createFixtureRepos(1);
+    fixtureCleanups = [repo.cleanup];
+    ctx = await launchApp({ env: { DAINTREE_E2E_FAULT_MODE: "1" } });
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, repo.dir, "portbroker-project");
+  });
+
+  test.afterAll(async () => {
+    if (ctx?.app) await closeApp(ctx.app);
+    for (const cleanup of fixtureCleanups) cleanup();
+  });
+
+  test("the active view keeps a live port and stable listeners across a host crash", async () => {
+    test.slow();
+    const windowId = await getWindowId(ctx.app);
+
+    // The port is brokered when the view attaches to its host — poll until a
+    // ported view appears, then pin that wcId for the rest of the test.
+    await expect.poll(() => findPortedWebContentsId(ctx.app), { timeout: T_LONG }).not.toBeNull();
+    const wcId = (await findPortedWebContentsId(ctx.app))!;
+
+    expect(await hasPort(ctx.app, wcId)).toBe(true);
+    const baselineListeners = await navigationListenerCount(ctx.app, wcId);
+    expect(baselineListeners).toBeGreaterThanOrEqual(1);
+
+    // Crash the workspace host's UtilityProcess.
+    expect(await crashWorkspaceHost(ctx.app, windowId)).toBe(true);
+
+    // After auto-restart + host-restarted, the broker re-establishes a port for
+    // the same view. The renderer is unchanged (same wcId), so the worktree
+    // store re-hydrates over the fresh port rather than staying stale.
+    await expect.poll(() => hasPort(ctx.app, wcId), { timeout: T_LONG }).toBe(true);
+
+    // No listener accumulation: each re-broker removes the prior view's
+    // listeners before attaching new ones, so the count must not climb.
+    const afterListeners = await navigationListenerCount(ctx.app, wcId);
+    expect(afterListeners).toBeLessThanOrEqual(baselineListeners);
+
+    // A second crash must recover identically — proving the recovery path is
+    // repeatable and not a one-shot.
+    expect(await crashWorkspaceHost(ctx.app, windowId)).toBe(true);
+    await expect.poll(() => hasPort(ctx.app, wcId), { timeout: T_LONG }).toBe(true);
+    expect(await navigationListenerCount(ctx.app, wcId)).toBeLessThanOrEqual(baselineListeners);
+  });
+
+  test("the sidebar worktree list survives the recovery", async () => {
+    // Re-hydration is observable in the UI: the worktree the fixture repo seeds
+    // is still listed after the crashes above (the store re-fetched over the
+    // re-brokered port instead of being stuck on a loading skeleton).
+    await expect(
+      ctx.window
+        .locator(
+          '[data-worktree-branch], [data-worktree-is-main="true"], [aria-label="Worktrees"] a, .worktree-item'
+        )
+        .first()
+    ).toBeVisible({ timeout: T_LONG });
+  });
+});

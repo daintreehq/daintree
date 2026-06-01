@@ -327,7 +327,10 @@ import {
   useNotificationSettingsStore,
   usePreferencesStore,
   usePluginManagerStore,
+  useDiagnosticsStore,
+  usePerformanceModeStore,
 } from "./store";
+import { usePerfMetricsStore } from "./store/perfMetricsStore";
 import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
 import { useRecipeConflictStore } from "./store/recipeConflictStore";
 // Eager side-effect import: registers the GitHub plugin's builtin view slots
@@ -393,12 +396,42 @@ function AppInner() {
         updates: { name: recipeName },
       });
     };
+
+    // Per-window store accessors for the multi-window isolation spec (#9599).
+    // Each project view is its own V8 context, so these Zustand singletons are
+    // per-window — mutating one window's store must not leak into another's.
+    // Gated on the preload-injected __DAINTREE_E2E_MODE__ flag (set only under
+    // DAINTREE_E2E_MODE=1) so the accessors never attach in production.
+    if (window.__DAINTREE_E2E_MODE__ === true) {
+      window.__DAINTREE_E2E_DIAGNOSTICS_STATE__ = () => ({
+        isOpen: useDiagnosticsStore.getState().isOpen,
+      });
+      window.__DAINTREE_E2E_OPEN_DIAGNOSTICS__ = () => useDiagnosticsStore.getState().openDock();
+      window.__DAINTREE_E2E_PERF_METRICS_STATE__ = () => {
+        const s = usePerfMetricsStore.getState();
+        return { fps: s.fps, lafCount30s: s.lafCount30s, cls30s: s.cls30s };
+      };
+      window.__DAINTREE_E2E_SET_PERF_METRIC__ = (fps: number) =>
+        usePerfMetricsStore.getState().setLiveMetrics({ fps, lafCount30s: 0, cls30s: 0 });
+      window.__DAINTREE_E2E_PERF_MODE_STATE__ = () => ({
+        performanceMode: usePerformanceModeStore.getState().performanceMode,
+      });
+      window.__DAINTREE_E2E_SET_PERF_MODE__ = (enabled: boolean) =>
+        usePerformanceModeStore.getState().setPerformanceMode(enabled);
+    }
+
     return () => {
       delete window.__DAINTREE_E2E_ERROR_STORE__;
       delete window.__DAINTREE_E2E_ADD_ERROR__;
       delete window.__DAINTREE_E2E_CLEAR_ERRORS__;
       delete window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__;
       delete window.__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__;
+      delete window.__DAINTREE_E2E_DIAGNOSTICS_STATE__;
+      delete window.__DAINTREE_E2E_OPEN_DIAGNOSTICS__;
+      delete window.__DAINTREE_E2E_PERF_METRICS_STATE__;
+      delete window.__DAINTREE_E2E_SET_PERF_METRIC__;
+      delete window.__DAINTREE_E2E_PERF_MODE_STATE__;
+      delete window.__DAINTREE_E2E_SET_PERF_MODE__;
     };
   }, []);
 
