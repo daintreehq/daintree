@@ -363,6 +363,7 @@ export function WorktreeOverviewModal({
   const aggregateStats = useMemo(() => {
     let workingCount = 0;
     let waitingCount = 0;
+    let finishedCount = 0;
 
     // Count worktrees (not terminals) with specific agent states
     // Use same visibility logic as filtered list to keep stats in sync
@@ -377,9 +378,11 @@ export function WorktreeOverviewModal({
 
       if (derived.hasWorkingAgent) workingCount++;
       if (derived.hasWaitingAgent) waitingCount++;
+      // Mirror matchesQuickStateFilter("finished") so the chip count and filter stay in sync
+      if (derived.chipState === "complete" || derived.chipState === "cleanup") finishedCount++;
     }
 
-    return { workingCount, waitingCount };
+    return { workingCount, waitingCount, finishedCount };
   }, [worktrees, derivedMetaMap, hideMainWorktree]);
 
   // Check if only main worktree exists (to hide the filter toggle)
@@ -844,7 +847,9 @@ export function WorktreeOverviewModal({
                 {filteredWorktrees.length !== worktrees.length && ` of ${worktrees.length}`})
               </span>
               {/* Aggregate activity statistics — clickable chips that set quickStateFilter */}
-              {(aggregateStats.workingCount > 0 || aggregateStats.waitingCount > 0) && (
+              {(aggregateStats.workingCount > 0 ||
+                aggregateStats.waitingCount > 0 ||
+                aggregateStats.finishedCount > 0) && (
                 <div
                   className="flex items-center gap-1 ml-2 pl-3 border-l border-divider"
                   role="group"
@@ -889,6 +894,27 @@ export function WorktreeOverviewModal({
                       <span className="w-1.5 h-1.5 rounded-full bg-status-warning" />
                       <span className="text-status-warning">
                         {aggregateStats.waitingCount} waiting
+                      </span>
+                    </button>
+                  )}
+                  {aggregateStats.finishedCount > 0 && (
+                    <button
+                      type="button"
+                      aria-pressed={quickStateFilter === "finished"}
+                      onClick={() =>
+                        setQuickStateFilter(quickStateFilter === "finished" ? "all" : "finished")
+                      }
+                      className={cn(
+                        "flex items-center gap-1 text-xs tabular-nums rounded-full px-2 py-0.5 transition-colors",
+                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
+                        quickStateFilter === "finished"
+                          ? "bg-overlay-subtle shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
+                          : "hover:bg-tint/[0.04]"
+                      )}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-daintree-text/30" />
+                      <span className="text-daintree-text/70">
+                        {aggregateStats.finishedCount} finished
                       </span>
                     </button>
                   )}

@@ -162,6 +162,77 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
     });
   });
 
+  describe("finished chip (#9607)", () => {
+    function statsSlice(src: string): string {
+      const start = src.indexOf("Aggregate activity statistics");
+      let depth = 0;
+      let i = start;
+      let found = false;
+      for (; i < src.length; i++) {
+        if (src.slice(i, i + 4) === "<div") {
+          depth++;
+        } else if (src.slice(i, i + 6) === "</div>") {
+          depth--;
+          if (depth === 0 && found) break;
+        }
+        if (depth > 0 && !found) found = true;
+      }
+      return src.slice(start, i + 6);
+    }
+
+    it("computes finishedCount in the aggregateStats loop", () => {
+      expect(source).toMatch(/finishedCount\+\+/);
+      expect(source).toMatch(/return\s*\{\s*workingCount,\s*waitingCount,\s*finishedCount\s*\}/);
+    });
+
+    it("derives finishedCount from chipState (mirrors matchesQuickStateFilter), not terminal flags", () => {
+      // Must match the filter's source of truth so the count and filter stay in sync.
+      expect(source).toMatch(
+        /derived\.chipState\s*===\s*"complete"\s*\|\|\s*derived\.chipState\s*===\s*"cleanup"\)\s*finishedCount\+\+/
+      );
+    });
+
+    it("includes finishedCount in the chip-row visibility gate", () => {
+      expect(source).toMatch(/aggregateStats\.finishedCount\s*>\s*0/);
+    });
+
+    it("sets aria-pressed based on quickStateFilter for finished chip", () => {
+      expect(source).toMatch(/aria-pressed=\{quickStateFilter\s*===\s*"finished"\}/);
+    });
+
+    it("finished chip onClick toggles between 'finished' and 'all'", () => {
+      expect(source).toMatch(
+        /setQuickStateFilter\(quickStateFilter\s*===\s*"finished"\s*\?\s*"all"\s*:\s*"finished"\)/
+      );
+    });
+
+    it("uses the shared neutral selected styling (no per-state color) on the finished chip", () => {
+      // The finished chip reuses the same bg-overlay-subtle + inset underline pattern.
+      const stats = statsSlice(source);
+      expect(stats).toContain("finished");
+      expect(stats).toContain("bg-overlay-subtle");
+    });
+
+    it("uses a neutral dot/text color for finished (no per-state token on dot/text)", () => {
+      // Neutral fill on the dot and muted text — the focus ring may still use
+      // the accent (single focus anchor, not selection state coloring).
+      expect(source).toContain("bg-daintree-text/30");
+      expect(source).toContain("text-daintree-text/70");
+      const finishedSlice = source.slice(
+        source.indexOf('aria-pressed={quickStateFilter === "finished"}'),
+        source.indexOf("} finished")
+      );
+      expect(finishedSlice).not.toContain("color-state-working");
+      expect(finishedSlice).not.toContain("status-warning");
+      expect(finishedSlice).not.toContain("bg-daintree-accent");
+      expect(finishedSlice).not.toContain("text-daintree-accent");
+    });
+
+    it("renders the finished count text", () => {
+      expect(source).toMatch(/\baggregateStats\.finishedCount\b/);
+    });
+  });
+
   describe("multi-select and keyboard navigation (#8653)", () => {
     it("imports the overview keyboard hook", () => {
       expect(source).toMatch(/useWorktreeOverviewKeyboard/);
