@@ -8,6 +8,7 @@ import { openAndOnboardProject } from "../../helpers/project";
 import {
   getTerminalText,
   waitForTerminalText,
+  waitForTerminalReady,
   writeTerminalInput,
   openTerminalContextMenu,
   clickTerminalContextMenuItem,
@@ -30,8 +31,9 @@ const FAKE_CLAUDE_IDLE = "__DAINTREE_FAKE_CLAUDE_IDLE__";
 // ActivityMonitor (`IDLE_DEBOUNCE_MS` for agent terminals). The OSC heartbeat
 // stops the moment we send the idle token, but the echo of that input resets
 // the activity clock once, so give the poll a generous window above the
-// debounce — CI multipliers already widen T_LONG for slow runners.
-const T_WAITING = 45_000;
+// debounce. Scale off T_LONG so slow CI runners (3×, Windows 5×) inherit the
+// same headroom rather than racing a hardcoded ceiling.
+const T_WAITING = T_LONG * 2;
 
 async function ptyWrite(page: Page, terminalId: string, data: string): Promise<void> {
   const result = await page.evaluate(
@@ -247,6 +249,7 @@ test.describe.serial("Full: terminal agent-state and status surfaces", () => {
       // The agent-state chip is a role=status element labelled with the state.
       const chip = panel.locator(SEL.terminal.agentStateChip);
       await expect(chip).toBeVisible({ timeout: T_MEDIUM });
+      await expect(chip).toHaveAttribute("aria-label", "Agent state: working");
 
       // The hybrid input bar renders for agent panels (CodeMirror editor) and is
       // not disabled while the backend is connected and the agent is working.
@@ -267,6 +270,11 @@ test.describe.serial("Full: terminal agent-state and status surfaces", () => {
           intervals: [500, 1000],
         })
         .toBe("waiting");
+      // The visible chip must track the FSM, not lag on the prior label.
+      await expect(panel.locator(SEL.terminal.agentStateChip)).toHaveAttribute(
+        "aria-label",
+        "Agent state: waiting"
+      );
     });
 
     await test.step("agent state clears when the session exits", async () => {
@@ -305,6 +313,9 @@ test.describe.serial("Full: terminal agent-state and status surfaces", () => {
     // Clicking Restart respawns the PTY and clears the exit-error banner.
     await restartAction.click();
     await expect(banner).not.toBeVisible({ timeout: T_LONG });
+    // The recovery action is only meaningful if the PTY is actually live again,
+    // not merely if the banner was dismissed.
+    await waitForTerminalReady(window, panel, T_LONG);
   });
 
   test("context menu gates destructive actions while an agent is working", async () => {
@@ -336,6 +347,16 @@ test.describe.serial("Full: terminal agent-state and status surfaces", () => {
       await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
       await expect(dialog).toContainText("Restart terminal with running agent?");
       // Cancel — leave the agent session intact.
+      await window.locator('[data-confirm-role="cancel"]').click();
+      await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
+    });
+
+    await test.step("Kill Terminal is guarded by the same confirmation while working", async () => {
+      await openTerminalContextMenu(panel);
+      await clickTerminalContextMenuItem(panel, "Kill Terminal");
+      const dialog = window.getByRole("alertdialog");
+      await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
+      await expect(dialog).toContainText("Kill terminal with running agent?");
       await window.locator('[data-confirm-role="cancel"]').click();
       await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
     });
