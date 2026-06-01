@@ -715,6 +715,10 @@ export class ProjectViewManager {
     }
   }
 
+  getLowMemoryFreeThresholdMb(): number | null {
+    return this.lowMemoryFreeThresholdMb;
+  }
+
   /**
    * Toggle CDP freeze on cached (non-active) project views. Called by
    * ResourceProfileService when transitioning into / out of the efficiency
@@ -1193,9 +1197,13 @@ export class ProjectViewManager {
         details.reason,
         details.exitCode
       );
-      getCrashRecoveryService().recordCrash(
-        new Error(`View renderer gone: ${details.reason} (exit code ${details.exitCode})`)
-      );
+      // Memory eviction is not a crash — skip the one-shot crash log so a
+      // genuine crash in the same session can still be recorded.
+      if (details.reason !== "memory-eviction") {
+        getCrashRecoveryService().recordCrash(
+          new Error(`View renderer gone: ${details.reason} (exit code ${details.exitCode})`)
+        );
+      }
 
       if (win.isDestroyed()) return;
 

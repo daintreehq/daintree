@@ -109,7 +109,9 @@ function setupCrashRecovery(
   win.webContents.on("render-process-gone", (_event, ...args) => {
     const details = args[0] as { reason: string; exitCode: number };
     if (details.reason === "clean-exit") return;
-    recordCrash(details);
+    if (details.reason !== "memory-eviction") {
+      recordCrash(details);
+    }
 
     if (win.isDestroyed()) return;
 
@@ -655,6 +657,45 @@ describe("renderer crash recovery", () => {
     const errorArg = vi.mocked(notifyError).mock.calls[0][0] as Error;
     expect(errorArg.message).not.toContain("crashed");
     expect(errorArg.message).toContain("memory pressure");
+  });
+
+  it('"memory-eviction" with onRecreateWindow provided still reloads, does not recreate (#9572)', () => {
+    const win = createMockWindow();
+    const onRecreateWindow = vi.fn().mockResolvedValue(undefined);
+    setupCrashRecovery(win, { onRecreateWindow });
+
+    win._emitWc("render-process-gone", { reason: "memory-eviction", exitCode: 0 });
+    vi.advanceTimersByTime(0);
+
+    expect(win.webContents.reload).toHaveBeenCalledOnce();
+    expect(onRecreateWindow).not.toHaveBeenCalled();
+    expect(win.destroy).not.toHaveBeenCalled();
+  });
+
+  it('"crashed" at exactly the threshold does not trigger OOM path (boundary check, #9572)', () => {
+    const win = createMockWindow();
+    const onRecreateWindow = vi.fn().mockResolvedValue(undefined);
+    setupCrashRecovery(win, {
+      onRecreateWindow,
+      lowMemoryFreeThresholdMb: 768,
+      getAvailableMemoryMb: () => 768,
+    });
+
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    vi.advanceTimersByTime(0);
+
+    // availableMb === threshold: condition is <, not <=, so NOT probable OOM
+    expect(win.webContents.reload).toHaveBeenCalledOnce();
+    expect(onRecreateWindow).not.toHaveBeenCalled();
+  });
+
+  it('"memory-eviction" does not call recordCrash (#9572)', () => {
+    const win = createMockWindow();
+    const { recordCrash: mockRecordCrash } = setupCrashRecovery(win);
+
+    win._emitWc("render-process-gone", { reason: "memory-eviction", exitCode: 0 });
+
+    expect(mockRecordCrash).not.toHaveBeenCalled();
   });
 });
 

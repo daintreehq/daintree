@@ -45,6 +45,25 @@ import {
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
 
+function getAvailableMemoryMb(): number | null {
+  try {
+    const getInfo = (
+      process as {
+        getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
+      }
+    ).getSystemMemoryInfo;
+    if (typeof getInfo !== "function") return null;
+    const info = getInfo.call(process);
+    const freeKb = typeof info.free === "number" ? info.free : 0;
+    const purgeableKb = typeof info.purgeable === "number" ? info.purgeable : 0;
+    const availableKb = freeKb + purgeableKb;
+    if (availableKb <= 0) return null;
+    return availableKb / 1024;
+  } catch {
+    return null;
+  }
+}
+
 let windowIpcHandlersRegistered = false;
 
 function registerWindowIpcHandlers(onCreateWindow?: (projectPath?: string) => Promise<void>): void {
@@ -476,11 +495,37 @@ export function setupBrowserWindow(
   appWebContents.on("render-process-gone", (_event, details) => {
     if (details.reason === "clean-exit") return;
     console.error("[MAIN] Renderer process gone:", details.reason, details.exitCode);
-    getCrashRecoveryService().recordCrash(
-      new Error(`Renderer process gone: ${details.reason} (exit code ${details.exitCode})`)
-    );
+    // Memory eviction is not a crash — skip the one-shot crash log so a
+    // genuine crash in the same session can still be recorded.
+    if (details.reason !== "memory-eviction") {
+      getCrashRecoveryService().recordCrash(
+        new Error(`Renderer process gone: ${details.reason} (exit code ${details.exitCode})`)
+      );
+    }
 
     if (win.isDestroyed()) return;
+
+    // OS-pressure memory eviction: reload without counting toward crash-loop
+    // guard (the view goes blank and will not auto-recover on its own).
+    if (details.reason === "memory-eviction") {
+      notifyError(new Error("The renderer was reloaded due to memory pressure."), {
+        source: "renderer-crash",
+      });
+      setImmediate(() => {
+        if (win.isDestroyed()) return;
+        appWebContents.reload();
+      });
+      return;
+    }
+
+    const availableMb = getAvailableMemoryMb();
+    const lowMemThresholdMb = getProjectViewManager()?.getLowMemoryFreeThresholdMb() ?? null;
+    const isProbableOom =
+      details.reason === "oom" ||
+      ((details.reason === "crashed" || details.reason === "killed") &&
+        lowMemThresholdMb !== null &&
+        availableMb !== null &&
+        availableMb < lowMemThresholdMb);
 
     const now = Date.now();
     while (
@@ -491,8 +536,6 @@ export function setupBrowserWindow(
     }
     rendererCrashTimestamps.push(now);
 
-    const isOom = details.reason === "oom";
-
     if (rendererCrashTimestamps.length >= CRASH_LOOP_THRESHOLD) {
       console.error("[MAIN] Crash loop detected, loading recovery page");
       setImmediate(() => {
@@ -500,7 +543,7 @@ export function setupBrowserWindow(
         const recoveryUrl = getRecoveryUrl(details.reason, details.exitCode);
         appWebContents.loadURL(recoveryUrl);
       });
-    } else if (isOom && onRecreateWindow) {
+    } else if (isProbableOom && onRecreateWindow) {
       const now2 = Date.now();
       while (
         oomRecreationTimestamps.length > 0 &&
