@@ -4,7 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import { PluginDetailPane } from "../PluginDetailPane";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { BuiltInPluginCapability, LoadedPluginInfo } from "@shared/types/plugin";
+import {
+  BUILT_IN_PLUGIN_CAPABILITIES,
+  type BuiltInPluginCapability,
+  type LoadedPluginInfo,
+} from "@shared/types/plugin";
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -114,6 +118,23 @@ describe("PluginDetailPane capabilities", () => {
     });
     renderPane(plugin);
     expect(screen.getByText("https://api.example.com/v1")).toBeTruthy();
+  });
+
+  it("renders a label for every built-in capability when all are declared", () => {
+    renderPane(withCapabilities([...BUILT_IN_PLUGIN_CAPABILITIES]));
+    // One representative label per family, covering all three severity tiers.
+    for (const label of [
+      "Read project files",
+      "Write project files",
+      "Make network requests",
+      "Launch agents",
+      "Register agent CLIs",
+      "Run git commands",
+      "Read clipboard",
+      "Run shell commands",
+    ]) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
   });
 
   it("renders capabilities in BUILT_IN_PLUGIN_CAPABILITIES order, not manifest order", () => {

@@ -1073,6 +1073,24 @@ describe("PluginService", () => {
       expect(service.listPlugins()[0].pluginDanger).toBe("confirm");
     });
 
+    // Guards against accidental removal from CONFIRM_TRIGGERING_CAPABILITIES.
+    it.each([
+      "git:write",
+      "fs:project-write",
+      "fs:user-data-write",
+      "agent:invoke",
+      "agent:register",
+    ])("reports confirm for the flat-elevated capability %s", async (capability) => {
+      await writePlugin("flat", {
+        name: "acme.flat",
+        version: "1.0.0",
+        capabilities: [capability],
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      expect(service.listPlugins()[0].pluginDanger).toBe("confirm");
+    });
+
     it("reports confirm via the compound lattice (sensitive read + unscoped network:fetch)", async () => {
       await writePlugin("exfil", {
         name: "acme.exfil",
