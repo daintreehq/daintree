@@ -302,6 +302,44 @@ describe("ProjectViewManager adversarial", () => {
     expect(projBView?.setBackgroundColor).toHaveBeenCalledWith("#1f1b16");
     const setColorOrder = projBView?.setBackgroundColor.mock.invocationCallOrder[0] ?? 0;
     const loadUrlOrder = projBView?.webContents.loadURL.mock.invocationCallOrder[0] ?? Infinity;
+    const addChildOrder =
+      (win.contentView.addChildView as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ??
+      Infinity;
     expect(setColorOrder).toBeLessThan(loadUrlOrder);
+    expect(setColorOrder).toBeLessThan(addChildOrder);
+  });
+
+  it("LRU-evicted cold-start replacement view gets background color set (#9573)", async () => {
+    const win = createMockWindow();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      cachedProjectViews: 2,
+    });
+
+    const initialWc = createMockWebContents();
+    manager.registerInitialView(
+      { webContents: initialWc, setBounds: vi.fn(), setBackgroundColor: vi.fn() } as never,
+      "proj-a",
+      "/a"
+    );
+
+    const projBWc = createMockWebContents();
+    wcQueue.push(projBWc);
+    await manager.switchTo("proj-b", "/b");
+    await manager.switchTo("proj-a", "/a");
+
+    projBWc.isDestroyed.mockReturnValue(true);
+
+    const replacementWc = createMockWebContents();
+    wcQueue.push(replacementWc);
+    const result = await manager.switchTo("proj-b", "/b");
+
+    expect(result.isNew).toBe(true);
+    const replacementView = result.view as {
+      setBackgroundColor: ReturnType<typeof vi.fn>;
+    };
+    expect(replacementView.setBackgroundColor).toHaveBeenCalledWith("#1f1b16");
   });
 });

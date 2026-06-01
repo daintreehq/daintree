@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveAppTheme } from "../../../shared/theme/index.js";
 
 const storeMock = vi.hoisted(() => ({
   get: vi.fn((key: string) => {
@@ -40,28 +41,29 @@ describe("resolveInitialCanvasBackgroundColor (#9573)", () => {
     storeMock.get.mockClear();
   });
 
-  it("returns a #RRGGBB hex string for the default dark scheme", () => {
+  it("returns the surface-canvas token for the default dark scheme", () => {
     storeMock.get.mockImplementation((key: string) => {
       if (key === "appTheme") return { colorSchemeId: "daintree" };
       return undefined;
     });
     const color = resolveInitialCanvasBackgroundColor();
-    expect(color).toMatch(/^#[0-9a-fA-F]{6}$/);
+    expect(color).toBe(resolveAppTheme("daintree", []).tokens["surface-canvas"]);
   });
 
-  it("returns a #RRGGBB hex string for the light Bondi scheme", () => {
+  it("returns the surface-canvas token for the light Bondi scheme", () => {
     storeMock.get.mockImplementation((key: string) => {
       if (key === "appTheme") return { colorSchemeId: "bondi" };
       return undefined;
     });
     const color = resolveInitialCanvasBackgroundColor();
-    expect(color).toMatch(/^#[0-9a-fA-F]{6}$/);
+    expect(color).toBe(resolveAppTheme("bondi", []).tokens["surface-canvas"]);
   });
 
-  it("falls back to the OS-default scheme when appTheme is missing", () => {
+  it("falls back to the OS-default scheme surface-canvas when appTheme is missing", () => {
     storeMock.get.mockImplementation(() => undefined);
     const color = resolveInitialCanvasBackgroundColor();
-    expect(color).toMatch(/^#[0-9a-fA-F]{6}$/);
+    // shouldUseDarkColors is true in this test environment → defaults to "daintree"
+    expect(color).toBe(resolveAppTheme("daintree", []).tokens["surface-canvas"]);
   });
 });
 
