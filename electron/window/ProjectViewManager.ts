@@ -30,6 +30,7 @@ import {
   injectSkeletonCss,
   injectSkeletonProjectIdentity,
   resolveInitialColorSchemeId,
+  resolveInitialCanvasBackgroundColor,
   INITIAL_COLOR_SCHEME_ARG,
   INITIAL_PROJECT_ID_ARG,
 } from "./skeletonCss.js";
@@ -970,7 +971,7 @@ export class ProjectViewManager {
       registerProtocolsForSession(ses, distPath);
     }
 
-    return new WebContentsView({
+    const view = new WebContentsView({
       webPreferences: {
         preload: path.join(this.dirname, "preload.cjs"),
         session: ses,
@@ -992,6 +993,10 @@ export class ProjectViewManager {
         ],
       },
     });
+    // Set the compositor background color before loadURL so the view never
+    // shows the default white background during the cold-start paint gap (#9573).
+    view.setBackgroundColor(resolveInitialCanvasBackgroundColor());
+    return view;
   }
 
   private loadView(view: WebContentsView, projectId: string): Promise<void> {

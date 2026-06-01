@@ -74,7 +74,7 @@ function createMockWebContents(options?: { autoFinishLoad?: boolean }): MockWebC
 vi.mock("electron", () => {
   function MockWebContentsView() {
     const wc = wcQueue.shift();
-    return { webContents: wc, setBounds: vi.fn() };
+    return { webContents: wc, setBounds: vi.fn(), setBackgroundColor: vi.fn() };
   }
 
   return {
@@ -131,6 +131,7 @@ vi.mock("../skeletonCss.js", () => ({
   INITIAL_COLOR_SCHEME_ARG: "--daintree-initial-color-scheme-id",
   INITIAL_PROJECT_ID_ARG: "--daintree-initial-project-id",
   resolveInitialColorSchemeId: vi.fn(() => "daintree"),
+  resolveInitialCanvasBackgroundColor: vi.fn(() => "#1f1b16"),
 }));
 
 vi.mock("../../services/ProjectStore.js", () => ({
@@ -270,5 +271,37 @@ describe("ProjectViewManager adversarial", () => {
     expect(result.isNew).toBe(true);
     expect(result.view.webContents).toBe(replacementWc);
     expect(manager.getActiveProjectId()).toBe("proj-b");
+  });
+
+  it("sets background color on cold-start view before loadURL to prevent white flash (#9573)", async () => {
+    const win = createMockWindow();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const initialWc = createMockWebContents({ autoFinishLoad: false });
+    const mockView = { webContents: initialWc, setBounds: vi.fn(), setBackgroundColor: vi.fn() };
+    manager.registerInitialView(mockView as never, "proj-a", "/a");
+
+    const projBWc = createMockWebContents();
+    wcQueue.push(projBWc);
+    await manager.switchTo("proj-b", "/b");
+
+    // The newly-created WebContentsView for proj-b must have had setBackgroundColor
+    // called with the resolved canvas color before loadURL fired.
+    const projBView = manager.getAllViews().find((v) => v.projectId === "proj-b")?.view as
+      | {
+          setBackgroundColor: ReturnType<typeof vi.fn>;
+          webContents: { loadURL: ReturnType<typeof vi.fn> };
+        }
+      | undefined;
+
+    expect(projBView?.setBackgroundColor).toHaveBeenCalledWith("#1f1b16");
+    const setColorOrder = projBView?.setBackgroundColor.mock.invocationCallOrder[0] ?? 0;
+    const loadUrlOrder = projBView?.webContents.loadURL.mock.invocationCallOrder[0] ?? Infinity;
+    expect(setColorOrder).toBeLessThan(loadUrlOrder);
   });
 });

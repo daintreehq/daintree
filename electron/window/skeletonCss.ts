@@ -67,6 +67,30 @@ export function resolveInitialColorSchemeId(): string {
 }
 
 /**
+ * Resolves the compositor background color for a cold-start WebContentsView.
+ * Called in ProjectViewManager.createView() before loadURL so the view's
+ * background clear color matches the app theme instead of defaulting to white
+ * (#9573). Accent override is intentionally omitted — applyAccentOverrideToScheme
+ * does not touch surface-canvas, so the base scheme value is correct.
+ */
+export function resolveInitialCanvasBackgroundColor(): string {
+  const colorSchemeId = resolveInitialColorSchemeId();
+  const themeConfig = store.get("appTheme") ?? {};
+  let customSchemes: AppColorScheme[] = [];
+  const rawSchemes = (themeConfig as Record<string, unknown>).customSchemes;
+  if (rawSchemes !== undefined) {
+    const result = migrateCustomSchemes(
+      rawSchemes,
+      appCustomSchemesReadSchema,
+      appCustomSchemesWriteSchema
+    );
+    customSchemes = result.schemes;
+  }
+  const scheme = resolveAppTheme(colorSchemeId, customSchemes);
+  return scheme.tokens["surface-canvas"];
+}
+
+/**
  * Inject the first-paint skeleton CSS custom properties. When a cold-start
  * project switch supplies the destination `project`, its accent color (when
  * set) overrides the theme's native accent tokens so the skeleton paints the

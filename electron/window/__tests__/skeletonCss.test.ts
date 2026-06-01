@@ -15,7 +15,11 @@ vi.mock("electron", () => ({
   nativeTheme: { shouldUseDarkColors: true },
 }));
 
-import { injectSkeletonCss, injectSkeletonProjectIdentity } from "../skeletonCss.js";
+import {
+  injectSkeletonCss,
+  injectSkeletonProjectIdentity,
+  resolveInitialCanvasBackgroundColor,
+} from "../skeletonCss.js";
 
 interface FakeWc {
   insertCSS: ReturnType<typeof vi.fn>;
@@ -30,6 +34,36 @@ function makeWc(): FakeWc {
     isDestroyed: vi.fn(() => false),
   };
 }
+
+describe("resolveInitialCanvasBackgroundColor (#9573)", () => {
+  beforeEach(() => {
+    storeMock.get.mockClear();
+  });
+
+  it("returns a #RRGGBB hex string for the default dark scheme", () => {
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appTheme") return { colorSchemeId: "daintree" };
+      return undefined;
+    });
+    const color = resolveInitialCanvasBackgroundColor();
+    expect(color).toMatch(/^#[0-9a-fA-F]{6}$/);
+  });
+
+  it("returns a #RRGGBB hex string for the light Bondi scheme", () => {
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appTheme") return { colorSchemeId: "bondi" };
+      return undefined;
+    });
+    const color = resolveInitialCanvasBackgroundColor();
+    expect(color).toMatch(/^#[0-9a-fA-F]{6}$/);
+  });
+
+  it("falls back to the OS-default scheme when appTheme is missing", () => {
+    storeMock.get.mockImplementation(() => undefined);
+    const color = resolveInitialCanvasBackgroundColor();
+    expect(color).toMatch(/^#[0-9a-fA-F]{6}$/);
+  });
+});
 
 describe("injectSkeletonCss accent override (#9162)", () => {
   beforeEach(() => {
