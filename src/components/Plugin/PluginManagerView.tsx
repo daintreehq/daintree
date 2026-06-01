@@ -1,5 +1,5 @@
 import {
-  Plug,
+  Package,
   FilePlus,
   Link2,
   Info,
@@ -143,7 +143,7 @@ function PluginRow({
         onClick={onSelect}
         className="flex items-start gap-2.5 min-w-0 flex-1 py-2.5 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
       >
-        <Plug
+        <Package
           className={
             enabled
               ? "w-4 h-4 mt-0.5 text-daintree-text/70"
@@ -441,7 +441,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           >
             <ChevronLeft />
           </Button>
-          <Plug className="w-5 h-5 text-daintree-text/70 shrink-0" aria-hidden="true" />
+          <Package className="w-5 h-5 text-daintree-text/70 shrink-0" aria-hidden="true" />
           <h2 className="text-sm font-medium text-daintree-text truncate">Plugins</h2>
         </div>
         <div className="flex items-center gap-3 shrink-0">
@@ -582,7 +582,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             <EmptyState
               variant="zero-data"
               scale="canvas"
-              icon={<Plug />}
+              icon={<Package />}
               title="No plugins installed"
               description="Install one from a file or URL to add panels, commands, and integrations."
             />
@@ -717,7 +717,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             // compact muted EmptyState, which looked cramped here. Click any row
             // to fill it; clicking the selected row again returns to this prompt.
             <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center">
-              <Plug className="w-8 h-8 text-daintree-text/30" aria-hidden="true" />
+              <Package className="w-8 h-8 text-daintree-text/30" aria-hidden="true" />
               <p className="text-base font-medium text-daintree-text/80">
                 {hasPlugins ? "Select a plugin" : "No plugin selected"}
               </p>

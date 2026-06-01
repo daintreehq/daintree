@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plug } from "lucide-react";
+import { Package } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
@@ -66,7 +66,7 @@ export function PluginsTab() {
 
       <div className="flex items-center justify-between gap-4 p-4 rounded-[var(--radius-lg)] border border-daintree-border">
         <div className="flex items-center gap-3 min-w-0">
-          <Plug className="w-5 h-5 text-daintree-text/70 shrink-0" aria-hidden="true" />
+          <Package className="w-5 h-5 text-daintree-text/70 shrink-0" aria-hidden="true" />
           <div className="min-w-0 text-left">
             <div className="text-sm font-medium text-daintree-text">Plugin manager</div>
             <div className="text-xs text-daintree-text/60 mt-0.5 min-h-[1rem]">
