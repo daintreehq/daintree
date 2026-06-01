@@ -619,6 +619,52 @@ describe("AppDialog focus trapping", () => {
       expect(screen.getByTestId("test-dialog").getAttribute("role")).toBe("alertdialog");
     });
 
+    it('renders role="dialog" for destructive variant with hasPreview={true}', async () => {
+      render(
+        <>
+          <Dispatcher />
+          <AppDialog
+            isOpen={true}
+            onClose={() => {}}
+            variant="destructive"
+            hasPreview={true}
+            data-testid="test-dialog"
+          >
+            <AppDialog.Body>
+              <ul>
+                <li>commit abc123</li>
+              </ul>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      await act(() => vi.runAllTimersAsync());
+
+      expect(screen.getByTestId("test-dialog").getAttribute("role")).toBe("dialog");
+    });
+
+    it('renders role="alertdialog" for destructive variant with hasPreview={false}', async () => {
+      render(
+        <>
+          <Dispatcher />
+          <AppDialog
+            isOpen={true}
+            onClose={() => {}}
+            variant="destructive"
+            hasPreview={false}
+            data-testid="test-dialog"
+          >
+            <AppDialog.Body>
+              <p>Are you sure?</p>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      await act(() => vi.runAllTimersAsync());
+
+      expect(screen.getByTestId("test-dialog").getAttribute("role")).toBe("alertdialog");
+    });
+
     it('renders role="dialog" for the default variant', async () => {
       renderDialog();
       await act(() => vi.runAllTimersAsync());

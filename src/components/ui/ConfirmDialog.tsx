@@ -76,6 +76,13 @@ type ConfirmDialogBaseProps = {
    * or disconnected.
    */
   restoreFocusTo?: RestoreFocusTarget;
+  /**
+   * Forwarded to {@link AppDialog.hasPreview}: set to true when the dialog
+   * body contains scrollable preview content (commit lists, directory tables).
+   * Switches the ARIA role from `alertdialog` to `dialog` for destructive
+   * variants, per WAI-ARIA APG guidance.
+   */
+  hasPreview?: boolean;
 };
 
 export type ConfirmDialogProps =
@@ -106,6 +113,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     zIndex,
     initialFocus,
     restoreFocusTo,
+    hasPreview = false,
   } = props;
   const rawTypedNameTarget = (props as { typedNameTarget?: string }).typedNameTarget;
   const typedNameTarget = variant === "destructive" ? rawTypedNameTarget : undefined;
@@ -195,6 +203,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       onClose={handleClose}
       size="sm"
       variant={variant}
+      hasPreview={hasPreview}
       zIndex={zIndex}
       initialFocus={initialFocus}
       restoreFocusTo={restoreFocusTo}

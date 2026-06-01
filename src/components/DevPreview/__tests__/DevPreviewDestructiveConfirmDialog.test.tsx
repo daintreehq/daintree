@@ -121,7 +121,7 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
       .find((row) => row.dataset.relPath === ".vite");
     expect(absentRow?.dataset.exists).toBe("false");
 
-    // Confirm button is enabled even though sizes haven't resolved yet.
+    // Confirm button is enabled once meta loads, even though sizes haven't resolved yet.
     const confirmBtn = screen.getByRole<HTMLButtonElement>("button", { name: /clear cache/i });
     expect(confirmBtn.disabled).toBe(false);
 
@@ -222,7 +222,7 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
     expect(screen.queryByText(/pnpm store files remain/)).toBeNull();
   });
 
-  it("surfaces a meta error without blocking confirm", async () => {
+  it("blocks confirm when meta errors", async () => {
     const sizesDeferred = deferred<DevPreviewDestructivePreviewSizes>();
     stubDevPreviewIpc({
       getDestructivePreviewMeta: vi.fn().mockRejectedValue(new Error("session not found")),
@@ -244,11 +244,68 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
       expect(screen.getByTestId("dev-preview-destructive-meta-error")).toBeTruthy();
     });
     const confirmBtn = screen.getByRole<HTMLButtonElement>("button", { name: /clear cache/i });
-    expect(confirmBtn.disabled).toBe(false);
+    expect(confirmBtn.disabled).toBe(true);
 
     await act(async () => {
       sizesDeferred.resolve(baseSizes);
     });
+  });
+
+  it("disables confirm while meta is loading", async () => {
+    const metaDeferred = deferred<DevPreviewDestructivePreviewMeta>();
+    stubDevPreviewIpc({
+      getDestructivePreviewMeta: vi.fn().mockReturnValue(metaDeferred.promise),
+      getDestructivePreviewSizes: vi.fn().mockResolvedValue(baseSizes),
+    });
+
+    render(
+      <DevPreviewDestructiveConfirmDialog
+        panelId="panel-1"
+        projectId="project-1"
+        tier="restartAndClearCache"
+        isOpen={true}
+        onClose={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+
+    const confirmBtn = screen.getByRole<HTMLButtonElement>("button", { name: /clear cache/i });
+    expect(confirmBtn.disabled).toBe(true);
+
+    await act(async () => {
+      metaDeferred.resolve(baseMeta);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole<HTMLButtonElement>("button", { name: /clear cache/i }).disabled).toBe(
+        false
+      );
+    });
+  });
+
+  it("does not disable confirm when only sizes fail", async () => {
+    stubDevPreviewIpc({
+      getDestructivePreviewMeta: vi.fn().mockResolvedValue(baseMeta),
+      getDestructivePreviewSizes: vi.fn().mockRejectedValue(new Error("disk error")),
+    });
+
+    render(
+      <DevPreviewDestructiveConfirmDialog
+        panelId="panel-1"
+        projectId="project-1"
+        tier="restartAndClearCache"
+        isOpen={true}
+        onClose={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("dev-preview-destructive-cache-row").length).toBeGreaterThan(0);
+    });
+
+    const confirmBtn = screen.getByRole<HTMLButtonElement>("button", { name: /clear cache/i });
+    expect(confirmBtn.disabled).toBe(false);
   });
 
   it("passes panelId/projectId to both IPC calls and sets skipNodeModules for the cache tier", async () => {
