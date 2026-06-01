@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Check, Copy, Download, Eye, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import type { PluginActionAuditRecord, PluginActionAuditResult } from "@shared/types";
@@ -28,8 +29,6 @@ const TIME_RANGE_MS: Record<Exclude<TimeRange, "all">, number> = {
   "1h": 3_600_000,
   "24h": 86_400_000,
 };
-
-const RELATIVE_TIMESTAMP_REFRESH_MS = 30_000;
 
 function formatRelativeTimestamp(ts: number, now: number): string {
   const diffMs = now - ts;
@@ -78,12 +77,12 @@ export function PluginActionAuditLogViewer({
   const [resultFilter, setResultFilter] = useState<ResultFilter>("all");
   const [timeRange, setTimeRange] = useState<TimeRange>("all");
   const [showSuccessful, setShowSuccessful] = useState(false);
-  const [nowTick, setNowTick] = useState(Date.now());
 
-  useEffect(() => {
-    const id = setInterval(() => setNowTick(Date.now()), RELATIVE_TIMESTAMP_REFRESH_MS);
-    return () => clearInterval(id);
-  }, []);
+  const tick = useGlobalMinuteTicker();
+  const now = useMemo(() => {
+    void tick;
+    return Date.now();
+  }, [tick]);
 
   // Whether the rendered list will visibly hide successful records. The toggle
   // is the user's expressed intent, but `resultFilter === "success"` means the
@@ -93,7 +92,7 @@ export function PluginActionAuditLogViewer({
   const filteredRecords = useMemo(() => {
     const needle = pluginFilter.trim().toLowerCase();
     const search = searchQuery.trim().toLowerCase();
-    const cutoffMs = timeRange !== "all" ? nowTick - TIME_RANGE_MS[timeRange] : undefined;
+    const cutoffMs = timeRange !== "all" ? now - TIME_RANGE_MS[timeRange] : undefined;
     return records.filter((record) => {
       if (cutoffMs !== undefined && record.ts < cutoffMs) return false;
       if (suppressSuccess && record.result === "success") return false;
@@ -114,7 +113,7 @@ export function PluginActionAuditLogViewer({
       }
       return true;
     });
-  }, [records, pluginFilter, searchQuery, resultFilter, suppressSuccess, timeRange, nowTick]);
+  }, [records, pluginFilter, searchQuery, resultFilter, suppressSuccess, timeRange, now]);
 
   const isFiltering =
     pluginFilter.trim().length > 0 ||
@@ -266,7 +265,7 @@ export function PluginActionAuditLogViewer({
                   ) : null}
                 </div>
                 <div className="text-right text-daintree-text/40 whitespace-nowrap">
-                  <div>{formatRelativeTimestamp(record.ts, nowTick)}</div>
+                  <div>{formatRelativeTimestamp(record.ts, now)}</div>
                   <div>{record.durationMs}ms</div>
                 </div>
               </li>
