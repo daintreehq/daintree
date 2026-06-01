@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveAppTheme } from "../../../shared/theme/index.js";
 
 const storeMock = vi.hoisted(() => ({
   get: vi.fn((key: string) => {
@@ -15,7 +16,11 @@ vi.mock("electron", () => ({
   nativeTheme: { shouldUseDarkColors: true },
 }));
 
-import { injectSkeletonCss, injectSkeletonProjectIdentity } from "../skeletonCss.js";
+import {
+  injectSkeletonCss,
+  injectSkeletonProjectIdentity,
+  resolveInitialCanvasBackgroundColor,
+} from "../skeletonCss.js";
 
 interface FakeWc {
   insertCSS: ReturnType<typeof vi.fn>;
@@ -30,6 +35,37 @@ function makeWc(): FakeWc {
     isDestroyed: vi.fn(() => false),
   };
 }
+
+describe("resolveInitialCanvasBackgroundColor (#9573)", () => {
+  beforeEach(() => {
+    storeMock.get.mockClear();
+  });
+
+  it("returns the surface-canvas token for the default dark scheme", () => {
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appTheme") return { colorSchemeId: "daintree" };
+      return undefined;
+    });
+    const color = resolveInitialCanvasBackgroundColor();
+    expect(color).toBe(resolveAppTheme("daintree", []).tokens["surface-canvas"]);
+  });
+
+  it("returns the surface-canvas token for the light Bondi scheme", () => {
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appTheme") return { colorSchemeId: "bondi" };
+      return undefined;
+    });
+    const color = resolveInitialCanvasBackgroundColor();
+    expect(color).toBe(resolveAppTheme("bondi", []).tokens["surface-canvas"]);
+  });
+
+  it("falls back to the OS-default scheme surface-canvas when appTheme is missing", () => {
+    storeMock.get.mockImplementation(() => undefined);
+    const color = resolveInitialCanvasBackgroundColor();
+    // shouldUseDarkColors is true in this test environment → defaults to "daintree"
+    expect(color).toBe(resolveAppTheme("daintree", []).tokens["surface-canvas"]);
+  });
+});
 
 describe("injectSkeletonCss accent override (#9162)", () => {
   beforeEach(() => {
