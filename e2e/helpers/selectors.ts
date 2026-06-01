@@ -468,5 +468,7 @@ export const SEL = {
     actionEnabledOptions: '#action-palette-list [role="option"]:not([aria-disabled="true"])',
     // Worktree palette reached via the `@` prefix.
     worktreeDialog: '[role="dialog"][aria-label="Worktree palette"]',
+    // Prompt-history palette reached via the `:` prefix (agent input bar gated).
+    promptHistoryDialog: '[role="dialog"][aria-label="Prompt history search"]',
   },
 } as const;

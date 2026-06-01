@@ -176,6 +176,37 @@ test.describe.serial("Core: Command Palette Accessibility", () => {
     await expect(trigger).toBeFocused({ timeout: T_MEDIUM });
   });
 
+  test("nested action -> # -> panel palette handoff releases focus on Escape", async () => {
+    const { window } = ctx;
+    await ensureWindowFocused(ctx.app);
+    await resetToApp(window);
+
+    await test.step("Open the action palette, then hand off to the panel palette via '#'", async () => {
+      await window.keyboard.press(`${mod}+Shift+P`);
+      const actionInput = window.locator(SEL.actionPalette.searchInput);
+      await expect(actionInput).toBeFocused({ timeout: T_MEDIUM });
+      await actionInput.press("#");
+      await expect(window.locator(SEL.actionPalette.dialog)).not.toBeVisible({ timeout: T_MEDIUM });
+      await expect(window.locator(SEL.panelPalette.dialog)).toBeVisible({ timeout: T_MEDIUM });
+      await expect(window.locator(SEL.panelPalette.searchInput)).toBeFocused({ timeout: T_SHORT });
+    });
+
+    await test.step("Escape closes the chain and focus is not trapped in a dismissed palette", async () => {
+      await window.keyboard.press("Escape");
+      await expect(window.locator(SEL.panelPalette.dialog)).not.toBeVisible({ timeout: T_MEDIUM });
+      await expect(window.locator(SEL.actionPalette.dialog)).toHaveCount(0, { timeout: T_MEDIUM });
+
+      // Focus must leave the palette overlay — it must not remain inside any
+      // (now-dismissed) dialog. The exact landing element after a palette-to-
+      // palette handoff is an implementation detail; the contract under test is
+      // that focus is released, not trapped.
+      const focusInDialog = await window.evaluate(() =>
+        Boolean(document.activeElement?.closest('[role="dialog"]'))
+      );
+      expect(focusInDialog).toBe(false);
+    });
+  });
+
   test("action palette MRU rail surfaces a recently used action after execution", async () => {
     const { window } = ctx;
     await ensureWindowFocused(ctx.app);
@@ -200,9 +231,11 @@ test.describe.serial("Core: Command Palette Accessibility", () => {
       await expect(window.locator(SEL.palettePrefix.recentlyUsedHeader)).toBeVisible({
         timeout: T_LONG,
       });
-      await expect(window.locator(SEL.palettePrefix.actionEnabledOptions).first()).toBeVisible({
-        timeout: T_MEDIUM,
-      });
+      // The action we just executed must be the one recorded in the rail.
+      const recentToggle = window
+        .locator(SEL.palettePrefix.actionEnabledOptions)
+        .filter({ hasText: "Toggle sidebar" });
+      await expect(recentToggle.first()).toBeVisible({ timeout: T_MEDIUM });
     });
 
     await test.step("Restore the sidebar state via the same action", async () => {

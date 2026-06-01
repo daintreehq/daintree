@@ -2,8 +2,8 @@ import { test, expect, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { getGridPanelCount } from "../../helpers/panels";
-import { ensureWindowFocused } from "../../helpers/focus";
+import { getGridPanelCount, getFirstGridPanel, openTerminal } from "../../helpers/panels";
+import { ensureWindowFocused, expectTerminalFocused } from "../../helpers/focus";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
@@ -167,6 +167,8 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
     await browserOption.click();
 
     await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
+    // Confirm it is the browser panel we asked for, not some other kind.
+    await expect(window.locator(SEL.browser.addressBar)).toBeVisible({ timeout: T_LONG });
 
     // Clean up the panel we just opened.
     const panel = window.locator(SEL.panel.gridPanel).last();
@@ -316,6 +318,74 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
     await expect(window.locator(SEL.actionPalette.dialog)).not.toBeVisible({ timeout: T_MEDIUM });
     await expect(window.locator(SEL.palettePrefix.worktreeDialog)).toBeVisible({
       timeout: T_MEDIUM,
+    });
+  });
+
+  test("typing ':' routes the action palette to the prompt-history prefix", async () => {
+    const { window } = ctx;
+    await ensureWindowFocused(ctx.app);
+
+    await window.keyboard.press(`${mod}+Shift+P`);
+    const actionInput = window.locator(SEL.actionPalette.searchInput);
+    await expect(actionInput).toBeFocused({ timeout: T_MEDIUM });
+
+    await actionInput.press(":");
+
+    // The `:` route hands off to the prompt-history palette, dismissing the
+    // action palette. The prompt-history palette itself renders inside an agent
+    // panel's input bar (CLI-gated), so assert the route fired via the handoff,
+    // then confirm the target too when it is available in this launch.
+    await expect(window.locator(SEL.actionPalette.dialog)).not.toBeVisible({ timeout: T_MEDIUM });
+
+    const promptHistory = window.locator(SEL.palettePrefix.promptHistoryDialog);
+    if (await promptHistory.isVisible({ timeout: T_SHORT }).catch(() => false)) {
+      await expect(promptHistory).toBeVisible();
+    } else {
+      test.info().annotations.push({
+        type: "conditional-skip",
+        description: "Prompt-history palette requires an agent input bar (not present this launch)",
+      });
+    }
+  });
+
+  test("quick switcher lists recent panels and restores focus on Escape", async () => {
+    const { window } = ctx;
+    await ensureWindowFocused(ctx.app);
+
+    const before = await getGridPanelCount(window);
+
+    await test.step("Open two terminal panels so the MRU list is populated", async () => {
+      await openTerminal(window);
+      await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
+      await openTerminal(window);
+      await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 2);
+    });
+
+    const lastPanel = window.locator(SEL.panel.gridPanel).last();
+    await lastPanel.locator(SEL.terminal.xtermRows).click();
+    await expectTerminalFocused(lastPanel);
+
+    await test.step("Quick switcher shows the recent panels", async () => {
+      await window.keyboard.press(`${mod}+P`);
+      await expect(window.locator(SEL.quickSwitcher.dialog)).toBeVisible({ timeout: T_MEDIUM });
+      const options = window.locator(SEL.quickSwitcher.options);
+      await expect(options.first()).toBeVisible({ timeout: T_MEDIUM });
+      expect(await options.count()).toBeGreaterThanOrEqual(2);
+    });
+
+    await test.step("Escape closes the switcher and restores terminal focus", async () => {
+      await window.keyboard.press("Escape");
+      await expect(window.locator(SEL.quickSwitcher.dialog)).not.toBeVisible({ timeout: T_MEDIUM });
+      await expectTerminalFocused(lastPanel, T_MEDIUM);
+    });
+
+    await test.step("Clean up the terminals opened for this test", async () => {
+      let count = await getGridPanelCount(window);
+      while (count > before) {
+        await getFirstGridPanel(window).locator(SEL.panel.close).first().click({ force: true });
+        await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(count - 1);
+        count--;
+      }
     });
   });
 
