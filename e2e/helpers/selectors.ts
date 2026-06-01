@@ -97,6 +97,15 @@ export const SEL = {
     searchRegexToggle: '[aria-label="Toggle regex mode"]',
     searchStatus: "[data-terminal-search-status]",
     scrollIndicator: '[aria-label="Scroll to latest output"]',
+    agentStateChip: '[role="status"][aria-label^="Agent state:"]',
+    restartBannerAction: '[aria-label="Restart session"]',
+    reconnectRetryAction: '[aria-label="Retry reconnecting"]',
+  },
+  terminalStatus: {
+    flowStatusPaused: '[role="status"]:has-text("Paused")',
+    flowStatusPausedMemory: '[role="status"]:has-text("Paused (memory)")',
+    flowStatusSuspended: '[role="status"]:has-text("Suspended")',
+    hibernatedBadge: '[data-testid="terminal-hibernated-badge"]',
   },
   worktree: {
     card: (branch: string) => `[data-worktree-branch="${branch}"]`,
