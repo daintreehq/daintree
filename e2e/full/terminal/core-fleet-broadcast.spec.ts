@@ -237,6 +237,22 @@ async function typeDirectlyIntoTerminal(
   }
 }
 
+async function focusPanelHybridInput(
+  page: Page,
+  panel: Locator,
+  terminalId: string
+): Promise<Locator> {
+  await dismissBlockingPalette(page);
+  await panel.click();
+  await expect
+    .poll(() => getFocusedPanelId(page), { timeout: T_MEDIUM, intervals: [100, 250] })
+    .toBe(terminalId);
+  const editor = panel.locator(SEL.terminal.cmEditor).first();
+  await expect(editor).toBeVisible({ timeout: T_MEDIUM });
+  await editor.click();
+  return editor;
+}
+
 function quotePosixShellArg(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
@@ -575,6 +591,111 @@ test.describe.serial("Core: Fleet terminal broadcast", () => {
         await expect(agents[i]!.panel).not.toHaveAttribute("data-selected", "true", {
           timeout: T_MEDIUM,
         });
+      }
+    });
+  });
+
+  test("destructive broadcast via hybrid input gates on confirm — cancel then send", async () => {
+    test.setTimeout(120_000);
+    const { window } = ctx;
+
+    await test.step("Clear any existing fleet state", async () => {
+      await dispatchAction(window, "terminal.disarmAll", undefined, { source: "test" });
+      await expect(window.locator(SEL.fleet.ribbon)).toBeHidden({ timeout: T_MEDIUM });
+    });
+
+    await test.step("Re-enable hybrid input so Enter routes through the editor broadcast path", async () => {
+      const enableHybrid = await dispatchAction(
+        window,
+        "terminalConfig.setHybridInputEnabled",
+        { enabled: true },
+        { source: "user" }
+      );
+      expect(enableHybrid.ok, enableHybrid.error?.message).toBe(true);
+    });
+
+    let gridIds: string[] = [];
+    await test.step("Create and arm two fresh fleet panels", async () => {
+      gridIds = await createFreshFleetGridPanels(2);
+      expect(gridIds.length).toBeGreaterThanOrEqual(2);
+      for (const id of gridIds.slice(0, 2)) {
+        const arm = await dispatchAction(
+          window,
+          "terminal.arm",
+          { terminalId: id },
+          { source: "user" }
+        );
+        expect(arm.ok, arm.error?.message).toBe(true);
+      }
+      await expect(window.locator(SEL.fleet.ribbon)).toBeVisible({ timeout: T_MEDIUM });
+      await expect(window.locator(SEL.fleet.armedCountChip)).toHaveAttribute(
+        "aria-label",
+        /^2 in fleet/,
+        { timeout: T_MEDIUM }
+      );
+    });
+
+    // Distinct markers per phase so the send assertion can never be satisfied
+    // by the cancelled draft: the cancel marker must stay absent throughout,
+    // and only the send marker may appear after confirming.
+    const cancelMarker = `fleet-e2e-cancel-${Date.now()}`;
+    const sendMarker = `fleet-e2e-send-${Date.now()}`;
+    const cancelCommand = `rm -rf ./${cancelMarker}`;
+    const sendCommand = `rm -rf ./${sendMarker}`;
+
+    await test.step("Typing a destructive command and pressing Enter surfaces the confirm strip", async () => {
+      const editor = await focusPanelHybridInput(
+        window,
+        getPanelById(window, gridIds[0]!),
+        gridIds[0]!
+      );
+      await editor.pressSequentially(cancelCommand);
+      await window.keyboard.press("Enter");
+
+      await expect(window.locator(SEL.fleet.pasteConfirm)).toBeVisible({ timeout: T_MEDIUM });
+      await expect(window.locator(SEL.fleet.pasteConfirmSend)).toBeVisible({ timeout: T_MEDIUM });
+      await expect(window.locator(SEL.fleet.pasteConfirmCancel)).toBeVisible({ timeout: T_MEDIUM });
+    });
+
+    await test.step("Cancelling the confirm aborts the broadcast — no target receives the command", async () => {
+      await window.locator(SEL.fleet.pasteConfirmCancel).click();
+      await expect(window.locator(SEL.fleet.pasteConfirm)).toBeHidden({ timeout: T_MEDIUM });
+      // The marker must not have reached any pane. Give the PTY a beat to echo
+      // before asserting absence so this isn't a trivially-true race.
+      await window.waitForTimeout(750);
+      for (const id of gridIds.slice(0, 2)) {
+        await expect(getPanelById(window, id).locator(SEL.terminal.xtermRows)).not.toContainText(
+          cancelMarker,
+          { timeout: T_MEDIUM }
+        );
+      }
+    });
+
+    await test.step("Re-typing and confirming sends the command to every armed pane", async () => {
+      const editor = await focusPanelHybridInput(
+        window,
+        getPanelById(window, gridIds[0]!),
+        gridIds[0]!
+      );
+      // Clear any residual draft from the cancelled attempt so the second
+      // submission contains exactly the send command, not a doubled string.
+      await editor.press("ControlOrMeta+a");
+      await editor.press("Delete");
+      await expect(editor).toHaveText("");
+      await editor.pressSequentially(sendCommand);
+      await window.keyboard.press("Enter");
+
+      await expect(window.locator(SEL.fleet.pasteConfirmSend)).toBeVisible({ timeout: T_MEDIUM });
+      await window.locator(SEL.fleet.pasteConfirmSend).click();
+      await expect(window.locator(SEL.fleet.pasteConfirm)).toBeHidden({ timeout: T_MEDIUM });
+
+      for (const id of gridIds.slice(0, 2)) {
+        await waitForTerminalText(getPanelById(window, id), sendMarker, T_LONG);
+        // The cancelled command must never have run on any pane.
+        await expect(getPanelById(window, id).locator(SEL.terminal.xtermRows)).not.toContainText(
+          cancelMarker,
+          { timeout: T_MEDIUM }
+        );
       }
     });
   });
