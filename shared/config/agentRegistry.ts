@@ -546,6 +546,7 @@ import { config as kiroConfig } from "./agents/kiro.js";
 // `BUILT_IN_AGENT_IDS` directly — but we mirror the order for readability.
 import { BUILT_IN_AGENT_IDS, isBuiltInAgentId } from "./agentIds.js";
 import type { BuiltInAgentId } from "./agentIds.js";
+import { getPluginAgentRegistry } from "./pluginAgentRegistry.js";
 
 /**
  * Mapping from `models.dev/api.json` provider keys to our agent IDs. The
@@ -601,7 +602,10 @@ export function getUserRegistry(): Record<string, AgentConfig> {
 }
 
 export function getEffectiveRegistry(): Record<string, AgentConfig> {
-  return { ...userRegistry, ...AGENT_REGISTRY };
+  // Merge order is priority order (later spreads win): plugin agents are the
+  // lowest tier (additive, never shadowing), user-registry overlays them, and
+  // built-ins always win last so a plugin or user can never patch a built-in.
+  return { ...getPluginAgentRegistry(), ...userRegistry, ...AGENT_REGISTRY };
 }
 
 export function getEffectiveAgentIds(): string[] {

@@ -44,6 +44,8 @@ import {
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
 import { getPluginKeybindings } from "../../services/pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../../services/pluginContextMenuRegistry.js";
+import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
+import type { AgentConfig } from "../../../shared/config/agentRegistry.js";
 import {
   getRegisteredForgeProviders,
   type RegisteredForgeProvider,
@@ -474,6 +476,11 @@ async function handleForgeProvidersGet(): Promise<RegisteredForgeProvider[]> {
   return getRegisteredForgeProviders();
 }
 
+async function handleAgentsGet(): Promise<Record<string, AgentConfig>> {
+  await pluginService.waitForInit();
+  return getPluginAgentRegistry();
+}
+
 /**
  * Per-provider budget for a single `provideDecorations` call. A provider that
  * never settles its promise would otherwise hang the whole IPC invocation
@@ -771,6 +778,7 @@ export const pluginNamespace = defineIpcNamespace({
     registerAction: op(PLUGIN_METHOD_CHANNELS.registerAction, handleActionsRegister),
     unregisterAction: op(PLUGIN_METHOD_CHANNELS.unregisterAction, handleActionsUnregister),
     getPanelKinds: op(PLUGIN_METHOD_CHANNELS.getPanelKinds, handlePanelKindsGet),
+    getAgents: op(PLUGIN_METHOD_CHANNELS.getAgents, handleAgentsGet),
     getForgeProviders: op(PLUGIN_METHOD_CHANNELS.getForgeProviders, handleForgeProvidersGet),
     getDecorations: op(PLUGIN_METHOD_CHANNELS.getDecorations, handleFileDecorationsGet),
     getAuditRecords: op(PLUGIN_METHOD_CHANNELS.getAuditRecords, handleGetAuditRecords),

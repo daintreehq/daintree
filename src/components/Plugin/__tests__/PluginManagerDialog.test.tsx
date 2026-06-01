@@ -45,6 +45,7 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
         contextMenus: [],
         forgeProviders: [],
         fileDecorationProviders: [],
+        agents: [],
       },
     },
     dir: "/plugins/acme.demo",

@@ -359,6 +359,9 @@ export interface GeneratedElectronAPI {
     getActions(
       ...args: IpcInvokeMap["plugin:actions-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-get"]["result"]>;
+    getAgents(
+      ...args: IpcInvokeMap["plugin:agents-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:agents-get"]["result"]>;
     getAuditConfig(
       ...args: IpcInvokeMap["plugin:get-audit-config"]["args"]
     ): Promise<IpcInvokeMap["plugin:get-audit-config"]["result"]>;

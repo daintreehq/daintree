@@ -403,6 +403,7 @@ describe("PluginManifestSchema capabilities field", () => {
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("network:fetch");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:invoke");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:read");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:register");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("git:read");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("git:write");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("clipboard:read");
@@ -410,9 +411,9 @@ describe("PluginManifestSchema capabilities field", () => {
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("shell:exec");
   });
 
-  it("BUILT_IN_PLUGIN_CAPABILITIES has exactly 12 unique entries", () => {
-    expect(BUILT_IN_PLUGIN_CAPABILITIES).toHaveLength(12);
-    expect(new Set(BUILT_IN_PLUGIN_CAPABILITIES).size).toBe(12);
+  it("BUILT_IN_PLUGIN_CAPABILITIES has exactly 13 unique entries", () => {
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toHaveLength(13);
+    expect(new Set(BUILT_IN_PLUGIN_CAPABILITIES).size).toBe(13);
   });
 
   it("rejects null capabilities value", () => {
@@ -7054,7 +7055,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     await expect(waiter).resolves.toBeUndefined();
   });
 
-  it("pushSnapshotTo() sends actions, panel kinds, toolbar buttons, menu items, and context-menu items to the target webContents", async () => {
+  it("pushSnapshotTo() sends actions, panel kinds, toolbar buttons, menu items, context-menu items, and agents to the target webContents", async () => {
     const service = new PluginService(tmpDir);
     await service.activateStartupFinishedPlugins();
     const send = vi.fn();
@@ -7062,7 +7063,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.pushSnapshotTo(wc);
 
-    expect(send).toHaveBeenCalledTimes(6);
+    expect(send).toHaveBeenCalledTimes(7);
     // Every replay goes through the EVENTS_PUSH channel — the same channel the
     // renderer hooks' persistent push listeners consume, so no renderer-side
     // changes are needed for the cold-restore path.
@@ -7076,6 +7077,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     expect(names).toContain("plugin:menu-items-changed");
     expect(names).toContain("plugin:keybindings-changed");
     expect(names).toContain("plugin:context-menu-items-changed");
+    expect(names).toContain("plugin:agents-changed");
     // The keybindings replay is a full authoritative snapshot — the renderer
     // hook full-replaces its plugin bindings on every push, so `complete: true`
     // is consistent with that replace-all semantics.
@@ -7120,13 +7122,14 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.pushSnapshotTo(wc);
 
-    expect(send).toHaveBeenCalledTimes(6);
+    expect(send).toHaveBeenCalledTimes(7);
     const names = send.mock.calls.map((c) => (c[1] as { name?: string })?.name);
     expect(names).toContain("plugin:panel-kinds-changed");
     expect(names).toContain("plugin:toolbar-buttons-changed");
     expect(names).toContain("plugin:menu-items-changed");
     expect(names).toContain("plugin:keybindings-changed");
     expect(names).toContain("plugin:context-menu-items-changed");
+    expect(names).toContain("plugin:agents-changed");
   });
 
   it("pushSnapshotTo() skips a destroyed webContents", async () => {
@@ -7154,7 +7157,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.activateStartupFinishedPlugins();
     await inFlight;
-    expect(send).toHaveBeenCalledTimes(6);
+    expect(send).toHaveBeenCalledTimes(7);
   });
 
   it("pushSnapshotTo() does not send after dispose()", async () => {

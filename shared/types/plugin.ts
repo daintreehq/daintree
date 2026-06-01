@@ -45,6 +45,7 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   "network:fetch",
   "agent:invoke",
   "agent:read",
+  "agent:register",
   "git:read",
   "git:write",
   "clipboard:read",
@@ -187,6 +188,52 @@ export interface PluginManifestScopes {
   fs?: PluginFsScope;
 }
 
+/**
+ * Pattern-based output-detection config a plugin may supply alongside an agent
+ * contribution (#9560). The shape mirrors the safe subset of the built-in
+ * `AgentDetectionConfig`. It is **validated** at manifest-parse time (each
+ * pattern is length-bounded, must compile, and must not use backreferences,
+ * lookarounds, or nested quantifiers — see `electron/schemas/plugin.ts`) but is
+ * **not yet wired** into the live PTY matcher: the minimal tier launches plugin
+ * agents as named, untracked terminals. The field exists now so manifests stay
+ * forward-compatible with the full-tracking tier without the strict schema
+ * rejecting an unknown key. Bad input degrades to a generic shell rather than
+ * breaking detection for other terminals.
+ */
+export interface PluginAgentDetectionContribution {
+  primaryPatterns?: string[];
+  fallbackPatterns?: string[];
+  promptPatterns?: string[];
+  bootCompletePatterns?: string[];
+  completionPatterns?: string[];
+  scanLineCount?: number;
+  debounceMs?: number;
+}
+
+/**
+ * A plugin-contributed agent entry (#9560). Lets a plugin teach Daintree about
+ * a launchable agent CLI it doesn't ship, so the CLI shows up as a named,
+ * selectable agent rather than a generic shell. Requires the `agent:register`
+ * capability (enforced at the manifest gate). Plugin agent IDs are additive for
+ * new IDs only — a contribution whose `id` collides with a built-in is rejected
+ * at parse time, and built-in entries always shadow plugin entries in
+ * `getEffectiveRegistry`. Cross-plugin ID conflicts resolve first-registered-wins.
+ *
+ * The minimal tier surfaces `id`, `name`, `command`, `args`, `color`, `iconId`,
+ * and `supportsContextInjection`; `detection` is reserved for the full-tracking
+ * tier (see {@link PluginAgentDetectionContribution}).
+ */
+export interface PluginAgentContribution {
+  id: string;
+  name: string;
+  command: string;
+  args?: string[];
+  color: string;
+  iconId: string;
+  supportsContextInjection?: boolean;
+  detection?: PluginAgentDetectionContribution;
+}
+
 export interface PluginManifest {
   name: string;
   version: string;
@@ -223,6 +270,13 @@ export interface PluginManifest {
     experimental_mcpServers: McpServerContribution[];
     forgeProviders: ForgeProviderContribution[];
     fileDecorationProviders: FileDecorationContribution[];
+    /**
+     * Plugin-contributed launchable agents (#9560). Each entry registers an
+     * {@link PluginAgentContribution} into the effective agent registry at load
+     * time so the CLI is selectable as a named agent. Requires the
+     * `agent:register` capability. Empty unless the plugin opts in.
+     */
+    agents: PluginAgentContribution[];
     /**
      * Declared plugin settings. Reserved for F29 — absent from parsed manifests
      * until that schema lands, so `host.settings.set()` accepts any key for now.

@@ -30,6 +30,7 @@ function manifestWith(settings: SettingDefinition[]): PluginManifest {
       experimental_mcpServers: [],
       forgeProviders: [],
       fileDecorationProviders: [],
+      agents: [],
       settings,
     },
   };

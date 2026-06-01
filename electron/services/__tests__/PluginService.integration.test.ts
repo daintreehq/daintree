@@ -71,6 +71,11 @@ import {
   getFileDecorationImpls,
   getRegisteredFileDecorationProviders,
 } from "../fileDecorationRegistry.js";
+import {
+  clearPluginAgentRegistryForTests,
+  getPluginAgentRegistry,
+} from "../../../shared/config/pluginAgentRegistry.js";
+import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
@@ -88,6 +93,7 @@ type PluginManifestShape = {
   version: string;
   displayName?: string;
   main?: string;
+  capabilities?: string[];
   contributes?: {
     panels?: unknown[];
     toolbarButtons?: unknown[];
@@ -96,6 +102,7 @@ type PluginManifestShape = {
     mcpServers?: unknown[];
     forgeProviders?: unknown[];
     fileDecorationProviders?: unknown[];
+    agents?: unknown[];
   };
 };
 
@@ -148,6 +155,7 @@ afterEach(async () => {
     clearForgeProviderRegistry();
     clearFileDecorationRegistry();
     clearFileDecorationImplRegistry();
+    clearPluginAgentRegistryForTests();
     storeState.clear();
     for (const key of globalMarkers) {
       delete (globalThis as Record<string, unknown>)[key];
@@ -460,6 +468,85 @@ describe("PluginService integration — forge provider contributions", () => {
     expect(getRegisteredForgeProviders()).toHaveLength(2);
     expect(listMatchingProviders("https://primary.example/repo")).toHaveLength(1);
     expect(listMatchingProviders("https://secondary.example/repo")).toHaveLength(1);
+  });
+});
+
+describe("PluginService integration — agent contributions (issue #9560)", () => {
+  it("registers a manifest agents entry and unregisters it on unload", async () => {
+    await writePlugin("acme.agent-plugin", {
+      name: "acme.agent-plugin",
+      version: "1.0.0",
+      capabilities: ["agent:register"],
+      contributes: {
+        agents: [
+          {
+            id: "acme-agent",
+            name: "Acme Agent",
+            command: "acme",
+            args: ["--flag"],
+            color: "#3366ff",
+            iconId: "terminal",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    // Flush the coalesced microtask broadcast scheduled on load.
+    await Promise.resolve();
+
+    expect(getPluginAgentRegistry()["acme-agent"]).toBeDefined();
+    const config = getEffectiveAgentConfig("acme-agent");
+    expect(config?.name).toBe("Acme Agent");
+    expect(config?.command).toBe("acme");
+
+    expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledWith("events:push", {
+      name: "plugin:agents-changed",
+      payload: {
+        agents: expect.objectContaining({ "acme-agent": expect.anything() }),
+        complete: false,
+      },
+    });
+
+    vi.mocked(broadcastToRenderer).mockClear();
+    service.unloadPlugin("acme.agent-plugin");
+    await Promise.resolve();
+
+    expect(getPluginAgentRegistry()["acme-agent"]).toBeUndefined();
+    expect(getEffectiveAgentConfig("acme-agent")).toBeUndefined();
+    expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledWith(
+      "events:push",
+      expect.objectContaining({
+        name: "plugin:agents-changed",
+        payload: expect.objectContaining({ complete: true }),
+      })
+    );
+  });
+
+  it("does not register agents when the manifest omits the agent:register capability", async () => {
+    await writePlugin("acme.no-cap", {
+      name: "acme.no-cap",
+      version: "1.0.0",
+      contributes: {
+        agents: [
+          {
+            id: "uncapped-agent",
+            name: "Uncapped",
+            command: "uncapped",
+            color: "#3366ff",
+            iconId: "terminal",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    // The manifest fails strict validation (capability gate), so the plugin
+    // never loads its agent into the registry.
+    expect(getPluginAgentRegistry()["uncapped-agent"]).toBeUndefined();
   });
 });
 
