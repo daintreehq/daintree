@@ -18,13 +18,24 @@ import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
 async function openConflictReviewHub(ctx: AppContext) {
-  const reviewBtn = ctx.window.locator(SEL.worktree.reviewHubButton);
-  await expect(reviewBtn.first()).toBeVisible({ timeout: T_LONG });
-  await reviewBtn.first().click();
+  const { window } = ctx;
 
-  const hub = ctx.window.locator(SEL.reviewHub.container);
+  // The card's inline "Open Review & Commit" button is gated on hasChanges,
+  // which is 0 while a merge/rebase is in progress: WorktreeMonitor skips the
+  // git status poll during an operation to avoid competing for index.lock
+  // (WorktreeMonitor.ts:1421). The actions-menu "Review & Commit" item is only
+  // gated on the handler being wired, so it's the reliable entry point here.
+  const card = window.locator(SEL.worktree.mainCard);
+  await expect(card).toBeVisible({ timeout: T_LONG });
+  await card.locator(SEL.worktree.actionsMenu).click();
+
+  const reviewItem = window.getByRole("menuitem", { name: "Review & Commit" });
+  await expect(reviewItem).toBeVisible({ timeout: T_MEDIUM });
+  await reviewItem.click();
+
+  const hub = window.locator(SEL.reviewHub.container);
   await expect(hub).toBeVisible({ timeout: T_MEDIUM });
-  await expect(hub.locator(SEL.reviewHub.conflictPanel)).toBeVisible({ timeout: T_MEDIUM });
+  await expect(hub.locator(SEL.reviewHub.conflictPanel)).toBeVisible({ timeout: T_LONG });
   return hub;
 }
 
