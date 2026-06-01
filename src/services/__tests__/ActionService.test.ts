@@ -1991,7 +1991,8 @@ describe("ActionService", () => {
       const action = {
         id: "acme.plugin.raw" as ActionId,
         title: "Raw",
-        description: "Plugin action with a raw input schema for mutation-isolation testing of the cache.",
+        description:
+          "Plugin action with a raw input schema for mutation-isolation testing of the cache.",
         category: "plugin",
         kind: "command",
         danger: "safe",
@@ -2020,7 +2021,8 @@ describe("ActionService", () => {
       const action = {
         id: "acme.plugin.raw" as ActionId,
         title: "Raw",
-        description: "Plugin action with a raw input schema, verifying the source object stays writable.",
+        description:
+          "Plugin action with a raw input schema, verifying the source object stays writable.",
         category: "plugin",
         kind: "command",
         danger: "safe",
