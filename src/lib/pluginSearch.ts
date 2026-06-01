@@ -13,13 +13,17 @@ const DESCRIPTION_WEIGHT = 0.5;
  */
 export type PluginFilterOperator = "builtin" | "installed" | "enabled" | "disabled" | "cap";
 
-const KNOWN_OPERATORS: ReadonlySet<string> = new Set<PluginFilterOperator>([
+const KNOWN_OPERATORS: ReadonlySet<string> = new Set([
   "builtin",
   "installed",
   "enabled",
   "disabled",
   "cap",
 ]);
+
+function isKnownOperator(key: unknown): key is PluginFilterOperator {
+  return typeof key === "string" && KNOWN_OPERATORS.has(key);
+}
 
 export interface ParsedPluginQuery {
   /** Recognized `@token` operators, in source order. */
@@ -42,18 +46,24 @@ export function parsePluginQuery(raw: string): ParsedPluginQuery {
   const textParts: string[] = [];
   let lastIndex = 0;
 
-  for (const match of raw.matchAll(OPERATOR_RE)) {
-    const key = match[1].toLowerCase();
-    if (!KNOWN_OPERATORS.has(key)) continue; // leave unknown tokens in the free text
+  const matches = Array.from(raw.matchAll(OPERATOR_RE));
+  for (const match of matches) {
+    // matchAll with a regex containing a capturing group always populates index and [1]
+    const matchIndex = match.index ?? 0;
+    const keyRaw = match[1];
+    if (keyRaw === undefined) continue; // safeguard
+
+    const key = keyRaw.toLowerCase();
+    if (!isKnownOperator(key)) continue; // leave unknown tokens in the free text
 
     // Capture any free text sitting between the previous token and this one.
-    const between = raw.slice(lastIndex, match.index);
+    const between = raw.slice(lastIndex, matchIndex);
     if (between.trim()) textParts.push(between.trim());
-    lastIndex = match.index + match[0].length;
+    lastIndex = matchIndex + match[0].length;
 
     const rawValue = match[2];
     operators.push({
-      key: key as PluginFilterOperator,
+      key,
       value: rawValue ? rawValue.toLowerCase() : null,
     });
   }
