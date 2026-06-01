@@ -149,32 +149,31 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       await closeAppDialog(window);
     });
 
-    test("terminal-type field round-trips through save and reopen", async () => {
+    test("terminal-type field round-trips through create and reopen", async () => {
       const { window } = ctx;
-      await createProjectRecipe(window, "Typed Recipe Seed");
 
-      // Edit the seeded recipe and switch its terminal to an agent type. Clicking
-      // edit closes the manager and opens the editor, so each edit reopens it.
-      let manager = await openRecipeManager(window);
+      // Create a recipe with an agent terminal type.
+      const manager = await openRecipeManager(window);
       await manager
-        .locator(SEL.recipeManager.exportButton("Typed Recipe Seed"))
-        .waitFor({ state: "attached", timeout: T_LONG });
-      await manager.getByLabel("Edit recipe Typed Recipe Seed").click({ force: true });
+        .locator(SEL.recipeManager.newProjectRecipeButton)
+        .first()
+        .click({ force: true });
 
-      const editor = getRecipeEditor(window, "Edit Recipe");
+      const editor = getRecipeEditor(window);
       await expect(editor).toBeVisible({ timeout: T_MEDIUM });
+      await editor.locator(SEL.recipeEditor.nameInput).fill("Typed Recipe");
       await editor.locator(SEL.recipeEditor.terminalType(0)).selectOption("claude");
 
       // Switching to an agent type reveals the agent-only initial-prompt field —
       // proof the type value drives the conditional terminal marshaling.
       await expect(editor.locator("#terminal-initial-prompt-0")).toBeVisible({ timeout: T_SHORT });
 
-      await editor.locator(SEL.recipeEditor.updateButton).click();
+      await editor.locator(SEL.recipeEditor.createButton).click();
       await expect(editor).not.toBeVisible({ timeout: T_MEDIUM });
 
-      // Reopen the manager, then the editor, and confirm the agent type persisted.
-      manager = await openRecipeManager(window);
-      await manager.getByLabel("Edit recipe Typed Recipe Seed").click({ force: true });
+      // Reopen the recipe and confirm the agent type persisted across the round-trip.
+      const reopenManager = await openRecipeManager(window);
+      await reopenManager.getByLabel("Edit recipe Typed Recipe").click({ force: true });
       const reopened = getRecipeEditor(window, "Edit Recipe");
       await expect(reopened).toBeVisible({ timeout: T_MEDIUM });
       await expect(reopened.locator(SEL.recipeEditor.terminalType(0))).toHaveValue("claude", {
