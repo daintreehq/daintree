@@ -109,7 +109,9 @@ function GitPushConfirmDialogInner() {
       confirmLabel="Push"
       cancelLabel="Cancel"
       variant="destructive"
+      hasPreview={true}
       isConfirmLoading={isLoading}
+      confirmDisabled={commits === null || !!loadError}
       onConfirm={() => resolveConfirmation(true)}
     >
       <div className="rounded border border-tint/[0.08] bg-tint/[0.04]">

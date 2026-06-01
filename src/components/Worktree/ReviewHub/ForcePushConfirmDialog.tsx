@@ -116,7 +116,9 @@ export function ForcePushConfirmDialog({
       confirmLabel="Force push"
       cancelLabel="Cancel"
       variant="destructive"
+      hasPreview={true}
       isConfirmLoading={isPushing}
+      confirmDisabled={isLoading || !!loadError}
     >
       <div className="space-y-3 text-xs text-daintree-text/80">
         <p>
