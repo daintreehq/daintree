@@ -534,7 +534,10 @@ jobs:
         shell: bash
         env:
           ELECTRON_ENABLE_LOGGING: "1"
-          DEBUG: "pw:protocol,pw:browser"
+          # Keep Electron/browser process logs without the high-volume protocol
+          # stream. On Windows, pw:protocol can flood stdout hard enough to
+          # starve long panel shards before the watchdog timeout fires.
+          DEBUG: "pw:browser"
           DEBUG_COLORS: "0"
           E2E_LAUNCH_TELEMETRY: "1"
           E2E_LAUNCH_TELEMETRY_FILE: ${{ runner.temp }}/e2e-launch-telemetry-${{ matrix.shard }}.jsonl

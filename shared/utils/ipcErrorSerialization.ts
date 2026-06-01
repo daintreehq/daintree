@@ -17,6 +17,62 @@ const KNOWN_ERROR_KEYS = new Set([
   "cause",
 ]);
 
+function sanitizeCloneValue(value: unknown, seen: WeakSet<object>): unknown {
+  if (value === null) return null;
+
+  const valueType = typeof value;
+  if (
+    valueType === "string" ||
+    valueType === "number" ||
+    valueType === "boolean" ||
+    valueType === "bigint"
+  ) {
+    return value;
+  }
+
+  if (valueType === "undefined" || valueType === "function" || valueType === "symbol") {
+    return undefined;
+  }
+
+  if (value instanceof Error) {
+    return serializeError(value, seen);
+  }
+
+  if (typeof value !== "object") {
+    return String(value);
+  }
+
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      const sanitized = sanitizeCloneValue(item, seen);
+      return sanitized === undefined ? null : sanitized;
+    });
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return String(value);
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    const sanitized = sanitizeCloneValue(child, seen);
+    if (sanitized !== undefined) {
+      result[key] = sanitized;
+    }
+  }
+  return result;
+}
+
 export function serializeError(error: unknown, seen = new WeakSet<object>()): SerializedError {
   if (error === null || error === undefined) {
     return { name: "Error", message: String(error) };
@@ -54,7 +110,10 @@ export function serializeError(error: unknown, seen = new WeakSet<object>()): Se
   if (typeof err.path === "string") serialized.path = err.path;
 
   if (err.context !== undefined && typeof err.context === "object" && err.context !== null) {
-    serialized.context = err.context as Record<string, unknown>;
+    const context = sanitizeCloneValue(err.context, seen);
+    if (context !== undefined && typeof context === "object" && context !== null) {
+      serialized.context = context as Record<string, unknown>;
+    }
   }
 
   if (err.cause !== undefined && err.cause !== null && typeof err.cause === "object") {
@@ -66,9 +125,11 @@ export function serializeError(error: unknown, seen = new WeakSet<object>()): Se
   for (const key of Object.keys(err)) {
     if (KNOWN_ERROR_KEYS.has(key)) continue;
     const val = err[key];
-    if (typeof val === "function") continue;
-    properties[key] = val;
-    hasProperties = true;
+    const sanitized = sanitizeCloneValue(val, seen);
+    if (sanitized !== undefined) {
+      properties[key] = sanitized;
+      hasProperties = true;
+    }
   }
   if (hasProperties) serialized.properties = properties;
 

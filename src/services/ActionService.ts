@@ -703,17 +703,21 @@ async function sha256Hex(value: unknown): Promise<string> {
 
 export const actionService = new ActionService();
 
-// Expose dispatch function for E2E tests (WebGL renderer has no DOM-level action API).
-// Gated on the preload-injected __DAINTREE_E2E_MODE__ flag so the global is never
-// attached in production sessions — the flag is only exposed when the Electron
-// process was launched with DAINTREE_E2E_MODE=1 (set exclusively by e2e/helpers/launch.ts).
-if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
+export function installE2EActionDispatchBridge(): void {
+  // Expose dispatch function for E2E tests (WebGL renderer has no DOM-level action API).
+  // Gated on the preload-injected __DAINTREE_E2E_MODE__ flag so the global is never
+  // attached in production sessions — the flag is only exposed when the Electron
+  // process was launched with DAINTREE_E2E_MODE=1 (set exclusively by e2e/helpers/launch.ts).
+  if (typeof window === "undefined" || window.__DAINTREE_E2E_MODE__ !== true) return;
+
   window.__daintreeDispatchAction = (
     actionId: string,
     args?: unknown,
     options?: { source?: string; confirmed?: boolean }
   ) => actionService.dispatch(actionId as ActionId, args, options as ActionDispatchOptions);
 }
+
+installE2EActionDispatchBridge();
 
 export function getActionContext(): ActionContext {
   return actionService.getContext();

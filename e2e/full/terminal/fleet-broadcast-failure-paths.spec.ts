@@ -116,6 +116,9 @@ async function armPanels(page: Page, ids: string[]): Promise<void> {
       { source: "user" }
     );
     expect(result.ok, result.error?.message).toBe(true);
+    await expect(getPanelById(page, id)).toHaveAttribute("data-selected", "true", {
+      timeout: T_MEDIUM,
+    });
   }
 }
 
@@ -242,7 +245,12 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
 
     await test.step("Clearing the fault and retrying delivers the payload", async () => {
       await clearAllFaults(ctx.app);
-      await window.getByRole("button", { name: "Retry failed" }).click();
+      const retryFailed = window.getByRole("button", { name: "Retry failed" });
+      await expect(retryFailed).toBeVisible({ timeout: T_MEDIUM });
+      await window.getByRole("button", { name: "Retry failed" }).click({
+        force: true,
+        timeout: T_MEDIUM,
+      });
       await waitForTerminalText(getPanelById(window, ids[0]!), marker, T_LONG);
       await waitForTerminalText(getPanelById(window, ids[1]!), marker, T_LONG);
       await expect(window.locator(SEL.fleet.failureBanner)).toBeHidden({ timeout: T_LONG });
@@ -300,10 +308,19 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
     // than FLEET_LARGE_PASTE_BATCH_SIZE (5) targets AND a payload at or above
     // FLEET_LARGE_PASTE_BYTE_THRESHOLD (100 KB). A small payload fires every
     // submit in a single Promise.allSettled, so Cancel would be a no-op the
-    // test couldn't distinguish from a broken feature. The leading sentinel
-    // echoes ahead of the filler so each pane is greppable.
+    // test couldn't distinguish from a broken feature. Keep the POSIX sentinel
+    // first and the byte-threshold filler in a shell comment so raw paste
+    // fallback on slower macOS runners still executes the marker instead of
+    // flooding the terminal with echoed filler. PowerShell line-wraps oversized
+    // prompt echoes before it reaches final command output, so Windows asserts
+    // the unique variable name echoed at the start of the oversized assignment.
     const sentinel = `fleet-cancel-${Date.now()}`;
-    const largePayload = `echo ${sentinel} ${"A".repeat(103_000)}`;
+    const windowsSentinelVariable = `$fc${Date.now().toString(36)}`;
+    const firstBatchReceiptText = process.platform === "win32" ? windowsSentinelVariable : sentinel;
+    const largePayload =
+      process.platform === "win32"
+        ? `${windowsSentinelVariable} = '${"A".repeat(103_000)}'`
+        : `printf '${sentinel}\\n'; : # ${"A".repeat(103_000)}`;
 
     await test.step("Send the oversized broadcast through the byte-limit confirm", async () => {
       // A long per-submit delay removes the cancel-click race: batch one stays
@@ -334,12 +351,12 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
     await test.step("First-batch target receives the payload; the sixth (later batch) is skipped", async () => {
       // ids[0] is in the first batch — already dispatched before Cancel — so it
       // completes once its delayed submit resolves (~12s).
-      await waitForTerminalText(getPanelById(window, ids[0]!), sentinel, 30_000);
+      await waitForTerminalText(getPanelById(window, ids[0]!), firstBatchReceiptText, 60_000);
       // ids[5] is the lone second-batch target; the abort skips it entirely.
       // Give the resolved first batch time to drain before asserting absence.
       await window.waitForTimeout(2000);
       await expect(getPanelById(window, ids[5]!).locator(SEL.terminal.xtermRows)).not.toContainText(
-        sentinel,
+        firstBatchReceiptText,
         { timeout: T_MEDIUM }
       );
       await expect(window.locator(SEL.fleet.broadcastProgress)).toBeHidden({ timeout: T_LONG });

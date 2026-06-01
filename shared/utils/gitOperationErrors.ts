@@ -79,7 +79,10 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
     // branch' / 'file size' / pack-size / ruleset-violation wording.
     /GH006: Protected branch|GH013: Repository rule violations|error:.*protected branch|error:.*file size|pack exceeds maximum allowed size|push declined due to repository rule violations/i,
   ],
-  ["push-rejected-outdated", /! \[rejected\].*\(non-fast-forward\)/i],
+  [
+    "push-rejected-outdated",
+    /(?:! \[rejected\].*\((?:non-fast-forward|fetch first)\)|^!\s+\S+\s+\[rejected\]\s+\((?:non-fast-forward|fetch first)\)|Updates were rejected because the tip of your current branch is behind)/im,
+  ],
   [
     "conflict-unresolved",
     /CONFLICT \(|Merge conflict in |error: (?:merge is not possible because you have unmerged files|pull is not possible because you have unmerged files)/i,

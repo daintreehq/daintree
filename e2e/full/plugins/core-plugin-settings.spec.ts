@@ -31,9 +31,16 @@ async function userSecretsSet(page: Page): Promise<string[]> {
 /** Open the manager, select the rich plugin, and switch to its Settings tab. */
 async function openRichSettings(page: Page): Promise<void> {
   await openPluginManager(page);
-  await page.locator(SEL.plugin.option).filter({ hasText: RICH_PLUGIN_LABEL }).first().click();
-  await page.locator(SEL.plugin.tabSettings).click();
-  await expect(page.locator(SEL.plugin.tabSettings)).toHaveAttribute("aria-selected", "true");
+  const option = page.locator(SEL.plugin.option).filter({ hasText: RICH_PLUGIN_LABEL }).first();
+  await expect(option).toBeVisible({ timeout: T_MEDIUM });
+  if ((await option.getAttribute("aria-selected")) !== "true") {
+    await option.click();
+  }
+
+  const settingsTab = page.locator(SEL.plugin.tabSettings);
+  await expect(settingsTab).toBeVisible({ timeout: T_MEDIUM });
+  await settingsTab.click();
+  await expect(settingsTab).toHaveAttribute("aria-selected", "true");
 }
 
 /**

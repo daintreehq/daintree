@@ -339,6 +339,10 @@ export class WorkspaceHostProcess extends EventEmitter {
     }
   }
 
+  _hasLiveChildForTesting(): boolean {
+    return !this.isDisposed && this.child !== null && typeof this.child.pid === "number";
+  }
+
   dispose(): void {
     if (this.isDisposed) return;
     this.isDisposed = true;

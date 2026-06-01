@@ -67,12 +67,22 @@ test.describe.serial("Panels: Notification toasts", () => {
 
   test("auto-dismisses after its duration elapses", async () => {
     const { window } = ctx;
+    const sidebarToggle = window.locator(SEL.toolbar.toggleSidebar);
+    await window.mouse.move(5, 400);
+    await sidebarToggle.focus();
+    await expect(sidebarToggle).toBeFocused();
+
     await injectToast(window, { type: "info", message: "Fades away", duration: 300 });
 
     const region = window.locator(SEL.notifications.toastRegion);
     await expect(region.getByText("Fades away")).toBeVisible({ timeout: T_SHORT });
+    await window.mouse.move(5, 400);
+    await sidebarToggle.focus();
+    await expect(sidebarToggle).toBeFocused();
+
     // Real-time auto-dismiss: the 300ms duration (×3 visible cap) elapses well
-    // within T_MEDIUM. No clock mock — the timer runs against the native clock.
+    // within T_MEDIUM. Keep focus and pointer outside the toast region because
+    // accessibility pause-on-focus/hover intentionally suspends the timer.
     await expect(region.getByText("Fades away")).not.toBeVisible({ timeout: T_MEDIUM });
   });
 

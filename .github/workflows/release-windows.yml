@@ -35,7 +35,9 @@ permissions:
   issues: write
 
 concurrency:
-  group: release-windows-${{ github.ref }}
+  # Keep real releases serialized per ref, but let dry runs bypass stale
+  # rehearsals that may be wedged on a runner from an older branch SHA.
+  group: release-windows-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && github.run_id || 'release' }}
   cancel-in-progress: false
 
 env:

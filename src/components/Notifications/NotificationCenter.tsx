@@ -833,8 +833,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
 
   return (
     <div className="w-[360px] max-h-[420px] flex flex-col">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-divider gap-2">
-        <div className="flex items-center gap-1.5 min-w-0">
+      <div className="flex items-start justify-between px-3 py-2 border-b border-divider gap-2">
+        <div className="flex flex-1 flex-wrap items-center gap-1.5 min-w-0">
           <span className="text-xs font-medium text-daintree-text/80">Notifications</span>
           {entries.length > 0 && (
             <>

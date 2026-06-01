@@ -34,7 +34,9 @@ permissions:
 
 concurrency:
   # Per-OS so re-running macOS never queues behind a passing Windows/Linux run.
-  group: release-macos-${{ github.ref }}
+  # Keep real releases serialized per ref, but let dry runs bypass stale
+  # rehearsals that may be wedged on a runner from an older branch SHA.
+  group: release-macos-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && github.run_id || 'release' }}
   cancel-in-progress: false
 
 env:

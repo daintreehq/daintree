@@ -128,11 +128,22 @@ test.describe.serial("Core: Review Hub Git Confirm Dialogs", () => {
     const hub = window.locator(SEL.reviewHub.container);
 
     const textarea = hub.locator(SEL.reviewHub.commitMessageInput);
-    // `fill` leaves the caret at the end, so the isCaretAtStart guard should
-    // suppress history navigation and leave the draft untouched.
-    await textarea.fill("draft: in-progress message");
+    const draftMessage = "draft: in-progress message";
+    await textarea.fill(draftMessage);
+    await expect(textarea).toHaveValue(draftMessage, { timeout: T_SHORT });
+    await textarea.evaluate((node) => {
+      const textareaNode = node as HTMLTextAreaElement;
+      textareaNode.focus();
+      const end = textareaNode.value.length;
+      textareaNode.setSelectionRange(end, end);
+    });
+    await expect
+      .poll(() => textarea.evaluate((node) => (node as HTMLTextAreaElement).selectionStart), {
+        timeout: T_SHORT,
+      })
+      .toBe(draftMessage.length);
     await textarea.press("ArrowUp");
-    await expect(textarea).toHaveValue("draft: in-progress message", { timeout: T_SHORT });
+    await expect(textarea).toHaveValue(draftMessage, { timeout: T_SHORT });
 
     await textarea.fill("");
   });

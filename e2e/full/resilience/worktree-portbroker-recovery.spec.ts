@@ -67,6 +67,43 @@ async function crashWorkspaceHost(app: AppContext["app"], windowId: number): Pro
   }, windowId);
 }
 
+async function crashWorkspaceHostWhenReady(
+  app: AppContext["app"],
+  windowId: number
+): Promise<void> {
+  await expect.poll(() => crashWorkspaceHost(app, windowId), { timeout: T_LONG }).toBe(true);
+}
+
+async function workspaceHostHasLiveChild(
+  app: AppContext["app"],
+  windowId: number
+): Promise<boolean> {
+  return app.evaluate((_electron, id) => {
+    const g = globalThis as Record<string, unknown>;
+    const fn = g.__daintreeWorkspaceHostHasLiveChildForWindow as
+      | ((x: number) => boolean)
+      | undefined;
+    if (!fn) throw new Error("__daintreeWorkspaceHostHasLiveChildForWindow not present");
+    return fn(id);
+  }, windowId);
+}
+
+async function workspaceHostRestartCount(app: AppContext["app"]): Promise<number> {
+  return app.evaluate(() => {
+    const g = globalThis as Record<string, unknown>;
+    const value = g.__daintreeWorkspaceHostRestartCount;
+    return typeof value === "number" ? value : 0;
+  });
+}
+
+function sidebarWorktreeList(page: AppContext["window"]) {
+  return page
+    .locator(
+      '[data-worktree-branch], [data-worktree-is-main="true"], [aria-label="Worktrees"] a, .worktree-item'
+    )
+    .first();
+}
+
 test.describe.serial("Resilience: worktree port broker recovery after host crash", () => {
   test.beforeAll(async () => {
     test.setTimeout(180_000);
@@ -84,6 +121,7 @@ test.describe.serial("Resilience: worktree port broker recovery after host crash
   test("the active view keeps a live port and stable listeners across a host crash", async () => {
     test.slow();
     const windowId = await getWindowId(ctx.app);
+    const initialRestartCount = await workspaceHostRestartCount(ctx.app);
 
     // The port is brokered when the view attaches to its host — poll until a
     // ported view appears, then pin that wcId for the rest of the test.
@@ -97,7 +135,7 @@ test.describe.serial("Resilience: worktree port broker recovery after host crash
     // Crash the workspace host's UtilityProcess. A `true` return proves a live
     // child existed and was killed — so the recovery poll below is exercised
     // against a genuine crash, not a no-op.
-    expect(await crashWorkspaceHost(ctx.app, windowId)).toBe(true);
+    await crashWorkspaceHostWhenReady(ctx.app, windowId);
 
     // After auto-restart + host-restarted, the broker re-establishes a port for
     // the same view. The renderer is unchanged (same wcId), so the worktree
@@ -105,16 +143,26 @@ test.describe.serial("Resilience: worktree port broker recovery after host crash
     // the recovered end-state (port present) rather than the transient gap — the
     // host-restarted re-broker path keeps the view's map entry across the crash,
     // so `hasPort` may never observably dip to false in between.
+    await expect
+      .poll(() => workspaceHostRestartCount(ctx.app), { timeout: T_LONG })
+      .toBeGreaterThan(initialRestartCount);
     await expect.poll(() => hasPort(ctx.app, wcId), { timeout: T_LONG }).toBe(true);
 
     // No listener accumulation: each re-broker removes the prior view's
     // listeners before attaching new ones, so the count must not climb.
     const afterListeners = await navigationListenerCount(ctx.app, wcId);
     expect(afterListeners).toBeLessThanOrEqual(baselineListeners);
+    const afterFirstRestartCount = await workspaceHostRestartCount(ctx.app);
 
     // A second crash must recover identically — proving the recovery path is
     // repeatable and not a one-shot.
-    expect(await crashWorkspaceHost(ctx.app, windowId)).toBe(true);
+    await expect
+      .poll(() => workspaceHostHasLiveChild(ctx.app, windowId), { timeout: T_LONG })
+      .toBe(true);
+    await crashWorkspaceHostWhenReady(ctx.app, windowId);
+    await expect
+      .poll(() => workspaceHostRestartCount(ctx.app), { timeout: T_LONG })
+      .toBeGreaterThan(afterFirstRestartCount);
     await expect.poll(() => hasPort(ctx.app, wcId), { timeout: T_LONG }).toBe(true);
     expect(await navigationListenerCount(ctx.app, wcId)).toBeLessThanOrEqual(baselineListeners);
   });
@@ -123,12 +171,6 @@ test.describe.serial("Resilience: worktree port broker recovery after host crash
     // Re-hydration is observable in the UI: the worktree the fixture repo seeds
     // is still listed after the crashes above (the store re-fetched over the
     // re-brokered port instead of being stuck on a loading skeleton).
-    await expect(
-      ctx.window
-        .locator(
-          '[data-worktree-branch], [data-worktree-is-main="true"], [aria-label="Worktrees"] a, .worktree-item'
-        )
-        .first()
-    ).toBeVisible({ timeout: T_LONG });
+    await expect(sidebarWorktreeList(ctx.window)).toBeVisible({ timeout: T_LONG });
   });
 });

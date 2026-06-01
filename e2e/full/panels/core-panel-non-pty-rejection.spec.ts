@@ -53,7 +53,6 @@ test.describe.serial("Core: Non-PTY panels reject the dock", () => {
         .filter({ has: window.locator(SEL.browser.addressBar) });
       await expect(browserPanel).toHaveCount(1, { timeout: T_MEDIUM });
 
-      await browserPanel.hover();
       // showMoveToDock requires `hasPty` — browser panels render no dock button.
       // Rendering it would silently strand the panel (ContentDock filters by isPtyPanel).
       await expect(browserPanel.locator(SEL.panel.minimize)).toHaveCount(0);

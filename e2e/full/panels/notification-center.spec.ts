@@ -30,7 +30,7 @@ async function openCenter(window: Page): Promise<void> {
 async function closeCenter(window: Page): Promise<void> {
   const bell = window.locator(SEL.notifications.bellButton);
   if ((await bell.getAttribute("aria-expanded")) === "true") {
-    await window.keyboard.press("Escape");
+    await bell.click();
     await expect(bell).toHaveAttribute("aria-expanded", "false", { timeout: T_SHORT });
   }
   // Wait for the Radix popover portal to unmount so its FocusScope doesn't

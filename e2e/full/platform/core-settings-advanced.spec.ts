@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
@@ -21,6 +21,32 @@ async function openKeyboardSettings(): Promise<void> {
   await expect(window.locator("h3", { hasText: "Keyboard Shortcuts" })).toBeVisible({
     timeout: T_SHORT,
   });
+}
+
+async function openShortcutRecorder(
+  window: Page,
+  search: string,
+  rowText: string
+): Promise<{ row: Locator; recordPrompt: Locator; searchInput: Locator }> {
+  const searchInput = window.locator(SEL.settings.shortcutsSearchInput);
+  await searchInput.fill(search);
+  await expect(searchInput).toHaveValue(search, { timeout: T_SHORT });
+  await window.waitForTimeout(T_SETTLE);
+
+  const row = window.locator(SEL.settings.shortcutRow).filter({ hasText: rowText }).first();
+  await expect(row).toBeVisible({ timeout: T_MEDIUM });
+  await row.scrollIntoViewIfNeeded();
+  await row.hover();
+
+  const editBtn = row.getByRole("button", { name: "Edit" });
+  await expect(editBtn).toBeVisible({ timeout: T_MEDIUM });
+  await editBtn.click();
+
+  const editingRow = window.locator(SEL.settings.shortcutRow).filter({ hasText: rowText }).first();
+  const recordPrompt = editingRow.getByRole("button", { name: "Click to record shortcut" });
+  await expect(recordPrompt).toBeVisible({ timeout: T_MEDIUM });
+
+  return { row: editingRow, recordPrompt, searchInput };
 }
 
 test.describe.serial("Core: Settings Advanced", () => {
@@ -89,20 +115,11 @@ test.describe.serial("Core: Settings Advanced", () => {
       const { window } = ctx;
       await openKeyboardSettings();
 
-      const searchInput = window.locator(SEL.settings.shortcutsSearchInput);
-      await searchInput.fill("Open settings");
-      await window.waitForTimeout(T_SETTLE);
-
-      const row = window.locator(SEL.settings.shortcutRow).first();
-      await row.scrollIntoViewIfNeeded();
-      await row.hover();
-
-      const editBtn = row.locator("button", { hasText: "Edit" });
-      await expect(editBtn).toBeVisible({ timeout: T_SHORT });
-      await editBtn.click();
-
-      const recordPrompt = window.locator(SEL.settings.shortcutRecordPrompt);
-      await expect(recordPrompt).toBeVisible({ timeout: T_SHORT });
+      const { recordPrompt, searchInput } = await openShortcutRecorder(
+        window,
+        "Open settings",
+        "Open settings"
+      );
 
       const cancelBtn = window.locator(SEL.settings.shortcutCancelButton);
       await cancelBtn.click();
@@ -121,22 +138,11 @@ test.describe.serial("Core: Settings Advanced", () => {
       // Open settings and navigate to Keyboard tab
       await openKeyboardSettings();
 
-      const searchInput = window.locator(SEL.settings.shortcutsSearchInput);
-      await searchInput.fill("Open settings");
-      await window.waitForTimeout(T_SETTLE);
-
-      const row = window.locator(SEL.settings.shortcutRow).first();
-      await row.scrollIntoViewIfNeeded();
-      await row.hover();
-
-      // Use the Edit UI to create an override via recording
-      const editBtn = row.locator("button", { hasText: "Edit" });
-      await expect(editBtn).toBeVisible({ timeout: T_SHORT });
-      await editBtn.click();
-
-      // Click "Click to record shortcut" to start recording
-      const recordPrompt = window.locator(SEL.settings.shortcutRecordPrompt);
-      await expect(recordPrompt).toBeVisible({ timeout: T_SHORT });
+      const { row, recordPrompt, searchInput } = await openShortcutRecorder(
+        window,
+        "Open settings",
+        "Open settings"
+      );
       await recordPrompt.click();
 
       // Press a key combo
@@ -179,20 +185,11 @@ test.describe.serial("Core: Settings Advanced", () => {
       // Edit a shortcut that is NOT bound to Cmd+T, then record Cmd+T —
       // the default binding for "Duplicate focused panel" (terminal.duplicate).
       // Conflict detection (which excludes the action being edited) must flag it.
-      const searchInput = window.locator(SEL.settings.shortcutsSearchInput);
-      await searchInput.fill("Reopen last");
-      await window.waitForTimeout(T_SETTLE);
-
-      const row = window.locator(SEL.settings.shortcutRow).first();
-      await row.scrollIntoViewIfNeeded();
-      await row.hover();
-
-      const editBtn = row.locator("button", { hasText: "Edit" });
-      await expect(editBtn).toBeVisible({ timeout: T_SHORT });
-      await editBtn.click();
-
-      const recordPrompt = window.locator(SEL.settings.shortcutRecordPrompt);
-      await expect(recordPrompt).toBeVisible({ timeout: T_SHORT });
+      const { recordPrompt, searchInput } = await openShortcutRecorder(
+        window,
+        "Reopen last closed terminal",
+        "Reopen last closed terminal"
+      );
       await recordPrompt.click();
 
       // The recorder reads event.code; Cmd maps to Meta on macOS, Ctrl elsewhere.

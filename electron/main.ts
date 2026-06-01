@@ -382,6 +382,12 @@ if (!gotTheLock) {
         const host = getWorkspaceClientRef()?.getHostForWindow(windowId);
         return host?._crashForTesting() ?? false;
       };
+      (globalThis as Record<string, unknown>).__daintreeWorkspaceHostHasLiveChildForWindow = (
+        windowId: number
+      ): boolean => {
+        const host = getWorkspaceClientRef()?.getHostForWindow(windowId);
+        return host?._hasLiveChildForTesting() ?? false;
+      };
       (globalThis as Record<string, unknown>).__daintreeWorktreeHasPort = (
         webContentsId: number
       ): boolean => {

@@ -95,6 +95,49 @@ describe("serializeError", () => {
     expect(serialized.properties?.toJSON).toBeUndefined();
   });
 
+  it("sanitizes nested custom properties so the result is structured-clone safe", () => {
+    class Task {
+      parser = () => "parsed";
+      command = "push";
+    }
+
+    const err = Object.assign(new Error("git push failed"), {
+      task: new Task(),
+      detail: {
+        ok: false,
+        retry: () => undefined,
+        nested: { value: "kept" },
+      },
+    });
+
+    const serialized = serializeError(err);
+    expect(() => structuredClone(serialized)).not.toThrow();
+    expect(serialized.properties?.task).toBe("[object Object]");
+    expect(serialized.properties?.detail).toEqual({
+      ok: false,
+      nested: { value: "kept" },
+    });
+  });
+
+  it("sanitizes nested context values so the result is structured-clone safe", () => {
+    const err = Object.assign(new Error("context failed"), {
+      context: {
+        command: "git push",
+        task: {
+          format: () => "git push",
+          args: ["push"],
+        },
+      },
+    });
+
+    const serialized = serializeError(err);
+    expect(() => structuredClone(serialized)).not.toThrow();
+    expect(serialized.context).toEqual({
+      command: "git push",
+      task: { args: ["push"] },
+    });
+  });
+
   it("handles non-Error values", () => {
     expect(serializeError("string error").message).toBe("string error");
     expect(serializeError(42).message).toBe("42");

@@ -23,6 +23,25 @@ let ctx: AppContext;
 let fixtureCleanups: Array<() => void> = [];
 let panelIdsA: string[] = [];
 
+async function expectActiveProjectReady(projectName: string): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const current = await ctx.window.evaluate(async () => {
+          return await (window as any).electron.project.getCurrent();
+        });
+        return typeof current?.name === "string" && current.name.includes(projectName);
+      },
+      { timeout: T_LONG }
+    )
+    .toBe(true);
+  await ctx.window
+    .locator('[data-grid-container="true"]')
+    .first()
+    .waitFor({ state: "attached", timeout: T_LONG });
+  await ctx.window.waitForTimeout(T_SETTLE * 2);
+}
+
 test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
   test.beforeAll(async () => {
     // beforeAll opens 3 projects and runs 5 project switches through
@@ -171,6 +190,8 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
     await test.step(
       "spawn 3rd terminal in A",
       async () => {
+        ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
+        await expectActiveProjectReady(PROJECT_A);
         await spawnTerminalAndVerify(ctx.window);
         await expect
           .poll(() => getGridPanelCount(ctx.window), { timeout: T_LONG })
@@ -183,6 +204,7 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
       "switch to B and spawn 2 terminals",
       async () => {
         ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_B);
+        await expectActiveProjectReady(PROJECT_B);
         await expect.poll(() => getGridPanelCount(ctx.window), { timeout: T_LONG }).toBe(0);
 
         await spawnTerminalAndVerify(ctx.window);
@@ -196,11 +218,13 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
       "verify A still has 3+, B still has 2+",
       async () => {
         ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
+        await expectActiveProjectReady(PROJECT_A);
         await expect
           .poll(() => getGridPanelCount(ctx.window), { timeout: T_LONG })
           .toBeGreaterThanOrEqual(3);
 
         ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_B);
+        await expectActiveProjectReady(PROJECT_B);
         await expect
           .poll(() => getGridPanelCount(ctx.window), { timeout: T_LONG })
           .toBeGreaterThanOrEqual(2);

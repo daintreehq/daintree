@@ -20,7 +20,7 @@ function seedRecipe(dir: string): void {
       {
         id: "inrepo-e2e",
         name: "E2E Recipe",
-        terminals: [{ type: "shell", title: "Shell", env: {} }],
+        terminals: [{ type: "terminal", title: "Shell", env: {} }],
         createdAt: 1700000000000,
         showInEmptyState: false,
       },

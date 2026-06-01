@@ -6,6 +6,8 @@ import { addAndSwitchToProject } from "../../helpers/workflows";
 import { SEL } from "../../helpers/selectors";
 import { T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
+const mod = process.platform === "darwin" ? "Meta" : "Control";
+
 let ctx: AppContext;
 let fixture: MultiProjectFixture | undefined;
 
@@ -38,7 +40,7 @@ test.describe.serial("Full: Worktree Dashboard Cards", () => {
   test("overview modal supports Ctrl-click and Shift-click range multi-select", async () => {
     const { window } = ctx;
 
-    await window.locator(SEL.worktree.openOverviewButton).click();
+    await window.keyboard.press(`${mod}+Shift+O`);
     await expect(window.locator(SEL.worktree.overviewModal)).toBeVisible({ timeout: T_LONG });
 
     const cells = window.locator(SEL.worktree.overviewCell);

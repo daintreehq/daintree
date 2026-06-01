@@ -148,6 +148,10 @@ function buildApi(): NotificationsE2EApi {
   };
 }
 
-if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
+export function installE2ENotificationBackdoor(): void {
+  if (typeof window === "undefined" || window.__DAINTREE_E2E_MODE__ !== true) return;
+
   window.__daintreeNotificationsE2E = buildApi();
 }
+
+installE2ENotificationBackdoor();

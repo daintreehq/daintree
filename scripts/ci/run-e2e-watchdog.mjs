@@ -7,6 +7,7 @@ export const WATCHDOG_EXIT_CODE = 124;
 export const DEFAULT_TIMEOUT_MINUTES = 45;
 export const DEFAULT_HEARTBEAT_SECONDS = 60;
 const KILL_GRACE_MS = 15_000;
+const TREE_KILL_TIMEOUT_MS = 5_000;
 
 function parsePositiveNumber(value, name) {
   const parsed = Number(value);
@@ -77,11 +78,21 @@ function terminateProcessTree(pid) {
 
     if (process.platform === "win32") {
       const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
-        stdio: "inherit",
-        shell: true,
+        stdio: "ignore",
+        shell: false,
       });
-      killer.once("close", () => resolve());
-      killer.once("error", () => resolve());
+      const timeout = setTimeout(() => {
+        killer.kill();
+        resolve();
+      }, TREE_KILL_TIMEOUT_MS);
+      killer.once("close", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      killer.once("error", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
       return;
     }
 
@@ -97,6 +108,28 @@ function terminateProcessTree(pid) {
 
     resolve();
   });
+}
+
+function forceDetachChild(child) {
+  try {
+    if (process.platform !== "win32" && child.pid) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        // Process group may already be gone.
+      }
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // Child may already be gone.
+      }
+    } else if (process.platform === "win32") {
+      void terminateProcessTree(child.pid);
+    }
+  } catch {
+    // Best effort only; the wrapper must still exit.
+  }
+  child.unref();
 }
 
 export function runCommandWithWatchdog({ args, command, heartbeatMs, timeoutMs }) {
@@ -134,10 +167,19 @@ export function runCommandWithWatchdog({ args, command, heartbeatMs, timeoutMs }
       timedOut = true;
       void terminateProcessTree(child.pid);
       setTimeout(() => {
-        if (!settled) resolve(WATCHDOG_EXIT_CODE);
-      }, KILL_GRACE_MS).unref();
+        if (settled) return;
+        settled = true;
+        clearInterval(heartbeat);
+        clearTimeout(hardExit);
+        forceDetachChild(child);
+        console.error(
+          `[e2e-watchdog] process tree did not close after ${formatDuration(
+            KILL_GRACE_MS
+          )}; forcing watchdog exit`
+        );
+        resolve(WATCHDOG_EXIT_CODE);
+      }, KILL_GRACE_MS);
     }, timeoutMs);
-    hardExit.unref();
 
     child.once("error", (error) => {
       if (settled) return;
