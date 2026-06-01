@@ -57,6 +57,8 @@ export default async function planFromIssue(args: { issue: number }) {
 
 _Imperative registration (escape hatch for dynamic commands):_
 
+> `@daintreehq/plugin-sdk` is the forward-looking published name for the SDK types/runtime (reserved in `shared/types/plugin-sdk.ts`, scaffolded as a dependency by the `daintree-plugin` CLI). It's distinct from the in-repo `daintree-plugin` CLI package — don't conflate the two.
+
 ```ts
 // src/index.ts
 import type { PluginHostApi } from "@daintreehq/plugin-sdk";
@@ -285,7 +287,7 @@ Keybindings map a key combination to an action.
 | `description` | no | Human-readable description of what the binding does. |
 | `when` | no | Context expression gating when the binding is active. |
 
-Bindings register when the plugin loads and unregister on unload. Conflicts with user overrides or other plugins' bindings are resolved by Daintree's existing keybinding service — plugin bindings are low-priority and yield to user overrides. See `src/services/KeybindingService.ts:325` for the registration API.
+Bindings register when the plugin loads and unregister on unload. Conflicts with user overrides or other plugins' bindings are resolved by Daintree's existing keybinding service — plugin bindings are low-priority and yield to user overrides. See `registerBinding` in `src/services/KeybindingService.ts` for the registration API.
 
 ## Settings schema — _Shipped_
 
@@ -362,9 +364,9 @@ Adds entries to right-click menus on specific UI elements.
 
 Context menus follow the same `actionId` dispatch pattern as menu items.
 
-## MCP servers — _Planned_
+## MCP servers — _Shipped_
 
-Declares Model Context Protocol servers the plugin ships. The manifest shape is validated but the `experimental_` prefix signals that it may change before the feature ships — use with awareness that the contract is not yet locked. See [Agent extensions → MCP servers](./agent-extensions.md#mcp-servers) for the full story.
+Declares Model Context Protocol servers the plugin ships. The `experimental_` manifest key retains its prefix while the contribution shape settles, but the runtime is live: `PluginMcpSupervisor` (`electron/services/PluginMcpSupervisor.ts`) spawns and supervises the stdio subprocess, and IPC handlers in `electron/ipc/handlers/pluginMcp.ts` wire start/restart/listTools/getFullSchema. See [Agent extensions → MCP servers](./agent-extensions.md#mcp-servers) for the full story.
 
 ```json
 {
@@ -393,6 +395,8 @@ Declares Model Context Protocol servers the plugin ships. The manifest shape is 
 | `env` | no | Environment variables. Values can reference settings with `${settings:settingId}` syntax. |
 
 Daintree supervises the process: lazy spawn on first tool use, hard kill on Daintree exit, exponential backoff on crash. The plugin's tools are exposed to any agent running in Daintree through the same MCP surface user-configured MCP servers use.
+
+Tool use is gated by a consent/permission/audit subsystem (`electron/services/plugin-mcp/` — `PluginMcpConsentService`, `PluginMcpTierAuth`, `PluginMcpAuditService`, `PluginMcpConsentStore`): inbound tool calls are checked against per-server permission tiers, prompt for consent when required, and are recorded to an audit log. Discovery is lazy and two-tier — a cheap tool list first, full schemas fetched on demand.
 
 **Intentionally excluded:** remote MCP transports (`url`), explicit transport types, per-server working directories, restart policies. These are deferred until use cases concretely require them.
 
@@ -476,10 +480,37 @@ Registers a forge backend — issues, pull/merge requests, reviews, CI roll-up, 
 | `name` | yes | Display label in Preferences → Forge Integrations. |
 | `matches` | yes | List of exact hostnames. The host extracts the hostname from the project's git remote (HTTPS/SSH/SCP-form URLs handled), lowercases and trims it, then matches for **exact string equality** — no glob, wildcard, or suffix matching. List every distinct hostname your forge serves as a separate entry. First matching provider wins. |
 | `capabilities` | no | Informational hints driving the Preferences "supports: …" display only; the host does not interpret them. Behavior gates on whether the runtime capability field is present. |
+| `credentialFields` | no | Array of `{ id, label, type, placeholder?, helpText? }` declaring the auth fields this provider needs. Drives the generated credential form in Preferences → Forge Integrations. |
 | `settingsScopeRef` | no | ID prefix in this plugin's `settings` contributions, used to group provider settings. |
 | `viewRefs` | no | IDs of `views` contributions shown under this provider's panel section. |
 
 The manifest entry is read eagerly so the provider populates Preferences and the remote-routing table before any plugin code runs; the implementation binds lazily in `activate()` via [`registerForgeProvider`](./host-api.md#registerforgeprovider). For the end-to-end walkthrough — implementing `ForgeProviderImpl`, state normalization, capabilities, and tests — see [Implementing a forge provider](./forge-provider.md).
+
+## File decoration providers — _Shipped_
+
+Registers a provider that decorates files (or other scoped resources) with status badges, colors, and tooltips. The manifest declares which **scopes** the provider handles so the renderer can route decoration pulls before the plugin's code has run. The first-party GitHub plugin (`plugins/builtin/github/`) uses one to decorate the worktree diff/review surface.
+
+```json
+{
+  "contributes": {
+    "fileDecorationProviders": [
+      {
+        "id": "worktree-diff-review",
+        "scopes": ["worktree-diff:*"]
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. Must match the `id` passed when the provider binds at runtime. |
+| `scopes` | yes | Non-empty list of scope patterns the provider answers for. A scope like `worktree-diff:*` matches every resource the host routes under the `worktree-diff` namespace; the host dispatches decoration pulls to the first provider whose scope matches. |
+
+The manifest entry is read eagerly so the host's decoration-routing table (`electron/services/fileDecorationRegistry.ts`) knows which provider owns a scope before any plugin code runs; the implementation binds lazily in `activate()`. See [Host API](./host-api.md) for the runtime registration signature.
 
 ## Agents — _Shipped (minimal tier)_
 

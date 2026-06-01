@@ -77,7 +77,7 @@ Example output:
 ```
 ✓ plugin.json is valid
 ⚠  engines.daintree omitted — consider pinning a range, e.g. ^0.11.0
-⚠  commands[0].keywords is empty — helps discoverability to add 2–3 terms
+⚠  commands[0].keywords is empty — 2–3 terms help discoverability in the palette
 ```
 
 Runs automatically as part of `package`.
@@ -120,7 +120,7 @@ Daintree logs plugin lifecycle events prefixed with `[PluginService]`:
 - Action registrations
 - Worktree subscription state
 
-These appear in the main-process terminal (the one running `npm run dev` for Daintree) and in `~/.daintree/logs/main.log`.
+These appear in the main-process terminal (the one running `npm run dev` for Daintree) and in `daintree.log` inside the app's userData logs directory (in dev: `<cwd>/logs/daintree.log`). See `getLogFilePath()` in `electron/utils/logger.ts` for resolution.
 
 Plugin code's own `console.log`s go to the main-process terminal for code running in main, and the renderer DevTools console for code running in panel views.
 
@@ -168,34 +168,32 @@ There's no hot reload yet (see [The edit loop](#the-edit-loop-today)). Re-run `p
 
 - Check the `command` and `args` — run them manually from the plugin directory
 - Verify `env` values resolve correctly (use `daintree-plugin validate --env`)
-- Look for `[MCPSupervisor]` log lines in Daintree's main-process terminal
+- Look for `[PluginService]` (lifecycle) and MCP-specific prefixes like `[PluginMcpAudit]` / `[PluginMcpConsentService]` in Daintree's main-process terminal — supervision lives in `electron/services/PluginMcpSupervisor.ts`
 
 ## Testing
 
-Use `@daintreehq/plugin-testing` for unit tests.
+> The standalone `@daintreehq/plugin-testing` package is not yet published (see [Status](./README.md)). The mock host it will eventually ship currently lives in-repo at `shared/testing/createMockHost.ts`; import it via a relative path for now. The example below mirrors `plugins/sample/hello-daintree/__tests__/activate.test.ts`.
 
 ```ts
 // src/plan-from-issue.test.ts
 import { describe, it, expect } from "vitest";
-import { createMockHost } from "@daintreehq/plugin-testing";
+import { createMockHost } from "../../shared/testing/createMockHost"; // pending @daintreehq/plugin-testing
 import planFromIssue from "./plan-from-issue";
 
 describe("plan-from-issue", () => {
   it("creates a worktree for the issue", async () => {
-    const host = createMockHost({
-      worktrees: [{ id: "wt1", name: "main", isCurrent: true }],
-    });
+    const host = createMockHost({ pluginId: "acme.linear-planner" });
     await planFromIssue({ args: { issueId: "LIN-1" }, host, dispatch: host.dispatch });
     expect(host.dispatchedActions).toContainEqual(
-      expect.objectContaining({ id: "worktree.create" })
+      expect.objectContaining({ actionId: "worktree.create" })
     );
   });
 });
 ```
 
-The mock host implements the full `PluginHostApi` surface with in-memory state. Good for covering command handler logic without spinning up an Electron instance.
+`createMockHost` implements the `PluginHostApi` surface with in-memory state and records dispatched actions as `{ actionId, args }` on `host.dispatchedActions` (see the `DispatchedActionRecord` type in `shared/testing/createMockHost.ts`). Good for covering command handler logic without spinning up an Electron instance.
 
-For E2E tests that exercise Daintree integration, use `@daintreehq/plugin-testing/electron` which boots a headless Daintree via Playwright. Slower but verifies the full plugin lifecycle including contribution registration.
+A headless-Daintree Playwright harness for full-lifecycle E2E (contribution registration, MCP spawn) is planned but does not exist yet — there's no `@daintreehq/plugin-testing/electron` entry point today.
 
 ## Publishing to npm (optional)
 

@@ -7,6 +7,7 @@
 - **Dependencies:** Use `npm install` for local development. `npm ci` is acceptable for CI environments where reproducible builds are critical. Both commands run the `postinstall` rebuild hook automatically unless `--ignore-scripts` is used.
 - **Native Modules:** `node-pty` must be rebuilt for Electron. The `postinstall` script handles this automatically. If errors occur, run `npm run rebuild`.
 - **Code Style:** Minimal comments. No decorative headers. High signal-to-noise ratio.
+- **Markdown / Docs Style:** Never hard-wrap prose. Each paragraph, list item, table row, or blockquote line is ONE physical line — no manual line breaks inside it. Soft wrapping is handled by the renderer/editor, so wrapping at a column is pointless noise that makes diffs and edits painful in these AI-first files. This applies to every `.md` you create or edit (`docs/`, READMEs, etc.). Fenced code blocks and ASCII diagrams are exempt — leave their internal line breaks intact. Blank lines still separate blocks as usual.
 - **Accent Color Restraint:** The accent color (`--color-accent-primary`, `text-accent-primary`, `outline-daintree-accent`, etc.) is a scarce resource, not a default highlight. If everything uses it, nothing stands out. Reserve it for _one_ genuinely load-bearing signal per active focus region — a strong focus anchor, a primary CTA. An active focus region is an independent focus trap or arrow-key navigation domain (macro layout zone, modal, popover, dropdown). See [Design review checklist](docs/themes/theme-system.md#design-review-checklist). Do NOT use it for: multi-select state, membership markers, secondary emphasis, "this is selected too" indicators, arming badges, or any treatment applied to multiple elements at once. For those, use the title-bar lift (`bg-overlay-subtle`), focus styling, or neutral surface differences. When in doubt, err on the side of NO accent — subtle wins.
 - **Motion Timing:** Use the shared timing tiers unless the animation encodes semantic state. **Tier 1 — State changes (150ms `ease-out`):** hover, focus, active, selected, group-hover, toggle thumbs, drop-target rings, hover scrims, and other local UI feedback. Bare `transition-colors` (no explicit duration) inherits the app-wide 150ms default and needs no extra class; when a duration is required use `duration-150`. **Tier 2 — Deliberate entry/exit (200ms enter / 120ms exit):** modals, popovers, dropdowns, and surfaced dialogs. **Tier 2-fast — Palette/tooltip (150ms enter / 100ms exit):** command palettes and tooltips use a snappier sub-tier because typed-input flow expects faster response. **Tier 3 — Panel motion (200ms restore / 120ms minimize):** large-area choreographed reflow. Prefer the named constants in `src/lib/animationUtils.ts` (`UI_ANIMATION_DURATION` and `TERMINAL_ANIMATION_DURATION` for Tier 1; `UI_ENTER_DURATION`, `UI_EXIT_DURATION`, `UI_PALETTE_ENTER_DURATION`, `UI_PALETTE_EXIT_DURATION`, `PANEL_RESTORE_DURATION`, `PANEL_MINIMIZE_DURATION` for Tiers 2/3) when timing is expressed in TypeScript. **Semantic exceptions** — durations encoding meaning, not motion — must not be "fixed": `ActivityLight` 1000ms color fade (fade IS the decay indicator); progress bar 300–500ms width (width IS the progress signal); agent-state panel border 300ms (`ContentPanel` + `panel-state-*` classes — ambient, not jittery); welcome/empty-state hero fades 500ms (deliberately inviting); sidebar collapse 250ms `ease-out-expo` (large theatrical reflow); inline alert banner 200ms entry (`TerminalCountWarning`); diagnostics dock height 200ms; `FileChangeList` row-recency gutter bar 2000ms (`file-change-row-new` — the decay IS the arrival signal); `SettingsSwitch` asymmetric track/thumb (100ms thumb `ease-out-expo` + 200ms track `ease-out` — thumb leads to convey responsive feedback before the color crossfade catches up). Never widen scoped transitions (`transition-[width]`, `transition-[backdrop-filter]`, `transition-transform`, `transition-colors`) to bare `transition` or `transition-all`. **Property stacking —** Use the narrowest property set: simple hover color/background changes use bare `transition-colors`; surfaces that also animate `box-shadow` name each property explicitly — CSS longhand (`transition: color 150ms ease, background-color 150ms ease, box-shadow 150ms ease` in `src/styles/components/toolbar.css` and `src/styles/components/sidebar.css`) or the equivalent Tailwind arbitrary-value form (`transition-[color,background-color,box-shadow]`). Keep `transform` out of the press snap by one of two mechanisms: omit it from the CSS property list (toolbar-style), or include it but collapse the duration on press (button-style — `Button` in `src/components/ui/button.tsx` uses bare `transition duration-150` plus `active:scale-[0.98] active:duration-[1ms]`, so the scale snaps instead of stretching to 150ms). Non-press transforms may still interpolate (badge entrance, `PulseHeatmap` cells). Box-shadow either interpolates at 150ms in its own named slot or snaps with `active:shadow-none`, never both for the same state. Focus-ring transitions (`outline-color`, `outline-offset`, `box-shadow`) are wired once in `src/index.css` `*:focus-visible` with reduced-motion/forced-colors handled globally — components must not add `outline-*` focus transitions per-element. Avoid `transition-all`; it makes Chromium interpolate every computed property every frame.
 - **High-Contrast Dual-Block Guard:** The `@media (prefers-contrast: more)` (`src/index.css:2727-2775`) and `@media (forced-colors: active)` (`src/index.css:2602-2725`) blocks in `src/index.css` are both mandatory and must never be consolidated. macOS "Increase Contrast" only fires `prefers-contrast: more`, not `forced-colors: active` (macOS has no forced-colors mode). Consolidating the blocks would either break Mac users (if forced-colors-only) or produce wrong visuals on Windows (if prefers-contrast-only with theme colors overriding the system palette). Rationale documented inline at `src/index.css:2727-2733`.
@@ -63,8 +64,8 @@ npm run rebuild      # Rebuild native modules
 Central orchestration layer for all UI operations. Provides a unified, typed API for menus, keybindings, context menus, and agent automation.
 
 - `ActionService` (`src/services/ActionService.ts`) — Registry and dispatcher singleton
-- 28 definition files in `src/services/actions/definitions/` (one per domain)
-- ~308 built-in action IDs in `shared/types/actions.ts` — `BuiltInActionId`, `ActionDefinition`, `ActionManifestEntry`
+- ~50 definition files in `src/services/actions/definitions/` (grouped into ~28 domains by `actionDefinitions.ts`)
+- ~343 built-in action IDs in `shared/config/actionIds.ts` (`BUILT_IN_ACTION_IDS`); `BuiltInActionId`, `ActionDefinition`, `ActionManifestEntry` types in `shared/types/actions.ts`
 - `dispatch(actionId, args?, options?)` — Execute any action by ID
 - `list()` / `get(id)` — Introspect available actions (MCP-compatible manifest)
 - `ActionSource`: "user" | "keybinding" | "menu" | "agent" | "context-menu"
@@ -87,7 +88,7 @@ Each project gets its own `WebContentsView` with an independent V8 context, mana
 
 ### IPC Bridge (`window.electron`)
 
-Access native features via namespaced API in Renderer. 56 namespaces exposed via `contextBridge` in `electron/preload.cts`. Returns Promises or Cleanups. Key namespaces: `worktree`, `terminal`, `files`, `system`, `app`, `project`, `github`, `git`, `portal`, `commands`, `appAgent`, `agentCapabilities`, `mcpServer`, `plugin`.
+Access native features via namespaced API in Renderer. ~70 namespaces exposed via `contextBridge` in `electron/preload.cts`. Returns Promises or Cleanups. Key namespaces: `worktree`, `terminal`, `files`, `system`, `app`, `project`, `github`, `git`, `portal`, `commands`, `appAgent`, `agentCapabilities`, `mcpServer`, `plugin`.
 
 ## Key Features & Implementation
 
@@ -104,7 +105,7 @@ Access native features via namespaced API in Renderer. 56 namespaces exposed via
 electron/
 ├── main.ts                  # Entry point
 ├── bootstrap.ts             # App bootstrap
-├── preload.cts              # IPC bridge (contextBridge, 56 namespaces)
+├── preload.cts              # IPC bridge (contextBridge, ~70 namespaces)
 ├── menu.ts                  # Application menu
 ├── store.ts                 # Main process store
 ├── windowState.ts           # Window state persistence
@@ -116,7 +117,7 @@ electron/
 │   ├── channels.ts          # Channel constants
 │   ├── handlers.ts          # IPC request handler registry
 │   ├── errorHandlers.ts     # IPC error handling
-│   └── handlers/            # 52 top-level + subdirectory handlers (~87 total)
+│   └── handlers/            # ~105 top-level + nested handlers (~200 total)
 ├── lifecycle/               # App lifecycle management
 ├── setup/                   # App setup/initialization
 ├── window/                  # Window management (ProjectViewManager, WindowRegistry, multi-window)
@@ -164,9 +165,9 @@ src/
     └── electron.d.ts        # window.electron types
 ```
 
-### Custom Icons
+### Icons
 
-Custom Daintree-specific icons live in `src/components/icons/custom/`. Lucide-style SVG components (24x24 viewBox, 2px stroke, round caps/joins, `currentColor`). Brand/agent icons in `src/components/icons/brands/`. Barrel-exported from `src/components/icons/index.ts`.
+Daintree's UI runs on Lucide icons (`lucide-react`); we don't draw bespoke glyphs for app concepts. For a Daintree-specific concept, pick the closest Lucide icon and add it to the curated alias list in `src/components/icons/index.ts` (e.g. `Plug` for agents, `FolderGit2` for worktrees, `Activity` for project pulse). The only bespoke components are the brand mark (`DaintreeIcon.tsx`), the `AgentStateCircles.tsx` state indicator, `McpServerIcon.tsx`, and third-party brand marks in `src/components/icons/brands/`. See `src/components/icons/README.md`.
 
 ## Common Tasks
 

@@ -22,7 +22,7 @@ This document maps each interactive component role to its canonical Tailwind cla
 "hover:bg-overlay-soft hover:text-daintree-text focus-visible:text-daintree-text";
 ```
 
-**Usage:** Combine with `transition-colors` for smooth transitions. Add `focus-visible:` variant for keyboard parity. Used in `button.tsx` ghost variant (line 21).
+**Usage:** Combine with `transition-colors` for smooth transitions. Add `focus-visible:` variant for keyboard parity. Used in `button.tsx` `ghost` variant.
 
 ---
 
@@ -34,19 +34,19 @@ This document maps each interactive component role to its canonical Tailwind cla
 "hover:bg-overlay-subtle hover:text-daintree-text";
 ```
 
-**Usage:** For selected state, use `bg-overlay-soft border-overlay` with a `before:` pseudo-element for the 2px accent rail (`before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent`). Used in `QuickSwitcherItem.tsx` (line 31).
+**Usage:** For selected state, use `aria-selected:bg-overlay-soft aria-selected:border-overlay` with a `before:` pseudo-element for the 2px accent rail (`aria-selected:before:absolute aria-selected:before:left-0 aria-selected:before:top-2 aria-selected:before:bottom-2 aria-selected:before:w-[2px] aria-selected:before:bg-daintree-accent`). Used in `QuickSwitcherItem.tsx`.
 
 ---
 
 ### Card Hover
 
-**Role:** Worktree cards (grid variant), settings cards. Use elevation or border change rather than large background shifts.
+**Role:** Worktree cards (grid variant), settings cards. Use a subtle neutral background lift plus elevation rather than large background shifts or accent borders.
 
 ```tsx
-"hover:border-accent-primary/50 hover:shadow-[var(--theme-shadow-floating)]";
+"hover:bg-overlay-subtle hover:shadow-[var(--theme-shadow-ambient)]";
 ```
 
-**Usage:** Accent-tinged border and floating shadow create elevation without heavy background fills. Used in `WorktreeCard.tsx` grid variant (line 691).
+**Usage:** A neutral overlay tint and ambient shadow signal elevation without color changes — no accent border. Used in `WorktreeCard.tsx` grid variant.
 
 ---
 
@@ -58,19 +58,15 @@ This document maps each interactive component role to its canonical Tailwind cla
 "border-b-2 border-daintree-accent text-daintree-text";
 ```
 
-**Usage:** Hover state: `hover:border-daintree-border hover:text-daintree-text`. Always use `border-b-2` for consistent 2px active indicator height. Used in `SettingsSubtabBar.tsx` (line 77).
+**Usage:** Hover state: `hover:border-daintree-border hover:text-daintree-text`. Always use `border-b-2` for consistent 2px active indicator height. Used in `SettingsSubtabBar.tsx`.
 
 ---
 
 ### Dock Item Active
 
-**Role:** Active dock button. Use border + ring combo for clear active state without heavy background.
+**Role:** Dock buttons (launch pill, popover-open triggers). Use a neutral lift — no accent border or ring.
 
-```tsx
-"bg-daintree-border border-daintree-accent/40 ring-1 ring-daintree-accent/30";
-```
-
-**Usage:** Semi-transparent accent at 30-40% creates subtle glow without overwhelming adjacent elements. Used in `HelpAgentDockButton.tsx` (line 27).
+**Usage:** The accent border+ring active treatment previously documented here was deliberately retired (commit `e30d29638`, "replace accent ring on popover-open dock buttons with neutral lift"). Dock buttons now render via the `pill` Button variant (`button.tsx`) — neutral surface, ambient shadow, no accent active state. The launch pill (`DockLaunchButton.tsx`) goes further and intentionally does NOT keep its accent focus-visible ring after a pointer-dismissed dropdown (see comment near `wasPointerCloseRef`); keyboard dismissal still restores focus for WAI-ARIA. Reach for the neutral overlay ladder, not accent, for any new dock-state treatment.
 
 ---
 
@@ -79,10 +75,10 @@ This document maps each interactive component role to its canonical Tailwind cla
 **Role:** Selected list item in a picker. Uses background fill with accent rail via pseudo-element.
 
 ```tsx
-"bg-overlay-soft border-overlay text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent";
+"aria-selected:bg-overlay-soft aria-selected:border-overlay aria-selected:text-daintree-text aria-selected:before:absolute aria-selected:before:left-0 aria-selected:before:top-2 aria-selected:before:bottom-2 aria-selected:before:w-[2px] aria-selected:before:bg-daintree-accent aria-selected:before:content-['']";
 ```
 
-**Usage:** Selected items do not add hover overlay — the background fill and accent rail provide sufficient state distinction. Unselected items get `hover:bg-overlay-subtle`. Used in `QuickSwitcherItem.tsx` (line 30).
+**Usage:** Selected items do not add hover overlay — the background fill and accent rail provide sufficient state distinction. Unselected items get `hover:bg-overlay-subtle`. Used in `QuickSwitcherItem.tsx`.
 
 ---
 
@@ -96,7 +92,7 @@ This document maps each interactive component role to its canonical Tailwind cla
 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2";
 ```
 
-**Usage:** 2px outline with 2px offset satisfies WCAG 2.2 SC 2.4.13 (3:1 contrast ratio and size requirements). Requires `focus-visible:outline` base class to enable outline rendering. Used in `SettingsInput.tsx` (line 7).
+**Usage:** 2px outline with 2px offset satisfies WCAG 2.2 SC 2.4.13 (3:1 contrast ratio and size requirements). Requires `focus-visible:outline` base class to enable outline rendering. Used in `SettingsInput.tsx` (`INPUT_CLASSES`).
 
 ---
 
@@ -120,7 +116,7 @@ This document maps each interactive component role to its canonical Tailwind cla
 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2";
 ```
 
-**Usage:** Base state includes `border-border-strong`. On focus, outline is added — do NOT change `border-width`. Changing width causes layout jitter. Used in `SettingsInput.tsx` (line 7) and `SettingsTextarea.tsx` (line 7).
+**Usage:** Base state includes `border-border-strong`. On focus, outline is added — do NOT change `border-width`. Changing width causes layout jitter. Used in `SettingsInput.tsx` and `SettingsTextarea.tsx`.
 
 ---
 
@@ -132,7 +128,7 @@ This document maps each interactive component role to its canonical Tailwind cla
 "border border-border-strong focus:border-daintree-accent focus:outline-hidden transition-colors";
 ```
 
-**Usage:** Border-shift is the lighter-weight alternative to outline-based focus. Base state must always have a visible border (`border-border-strong` or equivalent). On focus, only the border color changes — no outline or ring is added. Suitable for simple text inputs within constrained UIs. Used in `GitHubSettingsTab.tsx` (line 213) and `NotificationSettingsTab.tsx` (lines 217, 282, 415).
+**Usage:** Border-shift is the lighter-weight alternative to outline-based focus. Base state must always have a visible border (`border-border-strong` or equivalent). On focus, only the border color changes — no outline or ring is added. Suitable for simple text inputs within constrained UIs. Used in `GitHubSettingsTab.tsx` and `NotificationSettingsTab.tsx` (several inputs share the same `focus:border-daintree-accent focus:outline-hidden` string).
 
 ---
 
@@ -156,7 +152,7 @@ This document maps each interactive component role to its canonical Tailwind cla
 "border-daintree-border text-daintree-text";
 ```
 
-**Usage:** The row card always uses neutral border and text. A 2px left rail (`bg-state-modified`) on the row signals modified state — semantic info hue, not accent. The switch track uses `bg-daintree-border` in OFF state and `data-[state=checked]:bg-daintree-accent` in ON state — accent is constrained to the switch track and enabled-state icons, never the full row card or the modified-state rail. Apply `focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2` to the switch Root for keyboard focus. Used in `SettingsSwitchCard.tsx` + `SettingsSwitch.tsx`.
+**Usage:** The row card always uses neutral border and text. A 2px left rail (`bg-state-modified`) on the row signals modified state — semantic info hue, not accent. In the default `accent` color scheme (`SettingsSwitch.tsx` `COLOR_SCHEMES`), the switch track uses `bg-daintree-border` in OFF state and `data-[state=checked]:bg-daintree-text` in ON state — the ON fill is neutral text color, not accent. Accent on this widget is confined to the focus outline (`focus-visible:outline-daintree-accent`), never the track fill, the row card, or the modified-state rail. Apply `focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2` to the switch Root for keyboard focus. Used in `SettingsSwitchCard.tsx` + `SettingsSwitch.tsx`.
 
 ---
 
@@ -168,19 +164,19 @@ This document maps each interactive component role to its canonical Tailwind cla
 "opacity-80 scale-105 shadow-[var(--theme-shadow-floating)] cursor-grabbing";
 ```
 
-**Usage:** Apply during `isDragging` state. The floating shadow and slight scale-up signal elevation without color changes. **Caution:** Sortable containers must NOT use `content-visibility: auto` — it virtualizes layout and causes dnd-kit drag coordinate desync. Set `contentVisibility: 'visible'` during drag operations. (See lesson #4438.) Used in `PortalToolbar.tsx` (lines 107-109).
+**Usage:** Apply during `isDragging` state. The floating shadow and slight scale-up signal elevation without color changes. **Caution:** Sortable containers must NOT use `content-visibility: auto` — it virtualizes layout and causes dnd-kit drag coordinate desync. Set `contentVisibility: 'visible'` during drag operations. (See lesson #4438.) Used in `PortalToolbar.tsx` (`isDragging` branch).
 
 ---
 
 ### Inline Rename Input
 
-**Role:** Inline text input for renaming (e.g., tab labels, file names). Neutral border with accent focus outline — accent only on keyboard focus.
+**Role:** Inline text input for renaming (e.g., tab labels, file names). Neutral, non-accent border.
 
 ```tsx
-"border border-border-strong text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent";
+"text-xs bg-overlay-soft border border-transparent text-daintree-text focus:outline-hidden transition-colors";
 ```
 
-**Usage:** The base border is neutral (`border-border-strong`), not accent-tinged. Accent only appears on the focus outline. Use `text-xs` for compact inline inputs. Current implementation in `TabButton.tsx` (line 275) uses `border-daintree-accent/50`; this recipe prescribes the canonical target (`border-border-strong` with accent only on focus).
+**Usage:** The base border is neutral — `border-transparent` over an `bg-overlay-soft` fill, swapping to `border-status-error` on validation error. Use `text-xs` for compact inline inputs. The current implementation in `TabButton.tsx` (rename input) has converged on this neutral pattern and no longer uses any accent-tinged border. Note it uses `focus:outline-hidden` rather than the accent focus outline — the overlay fill plus the surrounding tab chrome already signal the edit state.
 
 ---
 
@@ -221,15 +217,15 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 | Quick Switcher Item | `QuickSwitcherItem.tsx` | Selected state with accent rail via `before:` |
 | Settings Input | `SettingsInput.tsx` | Input focus with outline ring |
 | Settings Textarea | `SettingsTextarea.tsx` | Input focus with outline ring |
-| Button Ghost | `button.tsx` (line 21) | Ghost button hover with overlay-soft |
-| Button Pill | `HelpAgentDockButton.tsx` | Dock item active with border + ring combo |
+| Button Ghost | `button.tsx` (`ghost` variant) | Ghost button hover with overlay-soft |
+| Dock Launch Button | `DockLaunchButton.tsx` (`pill` variant) | Neutral lift, no accent active state |
 | Settings Subtab | `SettingsSubtabBar.tsx` | Active tab with bottom border accent |
-| Worktree Card | `WorktreeCard.tsx` | Card hover with accent-tinged border + elevation |
-| GitHub Settings Tab | `GitHubSettingsTab.tsx` (line 213) | Input focus with border-shift (no outline) |
-| Notification Settings | `NotificationSettingsTab.tsx` (line 217) | Input focus with border-shift (no outline) |
-| Settings Switch Row | `SettingsSwitchCard.tsx` | Neutral row, accent only on switch track |
-| Portal Drag Handle | `PortalToolbar.tsx` (line 107) | Drag state with elevation + scale, no accent |
-| Inline Rename Input | `TabButton.tsx` (line 274) | Neutral border with accent focus outline only |
+| Worktree Card | `WorktreeCard.tsx` | Card hover with neutral overlay + ambient elevation |
+| GitHub Settings Tab | `GitHubSettingsTab.tsx` | Input focus with border-shift (no outline) |
+| Notification Settings | `NotificationSettingsTab.tsx` | Input focus with border-shift (no outline) |
+| Settings Switch Row | `SettingsSwitchCard.tsx` | Neutral row, neutral switch track (accent only on focus) |
+| Portal Drag Handle | `PortalToolbar.tsx` (`isDragging`) | Drag state with elevation + scale, no accent |
+| Inline Rename Input | `TabButton.tsx` (rename input) | Neutral `bg-overlay-soft`, transparent border |
 
 ---
 
@@ -239,7 +235,7 @@ Accent color is a scarce resource, not a default. These are the only contexts wh
 
 - **Focus rings** — Every interactive element. `focus-visible:outline-daintree-accent` on buttons, inputs, list items, tree nodes.
 - **Primary view anchor** — The single load-bearing signal per active focus region: armed terminal, focused worktree card, primary CTA button.
-- **Editor caret** — The terminal cursor is a singleton position anchor. (`--color-terminal-cursor-accent` in `src/index.css` line 97.)
+- **Editor caret** — The terminal cursor is a singleton position anchor. (`--color-terminal-cursor-accent` in `src/index.css`.)
 - **Theme mockup chrome** — Swatches and preview strips that display a theme's accent color are data, not interactive chrome (e.g., `PaletteStrip.tsx`, `AppThemePicker.tsx`).
 - **Status-tone routing** — Where `accent` is one option among `success`/`warning`/`danger` for mapping a semantic state to a color (e.g., `SettingsSwitch.tsx` `COLOR_SCHEMES`).
 

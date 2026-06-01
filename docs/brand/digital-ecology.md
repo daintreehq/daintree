@@ -1,6 +1,8 @@
 # Brand vibe — digital ecology
 
-Daintree is named after the rainforest. The product is a "digital ecology" — agents, branches, terminals and projects living and growing inside one environment. This doc captures the visual language we lean on so anything custom we draw (icons, illustrations, marketing) reads as one family.
+Daintree is named after the rainforest. The product is a "digital ecology" — agents, branches, terminals and projects living and growing inside one environment. This doc captures the visual language we lean on so anything custom we draw (illustrations, marketing, the brand mark) reads as one family.
+
+This is a brand-vibe note, not the icon spec. The app's UI icons are Lucide, not a bespoke set — see `src/components/icons/README.md` for the authoritative, current icon policy. The metaphor below still guides _which_ Lucide icons we reach for and how we'd draw an illustration, but Daintree no longer commissions custom app-concept glyphs (that set was removed in `540019a07`).
 
 ## The metaphor in one paragraph
 
@@ -8,7 +10,7 @@ A Daintree project is a small living system. Worktrees are branches off a trunk.
 
 ## Motifs
 
-These are the recurring visual cues. Use them sparingly — at most one per icon, never as decoration:
+These are the recurring visual cues for custom artwork (illustrations, marketing, brand mark). Use them sparingly — at most one per piece, never as decoration:
 
 - **Branches and stems** — vertical or curved single strokes terminating in a node or a container. Used wherever something derives from something else (worktrees, recipes, agent runs).
 - **Leaves** — almond or droplet shapes. Used as the "organic life" cue. Not decorative — usually doing real work in the silhouette.
@@ -20,33 +22,34 @@ These are the recurring visual cues. Use them sparingly — at most one per icon
 
 - **Robots, antennae, mechanical bodies.** AI in Daintree is organic, not mechanical. If we wanted a bot icon we would use Lucide's `bot` directly.
 - **Faces, eyes-as-features, anthropomorphic creatures.** The ecology is living but not personified.
-- **Decorative leaves or flourishes.** Every element earns its place by doing structural work in the icon.
+- **Decorative leaves or flourishes.** Every element earns its place by doing structural work in the piece.
 - **Dense textures, gradients, fills.** Line only, single stroke weight — this is a software UI, not a botanical illustration.
 
 ## How this lands in the icon set
 
-Custom icons should look like they belong in the Lucide icon pack — same 24×24 grid, 2px stroke, round caps and joins, `currentColor`. The "digital ecology" cue is a quiet through-line, not a stylistic departure. If you removed every Lucide icon from a toolbar and left only Daintree's customs, they should still feel like one consistent family.
+The app's icons are Lucide, full stop. There is no commissioned Daintree glyph set — the bespoke app-concept icons were removed in `540019a07` and each product concept now resolves to the nearest stock Lucide icon, aliased once in `src/components/icons/index.ts` so callsites stay short:
 
-The current commission set leans into this in three groups:
+| Concept | Lucide icon |
+| --- | --- |
+| Agent | `Plug` (an integration that plugs into the host) |
+| Origin / first step (main worktree, first launch) | `Sprout` |
+| Worktree | `FolderGit2` |
+| Worktree overview | `Layers` |
+| Project pulse / live activity | `Activity` |
+| Terminal recipe | `Workflow` |
+| Watch alert | `BellDot` |
+| Copy tree | `Folders` |
 
-- **Living things** — Daintree Agent (brain with a leaf cue).
-- **Branching systems** — Worktree, Worktree Overview (branches into containers).
-- **Pulses and signals** — Project Pulse, Broadcast Terminal (waves and arcs travelling outward).
+The metaphor still does work here: it's why agents read as a `Plug` rather than a `Bot`, why origin is a `Sprout`, why pulse is an `Activity` heartbeat. When a new concept needs an icon, pick the closest Lucide icon that carries the ecology cue and add it to the alias list — don't draw a new glyph.
 
-The remaining icons (Copy Tree, Terminal Recipe, Watch Alert) carry the ecology cue more lightly — through stems, growth, and observation rather than overt botanical detail.
+The only bespoke SVG components left in `src/components/icons/` are the brand mark (`DaintreeIcon`), the MCP mark (`McpServerIcon`, which mirrors the official MCP logo), the multi-dot agent-state indicator (`AgentStateCircles`), and third-party brand marks under `brands/`. Bespoke components are reserved for real brand marks with recognition value, never for app concepts.
 
-## Contribution intent
+## Where the metaphor still applies
 
-Where possible, custom icons we commission are **drawn to be contributable upstream to Lucide**. That sets a high bar: each concept must be generally useful (not Daintree-specific branding), each construction must satisfy Lucide's design guide exactly, and each name must be kebab-case and descriptive of the _concept_, not of Daintree's product surface (e.g. `git-worktree`, not `daintree-worktree`).
-
-This shapes our briefs in three ways:
-
-- We pick **general concepts** that already have demand outside Daintree (git worktrees, terminal broadcast, eye-with-alert, clipboard-with-tree).
-- We **avoid product-specific motifs** (no Daintree wordmarks, no rainforest scenes inside the glyph) — the "digital ecology" theme lives in the _choice_ of concept, not in a watermark.
-- We default to **Lucide's compositional grammar** even where it costs us brand distinctiveness — these icons must blend, not stand out.
+Illustrations and marketing — anything outside the Lucide-driven UI icon set — are where "digital ecology" has room to breathe. There the same rules hold: line over fill, motif over decoration, every element doing structural work. If you're drawing for a landing page or an empty-state hero, the motifs above are the vocabulary; the brand mark (`DaintreeIcon`) is the anchor.
 
 ## Adjacent reference
 
-For construction rules (grid, stroke, optical alignment, naming): <https://lucide.dev/contribute/icon-design-guide>
+Authoritative current icon policy: `src/components/icons/README.md`.
 
-For the contribution process itself: <https://lucide.dev/guide/developers/contribute>
+Lucide construction rules (grid, stroke, optical alignment), useful when judging which stock icon fits or when drawing a brand mark: <https://lucide.dev/contribute/icon-design-guide>

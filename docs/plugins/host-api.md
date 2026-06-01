@@ -75,7 +75,7 @@ interface PluginHostApi {
 
 The authoritative definition is in `shared/types/plugin.ts` in the Daintree repo.
 
-The `register*` methods (`registerAction`, `registerHandler`, `registerForgeProvider`, `registerFileDecorationProvider`) are revoke-guarded — they must be called during `activate()` and throw once the host is revoked. `invalidateFileDecorations`, `showToast`, `dispatch`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op after unload.
+The `register*` methods (`registerAction`, `registerHandler`, `registerForgeProvider`, `registerFileDecorationProvider`) plus `broadcastToRenderer` are revoke-guarded — they must be called during `activate()` and throw once the host is revoked. `invalidateFileDecorations`, `showToast`, `dispatch`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op after unload.
 
 ## `registerAction`
 
@@ -207,6 +207,8 @@ interface PluginWorktreeLinkedPR {
   readonly title?: string;
   readonly url: string;
   readonly state: NormalizedPRState;
+  readonly ciStatus?: CIStatus;
+  readonly baseRef?: string; // branch this PR merges into; drives base-branch divergence display
 }
 ```
 

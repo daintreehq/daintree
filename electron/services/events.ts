@@ -294,12 +294,6 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "Terminal reliability metric (pause/suspend/wake timing)",
   },
-  "terminal:state-changed": {
-    category: "agent",
-    requiresContext: true,
-    requiresTimestamp: true,
-    description: "Terminal agent state changed (idle, working, completed, etc.)",
-  },
   "terminal:exited": {
     category: "agent",
     requiresContext: false,
@@ -746,21 +740,6 @@ export type DaintreeEventMap = {
   "terminal:reliability-metric": TerminalReliabilityMetricPayload;
 
   /**
-   * Emitted when a terminal's agent state changes.
-   * This is a listener-friendly variant of agent:state-changed focused on terminals.
-   */
-  "terminal:state-changed": WithContext<{
-    terminalId: string;
-    agentId?: string;
-    oldState: AgentState;
-    newState: AgentState;
-    toState: AgentState;
-    worktreeId?: string;
-    trigger: AgentStateChangeTrigger;
-    confidence: number;
-  }>;
-
-  /**
    * Emitted exactly once per `TerminalProcess` lifetime when the PTY
    * transitions out of `alive`. Subscribers handle forensics logging,
    * agent completion emission, and fallback classification — work that
@@ -796,21 +775,6 @@ export type DaintreeEventMap = {
 
   // Task Lifecycle Events (Future-proof for task management)
 };
-
-/**
- * Event types that have working bridges for assistant listeners.
- * Only these events can be registered via the register_listener tool.
- * When new bridges are added, update this list accordingly.
- *
- * The `satisfies` constraint ensures all entries are valid event types at compile time.
- */
-export const BRIDGED_EVENT_TYPES = [
-  "terminal:state-changed",
-  "agent:completed",
-  "agent:killed",
-] as const satisfies ReadonlyArray<keyof DaintreeEventMap>;
-
-export type BridgedEventType = (typeof BRIDGED_EVENT_TYPES)[number];
 
 export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "sys:ready",
@@ -855,7 +819,6 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "terminal:backgrounded",
   "terminal:foregrounded",
   "terminal:reliability-metric",
-  "terminal:state-changed",
   "terminal:exited",
 ];
 

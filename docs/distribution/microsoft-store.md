@@ -2,7 +2,9 @@
 
 ## Overview
 
-Daintree's Windows distribution channel is the Microsoft Store. The `.github/workflows/release-windows.yml` workflow (one of the three per-OS release workflows — #8052) builds a `.appx` package for Windows on tag push, archives it to Cloudflare R2 (the macOS / Linux binaries land there independently from their own workflows), and submits it to Microsoft Store certification via the [`msstore`](https://github.com/microsoft/msstore-cli) CLI.
+The Microsoft Store is one of two Windows distribution channels. The `.github/workflows/release-windows.yml` workflow (one of the three per-OS release workflows — #8052) builds an x64 `.appx` package for the Store on tag push, archives it to Cloudflare R2 (the macOS / Linux binaries land there independently from their own workflows), and submits it to Microsoft Store certification via the [`msstore`](https://github.com/microsoft/msstore-cli) CLI — provided in-workflow by the `microsoft/microsoft-store-apppublisher@v1.3` action, not a manual download. The submission step runs `msstore reconfigure` with the four Entra credential flags, then `msstore publish . --appId <productId> --inputDirectory .\release`.
+
+Alongside the Store `.appx`, the same workflow also ships NSIS `.exe` installers — x64 (built on `windows-latest`) and native arm64 (built on `windows-11-arm`) — which are the non-Store Windows distribution path, auto-updated via electron-updater. The `.appx` is x64-only. So the Store package is one of several Windows release artifacts, not the sole output.
 
 Microsoft re-signs the package after certification with a Microsoft-issued certificate, so no Authenticode certificate is needed. End-user updates are delivered through the Store, not electron-updater. Mac and Linux distribution paths are unchanged.
 
@@ -21,7 +23,7 @@ Manual setup is unavoidable — Microsoft does not allow programmatic creation o
 
 ## Microsoft Entra app registration (for automation)
 
-The msstore CLI authenticates against Partner Center using a Microsoft Entra (Azure AD) service principal — not personal credentials.
+The msstore CLI (installed in-workflow by the `microsoft/microsoft-store-apppublisher@v1.3` action) authenticates against Partner Center using a Microsoft Entra (Azure AD) service principal — not personal credentials.
 
 1. In the Microsoft Entra admin center, **register a new application** (single-tenant is fine).
 2. **Generate a client secret** under Certificates & secrets. Copy the value immediately — it is only shown once.
@@ -45,17 +47,17 @@ Add the following to the GitHub repository under Settings → Secrets and variab
 | `PARTNER_CENTER_CLIENT_SECRET` | Client secret value from the Entra app registration |
 | `STORE_PRODUCT_ID` | Partner Center Product ID for Daintree |
 
-The existing R2 secrets (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`, `R2_BUCKET`) are still used to archive the `.appx` artifact alongside macOS / Linux binaries.
+The existing R2 secrets (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`, `DAINTREE_R2_BUCKET`) are still used to archive the `.appx` artifact alongside macOS / Linux binaries.
 
 ## Release flow
 
 On a `v*` tag push:
 
-1. The workflow builds Daintree on macos-14 / ubuntu-22.04 / windows-latest.
-2. The Windows runner produces a `.appx` via `electron-builder --win appx`.
+1. The Windows workflow builds on `windows-latest` (x64) and `windows-11-arm` (arm64); macOS and Linux build in their own per-OS workflows.
+2. The x64 build runs `electron-builder --config electron-builder.config.cjs --win appx nsis --x64`, producing both the Store `.appx` and an NSIS `.exe`. The arm64 build runs `--win nsis --arm64`, producing only the native arm64 NSIS `.exe`.
 3. WACK runs against the `.appx` as a best-effort smoke test (does not fail the build — Microsoft re-runs WACK during certification).
-4. The `.appx` is uploaded as a workflow artifact and synced to R2 alongside `*.dmg`, `*.zip`, `*.AppImage`, `*.deb`.
-5. **If all five PARTNER*CENTER*\*/STORE_PRODUCT_ID secrets are present**: the workflow runs `msstore reconfigure` then `msstore submission update <productId> <appxPath>` and `msstore submission publish <productId>`. Store certification typically takes 2–24 hours.
+4. The `.appx`, the NSIS `.exe` installers, and update metadata are uploaded as workflow artifacts and synced to R2 alongside `*.dmg`, `*.zip`, `*.AppImage`, `*.deb`.
+5. **If all five PARTNER*CENTER*\*/STORE_PRODUCT_ID secrets are present**: the workflow runs `msstore reconfigure` (with the four credential flags) then `msstore publish . --appId <productId> --inputDirectory .\release`. The submit step is `continue-on-error` — a failed submission warns in the step summary but doesn't fail the release. Store certification typically takes 2–24 hours.
 6. **If any of the five secrets is missing**: the submission step is skipped with a `::notice::` log line and the release otherwise completes normally. R2 sync still happens.
 
 This means the migration code can be merged before the Partner Center account is verified — releases continue to function, the `.appx` artifact lives on R2, and Store submission auto-engages the moment the secrets are added.

@@ -38,41 +38,42 @@ Main Process (electron/)     Renderer (src/)
 
 **Key Services:**
 
-| Service                    | Responsibility                    |
-| -------------------------- | --------------------------------- |
-| `PtyManager`               | Terminal process pool, spawn/kill |
-| `pty/TerminalProcess`      | Single PTY wrapper, data flow     |
-| `pty/AgentStateService`    | Idle/working/waiting detection    |
-| `pty/terminalInput`        | Input submission and timing       |
-| `GitService`               | Git operations via simple-git     |
-| `worktree/WorktreeService` | Worktree polling and status       |
-| `CopyTreeService`          | Context generation for agents     |
-| `PortalManager`            | Localhost browser, log viewer     |
-| `ProjectStore`             | Multi-project persistence         |
-| `HibernationService`       | Terminal state save/restore       |
+| Service | Responsibility |
+| --- | --- |
+| `PtyManager` | Terminal process pool, spawn/kill |
+| `pty/TerminalProcess` | Single PTY wrapper, data flow |
+| `pty/AgentStateService` | Idle/working/waiting detection |
+| `pty/terminalInput` | Input submission and timing |
+| `GitService` | Git operations via simple-git |
+| `workspace-host/WorkspaceService` | Worktree polling and status (per-worktree tracking via `WorktreeMonitor`) |
+| `CopyTreeService` | Context generation for agents |
+| `PortalManager` | Localhost browser, log viewer |
+| `ProjectStore` | Multi-project persistence |
+| `HibernationService` | Terminal state save/restore |
 
 ### Renderer (`src/`)
 
-| Path                   | Purpose                            |
-| ---------------------- | ---------------------------------- |
-| `components/Terminal/` | Xterm.js rendering, grid layout    |
-| `components/Worktree/` | Dashboard cards, status display    |
-| `components/Layout/`   | App shell, toolbar, dock           |
-| `components/Portal/`   | Browser panel, artifact viewer     |
-| `store/*.ts`           | Zustand stores                     |
-| `hooks/`               | React hooks for IPC subscriptions  |
-| `clients/`             | Typed wrappers for window.electron |
+| Path                   | Purpose                                            |
+| ---------------------- | -------------------------------------------------- |
+| `components/Terminal/` | Xterm.js rendering, grid layout                    |
+| `components/Worktree/` | Dashboard cards, status display                    |
+| `components/Layout/`   | App shell, toolbar, dock                           |
+| `components/Browser/`  | Browser panel (BrowserPane, toolbar)               |
+| `components/Portal/`   | Localhost portal, dev-server dashboard, log viewer |
+| `store/*.ts`           | Zustand stores                                     |
+| `hooks/`               | React hooks for IPC subscriptions                  |
+| `clients/`             | Typed wrappers for window.electron                 |
 
 **Key Stores:**
 
-| Store                | State                         |
-| -------------------- | ----------------------------- |
-| `terminalStore`      | Panel instances, grid layout  |
-| `terminalInputStore` | Hybrid input bar state        |
-| `worktreeStore`      | Active worktree, selection    |
-| `worktreeDataStore`  | Worktree list, git status     |
-| `projectStore`       | Current project, project list |
-| `portalStore`        | Portal tabs, visibility       |
+| Store                 | State                                                                 |
+| --------------------- | --------------------------------------------------------------------- |
+| `panelStore`          | Panel instances (`panelsById`), grid layout, focus                    |
+| `terminalInputStore`  | Hybrid input bar state                                                |
+| `worktreeStore`       | Active worktree, selection                                            |
+| `createWorktreeStore` | Per-view worktree list + git status (factory, backed by MessagePorts) |
+| `projectStore`        | Current project, project list                                         |
+| `portalStore`         | Portal tabs, visibility                                               |
 
 ### Shared Types (`shared/types/ipc/`)
 
@@ -108,7 +109,8 @@ Tests live in `__tests__/` directories adjacent to source. Use Vitest. Mock IPC 
 
 ```typescript
 import { logInfo, logError } from "./utils/logger";
-logInfo("ServiceName", "message", { data });
+logInfo("message", { data });
+logError("message", error, { data });
 ```
 
 **Common fixes:**
@@ -146,12 +148,14 @@ The flag is gated on `app.isPackaged === false` (forwarded to the pty host as `D
 
 ## CI
 
-GitHub Actions on push/PR to main:
+`.github/workflows/ci.yml` runs on push/PR to `main` and `develop`:
 
-1. **quality** (Ubuntu): typecheck, lint, format, test
-2. **build-macos/linux/windows**: Cross-platform build verification
+1. **check** (Ubuntu): typecheck + lint + format (`npm run check`)
+2. **test** (Ubuntu): vitest unit tests, sharded 4 ways
+3. **build** (Ubuntu only): production build verification
+4. **ci-ok**: aggregate gate that fails if any job failed — the sole required status check
 
-Windows requires `GYP_MSVS_VERSION=2022` for node-pty compilation.
+`check` and `test` default to Ubuntu on push/PR but can opt into Windows via `gh workflow run CI -f os=windows` (or `os=both`). Cross-platform build, smoke, and E2E live in `nightly.yml`; releases run per-OS via `release-macos.yml` / `release-linux.yml` / `release-windows.yml`.
 
 ## Compiler bailout tooling
 
@@ -176,7 +180,7 @@ Refresh the baseline with `npm run compiler-budget:update` when a regression is 
 
 ## Code Patterns
 
-**Service → IPC → Store → UI**: All features follow this flow. Services don't import from renderer. Stores don't call services directly.
+**Service → IPC → Store → UI**: All features follow this flow. Main-process services don't import from renderer. Stores reach the main process through the typed clients in `src/clients/`, not by importing main-process services.
 
 **Event subscriptions**: Renderer subscribes via `window.electron.<namespace>.on*()`. Returns cleanup function. Always clean up in useEffect.
 

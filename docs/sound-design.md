@@ -4,7 +4,7 @@ This document covers how Daintree's notification sounds are generated, the desig
 
 ## Overview
 
-Daintree's notification sounds are procedurally generated from pure math by `scripts/generate-sounds.mjs`. No external audio files, sample libraries, or Web Audio API are used. The entire synthesis engine is a Node.js script that writes raw PCM samples into WAV buffers.
+Daintree's notification sounds are procedurally generated from pure math by `scripts/generate-sounds.mjs`. No external audio files or sample libraries are used; the synthesis engine is a Node.js script that writes raw PCM samples into WAV buffers offline. (At _runtime_, playback routes through the renderer's Web Audio API — see "Playback Path" — but synthesis itself uses no Web Audio.)
 
 The sounds serve as **earcons** — short semantic audio cues that let users identify agent state changes without looking at the screen. They are designed for hundreds of repetitions per day across multi-hour coding sessions.
 
@@ -46,7 +46,7 @@ All pitches use **Just Intonation** (exact frequency ratios, no equal-temperamen
 | ---- | -------- | --------- | -------------------------------- |
 | A4   | 1/1      | 440.00 Hz | Root — grounding, resolution     |
 | B4   | 9/8      | 495.00 Hz | Suspension — waiting, unresolved |
-| C#5  | 5/4      | 550.00 Hz | Darkness — used only in error    |
+| C#5  | 5/4      | 550.00 Hz | Brightness / affirmation         |
 | D#5  | 45/32    | 618.75 Hz | Lydian #4 — wonder, discovery    |
 | E5   | 3/2      | 660.00 Hz | Stability — completion, power    |
 | F#5  | 5/3      | 733.33 Hz | Elevation — alertness            |
@@ -57,15 +57,17 @@ The **pentatonic scale** contains zero minor seconds or tritones, making dissona
 
 The **Lydian raised fourth** (D#5) is borrowed from Zelda's "item get" language. Used only in the chime sound for a sense of wonder.
 
+C#5 (5/4) is the JI major third — bright/affirmative, not dark. It appears in `error`, `git-push-error`, and `context-injected`. In the error family the _timbre_ (√3 metallic FM ratio, dead-wood resonance, downward pitch droop) carries the concern, not the pitch itself.
+
 ### Semantic Interval Mapping
 
-| Pattern                               | Emotion                     | Used in  |
-| ------------------------------------- | --------------------------- | -------- |
-| Ascending (root to fifth)             | Positive, bright, arriving  | chime    |
-| Descending (fifth to root)            | Resolved, settled, complete | complete |
-| Ascending to unresolved (root to 9/8) | Tension, waiting, question  | waiting  |
-| Single note at 5/4 with dark timbre   | Concern, fault, different   | error    |
-| Single note at 3/2                    | Quick acknowledgment        | ping     |
+| Pattern                               | Emotion                     | Used in               |
+| ------------------------------------- | --------------------------- | --------------------- |
+| Ascending (root to fifth)             | Positive, bright, arriving  | chime                 |
+| Descending (fifth to root)            | Resolved, settled, complete | complete              |
+| Ascending to unresolved (root to 9/8) | Tension, waiting, question  | waiting               |
+| Single note at 5/4 with dark timbre   | Concern, fault, different   | error, git-push-error |
+| Single note at 3/2                    | Quick acknowledgment        | ping                  |
 
 ## Synthesis Architecture
 
@@ -157,7 +159,22 @@ Applied in order to the raw synthesis output:
 
 9. **TPDF dither** — Triangular dither at 16-bit export for smoother quiet tail quantization.
 
-## The Five Sounds
+## The Sounds
+
+The generator produces **14 distinct sounds** (`scripts/generate-sounds.mjs`, `variantGenerators` + `staticSounds`). Ten are **variant** sounds (4 pre-baked variants each, no-repeat round-robin at playback): `chime`, `complete`, `waiting`, `ping`, `all-clear`, `git-commit`, `git-push`, `worktree-create`, `agent-spawned`, `context-injected`. Four are **static** (single file, no variants): `error`, `pulse`, `git-push-error`, `worktree-delete`.
+
+`electron/services/SoundService.ts` `SOUND_FILES` (the canonical map of `SoundId` → base filename) lists all 14; `ALLOWED_SOUND_FILES` is derived from it.
+
+### Earcon families
+
+| Family | Sounds | Role |
+| --- | --- | --- |
+| Agent state | `chime`, `complete`, `waiting`, `ping`, `error`, `agent-spawned` | Core agent lifecycle and notification cues |
+| Ambient | `pulse` | Repeating "still working" presence cue during background work |
+| Git | `git-commit`, `git-push`, `git-push-error` | VCS action confirmations and failures |
+| Worktree | `worktree-create`, `worktree-delete`, `all-clear`, `context-injected` | Worktree lifecycle, all-clear, and context injection |
+
+The five core agent-state sounds are documented in detail below; the remaining nine follow the same DSP architecture with notes drawn from the JI palette (see `genAllClear`, `genGitCommit`, `genGitPush`, `genWorktreeCreate`, `genAgentSpawned`, `genContextInjected` and the static `gitPushError` / `worktreeDelete` constants in `scripts/generate-sounds.mjs`).
 
 ### chime.wav — General Notification
 
@@ -195,7 +212,7 @@ Applied in order to the raw synthesis output:
 - **Emotion:** Concern without panic. "Something went wrong."
 - **Target peak:** 0.75 (cuts through, but brief)
 - **Chassis mix:** 1.0% (most isolated from family warmth)
-- **No variants:** Critical sounds need Pavlovian consistency. Variation on error sounds is a known UX anti-pattern — users interpret pitch shifts as hardware glitches.
+- **No variants:** One of four static sounds (`error`, `pulse`, `git-push-error`, `worktree-delete`). Failure and destructive cues need Pavlovian consistency — variation on them is a known UX anti-pattern, since users interpret pitch shifts as hardware glitches. `pulse` is static for a different reason: it's a repeating ambient cue and its per-playback freshness comes from runtime detune, not pre-baked variants (see "Working pulse" below).
 
 ### ping.wav — Brief Acknowledgment
 
@@ -205,6 +222,20 @@ Applied in order to the raw synthesis output:
 - **Emotion:** Quick, clean, over. "Heads up."
 - **Target peak:** 0.68 (sharp but not dominant)
 - **Chassis mix:** 2.0%
+
+### pulse.wav — Working Pulse (STATIC, ambient)
+
+- **Notes:** A4 (440Hz) — single quiet note, long attack
+- **Duration:** ~220ms, amplitude 0.28 (quietest sound in the family)
+- **Character:** Soft kalimba presence. A4 (the brand root) conveys grounding/presence without implying completion or alert.
+- **Emotion:** "I'm still working." Ambient, ignorable, non-blocking.
+- **Target peak:** 0.40 (softest — sits under everything else)
+
+`pulse.wav` is the only sound played _repeatedly_ rather than once per event. It's an ambient working-state awareness cue, fired on a cadence while an agent is doing background work so the user knows it's alive without watching the screen.
+
+**Cadence & eligibility** (`AgentNotificationService.ts`): gated on `workingPulseEnabled` + `soundEnabled`. A terminal is eligible if it's watched, or docked with `waitingEscalationEnabled`. After a `WORKING_PULSE_INITIAL_DELAY_MS` (10s) delay it ticks every 8–10s (`WORKING_PULSE_MIN_INTERVAL_MS`/`WORKING_PULSE_MAX_INTERVAL_MS`, jittered). The loop stays alive but skips its sound during scheduled quiet hours, session mute, or OS Do-Not-Disturb.
+
+**Runtime detune (anti-habituation):** unlike the other sounds, the pulse has no pre-baked variants. Instead each tick picks `detuneCents = ±15` and calls `soundService.playPulse(soundFile, detuneCents)`, which routes the detune to the renderer's Web Audio path. ±15 cents exceeds the ~5–10 cent JND (so the ear registers freshness) while preserving sound identity. The OS-process fallback can't detune, but the 8–10s cadence variation still helps. The sound file is configurable via the `workingPulseSoundFile` setting.
 
 ## Sound Variation System
 
@@ -248,19 +279,23 @@ Each variant gets a unique PRNG seed: `SEED + variantIndex * 0x1000 + soundName.
 
 ### Which Sounds Get Variants
 
-| Sound    | Variants   | Reason                                                |
-| -------- | ---------- | ----------------------------------------------------- |
-| chime    | 4 (v0-v3)  | Common notification — benefits from organic feel      |
-| complete | 4 (v0-v3)  | Frequent completion sound — organic variation         |
-| waiting  | 4 (v0-v3)  | Most common sound — agents finish and wait frequently |
-| ping     | 4 (v0-v3)  | Brief acknowledgment — organic feel                   |
-| error    | 1 (static) | Critical sound — Pavlovian consistency required       |
+| Sound | Variants | Reason |
+| --- | --- | --- |
+| chime, complete, waiting, ping | 4 (v0-v3) | Frequent agent-state cues — benefit from organic feel |
+| all-clear, git-commit, git-push, worktree-create, agent-spawned, context-injected | 4 (v0-v3) | Variant sounds — same round-robin treatment |
+| error | 1 (static) | Critical sound — Pavlovian consistency required |
+| git-push-error | 1 (static) | Failure cue — consistency, matches the error family |
+| worktree-delete | 1 (static) | Destructive cue — consistency |
+| pulse | 1 (static) | Ambient repeating cue — freshness via runtime detune |
 
 ### Playback: No-Repeat Round-Robin
 
-`AgentNotificationService.resolveVariant()` discovers variant files by listing the sounds directory for siblings matching `{base}.v{N}.wav`. It randomly selects a variant, ensuring the same variant never plays twice consecutively.
+Triggering and variant resolution are split across two services:
 
-For custom user sound files (no siblings in the sounds dir), the system passes through the original file unchanged.
+- **`AgentNotificationService.ts`** decides _when_ a sound should play (which event, eligibility, quiet-hours gating, working-pulse cadence) and calls `soundService.play(id)` / `playFile(...)` / `playPulse(...)`.
+- **`electron/services/SoundService.ts`** resolves _which_ variant and actually plays it. `pickVariant(soundFile)` (lines ~279–291) discovers variant siblings via `getVariants()` (cached by `initVariantCache()`, which scans the sounds dir once at startup), then randomly selects an index, looping until it differs from `lastVariant[soundFile]` — so the same variant never plays twice consecutively.
+
+For sounds with ≤1 variant (the static sounds, or custom user files with no siblings), `pickVariant` passes the original file through unchanged.
 
 ### File Naming Convention
 
@@ -336,11 +371,12 @@ If the sound should be static (critical/semantic):
 1. Generate it as a `const` like `error`
 2. Add it to `staticSounds`
 
-### Step 4: Update the Notification Service
+### Step 4: Register the Sound
 
-1. Add the new sound filename(s) to `electron/ipc/handlers/notifications.ts` (the allowlist)
-2. Add it to the sound picker arrays in `NotificationSettingsTab.tsx` and `ProjectNotificationsTab.tsx`
-3. If it maps to a new event type, update `AgentNotificationService.ts` to play it at the right time
+1. Add the new sound to the `SOUND_FILES` map in `electron/services/SoundService.ts`. This is the single source of truth — `ALLOWED_SOUND_FILES` (input validation) and the `notifications.ts` allowlist both derive from it via `getAllowedSoundFiles()`. There is **no** hardcoded list in `notifications.ts` to update.
+2. If the sound needs a dampening priority, add it to `PRIORITY_MAP` in `SoundService.ts` (lower number = higher priority; defaults to 4).
+3. Add it to the sound picker arrays in `NotificationSettingsTab.tsx` and `ProjectNotificationsTab.tsx`.
+4. If it maps to a new event type, update `AgentNotificationService.ts` to call `soundService.play(...)` at the right time.
 
 ### Step 5: Regenerate and Verify
 
@@ -364,16 +400,26 @@ Verify: all files play cleanly, variants are detectably different, typecheck pas
 | File | Purpose |
 | --- | --- |
 | `scripts/generate-sounds.mjs` | Sound generator script (the synthesis engine) |
-| `electron/resources/sounds/*.wav` | Generated WAV files |
-| `electron/utils/soundPlayer.ts` | Cross-platform playback (afplay/paplay/PowerShell) |
-| `electron/services/AgentNotificationService.ts` | When and how sounds are triggered, variant resolution |
-| `electron/ipc/handlers/notifications.ts` | Sound file allowlist, preview handler |
+| `electron/resources/sounds/*.wav` | Generated WAV files (14 base + variants) |
+| `electron/services/AgentNotificationService.ts` | Decides _when_ sounds trigger (events, eligibility, quiet-hours, working-pulse cadence) |
+| `electron/services/SoundService.ts` | Central playback: `SOUND_FILES`/`ALLOWED_SOUND_FILES`, variant resolution (`pickVariant`), dampening, `PRIORITY_MAP`, detune routing |
+| `src/services/WebAudioService.ts` | Renderer-side Web Audio playback (primary path) — fetch + decode + gain/detune |
+| `src/hooks/useSoundPlaybackListener.ts` | Renderer listener that bridges `SOUND_TRIGGER`/`sound:cancel` IPC to `WebAudioService` |
+| `electron/utils/soundPlayer.ts` | OS-process fallback (afplay/paplay/PowerShell) when no renderer is available |
+| `electron/ipc/handlers/notifications.ts` | Preview handler; allowlist derived from `SoundService.SOUND_FILES` |
 | `src/components/Settings/NotificationSettingsTab.tsx` | Global sound picker UI |
 | `src/components/Project/ProjectNotificationsTab.tsx` | Per-project sound picker UI |
-| `electron/store.ts` | Sound preference persistence |
+| `electron/store.ts` | Sound preference persistence (per-project settings layered via `projectStore`) |
+
+## Playback Path
+
+Sounds are generated offline (pure-math synthesis, no Web Audio in the generator) but played back at runtime through the **renderer's Web Audio API**, with the OS-process spawner as a fallback.
+
+- **Primary — Web Audio (renderer):** `SoundService.playDampened`/`playBypassed` broadcast a `SOUND_TRIGGER` IPC event (with `volume` and optional `detune`) whenever a renderer window exists. `useSoundPlaybackListener.ts` receives it and hands off to `WebAudioService.ts`, which fetches the WAV via `daintree-file://`, decodes it, and plays it through a gain/detune graph. This is what enables cross-platform per-playback pitch shifting (the working-pulse detune).
+- **Fallback — OS process (`soundPlayer.ts`):** when no renderer window is available (e.g., very early startup), `SoundService` spawns afplay/paplay/PowerShell directly. This path can't detune; the working pulse still gets freshness from its 8–10s cadence jitter.
 
 ## Future Considerations
 
-- **Runtime micro-randomization:** `afplay` on macOS supports `--rate` which shifts pitch/speed. Adding `--rate ${0.96 + Math.random() * 0.08}` to `soundPlayer.ts` would give true per-playback variation on macOS. Linux/Windows would need Web Audio API migration.
-- **Web Audio API migration:** Would enable real-time synthesis, infinite variation, and cross-platform pitch shifting. Requires a hidden BrowserWindow as an audio worker and IPC routing. High migration cost but the cleanest long-term architecture.
-- **Additional event types:** The synthesis engine can produce new sounds by combining existing DSP primitives with new notes from the JI palette. Follow the pattern in "Adding a New Sound" above.
+- **Runtime micro-randomization, broader:** per-playback pitch variation already exists for the working pulse via the Web Audio detune (`±15` cents, `SoundService.playPulse` → `WebAudioService`). The remaining gap is extending subtle per-playback detune to the _one-shot_ sounds (chime/complete/…) on top of their pre-baked variants — currently those vary only between the 4 baked takes.
+- **Real-time synthesis:** the current Web Audio path plays pre-rendered WAVs. Porting the DSP graph into `WebAudioService` would allow infinite, fully runtime-synthesized variation rather than round-robin over baked files — high cost, low priority.
+- **Additional event types:** the synthesis engine can produce new sounds by combining existing DSP primitives with new notes from the JI palette. Follow the pattern in "Adding a New Sound" above.

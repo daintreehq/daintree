@@ -145,7 +145,7 @@ The current GitHub action set is read-only (`openIssues`, `listPullRequests`, et
 
 | Action / call site | Current | UI confirm | Consent in breadcrumb | Reversibility | Blast | Tier | Recommendation | Follow-up |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `recipe.run` | safe | n/a | n/a | local-irreversible (spawns processes; not a content mutation) | one recipe → many terminals | D0 | Leave | — |
+| `recipe.run` | **confirm** (updated #9557) | agent-dispatch only — no user-side `ConfirmDialog` (the runner is the first-run discovery path); the `danger:"confirm"` classification gates only the agent source so a single MCP/agent dispatch can't fan out many terminals unprompted | Boolean via dispatch | local-irreversible (spawns processes; not a content mutation) | one recipe → many terminals | D0 (user) → D1 (agent-dispatched fan-out) | Done — bounds MCP/agent blast radius; `recipe.run` is in `EXPECTED_CONFIRM_DANGER` (regression test asserts the classification, agent-dispatch block, and non-empty `dangerRationale`) but stays off `CONFIRMED_WIRED` since user dispatch is intentionally un-gated | — |
 | `recipe.editor.open` / `recipe.manager.open` | safe | n/a | n/a | reversible | UI | D0 | Leave | — |
 | `recipe.saveToRepo` (with `deleteOriginal: true`) | safe | yes (`RecipeManager.tsx` ConfirmDialog) | n/a | local-irreversible (original deleted) | one recipe | D1 | Leave — current pattern is correct | — |
 | `recipe.delete` | **confirm** (added #8247) | yes (`ConfirmDialog` in `RecipeManager.tsx` + `RecipesTab.tsx`; both dispatch through the action) | Boolean via dispatch | local-irreversible | one recipe | D1 | Done (#8247) | #8247 |

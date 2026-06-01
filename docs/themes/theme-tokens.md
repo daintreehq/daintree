@@ -63,7 +63,7 @@ The built-in theme test suite (`shared/theme/__tests__/builtInThemes.test.ts`) v
 
 **Cross-theme distinctness** (`auditCrossThemeAccents`):
 
-- Primary accent pairwise distance within the same polarity: ΔE ≥ **15** in OKLCH. Ensures themes have perceptibly different accent colors.
+- Primary accent pairwise distance within the same polarity: ΔE ≥ **0.12** in OKLab (`CROSS_THEME_DE_WARN`). Ensures themes have perceptibly different accent colors.
 - No two themes may share the exact same `accentSecondary` hex value.
 
 All thresholds are derived from CSS Color 4, APCA research, and Material 3 guidelines. The OKLCH conversion chain (sRGB → linear → LMS → OKLab → OKLCh) is implemented in `shared/theme/oklch.ts`.
@@ -137,7 +137,6 @@ Drive state chips in panel headers and worktree card indicators.
 | `activity-waiting`   | Agent waiting for user input (amber) | Required                  |
 | `activity-idle`      | Inactive/dormant state               | Required                  |
 | `activity-completed` | Finished successfully                | Derived: `status-success` |
-| `activity-failed`    | Finished with error                  | Derived: `status-danger`  |
 
 ## Overlay Tokens
 
@@ -159,6 +158,15 @@ A single-knob color input (`overlay-base`) drives the entire opacity ladder.
 **See [Canonical Interaction State Recipes](./interaction-state-recipes.md)** for hover/focus implementation patterns using these overlay tokens.
 
 Set `overlay-base` to a hued color to tint all hover and fill states (e.g. Fiordland: icy blue `#B4DCF0`, Arashiyama: warm cream `#FFECE6`).
+
+## Filter-Selected Tokens
+
+Selected-state pill backgrounds (e.g. active filter chips). Tint-derived so they stay neutral across hued themes rather than picking up the accent or overlay hue.
+
+| Token                       | Dark default  | Light default |
+| --------------------------- | ------------- | ------------- |
+| `filter-selected-bg-soft`   | `tint` at 8%  | `tint` at 6%  |
+| `filter-selected-bg-strong` | `tint` at 12% | `tint` at 10% |
 
 ## Wash Tokens
 
@@ -220,7 +228,7 @@ Provider-agnostic — these color any forge's PR/issue state. Defaults follow Gi
 
 ## Search Tokens
 
-Search highlighting is independent of accent. Bondi uses blue (`#2B6CA8`) search while its accent is green (`#145A44`).
+Search highlighting is independent of accent. Bondi tints its search highlight _text/icon_ blue (`#2B6CA8` — `search-highlight-text`, `search-match-badge-text`, `search-selected-result-icon`) while its accent is green (`#145A44`).
 
 | Token | Purpose | Default |
 | --- | --- | --- |
@@ -405,27 +413,29 @@ Import and add to `shared/theme/builtInThemes/index.ts`.
 
 | Group           | Count                                                 |
 | --------------- | ----------------------------------------------------- |
-| Surface         | 10                                                    |
+| Surface         | 11                                                    |
 | Text            | 6                                                     |
 | Border          | 5                                                     |
 | Accent          | 9 (6 primary + 3 secondary)                           |
 | Focus           | 1                                                     |
-| Status          | 4                                                     |
-| Activity        | 7                                                     |
+| Status          | 5                                                     |
+| Activity        | 5                                                     |
 | Overlay         | 10 (base + 5 ladder + hover/active/selected/elevated) |
+| Filter-selected | 2                                                     |
 | Wash            | 3                                                     |
 | Scrim           | 3                                                     |
 | Shadow          | 4 (color + ambient + floating + dialog)               |
 | Tint            | 1                                                     |
 | Material/Radius | 4                                                     |
-| GitHub          | 4                                                     |
+| PR state        | 4                                                     |
 | Search          | 6                                                     |
 | Terminal        | 22 (6 base + 16 ANSI)                                 |
 | Syntax          | 10                                                    |
 | Category        | 12                                                    |
-| Diff            | 8                                                     |
 | UI Utility      | 13                                                    |
-| **Total**       | **142**                                               |
+| Form            | 2 (knob-base + state-modified)                        |
+| Diff            | 8                                                     |
+| **Total**       | **146**                                               |
 
 ## Tailwind Consumption
 

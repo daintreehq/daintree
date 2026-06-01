@@ -9,7 +9,7 @@ For the architecture, tuning model, and code ownership, see [Agent Activity Moni
 ## Indicators
 
 - Terminal header state badge (Working/Waiting).
-- Global "Waiting (N)" pill in the toolbar.
+- Global "Waiting (N)" pill in the content dock bar (`WaitingContainer` in `src/components/Layout/ContentDock.tsx`).
 
 ## Setup
 

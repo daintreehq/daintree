@@ -30,7 +30,7 @@ Actions expose themselves as an MCP-compatible manifest via `actionService.list(
 | --- | --- |
 | `shared/types/actions.ts` | Type definitions: `ActionId`, `ActionDefinition`, `ActionSource`, `ActionDanger` |
 | `src/services/ActionService.ts` | Singleton registry and dispatcher |
-| `src/services/actions/definitions/*.ts` | 17 domain-specific action definition files |
+| `src/services/actions/definitions/*.ts` | ~50 domain-specific definition files, grouped into ~28 domains by `actionDefinitions.ts` |
 | `src/services/actions/actionDefinitions.ts` | Registration aggregator |
 | `src/hooks/useActionRegistry.ts` | React hook that wires UI callbacks to the service |
 
@@ -39,18 +39,24 @@ Actions expose themselves as an MCP-compatible manifest via `actionService.list(
 Every action implements the `ActionDefinition` interface:
 
 ```typescript
-interface ActionDefinition<Args, Result> {
+// Abbreviated — see shared/types/actions.ts for the full interface.
+interface ActionDefinition<S extends z.ZodTypeAny | undefined, Result> {
   id: ActionId; // Typed union: "terminal.new", "worktree.delete", etc.
   title: string; // Human-readable name
   description: string; // What this action does
   category: string; // Grouping: "terminal", "worktree", "git", etc.
-  kind: "command" | "query"; // Mutates state vs. reads state
+  kind: ActionKind; // "command" | "query" — mutates vs. reads state
   danger: ActionDanger; // Safety level (see below)
-  scope: "renderer"; // Where this runs
-  argsSchema?: z.ZodType; // Runtime validation schema
-  resultSchema?: z.ZodType; // Optional result schema
-  isEnabled?: (ctx) => bool; // Dynamic enable/disable
-  run: (args, ctx) => Promise<Result>;
+  scope: ActionScope; // "renderer"
+  argsSchema?: S; // Runtime validation schema (drives arg type inference)
+  resultSchema?: z.ZodType<Result>; // Optional result schema
+  isEnabled?: (ctx) => boolean; // Dynamic enable/disable (fails closed)
+  isVisible?: (ctx) => boolean; // Discovery-layer visibility (fails open)
+  disabledReason?: (ctx) => string | undefined;
+  dangerRationale?: string; // Required when danger !== "safe"; surfaced in MCP consent
+  run: (args: InferActionArgs<S>, ctx: ActionContext) => Promise<Result>;
+  // MCP/AI surface: keywords, examples, mcpAnnotations, mcpVisibility,
+  //   mcpOutputSchema, safeBreadcrumbArgs, nonRepeatable, ...
 }
 ```
 
@@ -58,17 +64,19 @@ interface ActionDefinition<Args, Result> {
 
 This is crucial for AI safety:
 
-| Level        | Meaning                           | Agent Behavior                            |
-| ------------ | --------------------------------- | ----------------------------------------- |
-| `safe`       | Read-only or easily reversible    | Executes immediately                      |
-| `confirm`    | Destructive or hard to undo       | Requires `{ confirmed: true }` from agent |
-| `restricted` | System-only, never agent-callable | Returns `RESTRICTED` error                |
+| Level | Meaning | Agent Behavior |
+| --- | --- | --- |
+| `safe` | Read-only or easily reversible | Executes immediately |
+| `confirm` | Destructive or hard to undo | `agent`: requires `{ confirmed: true }`; `plugin`: always blocked |
+| `restricted` | System-only, never agent-callable | Returns `RESTRICTED` error |
 
 Examples:
 
 - `safe`: `terminal.focusNext`, `worktree.refresh`
 - `confirm`: `worktree.delete`, `terminal.killAll`
-- `restricted`: Reserved for future system-only operations
+- `restricted`: Reserved for system-only operations. No definition currently sets `danger: "restricted"`, but the RESTRICTED gate in `dispatch()` (`ActionService.ts`) is wired and tested.
+
+When `danger !== "safe"`, `dangerRationale` is required — it surfaces in the MCP elicitation prompt so the user sees the same reasoning the model would.
 
 ## The Dispatch Flow
 
@@ -76,14 +84,19 @@ When `actionService.dispatch(actionId, args, options)` is called:
 
 ```
 1. Lookup       → Find action in registry (or return NOT_FOUND)
-2. Validation   → Parse args through Zod schema (or return VALIDATION_ERROR)
-3. Enabled?     → Check isEnabled(context) (or return DISABLED)
-4. Restricted?  → Block if danger === "restricted" (return RESTRICTED)
-5. Confirm?     → If danger === "confirm" AND source === "agent" AND !confirmed
+2. Binding?     → If a contextOverride pins a projectId that no longer matches
+                  live state → return BINDING_STALE (stale session guard)
+3. Validation   → Parse args through Zod schema (or return VALIDATION_ERROR)
+4. Enabled?     → Check isEnabled(context) (or return DISABLED)
+5. Restricted?  → Block if danger === "restricted" (return RESTRICTED)
+6. Confirm?     → If danger === "confirm" AND
+                    (source === "plugin"  OR  (source === "agent" && !confirmed))
                   → Return CONFIRMATION_REQUIRED
-6. Execute      → Run the action handler
-7. Emit Event   → Log action:dispatched to main process event bus
-8. Return       → { ok: true, result } or { ok: false, error }
+                  Plugins are always confirm-gated — the `confirmed` flag is
+                  ignored for plugin sources.
+7. Execute      → Run the action handler (ctx carries dispatchSource for this run)
+8. Emit Event   → Log action:dispatched to main process event bus
+9. Return       → { ok: true, result } or { ok: false, error }
 ```
 
 ### Result Types
