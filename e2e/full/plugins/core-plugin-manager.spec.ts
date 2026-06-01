@@ -46,8 +46,10 @@ test.describe.serial("Core: Plugin manager view", () => {
     await expect(list.getByRole("option", { name: "Built-in", exact: true })).toBeVisible({
       timeout: T_MEDIUM,
     });
+    // SEL.plugin.option already scopes to the listbox, so don't re-nest it under
+    // `list` (that yields a `listbox listbox option` selector matching nothing).
     await expect(
-      list.locator(SEL.plugin.option).filter({ hasText: SAMPLE_PLUGIN_LABEL })
+      window.locator(SEL.plugin.option).filter({ hasText: SAMPLE_PLUGIN_LABEL })
     ).toBeVisible({ timeout: T_MEDIUM });
 
     // Nothing is disabled yet, so the Disabled group header is absent.
