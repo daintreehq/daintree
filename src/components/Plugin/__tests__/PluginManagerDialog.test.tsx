@@ -453,7 +453,15 @@ describe("PluginManagerDialog", () => {
     ]);
     renderDialog();
     await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-    expect(screen.getByText("Built-in")).toBeTruthy();
+    // "Built-in" now renders twice: the section heading (id=plugin-group-builtin)
+    // and the row's source badge alongside the display name. Assert the row badge
+    // by excluding the heading.
+    const builtinBadge = within(
+      screen.getByText("Acme Demo").closest("[role='group']") as HTMLElement
+    )
+      .getAllByText("Built-in")
+      .filter((el) => el.id !== "plugin-group-builtin");
+    expect(builtinBadge.length).toBe(1);
     // Uninstall lives in the detail pane now — select and confirm it's absent
     // for a built-in.
     await selectPlugin();
@@ -917,6 +925,140 @@ describe("PluginManagerDialog", () => {
       await waitFor(() =>
         expect(screen.getByText(/Plugin "missing\.plugin" isn't installed/)).toBeTruthy()
       );
+    });
+  });
+
+  describe("grouping", () => {
+    // Distinct manifest names + display names so each plugin is uniquely
+    // addressable across sections. "Built-in" also appears as a per-row source
+    // badge, so section assertions scope queries with role="group".
+    const named = (
+      overrides: Partial<Omit<LoadedPluginInfo, "manifest">> & {
+        manifest?: Partial<LoadedPluginInfo["manifest"]>;
+      } = {}
+    ): LoadedPluginInfo => {
+      const { manifest: manifestOverride, ...rest } = overrides;
+      const base = makePlugin(rest);
+      return {
+        ...base,
+        manifest: { ...base.manifest, ...manifestOverride },
+      };
+    };
+
+    const builtinGroup = () => screen.getByRole("group", { name: "Built-in" });
+    const installedGroup = () => screen.getByRole("group", { name: "Installed" });
+    const disabledGroup = () => screen.getByRole("group", { name: "Disabled" });
+
+    it("places an enabled built-in plugin in the Built-in section", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        named({
+          manifest: { name: "core.tools", displayName: "Core Tools" },
+          isBuiltin: true,
+          source: "builtin",
+        }),
+      ]);
+      renderDialog();
+      await waitFor(() => expect(screen.getByText("Core Tools")).toBeTruthy());
+      expect(within(builtinGroup()).getByText("Core Tools")).toBeTruthy();
+      expect(screen.queryByRole("group", { name: "Disabled" })).toBeNull();
+      expect(screen.queryByRole("group", { name: "Installed" })).toBeNull();
+    });
+
+    it("places an enabled user plugin in the Installed section", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        named({ manifest: { name: "acme.demo", displayName: "Acme Demo" }, source: "sideload" }),
+      ]);
+      renderDialog();
+      await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+      expect(within(installedGroup()).getByText("Acme Demo")).toBeTruthy();
+      expect(screen.queryByRole("group", { name: "Built-in" })).toBeNull();
+    });
+
+    it("places a disabled built-in in the Disabled section, not Built-in", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        named({
+          manifest: { name: "core.tools", displayName: "Core Tools" },
+          isBuiltin: true,
+          source: "builtin",
+          disabled: true,
+        }),
+      ]);
+      renderDialog();
+      await waitFor(() => expect(screen.getByText("Core Tools")).toBeTruthy());
+      expect(within(disabledGroup()).getByText("Core Tools")).toBeTruthy();
+      expect(screen.queryByRole("group", { name: "Built-in" })).toBeNull();
+    });
+
+    it("places a disabled user plugin in the Disabled section", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        named({ manifest: { name: "acme.demo", displayName: "Acme Demo" }, disabled: true }),
+      ]);
+      renderDialog();
+      await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+      expect(within(disabledGroup()).getByText("Acme Demo")).toBeTruthy();
+    });
+
+    it("renders all three sections for a mixed list and hides none", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        named({
+          manifest: { name: "core.tools", displayName: "Core Tools" },
+          isBuiltin: true,
+          source: "builtin",
+        }),
+        named({ manifest: { name: "acme.demo", displayName: "Acme Demo" }, source: "sideload" }),
+        named({ manifest: { name: "old.thing", displayName: "Old Thing" }, disabled: true }),
+      ]);
+      renderDialog();
+      await waitFor(() => expect(screen.getByText("Core Tools")).toBeTruthy());
+      expect(within(builtinGroup()).getByText("Core Tools")).toBeTruthy();
+      expect(within(installedGroup()).getByText("Acme Demo")).toBeTruthy();
+      expect(within(disabledGroup()).getByText("Old Thing")).toBeTruthy();
+      // Each plugin lands in exactly one section.
+      expect(screen.getAllByText("Core Tools").length).toBe(1);
+      expect(screen.getAllByText("Acme Demo").length).toBe(1);
+      expect(screen.getAllByText("Old Thing").length).toBe(1);
+      // Sections render in the order Built-in → Installed → Disabled.
+      const ids = Array.from(document.querySelectorAll("[role='group']")).map((el) =>
+        el.getAttribute("aria-labelledby")
+      );
+      expect(ids).toEqual([
+        "plugin-group-builtin",
+        "plugin-group-installed",
+        "plugin-group-disabled",
+      ]);
+    });
+
+    it("omits the Disabled section when every plugin is enabled", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        named({ manifest: { name: "acme.demo", displayName: "Acme Demo" } }),
+      ]);
+      renderDialog();
+      await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+      expect(screen.queryByRole("group", { name: "Disabled" })).toBeNull();
+    });
+
+    it("omits the Built-in and Installed sections when every plugin is disabled", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        named({ manifest: { name: "acme.demo", displayName: "Acme Demo" }, disabled: true }),
+      ]);
+      renderDialog();
+      await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+      expect(screen.queryByRole("group", { name: "Built-in" })).toBeNull();
+      expect(screen.queryByRole("group", { name: "Installed" })).toBeNull();
+      expect(disabledGroup()).toBeTruthy();
+    });
+
+    it("preserves alphabetical order within a section", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        named({ manifest: { name: "z.plugin", displayName: "Zebra" } }),
+        named({ manifest: { name: "a.plugin", displayName: "Alpha" } }),
+      ]);
+      renderDialog();
+      await waitFor(() => expect(screen.getByText("Alpha")).toBeTruthy());
+      const labels = within(installedGroup())
+        .getAllByText(/Alpha|Zebra/)
+        .map((el) => el.textContent);
+      expect(labels).toEqual(["Alpha", "Zebra"]);
     });
   });
 });

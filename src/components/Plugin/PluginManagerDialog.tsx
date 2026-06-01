@@ -14,6 +14,36 @@ import type { LoadedPluginInfo, PluginDeepLinkIntent } from "@shared/types/plugi
 const ROW_BADGE_CLASS =
   "inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 uppercase tracking-wide";
 
+/**
+ * Section grouping for the installed list (#9554). A disabled plugin always
+ * lands in "Disabled" regardless of its source, so the section reads as a clean
+ * list of everything that isn't currently running. Built-in and Installed only
+ * hold enabled plugins. Order is the render order below; sections with no
+ * matches are omitted. Within a section, rows inherit the alphabetical order of
+ * `pm.plugins` (already sorted enabled-then-name by the hook).
+ */
+const PLUGIN_GROUPS: ReadonlyArray<{
+  id: string;
+  label: string;
+  match: (plugin: LoadedPluginInfo) => boolean;
+}> = [
+  {
+    id: "plugin-group-builtin",
+    label: "Built-in",
+    match: (plugin) => !plugin.disabled && plugin.isBuiltin,
+  },
+  {
+    id: "plugin-group-installed",
+    label: "Installed",
+    match: (plugin) => !plugin.disabled && !plugin.isBuiltin,
+  },
+  {
+    id: "plugin-group-disabled",
+    label: "Disabled",
+    match: (plugin) => plugin.disabled === true,
+  },
+];
+
 interface PluginRowProps {
   plugin: LoadedPluginInfo;
   selected: boolean;
@@ -293,7 +323,6 @@ export function PluginManagerDialog({
               </div>
             ) : null
           ) : !hasPlugins && !pm.error ? (
-            // Suppress the empty state when a load error is showing — the error
             // banner above owns that case so we don't invite a redundant install.
             <EmptyState
               variant="zero-data"
@@ -305,25 +334,39 @@ export function PluginManagerDialog({
           ) : !hasPlugins ? null : (
             <ScrollShadow
               className="flex-1 min-h-0"
-              scrollClassName="p-2 space-y-1"
+              scrollClassName="p-2 space-y-4"
               role="listbox"
               aria-label="Installed plugins"
             >
-              {pm.plugins.map((plugin) => (
-                <PluginRow
-                  key={plugin.manifest.name}
-                  plugin={plugin}
-                  selected={plugin.manifest.name === selectedPluginId}
-                  toggling={pm.pending.has(plugin.manifest.name)}
-                  onSelect={() => setSelectedPluginId(plugin.manifest.name)}
-                  onToggle={() => void pm.handleToggle(plugin)}
-                  highlighted={highlightedPluginId === plugin.manifest.name}
-                  innerRef={(el) => {
-                    if (el) rowRefs.current.set(plugin.manifest.name, el);
-                    else rowRefs.current.delete(plugin.manifest.name);
-                  }}
-                />
-              ))}
+              {PLUGIN_GROUPS.map(({ id, label, match }) => {
+                const groupPlugins = pm.plugins.filter(match);
+                if (groupPlugins.length === 0) return null;
+                return (
+                  <div key={id} role="group" aria-labelledby={id} className="space-y-1">
+                    <p
+                      id={id}
+                      className="px-3 text-[10px] font-medium uppercase tracking-wider text-daintree-text/40 select-none"
+                    >
+                      {label}
+                    </p>
+                    {groupPlugins.map((plugin) => (
+                      <PluginRow
+                        key={plugin.manifest.name}
+                        plugin={plugin}
+                        selected={plugin.manifest.name === selectedPluginId}
+                        toggling={pm.pending.has(plugin.manifest.name)}
+                        onSelect={() => setSelectedPluginId(plugin.manifest.name)}
+                        onToggle={() => void pm.handleToggle(plugin)}
+                        highlighted={highlightedPluginId === plugin.manifest.name}
+                        innerRef={(el) => {
+                          if (el) rowRefs.current.set(plugin.manifest.name, el);
+                          else rowRefs.current.delete(plugin.manifest.name);
+                        }}
+                      />
+                    ))}
+                  </div>
+                );
+              })}
             </ScrollShadow>
           )}
         </div>
