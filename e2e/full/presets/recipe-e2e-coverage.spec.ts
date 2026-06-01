@@ -271,7 +271,9 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       const { window } = ctx;
       const manager = await openRecipeManager(window);
       await expect(manager.locator(SEL.recipeManager.teamSection)).toBeVisible({ timeout: T_LONG });
-      await expect(manager.getByText("Shared Dev", { exact: true })).toBeVisible({
+      // The in-repo recipe also has a reconciled project-mirror row, so the name
+      // can appear more than once — assert it's present rather than unique.
+      await expect(manager.getByText("Shared Dev", { exact: true }).first()).toBeVisible({
         timeout: T_SHORT,
       });
       await closeAppDialog(window);
@@ -297,7 +299,7 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       await loadRecipesViaSettings(window);
 
       const manager = await openRecipeManager(window);
-      await expect(manager.locator(SEL.recipeManager.overriddenBadge)).toBeVisible({
+      await expect(manager.locator(SEL.recipeManager.overriddenBadge).first()).toBeVisible({
         timeout: T_LONG,
       });
       await closeAppDialog(window);
