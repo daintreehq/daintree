@@ -301,6 +301,23 @@ export const SEL = {
     emptyState: 'text="No notifications yet"',
     configureButton: 'button:has-text("Configure")',
     clearAllButton: 'button:has-text("Clear all")',
+    // Toast surfaces (toaster.tsx)
+    toastRegion: '[role="region"][aria-label="Notifications"]',
+    toastDismissButton: 'button[aria-label="Dismiss notification"]',
+    toastCoalesceBadge: '[data-testid="toast-coalesce-badge"]',
+    toastActionSpinner: '[data-testid="toast-action-spinner"]',
+    toastActionCheckmark: '[data-testid="toast-action-checkmark"]',
+    toastOverflowPill: '[data-testid="toast-overflow-pill"]',
+    // Grid-bar surface (GridNotificationBar.tsx)
+    gridBar: '[data-testid="grid-notification-bar"]',
+    gridBarStatus: '[data-testid="grid-notification-bar"] [role="status"]',
+    // Notification center (NotificationCenter.tsx)
+    centerList: '[role="list"][aria-label="Notifications"]',
+    centerRow: '[role="listitem"]',
+    centerFilter: (label: string) => `button[aria-pressed]:has-text("${label}")`,
+    markAllReadButton: 'button:has-text("Mark all read")',
+    mutedPill: '[data-testid="notification-muted-pill"]',
+    mutedEmptyState: '[data-testid="notification-muted-empty-state"]',
   },
   actionPalette: {
     dialog: '[role="dialog"][aria-label="Action palette"]',

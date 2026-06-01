@@ -242,6 +242,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
 
   return (
     <div
+      data-testid="grid-notification-bar"
       className={cn(
         "grid-notification-wrapper shrink-0 overflow-hidden transition-[height,opacity]",
         isVisible

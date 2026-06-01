@@ -8,6 +8,7 @@ import type {
   CreateWorktreeOptions,
   TerminalInfoPayload,
 } from "@shared/types";
+import type { NotificationsE2EApi } from "@/lib/e2eNotificationBackdoor";
 
 declare global {
   interface Window {
@@ -37,6 +38,8 @@ declare global {
       args?: unknown,
       options?: { source?: string; confirmed?: boolean }
     ) => unknown;
+    /** E2E-only notification driver, attached by `src/lib/e2eNotificationBackdoor.ts` under DAINTREE_E2E_MODE. */
+    __daintreeNotificationsE2E?: NotificationsE2EApi;
   }
 }
 
