@@ -272,6 +272,8 @@ export function createConflictFixtureRepo(
   }
 
   return { dir, cleanup: makeFixtureCleanup(dir) };
+}
+
 export interface InRepoRecipeSeed {
   /** Recipe name; the file is written as `.daintree/recipes/<slug>.json`. */
   name: string;

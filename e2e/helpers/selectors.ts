@@ -431,6 +431,7 @@ export const SEL = {
     savedRow: '[data-testid="fleet-saved-row"]',
     savedRowDelete: '[data-testid="fleet-saved-row-delete"]',
     failureBanner: '[role="alert"]:has-text("Broadcast failed")',
+  },
   events: {
     timeline: '[role="log"][aria-label="Event timeline"]',
     row: '[role="log"][aria-label="Event timeline"] button',
