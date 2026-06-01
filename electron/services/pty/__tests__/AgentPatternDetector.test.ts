@@ -682,8 +682,24 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
           );
           const text = lines.join("\n") + trailing;
           const windowed = oracleWindow(text);
-          // Detection on the full text must equal detection on the oracle window.
-          expect(detector.detect(text).isWorking).toBe(detector.detect(windowed).isWorking);
+          // Detecting on the full text (new lastIndexOf window) must produce the
+          // exact same result as detecting on the oracle-windowed text (old
+          // split/slice/join). Full-object equality — not just isWorking — so a
+          // tier/confidence drift can't hide behind a matching boolean.
+          expect(detector.detect(text)).toEqual(detector.detect(windowed));
+        }
+      }
+    });
+  });
+
+  describe("pattern flag invariants", () => {
+    it("no configured pattern uses a stateful (/g, /y) flag", () => {
+      const configs = [...Object.values(AGENT_PATTERN_CONFIGS), UNIVERSAL_PATTERN_CONFIG];
+      for (const config of configs) {
+        const patterns = [...config.primaryPatterns, ...(config.fallbackPatterns ?? [])];
+        for (const pattern of patterns) {
+          expect(pattern.flags).not.toContain("g");
+          expect(pattern.flags).not.toContain("y");
         }
       }
     });
@@ -704,6 +720,19 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
       const second = detector.detect(output);
       expect(first).toEqual(second);
       expect(first.isWorking).toBe(true);
+    });
+
+    it("stays deterministic even with a stateful (/g) custom pattern", () => {
+      // Guards the lastIndex reset in matchPatterns: a /g pattern would
+      // otherwise advance lastIndex and miss on alternating calls.
+      const detector = createPatternDetector(undefined, {
+        primaryPatterns: [/working/g],
+        scanLineCount: 10,
+        primaryConfidence: 0.9,
+      });
+      expect(detector.detect("working").isWorking).toBe(true);
+      expect(detector.detect("working").isWorking).toBe(true);
+      expect(detector.detect("working").isWorking).toBe(true);
     });
   });
 });

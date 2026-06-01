@@ -197,6 +197,9 @@ export class AgentPatternDetector {
   private matchPatterns(textToScan: string): PatternDetectionResult {
     // Try primary patterns first (high confidence)
     for (const pattern of this.config.primaryPatterns) {
+      // Reset lastIndex so a stateful (/g, /y) pattern can't carry position
+      // across calls — restores the per-call semantics the old .match() had.
+      pattern.lastIndex = 0;
       if (pattern.test(textToScan)) {
         return {
           isWorking: true,
@@ -209,6 +212,7 @@ export class AgentPatternDetector {
     // Try fallback patterns (medium confidence)
     if (this.config.fallbackPatterns) {
       for (const pattern of this.config.fallbackPatterns) {
+        pattern.lastIndex = 0;
         if (pattern.test(textToScan)) {
           return {
             isWorking: true,
