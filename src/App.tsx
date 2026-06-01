@@ -325,6 +325,7 @@ import {
   usePluginManagerStore,
 } from "./store";
 import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
+import { useRecipeConflictStore } from "./store/recipeConflictStore";
 // Eager side-effect import: registers the GitHub plugin's builtin view slots
 // (bulkCreateWorktreeDialog, issueSelector) at module-eval time, before first
 // render. Must stay static — a deferred/idle import races the user, so
@@ -377,11 +378,23 @@ function AppInner() {
     // fault-mode tests to pick up a token seeded via __daintreeSeedGitHubToken
     // so the no-token empty state doesn't short-circuit IPC fault paths.
     window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__ = () => useGitHubConfigStore.getState().refresh();
+    // Parks a synthetic in-repo recipe stale-write conflict so E2E can exercise
+    // the RecipeConflictDialog without racing a real on-disk file mutation. The
+    // returned promise resolves with the user's choice; tests don't await it —
+    // they assert the dialog renders and that reload/overwrite dismiss it.
+    window.__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__ = (recipeName: string) => {
+      void useRecipeConflictStore.getState().requestConflict({
+        recipeId: `inrepo-${recipeName}`,
+        recipeName,
+        updates: { name: recipeName },
+      });
+    };
     return () => {
       delete window.__DAINTREE_E2E_ERROR_STORE__;
       delete window.__DAINTREE_E2E_ADD_ERROR__;
       delete window.__DAINTREE_E2E_CLEAR_ERRORS__;
       delete window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__;
+      delete window.__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__;
     };
   }, []);
 

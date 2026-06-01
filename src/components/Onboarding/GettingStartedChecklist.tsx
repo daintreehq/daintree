@@ -287,7 +287,7 @@ export function GettingStartedChecklist({
 
                 if (done) {
                   return (
-                    <div key={id} className={sharedClasses}>
+                    <div key={id} data-checklist-item={id} className={sharedClasses}>
                       {content}
                     </div>
                   );
@@ -297,6 +297,7 @@ export function GettingStartedChecklist({
                   <button
                     key={id}
                     type="button"
+                    data-checklist-item={id}
                     onClick={() => {
                       void actionService.dispatch(actionId, actionArgs, {
                         source: "user",

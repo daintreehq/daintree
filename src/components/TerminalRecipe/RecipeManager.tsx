@@ -525,6 +525,7 @@ export function RecipeManager({
           <textarea
             value={importJson}
             onChange={(e) => setImportJson(e.target.value)}
+            data-testid="recipe-import-textarea"
             placeholder='{"name": "My Recipe", "terminals": [...]}'
             className="w-full h-48 px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent resize-none"
             spellCheck={false}
