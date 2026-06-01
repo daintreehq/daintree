@@ -236,9 +236,17 @@ export async function initGlobalServices(
     // full-resilience specs can assert the side-effects (PVM fan-out, the
     // `watchdog:disabled` broadcast) without real memory pressure or three
     // genuine watchdog crashes. Same gating as the GitHub-token seams above.
+    const VALID_RESOURCE_PROFILES = new Set<ResourceProfile>([
+      "performance",
+      "balanced",
+      "efficiency",
+    ]);
     (globalThis as Record<string, unknown>).__daintreeForceResourceProfile = (
       profile: ResourceProfile
     ) => {
+      if (!VALID_RESOURCE_PROFILES.has(profile)) {
+        throw new Error(`__daintreeForceResourceProfile: unknown profile "${profile}"`);
+      }
       const svc = getResourceProfileService();
       if (!svc) throw new Error("ResourceProfileService not initialized");
       svc._forceProfileForTesting(profile);

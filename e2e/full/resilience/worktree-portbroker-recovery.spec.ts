@@ -94,12 +94,17 @@ test.describe.serial("Resilience: worktree port broker recovery after host crash
     const baselineListeners = await navigationListenerCount(ctx.app, wcId);
     expect(baselineListeners).toBeGreaterThanOrEqual(1);
 
-    // Crash the workspace host's UtilityProcess.
+    // Crash the workspace host's UtilityProcess. A `true` return proves a live
+    // child existed and was killed — so the recovery poll below is exercised
+    // against a genuine crash, not a no-op.
     expect(await crashWorkspaceHost(ctx.app, windowId)).toBe(true);
 
     // After auto-restart + host-restarted, the broker re-establishes a port for
     // the same view. The renderer is unchanged (same wcId), so the worktree
-    // store re-hydrates over the fresh port rather than staying stale.
+    // store re-hydrates over the fresh port rather than staying stale. We assert
+    // the recovered end-state (port present) rather than the transient gap — the
+    // host-restarted re-broker path keeps the view's map entry across the crash,
+    // so `hasPort` may never observably dip to false in between.
     await expect.poll(() => hasPort(ctx.app, wcId), { timeout: T_LONG }).toBe(true);
 
     // No listener accumulation: each re-broker removes the prior view's

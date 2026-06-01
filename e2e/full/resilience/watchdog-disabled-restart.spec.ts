@@ -60,12 +60,14 @@ test.describe.serial("Resilience: watchdog disabled banner + restart", () => {
     await expect(banner).toBeVisible({ timeout: T_LONG });
   });
 
-  test("the disabled banner exposes a single recovery action", async () => {
-    // The banner is already visible from the prior test (serial). Title-Message-
-    // Action: exactly one actionable button, no "Dismiss".
-    await expect(ctx.window.locator(SEL.recovery.watchdogDisabledBanner)).toBeVisible({
-      timeout: T_SHORT,
-    });
+  test("the disabled banner exposes exactly one recovery action", async () => {
+    // Self-contained: re-arm the banner so this test passes in isolation too.
+    await simulateWatchdogDisabled(ctx.app);
+    const banner = ctx.window.locator(SEL.recovery.watchdogDisabledBanner);
+    await expect(banner).toBeVisible({ timeout: T_LONG });
+
+    // Title-Message-Action: a single contextual button, no "Dismiss".
+    await expect(banner.locator("button")).toHaveCount(1, { timeout: T_SHORT });
     await expect(ctx.window.locator(SEL.recovery.watchdogRestartButton)).toBeVisible({
       timeout: T_SHORT,
     });
