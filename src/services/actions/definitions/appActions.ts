@@ -88,7 +88,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     keywords: ["plugins", "extensions", "addons", "install", "manage"],
     nonRepeatable: true,
     run: async () => {
-      callbacks.onOpenPluginManager();
+      window.dispatchEvent(new CustomEvent("daintree:open-plugin-manager"));
     },
   }));
 

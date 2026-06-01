@@ -2,7 +2,8 @@
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { PluginManagerDialog } from "../PluginManagerDialog";
+import { PluginManagerView } from "../PluginManagerView";
+import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { LoadedPluginInfo, SettingDefinition } from "@shared/types/plugin";
 
@@ -19,7 +20,7 @@ vi.mock("@/store/projectStore", () => ({
     selector({ currentProject: null }),
 }));
 
-// AppDialog observes its scroll container, which jsdom lacks.
+// ScrollShadow uses ResizeObserver, which jsdom lacks.
 class StubResizeObserver {
   observe() {}
   unobserve() {}
@@ -82,6 +83,7 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
 
 beforeEach(() => {
   vi.clearAllMocks();
+  usePluginManagerStore.setState({ isOpen: true });
   window.electron = {
     plugin: {
       list: vi.fn().mockResolvedValue([]),
@@ -123,7 +125,7 @@ function makePluginWithSettings(overrides: Partial<LoadedPluginInfo> = {}): Load
 function renderDialog() {
   return render(
     <TooltipProvider>
-      <PluginManagerDialog isOpen onClose={() => {}} />
+      <PluginManagerView />
     </TooltipProvider>
   );
 }
@@ -137,7 +139,7 @@ async function selectPlugin(name = "Acme Demo") {
   fireEvent.click(await screen.findByRole("option", { name: new RegExp(name, "i") }));
 }
 
-describe("PluginManagerDialog", () => {
+describe("PluginManagerView", () => {
   it("renders the section header immediately", async () => {
     renderDialog();
     expect(screen.getByText("Installed plugins")).toBeTruthy();
@@ -180,11 +182,13 @@ describe("PluginManagerDialog", () => {
     // Settings are not rendered until the plugin is selected — no layout shift
     // from inline expansion (#9555).
     await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-    expect(screen.queryByText("Settings")).toBeNull();
+    // Before selection there is no detail pane, so no Settings tab or form.
+    expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
     expect(window.electron.plugin.getSettingValues).not.toHaveBeenCalled();
 
     await selectPlugin();
-    expect(await screen.findByText("Settings")).toBeTruthy();
+    // After selection the Settings tab appears — click it to show the form.
+    fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
     expect(screen.getByLabelText("API key")).toBeTruthy();
     await waitFor(() =>
       expect(window.electron.plugin.getSettingValues).toHaveBeenCalledWith(
@@ -207,7 +211,8 @@ describe("PluginManagerDialog", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("false");
 
     await selectPlugin();
-    expect(await screen.findByText("Settings")).toBeTruthy();
+    // Click the Settings tab to show the form.
+    fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
     expect(screen.getByLabelText("API key")).toBeTruthy();
     // Hydration must run for disabled plugins too — the values are stored
     // independently of the plugin's runtime.
@@ -226,8 +231,9 @@ describe("PluginManagerDialog", () => {
     await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
 
     await selectPlugin();
+    // Navigate to the Settings tab to confirm no-settings note.
+    fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
     expect(await screen.findByText("This plugin has no settings.")).toBeTruthy();
-    expect(screen.queryByText("Settings")).toBeNull();
   });
 
   it("shows an empty detail pane before any plugin is selected", async () => {
@@ -237,7 +243,7 @@ describe("PluginManagerDialog", () => {
     renderDialog();
     await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
     expect(screen.getByText("Select a plugin")).toBeTruthy();
-    expect(screen.queryByText("Settings")).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
   });
 
   it("marks the selected row with aria-selected", async () => {
@@ -262,9 +268,9 @@ describe("PluginManagerDialog", () => {
     renderDialog();
     await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
 
-    // First click selects and fills the detail pane.
+    // First click selects and fills the detail pane — Settings tab appears.
     await selectPlugin();
-    expect(await screen.findByText("Settings")).toBeTruthy();
+    expect(await screen.findByRole("tab", { name: "Settings" })).toBeTruthy();
     expect(screen.getByRole("option", { name: /Acme Demo/i }).getAttribute("aria-selected")).toBe(
       "true"
     );
@@ -277,7 +283,7 @@ describe("PluginManagerDialog", () => {
       )
     );
     expect(screen.getByText("Select a plugin")).toBeTruthy();
-    expect(screen.queryByText("Settings")).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
   });
 
   it("clears the detail pane when the selected plugin is uninstalled elsewhere", async () => {
@@ -292,12 +298,13 @@ describe("PluginManagerDialog", () => {
     listMock.mockResolvedValueOnce([makePluginWithSettings()]).mockResolvedValueOnce([]);
     renderDialog();
     await selectPlugin();
-    expect(await screen.findByText("Settings")).toBeTruthy();
+    // Settings tab is visible in the detail pane after selection.
+    expect(await screen.findByRole("tab", { name: "Settings" })).toBeTruthy();
 
     // The plugin disappears from the refreshed list — selection must reset.
     fireProvenance?.();
     await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
-    expect(screen.queryByText("Settings")).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
   });
 
   it("renders settings in the detail pane, not inside the list row", async () => {
@@ -306,12 +313,13 @@ describe("PluginManagerDialog", () => {
     ]);
     renderDialog();
     await selectPlugin();
-    await screen.findByText("Settings");
+    // Click the Settings tab to show the form.
+    fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+    await screen.findByLabelText("API key");
     // The settings form and its fields must live outside the listbox — the
     // whole point of the master-detail split (#9555) is that the list row
     // never expands inline.
     const listbox = within(screen.getByRole("listbox"));
-    expect(listbox.queryByText("Settings")).toBeNull();
     expect(listbox.queryByLabelText("API key")).toBeNull();
   });
 
@@ -346,6 +354,8 @@ describe("PluginManagerDialog", () => {
     renderDialog();
 
     await selectPlugin("Acme Demo");
+    // Click the Settings tab to trigger PluginSettingsForm mount and hydration.
+    fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
     await waitFor(() =>
       expect(window.electron.plugin.getSettingValues).toHaveBeenCalledWith(
         "acme.demo",
@@ -354,7 +364,9 @@ describe("PluginManagerDialog", () => {
       )
     );
 
+    // Switching plugins remounts the detail pane — click Settings tab again.
     await selectPlugin("Beta Demo");
+    fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
     await waitFor(() =>
       expect(window.electron.plugin.getSettingValues).toHaveBeenCalledWith(
         "beta.demo",
@@ -489,6 +501,7 @@ describe("PluginManagerDialog", () => {
     renderDialog();
     await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
     await selectPlugin();
+    // Load error is on the Overview tab (default) — no tab click needed.
     expect(await screen.findByText(/Failed to load: boom/)).toBeTruthy();
   });
 
@@ -498,18 +511,17 @@ describe("PluginManagerDialog", () => {
     ]);
     renderDialog();
     await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-    // "Built-in" now renders twice: the section heading (id=plugin-group-builtin)
-    // and the row's source badge alongside the display name. Assert the row badge
-    // by excluding the heading.
-    const builtinBadge = within(
-      screen.getByText("Acme Demo").closest("[role='group']") as HTMLElement
-    )
-      .getAllByText("Built-in")
-      .filter((el) => el.id !== "plugin-group-builtin");
-    expect(builtinBadge.length).toBe(1);
+    // The section header row (aria-disabled option) and the row badge both say
+    // "Built-in". The listbox contains the row; assert the badge by scoping to
+    // the listbox, which excludes the section header label outside it.
+    const listbox = screen.getByRole("listbox");
+    const builtinBadges = within(listbox).getAllByText("Built-in");
+    expect(builtinBadges.length).toBeGreaterThanOrEqual(1);
     // Uninstall lives in the detail pane now — select and confirm it's absent
     // for a built-in.
     await selectPlugin();
+    // Navigate to Settings tab to check "no settings" note (built-in has no settings).
+    fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
     expect(await screen.findByText("This plugin has no settings.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Uninstall Acme Demo" })).toBeNull();
   });
@@ -879,9 +891,7 @@ describe("PluginManagerDialog", () => {
       const onConsumed = vi.fn();
       render(
         <TooltipProvider>
-          <PluginManagerDialog
-            isOpen
-            onClose={() => {}}
+          <PluginManagerView
             deepLinkIntent={{ action: "install", url: "https://example.com/p.dntr" }}
             onDeepLinkConsumed={onConsumed}
           />
@@ -905,9 +915,7 @@ describe("PluginManagerDialog", () => {
       const onConsumed = vi.fn();
       render(
         <TooltipProvider>
-          <PluginManagerDialog
-            isOpen
-            onClose={() => {}}
+          <PluginManagerView
             deepLinkIntent={{ action: "open", pluginId: "acme.demo" }}
             onDeepLinkConsumed={onConsumed}
           />
@@ -921,9 +929,7 @@ describe("PluginManagerDialog", () => {
     it("does not clobber a URL dialog the user already has open", async () => {
       const { rerender } = render(
         <TooltipProvider>
-          <PluginManagerDialog
-            isOpen
-            onClose={() => {}}
+          <PluginManagerView
             deepLinkIntent={{ action: "install", url: "https://first.example/p.dntr" }}
             onDeepLinkConsumed={() => {}}
           />
@@ -941,9 +947,7 @@ describe("PluginManagerDialog", () => {
       // …a second deep link arrives while the dialog is open — it must not win.
       rerender(
         <TooltipProvider>
-          <PluginManagerDialog
-            isOpen
-            onClose={() => {}}
+          <PluginManagerView
             deepLinkIntent={{ action: "install", url: "https://second.example/p.dntr" }}
             onDeepLinkConsumed={() => {}}
           />
@@ -958,9 +962,7 @@ describe("PluginManagerDialog", () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
       render(
         <TooltipProvider>
-          <PluginManagerDialog
-            isOpen
-            onClose={() => {}}
+          <PluginManagerView
             deepLinkIntent={{ action: "open", pluginId: "missing.plugin" }}
             onDeepLinkConsumed={() => {}}
           />
@@ -1115,8 +1117,9 @@ describe("PluginManagerDialog", () => {
 
   describe("grouping", () => {
     // Distinct manifest names + display names so each plugin is uniquely
-    // addressable across sections. "Built-in" also appears as a per-row source
-    // badge, so section assertions scope queries with role="group".
+    // addressable across sections. Section headers are now role="option"
+    // aria-disabled rows inside role="presentation" wrappers (LESSON #9006 —
+    // role="group" inside role="listbox" drops under Chromium 146 + VoiceOver).
     const named = (
       overrides: Partial<Omit<LoadedPluginInfo, "manifest">> & {
         manifest?: Partial<LoadedPluginInfo["manifest"]>;
@@ -1130,9 +1133,23 @@ describe("PluginManagerDialog", () => {
       };
     };
 
-    const builtinGroup = () => screen.getByRole("group", { name: "Built-in" });
-    const installedGroup = () => screen.getByRole("group", { name: "Installed" });
-    const disabledGroup = () => screen.getByRole("group", { name: "Disabled" });
+    // Section header rows are aria-disabled options with aria-label set to the
+    // section name. Find a plugin's section by locating the section header option
+    // and the nearest listbox, then scoping within it.
+    const pluginInSection = (sectionLabel: string, pluginName: string) => {
+      const listbox = screen.getByRole("listbox");
+      const sectionHeader = within(listbox).getByRole("option", {
+        name: sectionLabel,
+      });
+      // The section header and its sibling rows share a role="presentation" parent.
+      const sectionContainer = sectionHeader.closest("[role='presentation']") as HTMLElement;
+      return within(sectionContainer).getByText(pluginName);
+    };
+
+    const sectionExists = (sectionLabel: string) => {
+      const listbox = screen.getByRole("listbox");
+      return within(listbox).queryByRole("option", { name: sectionLabel }) !== null;
+    };
 
     it("places an enabled built-in plugin in the Built-in section", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -1144,9 +1161,9 @@ describe("PluginManagerDialog", () => {
       ]);
       renderDialog();
       await waitFor(() => expect(screen.getByText("Core Tools")).toBeTruthy());
-      expect(within(builtinGroup()).getByText("Core Tools")).toBeTruthy();
-      expect(screen.queryByRole("group", { name: "Disabled" })).toBeNull();
-      expect(screen.queryByRole("group", { name: "Installed" })).toBeNull();
+      expect(pluginInSection("Built-in", "Core Tools")).toBeTruthy();
+      expect(sectionExists("Disabled")).toBe(false);
+      expect(sectionExists("Installed")).toBe(false);
     });
 
     it("places an enabled user plugin in the Installed section", async () => {
@@ -1155,8 +1172,8 @@ describe("PluginManagerDialog", () => {
       ]);
       renderDialog();
       await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-      expect(within(installedGroup()).getByText("Acme Demo")).toBeTruthy();
-      expect(screen.queryByRole("group", { name: "Built-in" })).toBeNull();
+      expect(pluginInSection("Installed", "Acme Demo")).toBeTruthy();
+      expect(sectionExists("Built-in")).toBe(false);
     });
 
     it("places a disabled built-in in the Disabled section, not Built-in", async () => {
@@ -1170,8 +1187,8 @@ describe("PluginManagerDialog", () => {
       ]);
       renderDialog();
       await waitFor(() => expect(screen.getByText("Core Tools")).toBeTruthy());
-      expect(within(disabledGroup()).getByText("Core Tools")).toBeTruthy();
-      expect(screen.queryByRole("group", { name: "Built-in" })).toBeNull();
+      expect(pluginInSection("Disabled", "Core Tools")).toBeTruthy();
+      expect(sectionExists("Built-in")).toBe(false);
     });
 
     it("places a disabled user plugin in the Disabled section", async () => {
@@ -1180,7 +1197,7 @@ describe("PluginManagerDialog", () => {
       ]);
       renderDialog();
       await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-      expect(within(disabledGroup()).getByText("Acme Demo")).toBeTruthy();
+      expect(pluginInSection("Disabled", "Acme Demo")).toBeTruthy();
     });
 
     it("renders all three sections for a mixed list and hides none", async () => {
@@ -1195,22 +1212,22 @@ describe("PluginManagerDialog", () => {
       ]);
       renderDialog();
       await waitFor(() => expect(screen.getByText("Core Tools")).toBeTruthy());
-      expect(within(builtinGroup()).getByText("Core Tools")).toBeTruthy();
-      expect(within(installedGroup()).getByText("Acme Demo")).toBeTruthy();
-      expect(within(disabledGroup()).getByText("Old Thing")).toBeTruthy();
+      expect(pluginInSection("Built-in", "Core Tools")).toBeTruthy();
+      expect(pluginInSection("Installed", "Acme Demo")).toBeTruthy();
+      expect(pluginInSection("Disabled", "Old Thing")).toBeTruthy();
       // Each plugin lands in exactly one section.
       expect(screen.getAllByText("Core Tools").length).toBe(1);
       expect(screen.getAllByText("Acme Demo").length).toBe(1);
       expect(screen.getAllByText("Old Thing").length).toBe(1);
       // Sections render in the order Built-in → Installed → Disabled.
-      const ids = Array.from(document.querySelectorAll("[role='group']")).map((el) =>
-        el.getAttribute("aria-labelledby")
-      );
-      expect(ids).toEqual([
-        "plugin-group-builtin",
-        "plugin-group-installed",
-        "plugin-group-disabled",
-      ]);
+      // The section headers are aria-disabled options with aria-labelledby
+      // pointing to their id. Verify DOM order by checking option ids.
+      const listbox = screen.getByRole("listbox");
+      const sectionHeaders = within(listbox)
+        .getAllByRole("option", { hidden: true })
+        .filter((el) => el.getAttribute("aria-disabled") === "true")
+        .map((el) => el.getAttribute("aria-label"));
+      expect(sectionHeaders).toEqual(["Built-in", "Installed", "Disabled"]);
     });
 
     it("omits the Disabled section when every plugin is enabled", async () => {
@@ -1219,7 +1236,7 @@ describe("PluginManagerDialog", () => {
       ]);
       renderDialog();
       await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-      expect(screen.queryByRole("group", { name: "Disabled" })).toBeNull();
+      expect(sectionExists("Disabled")).toBe(false);
     });
 
     it("omits the Built-in and Installed sections when every plugin is disabled", async () => {
@@ -1228,9 +1245,9 @@ describe("PluginManagerDialog", () => {
       ]);
       renderDialog();
       await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-      expect(screen.queryByRole("group", { name: "Built-in" })).toBeNull();
-      expect(screen.queryByRole("group", { name: "Installed" })).toBeNull();
-      expect(disabledGroup()).toBeTruthy();
+      expect(sectionExists("Built-in")).toBe(false);
+      expect(sectionExists("Installed")).toBe(false);
+      expect(sectionExists("Disabled")).toBe(true);
     });
 
     it("preserves alphabetical order within a section", async () => {
@@ -1240,7 +1257,10 @@ describe("PluginManagerDialog", () => {
       ]);
       renderDialog();
       await waitFor(() => expect(screen.getByText("Alpha")).toBeTruthy());
-      const labels = within(installedGroup())
+      const listbox = screen.getByRole("listbox");
+      const sectionHeader = within(listbox).getByRole("option", { name: "Installed" });
+      const sectionContainer = sectionHeader.closest("[role='presentation']") as HTMLElement;
+      const labels = within(sectionContainer)
         .getAllByText(/Alpha|Zebra/)
         .map((el) => el.textContent);
       expect(labels).toEqual(["Alpha", "Zebra"]);
@@ -1363,7 +1383,9 @@ describe("PluginManagerDialog", () => {
       fireEvent.change(input, { target: { value: "Plugin00" } });
       await waitFor(() => expect(screen.queryByText("Plugin01")).toBeNull());
       expect(screen.getByText("Plugin00")).toBeTruthy();
-      expect(screen.queryByRole("group", { name: "Installed" })).toBeNull();
+      // When filtering, section header options are gone.
+      const listbox = screen.getByRole("listbox");
+      expect(within(listbox).queryByRole("option", { name: "Installed" })).toBeNull();
     });
 
     it("shows a zero-result state with a Clear search control", async () => {

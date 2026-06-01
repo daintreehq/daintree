@@ -33,7 +33,6 @@ export type NavigationDirection = "up" | "down" | "left" | "right";
 export interface ActionCallbacks {
   onOpenSettings: () => void;
   onOpenSettingsTab: (target: SettingsNavTarget) => void;
-  onOpenPluginManager: () => void;
   onToggleSidebar: () => void;
   onToggleFocusMode: () => void;
   onFocusRegionNext: () => void;

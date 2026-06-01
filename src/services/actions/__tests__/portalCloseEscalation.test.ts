@@ -20,7 +20,6 @@ async function createRegistry() {
   return createActionDefinitions({
     onOpenSettings: () => {},
     onOpenSettingsTab: () => {},
-    onOpenPluginManager: () => {},
     onToggleSidebar: () => {},
     onToggleFocusMode: () => {},
     onFocusRegionNext: () => {},

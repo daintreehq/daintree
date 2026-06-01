@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { PluginDetailPane } from "../PluginDetailPane";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -71,8 +71,10 @@ function withCapabilities(
   };
 }
 
+// Capabilities now live behind the "Permissions" subtab in the graduated
+// tabbed detail pane (#9558); activate it so the permission rows render.
 function renderPane(plugin: LoadedPluginInfo) {
-  return render(
+  const result = render(
     <TooltipProvider>
       <PluginDetailPane
         plugin={plugin}
@@ -83,6 +85,8 @@ function renderPane(plugin: LoadedPluginInfo) {
       />
     </TooltipProvider>
   );
+  fireEvent.click(screen.getByRole("tab", { name: "Permissions" }));
+  return result;
 }
 
 describe("PluginDetailPane capabilities", () => {

@@ -1,4 +1,4 @@
-import { Profiler, Suspense, lazy, useCallback, useEffect, useState } from "react";
+import { Profiler, Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import {
   isElectronAvailable,
@@ -209,11 +209,11 @@ const LazyShortcutReferenceDialog = lazy(() =>
   preloadShortcutReferenceDialog().then((m) => ({ default: m.ShortcutReferenceDialog }))
 );
 
-function preloadPluginManagerDialog() {
-  return import("./components/Plugin/PluginManagerDialog");
+function preloadPluginManagerView() {
+  return import("./components/Plugin/PluginManagerView");
 }
-const LazyPluginManagerDialog = lazy(() =>
-  preloadPluginManagerDialog().then((m) => ({ default: m.PluginManagerDialog }))
+const LazyPluginManagerView = lazy(() =>
+  preloadPluginManagerView().then((m) => ({ default: m.PluginManagerView }))
 );
 
 function preloadOnboardingFlow() {
@@ -322,6 +322,7 @@ import {
   usePaletteStore,
   useNotificationSettingsStore,
   usePreferencesStore,
+  usePluginManagerStore,
 } from "./store";
 import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
 // Eager side-effect import: registers the GitHub plugin's builtin view slots
@@ -464,13 +465,26 @@ function AppInner() {
 
   useThemeBrowserSettingsBridge(isSettingsOpen, setIsSettingsOpen);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
-  const [isPluginManagerOpen, setIsPluginManagerOpen] = useState(false);
-  // Keep the dialog mounted after its first open so the plugin list and any
+  // The plugin manager graduated from a modal to a first-class view (#9558);
+  // visibility now lives in usePluginManagerStore so the `app.pluginManager`
+  // action and `daintree://` deep links can open it without prop-drilling.
+  const isPluginManagerOpen = usePluginManagerStore((s) => s.isOpen);
+  // Keep the view mounted after its first open so the plugin list and any
   // pending operation state survive a close/reopen (mirrors SettingsDialog).
   const [hasOpenedPluginManager, setHasOpenedPluginManager] = useState(false);
   useEffect(() => {
     if (isPluginManagerOpen) setHasOpenedPluginManager(true);
   }, [isPluginManagerOpen]);
+  // Close Settings when the manager opens so the two surfaces don't stack —
+  // covers both entry points (the `app.pluginManager` action dispatched from
+  // the Plugins settings tab, and the deep-link path below). Mirrors the
+  // theme-browser <-> Settings coordination in useThemeBrowserSettingsBridge.
+  const prevPluginManagerOpenRef = useRef(false);
+  useEffect(() => {
+    const wasOpen = prevPluginManagerOpenRef.current;
+    prevPluginManagerOpenRef.current = isPluginManagerOpen;
+    if (!wasOpen && isPluginManagerOpen) setIsSettingsOpen(false);
+  }, [isPluginManagerOpen, setIsSettingsOpen]);
   const isThemePaletteOpen = usePaletteStore((state) => state.activePaletteId === "theme");
   const isLogLevelPaletteOpen = usePaletteStore((state) => state.activePaletteId === "log-level");
   const {
@@ -524,11 +538,10 @@ function AppInner() {
   const pluginDeepLink = usePluginDeepLink(isStateLoaded);
   useEffect(() => {
     if (!pluginDeepLink.intent) return;
-    // Close Settings so the two modals don't stack when the deep link arrives
-    // while Settings is open (mirrors the `onOpenPluginManager` action).
-    setIsSettingsOpen(false);
-    setIsPluginManagerOpen(true);
-  }, [pluginDeepLink.intent, setIsSettingsOpen, setIsPluginManagerOpen]);
+    // Opening the manager also closes Settings via the open-transition effect
+    // above, so the two surfaces don't stack when the deep link arrives.
+    usePluginManagerStore.getState().open();
+  }, [pluginDeepLink.intent]);
   // The skeleton is z-index 9999 and intercepts pointer events. The crash
   // recovery dialog is rendered before hydration completes, so without this
   // the dialog would be visible but unclickable until hydration finishes
@@ -574,7 +587,7 @@ function AppInner() {
       void preloadSendToAgentPalette();
       void preloadQuickCreatePalette();
       void preloadLogLevelPalette();
-      void preloadPluginManagerDialog();
+      void preloadPluginManagerView();
       import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
       // Warm the FileViewerModal/DiffViewer chunk split out of the eager
@@ -659,12 +672,6 @@ function AppInner() {
       void projectSwitcherPalette.removeProject(projectId);
     },
     onOpenShortcuts: () => setIsShortcutsOpen(true),
-    onOpenPluginManager: () => {
-      // Closing Settings keeps the two modals from stacking when the manager is
-      // opened from the Plugins settings tab; it's a no-op from the app menu.
-      setIsSettingsOpen(false);
-      setIsPluginManagerOpen(true);
-    },
     onLaunchAgent: async (agentId, options) => {
       return launchAgent(agentId, options);
     },
@@ -1247,14 +1254,13 @@ function AppInner() {
 
             <ErrorBoundary
               variant="component"
-              componentName="PluginManagerDialog"
+              componentName="PluginManagerView"
               resetKeys={[Number(isPluginManagerOpen)]}
+              onError={() => usePluginManagerStore.getState().close()}
             >
               {(isPluginManagerOpen || hasOpenedPluginManager) && (
                 <Suspense fallback={null}>
-                  <LazyPluginManagerDialog
-                    isOpen={isPluginManagerOpen}
-                    onClose={() => setIsPluginManagerOpen(false)}
+                  <LazyPluginManagerView
                     deepLinkIntent={pluginDeepLink.intent}
                     onDeepLinkConsumed={pluginDeepLink.clear}
                   />
