@@ -42,6 +42,7 @@ function makePlugin(overrides: {
     disabled: overrides.disabled ?? false,
     updateAvailable: null,
     devMode: false,
+    pluginDanger: "safe",
   };
 }
 
