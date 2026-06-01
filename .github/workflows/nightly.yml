@@ -408,7 +408,7 @@ jobs:
 
   # Nightly runs the safety net without paying the Windows full-suite cost:
   # on the scheduled trigger (no `inputs.platform`), `core` and `online` run
-  # across macOS, Linux, AND Windows; the six full-* domain buckets and the
+  # across macOS, Linux, AND Windows; the seven full-* domain buckets and the
   # memory-leak `nightly` project stay on non-windows because a Windows full
   # run takes ~5–6 hours. Windows confidence for release comes from core,
   # online, and the Windows build/package jobs.
@@ -427,10 +427,10 @@ jobs:
       json_report: true
       emit_classification: true
 
-  # Six domain buckets, each a reusable-workflow call expanded across the OS
+  # Seven domain buckets, each a reusable-workflow call expanded across the OS
   # matrix inside e2e.yml. e2e.yml auto-shards every full-* suite 4 ways
-  # (#8053), so with platform=non-windows that's 6 buckets × 2 OSes × 4 shards
-  # = 48 independent jobs running in parallel — a hung shard takes out 1/4 of
+  # (#8053), so with platform=non-windows that's 7 buckets × 2 OSes × 4 shards
+  # = 56 independent jobs running in parallel — a hung shard takes out 1/4 of
   # one bucket instead of stalling the whole nightly. No knob needed here:
   # sharding is keyed on `suite` inside e2e.yml. The e2e-nightly call below
   # passes suite=nightly, which stays unsharded (serialized leak heuristic).
@@ -446,6 +446,7 @@ jobs:
           - full-platform
           - full-panels
           - full-resilience
+          - full-plugins
     uses: ./.github/workflows/e2e.yml
     with:
       suite: ${{ matrix.suite }}

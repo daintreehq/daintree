@@ -10,6 +10,7 @@ const BUCKET_LABELS = [
   "full-platform",
   "full-panels",
   "full-resilience",
+  "full-plugins",
   "online",
   "nightly",
 ];

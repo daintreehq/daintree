@@ -115,6 +115,7 @@ jobs:
           - full-platform
           - full-panels
           - full-resilience
+          - full-plugins
     uses: ./.github/workflows/e2e.yml
     with:
       suite: ${{ matrix.suite }}

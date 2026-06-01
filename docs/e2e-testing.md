@@ -11,10 +11,11 @@ Playwright is installed as a dev dependency (`@playwright/test`). No browser dow
 ```bash
 npm run test:e2e                   # Run every Playwright project
 npm run test:e2e:core              # Lightweight release-gating smoke
-npm run test:e2e:full              # Run all six full-* buckets
+npm run test:e2e:full              # Run all seven full-* buckets
 npm run test:e2e:full-terminal     # Run a single bucket — substitute any of:
                                    #   full-terminal full-worktree full-presets
                                    #   full-platform full-panels full-resilience
+                                   #   full-plugins
 npm run test:e2e:online            # Claude/OpenCode-dependent online tests
 npm run test:e2e:nightly           # Soak / memory-leak nightly tests
 npx playwright test e2e/full/terminal/core-terminal-search.spec.ts  # Single file
@@ -23,7 +24,7 @@ PWDEBUG=1 npx playwright test --project=core                         # Debug mod
 
 ## Test Suites
 
-Tests are split into ten Playwright projects:
+Tests are split into eleven Playwright projects:
 
 - **core** — Lightweight deterministic release-gate smoke (5 specs). This is the Playwright e2e smoke suite (`npm run test:e2e:core`), distinct from the Electron stability soak (`npm run test:smoke`). See [test:smoke vs Playwright core](#testsmoke-vs-playwright-core) below.
 - **full-terminal** — PTY mechanics, scrollback, search, layout, recipes, output flood, context injection, fleet broadcast.
@@ -32,6 +33,7 @@ Tests are split into ten Playwright projects:
 - **full-platform** — Settings, persistence, a11y, keyboard, OS-shell surfaces, oauth, security.
 - **full-panels** — Browser, dev-preview, portal, review hub, file viewer, drag-drop, action palette, toolbar chrome.
 - **full-resilience** — Errors, IPC, crashes, races, perf budgets, diagnostics.
+- **full-plugins** — Plugin manager UI, plugin lifecycle (enable/disable, restart gating), and manifest contribution rendering against the sideloaded sample plugin.
 - **online** — Tests that interact with real agent CLIs (requires `ANTHROPIC_API_KEY`).
 - **nightly** — Long-running memory-leak detection (workers=1, no retries).
 - **screenshots** — Marketing screenshot pipeline. Run on demand via `screenshots.yml`, not part of the PR/release gates.
@@ -51,6 +53,7 @@ Tests are split into ten Playwright projects:
 | full-platform   | `./e2e/full/platform`   | 2            | 1-2     |
 | full-panels     | `./e2e/full/panels`     | 2            | 1-2     |
 | full-resilience | `./e2e/full/resilience` | 2            | 1-2     |
+| full-plugins    | `./e2e/full/plugins`    | 2            | 1-2     |
 | online          | `./e2e/online`          | 1            | 1-2     |
 | nightly         | `./e2e/nightly`         | 0            | 1       |
 | screenshots     | `./e2e/screenshots`     | 0            | 1-2     |
@@ -146,7 +149,7 @@ Components have `data-testid` and `data-worktree-branch` attributes for reliable
 
 ### `e2e.yml` (unified runner)
 
-A single reusable workflow runs every E2E suite. Pick one via the `suite` input: `full` (meta — all six buckets sequentially on one runner; workflow_dispatch default), `core`, any of the six `full-*` buckets (`full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`), `online`, or `nightly`.
+A single reusable workflow runs every E2E suite. Pick one via the `suite` input: `full` (meta — all seven buckets sequentially on one runner; workflow_dispatch default), `core`, any of the seven `full-*` buckets (`full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`, `full-plugins`), `online`, or `nightly`.
 
 - **Triggers:** workflow_dispatch, workflow_call
 - **Matrix:** macOS-14, ubuntu-22.04, windows-latest (selectable via `platform`)

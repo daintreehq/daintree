@@ -12,6 +12,7 @@ const VALID_PROJECTS = new Set([
   "full-platform",
   "full-panels",
   "full-resilience",
+  "full-plugins",
   "online",
   "nightly",
 ]);

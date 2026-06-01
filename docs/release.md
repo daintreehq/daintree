@@ -68,7 +68,7 @@ gh workflow run release-linux.yml   --ref develop -f dry_run=true
 gh workflow run release-windows.yml --ref develop -f dry_run=true
 ```
 
-Each dry run executes every gate and build job for its OS — checks, unit tests, that OS's E2E buckets (`core`, `online`, and all six auto-sharded `full-*` buckets — see #8053), and that OS's `build-daintree` job (macOS sign + notarize; Linux; Windows including Store package + WACK) — but **skips** the side effects that matter for an actual release:
+Each dry run executes every gate and build job for its OS — checks, unit tests, that OS's E2E buckets (`core`, `online`, and all seven auto-sharded `full-*` buckets — see #8053), and that OS's `build-daintree` job (macOS sign + notarize; Linux; Windows including Store package + WACK) — but **skips** the side effects that matter for an actual release:
 
 - No R2 upload (binaries or metadata)
 - No Microsoft Store submission (`Submit to Microsoft Store` is gated by `inputs.dry_run != true`)

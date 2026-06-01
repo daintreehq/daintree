@@ -6,7 +6,7 @@ name: E2E Tests
 # the run.
 run-name: ${{ inputs.suite || 'core' }} · ${{ inputs.platform || 'all' }}${{ inputs.test_file && format(' · {0}', inputs.test_file) || '' }}${{ inputs.shard && inputs.shard_total && format(' · shard {0}/{1}', inputs.shard, inputs.shard_total) || '' }}
 
-# Unified runner for every E2E suite: core smoke, the six full-* domain
+# Unified runner for every E2E suite: core smoke, the seven full-* domain
 # buckets, online (agent integration), and nightly (memory-leak detection).
 # Pick the suite via the `suite` input; everything else (OpenCode install,
 # ANTHROPIC_API_KEY, --workers=1 for nightly) is conditional on that choice.
@@ -37,7 +37,7 @@ on:
         type: string
         default: ""
       suite:
-        description: "Suite to run. `full` is a meta-suite that runs all six full-* buckets sequentially on one runner — handy for ad-hoc validation. Release and nightly fan the buckets out across separate runners instead."
+        description: "Suite to run. `full` is a meta-suite that runs all seven full-* buckets sequentially on one runner — handy for ad-hoc validation. Release and nightly fan the buckets out across separate runners instead."
         type: choice
         default: "full"
         options:
@@ -49,6 +49,7 @@ on:
           - full-platform
           - full-panels
           - full-resilience
+          - full-plugins
           - online
           - nightly
       shard:
@@ -115,7 +116,7 @@ env:
 jobs:
   # Determine which platforms to run on, and fan each one out into N shards.
   #
-  # Sharding (#8053): the six full-* domain buckets and the `full` meta-suite
+  # Sharding (#8053): the seven full-* domain buckets and the `full` meta-suite
   # split their spec list across SHARD_TOTAL parallel runners via Playwright's
   # native `--shard`. A 39-minute serial Windows bucket becomes ~10min
   # wall-time, and a hung shard takes out 1/N of the bucket instead of the
@@ -234,7 +235,7 @@ jobs:
     # full-terminal still contains a single serial recipes spec that Playwright
     # cannot split across shards, so it keeps the standard 90min E2E window.
     # nightly is unsharded and its serialized leak suite legitimately runs
-    # long, so it keeps the generous ceiling; `full` (meta — all six buckets on
+    # long, so it keeps the generous ceiling; `full` (meta — all seven buckets on
     # one runner) gets a wider window than a single full-* shard.
     timeout-minutes: ${{ (inputs.suite == 'nightly' && 180) || (inputs.suite == 'full' && 120) || (inputs.suite == 'full-terminal' && matrix.name == 'Windows' && 90) || (startsWith(inputs.suite, 'full-') && 45) || 90 }}
 
@@ -380,11 +381,11 @@ jobs:
         shell: bash
         run: |
           SUITE="${{ inputs.suite || 'core' }}"
-          # `full` is a meta-suite that fans across all six full-* buckets in
+          # `full` is a meta-suite that fans across all seven full-* buckets in
           # one runner. Each Playwright project becomes its own --project flag.
           # Single-bucket / single-test runs use one --project flag instead.
           if [ "$SUITE" = "full" ]; then
-            PROJECT_ARGS="--project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience"
+            PROJECT_ARGS="--project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience --project=full-plugins"
           else
             PROJECT_ARGS="--project=$SUITE"
           fi

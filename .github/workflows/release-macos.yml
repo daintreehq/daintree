@@ -91,7 +91,7 @@ jobs:
       suite: core
       platform: macos
 
-  # The six full-* domain buckets. e2e.yml auto-shards each one 4 ways
+  # The seven full-* domain buckets. e2e.yml auto-shards each one 4 ways
   # (#8053), so a single hung Windows-style spec — here, a hung macOS spec —
   # takes out 1/4 of one bucket instead of the whole macOS release.
   e2e-full-gate:
@@ -106,6 +106,7 @@ jobs:
           - full-platform
           - full-panels
           - full-resilience
+          - full-plugins
     uses: ./.github/workflows/e2e.yml
     with:
       suite: ${{ matrix.suite }}

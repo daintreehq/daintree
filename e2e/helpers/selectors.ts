@@ -287,4 +287,16 @@ export const SEL = {
     defaultOption: '[data-testid="preset-option-default"]',
     customPresetOption: '[data-testid="preset-selector-listbox"] [role="option"]',
   },
+  plugin: {
+    manager: '[data-testid="plugin-manager-view"]',
+    back: '[aria-label="Back"]',
+    close: '[aria-label="Close plugin manager"]',
+    list: '[role="listbox"][aria-label="Installed plugins"]',
+    option: '[role="listbox"][aria-label="Installed plugins"] [role="option"]',
+    filterInput: '[aria-label="Filter plugins"]',
+    urlInput: '[aria-label="Plugin URL"]',
+    tabOverview: '[role="tab"][data-tab="overview"]',
+    tabSettings: '[role="tab"][data-tab="settings"]',
+    tabPermissions: '[role="tab"][data-tab="capabilities"]',
+  },
 } as const;
