@@ -74,6 +74,7 @@ import { SidebarWorktreeRow } from "./SidebarWorktreeRow";
 import { WorktreeLoadErrorBanner } from "./WorktreeLoadErrorBanner";
 import { StaticWorktreeRow } from "./StaticWorktreeRow";
 import { WorktreeCardPlaceholder } from "./WorktreeCardPlaceholder";
+import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useScrollIndicator } from "./useScrollIndicator";
 import { useRecipeDialogState } from "./useRecipeDialogState";
 import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
@@ -412,14 +413,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // 1Hz tick that drives the escalated "Reconnecting… last updated X ago"
   // copy. The store holds the start timestamp; this state forces a render so
   // `formatRelativeTime(reconnectingAt)` recomputes against the latest clock.
-  // Effect re-runs on every new disconnect via `reconnectingAt` dep, so the
-  // baseline is always fresh — no stale-closure risk.
+  // Visibility-gated so the tick pauses while the window is hidden (Chromium
+  // throttles hidden-tab intervals to ~1/min) and snaps back on restore. The
+  // callback reads no captured timestamp, so there's no stale-closure risk
+  // despite the hook only depending on [intervalMs, enabled].
   const [, setReconnectTick] = useState(0);
-  useEffect(() => {
-    if (!isReconnecting || reconnectingAt == null) return;
-    const id = setInterval(() => setReconnectTick((n) => n + 1), 1000);
-    return () => clearInterval(id);
-  }, [isReconnecting, reconnectingAt]);
+  useVisibilityAwareInterval(
+    () => setReconnectTick((n) => n + 1),
+    1000,
+    isReconnecting && reconnectingAt != null
+  );
   const showReconnectingEscalated =
     isReconnecting &&
     reconnectingAt !== null &&

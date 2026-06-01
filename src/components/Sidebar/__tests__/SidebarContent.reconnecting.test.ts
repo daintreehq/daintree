@@ -28,4 +28,16 @@ describe("SidebarContent reconnecting indicator — issue #8074", () => {
     expect(reconnectingSpan).not.toBeNull();
     expect(source).not.toMatch(/\{isReconnecting && \(\s*<span/);
   });
+
+  it("drives the reconnect tick via useVisibilityAwareInterval, not a bare setInterval — issue #9583", () => {
+    // Chromium intensively throttles hidden-tab setInterval to ~1/min after 10s,
+    // which corrupts the "last updated X ago" relative-time display. The tick
+    // must pause while hidden and snap back on restore via the visibility hook.
+    expect(source).toMatch(/import \{ useVisibilityAwareInterval \}/);
+    expect(source).toMatch(
+      /useVisibilityAwareInterval\(\s*\(\) => setReconnectTick\(\(n\) => n \+ 1\),\s*1000,\s*isReconnecting && reconnectingAt != null\s*\)/
+    );
+    // The old ungated reconnect interval must be gone.
+    expect(source).not.toMatch(/setInterval\(\(\) => setReconnectTick/);
+  });
 });
