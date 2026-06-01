@@ -281,13 +281,15 @@ describe("AppLayout portal viewport coverage — issue #6629", () => {
     );
   });
 
-  it("disables the Portal chrome when the ThemeBrowser overlay is open", () => {
+  it("disables the Portal chrome when a full-screen overlay is open", () => {
     // Body-portaling moved the PortalDock out of the inert main-content
     // wrapper, so the inert prop must be applied directly to the new wrapper.
     // Without this, the Portal tabs / toolbar / resize handle remain clickable
     // through the ThemeBrowser overlay (Portal is z-50, ThemeBrowser is z-40).
+    // Since #9558 the same guard also covers the plugin-manager overlay via the
+    // shared `chromeInert` signal.
     expect(source).toMatch(
-      /\{layout\.portalOpen &&\s*\n\s*createPortal\([\s\S]+?isThemeBrowserOpen \? \{ inert: true \} : \{\}[\s\S]+?<PortalDock \/>/
+      /\{layout\.portalOpen &&\s*\n\s*createPortal\([\s\S]+?chromeInert \? \{ inert: true \} : \{\}[\s\S]+?<PortalDock \/>/
     );
   });
 });
