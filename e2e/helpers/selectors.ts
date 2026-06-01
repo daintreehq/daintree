@@ -194,6 +194,34 @@ export const SEL = {
     fileListToggle: '[data-testid="review-hub-file-list-toggle"]',
     noStagedFiles: 'text="Nothing staged"',
     noUnstagedChanges: 'text="All changes staged"',
+    commitAndPushButton: (count: number) => `button:has-text("Commit & Push (${count})")`,
+    fileDiffButton: (path: string) => `[aria-label="View diff: ${path}"]`,
+    // CommitPanel push confirm dialog (rendered in a portal, locate on `window`).
+    pushConfirmMessage: '[data-testid="commit-panel-push-confirm-message"]',
+    pushConfirmBranch: '[data-testid="commit-panel-push-confirm-branch"]',
+    pushConfirmDontAsk: '[data-testid="commit-panel-push-confirm-dont-ask"]',
+    // Push-error recovery banner + its CTAs.
+    pushError: '[data-testid="review-hub-push-error"]',
+    pushErrorCta: '[data-testid="review-hub-push-error-cta"]',
+    pushErrorSecondaryCta: '[data-testid="review-hub-push-error-secondary-cta"]',
+    // Force-push confirm dialog (portal).
+    forcePushCommitRow: '[data-testid="force-push-commit-row"]',
+    forcePushCommitsLoading: '[data-testid="force-push-commits-loading"]',
+    forcePushCommitsRetry: '[data-testid="force-push-commits-retry"]',
+    // Conflict panel.
+    conflictPanel: '[data-testid="conflict-panel"]',
+    conflictAbort: '[data-testid="conflict-abort"]',
+    conflictContinue: '[data-testid="conflict-continue"]',
+    conflictRebaseProgress: '[data-testid="conflict-rebase-progress"]',
+    conflictRebaseSequence: '[data-testid="conflict-rebase-sequence"]',
+    conflictResolvedToggle: '[data-testid="conflict-resolved-toggle"]',
+    conflictTakeOurs: (path: string) => `[aria-label="Take ours for ${path}"]`,
+    conflictTakeTheirs: (path: string) => `[aria-label="Take theirs for ${path}"]`,
+    conflictMarkResolved: (path: string) => `[aria-label="Mark ${path} as resolved"]`,
+  },
+  confirmDialog: {
+    confirm: '[data-confirm-role="confirm"]',
+    cancel: '[data-confirm-role="cancel"]',
   },
   welcome: {
     openFolder: 'button:has-text("Open folder")',
