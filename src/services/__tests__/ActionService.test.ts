@@ -1021,6 +1021,28 @@ describe("ActionService", () => {
       );
     });
 
+    it("isolates examples[].args from caller mutations", () => {
+      const action: ActionDefinition = {
+        id: "test.examples" as ActionId,
+        title: "Test Examples Action",
+        description: "An action with examples for nested mutation-isolation testing.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        examples: [{ args: { key: "value" }, description: "Example invocation" }],
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      service.register(action);
+      // A shallow array copy ([...examples]) would leave examples[0].args aliased
+      // to the static definition, so this nested write would leak (issue #9569).
+      const first = service.get("test.examples" as ActionId)!;
+      (first.examples![0]!.args as Record<string, unknown>).key = "mutated";
+      const second = service.get("test.examples" as ActionId)!;
+      expect((second.examples![0]!.args as Record<string, unknown>).key).toBe("value");
+    });
+
     it("omits examples and dangerRationale from manifest entry when not defined", () => {
       const action: ActionDefinition = {
         id: "test.noexamples" as ActionId,
@@ -1928,8 +1950,93 @@ describe("ActionService", () => {
 
       const first = service.list()[0]!.inputSchema as Record<string, unknown>;
       first.poisoned = "x";
+      // Nested mutation: a shallow copy would leave `properties` aliased to the
+      // cache, so this write would leak across reads (issue #9569).
+      (first.properties as Record<string, unknown>).poisoned = "x";
       const second = service.list()[0]!.inputSchema as Record<string, unknown>;
       expect(second.poisoned).toBeUndefined();
+      expect((second.properties as Record<string, unknown>).poisoned).toBeUndefined();
+    });
+
+    it("isolates outputSchema from caller mutations", () => {
+      const argsSchema = z.object({ count: z.number() });
+      const resultSchema = z.object({ total: z.number() });
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test",
+        description:
+          "Test action for validating ActionService definition invariant warnings and registration behavior.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        argsSchema,
+        resultSchema,
+        mcpOutputSchema: true,
+        run: vi.fn().mockResolvedValue({ total: 1 }),
+      });
+
+      const first = service.list()[0]!.outputSchema as Record<string, unknown>;
+      (first.properties as Record<string, unknown>).poisoned = "x";
+      const second = service.list()[0]!.outputSchema as Record<string, unknown>;
+      expect((second.properties as Record<string, unknown>).poisoned).toBeUndefined();
+    });
+
+    it("isolates a raw plugin inputSchema from source-object mutation", () => {
+      const rawInputSchema = {
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+      };
+      const action = {
+        id: "acme.plugin.raw" as ActionId,
+        title: "Raw",
+        description:
+          "Plugin action with a raw input schema for mutation-isolation testing of the cache.",
+        category: "plugin",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        rawInputSchema,
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+      service.register(action as unknown as ActionDefinition);
+
+      // Trigger schema compilation, then mutate the plugin's own source object.
+      service.get("acme.plugin.raw" as ActionId);
+      (rawInputSchema.properties as Record<string, unknown>).poisoned = { type: "string" };
+
+      const entry = service.get("acme.plugin.raw" as ActionId);
+      expect(
+        (entry!.inputSchema as { properties: Record<string, unknown> }).properties.poisoned
+      ).toBeUndefined();
+    });
+
+    it("does not freeze a plugin's own raw schema object (clones before DEV freeze)", () => {
+      const rawInputSchema = {
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+      };
+      const action = {
+        id: "acme.plugin.raw" as ActionId,
+        title: "Raw",
+        description:
+          "Plugin action with a raw input schema, verifying the source object stays writable.",
+        category: "plugin",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        rawInputSchema,
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+      service.register(action as unknown as ActionDefinition);
+
+      // Compilation must clone before the DEV freeze, leaving the source writable.
+      service.get("acme.plugin.raw" as ActionId);
+      expect(() => {
+        (rawInputSchema.properties as Record<string, unknown>).extra = { type: "number" };
+      }).not.toThrow();
     });
 
     it("evicts cache entry on unregister so re-register picks up new schema", () => {
