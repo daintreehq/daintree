@@ -705,19 +705,19 @@ describe("McpServerService", () => {
       openWorldHint: true,
     });
 
-    // Override flips readOnly/idempotent on; destructiveHint and openWorldHint
-    // now come from the spec-conservative true defaults.
+    // Override flips readOnly/idempotent on; destructiveHint derives from
+    // danger: "safe" → false; openWorldHint defaults to true.
     expect(readOnlyCmd?.annotations).toEqual({
       title: "Read Only Command",
       readOnlyHint: true,
       idempotentHint: true,
-      destructiveHint: true,
+      destructiveHint: false,
       openWorldHint: true,
     });
 
-    // Explicit `false` overrides must win over kind-derived defaults —
+    // Explicit `false` overrides must win over danger-derived defaults —
     // this would silently break if `??` were ever swapped for `||`.
-    // destructiveHint is false for queries (!isQuery); openWorldHint defaults
+    // destructiveHint is false for queries (danger: "safe"); openWorldHint defaults
     // to true per spec.
     expect(queryFalse?.annotations).toEqual({
       title: "Query With False Overrides",

@@ -374,4 +374,14 @@ describe("buildAnnotations", () => {
     });
     expect(buildAnnotations(entry).destructiveHint).toBe(true);
   });
+
+  it("confirm query with no override → destructiveHint: true (danger-derived, not kind-derived)", () => {
+    const entry = makeEntry({ kind: "query", danger: "confirm" });
+    expect(buildAnnotations(entry).destructiveHint).toBe(true);
+  });
+
+  it("restricted entry bypassing upstream gate → destructiveHint: false (not confirm)", () => {
+    const entry = makeEntry({ kind: "command", danger: "restricted" });
+    expect(buildAnnotations(entry).destructiveHint).toBe(false);
+  });
 });
