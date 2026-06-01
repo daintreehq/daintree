@@ -59,10 +59,11 @@ test.describe.serial("Full: Worktree Dashboard Cards", () => {
     await expect(second).toHaveAttribute("aria-selected", "true", { timeout: T_MEDIUM });
     await expect(window.locator(SEL.worktree.overviewModal)).toContainText("2 selected");
 
-    // Clearing the selection dismisses the bulk-action bar.
+    // Clearing the selection dismisses the bulk-action bar and deselects both cells.
     await window.locator(SEL.worktree.clearSelection).click();
     await expect(window.locator(SEL.worktree.bulkRemove)).toHaveCount(0, { timeout: T_MEDIUM });
-    await expect(first).toHaveAttribute("aria-selected", "false");
+    await expect(first).toHaveAttribute("aria-selected", "false", { timeout: T_MEDIUM });
+    await expect(second).toHaveAttribute("aria-selected", "false", { timeout: T_MEDIUM });
 
     await window.locator(SEL.worktree.overviewClose).click();
     await expect(window.locator(SEL.worktree.overviewModal)).toBeHidden({ timeout: T_MEDIUM });
@@ -87,6 +88,7 @@ test.describe.serial("Full: Worktree Dashboard Cards", () => {
   });
 
   test("sort order persists across a project switch", async () => {
+    // Serial dependency: relies on the preceding test having set "Alphabetical".
     // orderBy is a global (cross-project) preference persisted to localStorage,
     // so a fresh project view's renderer must read back the Alphabetical choice.
     ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, fixture!.repoB, "Dashboard B");

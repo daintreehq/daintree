@@ -49,7 +49,9 @@ async function ensureDialogClosed(window: Page): Promise<void> {
     .click({ timeout: T_SHORT })
     .catch(() => {});
   const discard = window.getByRole("button", { name: "Discard" });
-  if (await discard.isVisible({ timeout: 500 }).catch(() => false)) {
+  // The dirty-form confirmation can take a beat to render on a loaded CI runner;
+  // match the Cancel click's budget so the Discard click isn't silently skipped.
+  if (await discard.isVisible({ timeout: T_SHORT }).catch(() => false)) {
     await discard.click().catch(() => {});
   }
   await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
@@ -156,9 +158,10 @@ test.describe.serial("Full: New Worktree Dialog", () => {
     await expect(cloneOption).toBeVisible({ timeout: T_MEDIUM });
     await cloneOption.click();
 
-    await expect(trigger).toContainText(/Clone current layout/i, { timeout: T_MEDIUM });
-    // #6289: gate on the portaled listbox unmounting before the test ends so a
-    // lingering FocusScope doesn't swallow keys in the next serial test.
+    // #6289: gate on the portaled listbox unmounting first so a lingering
+    // FocusScope doesn't swallow keys in the next serial test (and so the
+    // trigger-text assertion below isn't racing the popover teardown).
     await expect(listbox).toHaveCount(0, { timeout: T_SHORT });
+    await expect(trigger).toContainText(/Clone current layout/i, { timeout: T_MEDIUM });
   });
 });
