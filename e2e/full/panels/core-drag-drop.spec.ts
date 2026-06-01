@@ -11,7 +11,7 @@ import {
   getPanelDragHandle,
   openTerminal,
 } from "../../helpers/panels";
-import { keyboardReorderElement } from "../../helpers/dragDrop";
+import { keyboardReorderElement, keyboardReorderDockChip } from "../../helpers/dragDrop";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
@@ -124,6 +124,54 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
     await expect
       .poll(() => getDockPanelCount(window), { timeout: T_MEDIUM })
       .toBe(dockIdsBefore.length - 1);
+  });
+
+  // ── Dock Chip Reorder ────────────────────────────────────
+
+  test("reorder dock chips with keyboard drag", async () => {
+    const { window } = ctx;
+
+    // Move two grid panels to the dock, leaving one in the grid. Emptying the
+    // grid would tear down the project WebContentsView (see the fixme'd dock
+    // tests in core-terminal-layout-operations.spec.ts), so we keep one panel
+    // resident to preserve the active view while the chips reorder.
+    await test.step("Move two grid panels to the dock", async () => {
+      const gridIds = await getGridPanelIds(window);
+      expect(gridIds.length).toBeGreaterThanOrEqual(3);
+
+      for (const id of gridIds.slice(0, 2)) {
+        const panel = getPanelById(window, id);
+        const moveToDock = panel.locator(SEL.panel.minimize);
+        await expect(moveToDock).toBeVisible({ timeout: T_SHORT });
+        await moveToDock.click();
+        await expect.poll(() => getDockPanelIds(window), { timeout: T_MEDIUM }).toContain(id);
+      }
+
+      await expect.poll(() => getDockPanelCount(window), { timeout: T_MEDIUM }).toBe(2);
+    });
+
+    await test.step("Keyboard-drag the first chip and verify the dock order changes", async () => {
+      const dockIdsBefore = await getDockPanelIds(window);
+      expect(dockIdsBefore).toHaveLength(2);
+
+      const chips = window.locator(`${SEL.dock.rail} ${SEL.dock.chip}`);
+      await expect.poll(() => chips.count(), { timeout: T_MEDIUM }).toBeGreaterThanOrEqual(2);
+
+      let dockIdsAfter = dockIdsBefore;
+      // Try moving right, then fall back to left, mirroring the grid-reorder
+      // test's resilience to dnd-kit's headless collision geometry.
+      for (const direction of ["ArrowRight", "ArrowLeft"] as const) {
+        await keyboardReorderDockChip(window, chips.first(), direction);
+        await window.waitForTimeout(T_SETTLE);
+        dockIdsAfter = await getDockPanelIds(window);
+        if (dockIdsAfter[0] !== dockIdsBefore[0]) break;
+      }
+
+      expect(dockIdsAfter).toHaveLength(2);
+      // Same panels, different order — the chip moved past its neighbour.
+      expect([...dockIdsAfter].sort()).toEqual([...dockIdsBefore].sort());
+      expect(dockIdsAfter[0]).not.toBe(dockIdsBefore[0]);
+    });
   });
 
   // ── Cleanup ──────────────────────────────────────────────
