@@ -213,11 +213,14 @@ test.describe.serial("Fleet broadcast: confirm and lifecycle paths", () => {
     expect(armAll.ok, armAll.error?.message).toBe(true);
 
     await expect(window.locator(SEL.fleet.ribbon)).toBeVisible({ timeout: T_MEDIUM });
-    await expect(window.locator(SEL.fleet.armedCountChip)).toHaveAttribute(
-      "aria-label",
-      /^[3-9]\d* in fleet/,
-      { timeout: T_MEDIUM }
-    );
+    // Assert by identity rather than a tolerant count: every fresh eligible
+    // panel must end up armed. A count regex would still pass if armAll
+    // skipped one of these and armed an unrelated leftover instead.
+    for (const id of ids) {
+      await expect(getPanelById(window, id)).toHaveAttribute("data-selected", "true", {
+        timeout: T_MEDIUM,
+      });
+    }
   });
 
   test("saved fleet snapshot save → recall → delete lifecycle", async () => {
@@ -270,6 +273,11 @@ test.describe.serial("Fleet broadcast: confirm and lifecycle paths", () => {
         /^3 in fleet/,
         { timeout: T_MEDIUM }
       );
+      // Recall must restore the snapshot's exact panes, not just any three
+      // eligible terminals — the disarmed pane (ids[0]) is re-armed by id.
+      await expect(getPanelById(window, ids[0]!)).toHaveAttribute("data-selected", "true", {
+        timeout: T_MEDIUM,
+      });
     });
 
     await test.step("Delete the saved fleet via the confirm dialog", async () => {

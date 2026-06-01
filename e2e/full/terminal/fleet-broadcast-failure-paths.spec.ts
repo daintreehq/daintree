@@ -229,6 +229,15 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
       await expect(window.getByRole("button", { name: "Retry failed" })).toBeVisible({
         timeout: T_MEDIUM,
       });
+      // The faulted broadcast must not have reached either pane — otherwise a
+      // later "marker present" assertion would pass on the original send, not
+      // the retry, making the retry path falsely look exercised.
+      for (const id of ids) {
+        await expect(getPanelById(window, id).locator(SEL.terminal.xtermRows)).not.toContainText(
+          marker,
+          { timeout: T_MEDIUM }
+        );
+      }
     });
 
     await test.step("Clearing the fault and retrying delivers the payload", async () => {
@@ -273,8 +282,8 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
     });
   });
 
-  test("broadcast progress and cancel surface for a slow multi-target fan-out", async () => {
-    test.setTimeout(150_000);
+  test("cancelling a slow batched broadcast skips the later batch", async () => {
+    test.setTimeout(200_000);
     const { window } = ctx;
     await clearFleet(window);
 
@@ -286,23 +295,53 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
       { timeout: T_MEDIUM }
     );
 
-    await test.step("Delay submits so the in-flight progress UI is observable", async () => {
-      await injectDelay(ctx.app, TERMINAL_SUBMIT_CHANNEL, 2000);
-      await broadcastViaEditor(
-        window,
-        getPanelById(window, ids[0]!),
-        ids[0]!,
-        `echo fleet-progress-${Date.now()}`
-      );
+    // Cooperative cancellation only has anything to interrupt on the batched
+    // fan-out path, which `executeFleetBroadcast` enters when there are more
+    // than FLEET_LARGE_PASTE_BATCH_SIZE (5) targets AND a payload at or above
+    // FLEET_LARGE_PASTE_BYTE_THRESHOLD (100 KB). A small payload fires every
+    // submit in a single Promise.allSettled, so Cancel would be a no-op the
+    // test couldn't distinguish from a broken feature. The leading sentinel
+    // echoes ahead of the filler so each pane is greppable.
+    const sentinel = `fleet-cancel-${Date.now()}`;
+    const largePayload = `echo ${sentinel} ${"A".repeat(103_000)}`;
+
+    await test.step("Send the oversized broadcast through the byte-limit confirm", async () => {
+      // A long per-submit delay removes the cancel-click race: batch one stays
+      // in flight for ~12s, far longer than it takes to click Cancel, so the
+      // abort always lands before batch two would dispatch.
+      await injectDelay(ctx.app, TERMINAL_SUBMIT_CHANNEL, 12_000);
+      await dismissBlockingPalette(window);
+      await getPanelById(window, ids[0]!).click();
+      await expect
+        .poll(() => getFocusedPanelId(window), { timeout: T_MEDIUM, intervals: [100, 250] })
+        .toBe(ids[0]!);
+      const editor = getPanelById(window, ids[0]!).locator(SEL.terminal.cmEditor).first();
+      await expect(editor).toBeVisible({ timeout: T_MEDIUM });
+      await editor.click();
+      await editor.fill(largePayload);
+      await window.keyboard.press("Enter");
+      // The oversized payload trips the byte-limit confirm gate before dispatch.
+      await expect(window.locator(SEL.fleet.pasteConfirmSend)).toBeVisible({ timeout: T_MEDIUM });
+      await window.locator(SEL.fleet.pasteConfirmSend).click();
     });
 
-    await test.step("Progress counter and cancel affordance both appear", async () => {
+    await test.step("Progress and cancel affordances surface, then cancel mid-flight", async () => {
       await expect(window.locator(SEL.fleet.broadcastProgress)).toBeVisible({ timeout: T_LONG });
       await expect(window.locator(SEL.fleet.broadcastCancel)).toBeVisible({ timeout: T_MEDIUM });
+      await window.locator(SEL.fleet.broadcastCancel).click();
     });
 
-    await test.step("Cancelling clears the progress UI", async () => {
-      await window.locator(SEL.fleet.broadcastCancel).click();
+    await test.step("First-batch target receives the payload; the sixth (later batch) is skipped", async () => {
+      // ids[0] is in the first batch — already dispatched before Cancel — so it
+      // completes once its delayed submit resolves (~12s).
+      await waitForTerminalText(getPanelById(window, ids[0]!), sentinel, 30_000);
+      // ids[5] is the lone second-batch target; the abort skips it entirely.
+      // Give the resolved first batch time to drain before asserting absence.
+      await window.waitForTimeout(2000);
+      await expect(getPanelById(window, ids[5]!).locator(SEL.terminal.xtermRows)).not.toContainText(
+        sentinel,
+        { timeout: T_MEDIUM }
+      );
       await expect(window.locator(SEL.fleet.broadcastProgress)).toBeHidden({ timeout: T_LONG });
     });
   });

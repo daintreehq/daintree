@@ -635,8 +635,13 @@ test.describe.serial("Core: Fleet terminal broadcast", () => {
       );
     });
 
-    const marker = `fleet-e2e-${Date.now()}`;
-    const destructiveCommand = `rm -rf ./${marker}`;
+    // Distinct markers per phase so the send assertion can never be satisfied
+    // by the cancelled draft: the cancel marker must stay absent throughout,
+    // and only the send marker may appear after confirming.
+    const cancelMarker = `fleet-e2e-cancel-${Date.now()}`;
+    const sendMarker = `fleet-e2e-send-${Date.now()}`;
+    const cancelCommand = `rm -rf ./${cancelMarker}`;
+    const sendCommand = `rm -rf ./${sendMarker}`;
 
     await test.step("Typing a destructive command and pressing Enter surfaces the confirm strip", async () => {
       const editor = await focusPanelHybridInput(
@@ -644,7 +649,7 @@ test.describe.serial("Core: Fleet terminal broadcast", () => {
         getPanelById(window, gridIds[0]!),
         gridIds[0]!
       );
-      await editor.pressSequentially(destructiveCommand);
+      await editor.pressSequentially(cancelCommand);
       await window.keyboard.press("Enter");
 
       await expect(window.locator(SEL.fleet.pasteConfirm)).toBeVisible({ timeout: T_MEDIUM });
@@ -660,7 +665,7 @@ test.describe.serial("Core: Fleet terminal broadcast", () => {
       await window.waitForTimeout(750);
       for (const id of gridIds.slice(0, 2)) {
         await expect(getPanelById(window, id).locator(SEL.terminal.xtermRows)).not.toContainText(
-          marker,
+          cancelMarker,
           { timeout: T_MEDIUM }
         );
       }
@@ -672,7 +677,12 @@ test.describe.serial("Core: Fleet terminal broadcast", () => {
         getPanelById(window, gridIds[0]!),
         gridIds[0]!
       );
-      await editor.pressSequentially(destructiveCommand);
+      // Clear any residual draft from the cancelled attempt so the second
+      // submission contains exactly the send command, not a doubled string.
+      await editor.press("ControlOrMeta+a");
+      await editor.press("Delete");
+      await expect(editor).toHaveText("");
+      await editor.pressSequentially(sendCommand);
       await window.keyboard.press("Enter");
 
       await expect(window.locator(SEL.fleet.pasteConfirmSend)).toBeVisible({ timeout: T_MEDIUM });
@@ -680,7 +690,12 @@ test.describe.serial("Core: Fleet terminal broadcast", () => {
       await expect(window.locator(SEL.fleet.pasteConfirm)).toBeHidden({ timeout: T_MEDIUM });
 
       for (const id of gridIds.slice(0, 2)) {
-        await waitForTerminalText(getPanelById(window, id), marker, T_LONG);
+        await waitForTerminalText(getPanelById(window, id), sendMarker, T_LONG);
+        // The cancelled command must never have run on any pane.
+        await expect(getPanelById(window, id).locator(SEL.terminal.xtermRows)).not.toContainText(
+          cancelMarker,
+          { timeout: T_MEDIUM }
+        );
       }
     });
   });
