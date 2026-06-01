@@ -618,4 +618,121 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
       expect(result.isWorking).toBe(true);
     });
   });
+
+  describe("alreadyStripped option", () => {
+    it("strips by default and yields the same result as pre-stripped input", () => {
+      const detector = buildTestDetector("codex");
+      const raw = "\x1b[34m•\x1b[0m Exploring the codebase (4s • esc to interrupt)";
+      const fromRaw = detector.detect(raw);
+      const fromStripped = detector.detect(stripAnsi(raw), { alreadyStripped: true });
+
+      expect(fromRaw.isWorking).toBe(true);
+      expect(fromRaw.matchTier).toBe("primary");
+      expect(fromStripped).toEqual(fromRaw);
+    });
+
+    it("skips the internal strip when alreadyStripped is true", () => {
+      const detector = buildTestDetector("claude");
+      // ANSI codes sit between the spinner and the verb, so the fallback
+      // pattern (spinner + whitespace + verb + ellipsis) only matches once
+      // stripped. With alreadyStripped:true the strip is skipped, so no match.
+      const raw = "✽\x1b[0m Thinking…";
+
+      expect(detector.detect(raw).isWorking).toBe(true);
+      expect(detector.detect(raw, { alreadyStripped: true }).isWorking).toBe(false);
+    });
+  });
+
+  describe("last-N-lines scan window", () => {
+    const detector = buildTestDetector("claude");
+    const pattern = "✽ Thinking…";
+
+    it("detects a pattern on the 10th line from the end", () => {
+      const noise = Array(9).fill("noise").join("\n");
+      const result = detector.detect(`${pattern}\n${noise}`);
+      expect(result.isWorking).toBe(true);
+    });
+
+    it("ignores a pattern on the 11th line from the end", () => {
+      const noise = Array(10).fill("noise").join("\n");
+      const result = detector.detect(`${pattern}\n${noise}`);
+      expect(result.isWorking).toBe(false);
+    });
+
+    it("detects a pattern on the final line with a trailing newline", () => {
+      const result = detector.detect(`${pattern}\n`);
+      expect(result.isWorking).toBe(true);
+    });
+
+    it("detects a pattern when there is no trailing newline", () => {
+      const result = detector.detect(`leading line\n${pattern}`);
+      expect(result.isWorking).toBe(true);
+    });
+
+    it("matches split/slice/join window semantics across boundary inputs", () => {
+      // Parity oracle: the old implementation joined the last scanLineCount
+      // lines. The new lastIndexOf scan must scan exactly the same text.
+      const scanLineCount = 10;
+      const oracleWindow = (text: string) => text.split("\n").slice(-scanLineCount).join("\n");
+
+      for (const lineCount of [1, 9, 10, 11, 25]) {
+        for (const trailing of ["", "\n"]) {
+          const lines = Array.from({ length: lineCount }, (_, i) =>
+            i === 0 ? pattern : `noise-${i}`
+          );
+          const text = lines.join("\n") + trailing;
+          const windowed = oracleWindow(text);
+          // Detecting on the full text (new lastIndexOf window) must produce the
+          // exact same result as detecting on the oracle-windowed text (old
+          // split/slice/join). Full-object equality — not just isWorking — so a
+          // tier/confidence drift can't hide behind a matching boolean.
+          expect(detector.detect(text)).toEqual(detector.detect(windowed));
+        }
+      }
+    });
+  });
+
+  describe("pattern flag invariants", () => {
+    it("no configured pattern uses a stateful (/g, /y) flag", () => {
+      const configs = [...Object.values(AGENT_PATTERN_CONFIGS), UNIVERSAL_PATTERN_CONFIG];
+      for (const config of configs) {
+        const patterns = [...config.primaryPatterns, ...(config.fallbackPatterns ?? [])];
+        for (const pattern of patterns) {
+          expect(pattern.flags).not.toContain("g");
+          expect(pattern.flags).not.toContain("y");
+        }
+      }
+    });
+  });
+
+  describe("hot-path allocation guarantees", () => {
+    it("does not populate matchedText (debug field retired)", () => {
+      const detector = buildTestDetector("claude");
+      const result = detector.detect("✽ Deliberating… (esc to interrupt · 15s)");
+      expect(result.isWorking).toBe(true);
+      expect(result.matchedText).toBeUndefined();
+    });
+
+    it("returns identical results on repeated calls (no lastIndex mutation)", () => {
+      const detector = buildTestDetector("claude");
+      const output = "✽ Deliberating… (esc to interrupt · 15s)";
+      const first = detector.detect(output);
+      const second = detector.detect(output);
+      expect(first).toEqual(second);
+      expect(first.isWorking).toBe(true);
+    });
+
+    it("stays deterministic even with a stateful (/g) custom pattern", () => {
+      // Guards the lastIndex reset in matchPatterns: a /g pattern would
+      // otherwise advance lastIndex and miss on alternating calls.
+      const detector = createPatternDetector(undefined, {
+        primaryPatterns: [/working/g],
+        scanLineCount: 10,
+        primaryConfidence: 0.9,
+      });
+      expect(detector.detect("working").isWorking).toBe(true);
+      expect(detector.detect("working").isWorking).toBe(true);
+      expect(detector.detect("working").isWorking).toBe(true);
+    });
+  });
 });
