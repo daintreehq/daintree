@@ -34,6 +34,24 @@ function getRecipeEditor(window: Page, title: "Create Recipe" | "Edit Recipe" = 
   return window.getByRole("dialog").filter({ hasText: title });
 }
 
+// Opens the project-settings Recipes tab and closes it. This is the canonical
+// trigger for recipeStore.loadRecipes(currentProject.id) (RecipesTab mount):
+// it sets the recipe store's currentProjectId and loads global/in-repo/project
+// recipes from disk. E2E project hydration does not auto-run loadRecipes, so
+// in-repo recipes and the RecipeRunner's currentProjectId gate need this first.
+async function loadRecipesViaSettings(window: Page): Promise<void> {
+  await dismissBlockingPalette(window).catch(() => undefined);
+  await window.locator(SEL.toolbar.projectSwitcherTrigger).click();
+  const palette = window.locator(SEL.projectSwitcher.palette);
+  await expect(palette).toBeVisible({ timeout: T_MEDIUM });
+  await palette.locator(SEL.projectSwitcher.projectSettings).click();
+  await expect(window.locator(SEL.projectSettings.heading)).toBeVisible({ timeout: T_MEDIUM });
+  await window.locator(SEL.projectSettings.recipesTab).click();
+  await window.waitForTimeout(T_SETTLE);
+  await window.locator(SEL.projectSettings.closeButton).click();
+  await expect(window.locator(SEL.projectSettings.heading)).not.toBeVisible({ timeout: T_SHORT });
+}
+
 // Creates a project recipe through the RecipeManager → editor flow. The manager
 // closes itself when the editor opens (handleRecipeManagerCreate), so callers
 // reopen it afterward if they need the resulting row.
@@ -240,6 +258,8 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       cleanup = c;
       ctx.window = await openAndOnboardProject(ctx.app, ctx.window, dir, "Recipe Scopes");
       await ctx.window.waitForTimeout(T_SETTLE);
+      // Load the seeded in-repo recipe from disk into the store.
+      await loadRecipesViaSettings(ctx.window);
     });
 
     test.afterAll(async () => {
@@ -272,10 +292,9 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
           createdAt: 1_700_000_000_000,
         });
       });
-      // Fire the focus-reload (useRecipeFocusReload) so the store picks up the
-      // newly-seeded project recipe; wait past the 500ms dedupe window first.
-      await window.waitForTimeout(700);
-      await window.evaluate(() => window.dispatchEvent(new Event("focus")));
+      // Reload so the store picks up the newly-seeded machine-local recipe
+      // alongside the in-repo one.
+      await loadRecipesViaSettings(window);
 
       const manager = await openRecipeManager(window);
       await expect(manager.locator(SEL.recipeManager.overriddenBadge)).toBeVisible({
@@ -302,6 +321,9 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       cleanup = c;
       ctx.window = await openAndOnboardProject(ctx.app, ctx.window, dir, "Recipe Runner");
       await ctx.window.waitForTimeout(T_SETTLE);
+      // Sets the recipe store's currentProjectId so the RecipeRunner (gated on
+      // recipesProjectId !== null) renders in the content-grid empty state.
+      await loadRecipesViaSettings(ctx.window);
     });
 
     test.afterAll(async () => {
