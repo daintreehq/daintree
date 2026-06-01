@@ -14,6 +14,7 @@ vi.mock("../../McpPaneConfigService.js", () => ({
 }));
 
 import {
+  buildAnnotations,
   extractBearerToken,
   isAuthorized,
   parseToolArguments,
@@ -334,5 +335,43 @@ describe("shouldExposeTool", () => {
   it("still excludes hidden entries even with fullToolSurface", () => {
     const entry = makeEntry({ id: "actions.search", mcpVisibility: "hidden" });
     expect(shouldExposeTool(entry, "external", true)).toBe(false);
+  });
+});
+
+describe("buildAnnotations", () => {
+  it("safe command → destructiveHint: false", () => {
+    const entry = makeEntry({ kind: "command", danger: "safe" });
+    expect(buildAnnotations(entry).destructiveHint).toBe(false);
+  });
+
+  it("confirm command → destructiveHint: true", () => {
+    const entry = makeEntry({ kind: "command", danger: "confirm" });
+    expect(buildAnnotations(entry).destructiveHint).toBe(true);
+  });
+
+  it("query → readOnlyHint: true, idempotentHint: true, destructiveHint: false", () => {
+    const entry = makeEntry({ kind: "query", danger: "safe" });
+    const annotations = buildAnnotations(entry);
+    expect(annotations.readOnlyHint).toBe(true);
+    expect(annotations.idempotentHint).toBe(true);
+    expect(annotations.destructiveHint).toBe(false);
+  });
+
+  it("mcpAnnotations.destructiveHint: false overrides confirm default (??-guard regression)", () => {
+    const entry = makeEntry({
+      kind: "command",
+      danger: "confirm",
+      mcpAnnotations: { destructiveHint: false },
+    });
+    expect(buildAnnotations(entry).destructiveHint).toBe(false);
+  });
+
+  it("mcpAnnotations.destructiveHint: true overrides safe default", () => {
+    const entry = makeEntry({
+      kind: "command",
+      danger: "safe",
+      mcpAnnotations: { destructiveHint: true },
+    });
+    expect(buildAnnotations(entry).destructiveHint).toBe(true);
   });
 });
