@@ -63,6 +63,14 @@ function useScrollIndicator({ itemCount }: UseScrollIndicatorParams): UseScrollI
 
   useResizeObserverRaf(scrollerEl, () => updateScrollIndicators());
 
+  // Always invoke the latest `updateScrollIndicators` from the deferred frame.
+  // A frame scheduled before `itemCount` changes would otherwise fire after the
+  // corrective effect above and overwrite the counts with a stale measurement.
+  const updateScrollIndicatorsRef = useRef(updateScrollIndicators);
+  useEffect(() => {
+    updateScrollIndicatorsRef.current = updateScrollIndicators;
+  }, [updateScrollIndicators]);
+
   // Cancel any pending re-position frame on unmount so the coalesced callback
   // never reads a detached scroller or sets state after teardown.
   useEffect(
@@ -79,9 +87,9 @@ function useScrollIndicator({ itemCount }: UseScrollIndicatorParams): UseScrollI
     if (scrollRafIdRef.current !== null) return;
     scrollRafIdRef.current = requestAnimationFrame(() => {
       scrollRafIdRef.current = null;
-      updateScrollIndicators();
+      updateScrollIndicatorsRef.current();
     });
-  }, [updateScrollIndicators]);
+  }, []);
 
   const scrollerRef = useCallback((el: HTMLElement | Window | null) => {
     // Virtuoso forwards either the scroller element or window. We only support

@@ -790,6 +790,12 @@ describe("FixedDropdown rAF re-position throttle (issue #9580)", () => {
     });
   }
 
+  function fireResize() {
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+  }
+
   function portalTop() {
     const body = document.querySelector('[data-testid="dropdown-body"]');
     return body?.parentElement?.style.top ?? "";
@@ -899,6 +905,39 @@ describe("FixedDropdown rAF re-position throttle (issue #9580)", () => {
     expect(portalTop()).toBe("48px");
   });
 
+  it("coalesces resize events through the same throttle", () => {
+    const { ref } = createMutableAnchor(40, 100);
+    render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+        <div data-testid="dropdown-body">Content</div>
+      </FixedDropdown>
+    );
+    rafSpy.mockClear();
+
+    fireResize();
+    fireResize();
+
+    expect(rafSpy).toHaveBeenCalledTimes(1);
+    expect(rafQueue.size).toBe(1);
+  });
+
+  it("applies the rect from the last event in a coalesced burst", () => {
+    const { ref, setRect } = createMutableAnchor(40, 100);
+    render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+        <div data-testid="dropdown-body">Content</div>
+      </FixedDropdown>
+    );
+
+    setRect({ bottom: 60 });
+    fireScroll();
+    // Anchor moves again before the single in-flight frame flushes — latest wins.
+    setRect({ bottom: 90 });
+    fireScroll();
+    flushFrames();
+    expect(portalTop()).toBe("98px");
+  });
+
   it("cancels a pending re-position frame on unmount", () => {
     const { ref } = createMutableAnchor(40, 100);
     const { unmount } = render(
@@ -915,5 +954,31 @@ describe("FixedDropdown rAF re-position throttle (issue #9580)", () => {
     });
     expect(cancelSpy).toHaveBeenCalled();
     expect(rafQueue.size).toBe(0);
+  });
+
+  it("cancels a pending re-position frame and stops re-scheduling when closed", () => {
+    const { ref } = createMutableAnchor(40, 100);
+    const { rerender } = render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+        <div data-testid="dropdown-body">Content</div>
+      </FixedDropdown>
+    );
+
+    fireScroll();
+    expect(rafQueue.size).toBe(1);
+    cancelSpy.mockClear();
+
+    rerender(
+      <FixedDropdown open={false} onOpenChange={onOpenChange} anchorRef={ref}>
+        <div data-testid="dropdown-body">Content</div>
+      </FixedDropdown>
+    );
+    expect(cancelSpy).toHaveBeenCalled();
+    expect(rafQueue.size).toBe(0);
+
+    // Listeners are gone, so a scroll after close schedules nothing.
+    rafSpy.mockClear();
+    fireScroll();
+    expect(rafSpy).not.toHaveBeenCalled();
   });
 });

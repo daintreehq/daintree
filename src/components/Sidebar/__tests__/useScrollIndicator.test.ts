@@ -86,12 +86,18 @@ describe("useScrollIndicator scroll rAF throttle (issue #9580)", () => {
     expect(result.current.hiddenBelow).toBe(85);
   });
 
-  it("cancels a pending scroll frame when the scroller detaches", () => {
+  it("cancels a pending scroll frame and resets counts when the scroller detaches", () => {
     const { result } = renderHook(() => useScrollIndicator({ itemCount: 100 }));
     const scroller = makeScroller({ scrollTop: 50, scrollHeight: 1000, clientHeight: 100 });
     act(() => {
       result.current.scrollerRef(scroller);
     });
+
+    act(() => {
+      result.current.handleScroll();
+    });
+    flushFrames();
+    expect(result.current.hiddenAbove).toBe(5);
 
     act(() => {
       result.current.handleScroll();
@@ -104,6 +110,30 @@ describe("useScrollIndicator scroll rAF throttle (issue #9580)", () => {
     });
     expect(cancelSpy).toHaveBeenCalled();
     expect(rafQueue.size).toBe(0);
+    expect(result.current.hiddenAbove).toBe(0);
+    expect(result.current.hiddenBelow).toBe(0);
+  });
+
+  it("uses the latest itemCount when a frame flushes after itemCount changes", () => {
+    const { result, rerender } = renderHook(({ itemCount }) => useScrollIndicator({ itemCount }), {
+      initialProps: { itemCount: 100 },
+    });
+    const scroller = makeScroller({ scrollTop: 50, scrollHeight: 1000, clientHeight: 100 });
+    act(() => {
+      result.current.scrollerRef(scroller);
+    });
+
+    // Schedule a frame while itemCount is 100, then shrink the list before it
+    // flushes. The stale frame must not overwrite counts with itemCount=100.
+    act(() => {
+      result.current.handleScroll();
+    });
+    rerender({ itemCount: 10 });
+    flushFrames();
+
+    // itemCount=10 → totalHidden 9, above 1, below 8 (not the stale 5 / 85).
+    expect(result.current.hiddenAbove).toBe(1);
+    expect(result.current.hiddenBelow).toBe(8);
   });
 
   it("cancels a pending scroll frame on unmount", () => {
