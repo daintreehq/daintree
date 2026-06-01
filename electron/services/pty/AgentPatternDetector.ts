@@ -190,37 +190,18 @@ export class AgentPatternDetector {
   }
 
   /**
-   * Detect working state from raw terminal output.
-   *
-   * @param output Raw terminal output (may include ANSI codes)
-   * @returns Detection result with working state and confidence
+   * Run the configured pattern tiers against pre-windowed, ANSI-stripped text.
+   * Uses `RegExp.test` rather than `String.match` to avoid allocating a match
+   * array on the per-chunk hot path — the matched substring is never consumed.
    */
-  detect(output: string): PatternDetectionResult {
-    if (!output || output.length === 0) {
-      return {
-        isWorking: false,
-        confidence: 0,
-        matchTier: "none",
-      };
-    }
-
-    // Strip ANSI codes for reliable pattern matching
-    const cleanOutput = stripAnsi(output);
-
-    // Split into lines and take the last N lines
-    const lines = cleanOutput.split("\n");
-    const scanLines = lines.slice(-this.scanLineCount);
-    const textToScan = scanLines.join("\n");
-
+  private matchPatterns(textToScan: string): PatternDetectionResult {
     // Try primary patterns first (high confidence)
     for (const pattern of this.config.primaryPatterns) {
-      const match = textToScan.match(pattern);
-      if (match) {
+      if (pattern.test(textToScan)) {
         return {
           isWorking: true,
           confidence: this.config.primaryConfidence ?? 0.95,
           matchTier: "primary",
-          matchedText: match[0],
         };
       }
     }
@@ -228,13 +209,11 @@ export class AgentPatternDetector {
     // Try fallback patterns (medium confidence)
     if (this.config.fallbackPatterns) {
       for (const pattern of this.config.fallbackPatterns) {
-        const match = textToScan.match(pattern);
-        if (match) {
+        if (pattern.test(textToScan)) {
           return {
             isWorking: true,
             confidence: this.config.fallbackConfidence ?? 0.75,
             matchTier: "fallback",
-            matchedText: match[0],
           };
         }
       }
@@ -246,6 +225,55 @@ export class AgentPatternDetector {
       confidence: 0,
       matchTier: "none",
     };
+  }
+
+  /**
+   * Find the offset of the last `scanLineCount` lines within `text` without
+   * allocating a per-line array. Equivalent to
+   * `text.split("\n").slice(-scanLineCount).join("\n")` but returns a single
+   * slice offset, avoiding the intermediate array and segment strings.
+   */
+  private lastLinesOffset(text: string): number {
+    let startOffset = 0;
+    let searchFrom = text.length;
+    for (let i = 0; i < this.scanLineCount; i++) {
+      const nl = text.lastIndexOf("\n", searchFrom - 1);
+      if (nl === -1) {
+        // Fewer than scanLineCount lines — scan the whole string.
+        return 0;
+      }
+      startOffset = nl + 1;
+      searchFrom = nl;
+    }
+    return startOffset;
+  }
+
+  /**
+   * Detect working state from terminal output.
+   *
+   * @param output Terminal output. Raw (may include ANSI codes) unless
+   *   `opts.alreadyStripped` is set.
+   * @param opts.alreadyStripped When true, `output` is assumed to already be
+   *   ANSI-stripped and the internal strip is skipped (hot-path callers that
+   *   strip once and reuse the result).
+   * @returns Detection result with working state and confidence
+   */
+  detect(output: string, opts?: { alreadyStripped?: boolean }): PatternDetectionResult {
+    if (!output || output.length === 0) {
+      return {
+        isWorking: false,
+        confidence: 0,
+        matchTier: "none",
+      };
+    }
+
+    // Strip ANSI codes for reliable pattern matching (unless already stripped).
+    const cleanOutput = opts?.alreadyStripped ? output : stripAnsi(output);
+
+    // Scan only the last N lines.
+    const textToScan = cleanOutput.slice(this.lastLinesOffset(cleanOutput));
+
+    return this.matchPatterns(textToScan);
   }
 
   /**
@@ -271,41 +299,7 @@ export class AgentPatternDetector {
     const cleanedLines = scanLines.map((line) => stripAnsi(line));
     const textToScan = cleanedLines.join("\n");
 
-    // Reuse main detection logic
-    // Try primary patterns first (high confidence)
-    for (const pattern of this.config.primaryPatterns) {
-      const match = textToScan.match(pattern);
-      if (match) {
-        return {
-          isWorking: true,
-          confidence: this.config.primaryConfidence ?? 0.95,
-          matchTier: "primary",
-          matchedText: match[0],
-        };
-      }
-    }
-
-    // Try fallback patterns (medium confidence)
-    if (this.config.fallbackPatterns) {
-      for (const pattern of this.config.fallbackPatterns) {
-        const match = textToScan.match(pattern);
-        if (match) {
-          return {
-            isWorking: true,
-            confidence: this.config.fallbackConfidence ?? 0.75,
-            matchTier: "fallback",
-            matchedText: match[0],
-          };
-        }
-      }
-    }
-
-    // No patterns matched
-    return {
-      isWorking: false,
-      confidence: 0,
-      matchTier: "none",
-    };
+    return this.matchPatterns(textToScan);
   }
 }
 
