@@ -50,8 +50,11 @@ describe("audit-log viewers — shared minute-ticker wiring (issue #9582)", () =
 
   it.each(VIEWERS)("%s no longer hand-rolls a per-component timer", (file) => {
     const source = sources.get(file)!;
-    expect(source).not.toContain("setInterval");
-    expect(source).not.toContain("clearInterval");
+    // Ban the bare names and their window/globalThis-qualified forms so a
+    // requalified timer can't sneak the old pattern back past the check.
+    expect(source).not.toMatch(/\b(?:window\.|globalThis\.)?setInterval\b/);
+    expect(source).not.toMatch(/\b(?:window\.|globalThis\.)?clearInterval\b/);
+    expect(source).not.toMatch(/\b(?:window\.|globalThis\.)?setTimeout\b/);
     expect(source).not.toContain("RELATIVE_TIMESTAMP_REFRESH_MS");
     expect(source).not.toContain("nowTick");
   });
