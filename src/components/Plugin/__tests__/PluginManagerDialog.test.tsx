@@ -75,6 +75,7 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
     loadError: null,
     updateAvailable: null,
     devMode: false,
+    pluginDanger: "safe",
     ...overrides,
   };
 }

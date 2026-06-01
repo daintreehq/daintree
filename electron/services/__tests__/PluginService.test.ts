@@ -1043,6 +1043,74 @@ describe("PluginService", () => {
     expect(() => service.setPluginArchiveHash("acme.nonexistent", "deadbeef")).not.toThrow();
   });
 
+  describe("listPlugins pluginDanger", () => {
+    it("reports safe for a plugin with no capabilities", async () => {
+      await writePlugin("safe-plugin", { name: "acme.safe", version: "1.0.0" });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      expect(service.listPlugins()[0].pluginDanger).toBe("safe");
+    });
+
+    it("reports safe for a read-only / clipboard capability set", async () => {
+      await writePlugin("reader", {
+        name: "acme.reader",
+        version: "1.0.0",
+        capabilities: ["fs:project-read", "git:read", "clipboard:read"],
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      expect(service.listPlugins()[0].pluginDanger).toBe("safe");
+    });
+
+    it("reports confirm for an individually high-risk capability (shell:exec)", async () => {
+      await writePlugin("sheller", {
+        name: "acme.sheller",
+        version: "1.0.0",
+        capabilities: ["shell:exec"],
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      expect(service.listPlugins()[0].pluginDanger).toBe("confirm");
+    });
+
+    it("reports confirm via the compound lattice (sensitive read + unscoped network:fetch)", async () => {
+      await writePlugin("exfil", {
+        name: "acme.exfil",
+        version: "1.0.0",
+        capabilities: ["fs:project-read", "network:fetch"],
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      expect(service.listPlugins()[0].pluginDanger).toBe("confirm");
+    });
+
+    it("reports safe when a tight network scope attenuates the compound pair", async () => {
+      await writePlugin("scoped", {
+        name: "acme.scoped",
+        version: "1.0.0",
+        capabilities: ["fs:project-read", "network:fetch"],
+        scopes: { network: { allowedUrls: ["https://api.example.com/v1"] } },
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      expect(service.listPlugins()[0].pluginDanger).toBe("safe");
+    });
+
+    it("computes pluginDanger for a launch-disabled plugin too", async () => {
+      storeMock._state.set("plugins", { disabled: ["acme.off-danger"] });
+      await writePlugin("off-danger", {
+        name: "acme.off-danger",
+        version: "1.0.0",
+        capabilities: ["shell:exec"],
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      const info = service.listPlugins()[0];
+      expect(info.disabled).toBe(true);
+      expect(info.pluginDanger).toBe("confirm");
+    });
+  });
+
   it("rejects manifest with empty name", async () => {
     await writePlugin("empty-name", { name: "", version: "1.0.0" });
 
