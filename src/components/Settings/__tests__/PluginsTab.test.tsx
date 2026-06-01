@@ -51,6 +51,7 @@ function makePlugin(name: string): LoadedPluginInfo {
     loadError: null,
     updateAvailable: null,
     devMode: false,
+    pluginDanger: "safe",
   };
 }
 

@@ -1,9 +1,14 @@
-import { AlertCircle, RefreshCw, Trash2 } from "lucide-react";
+import { AlertCircle, AlertTriangle, RefreshCw, Trash2 } from "lucide-react";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
-import type { LoadedPluginInfo, PluginInstallSource } from "@shared/types/plugin";
+import {
+  BUILT_IN_PLUGIN_CAPABILITIES,
+  type BuiltInPluginCapability,
+  type LoadedPluginInfo,
+  type PluginInstallSource,
+} from "@shared/types/plugin";
 
 /** Provenance source → short badge label (built-in / file / URL / catalog). */
 export const SOURCE_BADGE_LABELS: Record<PluginInstallSource, string> = {
@@ -19,6 +24,184 @@ export function pluginLabel(plugin: LoadedPluginInfo): string {
 
 const BADGE_CLASS =
   "inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 uppercase tracking-wide";
+
+/**
+ * Per-capability display tier. `danger` is reserved for `shell:exec` —
+ * categorically irreversible arbitrary execution; `warning` covers the
+ * remaining write/mutation/network capabilities (which also individually
+ * trigger install-time confirmation); `neutral` covers read-only and clipboard
+ * capabilities. Colours follow the status tokens, never the accent — risk is
+ * not a focus signal (see CLAUDE.md accent-restraint).
+ */
+type CapabilitySeverity = "danger" | "warning" | "neutral";
+
+interface CapabilityMeta {
+  label: string;
+  description: string;
+  severity: CapabilitySeverity;
+}
+
+/**
+ * Human-readable copy and risk tier for every built-in capability. Lives in the
+ * renderer (presentation only) — the authoritative danger verdict for the whole
+ * plugin is `plugin.pluginDanger`, computed on main. Iterated in
+ * `BUILT_IN_PLUGIN_CAPABILITIES` order so the list is stable regardless of the
+ * manifest's declaration order.
+ */
+const CAPABILITY_META = {
+  "fs:project-read": {
+    label: "Read project files",
+    description: "View files in the open project",
+    severity: "neutral",
+  },
+  "fs:project-write": {
+    label: "Write project files",
+    description: "Create, edit, or delete files in the open project",
+    severity: "warning",
+  },
+  "fs:user-data-read": {
+    label: "Read app data",
+    description: "View Daintree's stored data",
+    severity: "neutral",
+  },
+  "fs:user-data-write": {
+    label: "Write app data",
+    description: "Modify Daintree's stored data",
+    severity: "warning",
+  },
+  "network:fetch": {
+    label: "Make network requests",
+    description: "Send and receive data over the network",
+    severity: "warning",
+  },
+  "agent:invoke": {
+    label: "Launch agents",
+    description: "Start agent sessions on your behalf",
+    severity: "warning",
+  },
+  "agent:read": {
+    label: "Read agent activity",
+    description: "Observe running agent sessions",
+    severity: "neutral",
+  },
+  "agent:register": {
+    label: "Register agent CLIs",
+    description: "Add launchable agent commands",
+    severity: "warning",
+  },
+  "git:read": {
+    label: "Read git status",
+    description: "View branch and change information",
+    severity: "neutral",
+  },
+  "git:write": {
+    label: "Run git commands",
+    description: "Commit, branch, and modify git state",
+    severity: "warning",
+  },
+  "clipboard:read": {
+    label: "Read clipboard",
+    description: "Access clipboard contents",
+    severity: "neutral",
+  },
+  "clipboard:write": {
+    label: "Write clipboard",
+    description: "Replace clipboard contents",
+    severity: "neutral",
+  },
+  "shell:exec": {
+    label: "Run shell commands",
+    description: "Execute arbitrary commands on your machine",
+    severity: "danger",
+  },
+} satisfies Record<BuiltInPluginCapability, CapabilityMeta>;
+
+const SEVERITY_TEXT_CLASS: Record<CapabilitySeverity, string> = {
+  danger: "text-status-danger",
+  warning: "text-status-warning",
+  neutral: "text-daintree-text/40",
+};
+
+function CapabilityRow({
+  capability,
+  allowedUrls,
+}: {
+  capability: BuiltInPluginCapability;
+  allowedUrls?: string[];
+}) {
+  const meta = CAPABILITY_META[capability];
+  const scoped = capability === "network:fetch" && allowedUrls && allowedUrls.length > 0;
+  return (
+    <li className="flex items-start gap-2">
+      {meta.severity === "danger" ? (
+        <AlertCircle className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${SEVERITY_TEXT_CLASS.danger}`} />
+      ) : meta.severity === "warning" ? (
+        <AlertTriangle className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${SEVERITY_TEXT_CLASS.warning}`} />
+      ) : (
+        <span
+          className="w-1.5 h-1.5 rounded-full bg-daintree-text/30 shrink-0 mt-[7px]"
+          aria-hidden
+        />
+      )}
+      <div className="min-w-0">
+        <div
+          className={`text-xs ${meta.severity === "neutral" ? "text-daintree-text/80" : SEVERITY_TEXT_CLASS[meta.severity]}`}
+        >
+          {meta.label}
+        </div>
+        <div className="text-[11px] text-daintree-text/40">{meta.description}</div>
+        {scoped && (
+          <ul className="mt-0.5 space-y-0.5">
+            {allowedUrls.map((url) => (
+              <li key={url} className="text-[11px] font-mono text-daintree-text/50 break-all">
+                {url}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </li>
+  );
+}
+
+/**
+ * Surfaces a plugin's declared capabilities (#9556) as a labelled, risk-coloured
+ * list with an effective-danger summary. Read-only — the data already rides on
+ * `LoadedPluginInfo`; this only presents it so users can audit what an installed
+ * plugin is allowed to do without re-opening the install dialog.
+ */
+function PluginCapabilityList({ plugin }: { plugin: LoadedPluginInfo }) {
+  const declared = new Set(plugin.manifest.capabilities ?? []);
+  const granted = BUILT_IN_PLUGIN_CAPABILITIES.filter((c) => declared.has(c));
+  const allowedUrls = plugin.manifest.scopes?.network?.allowedUrls;
+
+  return (
+    <div className="space-y-2">
+      <h4 className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/40">
+        Permissions
+      </h4>
+      {granted.length === 0 ? (
+        <p className="text-xs text-daintree-text/40">No special permissions</p>
+      ) : (
+        <>
+          {plugin.pluginDanger === "confirm" && (
+            <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
+              <AlertTriangle className="w-3.5 h-3.5 text-status-warning shrink-0 mt-0.5" />
+              <p className="text-[11px] text-status-warning break-words">
+                Requests sensitive permissions — review before enabling
+              </p>
+            </div>
+          )}
+          <ul className="space-y-1.5">
+            {granted.map((capability) => (
+              <CapabilityRow key={capability} capability={capability} allowedUrls={allowedUrls} />
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
 
 interface PluginDetailPaneProps {
   plugin: LoadedPluginInfo;
@@ -159,6 +342,8 @@ export function PluginDetailPane({
           </p>
         </div>
       )}
+
+      <PluginCapabilityList plugin={plugin} />
 
       {/* Settings render whether or not the plugin is enabled — values persist
           independently of the plugin's runtime, so users can pre-configure a

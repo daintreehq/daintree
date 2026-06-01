@@ -231,6 +231,21 @@ function manifestTriggersCompoundElevation(
   return false;
 }
 
+/**
+ * Aggregate danger verdict for a whole plugin (vs. the per-action
+ * `effectiveDanger` computed in {@link PluginService.validateAndBuildActionDescriptor}).
+ * Surfaced on {@link LoadedPluginInfo.pluginDanger} so the manager UI can show
+ * an effective-danger summary without re-deriving the lattice in the renderer.
+ * Single source of truth on main: reuses {@link CONFIRM_TRIGGERING_CAPABILITIES}
+ * and {@link manifestTriggersCompoundElevation} rather than spawning a third copy.
+ */
+function computePluginDanger(manifest: PluginManifest | undefined): "safe" | "confirm" {
+  const caps = manifest?.capabilities ?? [];
+  if (caps.some((c) => CONFIRM_TRIGGERING_CAPABILITIES.has(c))) return "confirm";
+  if (manifestTriggersCompoundElevation(manifest, caps)) return "confirm";
+  return "safe";
+}
+
 interface LoadedPlugin {
   manifest: PluginManifest;
   dir: string;
@@ -2512,6 +2527,7 @@ export class PluginService {
       // pendingRestart: desired state diverges from running state.
       // Running + now-disabled → unload pending; skipped + now-enabled → load pending.
       const pendingRestart = isRunning ? disabled : !disabled;
+      const pluginDanger = computePluginDanger(p.manifest);
       if (p.isBuiltin) {
         return {
           manifest: p.manifest,
@@ -2527,6 +2543,7 @@ export class PluginService {
           updateAvailable: null,
           devMode: false,
           pendingRestart,
+          pluginDanger,
         };
       }
       const record = installed[p.manifest.name];
@@ -2545,6 +2562,7 @@ export class PluginService {
         updateAvailable: record?.updateAvailable ?? null,
         devMode: record?.devMode ?? false,
         pendingRestart,
+        pluginDanger,
       };
     };
 
