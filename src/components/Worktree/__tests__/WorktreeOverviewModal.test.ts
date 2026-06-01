@@ -163,23 +163,6 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
   });
 
   describe("finished chip (#9607)", () => {
-    function statsSlice(src: string): string {
-      const start = src.indexOf("Aggregate activity statistics");
-      let depth = 0;
-      let i = start;
-      let found = false;
-      for (; i < src.length; i++) {
-        if (src.slice(i, i + 4) === "<div") {
-          depth++;
-        } else if (src.slice(i, i + 6) === "</div>") {
-          depth--;
-          if (depth === 0 && found) break;
-        }
-        if (depth > 0 && !found) found = true;
-      }
-      return src.slice(start, i + 6);
-    }
-
     it("computes finishedCount in the aggregateStats loop", () => {
       expect(source).toMatch(/finishedCount\+\+/);
       expect(source).toMatch(/return\s*\{\s*workingCount,\s*waitingCount,\s*finishedCount\s*\}/);
