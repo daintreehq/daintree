@@ -10,6 +10,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
+import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 
 const SYNC_MODE_POLL_MS = 250;
 
@@ -182,18 +183,21 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
 
   useEffect(() => {
     if (!isOpen) return;
-    // xterm 6 mutates terminal.modes asynchronously as the parser consumes
-    // BSU/ESU sequences, and there is no change event. Poll at the same
-    // cadence as REFLOW_THROTTLE_MS (250ms) — enough resolution to catch
-    // most BSU blocks while the dialog is open.
+    // Immediate read on open so the dialog reflects the current sync-mode
+    // before the first poll lands.
     setSyncMode(terminalInstanceService.getSynchronizedOutputMode(terminalId));
-    const intervalId = window.setInterval(() => {
-      setSyncMode(terminalInstanceService.getSynchronizedOutputMode(terminalId));
-    }, SYNC_MODE_POLL_MS);
-    return () => {
-      window.clearInterval(intervalId);
-    };
   }, [isOpen, terminalId]);
+
+  // xterm 6 mutates terminal.modes asynchronously as the parser consumes
+  // BSU/ESU sequences, and there is no change event. Poll at the same cadence
+  // as REFLOW_THROTTLE_MS (250ms) — enough resolution to catch most BSU blocks
+  // while the dialog is open. Visibility-gated so the poll pauses while the
+  // window is hidden and snaps back on restore.
+  useVisibilityAwareInterval(
+    () => setSyncMode(terminalInstanceService.getSynchronizedOutputMode(terminalId)),
+    SYNC_MODE_POLL_MS,
+    isOpen
+  );
 
   const launchAgentId = panel?.launchAgentId ?? info?.launchAgentId;
   const command = panel?.command ?? info?.command;

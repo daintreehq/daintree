@@ -251,24 +251,53 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     const timeouts: ReturnType<typeof setTimeout>[] = [];
     const intervals: ReturnType<typeof setInterval>[] = [];
 
-    if (isSessionMuted) {
-      const delay = Math.max(0, quietUntil - Date.now());
-      timeouts.push(setTimeout(tick, delay + 50));
-    }
+    const clearAll = () => {
+      for (const t of timeouts) clearTimeout(t);
+      for (const i of intervals) clearInterval(i);
+      timeouts.length = 0;
+      intervals.length = 0;
+    };
 
-    if (quietHoursEnabled) {
-      const msToNextMinute = 60_000 - (Date.now() % 60_000);
-      timeouts.push(
-        setTimeout(() => {
-          tick();
-          intervals.push(setInterval(tick, 60_000));
-        }, msToNextMinute + 50)
-      );
+    // Visibility may flip between scheduling and firing; bail out if hidden.
+    const tickIfVisible = () => {
+      if (document.hidden) return;
+      tick();
+    };
+
+    const schedule = () => {
+      if (isSessionMuted) {
+        const delay = Math.max(0, quietUntil - Date.now());
+        timeouts.push(setTimeout(tickIfVisible, delay + 50));
+      }
+
+      if (quietHoursEnabled) {
+        const msToNextMinute = 60_000 - (Date.now() % 60_000);
+        timeouts.push(
+          setTimeout(() => {
+            if (document.hidden) return;
+            tick();
+            intervals.push(setInterval(tickIfVisible, 60_000));
+          }, msToNextMinute + 50)
+        );
+      }
+    };
+
+    const handleVisibility = () => {
+      clearAll();
+      if (!document.hidden) {
+        tick();
+        schedule();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+    if (!document.hidden) {
+      schedule();
     }
 
     return () => {
-      for (const t of timeouts) clearTimeout(t);
-      for (const i of intervals) clearInterval(i);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      clearAll();
     };
   }, [open, isSessionMuted, quietUntil, quietHoursEnabled]);
 

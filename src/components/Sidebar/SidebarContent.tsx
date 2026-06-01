@@ -74,6 +74,7 @@ import { SidebarWorktreeRow } from "./SidebarWorktreeRow";
 import { WorktreeLoadErrorBanner } from "./WorktreeLoadErrorBanner";
 import { StaticWorktreeRow } from "./StaticWorktreeRow";
 import { WorktreeCardPlaceholder } from "./WorktreeCardPlaceholder";
+import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useScrollIndicator } from "./useScrollIndicator";
 import { useRecipeDialogState } from "./useRecipeDialogState";
 import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
@@ -415,11 +416,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // Effect re-runs on every new disconnect via `reconnectingAt` dep, so the
   // baseline is always fresh — no stale-closure risk.
   const [, setReconnectTick] = useState(0);
-  useEffect(() => {
-    if (!isReconnecting || reconnectingAt == null) return;
-    const id = setInterval(() => setReconnectTick((n) => n + 1), 1000);
-    return () => clearInterval(id);
-  }, [isReconnecting, reconnectingAt]);
+  useVisibilityAwareInterval(
+    () => setReconnectTick((n) => n + 1),
+    1000,
+    isReconnecting && reconnectingAt != null
+  );
   const showReconnectingEscalated =
     isReconnecting &&
     reconnectingAt !== null &&
