@@ -337,7 +337,7 @@ describe("ProjectViewManager adversarial", () => {
     const result = await manager.switchTo("proj-b", "/b");
 
     expect(result.isNew).toBe(true);
-    const replacementView = result.view as {
+    const replacementView = result.view as unknown as {
       setBackgroundColor: ReturnType<typeof vi.fn>;
     };
     expect(replacementView.setBackgroundColor).toHaveBeenCalledWith("#1f1b16");
