@@ -45,7 +45,6 @@ export function DevPreviewDestructiveConfirmDialog({
 }: DevPreviewDestructiveConfirmDialogProps) {
   const [meta, setMeta] = useState<DevPreviewDestructivePreviewMeta | null>(null);
   const [metaError, setMetaError] = useState<string | null>(null);
-  const [metaPending, setMetaPending] = useState(false);
   const [sizes, setSizes] = useState<DevPreviewDestructivePreviewSizes | null>(null);
   const [sizesPending, setSizesPending] = useState(false);
   const requestIdRef = useRef(0);
@@ -54,7 +53,6 @@ export function DevPreviewDestructiveConfirmDialog({
     if (!isOpen || !projectId || !tier) {
       setMeta(null);
       setMetaError(null);
-      setMetaPending(false);
       setSizes(null);
       setSizesPending(false);
       return;
@@ -63,7 +61,6 @@ export function DevPreviewDestructiveConfirmDialog({
     const requestId = ++requestIdRef.current;
     setMeta(null);
     setMetaError(null);
-    setMetaPending(true);
     setSizes(null);
     setSizesPending(true);
 
@@ -77,10 +74,6 @@ export function DevPreviewDestructiveConfirmDialog({
         .catch((err: unknown) => {
           if (requestIdRef.current !== requestId) return;
           setMetaError(formatErrorMessage(err, "Couldn't load directory preview"));
-        })
-        .finally(() => {
-          if (requestIdRef.current !== requestId) return;
-          setMetaPending(false);
         }),
       { context: "DevPreviewDestructiveConfirmDialog: load meta" }
     );
@@ -126,7 +119,7 @@ export function DevPreviewDestructiveConfirmDialog({
       title={title}
       description={description}
       confirmLabel={confirmLabel}
-      confirmDisabled={metaPending || !!metaError}
+      confirmDisabled={!meta}
       onConfirm={onConfirm}
     >
       <PreviewBlock
