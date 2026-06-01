@@ -1,5 +1,5 @@
 import { Plug, FilePlus, Link2, Info, Download, AlertCircle, AlertTriangle } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, useDeferredValue } from "react";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -11,10 +11,25 @@ import { logError } from "@/utils/logger";
 import { cn } from "@/lib/utils";
 import { usePluginManager } from "./usePluginManager";
 import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDetailPane";
+import { filterPlugins, isQueryActive, parsePluginQuery } from "@/lib/pluginSearch";
 import type { LoadedPluginInfo, PluginDeepLinkIntent } from "@shared/types/plugin";
 
 const ROW_BADGE_CLASS =
   "inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 uppercase tracking-wide";
+
+// Below this many installed plugins the search box adds noise without value, so
+// it stays hidden and the grouped list is shown directly (#9557).
+const PLUGIN_SEARCH_MIN_ITEMS = 10;
+
+// Static operator chips surfaced below the search input so the filter syntax is
+// discoverable instead of hidden. `@cap:<value>` is omitted — its value set is
+// dynamic and would overflow the 288px pane — but stays typeable.
+const PLUGIN_FILTER_CHIPS: ReadonlyArray<{ token: string; label: string }> = [
+  { token: "@builtin", label: "Built-in" },
+  { token: "@installed", label: "Installed" },
+  { token: "@enabled", label: "Enabled" },
+  { token: "@disabled", label: "Disabled" },
+];
 
 /**
  * Section grouping for the installed list (#9554). A disabled plugin always
@@ -213,6 +228,39 @@ export function PluginManagerDialog({
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const [highlightedPluginId, setHighlightedPluginId] = useState<string | null>(null);
 
+  // Free-text + operator filter (#9557). The input binds to the immediate
+  // `query`; the expensive filter pass runs against the deferred value so typing
+  // stays responsive (LESSON #3726 — useDeferredValue, not setTimeout debounce).
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
+  const isSearchVisible = pm.plugins.length >= PLUGIN_SEARCH_MIN_ITEMS;
+  const isSearchActive = useMemo(
+    () => isSearchVisible && isQueryActive(parsePluginQuery(deferredQuery)),
+    [isSearchVisible, deferredQuery]
+  );
+  const filteredPlugins = useMemo(
+    () => (isSearchActive ? filterPlugins(pm.plugins, deferredQuery) : pm.plugins),
+    [isSearchActive, pm.plugins, deferredQuery]
+  );
+
+  const appendFilterToken = (token: string) => {
+    setQuery((prev) => {
+      const tokens = prev.split(/\s+/).filter(Boolean);
+      // Operators are case-insensitive, so dedup case-insensitively too.
+      if (tokens.some((t) => t.toLowerCase() === token.toLowerCase())) return prev;
+      return prev.length === 0 ? token : `${prev.trim()} ${token}`;
+    });
+    searchInputRef.current?.focus();
+  };
+
+  // Reset the query when the dialog closes (so a stale filter doesn't hide rows
+  // on reopen) or when the list drops back below the search threshold (so the
+  // filter can't silently reactivate if the count later climbs again).
+  useEffect(() => {
+    if (!isOpen || !isSearchVisible) setQuery("");
+  }, [isOpen, isSearchVisible]);
+
   // Re-validate the selection after every list refresh (reopen, uninstall,
   // cross-window provenance change). A single effect keyed on the list nulls a
   // selection whose plugin is gone — kept here rather than in a second reset
@@ -226,6 +274,20 @@ export function PluginManagerDialog({
     }
   }, [pm.plugins, selectedPluginId]);
 
+  // When a filter is active, also null a selection whose plugin is no longer in
+  // the filtered set — otherwise the detail pane keeps showing a plugin that the
+  // current query hides (#9557). Separate from the full-list effect above so the
+  // two have independent dependency arrays and can't race.
+  useEffect(() => {
+    if (
+      isSearchActive &&
+      selectedPluginId !== null &&
+      !filteredPlugins.some((p) => p.manifest.name === selectedPluginId)
+    ) {
+      setSelectedPluginId(null);
+    }
+  }, [isSearchActive, filteredPlugins, selectedPluginId]);
+
   // When the hook resolves a deep-link `open` target to an installed plugin
   // (#9559), select it, scroll its row into view, and apply a transient neutral
   // highlight, then clear the focus request so it doesn't re-trigger on the next
@@ -235,6 +297,9 @@ export function PluginManagerDialog({
   useEffect(() => {
     if (!focusPluginId) return;
     if (!pm.plugins.some((p) => p.manifest.name === focusPluginId)) return;
+    // Clear any active filter so the deep-link target row is actually rendered
+    // and can be scrolled into view (#9557 + #9559).
+    setQuery("");
     setSelectedPluginId(focusPluginId);
     const row = rowRefs.current.get(focusPluginId);
     if (!row) return; // Row not rendered yet — the not-found notice path handles misses.
@@ -354,6 +419,31 @@ export function PluginManagerDialog({
                 Install from URL
               </Button>
             </div>
+            {isSearchVisible && (
+              <div className="space-y-2">
+                <input
+                  ref={searchInputRef}
+                  type="search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Filter plugins"
+                  aria-label="Filter plugins"
+                  className="w-full px-3 py-2 text-sm rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border text-daintree-text placeholder:text-daintree-text/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                />
+                <div className="flex flex-wrap gap-1">
+                  {PLUGIN_FILTER_CHIPS.map(({ token, label }) => (
+                    <button
+                      key={token}
+                      type="button"
+                      onClick={() => appendFilterToken(token)}
+                      className="px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 hover:text-daintree-text/80 hover:border-daintree-border transition-colors"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {pm.notice && (
               <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-daintree-border">
                 <Info className="w-3.5 h-3.5 text-daintree-text/50 shrink-0 mt-0.5" />
@@ -385,46 +475,89 @@ export function PluginManagerDialog({
               title="No plugins installed"
               description="Install one from a file or URL to add panels, commands, and integrations."
             />
-          ) : !hasPlugins ? null : (
+          ) : !hasPlugins ? null : isSearchActive && filteredPlugins.length === 0 ? (
+            // Filtered to nothing — offer a one-tap escape back to the full list.
+            // No section headers here, so LESSON #9006 (role="group" + VoiceOver
+            // on Chromium 146) never applies to the filtered view.
+            <div className="flex-1 min-h-0 flex items-center justify-center">
+              <EmptyState
+                variant="filtered-empty"
+                scale="sidebar"
+                title="No matching plugins"
+                action={
+                  <button
+                    type="button"
+                    onClick={() => setQuery("")}
+                    className="text-xs text-daintree-text/60 hover:text-daintree-text underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent rounded-sm"
+                  >
+                    Clear search
+                  </button>
+                }
+              />
+            </div>
+          ) : (
             <ScrollShadow
               className="flex-1 min-h-0"
               scrollClassName="p-2 space-y-4"
               role="listbox"
               aria-label="Installed plugins"
             >
-              {PLUGIN_GROUPS.map(({ id, label, match }) => {
-                const groupPlugins = pm.plugins.filter(match);
-                if (groupPlugins.length === 0) return null;
-                return (
-                  <div key={id} role="group" aria-labelledby={id} className="space-y-1">
-                    <p
-                      id={id}
-                      className="px-3 text-[10px] font-medium uppercase tracking-wider text-daintree-text/40 select-none"
-                    >
-                      {label}
-                    </p>
-                    {groupPlugins.map((plugin) => (
-                      <PluginRow
-                        key={plugin.manifest.name}
-                        plugin={plugin}
-                        selected={plugin.manifest.name === selectedPluginId}
-                        toggling={pm.pending.has(plugin.manifest.name)}
-                        onSelect={() =>
-                          setSelectedPluginId((prev) =>
-                            prev === plugin.manifest.name ? null : plugin.manifest.name
-                          )
-                        }
-                        onToggle={() => void pm.handleToggle(plugin)}
-                        highlighted={highlightedPluginId === plugin.manifest.name}
-                        innerRef={(el) => {
-                          if (el) rowRefs.current.set(plugin.manifest.name, el);
-                          else rowRefs.current.delete(plugin.manifest.name);
-                        }}
-                      />
-                    ))}
-                  </div>
-                );
-              })}
+              {isSearchActive
+                ? // Flat filtered list — grouping is meaningless across filters
+                  // like @installed, and a flat list keeps the listbox free of
+                  // role="group" section labels (LESSON #9006).
+                  filteredPlugins.map((plugin) => (
+                    <PluginRow
+                      key={plugin.manifest.name}
+                      plugin={plugin}
+                      selected={plugin.manifest.name === selectedPluginId}
+                      toggling={pm.pending.has(plugin.manifest.name)}
+                      onSelect={() =>
+                        setSelectedPluginId((prev) =>
+                          prev === plugin.manifest.name ? null : plugin.manifest.name
+                        )
+                      }
+                      onToggle={() => void pm.handleToggle(plugin)}
+                      highlighted={highlightedPluginId === plugin.manifest.name}
+                      innerRef={(el) => {
+                        if (el) rowRefs.current.set(plugin.manifest.name, el);
+                        else rowRefs.current.delete(plugin.manifest.name);
+                      }}
+                    />
+                  ))
+                : PLUGIN_GROUPS.map(({ id, label, match }) => {
+                    const groupPlugins = pm.plugins.filter(match);
+                    if (groupPlugins.length === 0) return null;
+                    return (
+                      <div key={id} role="group" aria-labelledby={id} className="space-y-1">
+                        <p
+                          id={id}
+                          className="px-3 text-[10px] font-medium uppercase tracking-wider text-daintree-text/40 select-none"
+                        >
+                          {label}
+                        </p>
+                        {groupPlugins.map((plugin) => (
+                          <PluginRow
+                            key={plugin.manifest.name}
+                            plugin={plugin}
+                            selected={plugin.manifest.name === selectedPluginId}
+                            toggling={pm.pending.has(plugin.manifest.name)}
+                            onSelect={() =>
+                              setSelectedPluginId((prev) =>
+                                prev === plugin.manifest.name ? null : plugin.manifest.name
+                              )
+                            }
+                            onToggle={() => void pm.handleToggle(plugin)}
+                            highlighted={highlightedPluginId === plugin.manifest.name}
+                            innerRef={(el) => {
+                              if (el) rowRefs.current.set(plugin.manifest.name, el);
+                              else rowRefs.current.delete(plugin.manifest.name);
+                            }}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })}
             </ScrollShadow>
           )}
         </div>

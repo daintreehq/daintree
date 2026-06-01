@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -107,6 +107,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // matching row, then clears it. Held in a ref for the consumption effect so
   // `onConsumed` isn't a reactive dependency that re-fires the effect.
   const [focusPluginId, setFocusPluginId] = useState<string | null>(null);
+  // Stable identity so the consumer's deep-link highlight effect doesn't tear
+  // down its 2s timer the instant it clears the focus request (#9557 review).
+  const clearFocusPluginId = useCallback(() => setFocusPluginId(null), []);
   const deepLinkConsumedRef = useRef<(() => void) | undefined>(undefined);
   deepLinkConsumedRef.current = deepLink?.onConsumed;
   // Mirror `showUrlDialog` so the deep-link effect can read the latest value
@@ -617,6 +620,6 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     handleDragLeave,
     handleDrop,
     focusPluginId,
-    clearFocusPluginId: () => setFocusPluginId(null),
+    clearFocusPluginId,
   };
 }

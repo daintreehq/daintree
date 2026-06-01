@@ -1246,4 +1246,151 @@ describe("PluginManagerDialog", () => {
       expect(labels).toEqual(["Alpha", "Zebra"]);
     });
   });
+
+  describe("search (#9557)", () => {
+    // The search box only appears once the list is long enough to need it
+    // (PLUGIN_SEARCH_MIN_ITEMS = 10). Generate distinct, addressable plugins.
+    const make = (
+      name: string,
+      overrides: Partial<Omit<LoadedPluginInfo, "manifest">> & {
+        manifest?: Partial<LoadedPluginInfo["manifest"]>;
+      } = {}
+    ): LoadedPluginInfo => {
+      const { manifest: manifestOverride, ...rest } = overrides;
+      const base = makePlugin(rest);
+      return {
+        ...base,
+        manifest: {
+          ...base.manifest,
+          name: `pkg.${name}`,
+          displayName: name,
+          ...manifestOverride,
+        },
+      };
+    };
+
+    const manyPlugins = (count: number) =>
+      Array.from({ length: count }, (_, i) => make(`Plugin${String(i).padStart(2, "0")}`));
+
+    it("hides the filter input below the item threshold", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(9));
+      renderDialog();
+      await waitFor(() => expect(screen.getByText("Plugin00")).toBeTruthy());
+      expect(screen.queryByLabelText("Filter plugins")).toBeNull();
+    });
+
+    it("shows the filter input at the item threshold", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(10));
+      renderDialog();
+      await waitFor(() => expect(screen.getByLabelText("Filter plugins")).toBeTruthy());
+    });
+
+    it("filters the list by free text", async () => {
+      const plugins = [
+        ...manyPlugins(10),
+        make("Notepad", { manifest: { name: "pkg.notepad", displayName: "Notepad" } }),
+      ];
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(plugins);
+      renderDialog();
+      const input = await screen.findByLabelText("Filter plugins");
+      fireEvent.change(input, { target: { value: "Notepad" } });
+      await waitFor(() => expect(screen.getByText("Notepad")).toBeTruthy());
+      expect(screen.queryByText("Plugin00")).toBeNull();
+    });
+
+    it("injects an operator token when a filter chip is clicked", async () => {
+      const plugins = [
+        ...manyPlugins(10),
+        make("CoreThing", {
+          manifest: { name: "pkg.core", displayName: "CoreThing" },
+          isBuiltin: true,
+          source: "builtin",
+        }),
+      ];
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(plugins);
+      renderDialog();
+      await screen.findByLabelText("Filter plugins");
+      fireEvent.click(screen.getByRole("button", { name: "Built-in" }));
+      const input = screen.getByLabelText<HTMLInputElement>("Filter plugins");
+      expect(input.value).toBe("@builtin");
+      await waitFor(() => expect(screen.getByText("CoreThing")).toBeTruthy());
+      expect(screen.queryByText("Plugin00")).toBeNull();
+    });
+
+    it("appends an operator chip after existing free text", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(10));
+      renderDialog();
+      const input = await screen.findByLabelText<HTMLInputElement>("Filter plugins");
+      fireEvent.change(input, { target: { value: "notes" } });
+      fireEvent.click(screen.getByRole("button", { name: "Installed" }));
+      expect(screen.getByLabelText<HTMLInputElement>("Filter plugins").value).toBe(
+        "notes @installed"
+      );
+    });
+
+    it("does not duplicate an operator that is already present (case-insensitive)", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(10));
+      renderDialog();
+      const input = await screen.findByLabelText<HTMLInputElement>("Filter plugins");
+      fireEvent.change(input, { target: { value: "@BUILTIN" } });
+      fireEvent.click(screen.getByRole("button", { name: "Built-in" }));
+      expect(screen.getByLabelText<HTMLInputElement>("Filter plugins").value).toBe("@BUILTIN");
+    });
+
+    it("filters by the @cap operator with a colon-bearing value", async () => {
+      const plugins = [
+        ...manyPlugins(10),
+        make("NetPlugin", {
+          manifest: {
+            name: "pkg.net",
+            displayName: "NetPlugin",
+            capabilities: ["network:fetch"],
+          },
+        }),
+      ];
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(plugins);
+      renderDialog();
+      const input = await screen.findByLabelText("Filter plugins");
+      fireEvent.change(input, { target: { value: "@cap:network:fetch" } });
+      await waitFor(() => expect(screen.getByText("NetPlugin")).toBeTruthy());
+      expect(screen.queryByText("Plugin00")).toBeNull();
+    });
+
+    it("renders a flat list with no group sections while filtering", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(10));
+      renderDialog();
+      const input = await screen.findByLabelText("Filter plugins");
+      fireEvent.change(input, { target: { value: "Plugin00" } });
+      await waitFor(() => expect(screen.queryByText("Plugin01")).toBeNull());
+      expect(screen.getByText("Plugin00")).toBeTruthy();
+      expect(screen.queryByRole("group", { name: "Installed" })).toBeNull();
+    });
+
+    it("shows a zero-result state with a Clear search control", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(10));
+      renderDialog();
+      const input = await screen.findByLabelText("Filter plugins");
+      fireEvent.change(input, { target: { value: "zzzznomatch" } });
+      await waitFor(() => expect(screen.getByText("No matching plugins")).toBeTruthy());
+      fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+      await waitFor(() => expect(screen.getByText("Plugin00")).toBeTruthy());
+    });
+
+    it("clears the selected plugin when the filter hides it", async () => {
+      const plugins = [
+        ...manyPlugins(10),
+        make("Notepad", { manifest: { name: "pkg.notepad", displayName: "Notepad" } }),
+      ];
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(plugins);
+      renderDialog();
+      await screen.findByLabelText("Filter plugins");
+      fireEvent.click(await screen.findByRole("option", { name: /Plugin00/ }));
+      // Detail pane now shows the selected plugin's uninstall control.
+      await waitFor(() => expect(screen.getByRole("button", { name: /uninstall/i })).toBeTruthy());
+      const input = screen.getByLabelText("Filter plugins");
+      fireEvent.change(input, { target: { value: "Notepad" } });
+      // Plugin00 is filtered out, so the detail pane falls back to its empty state.
+      await waitFor(() => expect(screen.getByText("Select a plugin")).toBeTruthy());
+    });
+  });
 });
