@@ -645,7 +645,10 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
     switch (state) {
       case "MERGING":
-        await git.merge(["--continue", "--no-edit"]);
+        // `git merge --continue` rejects extra arguments on modern git
+        // ("fatal: --continue expects no arguments"); the non-interactive env
+        // overlay (GIT_EDITOR=true + GIT_MERGE_AUTOEDIT=no) covers the message.
+        await git.merge(["--continue"]);
         return;
       case "REBASING":
         // `git rebase --continue` has no `--no-edit`; the env overlay covers it.
