@@ -253,6 +253,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   // `query`; the expensive filter pass runs against the deferred value so typing
   // stays responsive (LESSON #3726 — useDeferredValue, not setTimeout debounce).
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const isSearchVisible = pm.plugins.length >= PLUGIN_SEARCH_MIN_ITEMS;
@@ -281,6 +282,18 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   useEffect(() => {
     if (!isOpen || !isSearchVisible) setQuery("");
   }, [isOpen, isSearchVisible]);
+
+  // Move focus into the view when it opens. Unlike the former modal dialog, a
+  // role="region" view doesn't trap focus, so without this the keyboard focus
+  // can stay on a background grid terminal — and `terminal.close` (Cmd+W) skips
+  // the escape stack while a grid panel is focused, closing the terminal
+  // instead of the view. Prefer the filter input when shown, else the close
+  // button. Mirrors ThemeBrowser's open-focus behaviour.
+  useEffect(() => {
+    if (!isOpen) return;
+    const target = searchInputRef.current ?? closeButtonRef.current;
+    target?.focus();
+  }, [isOpen]);
 
   // Re-validate the selection after every list refresh (reopen, uninstall,
   // cross-window provenance change). A single effect keyed on the list nulls a
@@ -323,13 +336,23 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     setQuery("");
     setSelectedPluginId(focusPluginId);
     const row = rowRefs.current.get(focusPluginId);
-    if (!row) return; // Row not rendered yet — the not-found notice path handles misses.
+    if (!row) return; // Row not rendered yet — leave focusPluginId set so a
+    // subsequent list/filter refresh retries the scroll.
     row.scrollIntoView({ block: "center", behavior: "smooth" });
     setHighlightedPluginId(focusPluginId);
     clearFocusPluginId();
+  }, [focusPluginId, clearFocusPluginId, pm.plugins]);
+
+  // Fade the deep-link highlight after a beat. Kept separate from the consume
+  // effect above: clearing focusPluginId there flips that effect's own
+  // dependency, so an inline timer would be torn down a render later before it
+  // ever fired. Keying this on `highlightedPluginId` lets the timer live until
+  // it actually clears the highlight (or the view unmounts).
+  useEffect(() => {
+    if (!highlightedPluginId) return;
     const timer = setTimeout(() => setHighlightedPluginId(null), DEEP_LINK_HIGHLIGHT_MS);
     return () => clearTimeout(timer);
-  }, [focusPluginId, clearFocusPluginId, pm.plugins]);
+  }, [highlightedPluginId]);
 
   const hasPlugins = pm.plugins.length > 0;
   // Any enabled/disabled toggle this session that hasn't taken effect yet leaves
@@ -381,7 +404,13 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           <Plug className="w-5 h-5 text-daintree-text/70 shrink-0" aria-hidden="true" />
           <h2 className="text-sm font-medium text-daintree-text truncate">Plugins</h2>
         </div>
-        <Button variant="ghost" size="icon-sm" onClick={close} aria-label="Close plugin manager">
+        <Button
+          ref={closeButtonRef}
+          variant="ghost"
+          size="icon-sm"
+          onClick={close}
+          aria-label="Close plugin manager"
+        >
           <X />
         </Button>
       </header>

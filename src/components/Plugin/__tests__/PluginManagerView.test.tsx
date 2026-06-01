@@ -145,6 +145,17 @@ describe("PluginManagerView", () => {
     expect(screen.getByText("Installed plugins")).toBeTruthy();
   });
 
+  it("moves focus into the view on open so the keyboard isn't left on the background", async () => {
+    // role="region" doesn't trap focus; the view must steal it on open so
+    // Escape (and Cmd+W) route through the view rather than a background panel.
+    renderDialog();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Close plugin manager" })
+      )
+    );
+  });
+
   it("shows an empty state when no plugins are installed", async () => {
     renderDialog();
     await waitFor(() => {
