@@ -871,7 +871,13 @@ export function WorktreeOverviewModal({
                       )}
                     >
                       <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-state-working)] motion-safe:animate-pulse" />
-                      <span className="text-[var(--color-state-working)]">
+                      <span
+                        className={
+                          quickStateFilter === "working"
+                            ? "text-daintree-text"
+                            : "text-daintree-text/60"
+                        }
+                      >
                         {aggregateStats.workingCount} working
                       </span>
                     </button>
@@ -892,7 +898,13 @@ export function WorktreeOverviewModal({
                       )}
                     >
                       <span className="w-1.5 h-1.5 rounded-full bg-status-warning" />
-                      <span className="text-status-warning">
+                      <span
+                        className={
+                          quickStateFilter === "waiting"
+                            ? "text-daintree-text"
+                            : "text-daintree-text/60"
+                        }
+                      >
                         {aggregateStats.waitingCount} waiting
                       </span>
                     </button>
@@ -912,8 +924,14 @@ export function WorktreeOverviewModal({
                           : "hover:bg-tint/[0.04]"
                       )}
                     >
-                      <span className="w-1.5 h-1.5 rounded-full bg-daintree-text/30" />
-                      <span className="text-daintree-text/70">
+                      <span className="w-1.5 h-1.5 rounded-full bg-category-blue" />
+                      <span
+                        className={
+                          quickStateFilter === "finished"
+                            ? "text-daintree-text"
+                            : "text-daintree-text/60"
+                        }
+                      >
                         {aggregateStats.finishedCount} finished
                       </span>
                     </button>

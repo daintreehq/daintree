@@ -206,30 +206,58 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       );
     });
 
-    it("uses the shared neutral selected styling (no per-state color) on the finished chip", () => {
-      // The finished chip reuses the same bg-overlay-subtle + inset underline pattern.
-      const stats = statsSlice(source);
-      expect(stats).toContain("finished");
-      expect(stats).toContain("bg-overlay-subtle");
+    // Slice tightly around the finished chip's button so assertions can't be
+    // satisfied by the working/waiting buttons that share the same group div.
+    function finishedChipSlice(src: string): string {
+      const start = src.indexOf('aria-pressed={quickStateFilter === "finished"}');
+      return src.slice(start, src.indexOf("} finished", start));
+    }
+
+    it("reuses the shared neutral selected styling (bg-overlay-subtle underline) on the finished chip", () => {
+      const chip = finishedChipSlice(source);
+      expect(chip).toContain("bg-overlay-subtle");
+      expect(chip).toContain("shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]");
     });
 
-    it("uses a neutral dot/text color for finished (no per-state token on dot/text)", () => {
-      // Neutral fill on the dot and muted text — the focus ring may still use
-      // the accent (single focus anchor, not selection state coloring).
-      expect(source).toContain("bg-daintree-text/30");
-      expect(source).toContain("text-daintree-text/70");
-      const finishedSlice = source.slice(
-        source.indexOf('aria-pressed={quickStateFilter === "finished"}'),
-        source.indexOf("} finished")
-      );
-      expect(finishedSlice).not.toContain("color-state-working");
-      expect(finishedSlice).not.toContain("status-warning");
-      expect(finishedSlice).not.toContain("bg-daintree-accent");
-      expect(finishedSlice).not.toContain("text-daintree-accent");
+    it("uses a semantic category-blue dot for finished, matching the WorktreeCard complete chip", () => {
+      const chip = finishedChipSlice(source);
+      expect(chip).toContain("bg-category-blue");
+    });
+
+    it("uses neutral (non-state-colored) text on the finished chip label", () => {
+      const chip = finishedChipSlice(source);
+      // Label text is neutral; only the dot carries semantic color.
+      expect(chip).toMatch(/quickStateFilter === "finished"\s*\?\s*"text-daintree-text"/);
+      expect(chip).not.toContain("text-status-warning");
+      expect(chip).not.toContain("text-[var(--color-state-working)]");
+      expect(chip).not.toContain("text-daintree-accent");
     });
 
     it("renders the finished count text", () => {
       expect(source).toMatch(/\baggregateStats\.finishedCount\b/);
+    });
+  });
+
+  describe("neutral chip labels (#9607)", () => {
+    // The working/waiting chips previously wrapped their whole label in a
+    // per-state color, a one-off treatment. Labels are now neutral; only the
+    // dot keeps semantic color (mirrors the sidebar QuickStateFilterBar).
+    it("working chip label is neutral, not state-colored", () => {
+      const start = source.indexOf('aria-pressed={quickStateFilter === "working"}');
+      const chip = source.slice(start, source.indexOf("} working", start));
+      expect(chip).toMatch(/quickStateFilter === "working"\s*\?\s*"text-daintree-text"/);
+      expect(chip).not.toContain("text-[var(--color-state-working)]");
+      // The dot keeps its semantic state color.
+      expect(chip).toContain("bg-[var(--color-state-working)]");
+    });
+
+    it("waiting chip label is neutral, not state-colored", () => {
+      const start = source.indexOf('aria-pressed={quickStateFilter === "waiting"}');
+      const chip = source.slice(start, source.indexOf("} waiting", start));
+      expect(chip).toMatch(/quickStateFilter === "waiting"\s*\?\s*"text-daintree-text"/);
+      expect(chip).not.toContain("text-status-warning");
+      // The dot keeps its semantic color.
+      expect(chip).toContain("bg-status-warning");
     });
   });
 
