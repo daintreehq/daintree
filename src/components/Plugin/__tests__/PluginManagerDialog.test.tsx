@@ -1317,6 +1317,45 @@ describe("PluginManagerDialog", () => {
       expect(screen.queryByText("Plugin00")).toBeNull();
     });
 
+    it("appends an operator chip after existing free text", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(10));
+      renderDialog();
+      const input = await screen.findByLabelText<HTMLInputElement>("Filter plugins");
+      fireEvent.change(input, { target: { value: "notes" } });
+      fireEvent.click(screen.getByRole("button", { name: "Installed" }));
+      expect(screen.getByLabelText<HTMLInputElement>("Filter plugins").value).toBe(
+        "notes @installed"
+      );
+    });
+
+    it("does not duplicate an operator that is already present (case-insensitive)", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(10));
+      renderDialog();
+      const input = await screen.findByLabelText<HTMLInputElement>("Filter plugins");
+      fireEvent.change(input, { target: { value: "@BUILTIN" } });
+      fireEvent.click(screen.getByRole("button", { name: "Built-in" }));
+      expect(screen.getByLabelText<HTMLInputElement>("Filter plugins").value).toBe("@BUILTIN");
+    });
+
+    it("filters by the @cap operator with a colon-bearing value", async () => {
+      const plugins = [
+        ...manyPlugins(10),
+        make("NetPlugin", {
+          manifest: {
+            name: "pkg.net",
+            displayName: "NetPlugin",
+            capabilities: ["network:fetch"],
+          },
+        }),
+      ];
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(plugins);
+      renderDialog();
+      const input = await screen.findByLabelText("Filter plugins");
+      fireEvent.change(input, { target: { value: "@cap:network:fetch" } });
+      await waitFor(() => expect(screen.getByText("NetPlugin")).toBeTruthy());
+      expect(screen.queryByText("Plugin00")).toBeNull();
+    });
+
     it("renders a flat list with no group sections while filtering", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(10));
       renderDialog();

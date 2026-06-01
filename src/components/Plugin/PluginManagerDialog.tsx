@@ -247,17 +247,19 @@ export function PluginManagerDialog({
   const appendFilterToken = (token: string) => {
     setQuery((prev) => {
       const tokens = prev.split(/\s+/).filter(Boolean);
-      if (tokens.includes(token)) return prev; // don't duplicate an active token
+      // Operators are case-insensitive, so dedup case-insensitively too.
+      if (tokens.some((t) => t.toLowerCase() === token.toLowerCase())) return prev;
       return prev.length === 0 ? token : `${prev.trim()} ${token}`;
     });
     searchInputRef.current?.focus();
   };
 
-  // Reset the query whenever the dialog closes so a stale filter doesn't hide
-  // rows on reopen.
+  // Reset the query when the dialog closes (so a stale filter doesn't hide rows
+  // on reopen) or when the list drops back below the search threshold (so the
+  // filter can't silently reactivate if the count later climbs again).
   useEffect(() => {
-    if (!isOpen) setQuery("");
-  }, [isOpen]);
+    if (!isOpen || !isSearchVisible) setQuery("");
+  }, [isOpen, isSearchVisible]);
 
   // Re-validate the selection after every list refresh (reopen, uninstall,
   // cross-window provenance change). A single effect keyed on the list nulls a

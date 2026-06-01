@@ -79,6 +79,18 @@ describe("parsePluginQuery", () => {
     expect(parsed.operators).toEqual([{ key: "cap", value: null }]);
     expect(parsed.freeText).toBe("");
   });
+
+  it("stops the operator key at a non-letter so @builtin-extra yields @builtin + tail", () => {
+    const parsed = parsePluginQuery("@builtin-extra");
+    expect(parsed.operators).toEqual([{ key: "builtin", value: null }]);
+    expect(parsed.freeText).toBe("-extra");
+  });
+
+  it("keeps a colon-bearing capability value intact", () => {
+    const parsed = parsePluginQuery("@cap:network:fetch");
+    expect(parsed.operators).toEqual([{ key: "cap", value: "network:fetch" }]);
+    expect(parsed.freeText).toBe("");
+  });
 });
 
 describe("isQueryActive", () => {
