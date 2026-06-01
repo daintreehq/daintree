@@ -377,6 +377,17 @@ export class MainProcessWatchdogClient {
     this.startHost();
   }
 
+  /**
+   * E2E seam: fire the disabled-notification path (telemetry + the `onDisabled`
+   * listener that broadcasts `watchdog:disabled`) without driving three real
+   * crashes. Respects the once-per-cycle `disabledNotified` guard exactly like
+   * the production cap-hit path, so a subsequent `restart()` re-arms it. Gated
+   * to `DAINTREE_E2E_FAULT_MODE` at the call site; never invoked in production.
+   */
+  _emitDisabledForTesting(): void {
+    this.notifyDisabled();
+  }
+
   /** Stop the watchdog cleanly. Idempotent. */
   dispose(): void {
     if (this.isDisposed) return;

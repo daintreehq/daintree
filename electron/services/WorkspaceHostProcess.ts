@@ -320,6 +320,25 @@ export class WorkspaceHostProcess extends EventEmitter {
     }
   }
 
+  /**
+   * E2E seam: force-kill the host child to exercise the real crash →
+   * auto-restart → `restarted` → port re-broker path. Mirrors the health-check
+   * watchdog's SIGKILL. Gated to `DAINTREE_E2E_FAULT_MODE` at the main-process
+   * call site; never invoked in production. Returns false if there is no live
+   * child to kill.
+   */
+  _crashForTesting(): boolean {
+    if (this.isDisposed || !this.child) return false;
+    const pid = this.child.pid;
+    if (!pid) return false;
+    try {
+      process.kill(pid, "SIGKILL");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   dispose(): void {
     if (this.isDisposed) return;
     this.isDisposed = true;

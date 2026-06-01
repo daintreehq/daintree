@@ -518,4 +518,8 @@ export const SEL = {
     toggleButton: "[data-getting-started-checklist] button[aria-expanded]",
     item: (id: string) => `[data-checklist-item="${id}"]`,
   },
+  recovery: {
+    watchdogDisabledBanner: '[role="alert"]:has-text("Crash watchdog disabled")',
+    watchdogRestartButton: 'button:has-text("Restart watchdog")',
+  },
 } as const;

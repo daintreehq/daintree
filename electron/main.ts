@@ -370,6 +370,25 @@ if (!gotTheLock) {
         nodeV8.writeHeapSnapshot(filePath);
     }
 
+    // E2E hook: crash a window's workspace host to exercise the
+    // WorktreePortBroker teardown → host auto-restart → port re-broker path
+    // (#9599). Resolved lazily so the workspace client need not exist at
+    // registration time. Gated on DAINTREE_E2E_FAULT_MODE — stricter than the
+    // PVM accessor above — so this crash seam never ships in production.
+    if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
+      (globalThis as Record<string, unknown>).__daintreeCrashWorkspaceHostForWindow = (
+        windowId: number
+      ): boolean => {
+        const host = getWorkspaceClientRef()?.getHostForWindow(windowId);
+        return host?._crashForTesting() ?? false;
+      };
+      (globalThis as Record<string, unknown>).__daintreeWorktreeHasPort = (
+        webContentsId: number
+      ): boolean => {
+        return getWorktreePortBrokerRef()?.hasPort(webContentsId) ?? false;
+      };
+    }
+
     // Clean up ProjectViewManager when the window's cleanup runs.
     // Registered before setupWindowServices so pvm.dispose() runs first —
     // views must close before per-window ports/event-buffer disconnect.
