@@ -633,6 +633,7 @@ export const GitHubStatsToolbarButton = memo(
               open={issuesOpen}
               count={issueCount}
               animKey={issueAnimKey}
+              testId="github-stat-pill-issues"
               ariaLabel={
                 isTokenError
                   ? "Configure GitHub token to see issues"
@@ -742,6 +743,7 @@ export const GitHubStatsToolbarButton = memo(
               open={prsOpen}
               count={prCount}
               animKey={prAnimKey}
+              testId="github-stat-pill-prs"
               ariaLabel={
                 isTokenError
                   ? "Configure GitHub token to see pull requests"

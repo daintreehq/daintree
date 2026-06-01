@@ -316,6 +316,34 @@ export const SEL = {
     defaultOption: '[data-testid="preset-option-default"]',
     customPresetOption: '[data-testid="preset-selector-listbox"] [role="option"]',
   },
+  github: {
+    // Settings → Code Forge → GitHub token block
+    tokenBlock: "#github-token",
+    tokenInput: '[aria-label="GitHub personal access token"]',
+    testButton: '[aria-label="Test token"]',
+    saveButton: '[aria-label="Save token"]',
+    connectedBadge: 'text="GitHub connected"',
+    // Toolbar stat pills (open the issue/PR dropdowns)
+    statPillIssues: '[data-testid="github-stat-pill-issues"]',
+    statPillPrs: '[data-testid="github-stat-pill-prs"]',
+    // Resource dropdown (issues / pull requests)
+    searchIssues: '[aria-label="Search issues"]',
+    searchPrs: '[aria-label="Search pull requests"]',
+    listIssues: "#github-issue-list",
+    listPrs: "#github-pr-list",
+    loadMore: (type: "issue" | "pr") => `#github-${type}-load-more`,
+    item: (number: number) => `[data-testid="github-item-${number}"]`,
+    selectionActions: '[role="group"][aria-label="Selection actions"]',
+    noTokenEmptyState: 'text="GitHub not connected"',
+    rateLimitedEmptyState: 'text="GitHub requests are paused"',
+    // Bulk selection action bar + dialog
+    bulkActionBar: '[role="toolbar"][aria-label="Bulk actions"]',
+    bulkCreateButton: '[data-testid="bulk-action-create-worktrees-button"]',
+    bulkClearButton: '[aria-label="Clear selection"]',
+    bulkCreateDialog: '[data-testid="bulk-create-worktree-dialog"]',
+    // Token-health banner (GlobalBannerCoordinator slot github-token)
+    tokenExpiredBanner: 'text="GitHub token expired"',
+  },
   plugin: {
     manager: '[data-testid="plugin-manager-view"]',
     back: '[aria-label="Back"]',

@@ -61,7 +61,12 @@ export function BulkActionBar({
         </span>
         selected
       </span>
-      <Button variant="default" size="xs" onClick={handleOpenDialog}>
+      <Button
+        variant="default"
+        size="xs"
+        onClick={handleOpenDialog}
+        data-testid="bulk-action-create-worktrees-button"
+      >
         <FolderGit2 className="w-3 h-3" />
         Create Worktrees
       </Button>
