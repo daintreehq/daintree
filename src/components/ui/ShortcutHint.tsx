@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useStore } from "zustand";
+import type { ActionId } from "@shared/types/actions";
 import { cn } from "@/lib/utils";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { shortcutHintStore } from "@/store/shortcutHintStore";
+import { actionService } from "@/services/ActionService";
 import { Kbd } from "./Kbd";
 
 const AUTO_DISMISS_MS = 2500;
@@ -53,13 +55,22 @@ export function ShortcutHint() {
   // attributes and the whole portal unmounted), Chromium treats the text it
   // finds at mount as pre-existing static content and never announces it. Keep
   // a dedicated sr-only status node always in the DOM and only swap its text.
+  // Lead the announcement with the action's name so the shortcut has meaning;
+  // fall back to the generic "Shortcut:" prefix for unnamed/plugin actions.
+  const liveTitle = activeHint ? actionService.getTitle(activeHint.actionId as ActionId) : "";
   const liveRegion = (
     <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-      {activeHint ? `Shortcut: ${activeHint.displayCombo}` : ""}
+      {activeHint
+        ? liveTitle
+          ? `${liveTitle}: ${activeHint.displayCombo}`
+          : `Shortcut: ${activeHint.displayCombo}`
+        : ""}
     </div>
   );
 
   if (!shouldRender || !hint) return liveRegion;
+
+  const title = actionService.getTitle(hint.actionId as ActionId);
 
   const vw = window.innerWidth;
   const vh = window.innerHeight;
@@ -99,7 +110,7 @@ export function ShortcutHint() {
               isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1"
             )}
           >
-            <span>Tip:</span>
+            <span>{title || "Tip:"}</span>
             <Kbd>{hint.displayCombo}</Kbd>
           </div>
         </div>,
