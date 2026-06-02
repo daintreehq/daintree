@@ -804,6 +804,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             const command = generateAgentCommand(baseCommand, entry, agentId, {
               initialPrompt,
               clipboardDirectory,
+              modelId: terminal.agentModelId,
               recipeArgs: terminal.args?.trim() || undefined,
             });
             // Persist the process-level launch flags so restart/resume/continue

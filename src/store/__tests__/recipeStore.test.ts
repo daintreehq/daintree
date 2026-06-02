@@ -964,6 +964,7 @@ describe("recipeStore", () => {
         .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
 
       const call = addTerminalMock.mock.calls[0]?.[0] as {
+        command?: string;
         agentLaunchFlags?: string[];
         agentModelId?: string;
       };
@@ -971,6 +972,9 @@ describe("recipeStore", () => {
         expect.arrayContaining(["--dangerously-skip-permissions", "--recipe-arg", "value"])
       );
       expect(call.agentModelId).toBe("sonnet");
+      // The initial command must also carry the model — without it the first run
+      // uses the default model and only restart (which replays the flags) fixes it.
+      expect(call.command).toContain("--model sonnet");
     });
 
     it("emits no blank flag tokens when an agent terminal has no recipe args (#9650)", async () => {
