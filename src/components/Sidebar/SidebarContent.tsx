@@ -972,25 +972,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       hasFacetFiltersActive,
     ]);
 
-  const {
-    hiddenAbove,
-    hiddenBelow,
-    scrollToTop,
-    scrollToBottom,
-    scrollerRef: scrollIndicatorScrollerRef,
-    handleScroll,
-  } = useScrollIndicator({
-    itemCount: filteredWorktrees.length,
-  });
-
-  const setScrollerElement = useCallback(
-    (el: HTMLElement | Window | null) => {
-      scrollerElementRef.current = el instanceof HTMLElement ? el : null;
-      scrollIndicatorScrollerRef(el);
-    },
-    [scrollIndicatorScrollerRef]
-  );
-
   const worktreeActions = useWorktreeActions({
     onOpenRecipeEditor: handleOpenRecipeEditor,
   });
@@ -1213,6 +1194,29 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     pinnedWorktrees,
     dragStartOrder,
   ]);
+
+  // Computed after `sidebarItems` because the indicator counts hidden worktree
+  // rows directly from the flat list geometry (variable-height rows + section
+  // headers, issue #9666), so it needs the full item array as its input.
+  const {
+    hiddenAbove,
+    hiddenBelow,
+    scrollToTop,
+    scrollToBottom,
+    scrollerRef: scrollIndicatorScrollerRef,
+    handleScroll,
+    handleItemsRendered,
+  } = useScrollIndicator({
+    items: sidebarItems,
+  });
+
+  const setScrollerElement = useCallback(
+    (el: HTMLElement | Window | null) => {
+      scrollerElementRef.current = el instanceof HTMLElement ? el : null;
+      scrollIndicatorScrollerRef(el);
+    },
+    [scrollIndicatorScrollerRef]
+  );
 
   // The pinned main + integration rows live OUTSIDE the Virtuoso surface but
   // INSIDE the role="grid" container, so keyboard navigation must visit them
@@ -1795,6 +1799,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               itemContent={renderSidebarFlatItem}
               scrollerRef={setScrollerElement}
               onScroll={handleScroll}
+              itemsRendered={handleItemsRendered}
               className="absolute inset-0 overflow-y-auto scrollbar-none"
             />
           ) : (
@@ -1811,6 +1816,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 itemContent={renderSidebarFlatItem}
                 scrollerRef={setScrollerElement}
                 onScroll={handleScroll}
+                itemsRendered={handleItemsRendered}
                 className="absolute inset-0 overflow-y-auto scrollbar-none"
               />
             </SortableContext>
