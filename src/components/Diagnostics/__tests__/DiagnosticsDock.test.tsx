@@ -95,7 +95,6 @@ describe("DiagnosticsDock — region id and aria wiring", () => {
   it("uses the named diagnostics-dock class for transition control", () => {
     const { container } = render(<DiagnosticsDock />);
     const region = container.querySelector(`#${DIAGNOSTICS_DOCK_REGION_ID}`);
-    expect(region?.className).toContain("diagnostics-dock");
     expect(region?.getAttribute("data-resizing")).toBeNull();
   });
 

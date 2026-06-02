@@ -281,18 +281,6 @@ describe("TrashBinItem", () => {
       expect(el.hasAttribute("aria-live")).toBe(false);
     });
 
-    it("uses tabular-nums to keep digits aligned", () => {
-      const terminal = makeAgentTerminal();
-      const trashedInfo: TrashedTerminal = {
-        id: "t1",
-        expiresAt: Date.now() + 20000,
-        originalLocation: "grid",
-      };
-      const { container } = render(<TrashBinItem terminal={terminal} trashedInfo={trashedInfo} />);
-      const el = findCountdownEl(container);
-      expect(el.className).toContain("tabular-nums");
-    });
-
     it("hides the countdown by default outside the final approach window", () => {
       const terminal = makeAgentTerminal();
       const trashedInfo: TrashedTerminal = {

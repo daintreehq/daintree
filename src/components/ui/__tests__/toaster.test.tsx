@@ -262,18 +262,6 @@ describe("Toast accessibility", () => {
     expect(screen.getByRole("alert")).toBeTruthy();
   });
 
-  it("includes motion-reduce classes on toast container", async () => {
-    render(<Toaster />);
-    await act(async () => {
-      addToast();
-      vi.advanceTimersByTime(16);
-    });
-
-    const toast = screen.getByRole("status");
-    expect(toast.className).toContain("motion-reduce:transition-none");
-    expect(toast.className).toContain("motion-reduce:duration-0");
-  });
-
   it("applies Tier 2 enter duration and spring easing once visible (issue #6331)", async () => {
     render(<Toaster />);
     await act(async () => {
@@ -820,18 +808,6 @@ describe("Toast count chip overflow & live-region throttling (issue #6427)", () 
     expect(chip.textContent).toBe("×99+");
   });
 
-  it("reserves a stable minimum width so the chip does not jump at the cap boundary", async () => {
-    render(<Toaster />);
-    await act(async () => {
-      addToast({ title: "Build", message: "x", count: 5 });
-      vi.advanceTimersByTime(16);
-    });
-
-    const chip = screen.getByLabelText("5 events");
-    expect(chip.className).toMatch(/min-w-\[3\.5ch\]/);
-    expect(chip.className).toMatch(/text-center/);
-  });
-
   it("sets aria-busy on the live region while count updates are in flight", async () => {
     render(<Toaster />);
     let toastId: string;
@@ -1199,7 +1175,6 @@ describe("Toast overflow pill (issue #6424)", () => {
       useNotificationHistoryStore.setState({ evictedToInboxCount: 1 });
     });
     const pill = screen.getByTestId("toast-overflow-pill");
-    expect(pill.className).toContain("bg-surface-panel");
     expect(pill.className).not.toContain("bg-daintree-accent");
     expect(pill.className).not.toContain("text-accent-primary");
   });

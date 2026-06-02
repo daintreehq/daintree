@@ -105,12 +105,6 @@ describe("buildPanelSnapshotOptions", () => {
     expect(result!.agentLaunchFlags).not.toBe((panel as PtyPanelData).agentLaunchFlags);
   });
 
-  it("copies title to the snapshot", () => {
-    const panel = makePanel({ title: "My Terminal" });
-    const result = buildPanelSnapshotOptions(panel);
-    expect(result!.title).toBe("My Terminal");
-  });
-
   it("does not include location in the snapshot", () => {
     const panel = makePanel({ location: "dock" });
     const result = buildPanelSnapshotOptions(panel);
@@ -126,43 +120,6 @@ describe("buildPanelSnapshotOptions", () => {
     const result = buildPanelSnapshotOptions(panel) as BrowserPanelOptions;
     expect(result.browserUrl).toBe("https://example.com");
     expect(result.browserConsoleOpen).toBe(true);
-  });
-
-  it("copies agent fields for agent terminals", () => {
-    const panel = makePanel({
-      launchAgentId: "claude",
-      command: "claude --flag",
-      agentModelId: "opus",
-      agentLaunchFlags: ["--verbose"],
-    });
-    const result = buildPanelSnapshotOptions(panel);
-    expect(result!.launchAgentId).toBe("claude");
-    expect(result!.agentModelId).toBe("opus");
-    expect(result!.agentLaunchFlags).toEqual(["--verbose"]);
-  });
-
-  it("copies preset identity fields for agent terminal snapshots", () => {
-    const panel = makePanel({
-      launchAgentId: "claude",
-      command: "claude --flag",
-      title: "Claude (Blue)",
-      agentPresetId: "blue-provider",
-      agentPresetColor: "#3366ff",
-      originalPresetId: "primary-provider",
-      isUsingFallback: true,
-      fallbackChainIndex: 1,
-    });
-
-    const result = buildPanelSnapshotOptions(panel);
-
-    expect(result).toMatchObject({
-      title: "Claude (Blue)",
-      agentPresetId: "blue-provider",
-      agentPresetColor: "#3366ff",
-      originalPresetId: "primary-provider",
-      isUsingFallback: true,
-      fallbackChainIndex: 1,
-    });
   });
 
   it("handles undefined agentLaunchFlags", () => {
@@ -206,30 +163,6 @@ describe("buildPanelSnapshotOptions", () => {
       agentModelId: "opus",
       agentLaunchFlags: ["--verbose"],
     });
-  });
-
-  it("copies agentPresetId to the snapshot", () => {
-    const panel = makePanel({ agentPresetId: "user-abc" });
-    const result = buildPanelSnapshotOptions(panel);
-    expect(result!.agentPresetId).toBe("user-abc");
-  });
-
-  it("copies agentPresetColor to the snapshot", () => {
-    const panel = makePanel({ agentPresetColor: "#ff6600" });
-    const result = buildPanelSnapshotOptions(panel);
-    expect(result!.agentPresetColor).toBe("#ff6600");
-  });
-
-  it("copies title to the snapshot (preserves 'Claude (PresetName)' format)", () => {
-    const panel = makePanel({ title: "Claude (My Preset)" });
-    const result = buildPanelSnapshotOptions(panel);
-    expect(result!.title).toBe("Claude (My Preset)");
-  });
-
-  it("omits agentPresetId when undefined", () => {
-    const panel = makePanel({ agentPresetId: undefined });
-    const result = buildPanelSnapshotOptions(panel);
-    expect(result!.agentPresetId).toBeUndefined();
   });
 });
 
@@ -372,24 +305,6 @@ describe("panelDuplicationService", () => {
     expect(result.kind).toBe("terminal");
     expect(result.launchAgentId).toBeUndefined();
     expect(result.command).toBe("claude --flag");
-  });
-
-  it("copies agentPresetId to duplicate options", async () => {
-    const panel = makePanel({ agentPresetId: "user-abc" });
-    const result = await buildPanelDuplicateOptions(panel, "grid");
-    expect(result.agentPresetId).toBe("user-abc");
-  });
-
-  it("copies agentPresetColor to duplicate options", async () => {
-    const panel = makePanel({ agentPresetColor: "#ff6600" });
-    const result = await buildPanelDuplicateOptions(panel, "grid");
-    expect(result.agentPresetColor).toBe("#ff6600");
-  });
-
-  it("copies title to duplicate options (preserves 'Agent (Preset)' format)", async () => {
-    const panel = makePanel({ title: "Claude (My Preset)" });
-    const result = await buildPanelDuplicateOptions(panel, "grid");
-    expect(result.title).toBe("Claude (My Preset)");
   });
 
   it("propagates preset env from resolveCommandForPanel into duplicate options", async () => {

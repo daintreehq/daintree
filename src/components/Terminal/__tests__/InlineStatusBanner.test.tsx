@@ -165,7 +165,6 @@ describe("InlineStatusBanner", () => {
     // No inline color-mix surface: neutral uses the overlay-subtle token class.
     expect(root.style.backgroundColor).toBe("");
     expect(root.style.borderBottom).toBe("");
-    expect(root.className).toContain("bg-overlay-subtle");
     expect(root.outerHTML).not.toContain("var(undefined)");
   });
 

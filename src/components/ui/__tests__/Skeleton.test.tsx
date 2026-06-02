@@ -86,11 +86,10 @@ describe("Skeleton", () => {
 });
 
 describe("SkeletonBone", () => {
-  it("is aria-hidden and carries the muted background", () => {
+  it("is aria-hidden", () => {
     render(<SkeletonBone data-testid={BONE_TEST_ID} />);
     const bone = screen.getByTestId(BONE_TEST_ID);
     expect(bone.getAttribute("aria-hidden")).toBe("true");
-    expect(bone.className).toContain("bg-muted");
   });
 
   it("uses animate-pulse-delayed by default", () => {

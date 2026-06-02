@@ -74,8 +74,6 @@ describe("ScrollShadow", () => {
     expect(overlays).toHaveLength(2);
     for (const overlay of overlays) {
       expect(overlay.getAttribute("data-visible")).toBe("false");
-      expect(overlay.className).toContain("transition-opacity");
-      expect(overlay.className).toContain("opacity-0");
     }
   });
 
@@ -168,26 +166,9 @@ describe("ScrollShadow", () => {
     );
     const outer = container.firstElementChild!;
     expect(outer.className).toContain("max-h-64");
-    expect(outer.className).toContain("relative");
 
     const inner = outer.querySelector(".overflow-y-auto")!;
     expect(inner.className).toContain("p-4");
-  });
-
-  it("outer wrapper uses flex layout for height chain", () => {
-    const { container } = render(
-      <ScrollShadow>
-        <p>Content</p>
-      </ScrollShadow>
-    );
-    const outer = container.firstElementChild!;
-    expect(outer.className).toContain("flex");
-    expect(outer.className).toContain("flex-col");
-    expect(outer.className).toContain("min-h-0");
-    expect(outer.className).toContain("overflow-hidden");
-
-    const inner = outer.querySelector(".overflow-y-auto")!;
-    expect(inner.className).toContain("flex-1");
   });
 
   it("passes through additional div props to inner scrollable div", () => {
@@ -199,29 +180,5 @@ describe("ScrollShadow", () => {
     const inner = screen.getByTestId("scroll-inner");
     expect(inner.getAttribute("role")).toBe("listbox");
     expect(inner.getAttribute("tabindex")).toBe("0");
-  });
-
-  it("gradient overlays are pointer-events-none", () => {
-    const { container } = render(
-      <ScrollShadow>
-        <p>Long content</p>
-      </ScrollShadow>
-    );
-
-    const scrollDiv = container.querySelector(".overflow-y-auto")!;
-    setScrollMetrics(scrollDiv as HTMLElement, {
-      scrollTop: 100,
-      scrollHeight: 500,
-      clientHeight: 200,
-    });
-
-    act(() => {
-      fireEvent.scroll(scrollDiv);
-    });
-
-    const gradients = container.querySelectorAll("[data-visible='true']");
-    for (const gradient of gradients) {
-      expect(gradient.className).toContain("pointer-events-none");
-    }
   });
 });

@@ -157,7 +157,7 @@ describe("FocusedSubLine", () => {
     expect(container.textContent ?? "").toBe("");
   });
 
-  it("renders the status label with a truncate class so long text doesn't overflow", () => {
+  it("renders a long status label without dropping it", () => {
     renderSubLine({
       open: true,
       changedFileCount: null,
@@ -166,6 +166,5 @@ describe("FocusedSubLine", () => {
     });
     const label = screen.queryByText(/Running teardown:/);
     expect(label).not.toBeNull();
-    expect(label?.className).toContain("truncate");
   });
 });

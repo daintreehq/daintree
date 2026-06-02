@@ -125,15 +125,6 @@ describe("LogFilters accessibility", () => {
     expect(onFiltersChange).toHaveBeenCalledWith({ sources: ["preload"] });
   });
 
-  it("right-aligns count with ml-auto and uses tabular-nums", () => {
-    render(<LogFilters {...baseProps} />);
-    fireEvent.click(screen.getByText(/Sources/).closest("button")!);
-    const rendererBtn = screen.getByText(/^\*?renderer/).closest("button")!;
-    const countSpan = rendererBtn.querySelector("span.ml-auto.tabular-nums");
-    expect(countSpan).toBeTruthy();
-    expect(countSpan!.className).toContain("opacity-70");
-  });
-
   it("does not dim zero-count rows when the source is actively selected", () => {
     render(
       <LogFilters

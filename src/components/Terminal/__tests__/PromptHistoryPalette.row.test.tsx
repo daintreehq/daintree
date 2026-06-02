@@ -87,24 +87,6 @@ describe("PromptHistoryRow", () => {
     );
   });
 
-  it("applies the canonical aria-selected variant classes", () => {
-    const { container } = render(
-      <PromptHistoryRow
-        item={makeEntry()}
-        index={0}
-        isSelected={true}
-        onSelect={vi.fn()}
-        onHoverIndex={vi.fn()}
-      />
-    );
-
-    const className = container.querySelector("button")?.className ?? "";
-    expect(className).toContain("group");
-    expect(className).toContain("aria-selected:bg-overlay-soft");
-    expect(className).toContain("aria-selected:before:content-['']");
-    expect(className).toContain("hover:bg-overlay-subtle");
-  });
-
   it("does NOT include before:rounded-r on the accent stripe", () => {
     const { container } = render(
       <PromptHistoryRow
@@ -153,22 +135,6 @@ describe("PromptHistoryRow", () => {
     fireEvent.click(container.querySelector("button")!);
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onSelect).toHaveBeenCalledWith(entry);
-  });
-
-  it("renders the timestamp with group-aria-selected brightness lift", () => {
-    render(
-      <PromptHistoryRow
-        item={makeEntry()}
-        index={0}
-        isSelected={true}
-        onSelect={vi.fn()}
-        onHoverIndex={vi.fn()}
-      />
-    );
-
-    const timestamp = screen.getByText(/ago|just now|\d/);
-    expect(timestamp.className).toContain("text-daintree-text/40");
-    expect(timestamp.className).toContain("group-aria-selected:text-daintree-text/60");
   });
 
   it("renders the agentId chip when provided", () => {

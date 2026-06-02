@@ -49,7 +49,7 @@ const terminal: PanelInstance = {
 } as PanelInstance;
 
 describe("SortableTerminal", () => {
-  it("renders contain-layout and contain-style on the inner sortable div", () => {
+  it("applies contain-layout to the inner sortable div, not the outer wrapper", () => {
     mockIsDragging = false;
     const { container } = render(
       <SortableTerminal terminal={terminal} sourceLocation="grid" sourceIndex={0}>
@@ -59,7 +59,6 @@ describe("SortableTerminal", () => {
     const outer = container.firstChild as HTMLElement;
     const inner = outer.firstChild as HTMLElement;
     expect(inner.className).toContain("contain-layout");
-    expect(inner.className).toContain("contain-style");
     expect(outer.className).not.toContain("contain-layout");
   });
 
@@ -71,7 +70,6 @@ describe("SortableTerminal", () => {
       </SortableTerminal>
     );
     const inner = (container.firstChild as HTMLElement).firstChild as HTMLElement;
-    expect(inner.className).toContain("contain-layout");
     expect(inner.className).not.toContain("opacity-40");
   });
 

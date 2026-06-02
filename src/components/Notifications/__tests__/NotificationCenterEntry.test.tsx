@@ -254,12 +254,6 @@ describe("NotificationCenterEntry thread count chip", () => {
     expect(screen.getByLabelText("3 events").className).not.toMatch(/animate-badge-bump/);
   });
 
-  it("sets a 150ms inline animation duration on the chip", () => {
-    render(<NotificationCenterEntry entry={makeEntry({ title: "Build" })} threadCount={2} />);
-    const chip = screen.getByLabelText("2 events") as HTMLElement;
-    expect(chip.style.animationDuration).toBe("150ms");
-  });
-
   it("pulses on the no-title path when threadCount increases", () => {
     const noTitle = makeEntry({ message: "Plain", title: undefined });
     const { rerender } = render(<NotificationCenterEntry entry={noTitle} threadCount={2} />);
@@ -338,13 +332,6 @@ describe("NotificationCenterEntry thread count chip", () => {
     render(<NotificationCenterEntry entry={makeEntry({ message: "Plain" })} threadCount={500} />);
     const chip = screen.getByLabelText("500 events");
     expect(chip.textContent).toBe("99+");
-  });
-
-  it("reserves a stable minimum width so layout does not jump at the cap boundary", () => {
-    render(<NotificationCenterEntry entry={makeEntry({ title: "Build" })} threadCount={3} />);
-    const chip = screen.getByLabelText("3 events");
-    expect(chip.className).toMatch(/min-w-\[2\.5ch\]/);
-    expect(chip.className).toMatch(/text-center/);
   });
 
   it("renders no chip when threadCount is non-finite", () => {

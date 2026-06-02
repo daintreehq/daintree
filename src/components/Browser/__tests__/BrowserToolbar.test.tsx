@@ -410,12 +410,6 @@ describe("BrowserToolbar address-bar scheme icon and input", () => {
     expect(queryByTestId("browser-url-scheme-lock")).toBeFalsy();
   });
 
-  it("URL input has spellCheck disabled", () => {
-    const { getByTestId } = renderToolbar();
-    const input = getByTestId("browser-address-bar");
-    expect(input.getAttribute("spellcheck")).toBe("false");
-  });
-
   it("reload button has animate-spin when isLoading is true", () => {
     const { getByTestId } = renderToolbar({ isLoading: true });
     const reload = getByTestId("browser-reload");

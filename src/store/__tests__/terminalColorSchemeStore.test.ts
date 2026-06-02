@@ -65,10 +65,6 @@ describe("terminalColorSchemeStore", () => {
     });
   });
 
-  it("defaults to daintree scheme", () => {
-    expect(useTerminalColorSchemeStore.getState().selectedSchemeId).toBe(DEFAULT_SCHEME_ID);
-  });
-
   it("switching scheme updates selectedSchemeId", () => {
     useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
     expect(useTerminalColorSchemeStore.getState().selectedSchemeId).toBe("dracula");

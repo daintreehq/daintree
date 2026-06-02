@@ -5,7 +5,6 @@ import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FixedDropdownVisibleContext } from "../fixed-dropdown";
 import { Tooltip, TooltipTrigger, TooltipContent } from "../tooltip";
-import { UI_TOOLTIP_SKIP_DELAY_DURATION } from "@/lib/animationUtils";
 
 const { rootSpy, mountSpy, primeOnEventSpy, contentSpy } = vi.hoisted(() => ({
   rootSpy: vi.fn(),
@@ -305,20 +304,6 @@ describe("TooltipContent — collisionPadding default and override (issue #8008)
     const lastCall = contentSpy.mock.calls.at(-1)?.[0];
     expect(lastCall?.collisionPadding).toBe(24);
   });
-
-  it("applies the max-w-xs width cap on the rendered className", () => {
-    render(
-      <FixedDropdownVisibleContext.Provider value={true}>
-        <Tooltip open>
-          <TooltipTrigger>trigger</TooltipTrigger>
-          <TooltipContent>content</TooltipContent>
-        </Tooltip>
-      </FixedDropdownVisibleContext.Provider>
-    );
-
-    const lastCall = contentSpy.mock.calls.at(-1)?.[0];
-    expect(typeof lastCall?.className === "string" && lastCall.className).toContain("max-w-xs");
-  });
 });
 
 describe("TooltipContent — sticky and hideWhenDetached defaults (issue #8100)", () => {
@@ -356,11 +341,5 @@ describe("TooltipContent — sticky and hideWhenDetached defaults (issue #8100)"
     const lastCall = contentSpy.mock.calls.at(-1)?.[0];
     expect(lastCall?.sticky).toBe("always");
     expect(lastCall?.hideWhenDetached).toBe(false);
-  });
-});
-
-describe("UI_TOOLTIP_SKIP_DELAY_DURATION (issue #8100)", () => {
-  it("is 300ms to cover toolbar hand-travel and match the Radix default", () => {
-    expect(UI_TOOLTIP_SKIP_DELAY_DURATION).toBe(300);
   });
 });

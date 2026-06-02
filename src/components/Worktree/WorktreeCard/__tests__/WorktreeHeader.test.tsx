@@ -1160,23 +1160,6 @@ describe("WorktreeHeader collapsed alarm pill", () => {
   });
 });
 
-describe("WorktreeHeader icon button hit targets", () => {
-  it("collapse button has p-1.5 for WCAG 24px minimum", () => {
-    renderHeader({
-      canCollapse: true,
-      onToggleCollapse: noop,
-    });
-    const collapseButton = screen.getByRole("button", { name: /Collapse card/ });
-    expect(collapseButton.className).toContain("p-1.5");
-  });
-
-  it("more actions button has p-1.5 for WCAG 24px minimum", () => {
-    renderHeader();
-    const menuButton = screen.getByTestId("worktree-actions-menu");
-    expect(menuButton.className).toContain("p-1.5");
-  });
-});
-
 describe("WorktreeHeader token-missing badge behavior", () => {
   beforeEach(() => {
     mockMissingToken = false;

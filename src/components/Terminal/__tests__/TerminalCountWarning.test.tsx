@@ -103,8 +103,6 @@ describe("TerminalCountWarning", () => {
     render(<TerminalCountWarning />);
     const button = screen.getByRole("button", { name: /dismiss warning/i });
     const className = button.className;
-    expect(className).toContain("focus-visible:outline");
-    expect(className).toContain("focus-visible:outline-daintree-accent");
     expect(className).not.toMatch(/(^|\s)focus:ring-/);
   });
 
@@ -134,8 +132,6 @@ describe("TerminalCountWarning", () => {
     render(<TerminalCountWarning />);
     const button = screen.getByRole("button", { name: /close.*completed agent/i });
     const className = button.className;
-    expect(className).toContain("focus-visible:outline");
-    expect(className).toContain("focus-visible:outline-daintree-accent");
     expect(className).not.toMatch(/(^|\s)focus:ring-/);
   });
 

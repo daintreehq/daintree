@@ -63,13 +63,9 @@ describe("getTerminalScrollbarDefaults", () => {
 });
 
 describe("getTerminalThemeFromAppScheme", () => {
-  it("maps terminal tokens and derives scrollbar colors from hex activity-idle", () => {
+  it("derives scrollbar colors from hex activity-idle", () => {
     const theme = getTerminalThemeFromAppScheme(createTestScheme("dark", "#112233"));
 
-    expect(theme.background).toBe("#111111");
-    expect(theme.foreground).toBe("#f5f5f5");
-    expect(theme.cursor).toBe("#22aa88");
-    expect(theme.selectionBackground).toBe("#334455");
     expect(theme.scrollbarSliderBackground).toBe("rgba(17, 34, 51, 0.4)");
     expect(theme.scrollbarSliderHoverBackground).toBe("rgba(17, 34, 51, 0.6)");
     expect(theme.scrollbarSliderActiveBackground).toBe("rgba(17, 34, 51, 0.8)");

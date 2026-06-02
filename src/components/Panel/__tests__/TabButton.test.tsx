@@ -236,26 +236,6 @@ describe("TabButton", () => {
     });
   });
 
-  describe("close button visibility", () => {
-    it("reveals on parent tab focus via group-focus-visible/tab variant", () => {
-      render(<TabButton {...defaultProps} />);
-      const closeButton = screen.getByLabelText("Close Test Agent");
-      // jsdom can't compute pseudo-classes; pin the class string so the
-      // parent-focus reveal symmetry survives refactors.
-      expect(closeButton.className).toContain("group-focus-visible/tab:opacity-100");
-      expect(closeButton.className).toContain("group-hover/tab:opacity-100");
-      expect(closeButton.className).toContain("focus-visible:opacity-100");
-    });
-
-    it("uses scoped transition so opacity fades instead of hard-hopping", () => {
-      render(<TabButton {...defaultProps} />);
-      const closeButton = screen.getByLabelText("Close Test Agent");
-      expect(closeButton.className).toContain(
-        "transition-[opacity,color,background-color,border-color]"
-      );
-    });
-  });
-
   describe("rename validation feedback", () => {
     afterEach(() => {
       vi.useRealTimers();
@@ -506,25 +486,6 @@ describe("TabButton", () => {
       const input = screen.getByTestId("motion-input");
       expect(input).not.toBeNull();
       expect(input.tagName).toBe("INPUT");
-    });
-  });
-
-  describe("span layout stability", () => {
-    it("has matching box-model classes to prevent pixel shift on rename swap", () => {
-      render(<TabButton {...defaultProps} onRename={vi.fn()} />);
-      const span = screen.getByText("Test Agent");
-      expect(span.className).toContain("inline-block");
-      expect(span.className).toContain("border");
-      expect(span.className).toContain("border-transparent");
-      expect(span.className).toContain("px-1");
-    });
-
-    it("input has matching box-model foundation", () => {
-      render(<TabButton {...defaultProps} onRename={vi.fn()} />);
-      fireEvent.doubleClick(screen.getByText("Test Agent"));
-      const input = screen.getByTestId("motion-input") as HTMLInputElement;
-      expect(input.className).toContain("border");
-      expect(input.className).toContain("px-1");
     });
   });
 

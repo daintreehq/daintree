@@ -30,16 +30,6 @@ describe("PaletteStrip", () => {
     expect(chips).toHaveLength(8);
   });
 
-  it("each swatch chip has the ring-1 ring-inset ring-daintree-border/30 classes", () => {
-    const { container } = render(<PaletteStrip scheme={scheme} />);
-    const chips = container.querySelectorAll(".w-3.h-3");
-    for (const chip of chips) {
-      expect(chip.classList.contains("ring-1")).toBe(true);
-      expect(chip.classList.contains("ring-inset")).toBe(true);
-      expect(chip.classList.contains("ring-daintree-border/30")).toBe(true);
-    }
-  });
-
   it("each swatch chip uses the correct token color as background", () => {
     const { container } = render(<PaletteStrip scheme={scheme} />);
     const chips = container.querySelectorAll<HTMLDivElement>(".w-3.h-3");

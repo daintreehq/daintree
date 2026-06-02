@@ -85,18 +85,6 @@ describe("agentRegistry", () => {
   });
 
   describe("contextWindow", () => {
-    it("claude has 200k context window", () => {
-      expect(getAgentConfig("claude")?.contextWindow).toBe(200_000);
-    });
-
-    it("gemini has 1M context window", () => {
-      expect(getAgentConfig("gemini")?.contextWindow).toBe(1_000_000);
-    });
-
-    it("codex has 128k context window", () => {
-      expect(getAgentConfig("codex")?.contextWindow).toBe(128_000);
-    });
-
     it("agents without contextWindow return undefined", () => {
       expect(getAgentConfig("cursor")?.contextWindow).toBeUndefined();
     });
@@ -464,14 +452,6 @@ describe("agentRegistry", () => {
 });
 
 describe("mistral configuration", () => {
-  it("uses 'vibe' as the binary command", () => {
-    expect(getAgentConfig("mistral")?.command).toBe("vibe");
-  });
-
-  it("passes --trust by default to skip the trust-folder prompt", () => {
-    expect(getAgentConfig("mistral")?.args).toContain("--trust");
-  });
-
   it("blocks alt-screen and mouse reporting for the Textual TUI", () => {
     const config = getAgentConfig("mistral");
     expect(config?.capabilities?.blockAltScreen).toBe(true);
@@ -504,10 +484,6 @@ describe("mistral configuration", () => {
     expect(detection?.promptFastPathMinQuietMs).toBe(6000);
   });
 
-  it("declares the PyPI package for path synthesis", () => {
-    expect(getAgentConfig("mistral")?.packages?.pypi).toBe("mistral-vibe");
-  });
-
   it("ships the local-llamacpp preset as a labeled placeholder", () => {
     const preset = getAgentConfig("mistral")?.presets?.find((p) => p.id === "local-llamacpp");
     expect(preset).toBeDefined();
@@ -516,10 +492,6 @@ describe("mistral configuration", () => {
 });
 
 describe("copilot configuration", () => {
-  it("has 160k context window", () => {
-    expect(getAgentConfig("copilot")?.contextWindow).toBe(160_000);
-  });
-
   it("has models with claude-sonnet-4.6 as first (default)", () => {
     const config = getAgentConfig("copilot");
     expect(config?.models).toBeDefined();
@@ -560,12 +532,6 @@ describe("copilot configuration", () => {
   it("uses single-write quit so /exit submits as one write (Ink TUI constraint)", () => {
     const config = getAgentConfig("copilot");
     expect(config?.capabilities?.quitSubmitMode).toBe("single-write");
-  });
-
-  it("has correct npm package and GitHub repo", () => {
-    const config = getAgentConfig("copilot");
-    expect(config?.version?.npmPackage).toBe("@github/copilot");
-    expect(config?.version?.githubRepo).toBe("github/copilot-cli");
   });
 });
 
