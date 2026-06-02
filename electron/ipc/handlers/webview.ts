@@ -332,15 +332,58 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       // Bind CDP message listener once per webContents
       if (!session.messageListener) {
         const listener = (_event: Electron.Event, method: string, params: unknown) => {
-          if (method === "Runtime.consoleAPICalled") {
-            handleConsoleApiCalled(webContentsId, session, params);
-          } else if (method === "Runtime.exceptionThrown") {
-            handleExceptionThrown(session, params);
-          } else if (method === "Log.entryAdded") {
-            handleLogEntryAdded(session, params);
-          } else if (method === "Runtime.executionContextsCleared") {
+          // CDP events can arrive synchronously mid-teardown (the renderer's
+          // detach hasn't flushed the buffered emit). Guard the whole body so a
+          // teardown-race access never escapes as an uncaught main-process crash.
+          try {
+            if (method === "Runtime.consoleAPICalled") {
+              handleConsoleApiCalled(webContentsId, session, params);
+            } else if (method === "Runtime.exceptionThrown") {
+              handleExceptionThrown(session, params);
+            } else if (method === "Log.entryAdded") {
+              handleLogEntryAdded(session, params);
+            } else if (method === "Runtime.executionContextsCleared") {
+              session.navigationGeneration++;
+              // Reset group depth and clear stale objectIds for all panes
+              for (const pid of session.paneIds) {
+                session.groupDepthByPane.set(pid, 0);
+                session.objectIdsByPane.get(pid)?.clear();
+                const payload = {
+                  paneId: pid,
+                  navigationGeneration: session.navigationGeneration,
+                };
+                if (session.ownerWindow && !session.ownerWindow.isDestroyed()) {
+                  sendToRenderer(
+                    session.ownerWindow,
+                    CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED,
+                    payload
+                  );
+                } else {
+                  broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, payload);
+                }
+              }
+            }
+          } catch (err) {
+            logWarn("CDP message listener failed mid-teardown", {
+              webContentsId,
+              method,
+              error: formatErrorMessage(err, "CDP message listener failed"),
+            });
+          }
+        };
+        session.messageListener = listener;
+        wc.debugger.on("message", listener);
+      }
+
+      if (!session.detachListener) {
+        const detachListener = (_event: Electron.Event, _reason: string) => {
+          try {
+            session.runtimeEnabled = false;
+            session.logEnabled = false;
+            // Debugger detach automatically removes all listeners, so just null our refs
+            session.messageListener = null;
+            session.detachListener = null;
             session.navigationGeneration++;
-            // Reset group depth and clear stale objectIds for all panes
             for (const pid of session.paneIds) {
               session.groupDepthByPane.set(pid, 0);
               session.objectIdsByPane.get(pid)?.clear();
@@ -358,36 +401,11 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
                 broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, payload);
               }
             }
-          }
-        };
-        session.messageListener = listener;
-        wc.debugger.on("message", listener);
-      }
-
-      if (!session.detachListener) {
-        const detachListener = (_event: Electron.Event, _reason: string) => {
-          session.runtimeEnabled = false;
-          session.logEnabled = false;
-          // Debugger detach automatically removes all listeners, so just null our refs
-          session.messageListener = null;
-          session.detachListener = null;
-          session.navigationGeneration++;
-          for (const pid of session.paneIds) {
-            session.groupDepthByPane.set(pid, 0);
-            session.objectIdsByPane.get(pid)?.clear();
-            const payload = {
-              paneId: pid,
-              navigationGeneration: session.navigationGeneration,
-            };
-            if (session.ownerWindow && !session.ownerWindow.isDestroyed()) {
-              sendToRenderer(
-                session.ownerWindow,
-                CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED,
-                payload
-              );
-            } else {
-              broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, payload);
-            }
+          } catch (err) {
+            logWarn("CDP detach listener failed mid-teardown", {
+              webContentsId,
+              error: formatErrorMessage(err, "CDP detach listener failed"),
+            });
           }
         };
         session.detachListener = detachListener;

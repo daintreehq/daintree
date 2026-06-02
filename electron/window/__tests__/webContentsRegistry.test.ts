@@ -109,6 +109,96 @@ describe("webContentsRegistry", () => {
     expect(getProjectForWebContents(wc.id)).toBe("project-a");
   });
 
+  it("does not throw and falls back to win.webContents when the app view's webContents is undefined", async () => {
+    const { getAppWebContents, getAppView, registerAppView } = await loadRegistry();
+    const win = createWindow(1);
+    const wc = createWebContents(104);
+    const view = createView(wc);
+
+    registerAppView(win, view);
+    expect(getAppWebContents(win)).toBe(wc);
+
+    // Electron 41 teardown race: the view is destroyed and view.webContents
+    // becomes undefined before the `destroyed` event prunes windowToAppView.
+    (view as unknown as { webContents: unknown }).webContents = undefined;
+
+    expect(() => getAppWebContents(win)).not.toThrow();
+    expect(getAppWebContents(win)).toBe(win.webContents);
+    // Stale entry is pruned eagerly on read.
+    expect(getAppView(win)).toBeNull();
+  });
+
+  it("falls back to win.webContents when the app view's webContents is destroyed but still present", async () => {
+    const { getAppView, getAppWebContents, registerAppView } = await loadRegistry();
+    const win = createWindow(1);
+    const wc = createWebContents(107);
+    const view = createView(wc);
+
+    registerAppView(win, view);
+    expect(getAppWebContents(win)).toBe(wc);
+
+    // webContents object is still present (not undefined) but reports destroyed —
+    // exercises the second half of the `view.webContents && !isDestroyed()` guard
+    // without firing the `destroyed` event that would prune the map.
+    wc.setDestroyed(true);
+
+    expect(getAppWebContents(win)).toBe(win.webContents);
+    expect(getAppView(win)).toBeNull();
+  });
+
+  it("getAllAppWebContents prunes only the stale window's app view, not live ones", async () => {
+    const { getAllAppWebContents, getAppView, registerAppView } = await loadRegistry();
+    const winA = createWindow(1);
+    const winB = createWindow(2);
+    const wcA = createWebContents(108);
+    const wcB = createWebContents(109);
+    const viewA = createView(wcA);
+    const viewB = createView(wcB);
+
+    registerAppView(winA, viewA);
+    registerAppView(winB, viewB);
+
+    (viewA as unknown as { webContents: unknown }).webContents = undefined;
+
+    const result = getAllAppWebContents();
+    expect(result).toEqual([wcB]);
+    expect(getAppView(winA)).toBeNull();
+    expect(getAppView(winB)).toBe(viewB);
+  });
+
+  it("getAllAppWebContents prunes app views whose webContents became undefined", async () => {
+    const { getAllAppWebContents, getAppView, registerAppView } = await loadRegistry();
+    const win = createWindow(1);
+    const wc = createWebContents(105);
+    const view = createView(wc);
+
+    registerAppView(win, view);
+
+    (view as unknown as { webContents: unknown }).webContents = undefined;
+    // Fallback path returns live BrowserWindow webContents.
+    electronMock.getAllWindows.mockReturnValue([win as unknown as never]);
+
+    let result: WebContents[] = [];
+    expect(() => {
+      result = getAllAppWebContents();
+    }).not.toThrow();
+    expect(result).toEqual([win.webContents]);
+    expect(getAppView(win)).toBeNull();
+  });
+
+  it("unregisterAppView does not throw when the view's webContents is undefined", async () => {
+    const { getAppWebContents, registerAppView, unregisterAppView } = await loadRegistry();
+    const win = createWindow(1);
+    const wc = createWebContents(106);
+    const view = createView(wc);
+
+    registerAppView(win, view);
+    (view as unknown as { webContents: unknown }).webContents = undefined;
+
+    expect(() => unregisterAppView(win)).not.toThrow();
+    expect(getAppWebContents(win)).toBe(win.webContents);
+  });
+
   it("allows unregister and later re-register without leaving stale listener state", async () => {
     const { registerWebContents, unregisterWebContents } = await loadRegistry();
     const firstWindow = createWindow(1);
