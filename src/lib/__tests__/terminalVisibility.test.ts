@@ -65,6 +65,11 @@ describe("isTerminalVisible", () => {
     expect(isTerminalVisible(t, isInTrash, worktreeIds)).toBe(false);
   });
 
+  it("stays visible for removeOnExit-only terminals (flags are independent)", () => {
+    const t = makeTerminal({ removeOnExit: true, excludeFromPersistence: false });
+    expect(isTerminalVisible(t, isInTrash, worktreeIds)).toBe(true);
+  });
+
   it("returns false for orphaned terminals", () => {
     const t = makeTerminal({ worktreeId: "nonexistent" });
     expect(isTerminalVisible(t, isInTrash, worktreeIds)).toBe(false);

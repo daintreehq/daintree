@@ -155,6 +155,7 @@ type AgentPanel = {
   id: string;
   location: "grid" | "dock" | "trash";
   excludeFromPersistence?: boolean;
+  removeOnExit?: boolean;
   detectedAgentId?: string;
   launchAgentId?: string;
   agentState?: string;
@@ -337,6 +338,23 @@ describe("terminal.killAll confirm gate", () => {
     expect(removePanel).toHaveBeenCalledWith("p2");
     expect(removePanel).not.toHaveBeenCalledWith("ephem");
     expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
+  });
+
+  it("kills removeOnExit-only panels — only excludeFromPersistence is spared (flags independent)", async () => {
+    const { removePanel } = setRichPanelState({
+      panels: [
+        { id: "p1", location: "grid" },
+        { id: "rox", location: "grid", removeOnExit: true, excludeFromPersistence: false },
+        { id: "ephem", location: "dock", excludeFromPersistence: true },
+      ],
+    });
+    const run = setupActions();
+
+    await run("terminal.killAll");
+
+    expect(removePanel).toHaveBeenCalledWith("p1");
+    expect(removePanel).toHaveBeenCalledWith("rox");
+    expect(removePanel).not.toHaveBeenCalledWith("ephem");
   });
 
   it("requests confirmation when any user-facing panel has a running agent", async () => {

@@ -152,7 +152,7 @@ describe("terminal.getStatus", () => {
     expect(byLocation.terminals.map((t) => t.terminalId)).toEqual(["t3"]);
   });
 
-  it("excludes ephemeral panels from filter results", async () => {
+  it("excludes excludeFromPersistence panels from filter results", async () => {
     panelStoreMock.getState.mockReturnValue({
       panelIds: ["t1", "t2"],
       panelsById: {
@@ -169,6 +169,26 @@ describe("terminal.getStatus", () => {
 
     const { terminals } = await callGetStatus(setupActions());
     expect(terminals.map((t) => t.terminalId)).toEqual(["t1"]);
+  });
+
+  it("includes removeOnExit-only panels in filter results (flags are independent)", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1", "t2"],
+      panelsById: {
+        t1: { id: "t1", kind: "terminal", location: "dock", agentState: "idle" },
+        t2: {
+          id: "t2",
+          kind: "terminal",
+          location: "dock",
+          agentState: "idle",
+          removeOnExit: true,
+          excludeFromPersistence: false,
+        },
+      },
+    });
+
+    const { terminals } = await callGetStatus(setupActions());
+    expect(terminals.map((t) => t.terminalId)).toEqual(["t1", "t2"]);
   });
 
   it("prefers detectedAgentId over launchAgentId", async () => {
