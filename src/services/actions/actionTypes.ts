@@ -51,7 +51,7 @@ export interface ActionCallbacks {
   onLaunchAgent: (
     agentId: string,
     options?: {
-      location?: "grid" | "dock";
+      location?: "grid" | "dock" | "overlay";
       cwd?: string;
       worktreeId?: string;
       prompt?: string;

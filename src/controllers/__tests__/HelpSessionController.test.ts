@@ -389,7 +389,7 @@ describe("HelpSessionController — launch phase FSM", () => {
         excludeFromPersistence: true,
         removeOnExit: true,
       }),
-      expect.anything(),
+      expect.anything()
     );
     ctrl.stop();
   });
