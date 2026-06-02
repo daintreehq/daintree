@@ -229,7 +229,9 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       expect(branch).toContain("<EmptyState");
       expect(branch).toContain('variant="filtered-empty"');
       expect(branch).toContain('"No matching worktrees"');
-      expect(branch).toMatch(/hasQuery/);
+      // The title gates on the deferred query (consistent with the filtered
+      // list) rather than the instant hasQuery flag.
+      expect(branch).toMatch(/deferredQuery\.trim\(\)/);
       expect(branch).toMatch(/truncateSearchQuery/);
       expect(branch).toMatch(/onClick=\{clearAllFilters\}[\s\S]*?>\s*Show all worktrees\s*</);
       expect(branch).toMatch(/onClick=\{onOpenOverview\}[\s\S]*?>\s*Open overview\s*</);
