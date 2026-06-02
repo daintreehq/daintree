@@ -88,6 +88,12 @@ interface WorktreeFilterActions {
   pruneStaleWorktreeIds: (validIds: ReadonlySet<string>) => void;
   setQuickStateFilter: (filter: QuickStateFilter) => void;
   clearQuickStateFilter: () => void;
+  clearStatusFilters: () => void;
+  clearTypeFilters: () => void;
+  clearPrIssueFilters: () => void;
+  clearSessionFilters: () => void;
+  clearActivityFilters: () => void;
+  clearDevServerFilters: () => void;
   clearAll: () => void;
   getActiveFilterCount: () => number;
   hasActiveFilters: () => boolean;
@@ -528,6 +534,24 @@ const _actions: WorktreeFilterActions = {
   },
   clearQuickStateFilter: () => {
     _projectStore.setState({ quickStateFilter: "all" });
+  },
+  clearStatusFilters: () => {
+    _projectStore.setState({ statusFilters: new Set() });
+  },
+  clearTypeFilters: () => {
+    _projectStore.setState({ typeFilters: new Set() });
+  },
+  clearPrIssueFilters: () => {
+    _projectStore.setState({ prIssueFilters: new Set() });
+  },
+  clearSessionFilters: () => {
+    _projectStore.setState({ sessionFilters: new Set() });
+  },
+  clearActivityFilters: () => {
+    _projectStore.setState({ activityFilters: new Set() });
+  },
+  clearDevServerFilters: () => {
+    _projectStore.setState({ devServerFilters: new Set() });
   },
   clearAll: () => {
     _projectStore.setState({

@@ -65,6 +65,86 @@ describe("worktreeFilterStore", () => {
     expect(useWorktreeFilterStore.getState().getActiveFilterCount()).toBe(0);
   });
 
+  describe("per-section clear actions", () => {
+    // Populate every facet section so each clear can be shown to affect only its own.
+    function populateAllSections() {
+      const store = useWorktreeFilterStore.getState();
+      store.toggleStatusFilter("active");
+      store.toggleStatusFilter("dirty");
+      store.toggleTypeFilter("feature");
+      store.togglePrIssueFilter("hasIssue");
+      store.toggleSessionFilter("working");
+      store.toggleActivityFilter("last1h");
+      store.toggleDevServerFilter("running");
+    }
+
+    // Each section is described by a thunk that reads its current Set and a thunk
+    // that invokes its clear action — typed references avoid dynamic string-key
+    // indexing so the isolation assertion stays fully type-checked.
+    const sections = [
+      {
+        name: "status",
+        size: () => useWorktreeFilterStore.getState().statusFilters.size,
+        clear: () => useWorktreeFilterStore.getState().clearStatusFilters(),
+      },
+      {
+        name: "branch type",
+        size: () => useWorktreeFilterStore.getState().typeFilters.size,
+        clear: () => useWorktreeFilterStore.getState().clearTypeFilters(),
+      },
+      {
+        name: "issues & PRs",
+        size: () => useWorktreeFilterStore.getState().prIssueFilters.size,
+        clear: () => useWorktreeFilterStore.getState().clearPrIssueFilters(),
+      },
+      {
+        name: "sessions",
+        size: () => useWorktreeFilterStore.getState().sessionFilters.size,
+        clear: () => useWorktreeFilterStore.getState().clearSessionFilters(),
+      },
+      {
+        name: "activity",
+        size: () => useWorktreeFilterStore.getState().activityFilters.size,
+        clear: () => useWorktreeFilterStore.getState().clearActivityFilters(),
+      },
+      {
+        name: "dev server",
+        size: () => useWorktreeFilterStore.getState().devServerFilters.size,
+        clear: () => useWorktreeFilterStore.getState().clearDevServerFilters(),
+      },
+    ];
+
+    it.each(sections)("clearing $name empties only its own section", (target) => {
+      populateAllSections();
+
+      target.clear();
+
+      expect(target.size()).toBe(0);
+      for (const other of sections) {
+        if (other.name === target.name) continue;
+        expect(other.size()).toBeGreaterThan(0);
+      }
+    });
+
+    it.each(sections)("clearing $name is idempotent on an already-empty section", (target) => {
+      target.clear();
+
+      expect(target.size()).toBe(0);
+      expect(useWorktreeFilterStore.getState().hasActiveFilters()).toBe(false);
+    });
+
+    it("preserves the search query when clearing a single section", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setQuery("feature-x");
+      store.toggleStatusFilter("active");
+
+      useWorktreeFilterStore.getState().clearStatusFilters();
+
+      expect(useWorktreeFilterStore.getState().statusFilters.size).toBe(0);
+      expect(useWorktreeFilterStore.getState().query).toBe("feature-x");
+    });
+  });
+
   it("shows main worktree by default (hideMainWorktree is false)", () => {
     expect(useWorktreeFilterStore.getState().hideMainWorktree).toBe(false);
   });
