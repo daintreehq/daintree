@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
-import { ChevronDown, ChevronRight, Layers, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Layers, Trash2 } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ import { useWorktrees } from "@/hooks/useWorktrees";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
-import { STATE_ICONS, STATE_LABELS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
+import { STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
 import type { TabGroup } from "@/types";
 
 interface WaitingContainerProps {
@@ -285,9 +285,6 @@ function WaitingSingleItem({
   compact = false,
 }: WaitingSingleItemProps) {
   const agentState = terminal.agentState;
-  const StateIcon = agentState ? STATE_ICONS[agentState] : null;
-  const stateLabel = agentState ? STATE_LABELS[agentState] : null;
-  const stateColor = agentState ? STATE_COLORS[agentState] : null;
   const title = terminal.title || "Terminal";
 
   return (
@@ -310,12 +307,12 @@ function WaitingSingleItem({
         }
       }}
       className={cn(
-        "flex items-start gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] border-l-2 border-l-transparent hover:bg-tint/5 focus:bg-tint/5 focus-visible:outline-2 focus-visible:outline-daintree-accent outline-hidden transition-colors group cursor-pointer w-full",
+        "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] border-l-2 border-l-transparent hover:bg-tint/5 focus:bg-tint/5 focus-visible:outline-2 focus-visible:outline-daintree-accent outline-hidden transition-colors group/row cursor-pointer w-full",
         compact && "py-1 pl-1.5"
       )}
       aria-label={`Focus ${title}`}
     >
-      <div className="shrink-0 mt-0.5 opacity-70 group-hover:opacity-100 transition-opacity">
+      <div className="shrink-0 opacity-70 group-hover/row:opacity-100 transition-opacity">
         <TerminalIcon
           kind={terminal.kind}
           chrome={deriveTerminalChrome(terminal)}
@@ -323,46 +320,39 @@ function WaitingSingleItem({
         />
       </div>
 
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <span
-            className={cn(
-              "truncate font-medium text-daintree-text/80 group-hover:text-daintree-text transition-colors",
-              compact ? "text-[11px]" : "text-xs"
+      <div className="flex-1 flex items-center gap-1.5 min-w-0">
+        <span
+          className={cn(
+            "truncate font-medium text-daintree-text/80 group-hover/row:text-daintree-text transition-colors",
+            compact ? "text-[11px]" : "text-xs"
+          )}
+        >
+          {title}
+        </span>
+        {(worktreeName || terminal.activityHeadline) && (
+          <span className="flex items-center gap-1 min-w-0 truncate text-[10px] text-daintree-text/45">
+            {worktreeName && <span className="truncate">{worktreeName}</span>}
+            {worktreeName && terminal.activityHeadline && (
+              <span className="text-daintree-text/30">·</span>
             )}
-          >
-            {title}
-          </span>
-          {terminal.lastStateChange != null && (
-            <LiveTimeAgo
-              timestamp={terminal.lastStateChange}
-              className="text-[10px] text-daintree-text/40 shrink-0"
-            />
-          )}
-        </div>
-        <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-daintree-text/55">
-          {worktreeName && <span className="truncate">{worktreeName}</span>}
-          {worktreeName && (stateLabel || terminal.activityHeadline) && (
-            <span className="text-daintree-text/30">·</span>
-          )}
-          {StateIcon && stateLabel && (
-            <span className={cn("inline-flex items-center gap-1 shrink-0", stateColor)}>
-              <StateIcon className="h-2.5 w-2.5" />
-              <span>{stateLabel}</span>
-            </span>
-          )}
-          {terminal.activityHeadline && (
-            <>
-              {(worktreeName || stateLabel) && <span className="text-daintree-text/30">·</span>}
-              <span className="truncate italic text-daintree-text/50">
+            {terminal.activityHeadline && (
+              <span className="truncate italic text-daintree-text/40">
                 {terminal.activityHeadline}
               </span>
-            </>
-          )}
-        </div>
+            )}
+          </span>
+        )}
       </div>
 
-      <div className="flex gap-0.5 shrink-0 mt-0.5">
+      {terminal.lastStateChange != null && (
+        <LiveTimeAgo
+          timestamp={terminal.lastStateChange}
+          noTooltip
+          className="text-[10px] text-daintree-text/40 shrink-0"
+        />
+      )}
+
+      <div className="flex gap-0.5 shrink-0 invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 motion-reduce:transition-none group-hover/row:visible group-hover/row:opacity-100 group-hover/row:pointer-events-auto group-focus-within/row:visible group-focus-within/row:opacity-100 group-focus-within/row:pointer-events-auto">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -375,7 +365,7 @@ function WaitingSingleItem({
               aria-label={`Kill ${title}`}
               data-testid="waiting-kill-button"
             >
-              <X aria-hidden="true" />
+              <Trash2 aria-hidden="true" />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">{`Kill ${title}`}</TooltipContent>
