@@ -642,6 +642,12 @@ jobs:
             echo "Cleanup complete"
           fi
 
+  # On a scheduled-nightly failure we keep ONE rolling issue, not one per
+  # failing test. First failure creates "[Nightly] Tests failed on <date>";
+  # subsequent failing runs add a comment to that same open issue. The
+  # E2E failure-report artifacts (when present) are folded into a compact,
+  # suite-grouped spec list so the single issue stays informative without
+  # spawning a separate issue per signature. notify-success closes it on green.
   notify:
     if: failure() && github.event_name == 'schedule'
     needs:
@@ -664,13 +670,6 @@ jobs:
       actions: read
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-        with:
-          # Full history required so git blame can attribute failing specs back
-          # to the most recent author since the last green nightly.
-          fetch-depth: 0
-
       - name: Download failure reports
         env:
           GH_TOKEN: ${{ github.token }}
@@ -682,8 +681,7 @@ jobs:
           echo "Found ${ARTIFACTS} failure-report artifact(s)"
 
           if [ "$ARTIFACTS" -eq 0 ]; then
-            echo "No failure reports to process"
-            echo '[]' > failure-reports/all-failures.json
+            echo "No failure reports to process (non-E2E failure or no spec-level data)"
             exit 0
           fi
 
@@ -696,214 +694,37 @@ jobs:
               unzip -o "failure-reports/${name}.zip" -d "failure-reports/${name}/"
             done
 
-      # Pulls the per-shard e2e-classification-*.json artifacts produced by
-      # scripts/ci/classify-e2e-failures.mjs into /tmp/e2e-classifications/ so
-      # a follow-up can fold bucket labels (Infrastructure / Test-Logic /
-      # Product-Logic / Unclassified) into the per-signature issues that the
-      # github-script step below creates. Failing silently is fine — when the
-      # classifier ran but produced nothing, or when classification artifacts
-      # aren't present at all, the per-signature flow still creates issues
-      # without the bucket enrichment.
-      - name: Download failure classification artifacts
-        id: download-classifications
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          rm -rf /tmp/e2e-classifications
-          mkdir -p /tmp/e2e-classifications
-          if gh run download "${{ github.run_id }}" \
-            --dir /tmp/e2e-classifications \
-            --pattern 'e2e-classification-*' 2>/dev/null; then
-            echo "downloaded=true" >> "$GITHUB_OUTPUT"
-            echo "Downloaded $(ls /tmp/e2e-classifications/*.json 2>/dev/null | wc -l) classification files"
-          else
-            echo "downloaded=false" >> "$GITHUB_OUTPUT"
-            echo "No classification artifacts found"
-          fi
-
-      - name: Download failure manifests
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          pattern: e2e-manifest-*
-          path: .nightly-failure-manifests/
-          merge-multiple: true
-
-      - name: Process failures and manage issues
+      - name: Create or update the nightly-failure issue
         uses: actions/github-script@v8
-        env:
-          NEEDS_JSON: ${{ toJSON(needs) }}
         with:
           script: |
             const fs = require('node:fs');
             const path = require('node:path');
 
             const workspace = process.env.GITHUB_WORKSPACE;
-            const mod = await import(path.join(workspace, 'scripts/ci/process-nightly-issues.mjs'));
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const today = new Date().toISOString().split('T')[0];
+            const label = 'nightly-failure';
 
-            // ---- Git-blame assignee routing ----
-            // Independent of the per-signature dedup below: aggregate the
-            // shard-level e2e-manifest artifacts into a single set of failing
-            // spec paths, then git-blame those paths since the last green
-            // nightly to pick the most-likely owner. Applied to every issue
-            // created or updated in this run.
-            const failedSpecs = new Set();
-            const manifestDir = path.join(workspace, '.nightly-failure-manifests');
-            if (fs.existsSync(manifestDir)) {
-              for (const file of fs.readdirSync(manifestDir)) {
-                if (!file.endsWith('.json')) continue;
-                try {
-                  const raw = fs.readFileSync(path.join(manifestDir, file), 'utf8');
-                  const m = JSON.parse(raw);
-                  for (const spec of m.failedSpecs || []) {
-                    failedSpecs.add(spec);
-                  }
-                } catch {
-                  // malformed manifest — skip
-                }
-              }
-            }
-
-            let lastGreenDate = null;
-            try {
-              const runs = await github.rest.actions.listWorkflowRuns({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                workflow_id: 'nightly.yml',
-                status: 'success',
-                event: 'schedule',
-                branch: context.payload.repository?.default_branch || 'develop',
-                per_page: 1,
-              });
-              lastGreenDate = runs.data.workflow_runs[0]?.created_at ?? null;
-            } catch (e) {
-              core.warning(`Could not find last green nightly: ${e.message}`);
-            }
-
-            async function blameToAssignee(args, rationaleFn) {
-              try {
-                const { stdout } = await exec.getExecOutput('git', args, { silent: true });
-                const counts = new Map();
-                for (const line of stdout.trim().split('\n')) {
-                  const m = line.match(/^[a-f0-9]{40} (.+ <[^>]+>)$/);
-                  if (m) {
-                    const author = m[1];
-                    counts.set(author, (counts.get(author) || 0) + 1);
-                  }
-                }
-                if (counts.size === 0) return { assignee: null, rationale: '' };
-                const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
-                const rationale = rationaleFn(top[0], top[1]);
-                const emailMatch = top[0].match(/<(.+)>/);
-                if (emailMatch) {
-                  const email = emailMatch[1];
-                  const { data: search } = await github.rest.search.users({ q: `${email} in:email` });
-                  if (search.items?.length > 0) {
-                    return { assignee: search.items[0].login, rationale };
-                  }
-                }
-                return { assignee: null, rationale };
-              } catch (e) {
-                core.warning(`Git blame failed: ${e.message}`);
-                return { assignee: null, rationale: '' };
-              }
-            }
-
-            let assignee = null;
-            let assigneeRationale = '';
-            if (lastGreenDate && failedSpecs.size > 0) {
-              const result = await blameToAssignee(
-                ['log', `--since=${lastGreenDate}`, '--format=%H %an <%ae>', '--name-only', '--', ...failedSpecs],
-                (author, n) => `${author} touched ${n} of the failing spec(s) since last green.`,
-              );
-              assignee = result.assignee;
-              assigneeRationale = result.rationale;
-            }
-            if (!assignee && lastGreenDate) {
-              const result = await blameToAssignee(
-                ['log', `--since=${lastGreenDate}`, '--format=%H %an <%ae>'],
-                (author, n) => `${author} had ${n} commit(s) since last green (no spec-level data).`,
-              );
-              assignee = result.assignee;
-              assigneeRationale = result.rationale;
-            }
-            if (assigneeRationale) {
-              console.log(`Routing rationale: ${assigneeRationale}`);
-            }
-
-            async function applyAssignee(issueNumber) {
-              if (!assignee) {
-                try {
-                  await github.rest.issues.addLabels({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: issueNumber,
-                    labels: ['needs-triage'],
-                  });
-                } catch (e) {
-                  core.warning(`Could not add needs-triage label to #${issueNumber}: ${e.message}`);
-                }
-                return;
-              }
-              try {
-                await github.rest.issues.addAssignees({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issueNumber,
-                  assignees: [assignee],
-                });
-              } catch (e) {
-                core.warning(`Could not assign ${assignee} to #${issueNumber}: ${e.message}`);
-                try {
-                  await github.rest.issues.addLabels({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: issueNumber,
-                    labels: ['needs-triage'],
-                  });
-                } catch (e2) {
-                  core.warning(`Could not add needs-triage fallback label to #${issueNumber}: ${e2.message}`);
-                }
-              }
-            }
-
-            // Bootstrap the needs-triage label lazily on first use so older
-            // repos without it don't fail label assignment.
-            if (!assignee) {
-              try {
-                await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: 'needs-triage',
-                  color: 'fbca04',
-                  description: 'Nightly failure requires manual triage — no clear owner found',
-                });
-              } catch {
-                // already exists
-              }
-            }
-
-            // Collect all failure reports from downloaded artifacts
+            // Collect failing specs from the per-shard failure-report artifacts.
+            // Missing artifacts (a non-E2E failure) just yield an empty list and
+            // the issue falls back to the generic "run link" body.
             const reportsDir = path.join(workspace, 'failure-reports');
-            const allFailures = [];
-
+            const failures = [];
             if (fs.existsSync(reportsDir)) {
-              const entries = fs.readdirSync(reportsDir, { withFileTypes: true });
-              for (const entry of entries) {
+              for (const entry of fs.readdirSync(reportsDir, { withFileTypes: true })) {
                 if (!entry.isDirectory()) continue;
                 const reportPath = path.join(reportsDir, entry.name, 'failure-report.json');
                 if (!fs.existsSync(reportPath)) continue;
-
-                // Parse OS from artifact name: failure-report-{suite}-{osName}-s{shard}of{total}
                 const osMatch = entry.name.match(/-(Linux|macOS|Windows)-s\d+of\d+$/);
-                const osName = osMatch ? osMatch[1] : "unknown";
-
+                const os = osMatch ? osMatch[1] : 'unknown';
                 try {
-                  const content = fs.readFileSync(reportPath, 'utf8');
-                  const reports = JSON.parse(content);
-                  for (const r of reports) {
-                    allFailures.push({ ...r, os: osName });
+                  for (const r of JSON.parse(fs.readFileSync(reportPath, 'utf8'))) {
+                    failures.push({
+                      suite: r.projectName ?? 'unknown',
+                      test: (r.titlePath ?? []).join(' › '),
+                      os,
+                    });
                   }
                 } catch (err) {
                   console.error(`Failed to read ${reportPath}: ${err.message}`);
@@ -911,117 +732,71 @@ jobs:
               }
             }
 
-            console.log(`Collected ${allFailures.length} failure(s) from artifacts`);
-
-            if (allFailures.length === 0) {
-              console.log('No test failures to process');
-              return;
+            // Sharding repeats the same (suite, test, os) row — collapse them.
+            const seen = new Set();
+            const unique = [];
+            for (const f of failures) {
+              const key = `${f.suite}::${f.test}::${f.os}`;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              unique.push(f);
             }
 
-            const deduped = mod.deduplicateReports(allFailures);
-            const today = new Date().toISOString().split('T')[0];
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const runId = context.runId;
-
-            // Fetch all open nightly-failure issues
-            const openIssues = await github.paginate(
-              github.rest.issues.listForRepo,
-              {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                labels: 'nightly-failure',
-                state: 'open',
-                per_page: 100,
+            let specList = '';
+            if (unique.length > 0) {
+              const bySuite = new Map();
+              for (const f of unique) {
+                if (!bySuite.has(f.suite)) bySuite.set(f.suite, []);
+                bySuite.get(f.suite).push(f);
               }
-            );
-
-            console.log(`Fetched ${openIssues.length} open nightly-failure issues`);
-
-            // Parse metadata from each issue
-            const parsedIssues = openIssues.map((issue) => ({
-              number: issue.number,
-              title: issue.title,
-              body: issue.body,
-              labels: issue.labels.map((l) => l.name),
-              metadata: mod.parseMetadata(issue.body),
-            }));
-
-            // Process each unique failure signature
-            let created = 0;
-            let updated = 0;
-
-            for (const report of deduped) {
-              const existing = mod.findIssueBySignature(parsedIssues, report.signature);
-              const metadata = mod.nextMetadata(existing?.metadata ?? null, report, runId, runUrl, today);
-              const title = mod.buildIssueTitle(report);
-              const body = mod.buildIssueBody(report, metadata, runUrl);
-              const labels = mod.labelsForIssue(report);
-              const escalateLabels = mod.labelsForEscalation(metadata);
-
-              if (existing) {
-                const updateLabels = [...new Set([...existing.labels, ...labels, ...escalateLabels])];
-                await github.rest.issues.update({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: existing.number,
-                  title,
-                  body,
-                  labels: updateLabels,
+              const blocks = [...bySuite.entries()]
+                .sort((a, b) => a[0].localeCompare(b[0]))
+                .map(([suite, items]) => {
+                  const lines = items
+                    .sort((a, b) => a.test.localeCompare(b.test))
+                    .map((f) => `- ${f.test} (${f.os})`);
+                  return `**${suite}**\n${lines.join('\n')}`;
                 });
-
-                if (escalateLabels.length > 0 && !existing.labels.includes('human-review')) {
-                  await github.rest.issues.createComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: existing.number,
-                    body: mod.buildEscalationComment(),
-                  });
-                }
-
-                await applyAssignee(existing.number);
-                updated++;
-              } else {
-                const createdIssue = await github.rest.issues.create({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  title,
-                  body,
-                  labels: [...labels, ...escalateLabels],
-                });
-                await applyAssignee(createdIssue.data.number);
-                created++;
-              }
+              specList = `\n\nFailing specs (${unique.length}):\n\n${blocks.join('\n\n')}`;
             }
 
-            console.log(`Created ${created} new issue(s), updated ${updated} existing issue(s)`);
+            const body = [
+              `The nightly test suite failed.`,
+              ``,
+              `**Run:** ${runUrl}`,
+              `**Date:** ${today}`,
+              specList,
+            ].join('\n');
 
-            // Stale sweep: close issues whose last_seen is >14 days ago
-            let staleClosed = 0;
-            for (const issue of parsedIssues) {
-              if (!issue.metadata) continue;
-              if (issue.labels.includes('human-review')) continue;
-              if (!mod.shouldStaleClose(issue.metadata, today)) continue;
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: label,
+              state: 'open',
+              per_page: 1,
+            });
 
-              await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                state: 'closed',
-                state_reason: 'not_planned',
-              });
+            if (issues.length > 0) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: issue.number,
-                body: 'Auto-closed: this failure has not been seen in over 14 days. If it recurs, a new issue will be created.',
+                issue_number: issues[0].number,
+                body,
               });
-              staleClosed++;
+              console.log(`Commented on existing nightly-failure issue #${issues[0].number}`);
+            } else {
+              const { data: created } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `[Nightly] Tests failed on ${today}`,
+                body,
+                labels: [label],
+              });
+              console.log(`Created nightly-failure issue #${created.number}`);
             }
 
-            if (staleClosed > 0) {
-              console.log(`Stale-closed ${staleClosed} issue(s)`);
-            }
-
+  # Green nightly closes any open rolling failure issue. human-review issues are
+  # left alone so a human-flagged failure isn't auto-closed out from under them.
   notify-success:
     if: success() && github.event_name == 'schedule'
     needs:
@@ -1042,73 +817,37 @@ jobs:
       issues: write
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Close resolved failure issues
+      - name: Close resolved nightly-failure issues
         uses: actions/github-script@v8
         with:
           script: |
-            const path = require('node:path');
-            const mod = await import(path.join(process.env.GITHUB_WORKSPACE, 'scripts/ci/process-nightly-issues.mjs'));
-
-            const today = new Date().toISOString().split('T')[0];
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
-            const openIssues = await github.paginate(
-              github.rest.issues.listForRepo,
-              {
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'nightly-failure',
+              state: 'open',
+              per_page: 100,
+            });
+
+            let closed = 0;
+            for (const issue of issues) {
+              if (issue.labels.some((l) => (l.name ?? l) === 'human-review')) continue;
+              await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                labels: 'nightly-failure',
-                state: 'open',
-                per_page: 100,
-              }
-            );
-
-            console.log(`Found ${openIssues.length} open nightly-failure issues`);
-
-            let recovered = 0;
-            let staleClosed = 0;
-
-            for (const issue of openIssues) {
-              const meta = mod.parseMetadata(issue.body);
-              if (!meta) continue;
-
-              const hasHumanReview = issue.labels.some((l) => l.name === 'human-review');
-              if (hasHumanReview) continue;
-
-              if (mod.shouldCloseOnGreen(meta, today)) {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issue.number,
-                  body: mod.buildRecoveredComment(runUrl),
-                });
-                await github.rest.issues.update({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issue.number,
-                  state: 'closed',
-                  state_reason: 'completed',
-                });
-                recovered++;
-              } else if (mod.shouldStaleClose(meta, today)) {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issue.number,
-                  body: 'Auto-closed: this failure has not been seen in over 14 days. If it recurs, a new issue will be created.',
-                });
-                await github.rest.issues.update({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issue.number,
-                  state: 'closed',
-                  state_reason: 'not_planned',
-                });
-                staleClosed++;
-              }
+                issue_number: issue.number,
+                body: `The nightly test suite is green again. Closing.\n\n**Run:** ${runUrl}`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'completed',
+              });
+              closed++;
             }
 
-            console.log(`Recovered (green close): ${recovered}, Stale-closed: ${staleClosed}`);
+            console.log(`Closed ${closed} open nightly-failure issue(s)`);
