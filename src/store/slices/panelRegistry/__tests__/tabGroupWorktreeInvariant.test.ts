@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
 import type { PtyPanelData, TabGroup } from "@shared/types/panel";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { NO_WORKTREE } from "../worktreeIndex";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -542,6 +543,119 @@ describe("Tab Group Worktree Invariant", () => {
       // Verify the persisted data contains the expected group
       const persistedGroups = vi.mocked(panelPersistence.saveTabGroups).mock.calls[0]![0];
       expect(persistedGroups.has("g1")).toBe(true);
+    });
+  });
+
+  // Regression for #9649: a recipe-launched panel spawns inside a
+  // beginSpawnBatch/flushSpawnBatch window where the worktree index
+  // (panelIdsByWorktreeId) is committed eagerly but panelIds only appends at
+  // flush. getTabGroups must surface the batched panel from the index so the
+  // grid paints on first mount instead of staying blank until a worktree
+  // switch forces a re-derive.
+  describe("getTabGroups pre-flush batch visibility (#9649)", () => {
+    // Simulate Commit #1 of a spawn batch: panelsById + the worktree index hold
+    // the new panel, but panelIds does NOT yet contain it (deferred to flush).
+    function commitOnePanelToIndexOnly(panel: PtyPanelData, committedIds: string[] = []) {
+      const byId: Record<string, PtyPanelData> = { [panel.id]: panel };
+      const index: Record<string, string[]> = {};
+      const bucket = panel.worktreeId ?? NO_WORKTREE;
+      index[bucket] = [...committedIds, panel.id];
+      usePanelStore.setState({
+        panelsById: byId,
+        panelIds: committedIds,
+        panelIdsByWorktreeId: index,
+        tabGroups: new Map(),
+      });
+    }
+
+    it("returns a virtual grid group for a batched panel before panelIds flush", () => {
+      const recipePanel = createMockTerminal("recipe-1", "wt-a", "grid");
+      commitOnePanelToIndexOnly(recipePanel);
+
+      const state = usePanelStore.getState();
+      // Precondition: panelIds is still stale (deferred), index already has it.
+      expect(state.panelIds).not.toContain("recipe-1");
+      expect(state.panelIdsByWorktreeId["wt-a"]).toContain("recipe-1");
+
+      const groups = state.getTabGroups("grid", "wt-a");
+      expect(groups).toEqual([
+        {
+          id: "recipe-1",
+          location: "grid",
+          worktreeId: "wt-a",
+          activeTabId: "recipe-1",
+          panelIds: ["recipe-1"],
+        },
+      ]);
+    });
+
+    it("includes a global dock panel in a worktree-scoped dock query before flush", () => {
+      const dockPanel = createMockTerminal("dock-1", undefined, "dock");
+      commitOnePanelToIndexOnly(dockPanel);
+
+      const state = usePanelStore.getState();
+      expect(state.panelIds).not.toContain("dock-1");
+      expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toContain("dock-1");
+
+      // Dock-global rule: a panel with worktreeId === undefined must still
+      // appear in a dock query scoped to a concrete worktree.
+      const groups = state.getTabGroups("dock", "wt-a");
+      const allIds = groups.flatMap((g) => g.panelIds);
+      expect(allIds).toContain("dock-1");
+    });
+
+    it("keeps a batched panel out of a different worktree's grid", () => {
+      const recipePanel = createMockTerminal("recipe-1", "wt-a", "grid");
+      commitOnePanelToIndexOnly(recipePanel);
+
+      const groups = usePanelStore.getState().getTabGroups("grid", "wt-b");
+      const allIds = groups.flatMap((g) => g.panelIds);
+      expect(allIds).not.toContain("recipe-1");
+    });
+
+    it("keeps a global pending panel out of a concrete worktree's grid", () => {
+      // The NO_WORKTREE bucket is scanned for grid queries too, but the in-loop
+      // panelMatchesWorktreeScope filter must still keep global panels out of a
+      // worktree-scoped grid (only dock queries surface them).
+      const globalPanel = createMockTerminal("global-1", undefined, "grid");
+      commitOnePanelToIndexOnly(globalPanel);
+
+      const state = usePanelStore.getState();
+      expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toContain("global-1");
+
+      const groups = state.getTabGroups("grid", "wt-a");
+      const allIds = groups.flatMap((g) => g.panelIds);
+      expect(allIds).not.toContain("global-1");
+    });
+
+    it("preserves committed panelIds ordering and appends batched panels last", () => {
+      const committed = createMockTerminal("committed-1", "wt-a", "grid");
+      const batched = createMockTerminal("batched-2", "wt-a", "grid");
+      usePanelStore.setState({
+        panelsById: { "committed-1": committed, "batched-2": batched },
+        panelIds: ["committed-1"],
+        panelIdsByWorktreeId: { "wt-a": ["committed-1", "batched-2"] },
+        tabGroups: new Map(),
+      });
+
+      const groups = usePanelStore.getState().getTabGroups("grid", "wt-a");
+      const orderedIds = groups.flatMap((g) => g.panelIds);
+      expect(orderedIds).toEqual(["committed-1", "batched-2"]);
+    });
+
+    it("does not duplicate a panel once it lands in both panelIds and the index after flush", () => {
+      const panel = createMockTerminal("recipe-1", "wt-a", "grid");
+      // Post-flush state: the id is now in BOTH panelIds and the index bucket.
+      usePanelStore.setState({
+        panelsById: { "recipe-1": panel },
+        panelIds: ["recipe-1"],
+        panelIdsByWorktreeId: { "wt-a": ["recipe-1"] },
+        tabGroups: new Map(),
+      });
+
+      const groups = usePanelStore.getState().getTabGroups("grid", "wt-a");
+      const allIds = groups.flatMap((g) => g.panelIds);
+      expect(allIds).toEqual(["recipe-1"]);
     });
   });
 });
