@@ -96,7 +96,7 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
         if (!raw) continue;
         if (raw.location === "trash") continue;
         if (!isPtyPanel(raw)) continue;
-        if (raw.ephemeral === true) continue;
+        if (raw.excludeFromPersistence === true) continue;
         out.push(raw);
       }
       return out;

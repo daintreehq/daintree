@@ -13,7 +13,10 @@ const selectionStoreMock = vi.hoisted(() => ({
 
 let panelState: {
   panelIds: string[];
-  panelsById: Record<string, { worktreeId?: string; location?: string; ephemeral?: boolean }>;
+  panelsById: Record<
+    string,
+    { worktreeId?: string; location?: string; excludeFromPersistence?: boolean }
+  >;
   removePanel: ReturnType<typeof vi.fn>;
 };
 const originalWindow = globalThis.window;
@@ -73,7 +76,7 @@ describe("worktree.delete action", () => {
         "terminal-1": {
           worktreeId: "wt-1",
           location: "grid",
-          ephemeral: false,
+          excludeFromPersistence: false,
         },
       },
       removePanel: vi.fn(),

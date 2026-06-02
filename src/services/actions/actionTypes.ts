@@ -60,7 +60,8 @@ export interface ActionCallbacks {
       presetId?: string | null;
       activateDockOnCreate?: boolean;
       env?: Record<string, string>;
-      ephemeral?: boolean;
+      excludeFromPersistence?: boolean;
+      removeOnExit?: boolean;
       agentLaunchFlags?: string[];
       spawnedBy?: TerminalSpawnSource;
       focusPolicy?: AddPanelFocusPolicy;

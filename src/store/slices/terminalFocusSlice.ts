@@ -562,7 +562,7 @@ export const createTerminalFocusSlice =
             t.location === "dock" &&
             (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined) &&
             isPtyPanel(t) &&
-            t.ephemeral !== true &&
+            t.excludeFromPersistence !== true &&
             t.agentState === "waiting"
         );
 

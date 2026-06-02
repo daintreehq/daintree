@@ -470,7 +470,8 @@ describe("HelpPanel — resume from hibernated session", () => {
         launchAgentId: "claude",
         command: "claude --resume abc-123",
         cwd: "/tmp/help/proj-1",
-        ephemeral: true,
+        excludeFromPersistence: true,
+        removeOnExit: true,
       })
     );
     // Resume bypasses the standard agent.launch dispatch.

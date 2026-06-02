@@ -3964,7 +3964,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Hibernate every idle, completed, or exited terminal. Skips ephemeral panels and active agents.",
+    "description": "Hibernate every idle, completed, or exited terminal. Skips tooling-internal panels and active agents.",
     "examples": undefined,
     "id": "terminal.hibernateAllIdle",
     "keywords": [
@@ -4040,7 +4040,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   {
     "category": "terminal",
     "danger": "confirm",
-    "dangerRationale": "Permanently kills every non-ephemeral terminal. All scrollback and session state are lost.",
+    "dangerRationale": "Permanently kills every user-facing terminal. All scrollback and session state are lost.",
     "description": "Permanently remove all terminals (cannot be undone)",
     "examples": undefined,
     "id": "terminal.killAll",

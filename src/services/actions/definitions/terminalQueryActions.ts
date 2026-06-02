@@ -47,7 +47,8 @@ export function registerTerminalQueryActions(
       let terminals = state.panelIds
         .map((id) => state.panelsById[id])
         .filter(
-          (t): t is PanelInstance => t !== undefined && (!isPtyPanel(t) || t.ephemeral !== true)
+          (t): t is PanelInstance =>
+            t !== undefined && (!isPtyPanel(t) || t.excludeFromPersistence !== true)
         );
 
       // Filter by worktree if specified
@@ -253,9 +254,9 @@ export function registerTerminalQueryActions(
       if (terminalIds !== undefined) {
         for (const id of terminalIds) {
           const t = getNarrowPanel(panelsById, id);
-          // Treat ephemeral panels as not found — they're tooling-internal and
-          // must never expose state to MCP callers (mirrors terminal.list).
-          if (!t || (isPtyPanel(t) && t.ephemeral === true)) {
+          // Treat tooling-internal panels as not found — they must never expose
+          // state to MCP callers (mirrors terminal.list).
+          if (!t || (isPtyPanel(t) && t.excludeFromPersistence === true)) {
             resolved.push({ id, terminal: undefined });
           } else {
             resolved.push({ id, terminal: t });
@@ -265,7 +266,8 @@ export function registerTerminalQueryActions(
         let terminals = state.panelIds
           .map((id) => panelsById[id])
           .filter(
-            (t): t is PanelInstance => t !== undefined && (!isPtyPanel(t) || t.ephemeral !== true)
+            (t): t is PanelInstance =>
+              t !== undefined && (!isPtyPanel(t) || t.excludeFromPersistence !== true)
           );
 
         if (worktreeId) {

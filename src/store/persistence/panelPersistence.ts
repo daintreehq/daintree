@@ -81,7 +81,7 @@ const DEFAULT_OPTIONS: Required<Omit<PanelPersistenceOptions, "getProjectId">> &
     t.location !== "trash" &&
     t.location !== "background" &&
     t.kind !== "assistant" &&
-    t.ephemeral !== true &&
+    t.excludeFromPersistence !== true &&
     !isSmokeTestTerminalId(t.id),
   transform: panelToSnapshot,
   getProjectId: undefined,

@@ -158,7 +158,8 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
           cwd,
           location: "dock",
           prompt: helpPrompt,
-          ephemeral: true,
+          excludeFromPersistence: true,
+          removeOnExit: true,
           ...(env && { env }),
         },
         { source: "user" }
