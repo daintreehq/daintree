@@ -242,3 +242,50 @@ describe("--anti-flicker-delay-palette CSS contract", () => {
     expect(UI_PALETTE_STALE_DELAY).toBeLessThan(UI_DOHERTY_THRESHOLD);
   });
 });
+
+describe("discrete-feedback easing CSS contract", () => {
+  // Discrete, user-triggered feedback animations must use the front-loaded
+  // --ease-out-expo token so they snap immediately on trigger. The symmetric
+  // Material curve cubic-bezier(0.4, 0, 0.2, 1) reads as sluggish for one-shot
+  // feedback — it belongs to ambient loops (terminal-ping wash) and interactive
+  // base transitions (--focus-transition-easing), which intentionally retain it.
+  // This contract guards against either drifting back onto the symmetric literal.
+  const css = readFileSync(resolve(__dirname, "../../index.css"), "utf8");
+
+  // Each selector's block is extracted individually so the negative assertion
+  // can't tunnel across a closing brace into a neighbouring rule that legitimately
+  // keeps the symmetric literal (terminal-ping, --focus-transition-easing).
+  const discreteFeedbackSelectors = [
+    ".animate-badge-bump",
+    ".animate-action-row-bump",
+    ".animate-diagnostics-flash",
+    ".animate-upstream-badge-flash",
+    ".animate-activity-blip",
+    ".animate-trash-pulse",
+    ".animate-fleet-bar-refocus-pulse::before",
+    ".animate-fleet-bar-commit-flash::before",
+    ".fleet-exit-pulse-overlay",
+    ".fleet-preview-enter-overlay",
+  ];
+
+  const extractBlock = (selector: string): string | null => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = css.match(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`));
+    return match?.[1] ?? null;
+  };
+
+  it.each(discreteFeedbackSelectors)("%s references var(--ease-out-expo)", (selector) => {
+    const block = extractBlock(selector);
+    expect(block).not.toBeNull();
+    expect(block).toMatch(/animation:[^;]*var\(--ease-out-expo\)/);
+  });
+
+  it.each(discreteFeedbackSelectors)(
+    "%s does not fall back to the symmetric Material literal",
+    (selector) => {
+      const block = extractBlock(selector);
+      expect(block).not.toBeNull();
+      expect(block).not.toMatch(/cubic-bezier\(0\.4,\s*0,\s*0\.2,\s*1\)/);
+    }
+  );
+});
