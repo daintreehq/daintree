@@ -151,7 +151,8 @@ export function registerAppView(win: BrowserWindow, view: WebContentsView): void
 export function unregisterAppView(win: BrowserWindow): void {
   const view = windowToAppView.get(win.id);
   if (view) {
-    if (!view.webContents.isDestroyed()) {
+    // Electron 41: view.webContents is undefined once the view is destroyed.
+    if (view.webContents && !view.webContents.isDestroyed()) {
       unregisterWebContents(view.webContents);
     }
     windowToAppView.delete(win.id);
@@ -164,8 +165,14 @@ export function unregisterAppView(win: BrowserWindow): void {
  */
 export function getAppWebContents(win: BrowserWindow): WebContents {
   const view = windowToAppView.get(win.id);
-  if (view && !view.webContents.isDestroyed()) {
-    return view.webContents;
+  // Electron 41: view.webContents is undefined once the view is destroyed, but
+  // the windowToAppView entry can linger until the `destroyed` event fires.
+  // Guard the property and prune the stale entry so the fallback is reached.
+  if (view) {
+    if (view.webContents && !view.webContents.isDestroyed()) {
+      return view.webContents;
+    }
+    windowToAppView.delete(win.id);
   }
   return win.webContents;
 }
@@ -185,8 +192,9 @@ export function getAllAppWebContents(): WebContents[] {
   const result: WebContents[] = [];
 
   // Active app view per window — typically the currently-visible project view.
+  // Electron 41: view.webContents is undefined once the view is destroyed.
   for (const [winId, view] of windowToAppView) {
-    if (!view.webContents.isDestroyed()) {
+    if (view.webContents && !view.webContents.isDestroyed()) {
       if (!seen.has(view.webContents.id)) {
         seen.add(view.webContents.id);
         result.push(view.webContents);
