@@ -124,6 +124,12 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       const branch = source.slice(branchStart, branchEnd);
       expect(branch).toContain('"No matching worktrees"');
       expect(branch).toContain('No matches for "${truncateSearchQuery(query.trim())}"');
+      // The search-aware copy is the hasQuery arm, the plain copy the fallback —
+      // guard against an inverted ternary by checking the query arm comes first.
+      const queryIdx = branch.indexOf('No matches for "${truncateSearchQuery(query.trim())}"');
+      const fallbackIdx = branch.indexOf('"No matching worktrees"');
+      expect(branch.indexOf("hasQuery")).toBeLessThan(queryIdx);
+      expect(queryIdx).toBeLessThan(fallbackIdx);
       // The old title-cased, count-suffixed copy is gone.
       expect(branch).not.toContain("QUICK_STATE_LABELS[quickStateFilter]");
       expect(branch).not.toContain("activeFacetFilterCount");
