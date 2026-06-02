@@ -18,6 +18,14 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
   }),
 }));
 
+// The component resolves the action's title from the ActionService registry to
+// label the hint. Mock that lookup so we can drive titled vs. untitled behaviour
+// without registering real actions.
+const getTitleMock = vi.hoisted(() => vi.fn<(id: string) => string>(() => ""));
+vi.mock("@/services/ActionService", () => ({
+  actionService: { getTitle: getTitleMock },
+}));
+
 function activate(combo: string) {
   act(() => {
     shortcutHintStore.setState({
@@ -37,6 +45,8 @@ const liveRegion = () => document.querySelector('[role="status"]');
 describe("ShortcutHint live region — issue #8942", () => {
   beforeEach(() => {
     shortcutHintStore.setState({ activeHint: null });
+    getTitleMock.mockReset();
+    getTitleMock.mockReturnValue("");
   });
 
   afterEach(() => {
@@ -71,21 +81,66 @@ describe("ShortcutHint live region — issue #8942", () => {
   });
 
   it("renders the visual tooltip only while a hint is active", () => {
+    getTitleMock.mockReturnValue("Open command palette");
     render(<ShortcutHint />);
-    expect(document.body.textContent).not.toContain("Tip:");
+    const tooltip = () => document.querySelector('[aria-hidden="true"]');
+    expect(tooltip()).toBeNull();
 
     activate("⌘K");
-    expect(document.body.textContent).toContain("Tip:");
+    expect(tooltip()).not.toBeNull();
 
     deactivate();
-    expect(document.body.textContent).not.toContain("Tip:");
+    expect(tooltip()).toBeNull();
+  });
+
+  it("labels the visual tooltip with the resolved action title", () => {
+    getTitleMock.mockReturnValue("Open command palette");
+    render(<ShortcutHint />);
+    activate("⌘K");
+    const tooltip = document.querySelector('[aria-hidden="true"]');
+    expect(tooltip?.textContent).toContain("Open command palette");
+    expect(tooltip?.textContent).toContain("⌘K");
+    expect(tooltip?.textContent).not.toContain("Tip:");
+  });
+
+  it("falls back to 'Tip:' when the action has no resolvable title", () => {
+    getTitleMock.mockReturnValue("");
+    render(<ShortcutHint />);
+    activate("⌘K");
+    const tooltip = document.querySelector('[aria-hidden="true"]');
+    expect(tooltip?.textContent).toContain("Tip:");
+    expect(tooltip?.textContent).toContain("⌘K");
+  });
+
+  it("falls back to 'Tip:' when the title is only whitespace", () => {
+    getTitleMock.mockReturnValue("   ");
+    render(<ShortcutHint />);
+    activate("⌘K");
+    const tooltip = document.querySelector('[aria-hidden="true"]');
+    expect(tooltip?.textContent).toContain("Tip:");
+    expect(liveRegion()?.textContent).toBe("Shortcut: ⌘K");
   });
 
   it("marks the visual tooltip aria-hidden so it doesn't double-announce", () => {
+    getTitleMock.mockReturnValue("Open command palette");
     render(<ShortcutHint />);
     activate("⌘K");
     const tooltip = document.querySelector('[aria-hidden="true"]');
     expect(tooltip).not.toBeNull();
-    expect(tooltip?.textContent).toContain("Tip:");
+    expect(tooltip?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("announces the action title and combo in the live region", () => {
+    getTitleMock.mockReturnValue("Open command palette");
+    render(<ShortcutHint />);
+    activate("⌘K");
+    expect(liveRegion()?.textContent).toBe("Open command palette: ⌘K");
+  });
+
+  it("announces a generic shortcut label when no title resolves", () => {
+    getTitleMock.mockReturnValue("");
+    render(<ShortcutHint />);
+    activate("⌘K");
+    expect(liveRegion()?.textContent).toBe("Shortcut: ⌘K");
   });
 });

@@ -266,6 +266,16 @@ export class ActionService {
     return this.registry.has(id);
   }
 
+  /**
+   * Resolve an action's human-readable title via a single O(1) registry lookup.
+   * Bypasses toManifestEntry() (isEnabled callbacks, schema cloning) — use this
+   * when only the title is needed (e.g. labelling a transient hint). Returns ""
+   * for unknown/plugin actions registered without a title.
+   */
+  getTitle(id: ActionId): string {
+    return this.registry.get(id)?.title ?? "";
+  }
+
   /** Remove an action from the registry. Silent no-op if unknown — safe for unload cleanup. */
   unregister(id: ActionId): void {
     this.registry.delete(id);
