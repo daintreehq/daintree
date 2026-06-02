@@ -441,12 +441,17 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
 
     it("ships a forced-colors outline fallback for the cursor ring (box-shadow is stripped there)", async () => {
       const css = await fs.readFile(SIDEBAR_CSS_PATH, "utf-8");
-      const forcedColorsBlocks = css.match(/@media \(forced-colors: active\) \{[\s\S]*?\n\}/g) ?? [];
-      const hasCursorFallback = forcedColorsBlocks.some(
-        (block) =>
+      // Split on each forced-colors media query and inspect the segment up to
+      // the next media query — robust to brace indentation, unlike a lazy
+      // `\n}` block match which depends on prettier's exact formatting.
+      const segments = css.split("@media (forced-colors: active)").slice(1);
+      const hasCursorFallback = segments.some((seg) => {
+        const block = seg.split("@media")[0]!;
+        return (
           block.includes('data-keyboard-cursor="true"') &&
           /outline:\s*2px solid Highlight/.test(block)
-      );
+        );
+      });
       expect(hasCursorFallback).toBe(true);
     });
 

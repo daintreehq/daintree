@@ -70,17 +70,13 @@ html[data-dragging="true"] .sidebar-worktree-card[data-hovered="true"] {
 
 /* Suppress the cursor ring when the sidebar isn't focused — the cursor only
    matters while the user is navigating the grid. Mirrors the `data-active`
-   dimming above so a backgrounded sidebar reads as quiet. */
+   dimming above (line 12 zeroes the active row's left-edge marker too) so a
+   backgrounded sidebar reads uniformly quiet, active row or not. The 0,5,0
+   specificity beats both the cursor rules and the focused active+cursor rule. */
 .sidebar-root:not(:focus-within)
   [data-worktree-row][data-keyboard-cursor="true"]
   .sidebar-worktree-card {
   box-shadow: none;
-}
-
-.sidebar-root:not(:focus-within)
-  [data-worktree-row][data-keyboard-cursor="true"]
-  .sidebar-worktree-card[data-active="true"] {
-  box-shadow: inset 2px 0 0 var(--theme-overlay-selected);
 }
 
 /* Reveal the per-row action toolbar whenever the row has keyboard focus
@@ -88,10 +84,13 @@ html[data-dragging="true"] .sidebar-worktree-card[data-hovered="true"] {
    rather than `:focus` / `:focus-within` so mousedown on a button does not
    flash the toolbar before the click resolves. The cursor-row selector covers
    grid-mode navigation, where focus stays on the container and the rules above
-   never match. */
+   never match. It scopes to the focused grid (not the whole sidebar) so the
+   action affordance hides when focus tabs out to the search bar — the cursor
+   ring lingers as a passive marker, but the interactive toolbar does not. */
 [data-worktree-row]:focus-visible [data-worktree-row-toolbar],
 [data-worktree-row]:has(:focus-visible) [data-worktree-row-toolbar],
-.sidebar-root:focus-within
+.sidebar-root
+  [role="grid"]:focus-within
   [data-worktree-row][data-keyboard-cursor="true"]
   [data-worktree-row-toolbar] {
   opacity: 1;
@@ -102,7 +101,8 @@ html[data-dragging="true"] .sidebar-worktree-card[data-hovered="true"] {
    toolbar reveal pattern above. */
 [data-worktree-row]:focus-visible [data-worktree-row-drag-handle],
 [data-worktree-row]:has(:focus-visible) [data-worktree-row-drag-handle],
-.sidebar-root:focus-within
+.sidebar-root
+  [role="grid"]:focus-within
   [data-worktree-row][data-keyboard-cursor="true"]
   [data-worktree-row-drag-handle] {
   color: color-mix(in srgb, var(--theme-text-primary) 30%, transparent);
