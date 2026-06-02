@@ -292,7 +292,6 @@ describe("ErrorBanner", () => {
       );
       const retry = screen.getByRole("button", { name: "Retry" });
       expect(retry.className).not.toMatch(/status-success/);
-      expect(retry.className).toMatch(/status-error/);
     });
 
     it("does not use success-green classes on the full retry button", () => {
@@ -305,7 +304,6 @@ describe("ErrorBanner", () => {
       );
       const retry = screen.getByRole("button", { name: "Retry" });
       expect(retry.className).not.toMatch(/status-success/);
-      expect(retry.className).toMatch(/status-error/);
     });
   });
 

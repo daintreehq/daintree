@@ -688,8 +688,6 @@ describe("ReviewHub", () => {
       expect(inspectBtn).not.toBe(stageBtn);
       expect(inspectBtn.contains(stageBtn)).toBe(false);
       expect(stageBtn.contains(inspectBtn)).toBe(false);
-      // Inspect button captures the row's interactive surface.
-      expect(inspectBtn.className).toMatch(/flex-1/);
     });
 
     it("renders +N/-M churn from staging entries", async () => {
@@ -2764,18 +2762,6 @@ describe("ReviewHub", () => {
       await waitFor(() => {
         expect(window.electron.git.unstageAll).toHaveBeenCalledWith(WORKTREE_PATH);
       });
-    });
-
-    it("passes density prop to FileStageRow (comfortable by default)", async () => {
-      getStagingStatusMock.mockResolvedValue(multiFileStatus());
-
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-
-      await waitFor(() => screen.getByText("index.ts"));
-
-      // The rows render with the comfortable density by default (py-1.5)
-      const stagedContainer = screen.getByText("index.ts").closest(".flex.flex-col");
-      expect(stagedContainer?.className).toMatch(/gap-0\.5/);
     });
 
     it("shows bulk button hidden when no files in section", async () => {

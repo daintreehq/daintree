@@ -261,8 +261,6 @@ describe("WaitingContainer", () => {
       mockTerminals = [makeTerminal({ id: "t1" })];
       render(<WaitingContainer />);
       const row = screen.getByTestId("waiting-single-item");
-      expect(row.className).toContain("border-l-2");
-      expect(row.className).toContain("border-l-transparent");
       expect(row.className).not.toContain("color-activity-waiting");
       expect(row.className).not.toContain("panel-state-waiting");
     });

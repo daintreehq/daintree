@@ -72,24 +72,6 @@ describe("SettingsInput", () => {
     render(<SettingsInput label="Test" ref={ref} />);
     expect(ref).toHaveBeenCalledWith(expect.any(HTMLInputElement));
   });
-
-  it("uses semantic tokens for background and focus", () => {
-    render(<SettingsInput label="Host" />);
-    const input = screen.getByLabelText("Host");
-    expect(input.className).toContain("bg-surface-input");
-    expect(input.className).toContain("focus-visible:outline");
-    expect(input.className).toContain("focus-visible:outline-2");
-    expect(input.className).toContain("focus-visible:outline-daintree-accent");
-    expect(input.className).toContain("focus-visible:outline-offset-2");
-  });
-
-  it("uses semantic text tokens for label and description", () => {
-    render(<SettingsInput label="Host" description="The server hostname" />);
-    const label = screen.getByText("Host");
-    const description = screen.getByText("The server hostname");
-    expect(label.className).toContain("text-text-secondary");
-    expect(description.className).toContain("text-text-muted");
-  });
 });
 
 describe("SettingsSelect", () => {

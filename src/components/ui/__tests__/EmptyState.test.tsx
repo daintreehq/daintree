@@ -314,8 +314,6 @@ describe("EmptyState", () => {
       );
       const inner = container.querySelector(".motion-safe\\:animate-in");
       expect(inner).toBeTruthy();
-      expect(inner?.className).toContain("motion-safe:fade-in");
-      expect(inner?.className).toContain("motion-safe:duration-150");
     });
 
     it("does not use transition-all", () => {

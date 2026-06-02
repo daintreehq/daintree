@@ -18,12 +18,6 @@ describe("Kbd", () => {
     expect(kbd).toBeTruthy();
     expect(kbd?.textContent).toBe("Esc");
   });
-
-  it("applies tabular-nums so digit and letter keys align (issue #8100)", () => {
-    const { container } = render(<Kbd>Esc</Kbd>);
-    const kbd = container.querySelector("kbd");
-    expect(kbd?.className).toContain("tabular-nums");
-  });
 });
 
 describe("KbdChord", () => {

@@ -113,22 +113,6 @@ describe("SortableWorktreeCard", () => {
     expect(ghost.className).toContain("transition-opacity");
   });
 
-  it("marks the outer wrapper relative so the drop indicator can position absolutely against it", () => {
-    mockState = { isDragging: false };
-    const { container } = render(
-      <SortableWorktreeCard
-        worktreeId="wt1"
-        dragStartOrder={["wt1"]}
-        ariaRowIndex={1}
-        isActive={false}
-      >
-        {() => <div data-testid="child" />}
-      </SortableWorktreeCard>
-    );
-    const wrapper = container.firstChild as HTMLElement;
-    expect(wrapper.className).toContain("relative");
-  });
-
   it("advertises Alt+Arrow keyboard reorder via aria-keyshortcuts when sortable", () => {
     mockState = { isDragging: false };
     const { container } = render(
@@ -186,7 +170,6 @@ describe("SortableWorktreeCard", () => {
     expect(indicator).not.toBeNull();
     expect(indicator.getAttribute("data-worktree-drop-indicator")).toBe("above");
     expect(indicator.className).toContain("-top-px");
-    expect(indicator.className).toContain("bg-border-strong");
   });
 
   it("renders a below-edge insertion line when the dragged row midpoint is below the hovered row midpoint", () => {

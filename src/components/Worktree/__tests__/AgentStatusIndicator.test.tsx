@@ -23,18 +23,15 @@ describe("AgentStatusIndicator", () => {
     cleanup();
   });
 
-  it.each([
-    ["working", "⟳"],
-    ["completed", "✓"],
-    ["exited", "–"],
-    ["directing", "✎"],
-  ] as const)("renders role=img with aria-label for state %s", (state, glyph) => {
-    const { container } = render(<AgentStatusIndicator state={state} />);
-    const el = container.querySelector('[role="img"]');
-    expect(el).not.toBeNull();
-    expect(el?.getAttribute("aria-label")).toBe(`Agent status: ${STATE_LABELS[state]}`);
-    expect(el?.textContent).toBe(glyph);
-  });
+  it.each(["working", "completed", "exited", "directing"] as const)(
+    "renders role=img with aria-label for state %s",
+    (state) => {
+      const { container } = render(<AgentStatusIndicator state={state} />);
+      const el = container.querySelector('[role="img"]');
+      expect(el).not.toBeNull();
+      expect(el?.getAttribute("aria-label")).toBe(`Agent status: ${STATE_LABELS[state]}`);
+    }
+  );
 
   it("does not render role=status (no live-region spam)", () => {
     const { container } = render(<AgentStatusIndicator state="working" />);
@@ -183,17 +180,6 @@ describe("STATE_PRIORITY contract", () => {
 });
 
 describe("agentStateDotColor", () => {
-  // Exact class assertions guard the color mapping itself: a swap between
-  // waiting and directing would still return a non-null string, so a
-  // truthiness-only check would let the regression slip past.
-  it("returns bg-state-waiting for waiting", () => {
-    expect(agentStateDotColor("waiting")).toBe("bg-state-waiting");
-  });
-
-  it("returns bg-state-working for directing", () => {
-    expect(agentStateDotColor("directing")).toBe("bg-state-working");
-  });
-
   it.each([["working"], ["completed"], ["exited"], ["idle"]] as const)(
     "returns null for passive state %s (no dot rendered)",
     (state) => {

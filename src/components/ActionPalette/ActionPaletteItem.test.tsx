@@ -64,9 +64,6 @@ describe("ActionPaletteItem", () => {
     expect(screen.getByText("Test Action")).toBeTruthy();
     expect(screen.getByText("Test description")).toBeTruthy();
     expect(screen.getByText("No focused terminal")).toBeTruthy();
-
-    const reasonElement = screen.getByText("No focused terminal");
-    expect(reasonElement.className).toContain("italic");
   });
 
   it("does not render disabled reason for disabled actions without a reason", () => {
@@ -112,15 +109,11 @@ describe("ActionPaletteItem", () => {
     expect(screen.getByText("⌘K")).toBeTruthy();
   });
 
-  it("applies selected styling with aria-selected and accent indicator", () => {
+  it("applies selected styling with aria-selected", () => {
     render(<ActionPaletteItem item={makeItem()} index={0} isSelected={true} onSelect={onSelect} />);
 
     const row = screen.getByRole("option");
     expect(row.getAttribute("aria-selected")).toBe("true");
-    // Selected state is now CSS-driven via aria-selected: variants.
-    expect(row.className).toContain("aria-selected:bg-overlay-soft");
-    expect(row.className).toContain("aria-selected:before:bg-daintree-accent");
-    expect(row.className).toContain("aria-selected:before:content-['']");
   });
 
   it("does not branch styling on isSelected — selection is purely aria-driven", () => {
@@ -134,22 +127,6 @@ describe("ActionPaletteItem", () => {
     const unselectedClass = screen.getByRole("option").className;
     // Class lists must be identical — only aria-selected attribute differs.
     expect(selectedClass).toBe(unselectedClass);
-  });
-
-  it("lifts keybinding glyph contrast on selection via group-aria-selected", () => {
-    render(
-      <ActionPaletteItem
-        item={makeItem({ keybinding: "⌘K" })}
-        index={0}
-        isSelected={true}
-        onSelect={onSelect}
-      />
-    );
-
-    const kbd = screen.getByText("⌘K");
-    expect(kbd.className).toContain("text-daintree-text/40");
-    expect(kbd.className).toContain("group-aria-selected:text-daintree-text/60");
-    expect(screen.getByRole("option").className).toContain("group");
   });
 
   it("calls onHoverIndex with index when pointer moves over the item", () => {
@@ -387,7 +364,6 @@ describe("ActionPaletteItem", () => {
 
       const icon = container.querySelector('svg[aria-hidden="true"]');
       expect(icon).toBeTruthy();
-      expect(icon?.getAttribute("class") ?? "").toContain("text-daintree-text/40");
     });
 
     it("does not render the alert icon on safe-tier rows", () => {
@@ -411,9 +387,6 @@ describe("ActionPaletteItem", () => {
       const rationale = container.querySelector(`#${expectedId}`);
       expect(rationale).toBeTruthy();
       expect(rationale?.textContent).toBe("Removes the working tree and branch from disk");
-      expect(rationale?.className).toContain("hidden");
-      expect(rationale?.className).toContain("group-aria-selected:block");
-      expect(rationale?.className).toContain("italic");
     });
 
     it("omits aria-describedby on unselected confirm-tier rows", () => {

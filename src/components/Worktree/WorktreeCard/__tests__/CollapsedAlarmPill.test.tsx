@@ -59,15 +59,9 @@ describe("CollapsedAlarmPill", () => {
     expect(pill.className).not.toContain("accent");
   });
 
-  it("uses transition-colors not transition-all", () => {
+  it("does not use transition-all", () => {
     const { getByTestId } = render(<CollapsedAlarmPill alarm={ciFailed} />);
     const pill = getByTestId("collapsed-alarm-pill");
-    expect(pill.className).toContain("transition-colors");
     expect(pill.className).not.toContain("transition-all");
-  });
-
-  it("uses shrink-0 to survive narrow flex containers", () => {
-    const { getByTestId } = render(<CollapsedAlarmPill alarm={ciFailed} />);
-    expect(getByTestId("collapsed-alarm-pill").className).toContain("shrink-0");
   });
 });

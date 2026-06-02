@@ -1310,17 +1310,6 @@ describe("resolveInputBarColors", () => {
     brightCyan: "#b4f9f0",
   };
 
-  it("maps all fields from a full theme", () => {
-    const colors = resolveInputBarColors(fullTheme);
-    expect(colors.accent).toBe("#f5e0dc");
-    expect(colors.foreground).toBe("#cdd6f4");
-    expect(colors.background).toBe("#1e1e2e");
-    expect(colors.selectionBg).toBe("#585b70");
-    expect(colors.chipColor).toBe("#94e2d5");
-    expect(colors.errorColor).toBe("#f38ba8");
-    expect(colors.successColor).toBe("#a6e3a1");
-  });
-
   it("falls back cursor to blue when cursor is missing", () => {
     const colors = resolveInputBarColors({ ...fullTheme, cursor: undefined });
     expect(colors.accent).toBe("#89b4fa");

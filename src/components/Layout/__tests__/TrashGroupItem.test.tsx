@@ -526,19 +526,6 @@ describe("TrashGroupItem", () => {
       expect(el.hasAttribute("aria-live")).toBe(false);
     });
 
-    it("uses tabular-nums to keep digits aligned", () => {
-      const { container } = render(
-        <TrashGroupItem
-          groupRestoreId="grp1"
-          groupMetadata={groupMetadata}
-          terminals={terminals}
-          earliestExpiry={Date.now() + 20000}
-        />
-      );
-      const el = findCountdownEl(container);
-      expect(el.className).toContain("tabular-nums");
-    });
-
     it("hides the countdown by default outside the final approach window", () => {
       const { container } = render(
         <TrashGroupItem

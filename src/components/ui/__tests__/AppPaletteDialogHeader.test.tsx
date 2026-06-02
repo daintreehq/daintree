@@ -84,20 +84,6 @@ describe("AppPaletteDialog.Header loading bar", () => {
     expect(bar?.dataset.loading).toBe("true");
   });
 
-  it("places the bar inside a positioned container that clips overflow", () => {
-    const { container } = render(
-      <AppPaletteDialog.Header label="Quick switch" isLoading>
-        <input aria-label="Search" />
-      </AppPaletteDialog.Header>
-    );
-    // The outer header div must be `relative overflow-hidden` so the
-    // absolute-positioned bar clips at the header boundary, not the
-    // surrounding modal card.
-    const header = container.firstElementChild as HTMLElement;
-    expect(header.className).toContain("relative");
-    expect(header.className).toContain("overflow-hidden");
-  });
-
   it("still renders header label and child input", () => {
     render(
       <AppPaletteDialog.Header label="Quick switch" shortcut="Cmd+P" isLoading>

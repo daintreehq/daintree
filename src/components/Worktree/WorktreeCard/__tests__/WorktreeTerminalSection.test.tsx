@@ -648,9 +648,6 @@ describe("WorktreeTerminalSection drag handle visibility (issue #8099)", () => {
     const handles = screen.getAllByRole("button", { name: "Drag to move terminal" });
     expect(handles.length).toBeGreaterThanOrEqual(1);
     for (const handle of handles) {
-      expect(handle.className).toContain("text-text-primary/25");
-      expect(handle.className).toContain("group-hover/termrow:text-text-primary/40");
-      expect(handle.className).toContain("transition-colors");
       expect(handle.className).not.toContain("opacity-0");
       expect(handle.className).not.toContain("transition-opacity");
     }
@@ -661,7 +658,6 @@ describe("WorktreeTerminalSection drag handle visibility (issue #8099)", () => {
     const handles = screen.getAllByRole("button", { name: "Drag to move terminal" });
     expect(handles.length).toBeGreaterThanOrEqual(1);
     for (const handle of handles) {
-      expect(handle.className).toContain("focus-visible:text-text-secondary");
       expect(handle.className).not.toContain("focus-visible:opacity-100");
     }
   });

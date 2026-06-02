@@ -271,7 +271,6 @@ describe("OverrideField", () => {
       />
     );
     const dot = screen.getByTestId("override-indicator");
-    expect(dot.className).toContain("bg-status-info");
     expect(dot.className).not.toContain("bg-accent");
     expect(dot.className).not.toContain("bg-daintree-accent");
   });

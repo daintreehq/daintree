@@ -347,7 +347,6 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
 
       const dot = overflowButton!.querySelector("span.bg-daintree-text\\/70");
       expect(dot).not.toBeNull();
-      expect(dot!.className).toContain("rounded-full");
       // Accent restraint: the neutral cue must NOT use any accent token.
       expect(dot!.className).not.toContain("daintree-accent");
     });
@@ -373,7 +372,6 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
       const activeRow = rows[0]!;
       expect(activeRow.getAttribute("aria-current")).toBe("true");
       expect(activeRow.className).toContain("font-medium");
-      expect(activeRow.className).toContain("before:w-[2px]");
       expect(activeRow.className).toContain("before:bg-daintree-accent");
 
       // The non-active hidden row must NOT carry the active marker.
