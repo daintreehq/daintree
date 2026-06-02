@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useState, useCallback, useRef } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useState,
+  useCallback,
+  useRef,
+  type CSSProperties,
+} from "react";
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
@@ -71,7 +78,15 @@ const TYPE_ICON_CONFIG: Record<string, IconConfig> = {
 const MAX_VISIBLE_DURATION_MS = 15000;
 const VISIBLE_DURATION_MULTIPLIER = 3;
 
-function Toast({ notification, isTopmost }: { notification: Notification; isTopmost: boolean }) {
+function Toast({
+  notification,
+  isTopmost,
+  stackIndex,
+}: {
+  notification: Notification;
+  isTopmost: boolean;
+  stackIndex: number;
+}) {
   const { dismissNotification, removeNotification } = useNotificationStore(
     useShallow((state) => ({
       dismissNotification: state.dismissNotification,
@@ -269,26 +284,47 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
   const { Icon, className: iconClassName } =
     TYPE_ICON_CONFIG[notification.type] ?? DEFAULT_ICON_CONFIG;
 
+  // Stack depth: frontmost (newest) toast is 0; background toasts lift up and
+  // scale down per index to read as a coordinated pile. The parent passes
+  // dismissed/exiting toasts index 0 so the remaining *live* toasts slide into
+  // their compacted positions. Clamp at 2 as a defensive floor against a
+  // transient over-cap from dismissed-state races (MAX_VISIBLE_TOASTS keeps the
+  // live count at 3).
+  const depth = Math.min(Math.max(stackIndex, 0), 2);
+
+  // Freeze the exit position at the toast's last live depth. Without this, an
+  // evicted *background* toast (e.g. index 2 when MAX_VISIBLE_TOASTS evicts the
+  // oldest) would fall off the parent's visible-index map, receive index 0, and
+  // animate from the back of the pile toward the front as it fades — a visible
+  // forward lurch. Holding the last depth lets it fade out in place.
+  const lastDepthRef = useRef(depth);
+  if (!notification.dismissed) lastDepthRef.current = depth;
+  const renderDepth = notification.dismissed ? lastDepthRef.current : depth;
+
+  // Two-node split: the outer wrapper owns ALL transform/opacity motion (entry
+  // slide, stack lift/scale, exit) and the interaction surface (ref, role,
+  // handlers); the inner card keeps `backdrop-blur-xl`. Chromium 146 flickers
+  // or drops the blur when a `transform` transition runs on the same node as
+  // `backdrop-filter`, so the animated node must never carry the blur (lessons
+  // #6192, #2574 — the blur ancestor also anchors the options dropdown's
+  // containing block, which stays intact on the inner card).
   return (
     <div
       ref={toastRef}
       className={cn(
-        "group pointer-events-auto relative flex w-full max-w-[360px] items-start gap-3",
-        "rounded-[var(--radius-sm)] border-l-[3px] border border-tint/[0.08]",
-        "bg-surface-panel/85 backdrop-blur-xl",
-        "px-3 py-2.5 pr-2",
-        "text-sm text-daintree-text",
-        "shadow-[var(--theme-shadow-floating)]",
-        "ring-1 ring-inset ring-tint/[0.05]",
+        "pointer-events-auto relative w-full max-w-[360px]",
         "transition-[transform,opacity]",
         "motion-reduce:transition-none motion-reduce:duration-0",
-        isVisible ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0",
-        accentClass
+        isVisible ? "opacity-100" : "opacity-0"
       )}
-      style={{
-        transitionDuration: `${isVisible ? UI_ENTER_DURATION : UI_EXIT_DURATION}ms`,
-        transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
-      }}
+      style={
+        {
+          "--toast-index": renderDepth,
+          transform: `translateX(${isVisible ? "0px" : "2rem"}) translateY(calc(var(--toast-index) * -10px)) scale(calc(1 - var(--toast-index) * 0.05))`,
+          transitionDuration: `${isVisible ? UI_ENTER_DURATION : UI_EXIT_DURATION}ms`,
+          transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+        } as CSSProperties
+      }
       onMouseEnter={() => {
         if (mouseLeaveTimerRef.current) {
           clearTimeout(mouseLeaveTimerRef.current);
@@ -316,270 +352,283 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
       role={notification.type === "error" ? "alert" : "status"}
       aria-busy={isCountBusy || undefined}
     >
-      <div className={cn("shrink-0 mt-0.5", iconClassName)}>
-        <Icon className="h-4 w-4" />
-      </div>
-      <div className="flex-1 space-y-1 min-w-0 py-0.5">
-        {notification.title ? (
-          <h4 className="font-medium leading-tight tracking-tight text-xs text-daintree-text flex items-center gap-1.5">
-            <span className="min-w-0 truncate">{notification.title}</span>
-            {notification.count != null &&
-              Number.isFinite(notification.count) &&
-              notification.count > 1 && (
-                <span
-                  data-testid="toast-coalesce-badge"
-                  aria-label={formatNotificationCountAriaLabel(notification.count)}
-                  className={cn(
-                    "shrink-0 rounded-full bg-tint/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[3.5ch] text-center",
-                    isCountBumping && "animate-badge-bump"
-                  )}
-                  style={{ animationDuration: `${DURATION_150}ms` }}
-                  onAnimationEnd={(e) => {
-                    if (e.animationName === "badge-bump") setIsCountBumping(false);
-                  }}
-                >
-                  {formatNotificationCountGlyph(notification.count, "×")}
-                </span>
-              )}
-          </h4>
-        ) : notification.count != null &&
-          Number.isFinite(notification.count) &&
-          notification.count > 1 ? (
-          <div>
-            <span
-              data-testid="toast-coalesce-badge"
-              aria-label={formatNotificationCountAriaLabel(notification.count)}
-              className={cn(
-                "inline-block rounded-full bg-tint/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[3.5ch] text-center",
-                isCountBumping && "animate-badge-bump"
-              )}
-              style={{ animationDuration: `${DURATION_150}ms` }}
-              onAnimationEnd={(e) => {
-                if (e.animationName === "badge-bump") setIsCountBumping(false);
-              }}
-            >
-              {formatNotificationCountGlyph(notification.count, "×")}
-            </span>
-          </div>
-        ) : null}
-        {typeof notification.message !== "string" && notification.inboxMessage ? (
-          <>
-            <span className="sr-only">{notification.inboxMessage}</span>
-            <div
-              aria-hidden="true"
-              className="text-xs text-daintree-text/70 leading-snug break-words"
-            >
-              {notification.message}
-            </div>
-          </>
-        ) : (
-          <div className="text-xs text-daintree-text/70 leading-snug break-words">
-            {notification.message}
-          </div>
-        )}
-        {(() => {
-          const actions = [
-            ...(notification.actions ?? []),
-            ...(notification.action ? [notification.action] : []),
-          ];
-          if (actions.length === 0) return null;
-
-          const handleActionClick = (action: (typeof actions)[number], index: number) => {
-            if (activeActionIndex !== null) return;
-
-            const result = action.onClick();
-
-            if (!action.successLabel) {
-              handleDismiss();
-              return;
-            }
-
-            setActiveActionIndex(index);
-
-            if (result instanceof Promise) {
-              let settled = false;
-              spinnerTimerRef.current = setTimeout(() => {
-                if (!settled && mountedRef.current) {
-                  setActionStatus("loading");
-                }
-              }, DURATION_150);
-
-              result
-                .then(() => {
-                  settled = true;
-                  if (spinnerTimerRef.current) {
-                    clearTimeout(spinnerTimerRef.current);
-                    spinnerTimerRef.current = null;
-                  }
-                  if (!mountedRef.current) return;
-                  if (dismissTimerRef.current) {
-                    clearTimeout(dismissTimerRef.current);
-                    dismissTimerRef.current = null;
-                  }
-                  setActionStatus("success");
-                  const announcementText = notification.title
-                    ? `${notification.title}: ${action.successLabel}`
-                    : action.successLabel!;
-                  useAnnouncerStore.getState().announce(announcementText, "polite");
-                  dwellTimerRef.current = setTimeout(() => {
-                    if (mountedRef.current) dismissRef.current();
-                  }, UI_ACTION_SUCCESS_DWELL_MS);
-                })
-                .catch(() => {
-                  settled = true;
-                  if (spinnerTimerRef.current) {
-                    clearTimeout(spinnerTimerRef.current);
-                    spinnerTimerRef.current = null;
-                  }
-                  if (!mountedRef.current) return;
-                  setActionStatus("idle");
-                  setActiveActionIndex(null);
-                });
-            } else {
-              if (dismissTimerRef.current) {
-                clearTimeout(dismissTimerRef.current);
-                dismissTimerRef.current = null;
-              }
-              setActionStatus("success");
-              const announcementText = notification.title
-                ? `${notification.title}: ${action.successLabel}`
-                : action.successLabel!;
-              useAnnouncerStore.getState().announce(announcementText, "polite");
-              dwellTimerRef.current = setTimeout(() => {
-                if (mountedRef.current) dismissRef.current();
-              }, UI_ACTION_SUCCESS_DWELL_MS);
-            }
-          };
-
-          const isSuccess = actionStatus === "success";
-          const showLoading = actionStatus === "loading" && activeActionIndex !== null;
-
-          return (
-            <div
-              className={cn(
-                "mt-1.5 flex flex-wrap gap-1.5",
-                isSuccess && "animate-action-row-bump"
-              )}
-            >
-              {actions.map((action, index) => {
-                const isActive = activeActionIndex === index;
-                const isDimmed = activeActionIndex !== null && !isActive;
-                const variant = action.variant ?? "primary";
-
-                return (
-                  <button
-                    key={action.label}
-                    type="button"
-                    onClick={() => handleActionClick(action, index)}
-                    className={cn(
-                      "px-2.5 py-1 rounded-[var(--radius-xs)]",
-                      "text-xs font-medium transition-colors",
-                      variant === "secondary"
-                        ? "text-daintree-text/70 hover:text-daintree-text hover:bg-tint/10"
-                        : "bg-status-info/10 text-status-info hover:bg-status-info/20",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
-                      isDimmed && "opacity-50 pointer-events-none"
-                    )}
-                    disabled={activeActionIndex !== null}
-                  >
-                    {isActive && showLoading ? (
-                      <span
-                        data-testid="toast-action-spinner"
-                        className="inline-flex items-center gap-1.5"
-                      >
-                        <Spinner size="xs" />
-                        {action.label}
-                      </span>
-                    ) : isActive && isSuccess ? (
-                      <span
-                        data-testid="toast-action-checkmark"
-                        className="inline-flex items-center gap-1"
-                      >
-                        <Check className="h-3 w-3" />
-                        {action.successLabel}
-                      </span>
-                    ) : (
-                      action.label
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          );
-        })()}
-      </div>
-
-      {(notification.context?.projectId || notification.context?.eventKind) &&
-        (() => {
-          const eventKind = notification.context?.eventKind;
-          return (
-            <DropdownMenu onOpenChange={(open) => setIsDropdownOpen(open)}>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  aria-label="Notification options"
-                  className={cn(
-                    "shrink-0 rounded-[var(--radius-xs)]",
-                    "h-6 w-6 flex items-center justify-center",
-                    "text-daintree-text/40 transition-colors duration-150",
-                    "hover:text-daintree-text/80 hover:bg-tint/10",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
-                    "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
-                  )}
-                >
-                  <MoreHorizontal className="h-3.5 w-3.5" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" sideOffset={4}>
-                {isNotificationEventKind(eventKind) && (
-                  <DropdownMenuItem
-                    onSelect={() => {
-                      const projectId = notification.context?.projectId;
-                      if (!isNotificationEventKind(eventKind)) return;
-                      handleDismiss();
-                      void actionService.dispatch("project.silenceNotificationKind", {
-                        kind: eventKind,
-                        projectId,
-                      });
-                    }}
-                  >
-                    Silence {EVENT_KIND_LABEL[eventKind]}
-                    {notification.context?.projectId && eventKind !== "uiFeedback"
-                      ? " from this project"
-                      : ""}
-                  </DropdownMenuItem>
-                )}
-                {notification.context?.projectId && (
-                  <DropdownMenuItem
-                    onSelect={() => {
-                      const projectId = notification.context?.projectId;
-                      if (!projectId) return;
-                      handleDismiss();
-                      void actionService.dispatch("project.muteNotifications", { projectId });
-                    }}
-                  >
-                    Mute project notifications
-                  </DropdownMenuItem>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          );
-        })()}
-
-      <button
-        type="button"
-        onClick={handleDismiss}
-        aria-label="Dismiss notification"
+      <div
         className={cn(
-          "shrink-0 rounded-[var(--radius-xs)]",
-          "h-6 w-6 flex items-center justify-center",
-          "text-daintree-text/40 transition-colors duration-150",
-          "hover:text-daintree-text/80 hover:bg-tint/10",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          "group flex w-full items-start gap-3",
+          "rounded-[var(--radius-sm)] border-l-[3px] border border-tint/[0.08]",
+          "bg-surface-panel/85 backdrop-blur-xl",
+          "px-3 py-2.5 pr-2",
+          "text-sm text-daintree-text",
+          "shadow-[var(--theme-shadow-floating)]",
+          "ring-1 ring-inset ring-tint/[0.05]",
+          accentClass
         )}
       >
-        <X className="h-3.5 w-3.5" />
-      </button>
+        <div className={cn("shrink-0 mt-0.5", iconClassName)}>
+          <Icon className="h-4 w-4" />
+        </div>
+        <div className="flex-1 space-y-1 min-w-0 py-0.5">
+          {notification.title ? (
+            <h4 className="font-medium leading-tight tracking-tight text-xs text-daintree-text flex items-center gap-1.5">
+              <span className="min-w-0 truncate">{notification.title}</span>
+              {notification.count != null &&
+                Number.isFinite(notification.count) &&
+                notification.count > 1 && (
+                  <span
+                    data-testid="toast-coalesce-badge"
+                    aria-label={formatNotificationCountAriaLabel(notification.count)}
+                    className={cn(
+                      "shrink-0 rounded-full bg-tint/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[3.5ch] text-center",
+                      isCountBumping && "animate-badge-bump"
+                    )}
+                    style={{ animationDuration: `${DURATION_150}ms` }}
+                    onAnimationEnd={(e) => {
+                      if (e.animationName === "badge-bump") setIsCountBumping(false);
+                    }}
+                  >
+                    {formatNotificationCountGlyph(notification.count, "×")}
+                  </span>
+                )}
+            </h4>
+          ) : notification.count != null &&
+            Number.isFinite(notification.count) &&
+            notification.count > 1 ? (
+            <div>
+              <span
+                data-testid="toast-coalesce-badge"
+                aria-label={formatNotificationCountAriaLabel(notification.count)}
+                className={cn(
+                  "inline-block rounded-full bg-tint/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[3.5ch] text-center",
+                  isCountBumping && "animate-badge-bump"
+                )}
+                style={{ animationDuration: `${DURATION_150}ms` }}
+                onAnimationEnd={(e) => {
+                  if (e.animationName === "badge-bump") setIsCountBumping(false);
+                }}
+              >
+                {formatNotificationCountGlyph(notification.count, "×")}
+              </span>
+            </div>
+          ) : null}
+          {typeof notification.message !== "string" && notification.inboxMessage ? (
+            <>
+              <span className="sr-only">{notification.inboxMessage}</span>
+              <div
+                aria-hidden="true"
+                className="text-xs text-daintree-text/70 leading-snug break-words"
+              >
+                {notification.message}
+              </div>
+            </>
+          ) : (
+            <div className="text-xs text-daintree-text/70 leading-snug break-words">
+              {notification.message}
+            </div>
+          )}
+          {(() => {
+            const actions = [
+              ...(notification.actions ?? []),
+              ...(notification.action ? [notification.action] : []),
+            ];
+            if (actions.length === 0) return null;
+
+            const handleActionClick = (action: (typeof actions)[number], index: number) => {
+              if (activeActionIndex !== null) return;
+
+              const result = action.onClick();
+
+              if (!action.successLabel) {
+                handleDismiss();
+                return;
+              }
+
+              setActiveActionIndex(index);
+
+              if (result instanceof Promise) {
+                let settled = false;
+                spinnerTimerRef.current = setTimeout(() => {
+                  if (!settled && mountedRef.current) {
+                    setActionStatus("loading");
+                  }
+                }, DURATION_150);
+
+                result
+                  .then(() => {
+                    settled = true;
+                    if (spinnerTimerRef.current) {
+                      clearTimeout(spinnerTimerRef.current);
+                      spinnerTimerRef.current = null;
+                    }
+                    if (!mountedRef.current) return;
+                    if (dismissTimerRef.current) {
+                      clearTimeout(dismissTimerRef.current);
+                      dismissTimerRef.current = null;
+                    }
+                    setActionStatus("success");
+                    const announcementText = notification.title
+                      ? `${notification.title}: ${action.successLabel}`
+                      : action.successLabel!;
+                    useAnnouncerStore.getState().announce(announcementText, "polite");
+                    dwellTimerRef.current = setTimeout(() => {
+                      if (mountedRef.current) dismissRef.current();
+                    }, UI_ACTION_SUCCESS_DWELL_MS);
+                  })
+                  .catch(() => {
+                    settled = true;
+                    if (spinnerTimerRef.current) {
+                      clearTimeout(spinnerTimerRef.current);
+                      spinnerTimerRef.current = null;
+                    }
+                    if (!mountedRef.current) return;
+                    setActionStatus("idle");
+                    setActiveActionIndex(null);
+                  });
+              } else {
+                if (dismissTimerRef.current) {
+                  clearTimeout(dismissTimerRef.current);
+                  dismissTimerRef.current = null;
+                }
+                setActionStatus("success");
+                const announcementText = notification.title
+                  ? `${notification.title}: ${action.successLabel}`
+                  : action.successLabel!;
+                useAnnouncerStore.getState().announce(announcementText, "polite");
+                dwellTimerRef.current = setTimeout(() => {
+                  if (mountedRef.current) dismissRef.current();
+                }, UI_ACTION_SUCCESS_DWELL_MS);
+              }
+            };
+
+            const isSuccess = actionStatus === "success";
+            const showLoading = actionStatus === "loading" && activeActionIndex !== null;
+
+            return (
+              <div
+                className={cn(
+                  "mt-1.5 flex flex-wrap gap-1.5",
+                  isSuccess && "animate-action-row-bump"
+                )}
+              >
+                {actions.map((action, index) => {
+                  const isActive = activeActionIndex === index;
+                  const isDimmed = activeActionIndex !== null && !isActive;
+                  const variant = action.variant ?? "primary";
+
+                  return (
+                    <button
+                      key={action.label}
+                      type="button"
+                      onClick={() => handleActionClick(action, index)}
+                      className={cn(
+                        "px-2.5 py-1 rounded-[var(--radius-xs)]",
+                        "text-xs font-medium transition-colors",
+                        variant === "secondary"
+                          ? "text-daintree-text/70 hover:text-daintree-text hover:bg-tint/10"
+                          : "bg-status-info/10 text-status-info hover:bg-status-info/20",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                        isDimmed && "opacity-50 pointer-events-none"
+                      )}
+                      disabled={activeActionIndex !== null}
+                    >
+                      {isActive && showLoading ? (
+                        <span
+                          data-testid="toast-action-spinner"
+                          className="inline-flex items-center gap-1.5"
+                        >
+                          <Spinner size="xs" />
+                          {action.label}
+                        </span>
+                      ) : isActive && isSuccess ? (
+                        <span
+                          data-testid="toast-action-checkmark"
+                          className="inline-flex items-center gap-1"
+                        >
+                          <Check className="h-3 w-3" />
+                          {action.successLabel}
+                        </span>
+                      ) : (
+                        action.label
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
+        </div>
+
+        {(notification.context?.projectId || notification.context?.eventKind) &&
+          (() => {
+            const eventKind = notification.context?.eventKind;
+            return (
+              <DropdownMenu onOpenChange={(open) => setIsDropdownOpen(open)}>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Notification options"
+                    className={cn(
+                      "shrink-0 rounded-[var(--radius-xs)]",
+                      "h-6 w-6 flex items-center justify-center",
+                      "text-daintree-text/40 transition-colors duration-150",
+                      "hover:text-daintree-text/80 hover:bg-tint/10",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                      "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+                    )}
+                  >
+                    <MoreHorizontal className="h-3.5 w-3.5" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" sideOffset={4}>
+                  {isNotificationEventKind(eventKind) && (
+                    <DropdownMenuItem
+                      onSelect={() => {
+                        const projectId = notification.context?.projectId;
+                        if (!isNotificationEventKind(eventKind)) return;
+                        handleDismiss();
+                        void actionService.dispatch("project.silenceNotificationKind", {
+                          kind: eventKind,
+                          projectId,
+                        });
+                      }}
+                    >
+                      Silence {EVENT_KIND_LABEL[eventKind]}
+                      {notification.context?.projectId && eventKind !== "uiFeedback"
+                        ? " from this project"
+                        : ""}
+                    </DropdownMenuItem>
+                  )}
+                  {notification.context?.projectId && (
+                    <DropdownMenuItem
+                      onSelect={() => {
+                        const projectId = notification.context?.projectId;
+                        if (!projectId) return;
+                        handleDismiss();
+                        void actionService.dispatch("project.muteNotifications", { projectId });
+                      }}
+                    >
+                      Mute project notifications
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            );
+          })()}
+
+        <button
+          type="button"
+          onClick={handleDismiss}
+          aria-label="Dismiss notification"
+          className={cn(
+            "shrink-0 rounded-[var(--radius-xs)]",
+            "h-6 w-6 flex items-center justify-center",
+            "text-daintree-text/40 transition-colors duration-150",
+            "hover:text-daintree-text/80 hover:bg-tint/10",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          )}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
     </div>
   );
 }
@@ -632,6 +681,13 @@ export function Toaster() {
   const renderOrder = [...toastNotifications].reverse();
   const topmostActiveId = renderOrder.find((n) => !n.dismissed)?.id;
 
+  // Stack index counts only live (non-dismissed) toasts so an exiting toast
+  // doesn't occupy a slot — the remaining toasts compact into 0,1,2 and slide
+  // up smoothly instead of snapping when one leaves. Exiting toasts get index 0
+  // (no lift/scale) for the duration of their fade-out.
+  const visibleIndexById = new Map<string, number>();
+  renderOrder.filter((n) => !n.dismissed).forEach((n, index) => visibleIndexById.set(n.id, index));
+
   return createPortal(
     <div
       role="region"
@@ -644,6 +700,7 @@ export function Toaster() {
           key={notification.id}
           notification={notification}
           isTopmost={notification.id === topmostActiveId}
+          stackIndex={visibleIndexById.get(notification.id) ?? 0}
         />
       ))}
       {evictedToInboxCount > 0 && <OverflowPill count={evictedToInboxCount} />}

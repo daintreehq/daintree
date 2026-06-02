@@ -1703,3 +1703,129 @@ describe("Toast action variant rendering (issue #7595)", () => {
     expect(button.className).not.toContain("bg-status-info/10");
   });
 });
+
+describe("Toast stack motion (issue #9618)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useNotificationStore.getState().reset();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  it("assigns ascending stack indices, newest frontmost", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ message: "First" });
+      addToast({ message: "Second" });
+      addToast({ message: "Third" });
+      vi.advanceTimersByTime(16);
+    });
+
+    // renderOrder is newest-first, so DOM order is [Third, Second, First] and
+    // the frontmost (newest) toast carries index 0.
+    // Bind indices to toast identity, not raw DOM position.
+    const byText = (needle: string) =>
+      screen.getAllByRole("status").find((t) => t.textContent?.includes(needle))!;
+    expect(screen.getAllByRole("status")).toHaveLength(3);
+    expect(byText("Third").style.getPropertyValue("--toast-index")).toBe("0");
+    expect(byText("Second").style.getPropertyValue("--toast-index")).toBe("1");
+    expect(byText("First").style.getPropertyValue("--toast-index")).toBe("2");
+
+    // The lift/scale must actually read the custom property, not a baked value.
+    expect(byText("Second").style.transform).toContain("var(--toast-index)");
+  });
+
+  it("gives a single toast a flat front index", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ message: "Only" });
+      vi.advanceTimersByTime(16);
+    });
+
+    expect(screen.getByRole("status").style.getPropertyValue("--toast-index")).toBe("0");
+  });
+
+  it("compacts remaining toasts when one is dismissed", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ message: "First" });
+      addToast({ message: "Second" });
+      vi.advanceTimersByTime(16);
+    });
+
+    // Second is frontmost (index 0); First is behind it (index 1).
+    let toasts = screen.getAllByRole("status");
+    const firstToast = toasts.find((t) => t.textContent?.includes("First"))!;
+    expect(firstToast.style.getPropertyValue("--toast-index")).toBe("1");
+
+    // Dismiss the frontmost toast; the remaining one must slide forward to 0
+    // rather than stay parked behind the (now exiting) toast.
+    const dismissButtons = screen.getAllByLabelText("Dismiss notification");
+    await act(async () => {
+      fireEvent.click(dismissButtons[0]!);
+    });
+
+    toasts = screen.getAllByRole("status");
+    const firstAfter = toasts.find((t) => t.textContent?.includes("First"))!;
+    expect(firstAfter.style.getPropertyValue("--toast-index")).toBe("0");
+  });
+
+  it("freezes an evicted background toast's index during its exit fade", async () => {
+    render(<Toaster />);
+    let oldestId = "";
+    await act(async () => {
+      oldestId = addToast({ message: "Oldest" });
+      addToast({ message: "Middle" });
+      addToast({ message: "Newest" });
+      vi.advanceTimersByTime(16);
+    });
+
+    const oldest = () =>
+      screen.getAllByRole("status").find((t) => t.textContent?.includes("Oldest"))!;
+    expect(oldest().style.getPropertyValue("--toast-index")).toBe("2");
+
+    // Dismiss the oldest (background) toast. While it fades out it falls off the
+    // parent's live-index map, but its depth must stay parked at 2 so it exits
+    // in place rather than lurching from the back of the pile to the front.
+    await act(async () => {
+      useNotificationStore.getState().dismissNotification(oldestId);
+    });
+    expect(oldest().style.getPropertyValue("--toast-index")).toBe("2");
+  });
+
+  it("keeps backdrop-blur off the animated wrapper to avoid Chromium 146 flicker", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ message: "Blur split" });
+      vi.advanceTimersByTime(16);
+    });
+
+    // The animated outer wrapper owns the transform/opacity transition; the
+    // backdrop blur lives only on the inner card so the compositor doesn't drop
+    // it mid-animation.
+    const wrapper = screen.getByRole("status");
+    expect(wrapper.className).toContain("transition-[transform,opacity]");
+    expect(wrapper.className).not.toContain("backdrop-blur");
+
+    const card = wrapper.firstElementChild as HTMLElement;
+    expect(card.className).toContain("backdrop-blur-xl");
+    expect(card.className).not.toContain("transition-[transform,opacity]");
+  });
+
+  it("scopes the reduced-motion guard to the animated wrapper", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ message: "Reduced motion" });
+      vi.advanceTimersByTime(16);
+    });
+
+    const wrapper = screen.getByRole("status");
+    expect(wrapper.className).toContain("motion-reduce:transition-none");
+    const card = wrapper.firstElementChild as HTMLElement;
+    expect(card.className).not.toContain("motion-reduce:transition-none");
+  });
+});
