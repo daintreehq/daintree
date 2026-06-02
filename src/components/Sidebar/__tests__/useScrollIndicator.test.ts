@@ -153,9 +153,9 @@ describe("useScrollIndicator hidden-row counts (issue #9666)", () => {
     expect(result.current.hiddenBelow).toBe(10);
   });
 
-  it("treats a barely-visible row as visible at the epsilon boundary", () => {
-    const items = makeItems(["row", "row"]);
-    const { result, rerender } = renderHook(() => useScrollIndicator({ items }));
+  it("counts a row hidden within 1px of an edge, visible past it (epsilon)", () => {
+    const items = makeItems(["row", "row", "row"]);
+    const { result } = renderHook(() => useScrollIndicator({ items }));
     const scroller = makeScroller({ scrollTop: 99, clientHeight: 100 });
     act(() => {
       result.current.scrollerRef(scroller);
@@ -163,23 +163,94 @@ describe("useScrollIndicator hidden-row counts (issue #9666)", () => {
     const rendered = makeRendered([
       { index: 0, offset: 0, size: 100, kind: "row" },
       { index: 1, offset: 100, size: 100, kind: "row" },
+      { index: 2, offset: 200, size: 100, kind: "row" },
     ]);
     act(() => {
       result.current.handleItemsRendered(rendered);
     });
 
-    // scrollTop 99: row 0's bottom (100) is within 1px of the viewport top, so
-    // it counts as hidden-above.
+    // Top edge — scrollTop 99, viewport [99, 199]: row 0's bottom (100) is
+    // within 1px of the viewport top, so it counts as hidden-above. Row 2's top
+    // (200) is within 1px of the viewport bottom (199), so it's hidden-below.
     expect(result.current.hiddenAbove).toBe(1);
+    expect(result.current.hiddenBelow).toBe(1);
 
-    // scrollTop 98: row 0 now shows 2px — past the epsilon — so it's visible.
+    // scrollTop 98, viewport [98, 198]: row 0 now shows 2px (past epsilon) so
+    // it's visible; row 2's top (200) is 2px below the viewport bottom (198) so
+    // it stays hidden-below.
     scroller.scrollTop = 98;
     act(() => {
       result.current.handleScroll();
     });
     flushFrames();
-    rerender();
     expect(result.current.hiddenAbove).toBe(0);
+    expect(result.current.hiddenBelow).toBe(1);
+  });
+
+  it("ignores section headers that sit outside the rendered window", () => {
+    // header, row, row, header, row, row — only indices 3..5 are mounted.
+    const items = makeItems(["header", "row", "row", "header", "row", "row"]);
+    const { result } = renderHook(() => useScrollIndicator({ items }));
+    const scroller = makeScroller({ scrollTop: 400, clientHeight: 100 });
+    act(() => {
+      result.current.scrollerRef(scroller);
+    });
+    act(() => {
+      result.current.handleItemsRendered(
+        makeRendered([
+          { index: 3, offset: 230, size: 30, kind: "header" },
+          { index: 4, offset: 260, size: 100, kind: "row" },
+          { index: 5, offset: 360, size: 100, kind: "row" },
+        ])
+      );
+    });
+
+    // Unrendered prefix items[0..2] = header + 2 rows → only the 2 rows count
+    // above (the header is ignored). Viewport [400, 500]: rendered row 4
+    // (260..360) is fully above → +1; row 5 (360..460) overlaps the viewport so
+    // it's visible. Total hidden-above = 2 unrendered rows + row 4 = 3.
+    expect(result.current.hiddenAbove).toBe(3);
+    expect(result.current.hiddenBelow).toBe(0);
+  });
+
+  it("applies fresh geometry tagged for the new list right after an items change", () => {
+    const itemsA = makeItems(["row", "row", "row"]);
+    const itemsB = makeItems(["row", "row", "row", "row"]);
+    const { result, rerender } = renderHook(({ items }) => useScrollIndicator({ items }), {
+      initialProps: { items: itemsA },
+    });
+    const scroller = makeScroller({ scrollTop: 250, clientHeight: 50 });
+    act(() => {
+      result.current.scrollerRef(scroller);
+    });
+    act(() => {
+      result.current.handleItemsRendered(
+        makeRendered([
+          { index: 0, offset: 0, size: 100, kind: "row" },
+          { index: 1, offset: 100, size: 100, kind: "row" },
+          { index: 2, offset: 200, size: 100, kind: "row" },
+        ])
+      );
+    });
+    expect(result.current.hiddenAbove).toBe(2);
+
+    // Swap the list, then immediately deliver fresh geometry for the new layout
+    // (the order Virtuoso fires in). The identity guard must accept geometry
+    // tagged for the current list — counts must reflect itemsB, not fall to 0/0.
+    rerender({ items: itemsB });
+    act(() => {
+      result.current.handleItemsRendered(
+        makeRendered([
+          { index: 0, offset: 0, size: 100, kind: "row" },
+          { index: 1, offset: 100, size: 100, kind: "row" },
+          { index: 2, offset: 200, size: 100, kind: "row" },
+          { index: 3, offset: 300, size: 100, kind: "row" },
+        ])
+      );
+    });
+    // Viewport [250, 300]: rows 0,1 above, row 2 visible, row 3 below.
+    expect(result.current.hiddenAbove).toBe(2);
+    expect(result.current.hiddenBelow).toBe(1);
   });
 
   it("reports 0/0 before any itemsRendered geometry has been captured", () => {

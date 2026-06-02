@@ -38,11 +38,24 @@ function useScrollIndicator({ items }: UseScrollIndicatorParams): UseScrollIndic
   const [hiddenBelow, setHiddenBelow] = useState(0);
   const scrollerElRef = useRef<HTMLElement | null>(null);
   const [scrollerEl, setScrollerEl] = useState<HTMLElement | null>(null);
+  // Latest `items` mirrored into a ref so the stable callbacks below always read
+  // the current list without taking it as a dependency (which would churn their
+  // identity and break the rAF coalescing). Written during render — safe for a
+  // "latest value" ref.
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   // Latest per-item geometry from Virtuoso's `itemsRendered`. Held in a ref (not
   // state) because `itemsRendered` only fires when the rendered set changes —
   // intra-overscan scrolls reuse this cached geometry via `handleScroll`, so it
   // must be readable without forcing a re-render.
   const renderedItemsRef = useRef<ListItem<ScrollIndicatorItem>[]>([]);
+  // The exact `items` array the cached geometry was measured against. After a
+  // filter/sort/group change the offsets/indices describe a different layout, so
+  // geometry whose tag no longer matches the live list is treated as absent.
+  // This identity check is ordering-independent: it never discards geometry that
+  // Virtuoso just refreshed for the current list, and never trusts geometry left
+  // over from a previous one — no reliance on effect-vs-callback timing.
+  const geometryItemsRef = useRef<ReadonlyArray<ScrollIndicatorItem> | null>(null);
   // rAF-coalesce Virtuoso scroll callbacks into a single in-flight frame so a
   // burst of scroll events triggers one layout read, not one per event (issue
   // #9580). The ResizeObserver path already throttles via `useResizeObserverRaf`.
@@ -52,10 +65,12 @@ function useScrollIndicator({ items }: UseScrollIndicatorParams): UseScrollIndic
     const scroller = scrollerElRef.current;
     if (!scroller) return;
 
+    const items = itemsRef.current;
     const rendered = renderedItemsRef.current;
-    // No geometry yet (pre-first-render, or just cleared on an items change).
-    // Virtuoso re-fires `itemsRendered` with fresh offsets momentarily.
-    if (rendered.length === 0) {
+    // No usable geometry: either nothing has been measured yet, or the cached
+    // geometry belongs to a previous list layout. Virtuoso re-fires
+    // `itemsRendered` for the current list momentarily, refreshing the tag.
+    if (rendered.length === 0 || geometryItemsRef.current !== items) {
       setHiddenAbove(0);
       setHiddenBelow(0);
       return;
@@ -93,25 +108,15 @@ function useScrollIndicator({ items }: UseScrollIndicatorParams): UseScrollIndic
 
     setHiddenAbove(above);
     setHiddenBelow(below);
-  }, [items]);
+  }, []);
 
-  // Always invoke the latest `updateScrollIndicators` from deferred frames and
-  // callbacks. A frame scheduled before `items` changes would otherwise fire
-  // after the corrective effect below and overwrite the counts with a stale
-  // measurement taken against the previous list layout.
-  const updateScrollIndicatorsRef = useRef(updateScrollIndicators);
+  // Recompute when the backing list changes (filter, sort, group toggle). Until
+  // Virtuoso re-fires `itemsRendered` with geometry tagged for the new list, the
+  // identity guard inside `updateScrollIndicators` yields a conservative 0/0
+  // rather than measuring stale offsets against the new layout.
   useEffect(() => {
-    updateScrollIndicatorsRef.current = updateScrollIndicators;
-  }, [updateScrollIndicators]);
-
-  // When the backing list changes (filter, sort, group toggle), the cached
-  // geometry describes a different index space — drop it so stale offsets are
-  // never measured against the new layout. Virtuoso re-fires `itemsRendered`
-  // with fresh geometry right after, so the brief 0/0 lasts at most a frame.
-  useEffect(() => {
-    renderedItemsRef.current = [];
     updateScrollIndicators();
-  }, [updateScrollIndicators]);
+  }, [items, updateScrollIndicators]);
 
   useResizeObserverRaf(scrollerEl, () => updateScrollIndicators());
 
@@ -131,14 +136,20 @@ function useScrollIndicator({ items }: UseScrollIndicatorParams): UseScrollIndic
     if (scrollRafIdRef.current !== null) return;
     scrollRafIdRef.current = requestAnimationFrame(() => {
       scrollRafIdRef.current = null;
-      updateScrollIndicatorsRef.current();
+      updateScrollIndicators();
     });
-  }, []);
+  }, [updateScrollIndicators]);
 
-  const handleItemsRendered = useCallback((rendered: ListItem<ScrollIndicatorItem>[]) => {
-    renderedItemsRef.current = rendered;
-    updateScrollIndicatorsRef.current();
-  }, []);
+  const handleItemsRendered = useCallback(
+    (rendered: ListItem<ScrollIndicatorItem>[]) => {
+      renderedItemsRef.current = rendered;
+      // Tag the geometry with the list it was measured against so a later
+      // recompute can tell whether it still applies.
+      geometryItemsRef.current = itemsRef.current;
+      updateScrollIndicators();
+    },
+    [updateScrollIndicators]
+  );
 
   const scrollerRef = useCallback((el: HTMLElement | Window | null) => {
     // Virtuoso forwards either the scroller element or window. We only support
@@ -156,6 +167,7 @@ function useScrollIndicator({ items }: UseScrollIndicatorParams): UseScrollIndic
         scrollRafIdRef.current = null;
       }
       renderedItemsRef.current = [];
+      geometryItemsRef.current = null;
       setHiddenAbove(0);
       setHiddenBelow(0);
     }
