@@ -118,7 +118,9 @@ export function getVisibleWorktreesForCycling(
 ): WorktreeState[] {
   const filterState = useWorktreeFilterStore.getState();
   const {
-    query,
+    // Use the instant `liveQuery` so cycling walks the same list the user sees,
+    // not the debounced persisted `query` that lags ~500ms behind typing.
+    liveQuery: query,
     orderBy,
     groupByType: isGroupedByType,
     statusFilters,

@@ -85,7 +85,12 @@ export function WorktreeSidebarSearchBar({ inputRef, chipCounts }: WorktreeSideb
       }
       debounceRef.current = setTimeout(() => {
         debounceRef.current = null;
-        setQuery(value);
+        // Commit whatever `liveQuery` is when the timer fires, not the value
+        // captured at schedule time. If the query was cleared externally (e.g.
+        // "Show all worktrees" → clearAll with no other active filters, so the
+        // hasActiveFilters guard never trips), this commits "" instead of
+        // resurrecting the stale typed value.
+        setQuery(useWorktreeFilterStore.getState().liveQuery);
       }, QUERY_PERSIST_DEBOUNCE_MS);
     },
     [setQuery, setLiveQuery]

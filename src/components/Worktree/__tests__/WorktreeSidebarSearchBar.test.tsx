@@ -280,6 +280,30 @@ describe("WorktreeSidebarSearchBar", () => {
     }
   });
 
+  it("stale debounce: clearAll with no other active filters does not resurrect the typed query", () => {
+    vi.useFakeTimers();
+    try {
+      renderBar();
+      // No facets — hasActiveFilters() stays false throughout, so the
+      // hasActiveFilters cancellation guard never fires for this path.
+      fireEvent.change(getInput(), { target: { value: "foo" } });
+      expect(useWorktreeFilterStore.getState().liveQuery).toBe("foo");
+      expect(useWorktreeFilterStore.getState().query).toBe("");
+      // "Show all worktrees" / empty-state CTA → clearAll resets liveQuery to "".
+      act(() => {
+        useWorktreeFilterStore.getState().clearAll();
+      });
+      act(() => {
+        vi.advanceTimersByTime(550);
+      });
+      // The pending write must commit the cleared live value, not "foo".
+      expect(useWorktreeFilterStore.getState().query).toBe("");
+      expect(useWorktreeFilterStore.getState().liveQuery).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("typing updates the visible query instantly but defers the persisted write", () => {
     vi.useFakeTimers();
     try {
