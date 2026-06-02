@@ -19,6 +19,7 @@ vi.mock("@/utils/logger", () => ({
 let mockActiveWorktreeId: string | null = null;
 let mockPanelIds: string[] = [];
 let mockPanelsById: Record<string, PanelInstance> = {};
+let mockHelpTerminalId: string | null = null;
 
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: {
@@ -29,6 +30,12 @@ vi.mock("@/store/worktreeStore", () => ({
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
     getState: () => ({ panelIds: mockPanelIds, panelsById: mockPanelsById }),
+  },
+}));
+
+vi.mock("@/store/helpPanelStore", () => ({
+  useHelpPanelStore: {
+    getState: () => ({ terminalId: mockHelpTerminalId }),
   },
 }));
 
@@ -53,6 +60,7 @@ beforeEach(() => {
   mockActiveWorktreeId = null;
   mockPanelIds = [];
   mockPanelsById = {};
+  mockHelpTerminalId = null;
 });
 
 describe("wakeActiveWorktreeTerminals", () => {
@@ -301,5 +309,81 @@ describe("wakeActiveWorktreeTerminals", () => {
     // done never resolves because a hangs — but b and c made progress.
     // Drop reference; vitest cleanup will handle the pending promise.
     void done;
+  });
+
+  // #9637 — the Daintree Assistant terminal is a `location: "dock"` panel but
+  // is rendered persistently in HelpPanel, so it must be woken on project
+  // return even though ordinary dock terminals are excluded.
+  it("wakes the help-panel assistant terminal even though it is dock-located", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    const assistant = panel("assistant", { worktreeId: "wt-1", location: "dock" });
+    mockPanelIds = ["a", "assistant"];
+    mockPanelsById = { a, assistant };
+    mockHelpTerminalId = "assistant";
+
+    await wakeActiveWorktreeTerminals();
+
+    expect(fullWakeMock).toHaveBeenCalledTimes(2);
+    expect(fullWakeMock).toHaveBeenCalledWith("a");
+    expect(fullWakeMock).toHaveBeenCalledWith("assistant");
+  });
+
+  it("still excludes dock terminals that are not the assistant terminal", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    const assistant = panel("assistant", { worktreeId: "wt-1", location: "dock" });
+    const otherDock = panel("other-dock", { worktreeId: "wt-1", location: "dock" });
+    mockPanelIds = ["a", "assistant", "other-dock"];
+    mockPanelsById = { a, assistant, "other-dock": otherDock };
+    mockHelpTerminalId = "assistant";
+
+    await wakeActiveWorktreeTerminals();
+
+    expect(fullWakeMock).toHaveBeenCalledTimes(2);
+    expect(fullWakeMock).toHaveBeenCalledWith("a");
+    expect(fullWakeMock).toHaveBeenCalledWith("assistant");
+    expect(fullWakeMock).not.toHaveBeenCalledWith("other-dock");
+  });
+
+  it("ignores a stale assistant terminal id with no matching panel", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    mockPanelIds = ["a"];
+    mockPanelsById = { a };
+    mockHelpTerminalId = "gone";
+
+    await expect(wakeActiveWorktreeTerminals()).resolves.toBeUndefined();
+    expect(fullWakeMock).toHaveBeenCalledTimes(1);
+    expect(fullWakeMock).toHaveBeenCalledWith("a");
+    expect(fullWakeMock).not.toHaveBeenCalledWith("gone");
+  });
+
+  it("does not double-wake when the assistant id is already a grid target", async () => {
+    mockActiveWorktreeId = "wt-1";
+    // The assistant id resolves to a grid-located panel that the main loop
+    // already picked up — the inclusion guard must not push it a second time.
+    const assistant = panel("assistant", { worktreeId: "wt-1", location: "grid" });
+    mockPanelIds = ["assistant"];
+    mockPanelsById = { assistant };
+    mockHelpTerminalId = "assistant";
+
+    await wakeActiveWorktreeTerminals();
+
+    expect(fullWakeMock).toHaveBeenCalledTimes(1);
+    expect(fullWakeMock).toHaveBeenCalledWith("assistant");
+  });
+
+  it("wakes the assistant terminal when it is the only terminal to wake", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const assistant = panel("assistant", { worktreeId: "wt-1", location: "dock" });
+    mockPanelIds = ["assistant"];
+    mockPanelsById = { assistant };
+    mockHelpTerminalId = "assistant";
+
+    await wakeActiveWorktreeTerminals();
+
+    expect(fullWakeMock).toHaveBeenCalledTimes(1);
+    expect(fullWakeMock).toHaveBeenCalledWith("assistant");
   });
 });
