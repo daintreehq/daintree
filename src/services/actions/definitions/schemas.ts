@@ -4,9 +4,9 @@ import { BUILT_IN_AGENT_IDS, BUILT_IN_TERMINAL_TYPES } from "@shared/config/agen
 export const AgentIdSchema = z.enum([...BUILT_IN_AGENT_IDS, "terminal", "browser", "dev-preview"]);
 
 export const LaunchLocationSchema = z
-  .enum(["grid", "dock"])
+  .enum(["grid", "dock", "overlay"])
   .describe(
-    'Where to place the panel. "grid" places it in the main panel grid (default). "dock" places it in the sidebar dock.'
+    'Where to place the panel. "grid" places it in the main panel grid (default). "dock" places it in the sidebar dock. "overlay" places it in a floating overlay (e.g. the Daintree Assistant), outside the grid and dock.'
   );
 
 /**

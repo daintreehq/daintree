@@ -156,7 +156,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         {
           agentId,
           cwd,
-          location: "dock",
+          location: "overlay",
           prompt: helpPrompt,
           excludeFromPersistence: true,
           removeOnExit: true,
