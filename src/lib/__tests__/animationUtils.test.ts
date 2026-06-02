@@ -9,6 +9,8 @@ import {
   DURATION_200,
   DURATION_250,
   DURATION_300,
+  DRAG_OVERLAY_SPRING_VISUAL_DURATION,
+  DRAG_OVERLAY_SPRING_BOUNCE,
   EASE_OUT_EXPO,
   EASE_SNAPPY,
   EASE_SPRING_CRITICAL,
@@ -42,6 +44,16 @@ describe("motion token constants", () => {
     expect(EASE_SNAPPY).toMatch(/^cubic-bezier\(/);
     expect(EASE_OUT_EXPO).toMatch(/^cubic-bezier\(/);
     expect(EASE_SPRING_CRITICAL).toMatch(/^linear\(/);
+  });
+
+  it("tunes the drag-overlay pickup spring in seconds with near-zero bounce", () => {
+    // Framer Motion's `visualDuration` is in seconds, not ms — a value >= 1
+    // would mean someone passed a millisecond figure and the pickup would crawl.
+    expect(DRAG_OVERLAY_SPRING_VISUAL_DURATION).toBeGreaterThan(0);
+    expect(DRAG_OVERLAY_SPRING_VISUAL_DURATION).toBeLessThan(1);
+    // Near-zero bounce keeps the pickup crisp; visible overshoot reads cheap.
+    expect(DRAG_OVERLAY_SPRING_BOUNCE).toBeGreaterThanOrEqual(0);
+    expect(DRAG_OVERLAY_SPRING_BOUNCE).toBeLessThan(0.1);
   });
 });
 
