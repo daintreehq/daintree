@@ -170,7 +170,7 @@ describe("useGlobalKeybindings — Cmd+W escape stack guard", () => {
     }
   });
 
-  it("routes Cmd+W to escape stack when focus is inside a dock panel", () => {
+  it("dispatches terminal.close when focus is inside a dock panel", () => {
     mocks.keybindingService.resolveKeybinding.mockReturnValue({
       match: { actionId: "terminal.close" },
       chordPrefix: false,
@@ -194,8 +194,12 @@ describe("useGlobalKeybindings — Cmd+W escape stack guard", () => {
 
       pressCmdW();
 
-      expect(escapeHandler).toHaveBeenCalledTimes(1);
-      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+      expect(escapeHandler).not.toHaveBeenCalled();
+      expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+        "terminal.close",
+        undefined,
+        expect.objectContaining({ source: "keybinding" })
+      );
     } finally {
       dockPanel.remove();
     }
