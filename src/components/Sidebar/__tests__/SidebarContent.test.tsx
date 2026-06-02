@@ -110,10 +110,11 @@ describe("SidebarContent screen-reader announcements — issue #9665", () => {
     expect(source).toMatch(/if \(!showScope\) return;/);
   });
 
-  it("announces the sort-disabled reason only on the null → string transition", () => {
-    // Persistent text must not re-fire while the reason stays set; the
-    // re-enable path is owned by the isSortDisabledPrevRef effect.
+  it("announces the sort-disabled reason on appear/change but not on re-enable", () => {
+    // Fires on null → reason and reason → reason, but not reason → null (the
+    // re-enable path is owned by the isSortDisabledPrevRef effect) and not when
+    // the reason is unchanged (so a stable reason isn't re-spoken every render).
     expect(source).toContain("prevDragDisabledReasonRef");
-    expect(source).toMatch(/prev === null && dragDisabledReason !== null/);
+    expect(source).toMatch(/dragDisabledReason !== null && prev !== dragDisabledReason/);
   });
 });

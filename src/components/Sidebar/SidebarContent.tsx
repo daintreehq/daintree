@@ -1131,15 +1131,18 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     };
   }, [showScope, filteredCount, totalCount]);
 
-  // Announce the sort-disabled reason once, only when it first appears. The
-  // re-enable transition ("Manual reorder available") is handled by the
-  // isSortDisabledPrevRef effect above, so we deliberately skip the
-  // string → null direction here to avoid double-speaking.
+  // Announce the sort-disabled reason whenever it appears or changes — covers
+  // null → reason (sorting becomes disabled) and reason → reason (e.g. switching
+  // from group-by-type to an active search). The reason → null re-enable
+  // transition ("Manual reorder available") is owned by the isSortDisabledPrevRef
+  // effect above, so we skip it here to avoid double-speaking. Initialising the
+  // ref to the current value keeps mount silent: a sidebar that opens with a
+  // persisted filter shows the visual text rather than announcing stale state.
   const prevDragDisabledReasonRef = useRef<string | null>(dragDisabledReason);
   useEffect(() => {
     const prev = prevDragDisabledReasonRef.current;
     prevDragDisabledReasonRef.current = dragDisabledReason;
-    if (prev === null && dragDisabledReason !== null) {
+    if (dragDisabledReason !== null && prev !== dragDisabledReason) {
       useAnnouncerStore.getState().announce(dragDisabledReason);
     }
   }, [dragDisabledReason]);
