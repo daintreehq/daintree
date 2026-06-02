@@ -12,7 +12,7 @@ import {
 } from "@shared/types/panel";
 import { projectClient, agentSettingsClient, systemClient, globalRecipesClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
-import { generateAgentCommand } from "@shared/types";
+import { generateAgentCommand, buildAgentLaunchFlags } from "@shared/types";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { sanitizeRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
 import type { ActionSource } from "@shared/types/actions";
@@ -806,6 +806,18 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               clipboardDirectory,
               recipeArgs: terminal.args?.trim() || undefined,
             });
+            // Persist the process-level launch flags so restart/resume/continue
+            // reproduce the same configuration. Without this the panel arrives
+            // with `agentLaunchFlags: undefined` and the restart slice silently
+            // regenerates the command from current settings, dropping
+            // `--dangerously-skip-permissions` and the recipe's args (#9650).
+            // Computed from live settings (not the disk-stripped recipe state),
+            // mirroring useAgentLauncher; recipe args append as raw tokens since
+            // the restart command builder applies its own escaping.
+            const agentLaunchFlags = [
+              ...buildAgentLaunchFlags(entry, agentId, { modelId: terminal.agentModelId }),
+              ...(terminal.args?.trim().split(/\s+/).filter(Boolean) ?? []),
+            ];
             return terminalStore.addPanel({
               kind: "terminal",
               launchAgentId: agentId,
@@ -813,6 +825,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               title: terminal.title,
               cwd: worktreePath,
               worktreeId: worktreeId,
+              agentLaunchFlags,
+              agentModelId: terminal.agentModelId,
               env: terminal.env,
               exitBehavior: terminal.exitBehavior,
               spawnedBy,

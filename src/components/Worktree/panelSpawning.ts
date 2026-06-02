@@ -1,7 +1,7 @@
 import { usePanelStore } from "@/store/panelStore";
 import { agentSettingsClient, systemClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
-import { generateAgentCommand } from "@shared/types";
+import { generateAgentCommand, buildAgentLaunchFlags } from "@shared/types";
 import type { RecipeTerminal } from "@shared/types";
 import { preflightSpawnBatchLimit } from "@/store/panelLimitStore";
 import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
@@ -108,7 +108,17 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
             const command = generateAgentCommand(baseCommand, entry, agentId, {
               clipboardDirectory,
               modelId: t.agentModelId,
+              recipeArgs: t.args?.trim() || undefined,
             });
+            // Compute launch flags from live settings rather than reading
+            // `t.agentLaunchFlags` (always undefined — disk persistence strips
+            // it). Persisting these lets restart/resume reproduce the launch,
+            // preventing `--dangerously-skip-permissions` and recipe args from
+            // being dropped on resume (#9650). Recipe args append as raw tokens.
+            const agentLaunchFlags = [
+              ...buildAgentLaunchFlags(entry, agentId, { modelId: t.agentModelId }),
+              ...(t.args?.trim().split(/\s+/).filter(Boolean) ?? []),
+            ];
 
             panelId = await store.addPanel({
               kind: "terminal",
@@ -119,7 +129,7 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
               worktreeId,
               exitBehavior: t.exitBehavior,
               agentModelId: t.agentModelId,
-              agentLaunchFlags: t.agentLaunchFlags,
+              agentLaunchFlags,
               bypassLimits: true,
             });
           } else {
