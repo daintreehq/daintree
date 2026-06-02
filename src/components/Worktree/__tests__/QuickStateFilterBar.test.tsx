@@ -214,6 +214,23 @@ describe("QuickStateFilterBar", () => {
     expect(svg?.getAttribute("class") ?? "").not.toContain("animate-spin-slow");
   });
 
+  it("only the working segment can spin — waiting and finished icons never animate", () => {
+    // The spinner is the working segment's distinguishing shape signal; the
+    // spin class must stay scoped to working even when every state has a count.
+    renderBar(
+      <QuickStateFilterBar
+        value="all"
+        onChange={() => {}}
+        counts={{ all: 9, working: 3, waiting: 2, finished: 4 }}
+      />
+    );
+    for (const name of [/Waiting/, /Finished/]) {
+      const svg = screen.getByRole("button", { name }).querySelector("svg");
+      expect(svg).not.toBeNull();
+      expect(svg?.getAttribute("class") ?? "").not.toContain("animate-spin-slow");
+    }
+  });
+
   it("marks each segment icon as aria-hidden so the accessible name stays clean", () => {
     renderBar(
       <QuickStateFilterBar
