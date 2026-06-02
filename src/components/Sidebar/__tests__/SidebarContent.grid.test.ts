@@ -422,9 +422,7 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
       // Without this the React.memo comparator would swallow cursor changes and
       // the ring would stick on a stale row as the user navigates.
       const sortableSource = await fs.readFile(SORTABLE_CARD_PATH, "utf-8");
-      expect(sortableSource).toMatch(
-        /prev\.isKeyboardCursor\s*!==\s*next\.isKeyboardCursor/
-      );
+      expect(sortableSource).toMatch(/prev\.isKeyboardCursor\s*!==\s*next\.isKeyboardCursor/);
     });
 
     it("styles the cursor ring with the neutral focus token, never the accent ring (one-accent rule)", async () => {
