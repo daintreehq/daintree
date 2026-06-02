@@ -359,6 +359,21 @@ describe("wakeActiveWorktreeTerminals", () => {
     expect(fullWakeMock).not.toHaveBeenCalledWith("gone");
   });
 
+  it("does not double-wake when the assistant id is already a grid target", async () => {
+    mockActiveWorktreeId = "wt-1";
+    // The assistant id resolves to a grid-located panel that the main loop
+    // already picked up — the inclusion guard must not push it a second time.
+    const assistant = panel("assistant", { worktreeId: "wt-1", location: "grid" });
+    mockPanelIds = ["assistant"];
+    mockPanelsById = { assistant };
+    mockHelpTerminalId = "assistant";
+
+    await wakeActiveWorktreeTerminals();
+
+    expect(fullWakeMock).toHaveBeenCalledTimes(1);
+    expect(fullWakeMock).toHaveBeenCalledWith("assistant");
+  });
+
   it("wakes the assistant terminal when it is the only terminal to wake", async () => {
     mockActiveWorktreeId = "wt-1";
     const assistant = panel("assistant", { worktreeId: "wt-1", location: "dock" });
