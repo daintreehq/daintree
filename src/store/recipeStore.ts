@@ -812,10 +812,12 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             // with `agentLaunchFlags: undefined` and the restart slice silently
             // regenerates the command from current settings, dropping
             // `--dangerously-skip-permissions` and the recipe's args (#9650).
-            // Computed from live settings (not the disk-stripped recipe state),
-            // mirroring useAgentLauncher; recipe args append as raw tokens since
-            // the restart command builder applies its own escaping.
-            const agentLaunchFlags = [
+            // Preserve flags an in-memory recipe already carries; for disk
+            // recipes the field is stripped (undefined), so compute from live
+            // settings (mirroring useAgentLauncher) and append recipe args as
+            // raw tokens since the restart command builder applies its own
+            // escaping.
+            const agentLaunchFlags = terminal.agentLaunchFlags ?? [
               ...buildAgentLaunchFlags(entry, agentId, { modelId: terminal.agentModelId }),
               ...(terminal.args?.trim().split(/\s+/).filter(Boolean) ?? []),
             ];

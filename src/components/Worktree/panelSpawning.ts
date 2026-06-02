@@ -110,12 +110,14 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
               modelId: t.agentModelId,
               recipeArgs: t.args?.trim() || undefined,
             });
-            // Compute launch flags from live settings rather than reading
-            // `t.agentLaunchFlags` (always undefined — disk persistence strips
-            // it). Persisting these lets restart/resume reproduce the launch,
-            // preventing `--dangerously-skip-permissions` and recipe args from
-            // being dropped on resume (#9650). Recipe args append as raw tokens.
-            const agentLaunchFlags = [
+            // Preserve flags the caller already captured (the clone-layout path
+            // projects a live panel's `agentLaunchFlags` onto the recipe). For
+            // disk recipes the field is stripped (undefined), so compute from
+            // live settings instead — persisting these lets restart/resume
+            // reproduce the launch and prevents `--dangerously-skip-permissions`
+            // and recipe args from being dropped on resume (#9650). Recipe args
+            // append as raw tokens.
+            const agentLaunchFlags = t.agentLaunchFlags ?? [
               ...buildAgentLaunchFlags(entry, agentId, { modelId: t.agentModelId }),
               ...(t.args?.trim().split(/\s+/).filter(Boolean) ?? []),
             ];
