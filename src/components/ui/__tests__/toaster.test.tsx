@@ -1766,7 +1766,7 @@ describe("Toast stack motion (issue #9618)", () => {
     // rather than stay parked behind the (now exiting) toast.
     const dismissButtons = screen.getAllByLabelText("Dismiss notification");
     await act(async () => {
-      fireEvent.click(dismissButtons[0]);
+      fireEvent.click(dismissButtons[0]!);
     });
 
     toasts = screen.getAllByRole("status");
