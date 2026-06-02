@@ -470,6 +470,16 @@ describe("AutoUpdaterService", () => {
       expect(markCleanLaunchMock).not.toHaveBeenCalled();
     });
 
+    it("writes the markers only once on a rapid double-IPC", () => {
+      downloadedHandler({ version: "2.0.0" });
+
+      quitAndInstallHandler(TRUSTED_SENDER);
+      quitAndInstallHandler(TRUSTED_SENDER);
+
+      expect(markCleanExitMock).toHaveBeenCalledTimes(1);
+      expect(markCleanLaunchMock).toHaveBeenCalledTimes(1);
+    });
+
     it("still writes markCleanLaunch and installs when cleanupOnExit throws", () => {
       downloadedHandler({ version: "2.0.0" });
       cleanupOnExitMock.mockImplementationOnce(() => {
@@ -1932,6 +1942,18 @@ describe("AutoUpdaterService", () => {
       vi.advanceTimersToNextTimer();
 
       expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+    });
+
+    it("still writes both markers when cleanupOnExit throws", () => {
+      downloadedHandler({ version: "2.0.0" });
+      cleanupOnExitMock.mockImplementationOnce(() => {
+        throw new Error("cleanup failed");
+      });
+
+      expect(autoUpdaterService.quitAndInstallIfReady()).toBe(true);
+
+      expect(markCleanExitMock).toHaveBeenCalledTimes(1);
+      expect(markCleanLaunchMock).toHaveBeenCalledTimes(1);
     });
 
     it("a rapid double-call only schedules a single quitAndInstall (idempotency)", () => {
