@@ -268,12 +268,15 @@ export function AppLayout({
       };
       // Capture the persistent toolbar preference synchronously at gesture
       // entry so the exit path can restore it (see GestureSnapshot.assistantWasOpen).
+      // Derive assistantVisible from the same live read rather than the render
+      // closure's showAssistant, so the snapshot's hidAssistant and
+      // assistantWasOpen can't diverge if isOpen changed since the last render.
       const assistantWasOpen = useHelpPanelStore.getState().isOpen;
       layout.toggleFocusMode(
         currentPanelState,
         {
           sidebarVisible: showSidebar,
-          assistantVisible: showAssistant,
+          assistantVisible: !layout.gestureAssistantHidden && assistantWasOpen,
         },
         assistantWasOpen
       );

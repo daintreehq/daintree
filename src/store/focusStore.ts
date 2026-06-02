@@ -104,7 +104,10 @@ const createFocusStore: StateCreator<FocusState> = (set, get) => ({
         gestureSnapshot: {
           hidSidebar: sidebarVisible,
           hidAssistant: assistantVisible,
-          assistantWasOpen: assistantWasOpen ?? false,
+          // Fall back to assistantVisible (which equals the pre-entry isOpen at
+          // gesture entry) when a caller omits the value, so the exit restore
+          // can't silently snap a logically-open assistant shut.
+          assistantWasOpen: assistantWasOpen ?? assistantVisible,
         },
         savedPanelState: { ...currentPanelState },
       };

@@ -143,7 +143,8 @@ describe("focusStore independent gestures (issue #6659)", () => {
     expect(useFocusStore.getState().gestureSnapshot).toEqual({
       hidSidebar: true,
       hidAssistant: true,
-      assistantWasOpen: false,
+      // No 3rd arg passed → falls back to assistantVisible (true here).
+      assistantWasOpen: true,
     });
   });
 
@@ -312,13 +313,16 @@ describe("focusStore assistant isOpen restore (issue #9641)", () => {
     expect(useFocusStore.getState().gestureSnapshot?.assistantWasOpen).toBe(false);
   });
 
-  it("defaults assistantWasOpen to false when the argument is omitted", () => {
+  it("falls back to assistantVisible for assistantWasOpen when the argument is omitted", () => {
+    // assistantVisible equals the pre-entry isOpen at gesture entry, so it's the
+    // safest fallback — a caller that forgets the 3rd arg still restores a
+    // logically-open assistant rather than silently closing it on exit.
     useFocusStore.getState().toggleFocusMode(panelState, {
       sidebarVisible: true,
       assistantVisible: true,
     });
 
-    expect(useFocusStore.getState().gestureSnapshot?.assistantWasOpen).toBe(false);
+    expect(useFocusStore.getState().gestureSnapshot?.assistantWasOpen).toBe(true);
   });
 });
 
@@ -382,6 +386,23 @@ describe("focus-mode exit assistant reconciliation contract (issue #9641)", () =
 
     // The gesture never owned the assistant, so exiting must not snap it shut.
     expect(useHelpPanelStore.getState().isOpen).toBe(true);
+  });
+
+  it("restores the assistant on an assistant-only gesture round-trip without touching the sidebar", () => {
+    useHelpPanelStore.setState({ isOpen: true });
+    useFocusStore.getState().toggleFocusMode(
+      panelState,
+      { sidebarVisible: false, assistantVisible: true },
+      true
+    );
+    // Assistant masked by the gesture; user closes it via toolbar mid-focus.
+    useHelpPanelStore.getState().setOpen(false);
+
+    exitFocusGesture();
+
+    expect(useHelpPanelStore.getState().isOpen).toBe(true);
+    expect(useFocusStore.getState().gestureSidebarHidden).toBe(false);
+    expect(useFocusStore.getState().gestureSnapshot).toBeNull();
   });
 
   it("keeps the assistant closed when it was closed at entry and gesture hid only the sidebar", () => {
