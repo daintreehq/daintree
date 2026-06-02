@@ -21,6 +21,7 @@ import {
   useDiagnosticsStore,
   useDockStore,
   useFocusStore,
+  useHelpPanelStore,
   usePreferencesStore,
   useUIStore,
   type PanelState,
@@ -224,15 +225,27 @@ export function AppLayout({
     // only the worktree sidebar, and using it here would treat that single
     // toolbar action as a gesture exit (clearing the sidebar gesture instead
     // of entering the gesture and hiding the assistant).
-    const gestureActive = useFocusStore.getState().gestureSnapshot !== null;
+    const snapshot = useFocusStore.getState().gestureSnapshot;
+    const gestureActive = snapshot !== null;
     if (gestureActive) {
       if (layout.savedPanelState) {
         setSidebarWidth((layout.savedPanelState as PanelState).sidebarWidth);
       }
+      // Read the assistant's pre-entry isOpen before toggleFocusMode clears the
+      // snapshot. Restore it only when the gesture itself hid the assistant —
+      // symmetric with the sidebar revert, which the store gates on hidSidebar
+      // ("the snapshot only owns the deltas it caused"). If the assistant was
+      // never gesture-hidden (e.g. a sidebar-only gesture), an explicit toolbar
+      // open during focus mode must survive the exit rather than be snapped shut.
+      const restoreAssistant = snapshot.hidAssistant;
+      const assistantWasOpen = snapshot.assistantWasOpen;
       layout.toggleFocusMode({
         sidebarWidth,
         diagnosticsOpen: layout.diagnosticsOpen,
       } as PanelState);
+      if (restoreAssistant) {
+        useHelpPanelStore.getState().setOpen(assistantWasOpen);
+      }
       // Persist to per-project state
       if (currentProject?.id) {
         try {
@@ -253,10 +266,17 @@ export function AppLayout({
         sidebarWidth,
         diagnosticsOpen: layout.diagnosticsOpen,
       };
-      layout.toggleFocusMode(currentPanelState, {
-        sidebarVisible: showSidebar,
-        assistantVisible: showAssistant,
-      });
+      // Capture the persistent toolbar preference synchronously at gesture
+      // entry so the exit path can restore it (see GestureSnapshot.assistantWasOpen).
+      const assistantWasOpen = useHelpPanelStore.getState().isOpen;
+      layout.toggleFocusMode(
+        currentPanelState,
+        {
+          sidebarVisible: showSidebar,
+          assistantVisible: showAssistant,
+        },
+        assistantWasOpen
+      );
       // Persist to per-project state — only when something actually changed.
       // toggleFocusMode is a no-op if neither sidebar was visible.
       const persistFocusMode = useFocusStore.getState().isFocusMode || showSidebar || showAssistant;
