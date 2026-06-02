@@ -97,6 +97,34 @@ export function shouldEnablePtyPool(platform: NodeJS.Platform = process.platform
  * try/catch because either may throw on an already-dead handle.
  */
 export function destroyPty(p: pty.IPty): void {
+  // Windows ConPTY double-free guard (#9551). node-pty's WindowsTerminal routes
+  // BOTH destroy() and kill() into a deferred native `_ptyNative.kill(this._pty)`
+  // (destroy() simply defers a kill()). So the cross-platform "destroy() then
+  // kill()" sequence below issues *two* native kills on the same pty handle,
+  // double-freeing the pseudoconsole and crashing the pty-host Utility process
+  // with STATUS_HEAP_CORRUPTION (exit 0xC0000374) — observed in the Windows
+  // smoke build during rapid terminal teardown. Worse, once the child has
+  // exited, node-pty's `_$onProcessExit` has already freed the handle, so any
+  // kill at all is a use-after-free.
+  //
+  // Windows has no master /dev/ptmx fd to release (#9539 is Unix-only: there
+  // destroy() closes the leaked master socket), so on a real Windows pty a
+  // single kill() on a still-live handle — and nothing at all once it has
+  // exited — is both sufficient and the safe maximum. Test mocks expose no
+  // `_agent`, so they fall through to the Unix path and behavior is unchanged.
+  const agent = (p as unknown as { _agent?: { exitCode?: number } })._agent;
+  if (process.platform === "win32" && agent !== undefined) {
+    if (typeof agent.exitCode === "number") {
+      return; // already exited — native agent has freed the pseudoconsole
+    }
+    try {
+      p.kill();
+    } catch {
+      // Already dead — ignore.
+    }
+    return;
+  }
+
   const withDestroy = p as pty.IPty & { destroy?: () => void };
   try {
     withDestroy.destroy?.();

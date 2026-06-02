@@ -1,8 +1,8 @@
 # Daintree Plugins
 
-> **Status: pre-release, in active development.** The runtime (`PluginService`: load/activate/unload, manifest validation, panel/toolbar/menu/keybinding/context-menu registration, host settings, MCP supervision, worktree observation) is implemented, and the `daintree-plugin` CLI ships `new`, `validate`, `package`, `install`, and `uninstall`. Still pending: the CLI `dev` (hot-reload) command and the published `@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite`, and `@daintreehq/plugin-testing` packages. Per-contribution-point status lives in [Contribution points](./contribution-points.md); APIs may still change before 1.0.
+> **Status: pre-release, in active development.** The runtime (`PluginService`: load/activate/unload, manifest validation, panel/toolbar/menu/keybinding/context-menu registration, host settings, MCP supervision, worktree observation) is implemented, and the `daintree-plugin` CLI ships `new`, `validate`, `package`, `install`, and `uninstall`. Still pending: the CLI `dev` (hot-reload) command. `@daintreehq/plugin-vite` now lives in-repo at `packages/plugin-vite` but is unpublished (`private: true`); `@daintreehq/plugin-sdk` and `@daintreehq/plugin-testing` have no package directory yet. Per-contribution-point status lives in [Contribution points](./contribution-points.md); APIs may still change before 1.0.
 
-Plugins extend Daintree with new panels, actions, keybindings, MCP servers, skills, and more. You can write a plugin for your own workflow and sideload it, share a plugin with your team by distributing a single file or URL, or publish one for others to install.
+Plugins extend Daintree with new panels, actions, keybindings, MCP servers, agents, and — planned — skills. You can write a plugin for your own workflow and sideload it, share a plugin with your team by distributing a single file or URL, or publish one for others to install.
 
 This section documents the plugin system for plugin authors. If you're looking for information on Daintree's internals, see [`../development.md`](../development.md).
 
@@ -30,8 +30,10 @@ Plugins are **sandboxed by convention, not by runtime enforcement.** They run wi
 | [Contribution points](./contribution-points.md) | Every contribution type with examples and current status |
 | [Host API](./host-api.md) | The runtime API your plugin code consumes |
 | [Agent extensions](./agent-extensions.md) | MCP servers and Skills — how plugins extend Daintree's agent loop |
+| [Forge providers](./forge-provider.md) | The `forgeProviders` contribution type for code-hosting integrations |
 | [Distribution](./distribution.md) | Packaging, sharing, installing from file or URL |
 | [Development loop](./dev-loop.md) | The `daintree-plugin` CLI, hot reload, debugging |
+| [Trust model](./trust-model.md) | Capability disclosure, confirm-dialog policy, the security contract |
 | [Architecture](./architecture.md) | How the plugin system works under the hood |
 
 ## Status

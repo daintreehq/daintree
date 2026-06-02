@@ -248,13 +248,7 @@ describe("definition invariants", () => {
       }
     }
 
-    if (missing.length > 0) {
-      console.warn(
-        `[quality-gate] ${missing.length} dangerous action(s) missing dangerRationale:\n` +
-          missing.map((m) => `  - ${m}`).join("\n")
-      );
-    }
-    // TODO(#8431): Promote to hard assert once all dangerous actions have rationale.
+    expect(missing).toEqual([]);
   });
 
   it("every workbench-tier arg-requiring action has examples", async () => {
@@ -341,23 +335,61 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
 
 /**
  * Actions from EXPECTED_CONFIRM_DANGER whose user/menu/keybinding call site has
- * a confirmed, identified `ConfirmDialog` gate (the audit's "UI confirm: yes"
- * rows). `danger:"confirm"` only gates the agent dispatch source at runtime
- * (ActionService.ts) — user-initiated dispatch is gated by a dialog wired at the
- * call site, which the registry can't see. This list is the registry-side
- * counterpart to that call-site wiring: a static allowlist, deliberately, since
- * a source grep is brittle against aliased imports and refactors.
+ * a ConfirmDialog-family component wired at the call site. `danger:"confirm"` only
+ * gates the agent dispatch source at runtime (ActionService.ts) — user-initiated
+ * dispatch is gated by a dialog wired at the call site, which the registry can't see.
  *
  * Update contract: when you wire a ConfirmDialog for one of the
  * EXPECTED_CONFIRM_DANGER actions, add its ID here and flip the audit row in
  * docs/architecture/destructive-action-safeguards.md to "UI confirm: yes".
- *
- * `git.snapshotRevert` / `git.snapshotDelete` are wired in
- * src/components/Worktree/WorktreeCard/hooks/useWorktreeActions.ts
- * (handleRevertAgentChanges / handleDeleteSnapshot), surfaced via
- * WorktreeMenuItems and gated by the shared ConfirmDialog in WorktreeDialogs.
+ * The ongoing CI enforcement — verifying that the listed call sites still exist
+ * in source — runs via `npm run check:confirm-wiring`.
  */
-const CONFIRMED_WIRED: ReadonlyArray<ActionId> = ["git.snapshotRevert", "git.snapshotDelete"];
+const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
+  "terminal.kill",
+  "terminal.killAll",
+  "terminal.restart",
+  "terminal.restartAll",
+  "worktree.delete",
+  "worktree.sessions.endAll",
+  "worktree.sessions.trashAll",
+  "worktree.sessions.restartAll",
+  "worktree.resource.teardown",
+  "fleet.kill",
+  "fleet.trash",
+  "fleet.restart",
+  "fleet.deleteNamedFleet",
+  "portal.links.remove",
+  "keybinding.resetAll",
+  "recipe.delete",
+  "devPreview.restartAndClearCache",
+  "devPreview.reinstallAndRestart",
+];
+
+/**
+ * Actions from EXPECTED_CONFIRM_DANGER whose confirmation uses a non-ConfirmDialog
+ * pattern: IPC bypass without the action ID co-located in the dialog's file,
+ * deferred-promise store, or agent-dispatch-only gate with no user-side dialog.
+ * See docs/architecture/destructive-action-safeguards.md Known Bypasses.
+ */
+const BYPASS_WIRED: ReadonlyArray<ActionId> = [
+  // IPC bypass in useWorktreeActions.ts; ConfirmDialog in WorktreeDialogs.tsx
+  // (action ID not co-located with the dialog component).
+  "git.snapshotRevert",
+  "git.snapshotDelete",
+  // Deferred-promise via gitPushConfirmStore; action run() awaits confirmation
+  // before calling IPC; GitPushConfirmDialog resolves the Promise.
+  "git.push",
+  // IPC bypass in ReviewHubContent.tsx; ConfirmDialog wired there but the action
+  // ID string is not present in that file (direct IPC call, not ActionService dispatch).
+  "git.pullRebase",
+  // Confirm in ProjectSwitcherPalette.tsx via removeConfirmProject state;
+  // action ID not co-located with the ConfirmDialog in that file.
+  "project.remove",
+  // Agent-dispatch only — no user-side ConfirmDialog. danger:"confirm" gates MCP/agent
+  // dispatch only; user dispatch of recipe.run is intentionally ungated.
+  "recipe.run",
+];
 
 describe("destructive-action confirm wiring", () => {
   it('every CONFIRMED_WIRED action is classified danger:"confirm"', () => {
@@ -368,20 +400,15 @@ describe("destructive-action confirm wiring", () => {
     expect(leaked).toEqual([]);
   });
 
+  it('every BYPASS_WIRED action is classified danger:"confirm"', () => {
+    const leaked = BYPASS_WIRED.filter((id) => !EXPECTED_CONFIRM_DANGER.includes(id));
+    expect(leaked).toEqual([]);
+  });
+
   it("every EXPECTED_CONFIRM_DANGER action has a wired confirm call site", () => {
-    const unwired = EXPECTED_CONFIRM_DANGER.filter((id) => !CONFIRMED_WIRED.includes(id));
-
-    if (unwired.length > 0) {
-      console.warn(
-        `[quality-gate] ${unwired.length} confirm-danger action(s) without an ` +
-          `identified ConfirmDialog call site in CONFIRMED_WIRED:\n` +
-          unwired.map((id) => `  - ${id}`).join("\n")
-      );
-    }
-
-    // TODO(#8415): Promote to `expect(unwired).toEqual([])` once every
-    // EXPECTED_CONFIRM_DANGER call site is audited and listed in CONFIRMED_WIRED.
-    expect(true).toBe(true);
+    const allWired = new Set<ActionId>([...CONFIRMED_WIRED, ...BYPASS_WIRED]);
+    const unwired = EXPECTED_CONFIRM_DANGER.filter((id) => !allWired.has(id));
+    expect(unwired).toEqual([]);
   });
 });
 

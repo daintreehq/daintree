@@ -1,6 +1,6 @@
 # Dev Preview Event Routing
 
-Canonical routing table for the 7 open PRs (#9090, #9091, #9093, #9094, #9097, #9101, #9102) plus 3 precedent rows (#8274/#8275, #9088). Each open PR introduces one or more lifecycle signals; this document is the single source of truth so downstream call sites don't re-derive notification policy and reviewers have a fixed reference to check against. New PRs that add dev-preview signals must add their rows here (see Maintenance).
+Per-event routing audit for the dev-preview lifecycle signals. The bulk of the table was shipped by a batch of now-merged PRs (#9090, #9091, #9093, #9094, #9097, #9101, #9102) plus the precedent rows (#8274/#8275, #9088) — each introduced one or more lifecycle signals. This document is the single source of truth so downstream call sites don't re-derive notification policy and reviewers have a fixed reference to check against. New PRs that add dev-preview signals must add their rows here (see Maintenance).
 
 CLAUDE.md carries the abbreviated Runtime Signals tier ladder; this file is the per-event audit and the rationale traceable to the `notify()` four-question gate.
 
@@ -16,14 +16,14 @@ Five tiers, calibrated to **actionability × observability**. The boundary betwe
 | **T3** | Inline error banner | Required. Pane-local failure with explicit recovery context. | Retry, Restart, Open External, or adjust config. |
 | **T4** | Global banner (host-crash) | Required. Multi-pane or host-level failure. | Host restart or factory reset. |
 
-Tier 4 is never appropriate for pane-local dev-preview failures. When the global host-crash banner is active (`backendStatus !== "connected"`), per-pane duplicate error banners with no distinct recovery path are suppressed. The `panel-state-*` border classes are the canonical Tier 1 surface: `panel-state-working` (35% opacity, active), `panel-state-waiting` (75%, agent waiting), `panel-state-hibernated` (60%, passive). None animate, per WCAG COGA.
+Tier 4 is never appropriate for pane-local dev-preview failures. When the global host-crash banner is active (`backendStatus !== "connected"`), per-pane duplicate error banners with no distinct recovery path are suppressed. The `panel-state-*` border classes are the canonical Tier 1 surface: `panel-state-working` (`--color-activity-working` at 35%, active), `panel-state-waiting` (`--color-activity-waiting` at 75%, agent waiting), `panel-state-hibernated` (`--color-activity-idle` at 60%, passive), and `panel-state-compiling` (`--color-border-subtle` at 60%, neutral — the dev-preview/HMR compile signal, deliberately non-accent per accent restraint). None animate, per WCAG COGA. `DevPreviewPane` applies `panel-state-compiling` while `phaseLabel === "Compiling"` and `panel-state-working` once `stuckTier >= 1`.
 
 ## Event Routing Table
 
 Columns:
 
 - **Event** — the lifecycle transition or signal
-- **Issue** — the PR or issue introducing it; `NEW` = planned, not yet assigned
+- **Issue** — the issue that introduced the signal (all merged unless marked `NEW`); `NEW` = planned, not yet implemented
 - **Tier** — from the ladder above
 - **Surface** — the concrete delivery mechanism in the UI
 - **Rationale** — why this tier and surface, traceable to the four-question gate

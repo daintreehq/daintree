@@ -172,6 +172,13 @@ export class WorktreeMonitor {
   // but written by the monitor or its callers).
   private readonly watcherController: WatcherController;
   private gitWatchEnabled: boolean;
+  // Per-view budget gate layered on top of `gitWatchEnabled`. When the
+  // WorkspaceService LRU evicts this (background) worktree past the watcher
+  // cap, it sets this false; the combined `gitWatchEnabled && gitWatchBudgetAllowed`
+  // signal the watcher controller observes then stops the watcher and the
+  // monitor falls back to adaptive polling. Always true for the focused
+  // worktree (which is never counted against the cap).
+  private gitWatchBudgetAllowed: boolean = true;
   private gitWatchDebounceMs: number;
   private lastGitStatusCompletedAt: number = 0;
   // Stamped by the watcher's onTriggerUpdate hook before a forced refresh
@@ -357,7 +364,11 @@ export class WorktreeMonitor {
         return monitor._isCurrent;
       },
       get gitWatchEnabled() {
-        return monitor.gitWatchEnabled;
+        // Combined gate: the per-view watcher budget can suppress the watcher
+        // for an evicted background worktree without touching the user/config
+        // `gitWatchEnabled` flag. The controller observes only this single
+        // signal, so budget enforcement stays transparent to it.
+        return monitor.gitWatchEnabled && monitor.gitWatchBudgetAllowed;
       },
       get gitWatchDebounceMs() {
         return monitor.gitWatchDebounceMs;
@@ -1180,6 +1191,32 @@ export class WorktreeMonitor {
 
   ensureWatcherState(): void {
     this.watcherController.ensureState();
+  }
+
+  /** True when this monitor is currently allowed a git file watcher by the
+   *  per-view watcher budget. Reflects the LRU eviction decision, not the
+   *  user/config `gitWatchEnabled` flag. */
+  get gitWatchBudgetGranted(): boolean {
+    return this.gitWatchBudgetAllowed;
+  }
+
+  /**
+   * Grant or revoke this monitor's watcher budget (WorkspaceService LRU
+   * eviction). Revoking stops the watcher via the combined host getter and
+   * reschedules polling so the evicted worktree immediately picks up the
+   * adaptive interval instead of waiting out the watcher's 300s heartbeat;
+   * granting re-arms the watcher at the desired granularity. No-op when the
+   * flag is unchanged.
+   */
+  setGitWatchBudgetAllowed(allowed: boolean): void {
+    if (this.gitWatchBudgetAllowed === allowed) return;
+    this.gitWatchBudgetAllowed = allowed;
+    // Reconcile the watcher against the new combined gate. ensureState() stops
+    // the watcher when the gate is now false, or (re)starts it when true.
+    this.watcherController.ensureState();
+    // The mode dropped to "none" on revoke (or rotated on grant); reschedule
+    // so scheduleNextPoll() re-reads the now-current poll cadence.
+    this.reschedulePolling();
   }
 
   restartWatcherIfRunning(): void {

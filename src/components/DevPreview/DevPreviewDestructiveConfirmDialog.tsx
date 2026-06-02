@@ -115,9 +115,11 @@ export function DevPreviewDestructiveConfirmDialog({
       isOpen={isOpen}
       onClose={onClose}
       variant="destructive"
+      hasPreview={true}
       title={title}
       description={description}
       confirmLabel={confirmLabel}
+      confirmDisabled={!meta}
       onConfirm={onConfirm}
     >
       <PreviewBlock

@@ -6,7 +6,7 @@ name: E2E Tests
 # the run.
 run-name: ${{ inputs.suite || 'core' }} · ${{ inputs.platform || 'all' }}${{ inputs.test_file && format(' · {0}', inputs.test_file) || '' }}${{ inputs.shard && inputs.shard_total && format(' · shard {0}/{1}', inputs.shard, inputs.shard_total) || '' }}
 
-# Unified runner for every E2E suite: core smoke, the six full-* domain
+# Unified runner for every E2E suite: core smoke, the seven full-* domain
 # buckets, online (agent integration), and nightly (memory-leak detection).
 # Pick the suite via the `suite` input; everything else (OpenCode install,
 # ANTHROPIC_API_KEY, --workers=1 for nightly) is conditional on that choice.
@@ -37,7 +37,7 @@ on:
         type: string
         default: ""
       suite:
-        description: "Suite to run. `full` is a meta-suite that runs all six full-* buckets sequentially on one runner — handy for ad-hoc validation. Release and nightly fan the buckets out across separate runners instead."
+        description: "Suite to run. `full` is a meta-suite that runs all seven full-* buckets sequentially on one runner — handy for ad-hoc validation. Release and nightly fan the buckets out across separate runners instead."
         type: choice
         default: "full"
         options:
@@ -49,6 +49,7 @@ on:
           - full-platform
           - full-panels
           - full-resilience
+          - full-plugins
           - online
           - nightly
       shard:
@@ -115,7 +116,7 @@ env:
 jobs:
   # Determine which platforms to run on, and fan each one out into N shards.
   #
-  # Sharding (#8053): the six full-* domain buckets and the `full` meta-suite
+  # Sharding (#8053): the seven full-* domain buckets and the `full` meta-suite
   # split their spec list across SHARD_TOTAL parallel runners via Playwright's
   # native `--shard`. A 39-minute serial Windows bucket becomes ~10min
   # wall-time, and a hung shard takes out 1/N of the bucket instead of the
@@ -234,7 +235,7 @@ jobs:
     # full-terminal still contains a single serial recipes spec that Playwright
     # cannot split across shards, so it keeps the standard 90min E2E window.
     # nightly is unsharded and its serialized leak suite legitimately runs
-    # long, so it keeps the generous ceiling; `full` (meta — all six buckets on
+    # long, so it keeps the generous ceiling; `full` (meta — all seven buckets on
     # one runner) gets a wider window than a single full-* shard.
     timeout-minutes: ${{ (inputs.suite == 'nightly' && 180) || (inputs.suite == 'full' && 120) || (inputs.suite == 'full-terminal' && matrix.name == 'Windows' && 90) || (startsWith(inputs.suite, 'full-') && 45) || 90 }}
 
@@ -380,11 +381,11 @@ jobs:
         shell: bash
         run: |
           SUITE="${{ inputs.suite || 'core' }}"
-          # `full` is a meta-suite that fans across all six full-* buckets in
+          # `full` is a meta-suite that fans across all seven full-* buckets in
           # one runner. Each Playwright project becomes its own --project flag.
           # Single-bucket / single-test runs use one --project flag instead.
           if [ "$SUITE" = "full" ]; then
-            PROJECT_ARGS="--project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience"
+            PROJECT_ARGS="--project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience --project=full-plugins"
           else
             PROJECT_ARGS="--project=$SUITE"
           fi
@@ -394,11 +395,24 @@ jobs:
           if [ "$SUITE" = "nightly" ]; then
             EXTRA="--workers=1"
           fi
+          # Keep the command-level watchdog a few minutes under the job timeout
+          # so Playwright can be killed and the always() artifact steps can run.
+          WATCHDOG_TIMEOUT_MINUTES=80
+          if [ "$SUITE" = "nightly" ]; then
+            WATCHDOG_TIMEOUT_MINUTES=170
+          elif [ "$SUITE" = "full" ]; then
+            WATCHDOG_TIMEOUT_MINUTES=110
+          elif [ "$SUITE" = "full-terminal" ] && [ "${{ matrix.name }}" = "Windows" ]; then
+            WATCHDOG_TIMEOUT_MINUTES=80
+          elif [[ "$SUITE" == full-* ]]; then
+            WATCHDOG_TIMEOUT_MINUTES=40
+          fi
           if [ -n "${{ inputs.test_file }}" ]; then
             echo "args=$PROJECT_ARGS $EXTRA ${{ inputs.test_file }}" >> "$GITHUB_OUTPUT"
           else
             echo "args=$PROJECT_ARGS $EXTRA" >> "$GITHUB_OUTPUT"
           fi
+          echo "watchdog_timeout_minutes=$WATCHDOG_TIMEOUT_MINUTES" >> "$GITHUB_OUTPUT"
 
       # Download the failed-specs artifact from attempt 1 so a job-level retry
       # (via "Re-run failed jobs") can scope to --test-list and rerun only the
@@ -489,7 +503,9 @@ jobs:
           PLAYWRIGHT_BLOB_REPORT: ${{ (inputs.enable_blob_report || inputs.emit_classification) && '1' || '' }}
         run: |
           set -euo pipefail
-          npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${RETRY_ARGS:-}
+          node scripts/ci/run-e2e-watchdog.mjs \
+            --timeout-minutes "${{ steps.test-cmd.outputs.watchdog_timeout_minutes }}" \
+            -- npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${RETRY_ARGS:-}
 
       - name: Run ${{ inputs.suite || 'core' }} e2e tests (Linux)
         if: runner.os == 'Linux'
@@ -503,7 +519,9 @@ jobs:
           PLAYWRIGHT_BLOB_REPORT: ${{ (inputs.enable_blob_report || inputs.emit_classification) && '1' || '' }}
         run: |
           set -euo pipefail
-          xvfb-run --auto-servernum npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${RETRY_ARGS:-}
+          node scripts/ci/run-e2e-watchdog.mjs \
+            --timeout-minutes "${{ steps.test-cmd.outputs.watchdog_timeout_minutes }}" \
+            -- xvfb-run --auto-servernum npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${RETRY_ARGS:-}
 
       - name: Verify native modules (Windows)
         if: runner.os == 'Windows'
@@ -516,7 +534,10 @@ jobs:
         shell: bash
         env:
           ELECTRON_ENABLE_LOGGING: "1"
-          DEBUG: "pw:protocol,pw:browser"
+          # Keep Electron/browser process logs without the high-volume protocol
+          # stream. On Windows, pw:protocol can flood stdout hard enough to
+          # starve long panel shards before the watchdog timeout fires.
+          DEBUG: "pw:browser"
           DEBUG_COLORS: "0"
           E2E_LAUNCH_TELEMETRY: "1"
           E2E_LAUNCH_TELEMETRY_FILE: ${{ runner.temp }}/e2e-launch-telemetry-${{ matrix.shard }}.jsonl
@@ -528,18 +549,9 @@ jobs:
           PLAYWRIGHT_BLOB_REPORT: ${{ (inputs.enable_blob_report || inputs.emit_classification) && '1' || '' }}
         run: |
           set -euo pipefail
-
-          while true; do
-            sleep 60
-            echo "[e2e] heartbeat $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-            if [ -f "$E2E_LAUNCH_TELEMETRY_FILE" ]; then
-              tail -n 3 "$E2E_LAUNCH_TELEMETRY_FILE" 2>/dev/null | sed 's/^/[e2e] launch-telemetry /'
-            fi
-          done &
-          heartbeat_pid=$!
-          trap 'kill "$heartbeat_pid" 2>/dev/null || true' EXIT
-
-          npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${RETRY_ARGS:-}
+          node scripts/ci/run-e2e-watchdog.mjs \
+            --timeout-minutes "${{ steps.test-cmd.outputs.watchdog_timeout_minutes }}" \
+            -- npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${RETRY_ARGS:-}
 
       # Extract failed spec paths from the JSON report so they can be uploaded
       # as a --test-list artifact for any retry attempt. Runs even on Playwright

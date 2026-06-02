@@ -162,6 +162,88 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
     });
   });
 
+  describe("finished chip (#9607)", () => {
+    it("computes finishedCount in the aggregateStats loop", () => {
+      expect(source).toMatch(/finishedCount\+\+/);
+      expect(source).toMatch(/return\s*\{\s*workingCount,\s*waitingCount,\s*finishedCount\s*\}/);
+    });
+
+    it("derives finishedCount from chipState (mirrors matchesQuickStateFilter), not terminal flags", () => {
+      // Must match the filter's source of truth so the count and filter stay in sync.
+      expect(source).toMatch(
+        /derived\.chipState\s*===\s*"complete"\s*\|\|\s*derived\.chipState\s*===\s*"cleanup"\)\s*finishedCount\+\+/
+      );
+    });
+
+    it("includes finishedCount in the chip-row visibility gate", () => {
+      expect(source).toMatch(/aggregateStats\.finishedCount\s*>\s*0/);
+    });
+
+    it("sets aria-pressed based on quickStateFilter for finished chip", () => {
+      expect(source).toMatch(/aria-pressed=\{quickStateFilter\s*===\s*"finished"\}/);
+    });
+
+    it("finished chip onClick toggles between 'finished' and 'all'", () => {
+      expect(source).toMatch(
+        /setQuickStateFilter\(quickStateFilter\s*===\s*"finished"\s*\?\s*"all"\s*:\s*"finished"\)/
+      );
+    });
+
+    // Slice tightly around the finished chip's button so assertions can't be
+    // satisfied by the working/waiting buttons that share the same group div.
+    function finishedChipSlice(src: string): string {
+      const start = src.indexOf('aria-pressed={quickStateFilter === "finished"}');
+      return src.slice(start, src.indexOf("} finished", start));
+    }
+
+    it("reuses the shared neutral selected styling (bg-overlay-subtle underline) on the finished chip", () => {
+      const chip = finishedChipSlice(source);
+      expect(chip).toContain("bg-overlay-subtle");
+      expect(chip).toContain("shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]");
+    });
+
+    it("uses a semantic category-blue dot for finished, matching the WorktreeCard complete chip", () => {
+      const chip = finishedChipSlice(source);
+      expect(chip).toContain("bg-category-blue");
+    });
+
+    it("uses neutral (non-state-colored) text on the finished chip label", () => {
+      const chip = finishedChipSlice(source);
+      // Label text is neutral; only the dot carries semantic color.
+      expect(chip).toMatch(/quickStateFilter === "finished"\s*\?\s*"text-daintree-text"/);
+      expect(chip).not.toContain("text-status-warning");
+      expect(chip).not.toContain("text-[var(--color-state-working)]");
+      expect(chip).not.toContain("text-daintree-accent");
+    });
+
+    it("renders the finished count text", () => {
+      expect(source).toMatch(/\baggregateStats\.finishedCount\b/);
+    });
+  });
+
+  describe("neutral chip labels (#9607)", () => {
+    // The working/waiting chips previously wrapped their whole label in a
+    // per-state color, a one-off treatment. Labels are now neutral; only the
+    // dot keeps semantic color (mirrors the sidebar QuickStateFilterBar).
+    it("working chip label is neutral, not state-colored", () => {
+      const start = source.indexOf('aria-pressed={quickStateFilter === "working"}');
+      const chip = source.slice(start, source.indexOf("} working", start));
+      expect(chip).toMatch(/quickStateFilter === "working"\s*\?\s*"text-daintree-text"/);
+      expect(chip).not.toContain("text-[var(--color-state-working)]");
+      // The dot keeps its semantic state color.
+      expect(chip).toContain("bg-[var(--color-state-working)]");
+    });
+
+    it("waiting chip label is neutral, not state-colored", () => {
+      const start = source.indexOf('aria-pressed={quickStateFilter === "waiting"}');
+      const chip = source.slice(start, source.indexOf("} waiting", start));
+      expect(chip).toMatch(/quickStateFilter === "waiting"\s*\?\s*"text-daintree-text"/);
+      expect(chip).not.toContain("text-status-warning");
+      // The dot keeps its semantic color.
+      expect(chip).toContain("bg-status-warning");
+    });
+  });
+
   describe("multi-select and keyboard navigation (#8653)", () => {
     it("imports the overview keyboard hook", () => {
       expect(source).toMatch(/useWorktreeOverviewKeyboard/);

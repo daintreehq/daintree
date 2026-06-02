@@ -35,7 +35,7 @@ The manifest key is `experimental_mcpServers` — the `experimental_` prefix sig
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. |
+| `id` | yes | Identified at runtime by its `pluginId` + server `id` (the supervisor keys state as `{pluginId} {serverId}`; the IPC surface keys by separate `pluginId`/`serverId` fields). |
 | `name` | yes | Display name in the agent's tool list and Daintree UI. |
 | `command` | yes | Executable. Relative paths resolve inside the plugin directory. Absolute paths and bare commands (`node`, `python`, `npx`, `uv`) work too. |
 | `args` | no | Argv after the command. |
@@ -45,17 +45,16 @@ The manifest key is `experimental_mcpServers` — the `experimental_` prefix sig
 
 ### Lifecycle
 
-Daintree spawns MCP servers **on first use**, not at plugin activation. This avoids the well-documented issue where IDEs with many installed MCP servers accumulate subprocesses and leak memory over time.
+Daintree spawns MCP servers **on first tool enumeration**, not at plugin activation. This avoids the well-documented issue where IDEs with many installed MCP servers accumulate subprocesses and leak memory over time.
 
-1. User opens an agent session.
-2. Daintree enumerates all registered MCP servers (built-in + user-configured + plugin-contributed) but does not yet spawn them.
-3. Agent runs; if it tries to call a tool from a specific server, Daintree spawns that server, waits for handshake, forwards the call.
-4. The server stays running for the rest of the session.
-5. When the agent session ends (or Daintree exits), Daintree sends SIGTERM, then SIGKILL after a short grace period.
+1. A plugin's MCP servers are registered at plugin load but not spawned.
+2. The first `pluginMcp.listTools` (or `pluginMcp.getFullSchema`) call for a server goes through `ensureServerStarted()` (`electron/ipc/handlers/pluginMcp.ts`), which spawns the subprocess, waits for the `initialize` handshake, then returns the tool list / schema.
+3. The server stays running. Teardown is keyed by **plugin**, not by any agent session: `PluginMcpSupervisor.shutdown({ pluginId })` runs on plugin unload, and `shutdownAll()` runs on app shutdown.
+4. Teardown is execa-managed. The supervisor calls `subprocess.kill()` with no arguments so execa's `forceKillAfterDelay` escalation stays active (passing an explicit signal would disable it). On Windows it additionally shells out to a `taskkill /T /F` tree-kill after `SHUTDOWN_GRACE_MS` to reap stranded grandchildren. There is no hand-sequenced SIGTERM→SIGKILL in the supervisor itself.
 
-**Tool discovery:** Daintree queries each server's tool list lazily as well. The list is fetched on first spawn and cached. A server that ships with 40 tools won't dump 40 schemas into the agent's context window unless the agent asks for them — Daintree uses a search-based discovery pattern so only the tools the agent actually calls land in its context.
+**Tool discovery:** Daintree queries each server's tool list lazily as well. The list is fetched on first spawn and cached (invalidated on crash or restart). A server that ships with 40 tools won't dump 40 schemas into the agent's context window unless the agent asks for them — Daintree uses a capped two-tier disclosure: tier-1 (`pluginMcp.listTools`) returns terse tool summaries, bounded by a per-session `maxToolsPerSession` cap (`clampMaxTools`), and the full JSON schema for a tool is fetched lazily via tier-2 (`pluginMcp.getFullSchema`) only when the agent selects it.
 
-**Crash handling:** if a server process dies unexpectedly, Daintree retries with exponential backoff (1s, 2s, 4s, 8s up to 30s). If 3 consecutive starts fail within 60 seconds, the server is marked degraded and further tool calls return a structured error until manual restart.
+**Crash handling:** if a server process dies unexpectedly, the supervisor transitions it to status `crashed`, records `lastError`, invalidates its tool cache, and rejects any pending tool calls (`handleSubprocessExit`, `electron/services/PluginMcpSupervisor.ts`). There is **no** automatic retry or backoff, and no "degraded" state — the status enum is `spawning | ready | crashed | stopped`. Recovery is an explicit manual restart through the `pluginMcp.restart` IPC (also fired automatically when a `${settings:*}` secret referenced by the manifest rotates, since the new value is only folded into env at spawn time).
 
 ### Writing an MCP server for Daintree
 
@@ -109,7 +108,9 @@ See [Architecture → MCP supervisor](./architecture.md#mcp-supervisor) for how 
 
 ## Skills
 
-Skills are markdown files a plugin contributes. Daintree's built-in MCP server exposes them as tools. Any agent running in Daintree — through a terminal, through the orchestrated assistant, anywhere — can invoke them through the standard MCP protocol.
+> **Design preview — not implemented.** None of this section is wired up yet. There is no `skills` contribution point in the manifest schema (`shared/types/plugin.ts` `contributes` block), no `skills/search` or `skills/load` MCP tools, and the built-in MCP server (`electron/services/McpServerService.ts`) exposes Daintree _action_ tools, not skills. The shapes and flows below describe the intended design so the contribution point lands consistently — do not author skills or call these tools against the current build. (The `.claude/skills` paths in `SlashCommandService` are an unrelated Claude-native slash-command feature.)
+
+Skills are markdown files a plugin contributes. The intent is for Daintree's built-in MCP server to expose them as tools, so any agent running in Daintree — through a terminal, through the orchestrated assistant, anywhere — could invoke them through the standard MCP protocol.
 
 This is the right contribution point when the extension is about **knowledge or instructions** rather than **capabilities**. A TDD workflow skill doesn't need to call APIs — it just tells the agent how to think. A Linear integration, by contrast, needs network access and belongs in an MCP server.
 
@@ -143,7 +144,9 @@ Skills are not yet present in the manifest schema. The example below shows the p
 
 ### Skill file format
 
-Skills use a simple frontmatter + markdown body format:
+> Planned design — no parser reads this format yet (see the banner at the top of this section).
+
+Skills would use a simple frontmatter + markdown body format:
 
 ```markdown
 ---
@@ -183,14 +186,16 @@ One feature = one Red-Green-Refactor cycle. Never skip Red — a test that's nev
 
 Everything after the frontmatter is the skill body — the text that gets injected into the agent's context when it invokes the skill.
 
-### How agents invoke skills
+### How agents would invoke skills
 
-Daintree's built-in MCP server exposes two tools for skills:
+> Planned design — these tools do not exist yet (see the banner at the top of this section).
 
-- `skills/search(query)` — searches triggers and descriptions, returns matching skill IDs and summaries
-- `skills/load(id)` — returns the full markdown body of a specific skill
+The plan is for Daintree's built-in MCP server to expose two tools for skills:
 
-Agents use these the same way they'd use any MCP tool. A typical flow:
+- `skills/search(query)` — would search triggers and descriptions, returning matching skill IDs and summaries
+- `skills/load(id)` — would return the full markdown body of a specific skill
+
+Agents would use these the same way they'd use any MCP tool. A typical flow:
 
 1. User says "apply TDD to this feature"
 2. Agent calls `skills/search("tdd")`
@@ -198,7 +203,7 @@ Agents use these the same way they'd use any MCP tool. A typical flow:
 4. Calls `skills/load("acme.workflows.tdd-workflow")`
 5. Incorporates the markdown body into its plan
 
-This keeps Daintree's skill system compatible with any agent that speaks MCP — no Daintree-specific prompt engineering needed.
+This would keep Daintree's skill system compatible with any agent that speaks MCP — no Daintree-specific prompt engineering needed.
 
 ## When to use which
 

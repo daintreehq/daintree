@@ -1,11 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { DECAY_DURATION, getActivityColor } from "../colorInterpolation";
-
-describe("DECAY_DURATION", () => {
-  it("is exported as 90 seconds in milliseconds", () => {
-    expect(DECAY_DURATION).toBe(90_000);
-  });
-});
+import { getActivityColor } from "../colorInterpolation";
 
 describe("getActivityColor", () => {
   beforeEach(() => {

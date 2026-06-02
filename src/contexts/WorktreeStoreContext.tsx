@@ -333,6 +333,30 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       })
     );
 
+    // Pulse-cache pruning backstop: the `worktree-removed` event invalidates a
+    // single worktree, but `applySnapshot` on a host restart can replace the
+    // whole `worktrees` Map with a smaller set WITHOUT firing per-id removal
+    // events — leaving stale entries in pulseStore's worktree-keyed maps
+    // (pulses/loading/errors/retry). Diff the Map on every state change and
+    // invalidate any key that disappeared. `applyRemove`/`applySnapshot` always
+    // build a fresh `new Map(...)` on real changes (the value-equality fast path
+    // preserves the same ref), so the ref-equality guard reliably skips
+    // unrelated-slice updates. `invalidate` is synchronous and functionally
+    // idempotent — it clears whatever is present and corrupts nothing on an
+    // already-clean key — so on a normal single removal the `worktree-removed`
+    // event path and this subscription each fire it once for the same id
+    // (the second call re-publishes correct state, nothing more) (#9536).
+    cleanups.push(
+      store.subscribe((state, prevState) => {
+        if (state.worktrees === prevState.worktrees) return;
+        for (const id of prevState.worktrees.keys()) {
+          if (!state.worktrees.has(id)) {
+            usePulseStore.getState().invalidate(id);
+          }
+        }
+      })
+    );
+
     cleanups.push(
       worktreePort.onEvent("worktree-activated", (data) => {
         const event = data as WorktreeActivatedEvent;
@@ -356,7 +380,10 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         // Full-replace semantics for prCiStatus mirror the backend
         // (WorktreeMonitor.setPRInfo): undefined means "no checks", not
         // "preserve prior value." Merging with ?? would let stale CI rollups
-        // linger after checks disappear.
+        // linger after checks disappear. The transient phase-1 "no CI yet"
+        // case is handled in the workspace host (it preserves the prior rollup
+        // before emitting), so the renderer never sees a flicker-inducing
+        // undefined here — see WorkspaceService.onPRDetected (#9551).
         store.getState().applyUpdate(
           {
             ...existing,

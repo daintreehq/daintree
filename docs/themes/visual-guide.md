@@ -51,18 +51,19 @@ The toolbar background uses a CSS fallback chain:
 
 ```css
 .surface-toolbar {
-  background: var(--toolbar-bg, var(--theme-surface-toolbar));
+  background-color: var(--toolbar-bg, var(--theme-surface-toolbar));
   background-image: var(--toolbar-noise, var(--chrome-noise-texture));
+  background-blend-mode: soft-light;
   backdrop-filter: blur(var(--theme-material-blur)) saturate(var(--theme-material-saturation));
 }
 ```
 
-Most themes use a solid color here. The Highlands theme adds a subtle SVG noise texture for a tactile feel. Themes with `materialBlur > 0` get a frosted glass effect where the toolbar is slightly translucent and blurs content beneath it.
+The noise texture (when present) blends into the base color via `background-blend-mode: soft-light`. Most themes use a solid color here. The Highlands theme adds a subtle SVG noise texture for a tactile feel. Themes with `materialBlur > 0` get a frosted glass effect where the toolbar is slightly translucent and blurs content beneath it. The same `background-color` + `soft-light` blend pattern applies to `.surface-chrome` in `panels.css`.
 
-A thin shadow or border separates the toolbar from the content below:
+A thin shadow or border can separate the toolbar from the content below (defaults to no shadow):
 
 ```css
-box-shadow: var(--toolbar-shadow, var(--theme-shadow-ambient));
+box-shadow: var(--toolbar-shadow, none);
 ```
 
 ### Project Selector (Center)
@@ -186,7 +187,7 @@ A very subtle tint appears on hover — in dark themes this is ~3% white, in lig
 }
 ```
 
-**In Bondi (light gold standard):** The active card uses `#FDFDFE` (nearly white) with a subtle `0 1px 3px rgba(0,0,0,0.05)` shadow. This makes the selected card appear to "lift" above the sidebar surface — a light card on a slightly darker sidebar.
+**In Bondi (light gold standard):** The active card uses `sidebar-active-bg: rgba(0,0,0,0.04)` — a subtle darkening overlay tint over the sidebar surface (no `sidebar-active-shadow` override), so the selected card reads as a faintly recessed/tinted row rather than a lifted white card.
 
 **In Daintree (dark gold standard):** The active card uses `rgba(255,255,255,0.04)` — a barely-there brightness increase. No dramatic shadow.
 
@@ -218,7 +219,8 @@ Colors:
 - **Idle:** `activity-idle` (gray/muted) — static
 - **Waiting:** `activity-waiting` (amber/yellow) — needs user input
 - **Completed:** `activity-completed` (defaults to `status-success`)
-- **Failed:** `activity-failed` (defaults to `status-danger`)
+
+There is no dedicated `activity-failed` token — failure surfaces use `status-danger` directly (e.g. `dock-item-bg-failed`).
 
 ### Resize Handle
 
@@ -242,7 +244,7 @@ However, the empty grid area (when no panels are open) uses a special override:
 --color-grid-bg: var(--panel-grid-bg, var(--terminal-grid-bg, var(--theme-surface-grid)));
 ```
 
-Themes can set `panel-grid-bg` to make the empty grid lighter than the structural grid surface. **Bondi sets this to `#FBFCFD`** — nearly white, so the empty state feels bright and airy rather than gray. All light themes now have this extension. The legacy `terminal-grid-bg` variable is still supported as a fallback for custom themes.
+Themes can set `panel-grid-bg` to make the empty grid lighter than the structural grid surface. **Bondi sets this to `#FFFFFF`** — pure white, so the empty state feels bright and airy rather than gray. All light themes now have this extension. The legacy `terminal-grid-bg` variable is still supported as a fallback for custom themes.
 
 ### Panel Arrangement
 
@@ -753,9 +755,9 @@ The accent is the primary brand/interaction color. It's used for:
 
 Some themes have a **secondary accent** — a second color lane:
 
-- **Bali:** Primary green `#228243`, secondary sage `#6B8F71`
-- **Table Mountain:** Primary pink `#A8456E`, secondary fynbos green `#6B8F71`
-- **Serengeti:** Primary gold `#A28224`, secondary also gold (single-accent theme)
+- **Bali:** Primary green `#228243`, secondary green `#406045`
+- **Table Mountain:** Primary pink `#A8456E`, secondary fynbos green `#406045`
+- **Serengeti:** Primary gold `#9E7F22`, secondary green `#5E7A45`
 
 ---
 
@@ -888,11 +890,13 @@ All radii are derived from a base value scaled by `radius-scale`:
 
 Tiers:
 
-- `radius-xs`: 1px (tiny badges)
-- `radius-sm`: 3px (small chips)
-- `radius-md`: 7px (buttons, inputs, cards)
-- `radius-lg`: 10px (panels, dialogs)
-- `radius-xl`: 17px (large containers)
+At the default `radius-scale` of 1 (base `--radius` = 0.625rem / 10px):
+
+- `radius-xs`: 4px — `calc(var(--radius) - 6px)` (tiny badges)
+- `radius-sm`: 6px — `calc(var(--radius) - 4px)` (small chips)
+- `radius-md`: 8px — `calc(var(--radius) - 2px)` (buttons, inputs, cards)
+- `radius-lg`: 10px — `var(--radius)` (panels, dialogs)
+- `radius-xl`: 14px — `calc(var(--radius) + 4px)` (large containers)
 
 ---
 
@@ -950,7 +954,7 @@ The app supports three modes via `applyColorVisionMode()`:
 - **Red-green (protanopia/deuteranopia):** Replaces red/green with orange/blue alternatives
 - **Blue-yellow (tritanopia):** Replaces blue/yellow with vermillion/sky alternatives
 
-These override 19 specific tokens (status, activity, GitHub, diff colors) with science-based replacements that maintain perceptual distinguishability.
+The override maps in `shared/theme/colorVisionOverrides.ts` cover ~39 distinct `--theme-*` tokens (31 in `RED_GREEN_OVERRIDES`, 26 in `BLUE_YELLOW_OVERRIDES`, with overlap) — spanning status, activity, PR-state, syntax, terminal ANSI, and category colors — with science-based replacements that maintain perceptual distinguishability. (Diff tokens are not overridden.)
 
 ---
 

@@ -59,6 +59,13 @@ describe("classifyGitError — table-driven", () => {
     ],
     ["push-rejected-policy", "remote: pack exceeds maximum allowed size"],
     ["push-rejected-outdated", " ! [rejected]        main -> main (non-fast-forward)"],
+    ["push-rejected-outdated", "!\trefs/heads/main:refs/heads/main\t[rejected] (non-fast-forward)"],
+    ["push-rejected-outdated", " ! [rejected]        main -> main (fetch first)"],
+    [
+      "push-rejected-outdated",
+      "hint: Updates were rejected because the tip of your current branch is behind\n" +
+        "hint: its remote counterpart.",
+    ],
     ["conflict-unresolved", "CONFLICT (content): Merge conflict in src/index.ts"],
     ["conflict-unresolved", "error: merge is not possible because you have unmerged files."],
     [

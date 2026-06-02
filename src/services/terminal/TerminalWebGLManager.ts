@@ -62,7 +62,7 @@ function loadWebglAddon(): Promise<WebglAddonConstructor> {
 }
 
 // Force synchronous GPU-side context release. Reaches into @xterm/addon-webgl
-// 0.19's renderer internals to get the WebGL context and call loseContext()
+// 0.20's renderer internals to get the WebGL context and call loseContext()
 // before addon.dispose() — without this, Chromium's 16-context budget is not
 // freed until garbage collection runs the WebGL teardown. Wrapped in try/catch
 // so a future addon shape change degrades gracefully rather than throwing.
@@ -220,7 +220,7 @@ export class TerminalWebGLManager {
   // reattaches the atlas, clears the model, and then repaints. The public
   // clearTextureAtlas() API clears the shared atlas too, so using it as a
   // per-renderer recovery can perturb co-owners under tiled-agent load. Instead,
-  // run only the local resize-like reset through the pinned 0.19 internal shape
+  // run only the local resize-like reset through the pinned 0.20 internal shape
   // and follow with a full terminal.refresh(). If that internal shape drifts,
   // fall back to releasing/reacquiring only this context.
   // Recurrence signature to watch for when triaging: ~12 concurrent agents, a

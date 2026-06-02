@@ -45,6 +45,7 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   "network:fetch",
   "agent:invoke",
   "agent:read",
+  "agent:register",
   "git:read",
   "git:write",
   "clipboard:read",
@@ -187,6 +188,52 @@ export interface PluginManifestScopes {
   fs?: PluginFsScope;
 }
 
+/**
+ * Pattern-based output-detection config a plugin may supply alongside an agent
+ * contribution (#9560). The shape mirrors the safe subset of the built-in
+ * `AgentDetectionConfig`. It is **validated** at manifest-parse time (each
+ * pattern is length-bounded, must compile, and must not use backreferences,
+ * lookarounds, or nested quantifiers — see `electron/schemas/plugin.ts`) but is
+ * **not yet wired** into the live PTY matcher: the minimal tier launches plugin
+ * agents as named, untracked terminals. The field exists now so manifests stay
+ * forward-compatible with the full-tracking tier without the strict schema
+ * rejecting an unknown key. Bad input degrades to a generic shell rather than
+ * breaking detection for other terminals.
+ */
+export interface PluginAgentDetectionContribution {
+  primaryPatterns?: string[];
+  fallbackPatterns?: string[];
+  promptPatterns?: string[];
+  bootCompletePatterns?: string[];
+  completionPatterns?: string[];
+  scanLineCount?: number;
+  debounceMs?: number;
+}
+
+/**
+ * A plugin-contributed agent entry (#9560). Lets a plugin teach Daintree about
+ * a launchable agent CLI it doesn't ship, so the CLI shows up as a named,
+ * selectable agent rather than a generic shell. Requires the `agent:register`
+ * capability (enforced at the manifest gate). Plugin agent IDs are additive for
+ * new IDs only — a contribution whose `id` collides with a built-in is rejected
+ * at parse time, and built-in entries always shadow plugin entries in
+ * `getEffectiveRegistry`. Cross-plugin ID conflicts resolve first-registered-wins.
+ *
+ * The minimal tier surfaces `id`, `name`, `command`, `args`, `color`, `iconId`,
+ * and `supportsContextInjection`; `detection` is reserved for the full-tracking
+ * tier (see {@link PluginAgentDetectionContribution}).
+ */
+export interface PluginAgentContribution {
+  id: string;
+  name: string;
+  command: string;
+  args?: string[];
+  color: string;
+  iconId: string;
+  supportsContextInjection?: boolean;
+  detection?: PluginAgentDetectionContribution;
+}
+
 export interface PluginManifest {
   name: string;
   version: string;
@@ -223,6 +270,13 @@ export interface PluginManifest {
     experimental_mcpServers: McpServerContribution[];
     forgeProviders: ForgeProviderContribution[];
     fileDecorationProviders: FileDecorationContribution[];
+    /**
+     * Plugin-contributed launchable agents (#9560). Each entry registers an
+     * {@link PluginAgentContribution} into the effective agent registry at load
+     * time so the CLI is selectable as a named agent. Requires the
+     * `agent:register` capability. Empty unless the plugin opts in.
+     */
+    agents: PluginAgentContribution[];
     /**
      * Declared plugin settings. Reserved for F29 — absent from parsed manifests
      * until that schema lands, so `host.settings.set()` accepts any key for now.
@@ -330,6 +384,23 @@ export interface SettingsApi {
 }
 
 export type PluginInstallSource = "builtin" | "sideload" | "url" | "catalog";
+
+/**
+ * Parsed intent of a `daintree://` deep link (#9559). The OS hands the raw URI
+ * to the main process via `open-url` (macOS) or `second-instance` / `process.argv`
+ * (Windows/Linux); `parseDaintreeUrl` validates and narrows it to one of these
+ * shapes before it crosses to the renderer.
+ *
+ * - `install` — `daintree://plugin/install?url=<https-or-http-archive-url>`: opens
+ *   the Plugin Manager with the URL pre-filled in the install dialog. The user
+ *   still presses install, so the existing HTTP-warning and security gates fire;
+ *   a deep link never installs silently.
+ * - `open` — `daintree://plugin/open?id=<publisher.name>`: opens the Plugin
+ *   Manager scrolled to the named plugin.
+ */
+export type PluginDeepLinkIntent =
+  | { action: "install"; url: string }
+  | { action: "open"; pluginId: string };
 
 /**
  * Discriminant for {@link PluginCheckUpdateResult}. A manual update check
@@ -528,6 +599,19 @@ export interface LoadedPluginInfo {
    * survives a Preferences-tab remount.
    */
   pendingRestart?: boolean;
+  /**
+   * Aggregate danger verdict for the plugin's declared capabilities, computed
+   * once in the main process by `PluginService.listPlugins` from the flat
+   * `CONFIRM_TRIGGERING_CAPABILITIES` set plus the compound-capability lattice
+   * (`manifestTriggersCompoundElevation`). `"confirm"` means the plugin holds at
+   * least one individually high-risk capability, or a compound pair the lattice
+   * elevates (e.g. a sensitive read + an unconstrained network sink). The
+   * renderer reads this for the manager's effective-danger summary instead of
+   * re-deriving the lattice — the security logic stays single-source on main
+   * (the flat set is already duplicated once with `HIGH_RISK_CAPABILITIES` and
+   * must not gain a third copy).
+   */
+  pluginDanger: "safe" | "confirm";
 }
 
 export interface PluginIpcContext {

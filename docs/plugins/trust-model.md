@@ -1,10 +1,10 @@
 # Plugin trust model
 
-This is the canonical decision record for what a plugin's declared `capabilities` mean. It settles a contradiction that had accumulated across the codebase: the docs claimed pure disclosure while the code already applied a small derived gate. The contract is now **hybrid** — disclosure-first, with load-bearing host-side policy effects. Everything downstream (`#9268` schema, `#9247` lattice, `#9234` MCP consent) builds on this record.
+This is the canonical decision record for what a plugin's declared `capabilities` mean. It settles a contradiction that had accumulated across the codebase: the docs claimed pure disclosure while the code already applied a small derived gate. The contract is now **hybrid** — disclosure-first, with load-bearing host-side policy effects. Everything downstream built on this record and has since shipped: the `capabilities` rename (`#9268`), the compound-capability lattice (`#9247`, `manifestTriggersCompoundElevation`), and MCP consent + the danger-tier cap (`#9234`, `electron/services/plugin-mcp/`).
 
 ## The contract in one line
 
-> **Capabilities are disclosure-first with host-side policy effects.** The host does not sandbox plugin code — a plugin can call any Node API directly. The `capabilities` field is shown to the user at install, drives host-derived danger classification on plugin-registered actions, gates which MCP client capabilities are advertised to plugin-hosted servers, and is the upper bound on which MCP tools are exposed. It is not an enforcement boundary against malicious code; it is an honest, machine-readable description of what a plugin claims to need, used by the host to apply proportional friction at high-risk intent surfaces.
+> **Capabilities are disclosure-first with host-side policy effects.** The host does not sandbox plugin code — a plugin can call any Node API directly. The `capabilities` field is disclosed in the plugin manager, drives host-derived danger classification on plugin-registered actions, and caps the consent danger tier a plugin-hosted MCP server's tools can reach. It is not an enforcement boundary against malicious code; it is an honest, machine-readable description of what a plugin claims to need, used by the host to apply proportional friction at high-risk intent surfaces.
 
 ## The three options
 
@@ -12,19 +12,19 @@ Three contracts were on the table. Only one is honest about the constraint that 
 
 |  | (a) Disclosure-only | (b) Pure gated | (c) Hybrid (recommended) |
 | --- | --- | --- | --- |
-| Enforcement cost | None | Very high — checks on every host-API method, plus the impossible task of intercepting raw Node calls | Moderate — extend the existing `effectiveDanger` derivation, add the lattice (#9247), add the MCP advertisement gate (#9234) |
+| Enforcement cost | None | Very high — checks on every host-API method, plus the impossible task of intercepting raw Node calls | Moderate — extend the existing `effectiveDanger` derivation, add the lattice, add the MCP tier cap (all now shipped) |
 | Plugin-author cost | None | High — calls can fail mid-flow with `PermissionDenied` | Low — declare honestly; high-risk declarations show a confirm dialog (already true) |
 | False-negative risk | **High** — compound attacks (read + network) declare nothing individually risky | Medium — gates work at the host-API surface but raw Node bypasses them, giving false confidence | Medium — same Node bypass, but the model never claims to prevent it; the lattice catches the compound classes |
-| False-positive risk | None | High — risks training users to dismiss dialogs | Low — gates fire only on the five high-risk tokens + lattice; scopes attenuate further |
-| Interaction with #9247 | No derived effects to raise | A lattice would refuse calls, but the enforcement surface doesn't exist | The lattice raises `effectiveDanger`; URL/glob scopes narrow sinks |
-| Interaction with #9234 | MCP consent runs independent of the manifest — shadow privilege escalation | The manifest caps MCP at advertisement | The manifest caps MCP advertisement; `mcp:elicitation` / `mcp:sampling` become explicit opt-in tokens |
+| False-positive risk | None | High — risks training users to dismiss dialogs | Low — gates fire only on the six high-risk tokens + lattice; scopes attenuate further |
+| Compound lattice | No derived effects to raise | A lattice would refuse calls, but the enforcement surface doesn't exist | The lattice raises `effectiveDanger`; URL scopes narrow sinks (shipped) |
+| MCP coupling | MCP consent runs independent of the manifest — shadow privilege escalation | The manifest caps MCP at advertisement | The manifest caps the MCP consent danger tier; `mcp:elicitation` / `mcp:sampling` opt-in tokens still pending |
 | Honest framing | Truthful (no sandbox) but invites attacks | Misleading — implies enforcement we can't deliver | Truthful: we disclose, we don't sandbox, but high-risk intent gets a confirm dialog |
 
 ## Recommendation
 
 **Hybrid.** Three reasons.
 
-**The code already does this.** `electron/services/PluginService.ts` raises a plugin action's `effectiveDanger` to `"confirm"` whenever the manifest holds one of five high-risk tokens. The docs claimed pure disclosure. The docs were wrong, not the code — this record reconciles them.
+**The code already does this.** `electron/services/PluginService.ts` raises a plugin action's `effectiveDanger` to `"confirm"` whenever the manifest holds one of six high-risk tokens. The docs claimed pure disclosure. The docs were wrong, not the code — this record reconciles them.
 
 **Pure disclosure is the no-sandbox baseline, and it's the model that failed publicly.** VS Code, Cursor, Obsidian, and JetBrains all ship pure disclosure. That's the industry default, and it's exactly the class the malicious `ChatGPT - 中文版` / `ChatMoss` VS Code extensions exploited in January 2026 — over 1.5M combined installs, exfiltrating developer code using only the implicit filesystem + network access every editor extension already gets. They declared nothing individually risky because nothing gated the capabilities they abused. Pure disclosure has no surface to detect that compound class.
 
@@ -38,17 +38,17 @@ The contract carries three roles, in descending order of how strong a guarantee 
 
 ### 1. Disclosure (always)
 
-Declared capabilities are shown in the install dialog and the Settings detail view as a humanised list ("This plugin can read your worktree files, make network requests, and spawn subprocesses"). This is the same reasoning Chrome extension permissions use — informational, pre-install. It is always present and never an enforcement boundary.
+Declared capabilities are shown in the plugin manager's detail pane as a humanised list — each token maps to a label + one-line description with a `neutral`/`warning` severity (the `CAPABILITY_DISCLOSURE` map in `src/components/Plugin/PluginDetailPane.tsx`, e.g. `network:fetch` → "Make network requests"; rendered by `PluginManagerDialog.tsx`). This is the same reasoning Chrome extension permissions use — informational disclosure. It is always present and never an enforcement boundary.
 
 ### 2. Host-side policy input (load-bearing)
 
-Declared capabilities feed five derived effects. Be precise about what is live today versus what these sibling issues add — the `effectiveDanger` raise, the compound-capability lattice, and network scope attenuation are implemented; the MCP gates and the per-capability discriminated-union refactor are forthcoming.
+Declared capabilities feed five derived effects. Be precise about what is live today — the `effectiveDanger` raise, the compound-capability lattice, network scope attenuation, and the MCP tool danger-tier cap are all implemented. Only the `mcp:elicitation` / `mcp:sampling` client-capability advertisement tokens and the per-capability discriminated-union refactor remain unshipped.
 
-- **`effectiveDanger` raise — _live today._** When a plugin's manifest holds any token in `CONFIRM_TRIGGERING_CAPABILITIES` (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`), every action that plugin registers is raised to `effectiveDanger: "confirm"`, regardless of the `danger` the plugin self-declared. The host may only raise, never lower. **This affects Daintree's own action system** — it gates the renderer's confirm dialog, MRU-rail eligibility, and `repeatLast`. It does **not** block the plugin from executing code or calling IPC directly. It is host-side UX policy, not a sandbox. (`PluginService.ts` — `CONFIRM_TRIGGERING_CAPABILITIES`, `effectiveDanger` derivation.)
+- **`effectiveDanger` raise — _live today._** When a plugin's manifest holds any token in `CONFIRM_TRIGGERING_CAPABILITIES` (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`, `agent:register` — registering a launchable agent CLI is a runtime side effect on par with `agent:invoke`), every action that plugin registers is raised to `effectiveDanger: "confirm"`, regardless of the `danger` the plugin self-declared. The host may only raise, never lower. **This affects Daintree's own action system** — it gates the renderer's confirm dialog, MRU-rail eligibility, and `repeatLast`. It does **not** block the plugin from executing code or calling IPC directly. It is host-side UX policy, not a sandbox. (`PluginService.ts` — `CONFIRM_TRIGGERING_CAPABILITIES`, `effectiveDanger` derivation.)
 - **Compound-capability lattice — _live today._** Combinations that are individually benign but dangerous together — sensitive-read + unconstrained-sink, or `network:fetch` + local-write/shell sink — raise `effectiveDanger` even when no single token triggers. This is the surface that catches the compound benign-capability attack class. (`PluginService.ts` — `manifestTriggersCompoundElevation`.)
-- **Scope attenuation — _network live today; fs forthcoming (#9247)._** Scopes ship as a top-level `scopes` object on the manifest, not a per-capability discriminated union. `scopes.network.allowedUrls` is parsed and consulted: a non-empty URL allowlist on `network:fetch` attenuates lattice elevation because the sink can't be remote-controlled. `scopes.fs.allowedPaths` is parsed but not yet consulted for attenuation (fs writes already elevate flat). The schema rejects `*` / `**` and SSRF/credential-bearing URLs at parse time (`electron/schemas/plugin.ts`).
-- **MCP client-capability advertisement — _forthcoming (#9234)._** `elicitation` and `sampling` are advertised to a plugin-hosted MCP server in the `initialize` handshake only when the plugin declares `mcp:elicitation` / `mcp:sampling`. Default-deny.
-- **MCP tool advertisement — _forthcoming (#9234)._** The host refuses to expose tools whose declared scope exceeds the manifest. The manifest is the upper bound.
+- **Scope attenuation — _network live today; fs parsed but not yet consulted._** Scopes ship as a top-level `scopes` object on the manifest, not a per-capability discriminated union. `scopes.network.allowedUrls` is parsed and consulted: a non-empty URL allowlist on `network:fetch` attenuates lattice elevation because the sink can't be remote-controlled. `scopes.fs.allowedPaths` is parsed but not yet consulted for attenuation (fs writes already elevate flat). The schema rejects `*` / `**` and SSRF/credential-bearing URLs at parse time (`electron/schemas/plugin.ts`).
+- **MCP tool danger-tier cap — _live today._** A plugin-hosted MCP server's per-tool consent danger tier is capped against the plugin's declared `manifest.capabilities`. A plugin that did not declare a high-risk token (`HIGH_RISK_CAPABILITIES` in `electron/services/plugin-mcp/PluginMcpTierAuth.ts` — `fs:project-write`, `fs:user-data-write`, `git:write`, `shell:exec`, `agent:invoke`) cannot have its server reach the D2 "shared-state mutation" tier just because a tool advertised `destructiveHint: true`; the call is **denied**, not silently downgraded (a downgrade would let the model pretend a mutation was read-only and bypass the audit narrative). This caps the consent tier, not literal tool-list filtering. (`deriveDangerTier` in `PluginMcpTierAuth.ts`, wired into `PluginMcpConsentService.ts`; `HIGH_RISK_CAPABILITIES` is kept in lockstep with `CONFIRM_TRIGGERING_CAPABILITIES`.)
+- **MCP client-capability advertisement — _not yet shipped._** Intended: `elicitation` and `sampling` are advertised to a plugin-hosted MCP server in the `initialize` handshake only when the plugin declares `mcp:elicitation` / `mcp:sampling` (default-deny). Those tokens don't exist in the schema yet, so no gate fires today.
 
 ### 3. Explicit non-guarantee (written prominently)
 
@@ -56,7 +56,7 @@ The host does not sandbox Node. A plugin can call `require("fs")` directly, spaw
 
 ## Schema shape
 
-The manifest field is `capabilities` (`PluginCapability = BuiltInPluginCapability` in `shared/types/plugin.ts`). The per-capability discriminated-union form below and the `mcp:*` tokens are **not yet parsed** — `capabilities` accepts only flat string tokens today. Scope attenuation has shipped, but as a separate **top-level `scopes` object** on the manifest (`scopes.network.allowedUrls`, `scopes.fs.allowedPaths`; see `PluginManifestScopesSchema` in `electron/schemas/plugin.ts`), not as the per-element `{ name, scopes }` shape below. The refactor that folds scopes into the capability element, plus the `mcp:*` tokens, is tracked in #9247.
+The manifest field is `capabilities` (`PluginCapability = BuiltInPluginCapability` in `shared/types/plugin.ts`). The per-capability discriminated-union form below and the `mcp:*` tokens are **not yet parsed** — `capabilities` accepts only flat string tokens today. Scope attenuation has shipped, but as a separate **top-level `scopes` object** on the manifest (`scopes.network.allowedUrls`, `scopes.fs.allowedPaths`; see `PluginManifestScopesSchema` in `electron/schemas/plugin.ts`), not as the per-element `{ name, scopes }` shape below. The refactor that folds scopes into the capability element, plus the `mcp:*` tokens, remains the only genuinely unshipped part of this contract.
 
 ```ts
 capabilities: Array<
@@ -82,14 +82,16 @@ The prior art divides cleanly along one axis: whether a sandbox exists to gate a
 
 Daintree has no equivalent boundary — shared V8 + Node means there is no chokepoint to gate at. Hybrid is the honest model for that constraint.
 
-## Sibling-issue amendments
+## What shipped
 
-The chosen contract changes what these issues must do:
+The sibling issues this record drove are all closed. For traceability:
 
-- **#9268** — adopt `capabilities` as the field name and extend the element schema to the discriminated union above. The field rename and the non-guarantee both freeze here.
-- **#9228** — bake the canonical statement into the manifest contract before the SDK ships to npm; the field name and the non-guarantee must be frozen before external authors depend on them.
-- **#9247** — the compound-capability lattice and scope attenuation are load-bearing parts of this contract, not optional add-ons. Ship them in the same release as the schema.
-- **#9234** — `elicitation` / `sampling` advertisement must be gated by `mcp:elicitation` / `mcp:sampling` capabilities; tool advertisement must be bounded by the manifest as the upper bound.
+- **#9268 (capabilities rename + schema)** — shipped. `permissions` was renamed to `capabilities` (`PluginCapability = BuiltInPluginCapability` in `shared/types/plugin.ts`). The element is still a flat token, not the discriminated union below.
+- **#9228 (lock the manifest contract before 1.0)** — shipped. The field name and the non-guarantee are frozen in the manifest contract before external authors depend on them.
+- **#9247 (compound lattice + manifest scopes)** — shipped. `manifestTriggersCompoundElevation` (`PluginService.ts`) implements the lattice; `scopes` ship as a top-level object (`PluginManifestScopesSchema`, `electron/schemas/plugin.ts`), with network attenuation live and fs parsed-but-unconsulted.
+- **#9234 (plugin-MCP consent + gating + audit)** — shipped. `electron/services/plugin-mcp/` holds `PluginMcpConsentService`, `PluginMcpTierAuth` (`deriveDangerTier`), and `PluginMcpAuditService`.
+
+Still genuinely unshipped (no open issue tracks them — fold in when the work lands): the per-capability discriminated-union refactor below, and the `mcp:elicitation` / `mcp:sampling` client-capability advertisement tokens.
 
 ## Open questions
 

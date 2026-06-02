@@ -63,6 +63,18 @@ Some CLIs bracket redraws with DEC mode 2026 synchronized output. The headless t
 
 Spinner and time-counter frames are activity evidence. Cosmetic-only frames can keep an already-working agent alive, but idle-to-working recovery still needs sustained signal.
 
+### Escape-Sequence Progress Layer
+
+`electron/services/pty/Osc94Parser.ts` taps raw PTY output for OSC 9;4 taskbar-progress sequences upstream of the rest of the pipeline, so the signal is viewport-independent. This matters for small grid tiles where the visible-tail snapshot is too small to feed the temperature/output detectors. `TerminalProcess` instantiates the parser and feeds every output chunk through `osc94Parser.feed(data, now)`; its callbacks drive `ActivityMonitor.onOscProgressWorking()` and `onOscProgressIdle()`.
+
+State codes follow the de-facto ConEmu spec that Claude Code adopted (v2.0.56):
+
+- `1` (normal/determinate) and `3` (indeterminate) mean working;
+- `0` (remove/hide) is emitted between every tool call, so the idle path is debounced (200ms) — any working state inside that window cancels it;
+- `2` (error) and `4` (paused) are ignored — there is no matching agent state.
+
+The parser is a read-only side channel. `IdleSequenceFilter.stripIdleTerminalSequences` still removes the sequence from the byte-volume and renderer-bound paths downstream, so other detectors stay clean. `onOscProgressWorking` acts as a heartbeat: it refreshes the working hold without bypassing focus suppression or the `MAX_WORKING_SILENCE_MS` safety net.
+
 ### Visible-Tail Temperature Layer
 
 `AgentActivityTemperature` is the current entropy/temperature model. It observes the visible tail instead of the full terminal buffer:
@@ -74,7 +86,7 @@ Spinner and time-counter frames are activity evidence. Cosmetic-only frames can 
 - working dwell: `2000ms`
 - waiting dwell: `6000ms`
 - activity gap reset: `3000ms`
-- resize quiet period: `1000ms`
+- resize quiet period: `500ms`
 
 Visible changes add heat. Silence decays heat exponentially. The model emits a `busy` hint only when heat is above the working threshold for the working dwell. It emits an `idle` hint only when heat has cooled below the waiting threshold for the waiting dwell.
 
@@ -125,7 +137,7 @@ The FSM then produces canonical agent states:
 - `working -> completed` on completion
 - any non-exited state -> `exited` on exit
 
-Agent state changes are emitted through the event bus as `agent:state-changed`. Assistant listeners translate these into `terminal:state-changed` events for assistant workflows.
+Agent state changes are emitted through the event bus as `agent:state-changed` (from `PtyEventsBridge`). A listener-friendly variant, `terminal:state-changed`, is declared and bridge-eligible in `electron/services/events.ts` but currently has no producer — only `agent:state-changed` is emitted.
 
 ## Resize Handling
 
@@ -193,6 +205,7 @@ Use these focused tests when changing the monitor:
 - `electron/services/pty/__tests__/LineRewriteDetector.test.ts`
 - `electron/services/pty/__tests__/SynchronizedFrameAnalyzer.test.ts`
 - `electron/services/pty/__tests__/AgentPatternDetector.test.ts`
+- `electron/services/pty/__tests__/Osc94Parser.test.ts`
 
 Manual release checks live in [activity-testing.md](../activity-testing.md).
 

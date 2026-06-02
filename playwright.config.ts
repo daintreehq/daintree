@@ -115,6 +115,12 @@ export default defineConfig({
       retries: isCI ? 2 : 0,
     },
     {
+      name: "full-plugins",
+      testDir: "./e2e/full/plugins",
+      timeout: coreTimeout,
+      retries: isCI ? 2 : 0,
+    },
+    {
       name: "online",
       testDir: "./e2e/online",
       timeout: onlineTimeout,

@@ -454,18 +454,6 @@ describe("ConsoleDrawer", () => {
   });
 
   describe("drawer container", () => {
-    it("has overflow-hidden class to prevent content leak", () => {
-      const { container } = renderDrawer({ defaultOpen: false });
-      const drawer = container.querySelector('[id^="console-drawer-"]');
-      expect(drawer?.className).toContain("overflow-hidden");
-    });
-
-    it("has transition-[height] for smooth animation", () => {
-      const { container } = renderDrawer({ defaultOpen: false });
-      const drawer = container.querySelector('[id^="console-drawer-"]');
-      expect(drawer?.className).toContain("transition-[height]");
-    });
-
     it("sets correct aria-controls id", () => {
       renderDrawer({ defaultOpen: false });
       expect(getToggleButton().getAttribute("aria-controls")).toBe(

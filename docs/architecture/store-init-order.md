@@ -11,15 +11,16 @@ Direct top-level imports between any pair of these stores form an ESM cycle. Cyc
 1. **TDZ crash on boot.** `ReferenceError: Cannot access 'X' before initialization` when a module references a non-hoisted binding (`let`/`const`/`class`) from a partner that has started evaluating but not finished.
 2. **Silent stale-state failure.** If the cycle is "patched" with a getter that defaults to `null`, an inverted evaluation order leaves the closure unset—and call sites like `buildOutgoingState()` quietly return incomplete data instead of crashing.
 
-The accessor-module pattern eliminates both classes by routing all cross-store references through a leaf module that imports nothing, and by deferring closure registration to a single explicit init point.
+The accessor-module pattern eliminates both classes by routing all cross-store references through a leaf module that imports no other store module, and by deferring closure registration to a single explicit init point.
 
 ## Architecture
 
 ### Leaf accessor module (`src/store/storeAccessors.ts`)
 
-Holds five mutable getter slots and a paired reader for each. No imports from any store. Stores import from this leaf unidirectionally:
+Holds seven mutable getter/callback slots and a paired reader for each. It imports no other store module—only a shared type (`TabGroup`) and a panel-registry selector used to derive the `PanelStoreSnapshot` carrier type—so it cannot participate in a store cycle. Stores import from this leaf unidirectionally:
 
 ```typescript
+// imports elided (TabGroup type, panel-registry selector for the carrier type)
 let _getPanelStoreState: (() => PanelStoreSnapshot) | null = null;
 
 export function setPanelStoreAccessor(getter: () => PanelStoreSnapshot): void {
@@ -67,6 +68,8 @@ if (!terminalState) {
 | --- | --- | --- | --- |
 | Panel snapshot | `getPanelStoreSnapshot()` | `setPanelStoreAccessor()` | `projectStore.buildOutgoingState()` |
 | Worktree selection | `getWorktreeSelectionSnapshot()` | `setWorktreeSelectionAccessor()` | `projectStore.buildOutgoingState()` |
+| Worktree id set | `getWorktreeIdSet()` | `setWorktreeIdSetAccessor()` | `projectStore.buildOutgoingState()` |
+| Panel store clear-for-switch | `clearPanelStoreForSwitchThroughAccessor()` | `setPanelStoreClearForSwitchAccessor()` | `projectStore.switchProject()` |
 | Fleet arming clear | `clearFleetArmingThroughAccessor()` | `setFleetArmingClearAccessor()` | `projectStore.switchProject()` |
 | Fleet armed ids | `getFleetArmedIds()` | `setFleetArmedIdsAccessor()` | `worktreeStore.applyWorktreeTerminalPolicy()` |
 | Fleet last armed id | `getFleetLastArmedId()` | `setFleetLastArmedIdAccessor()` | `worktreeStore.exitFleetScope()` |
@@ -117,7 +120,7 @@ if (!terminalState) {
 }
 ```
 
-The accessor was never set because `initStoreOrchestrator()` did not run. In production this only happens if the renderer entry stops calling the orchestrator; in tests it is the normal path when a store is imported in isolation.
+The accessor was never set because `initStoreOrchestrator()` did not run. In production this only happens if the renderer entry stops calling the orchestrator; in tests it is the normal path when a store is imported in isolation. To return the slots to that unset state between a `destroyStoreOrchestrator()` and a fresh re-init, use the canonical `resetStoreAccessorsForTesting()` hook (`storeAccessors.ts`)—`destroyStoreOrchestrator()` already calls it (`rendererStoreOrchestrator.ts`). Never null the module-scope slots by hand.
 
 **Stale closures in async callbacks:**
 

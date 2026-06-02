@@ -1907,6 +1907,16 @@ export interface IpcEventMap {
     complete: boolean;
   };
 
+  // Plugin agent registry events (main → renderer). Carries the flattened
+  // plugin-agent record so the renderer can mirror main's effective registry.
+  // Same `complete` flag semantics as toolbar buttons / menu items: true for an
+  // authoritative post-unload snapshot, false for partial/growing load-time
+  // broadcasts.
+  "plugin:agents-changed": {
+    agents: Record<string, import("../../config/agentRegistry.js").AgentConfig>;
+    complete: boolean;
+  };
+
   // Plugin file-decoration invalidation (main → renderer). Carries only the
   // changed scope (optionally narrowed to `paths`) — never decoration data.
   // The renderer re-pulls fresh decorations via `plugin:file-decorations-get`.
@@ -1918,6 +1928,12 @@ export interface IpcEventMap {
   // Plugin provenance record changed (main → renderer). Signal-only — the
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
+
+  // `daintree://` deep-link intent (main → renderer, #9559). Delivered to the
+  // primary window once it has painted; the renderer opens the Plugin Manager
+  // (URL pre-filled for install, or scrolled to the plugin for open). Routing
+  // installs through the existing manager flow keeps every security gate intact.
+  "plugin:deep-link": import("../plugin.js").PluginDeepLinkIntent;
 
   // Resource profile change (main → renderer)
   "resource:profile-changed": import("../resourceProfile.js").ResourceProfilePayload;
@@ -2000,10 +2016,14 @@ export type IpcEventBusMap = Pick<
   | "plugin:keybindings-changed"
   // Plugin context-menu item registry (global broadcast)
   | "plugin:context-menu-items-changed"
+  // Plugin agent registry (global broadcast)
+  | "plugin:agents-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
+  // Plugin deep-link intent (targeted at the primary window)
+  | "plugin:deep-link"
   // Terminal lifecycle (non-data) — exit, spawn-result, backend crash/ready
   | "terminal:exit"
   | "terminal:backend-crashed"

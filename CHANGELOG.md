@@ -1,5 +1,65 @@
 # Changelog
 
+## [0.16.0] - 2026-06-02
+
+The plugin manager grows up. Per-plugin configuration, capabilities, and permissions move out of the settings tab into a dedicated first-class view with a master-detail layout, source/state grouping, and filter-operator search, and a `daintree://` deep-link scheme can install or open plugins from outside the app. Alongside it: a round of memory-leak and long-session fixes (xterm dispose, PTY fd, disk-state growth), tightened destructive-action gates, and a large internal E2E-coverage expansion.
+
+### Features
+
+**Plugin manager**
+
+- Graduated into a dedicated first-class view with a back button and OS window-control spacers (#9558, #9548)
+- Master-detail layout replacing the inline settings panel (#9555); per-plugin settings now shown for disabled plugins too (#9549)
+- Plugin list grouped by source and state (#9554); filter-operator search (#9557)
+- Declared capabilities and danger surfaced in the manager (#9556); restart-required banner for pending changes
+- `daintree://` deep-link scheme for plugin install and open (#9559)
+- `contributes.agents` contribution point for registering agents (#9560)
+
+**Worktree & motion**
+
+- "Finished" chip added to the Worktrees Overview quick-state filter (#9607)
+- Coordinated notification toast-stack motion (#9618); spring physics on the panel drag-overlay pickup (#9617)
+
+**Destructive actions**
+
+- Hardened destructive-action confirm/danger enforcement gates (#9567); confirm dialogs now block when an async preview fails to load (#9570)
+
+### Bug Fixes
+
+**Leaks & long-session stability**
+
+- Bumped `@xterm/*` to 6.1.0-beta to fix the Terminal graph leak on every dispose (#9540)
+- Released the master PTY fd on live-terminal teardown and exit (#9539); guarded against Windows ConPTY double-free
+- Re-run disk reclamation across long sessions instead of only at boot (#9537); pruned orphaned diagnostic-store entries on panel/worktree removal (#9536)
+
+**Rendering & state**
+
+- Project-switch WebContentsViews no longer flash white on cold-start swap (#9573)
+- Renderer-gone handler now distinguishes OOM from memory-eviction (#9572)
+- Persist docked popover height across restart; keep the default when hydrating an unset value
+- Dropped the blur filter from the AnimatedLabel crossfade for crisp text (#9615); moved discrete-feedback keyframes onto the front-loaded easing token (#9616); froze evicted background toasts at their exit position
+- Stopped the PR CI status dot flickering on refresh (#9551)
+
+**Plugins & MCP**
+
+- Derived MCP `destructiveHint` from the danger classification rather than kind (#9568)
+- Isolated cached manifest schemas from nested mutation (#9569)
+- Resolved settings for launch-disabled plugins; swapped the `Plug` icon for `Package` across plugin UI
+
+### Performance
+
+- Coalesced overlay/scroll layout reads through a shared rAF throttle (#9580)
+- Visibility-gated stray ungated renderer timers (#9583)
+- Trimmed redundant per-chunk allocations in agent-state detection (#9581)
+- Migrated audit-log viewers onto the shared minute ticker (#9582)
+- Bounded background git file-watchers via an LRU budget (#9538)
+
+### Other Changes
+
+- Large E2E-coverage expansion across GitHub, Review Hub, fleet broadcast, notifications, plugins, terminal agent-state, new-worktree, panel layout, settings/theme, recipes, command palette, and adaptive recovery (#9588–#9599), plus a minimal online suite against the real GitHub API (#9600)
+- Sharded unit tests across 4 parallel CI runners; nightly infrastructure hardening and an E2E watchdog
+- Architecture documentation overhaul
+
 ## [0.15.0] - 2026-05-30
 
 Daintree gains a plugin platform. The `.dntr` archive format, an atomic install/uninstall pipeline, a `daintree-plugin` CLI, the `@daintreehq/plugin-sdk`, a compound-capability lattice, and an MCP supervisor together let third-party plugins contribute commands, menus, keybindings, settings forms, and experimental views — all sandboxed behind manifest-declared capabilities. Voice input matured with client-side VAD, push-to-talk, and dictation target locking; dev preview now persists sessions across relaunch and surfaces a cross-worktree dashboard; and notifications gained a persistent inbox with OS Do-Not-Disturb awareness.

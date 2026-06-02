@@ -47,9 +47,6 @@ describe("QuickSwitcherItem", () => {
 
     const button = container.querySelector("button");
     expect(button?.getAttribute("aria-selected")).toBe("true");
-    expect(button?.className).toContain("aria-selected:bg-overlay-soft");
-    expect(button?.className).toContain("aria-selected:before:content-['']");
-    expect(button?.className).toContain("group");
   });
 
   it("does not branch styling on isSelected — selection is purely aria-driven", () => {

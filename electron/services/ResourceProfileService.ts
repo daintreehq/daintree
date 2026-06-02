@@ -202,6 +202,17 @@ export class ResourceProfileService {
     return this.currentProfile;
   }
 
+  /**
+   * E2E seam: synchronously drive a profile transition, bypassing the
+   * pressure-scoring and hold-timer machinery so fault-mode specs can assert
+   * `applyProfile`'s side-effects (PVM fan-out, the `resource:profile-changed`
+   * broadcast) deterministically. Gated to `DAINTREE_E2E_FAULT_MODE` at the
+   * sole call site in `globalServicesInit.ts`; never invoked in production.
+   */
+  _forceProfileForTesting(profile: ResourceProfile): void {
+    this.applyProfile(profile);
+  }
+
   start(): void {
     if (this.evalCleanup) return;
     this.disposed = false;
@@ -697,6 +708,7 @@ export class ResourceProfileService {
           pollIntervalBackground: config.pollIntervalBackground,
           fetchIntervalActiveMs: config.fetchIntervalActiveMs,
           fetchIntervalBackgroundMs: config.fetchIntervalBackgroundMs,
+          backgroundGitWatcherCap: config.backgroundGitWatcherCap,
         });
       } catch {
         // non-critical

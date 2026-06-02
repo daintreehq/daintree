@@ -623,6 +623,10 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, actionId: string];
     result: void;
   };
+  "plugin:agents-get": {
+    args: [];
+    result: Record<string, import("../../config/agentRegistry.js").AgentConfig>;
+  };
   "plugin:check-for-update": {
     args: [pluginId: string];
     result: import("../plugin.js").PluginCheckUpdateResult;

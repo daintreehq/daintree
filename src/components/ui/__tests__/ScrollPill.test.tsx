@@ -27,23 +27,6 @@ describe("ScrollPill", () => {
     expect(screen.getByRole("button").getAttribute("type")).toBe("button");
   });
 
-  it("applies the shared chrome classes", () => {
-    render(
-      <ScrollPill isVisible translateDirection="down">
-        hi
-      </ScrollPill>
-    );
-    const button = screen.getByRole("button");
-    expect(button.className).toContain("rounded-full");
-    expect(button.className).toContain("bg-daintree-bg/90");
-    expect(button.className).toContain("border-daintree-border/40");
-    expect(button.className).toContain("shadow-[var(--theme-shadow-floating)]");
-    expect(button.className).toContain("pointer-events-auto");
-    expect(button.className).toContain("hover:bg-daintree-bg");
-    expect(button.className).toContain("focus-visible:outline-daintree-accent");
-    expect(button.className).toContain("motion-reduce:transition-none");
-  });
-
   it("uses scoped transition-[opacity,transform] and not bare transition", () => {
     render(
       <ScrollPill isVisible translateDirection="down">

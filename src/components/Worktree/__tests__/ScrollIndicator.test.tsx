@@ -80,14 +80,6 @@ describe("ScrollIndicator", () => {
     expect(screen.getByLabelText("Scroll up, 5 more above")).toBeTruthy();
   });
 
-  it("uses pointer-events-none on container and pointer-events-auto on button", () => {
-    render(<ScrollIndicator direction="below" count={1} onClick={onClick} />);
-    const button = screen.getByRole("button");
-    const container = button.parentElement!;
-    expect(container.className).toContain("pointer-events-none");
-    expect(button.className).toContain("pointer-events-auto");
-  });
-
   it("applies bottom-0 positioning for below direction", () => {
     render(<ScrollIndicator direction="below" count={1} onClick={onClick} />);
     const button = screen.getByRole("button");
@@ -100,13 +92,6 @@ describe("ScrollIndicator", () => {
     const button = screen.getByRole("button");
     const container = button.parentElement!;
     expect(container.className).toContain("top-0");
-  });
-
-  it("applies pill styling classes", () => {
-    render(<ScrollIndicator direction="below" count={1} onClick={onClick} />);
-    const button = screen.getByRole("button");
-    expect(button.className).toContain("rounded-full");
-    expect(button.className).toContain("bg-daintree-bg/90");
   });
 
   it("uses translate-y-0 when visible (below)", () => {

@@ -85,6 +85,20 @@ describe("ActionService window.__daintreeDispatchAction gate", () => {
     expect(typeof fakeWindow.__daintreeDispatchAction).toBe("function");
   });
 
+  it("can attach after the E2E mode flag appears", async () => {
+    const fakeWindow: Record<string, unknown> = {};
+    restore = setWindow(fakeWindow);
+
+    vi.resetModules();
+    const mod = await import("../ActionService");
+    expect(fakeWindow.__daintreeDispatchAction).toBeUndefined();
+
+    fakeWindow.__DAINTREE_E2E_MODE__ = true;
+    mod.installE2EActionDispatchBridge();
+
+    expect(typeof fakeWindow.__daintreeDispatchAction).toBe("function");
+  });
+
   it("forwards actionId, args, and options to actionService.dispatch", async () => {
     const fakeWindow: Record<string, unknown> = { __DAINTREE_E2E_MODE__: true };
     restore = setWindow(fakeWindow);

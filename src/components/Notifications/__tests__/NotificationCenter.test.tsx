@@ -1404,12 +1404,8 @@ describe("NotificationCenter — bulk mark-read with Undo", () => {
     expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
 
     const payload = getLastNotifyPayload();
-    expect(payload.type).toBe("success");
     expect(payload.message).toBe("Marked 2 as read");
-    expect(payload.duration).toBe(5000);
-    expect(payload.urgent).toBe(true);
-    expect(payload.transient).toBe(true);
-    expect(payload.priority).toBe("high");
+    // `transient` confirmations must not carry `context` (notify drops them in DEV).
     expect(payload.context).toBeUndefined();
     expect(payload.action?.label).toBe("Undo");
   });

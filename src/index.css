@@ -1228,7 +1228,7 @@ body,
 }
 
 .animate-badge-bump {
-  animation: badge-bump var(--terminal-select-duration, 200ms) cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation: badge-bump var(--terminal-select-duration, 200ms) var(--ease-out-expo) both;
   will-change: transform;
 }
 
@@ -1247,7 +1247,7 @@ body,
 }
 
 .animate-action-row-bump {
-  animation: action-row-bump 200ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation: action-row-bump 200ms var(--ease-out-expo) both;
   will-change: transform;
 }
 
@@ -1265,7 +1265,7 @@ body,
 }
 
 .animate-diagnostics-flash {
-  animation: diagnostics-state-flash 200ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation: diagnostics-state-flash 200ms var(--ease-out-expo) both;
 }
 
 /* Upstream sync badge value-change flash — one-shot opacity dip when the
@@ -1284,7 +1284,7 @@ body,
 }
 
 .animate-upstream-badge-flash {
-  animation: upstream-badge-update-flash 200ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation: upstream-badge-update-flash 200ms var(--ease-out-expo) both;
   will-change: opacity;
 }
 
@@ -1305,7 +1305,7 @@ body,
 }
 
 .animate-activity-blip {
-  animation: activity-blip 200ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation: activity-blip 200ms var(--ease-out-expo) both;
 }
 
 /* Trash pulse animation - for trash icon when panels are added */
@@ -1325,7 +1325,7 @@ body,
 }
 
 .animate-trash-pulse {
-  animation: trash-pulse 200ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation: trash-pulse 200ms var(--ease-out-expo) both;
 }
 
 /* All-clear flash: subtle full-screen overlay when all agents complete */
@@ -1367,7 +1367,11 @@ body,
 }
 
 /* Label crossfade — used by AnimatedLabel for text/number swaps. Outgoing
- * label fades out & lifts up + slight blur; incoming rises in from below.
+ * label fades out & lifts up; incoming rises in from below. Opacity +
+ * transform only (no filter): filter was the culprit — `will-change: filter`
+ * promotes the text to a composited layer even at rest, permanently disabling
+ * subpixel antialiasing and softening the glyphs. opacity/transform only
+ * promote transiently during the 150ms swap, not at rest.
  * Container holds both spans in a CSS grid cell so width is the natural max
  * of both labels and no layout shift occurs during the swap.
  */
@@ -1375,12 +1379,10 @@ body,
   0% {
     opacity: 1;
     transform: translateY(0);
-    filter: blur(0);
   }
   100% {
     opacity: 0;
     transform: translateY(-4px);
-    filter: blur(2px);
   }
 }
 
@@ -1388,23 +1390,21 @@ body,
   0% {
     opacity: 0;
     transform: translateY(4px);
-    filter: blur(2px);
   }
   100% {
     opacity: 1;
     transform: translateY(0);
-    filter: blur(0);
   }
 }
 
 .animate-label-swap-out {
   animation: label-swap-out var(--duration-150) var(--ease-out-expo) both;
-  will-change: opacity, transform, filter;
+  will-change: opacity, transform;
 }
 
 .animate-label-swap-in {
   animation: label-swap-in var(--duration-150) var(--ease-out-expo) both;
-  will-change: opacity, transform, filter;
+  will-change: opacity, transform;
 }
 
 /* Card border accent flash — opacity-only sibling overlay so we never animate
@@ -1468,7 +1468,7 @@ body,
 }
 
 .animate-fleet-bar-refocus-pulse::before {
-  animation: fleet-bar-refocus-pulse 800ms cubic-bezier(0.4, 0, 0.2, 1) 1 both;
+  animation: fleet-bar-refocus-pulse 800ms var(--ease-out-expo) 1 both;
   will-change: opacity;
 }
 
@@ -1489,7 +1489,7 @@ body,
 }
 
 .animate-fleet-bar-commit-flash::before {
-  animation: fleet-bar-commit-flash 140ms cubic-bezier(0.4, 0, 0.2, 1) 1 both;
+  animation: fleet-bar-commit-flash 140ms var(--ease-out-expo) 1 both;
   will-change: opacity;
 }
 
@@ -1516,7 +1516,7 @@ body,
   pointer-events: none;
   border-radius: inherit;
   box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--theme-tint) 35%, transparent);
-  animation: fleet-exit-pulse 220ms cubic-bezier(0.4, 0, 0.2, 1) 1 both;
+  animation: fleet-exit-pulse 220ms var(--ease-out-expo) 1 both;
   will-change: opacity;
   z-index: 2;
 }
@@ -1552,7 +1552,7 @@ body,
    * wildcard sets `animation: none`), avoiding a frozen static tint. */
   opacity: 0;
   background-color: color-mix(in oklch, var(--theme-tint) 20%, transparent);
-  animation: fleet-preview-enter 150ms cubic-bezier(0.4, 0, 0.2, 1) 1 both;
+  animation: fleet-preview-enter 150ms var(--ease-out-expo) 1 both;
   will-change: opacity;
   z-index: 2;
 }
@@ -1712,7 +1712,6 @@ body,
   .animate-label-swap-in {
     animation: none;
     transform: none !important;
-    filter: none !important;
     will-change: auto;
   }
 

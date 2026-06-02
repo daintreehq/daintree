@@ -78,6 +78,7 @@ const { usePanelStore } = await import("../panelStore");
 const { useWorktreeSelectionStore, persistMruList } = await import("../worktreeStore");
 const { useTerminalInputStore } = await import("../terminalInputStore");
 const { useConsoleCaptureStore } = await import("../consoleCaptureStore");
+const { useResourceMonitoringStore } = await import("../resourceMonitoringStore");
 const { useVoiceRecordingStore } = await import("../voiceRecordingStore");
 const { unregisterInputController } = await import("../terminalInputStore");
 const { semanticAnalysisService } = await import("@/services/SemanticAnalysisService");
@@ -107,6 +108,7 @@ describe("rendererStoreOrchestrator", () => {
     });
     useWorktreeSelectionStore.getState().reset();
     useConsoleCaptureStore.setState({ messages: new Map() });
+    useResourceMonitoringStore.setState({ metrics: new Map() });
     useVoiceRecordingStore.setState({ panelBuffers: {} });
   });
 
@@ -561,6 +563,146 @@ describe("rendererStoreOrchestrator", () => {
     usePanelStore.getState().removePanel(panelId);
 
     expect(useVoiceRecordingStore.getState().panelBuffers[panelId]).toBeUndefined();
+  });
+
+  it("prunes resource-monitoring metrics for the removed panel only", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "term-a": {
+          id: "term-a",
+          title: "A",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+        "term-b": {
+          id: "term-b",
+          title: "B",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: ["term-a", "term-b"],
+    });
+
+    useResourceMonitoringStore.getState().updateMetrics({
+      "term-a": { cpuPercent: 5, memoryKb: 1000, breakdown: [] },
+      "term-b": { cpuPercent: 7, memoryKb: 2000, breakdown: [] },
+    });
+    expect(useResourceMonitoringStore.getState().metrics.has("term-a")).toBe(true);
+    expect(useResourceMonitoringStore.getState().metrics.has("term-b")).toBe(true);
+
+    usePanelStore.getState().removePanel("term-a");
+
+    expect(useResourceMonitoringStore.getState().metrics.has("term-a")).toBe(false);
+    expect(useResourceMonitoringStore.getState().metrics.has("term-b")).toBe(true);
+  });
+
+  it("does not error when removing a panel without resource metrics", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "term-no-metrics": {
+          id: "term-no-metrics",
+          title: "T1",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: ["term-no-metrics"],
+    });
+
+    expect(useResourceMonitoringStore.getState().metrics.has("term-no-metrics")).toBe(false);
+
+    expect(() => usePanelStore.getState().removePanel("term-no-metrics")).not.toThrow();
+    expect(useResourceMonitoringStore.getState().metrics.size).toBe(0);
+  });
+
+  it("prunes metrics for every panel in a bulk removal, keeping survivors", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "m-1": {
+          id: "m-1",
+          title: "1",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+        "m-2": {
+          id: "m-2",
+          title: "2",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+        "m-3": {
+          id: "m-3",
+          title: "3",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: ["m-1", "m-2", "m-3"],
+    });
+
+    useResourceMonitoringStore.getState().updateMetrics({
+      "m-1": { cpuPercent: 1, memoryKb: 100, breakdown: [] },
+      "m-2": { cpuPercent: 2, memoryKb: 200, breakdown: [] },
+      "m-3": { cpuPercent: 3, memoryKb: 300, breakdown: [] },
+    });
+
+    // Shrink to a single survivor in one setState (e.g. worktree teardown).
+    usePanelStore.setState({
+      panelsById: { "m-3": usePanelStore.getState().panelsById["m-3"]! },
+      panelIds: ["m-3"],
+    });
+
+    expect(useResourceMonitoringStore.getState().metrics.has("m-1")).toBe(false);
+    expect(useResourceMonitoringStore.getState().metrics.has("m-2")).toBe(false);
+    expect(useResourceMonitoringStore.getState().metrics.has("m-3")).toBe(true);
+  });
+
+  it("removePanel stays a no-op when metrics were already pruned (onExit + force-removal)", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "dup-1": {
+          id: "dup-1",
+          title: "T1",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: ["dup-1"],
+    });
+
+    useResourceMonitoringStore.getState().updateMetrics({
+      "dup-1": { cpuPercent: 5, memoryKb: 1000, breakdown: [] },
+    });
+
+    // Simulate the PTY onExit path (lifecycle.ts) pruning first.
+    useResourceMonitoringStore.getState().removePanel("dup-1");
+    expect(useResourceMonitoringStore.getState().metrics.has("dup-1")).toBe(false);
+
+    // Then the orchestrator's force-removal path fires for the same id.
+    expect(() => usePanelStore.getState().removePanel("dup-1")).not.toThrow();
+    expect(useResourceMonitoringStore.getState().metrics.has("dup-1")).toBe(false);
   });
 
   it("does not error when removing terminal without voice buffer", () => {

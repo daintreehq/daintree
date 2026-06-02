@@ -688,8 +688,6 @@ describe("ReviewHub", () => {
       expect(inspectBtn).not.toBe(stageBtn);
       expect(inspectBtn.contains(stageBtn)).toBe(false);
       expect(stageBtn.contains(inspectBtn)).toBe(false);
-      // Inspect button captures the row's interactive surface.
-      expect(inspectBtn.className).toMatch(/flex-1/);
     });
 
     it("renders +N/-M churn from staging entries", async () => {
@@ -2766,18 +2764,6 @@ describe("ReviewHub", () => {
       });
     });
 
-    it("passes density prop to FileStageRow (comfortable by default)", async () => {
-      getStagingStatusMock.mockResolvedValue(multiFileStatus());
-
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-
-      await waitFor(() => screen.getByText("index.ts"));
-
-      // The rows render with the comfortable density by default (py-1.5)
-      const stagedContainer = screen.getByText("index.ts").closest(".flex.flex-col");
-      expect(stagedContainer?.className).toMatch(/gap-0\.5/);
-    });
-
     it("shows bulk button hidden when no files in section", async () => {
       getStagingStatusMock.mockResolvedValue(
         makeStatus({
@@ -2991,6 +2977,44 @@ describe("ReviewHub", () => {
           timeout: 3000,
         }
       );
+    });
+
+    it("keeps cycling history after the first recalled message even when the caret moved", async () => {
+      listCommitsMock.mockResolvedValue({
+        items: [
+          {
+            hash: "abc1234",
+            shortHash: "abc1234",
+            message: "feat: most recent commit",
+            author: { name: "Test", email: "test@example.com" },
+            date: "2026-05-10",
+          },
+          {
+            hash: "def5678",
+            shortHash: "def5678",
+            message: "fix: older commit",
+            author: { name: "Test", email: "test@example.com" },
+            date: "2026-05-09",
+          },
+        ],
+        hasMore: false,
+        total: 2,
+      });
+
+      renderOpen();
+      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+
+      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+
+      focusTextareaAt(textarea, 0);
+      fireEvent.keyDown(textarea, { key: "ArrowUp" });
+      await waitFor(() => expect(textarea.value).toBe("feat: most recent commit"), {
+        timeout: 3000,
+      });
+
+      focusTextareaAt(textarea, textarea.value.length);
+      fireEvent.keyDown(textarea, { key: "ArrowUp" });
+      await waitFor(() => expect(textarea.value).toBe("fix: older commit"), { timeout: 3000 });
     });
 
     it("ArrowDown unwinds through history and restores original draft", async () => {

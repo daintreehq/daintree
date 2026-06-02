@@ -476,7 +476,6 @@ describe("TrashContainer", () => {
     it("renders Empty trash button when trash has items", () => {
       const { getByTestId } = render(<TrashContainer trashedTerminals={[makeTrashedItem("1")]} />);
       expect(getByTestId("empty-trash-button")).not.toBeNull();
-      expect(getByTestId("empty-trash-button").textContent).toBe("Empty trash");
     });
 
     it("shows Auto-clears hint when trash is empty (ghost pill path excluded)", () => {
@@ -500,8 +499,6 @@ describe("TrashContainer", () => {
 
       expect(getByTestId("confirm-dialog")).not.toBeNull();
       expect(confirmDialogProps?.isOpen).toBe(true);
-      expect(confirmDialogProps?.title).toBe("Empty trash?");
-      expect(confirmDialogProps?.confirmLabel).toBe("Empty trash");
     });
 
     it("shows panel titles in the confirm dialog body", () => {

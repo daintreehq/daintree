@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Check, Clock, Copy, Download, Eye, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import type { ForgeAnomalyKind, ForgeAuditRecord, ForgeAuditResult } from "@shared/types/ipc/forge";
@@ -14,8 +15,6 @@ const TIME_RANGE_MS: Record<Exclude<TimeRange, "all">, number> = {
   "1h": 3_600_000,
   "24h": 86_400_000,
 };
-
-const RELATIVE_TIMESTAMP_REFRESH_MS = 30_000;
 
 const RESULT_LABEL: Record<ForgeAuditResult, string> = {
   success: "Success",
@@ -89,12 +88,12 @@ export function ForgeAuditLogViewer({
   const [timeRange, setTimeRange] = useState<TimeRange>("all");
   const [showSuccessful, setShowSuccessful] = useState(false);
   const [ignoreLastHour, setIgnoreLastHour] = useState(false);
-  const [nowTick, setNowTick] = useState(Date.now());
 
-  useEffect(() => {
-    const id = setInterval(() => setNowTick(Date.now()), RELATIVE_TIMESTAMP_REFRESH_MS);
-    return () => clearInterval(id);
-  }, []);
+  const tick = useGlobalMinuteTicker();
+  const now = useMemo(() => {
+    void tick;
+    return Date.now();
+  }, [tick]);
 
   // The toggle is the user's expressed intent, but `resultFilter === "success"`
   // means the user explicitly asked for that bucket — don't filter them back out.
@@ -103,7 +102,7 @@ export function ForgeAuditLogViewer({
   const filteredRecords = useMemo(() => {
     const needle = methodFilter.trim().toLowerCase();
     const search = searchQuery.trim().toLowerCase();
-    const cutoffMs = timeRange !== "all" ? nowTick - TIME_RANGE_MS[timeRange] : undefined;
+    const cutoffMs = timeRange !== "all" ? now - TIME_RANGE_MS[timeRange] : undefined;
     return records.filter((record) => {
       if (cutoffMs !== undefined && record.timestamp < cutoffMs) return false;
       if (suppressSuccess && record.result === "success") return false;
@@ -124,9 +123,9 @@ export function ForgeAuditLogViewer({
       }
       return true;
     });
-  }, [records, methodFilter, searchQuery, resultFilter, suppressSuccess, timeRange, nowTick]);
+  }, [records, methodFilter, searchQuery, resultFilter, suppressSuccess, timeRange, now]);
 
-  const oneHourAgo = nowTick - 3_600_000;
+  const oneHourAgo = now - 3_600_000;
   const visibleSignals = useMemo(() => {
     if (anomalySuppressed) return [];
     return ignoreLastHour
@@ -331,7 +330,7 @@ export function ForgeAuditLogViewer({
                   )}
                 </div>
                 <div className="text-right text-daintree-text/40 whitespace-nowrap">
-                  <div>{formatRelativeTimestamp(record.timestamp, nowTick)}</div>
+                  <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
                   <div>{record.durationMs}ms</div>
                 </div>
               </li>

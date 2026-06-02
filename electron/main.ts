@@ -21,9 +21,11 @@ import { enforceIpcSenderValidation, setupPermissionLockdown } from "./setup/sec
 import {
   registerAppProtocol,
   registerDaintreeFileProtocol,
+  registerDeepLinkProtocolClient,
   registerPluginProtocol,
   setupWebviewCSP,
 } from "./setup/protocols.js";
+import { activateDeepLinkHandler } from "./setup/deepLinkInstall.js";
 import {
   registerAppLifecycleHandlers,
   registerWindowSessionEndHandler,
@@ -368,6 +370,31 @@ if (!gotTheLock) {
         nodeV8.writeHeapSnapshot(filePath);
     }
 
+    // E2E hook: crash a window's workspace host to exercise the
+    // WorktreePortBroker teardown → host auto-restart → port re-broker path
+    // (#9599). Resolved lazily so the workspace client need not exist at
+    // registration time. Gated on DAINTREE_E2E_FAULT_MODE — stricter than the
+    // PVM accessor above — so this crash seam never ships in production.
+    if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
+      (globalThis as Record<string, unknown>).__daintreeCrashWorkspaceHostForWindow = (
+        windowId: number
+      ): boolean => {
+        const host = getWorkspaceClientRef()?.getHostForWindow(windowId);
+        return host?._crashForTesting() ?? false;
+      };
+      (globalThis as Record<string, unknown>).__daintreeWorkspaceHostHasLiveChildForWindow = (
+        windowId: number
+      ): boolean => {
+        const host = getWorkspaceClientRef()?.getHostForWindow(windowId);
+        return host?._hasLiveChildForTesting() ?? false;
+      };
+      (globalThis as Record<string, unknown>).__daintreeWorktreeHasPort = (
+        webContentsId: number
+      ): boolean => {
+        return getWorktreePortBrokerRef()?.hasPort(webContentsId) ?? false;
+      };
+    }
+
     // Clean up ProjectViewManager when the window's cleanup runs.
     // Registered before setupWindowServices so pvm.dispose() runs first —
     // views must close before per-window ports/event-buffer disconnect.
@@ -448,6 +475,7 @@ if (!gotTheLock) {
         markPerformance(PERF_MARKS.EARLY_PATH_REFRESH_COMPLETE);
       });
       setupPermissionLockdown();
+      registerDeepLinkProtocolClient();
       registerAppProtocol(distPath);
       registerDaintreeFileProtocol();
       const { pluginService } = await import("./services/PluginService.js");
@@ -457,6 +485,12 @@ if (!gotTheLock) {
       // that PluginService can install them. Fire-and-forget — install runs
       // concurrently with the rest of startup. #9293
       void activateOpenFileInstaller(pluginService);
+      // Wire the `daintree://` deep-link path (#9559): take over live macOS
+      // `open-url` events and drain any cold-launch URL (queued `open-url` on
+      // macOS, `process.argv` on Windows/Linux). Routed to the primary window
+      // once it paints, where the Plugin Manager opens — installs still go
+      // through the existing confirm/security gates, never silently.
+      activateDeepLinkHandler(windowRegistry);
       setupWebviewCSP();
       // Prime the hydrate prefetch cache for the last-active project so the
       // renderer's first `app:boot` invoke resolves as a cache hit instead of

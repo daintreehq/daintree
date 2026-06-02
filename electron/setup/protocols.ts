@@ -495,6 +495,22 @@ export function registerAppProtocol(distPath: string): void {
   protocol.handle("app", createAppProtocolHandler(distPath));
 }
 
+/**
+ * Claim the `daintree://` URI scheme as this build's OS-level default protocol
+ * client (#9559) so deep links route to the running app. The durable OS
+ * association is declared in `electron-builder.config.cjs` (`protocols`); this
+ * runtime call ensures the launched build owns the scheme.
+ *
+ * Packaged-only: an unsigned dev/E2E build registering `daintree://` would
+ * point the OS at the dev binary and pollute the user's Launch Services / XDG
+ * handler database — the same reasoning that gates the macOS `.dntr`
+ * `fileAssociations` on `CSC_LINK`.
+ */
+export function registerDeepLinkProtocolClient(): void {
+  if (!app.isPackaged) return;
+  app.setAsDefaultProtocolClient("daintree");
+}
+
 export function registerDaintreeFileProtocol(): void {
   protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
 }

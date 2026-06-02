@@ -3,7 +3,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>();
 
 vi.mock("electron", () => ({
-  app: { getVersion: vi.fn(() => "1.0.0"), getPath: vi.fn(() => "/tmp") },
+  app: { getVersion: vi.fn(() => "1.0.0"), getPath: vi.fn(() => "/tmp"), on: vi.fn() },
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
       ipcHandlers.set(channel, handler);

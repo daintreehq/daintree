@@ -137,7 +137,7 @@ export function buildAnnotations(entry: ActionManifestEntry): ToolAnnotations {
     title: entry.title,
     readOnlyHint: overrides?.readOnlyHint ?? isQuery,
     idempotentHint: overrides?.idempotentHint ?? isQuery,
-    destructiveHint: overrides?.destructiveHint ?? !isQuery,
+    destructiveHint: overrides?.destructiveHint ?? entry.danger === "confirm",
     openWorldHint: overrides?.openWorldHint ?? true,
   };
 }

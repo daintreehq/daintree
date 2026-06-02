@@ -195,6 +195,11 @@ export function createApplicationMenu(
                 click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) =>
                   sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
               },
+              {
+                label: "Plugin Manager...",
+                click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) =>
+                  sendAction("app.pluginManager", getTargetBrowserWindow(browserWindow)),
+              },
             ]
           : []),
         {
@@ -522,6 +527,11 @@ export function createApplicationMenu(
           accelerator: "CommandOrControl+,",
           click: (_item, browserWindow) =>
             sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
+        },
+        {
+          label: "Plugin Manager...",
+          click: (_item, browserWindow) =>
+            sendAction("app.pluginManager", getTargetBrowserWindow(browserWindow)),
         },
         { type: "separator" },
         { role: "services" },

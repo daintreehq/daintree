@@ -816,6 +816,7 @@ export const CHANNELS = {
   PLUGIN_ACTIONS_REGISTER: "plugin:actions-register",
   PLUGIN_ACTIONS_UNREGISTER: "plugin:actions-unregister",
   PLUGIN_PANEL_KINDS_GET: "plugin:panel-kinds-get",
+  PLUGIN_AGENTS_GET: "plugin:agents-get",
   PLUGIN_FORGE_PROVIDERS_GET: "plugin:forge-providers-get",
   PLUGIN_FILE_DECORATIONS_GET: "plugin:file-decorations-get",
   PLUGIN_GET_AUDIT_RECORDS: "plugin:get-audit-records",

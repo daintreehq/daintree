@@ -51,7 +51,7 @@ export function extractAcronym(field: string): string {
   return acronym;
 }
 
-function scoreSubsequence(lowerQuery: string, field: string, lowerField: string): number {
+export function scoreSubsequence(lowerQuery: string, field: string, lowerField: string): number {
   let score = 0;
   if (lowerField.includes(lowerQuery)) {
     score += 200;

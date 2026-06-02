@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { classifyFailure, DETERMINISTIC_PATTERNS, TRANSIENT_PATTERNS } from "./npm-ci-retry.mjs";
+import {
+  classifyFailure,
+  DETERMINISTIC_PATTERNS,
+  TRANSIENT_OVERRIDE_PATTERNS,
+  TRANSIENT_PATTERNS,
+} from "./npm-ci-retry.mjs";
 
 describe("npm-ci-retry", () => {
   describe("DETERMINISTIC_PATTERNS", () => {
@@ -140,6 +145,21 @@ describe("npm-ci-retry", () => {
       expect(classifyFailure(stderr)).toBe("deterministic");
     });
 
+    it("treats node-gyp undici parser assertions as retryable infrastructure failures", () => {
+      const stderr = `
+AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+  assert(!this.paused)
+
+    at Parser.finish (D:\\a\\daintree\\daintree\\node_modules\\node-gyp\\node_modules\\undici\\lib\\dispatcher\\client-h1.js:302:5)
+    at TLSSocket.<anonymous> (D:\\a\\daintree\\daintree\\node_modules\\node-gyp\\node_modules\\undici\\lib\\dispatcher\\client-h1.js:741:32)
+
+Rebuild failures (1/5):
+  node-pty: node-gyp failed to rebuild 'D:\\a\\daintree\\daintree\\node_modules\\node-pty'
+`;
+      expect(classifyFailure(stderr)).toBe("transient");
+    });
+
     it("handles case-insensitive matching", () => {
       expect(classifyFailure("Gyp Err! build failed\neconnreset\n")).toBe("deterministic");
     });
@@ -147,6 +167,7 @@ describe("npm-ci-retry", () => {
 
   describe("pattern coverage", () => {
     const allDeterministic = DETERMINISTIC_PATTERNS.map((p) => p.source);
+    const allTransientOverride = TRANSIENT_OVERRIDE_PATTERNS.map((p) => p.source);
     const allTransient = TRANSIENT_PATTERNS.map((p) => p.source);
 
     it("covers every deterministic pattern", () => {
@@ -157,10 +178,17 @@ describe("npm-ci-retry", () => {
       expect(TRANSIENT_PATTERNS).toHaveLength(12);
     });
 
+    it("covers every transient override pattern", () => {
+      expect(TRANSIENT_OVERRIDE_PATTERNS).toHaveLength(1);
+    });
+
     it("has no overlap between deterministic and transient patterns", () => {
       for (const dp of allDeterministic) {
         for (const tp of allTransient) {
           expect(dp).not.toBe(tp);
+        }
+        for (const top of allTransientOverride) {
+          expect(dp).not.toBe(top);
         }
       }
     });

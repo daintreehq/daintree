@@ -9,6 +9,7 @@ This document describes the runtime lifecycle state for terminals across rendere
 - `running`: terminal is active and visible.
 - `background`: terminal is alive but not visible (dock or inactive worktree).
 - `paused-backpressure`: PTY host paused output due to SAB backpressure.
+- `paused-resource-governor`: PTY host paused output under memory/resource-governor pressure (auto-recovers when pressure eases).
 - `paused-user`: user-initiated pause.
 - `suspended`: PTY host suspended visual streaming after a stall.
 - `exited`: terminal process exited (used for post-mortem review).
@@ -18,7 +19,7 @@ This document describes the runtime lifecycle state for terminals across rendere
 
 ## Transition sources
 
-- PTY host emits `terminal-status` for flow control (`running`, `paused-backpressure`, `paused-user`, `suspended`).
+- PTY host emits `terminal-status` for flow control (`running`, `paused-backpressure`, `paused-resource-governor`, `paused-user`, `suspended`).
 - Renderer visibility updates (`isVisible`) convert `running` to `background` when a terminal is not visible.
 - PTY exit events set `runtimeStatus` to `exited` before trashing or preserving the terminal.
 

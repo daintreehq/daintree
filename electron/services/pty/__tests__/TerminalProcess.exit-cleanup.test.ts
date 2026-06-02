@@ -26,17 +26,25 @@ type ExitCb = (e: { exitCode: number; signal?: number }) => void;
 function createControllablePty(): IPty & {
   emitData: (d: string) => void;
   emitExit: (code: number) => void;
+  destroy: ReturnType<typeof vi.fn>;
 } {
   let dataCb: DataCb | null = null;
   let exitCb: ExitCb | null = null;
 
-  const pty: Partial<IPty> & { emitData: (d: string) => void; emitExit: (code: number) => void } = {
+  const pty: Partial<IPty> & {
+    emitData: (d: string) => void;
+    emitExit: (code: number) => void;
+    destroy: ReturnType<typeof vi.fn>;
+  } = {
     pid: 123,
     cols: 80,
     rows: 24,
     write: () => {},
     resize: () => {},
     kill: vi.fn(),
+    // destroy() releases the master PTY fd; absent from the IPty type so it is
+    // accessed structurally by destroyPty() (#9539).
+    destroy: vi.fn(),
     pause: () => {},
     resume: () => {},
     onData: (cb: (data: string) => void) => {
@@ -54,7 +62,11 @@ function createControllablePty(): IPty & {
       exitCb?.({ exitCode: code, signal: 0 });
     },
   };
-  return pty as IPty & { emitData: (d: string) => void; emitExit: (code: number) => void };
+  return pty as IPty & {
+    emitData: (d: string) => void;
+    emitExit: (code: number) => void;
+    destroy: ReturnType<typeof vi.fn>;
+  };
 }
 
 function defaultSpawnContext(overrides?: Partial<SpawnContext>): SpawnContext {
@@ -166,5 +178,38 @@ describe("TerminalProcess onExit — sessionPersistTimer cleanup", () => {
 
     // Exit without any data — no timer was ever scheduled
     expect(() => pty.emitExit(0)).not.toThrow();
+  });
+});
+
+describe("TerminalProcess onExit — master fd release (#9539)", () => {
+  it("calls destroy() to release the master fd on natural exit", () => {
+    const pty = createControllablePty();
+
+    createTerminal(pty);
+    pty.emitExit(0);
+
+    expect(pty.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls destroy() exactly once when natural exit fires twice", () => {
+    const pty = createControllablePty();
+
+    createTerminal(pty);
+    pty.emitExit(0);
+    pty.emitExit(0);
+
+    expect(pty.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the master fd even when an agent terminal is preserved on exit", () => {
+    const pty = createControllablePty();
+
+    // launchAgentId + exitCode 0 → shouldPreserveOnExit() returns true, so the
+    // onExit handler takes the preserve early-return. teardown() runs before
+    // that return, so the fd is still released.
+    createTerminal(pty, { kind: "terminal", launchAgentId: "claude" });
+    pty.emitExit(0);
+
+    expect(pty.destroy).toHaveBeenCalledTimes(1);
   });
 });

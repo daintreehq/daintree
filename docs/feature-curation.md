@@ -184,13 +184,13 @@ Daintree targets all three desktop platforms, but not equally:
 
 Daintree is built by a solo developer augmented by AI coding agents — the same agents Daintree orchestrates. This means:
 
-1. **Higher throughput than traditional solo dev** — But maintenance burden is still real. Every feature must be maintained across 3 platforms and kept compatible with 15 agent CLIs that each update independently.
+1. **Higher throughput than traditional solo dev** — But maintenance burden is still real. Every feature must be maintained across 3 platforms and kept compatible with 16 agent CLIs that each update independently.
 
 2. **No unnecessary native dependencies** — `node-pty` is already complex enough. Avoid adding more native modules unless they provide 10x value.
 
 3. **State over database** — Use the file system (git) as the source of truth whenever possible. Don't sync state that can be derived from the folder structure.
 
-4. **Opinionated integrations** — Support the CLIs that matter (Claude, Gemini, Codex, OpenCode, Cursor, Kiro, GitHub Copilot, Goose, Crush, Qwen, Open Interpreter, Mistral Vibe, Kimi, Amp, Aider) and support them _deeply_ via the agent registry. Don't try to support every AI tool generically.
+4. **Opinionated integrations** — Support the CLIs that matter (Claude, Gemini, Antigravity, Codex, OpenCode, Cursor, Kiro, GitHub Copilot, Goose, Crush, Qwen, Open Interpreter, Mistral Vibe, Kimi, Amp, Aider) and support them _deeply_ via the agent registry (`shared/config/agentIds.ts`). Don't try to support every AI tool generically.
 
 5. **Maintenance budget** — If a feature can't justify its ongoing maintenance cost across platforms and agent updates, reject it.
 
@@ -211,23 +211,15 @@ Before implementing any feature, verify:
 - [ ] Can't be solved with a shell alias
 - [ ] Sustainable maintenance burden
 
-## Using the Slash Command
+## Evaluating a proposal
 
-For automated evaluation, use:
+There's no automated evaluation command — work each proposal through the checklist above by hand, defaulting to **NO**. A feature has to clearly pass before it ships:
 
-```
-/evaluate-feature <paste your feature proposal here>
-```
-
-This command runs a rigorous 5-phase evaluation:
-
-1. **Existence Check** — Does it already exist?
-2. **Mission Alignment** — Does it fit Daintree's purpose?
-3. **Architectural Fit** — Does it follow patterns?
-4. **Implementation Complexity** — What's the effort and risk?
-5. **Value Assessment** — Is the value worth the cost?
-
-The command defaults to **NO** and requires features to clearly pass all tests.
+1. **Existence check** — Does it already exist?
+2. **Mission alignment** — Does it fit Daintree's purpose?
+3. **Architectural fit** — Does it follow the 4-layer pattern?
+4. **Implementation complexity** — What's the effort and risk?
+5. **Value assessment** — Is the value worth the ongoing maintenance cost?
 
 ## Remember
 

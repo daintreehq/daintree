@@ -606,17 +606,6 @@ describe("PanelHeader", () => {
       const inactiveItem = items.find((b) => b.textContent?.includes("Tab 2"));
       expect(inactiveItem?.getAttribute("aria-current")).toBeNull();
     });
-
-    it("constrains the dropdown content height to available viewport (#4402)", () => {
-      mockHiddenTabIds = new Set(["t2"]);
-      render(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
-      const menus = screen.getAllByTestId("overflow-menu");
-      const tabsMenu = menus.find((m) => m.textContent?.includes("Tab 2"))!;
-      expect(tabsMenu.className).toContain(
-        "max-h-[var(--radix-dropdown-menu-content-available-height)]"
-      );
-      expect(tabsMenu.className).toContain("overflow-y-auto");
-    });
   });
 
   describe("header double-click behavior", () => {

@@ -8,6 +8,7 @@ import type {
   CreateWorktreeOptions,
   TerminalInfoPayload,
 } from "@shared/types";
+import type { NotificationsE2EApi } from "@/lib/e2eNotificationBackdoor";
 
 declare global {
   interface Window {
@@ -22,6 +23,18 @@ declare global {
     __DAINTREE_E2E_ADD_ERROR__?: (message: string) => void;
     __DAINTREE_E2E_CLEAR_ERRORS__?: () => void;
     __DAINTREE_E2E_REFRESH_GITHUB_CONFIG__?: () => Promise<void>;
+    __DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__?: (recipeName: string) => void;
+    /** Per-window store accessors for the multi-window isolation spec (#9599). */
+    __DAINTREE_E2E_DIAGNOSTICS_STATE__?: () => { isOpen: boolean };
+    __DAINTREE_E2E_OPEN_DIAGNOSTICS__?: () => void;
+    __DAINTREE_E2E_PERF_METRICS_STATE__?: () => {
+      fps: number | null;
+      lafCount30s: number;
+      cls30s: number;
+    };
+    __DAINTREE_E2E_SET_PERF_METRIC__?: (fps: number) => void;
+    __DAINTREE_E2E_PERF_MODE_STATE__?: () => { performanceMode: boolean };
+    __DAINTREE_E2E_SET_PERF_MODE__?: (enabled: boolean) => void;
     __DAINTREE_E2E_IPC__?: {
       getRendererListenerCount: (channel: string) => number;
     };
@@ -36,6 +49,8 @@ declare global {
       args?: unknown,
       options?: { source?: string; confirmed?: boolean }
     ) => unknown;
+    /** E2E-only notification driver, attached by `src/lib/e2eNotificationBackdoor.ts` under DAINTREE_E2E_MODE. */
+    __daintreeNotificationsE2E?: NotificationsE2EApi;
   }
 }
 

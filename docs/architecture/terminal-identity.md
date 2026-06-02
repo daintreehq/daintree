@@ -8,38 +8,51 @@ See also: [terminal-lifecycle.md](./terminal-lifecycle.md) for process runtime s
 
 ## The Rule
 
-Terminal chrome and agent capability are derived from live runtime identity:
+Terminal chrome and agent capability are derived from live runtime identity, with `launchAgentId` acting as exit-gated agent affinity. `deriveChromeAgentIdentity()` (`src/utils/terminalChrome.ts`) resolves in this order:
 
 1. `detectedAgentId` wins. If it is set, the terminal is currently an agent.
-2. Otherwise `detectedProcessId` wins. If it is set, the terminal shows that process icon without agent capability.
-3. Otherwise the terminal is plain shell chrome.
+2. Otherwise an agent `runtimeIdentity` wins, unless a strong exit signal has been observed.
+3. Otherwise `launchAgentId` wins, again unless a strong exit signal has been observed. This is what keeps restored and toolbar-launched agent terminals branded as agents before the transient detector fields rehydrate.
+4. Otherwise `detectedProcessId` (or a process `runtimeIdentity`) wins, showing that process icon without agent capability.
+5. Otherwise the terminal is plain shell chrome.
 
-`launchAgentId` is never chrome identity. It is only the spawn/restart hint for the command that was requested.
+`launchAgentId` is durable agent chrome/activity affinity, not just a spawn/restart hint. Live detection takes precedence when present, but the launch identity carries agent chrome until a **strong exit signal** demotes it back to shell (see Exit-Gated Demotion below). The one carve-out: a sticky-but-cleared legacy record — `everDetectedAgent` true with `launchAgentId` set but no live detection and no `agentState` — is treated as non-agent for runtime purposes (`isDemotedExAgent()` in `src/utils/terminalType.ts`).
 
 ## Runtime Identity
 
 Renderer state carries a normalized `runtimeIdentity` alongside the raw detection fields:
 
 ```ts
-type TerminalRuntimeIdentity =
-  | {
-      kind: "agent";
-      id: string;
-      iconId: string;
-      agentId: string;
-      processId?: string;
-    }
-  | {
-      kind: "process";
-      id: string;
-      iconId: string;
-      processId: string;
-    };
+interface TerminalRuntimeIdentity {
+  kind: "agent" | "process";
+  /** Stable runtime id: agent id for agents, process icon id for processes. */
+  id: string;
+  /** Icon registry id used by terminal chrome. */
+  iconId: string;
+  /** Present only when the live process is an agent. */
+  agentId?: AgentId;
+  /** Present when the detector emitted a process icon id. */
+  processId?: string;
+}
 ```
+
+It is a single interface (`shared/types/panel.ts`), not a discriminated union: `kind` distinguishes the two cases by convention, but both `agentId` and `processId` are optional on the type.
 
 `deriveTerminalRuntimeIdentity()` and `deriveTerminalChrome()` are the canonical helpers. Components should consume the derived descriptor, not stitch together `launchAgentId`, `detectedAgentId`, `detectedProcessId`, and sticky flags.
 
 Fresh detection fields take precedence over any existing `runtimeIdentity`. This protects promotion paths like `npm run build -> claude`, where stale process identity must not block agent promotion.
+
+## Exit-Gated Demotion
+
+`launchAgentId` (and an agent `runtimeIdentity`) keep agent chrome alive across the gap between renderer restore and live re-detection. That affinity drops back to shell chrome only on a **strong exit signal**. `hasExplicitAgentExit()` (`src/utils/terminalChrome.ts`) defines it as any of:
+
+- `agentState === "exited"`
+- `runtimeStatus === "exited"` or `runtimeStatus === "error"`
+- `exitCode` set (any number)
+
+When none of these are present, launch/runtime agent affinity holds and the terminal stays branded. When one fires, `deriveChromeAgentIdentity()` stops falling back to `launchAgentId`/`runtimeIdentity`, chrome reverts to process or shell, and the descriptor's `hasExited` is `true`.
+
+A separate legacy path, `isDemotedExAgent()` (`src/utils/terminalType.ts`), covers the sticky-but-cleared case: `everDetectedAgent` true with a `launchAgentId` but no live detection and no `agentState`. Such records still render the launch identity for visual continuity, but `getRuntimeAgentId()` and `isAgentTerminal()` report non-agent so focus fallback, agent grouping, and agent-targeted actions skip them.
 
 ## Live Identity Sources
 
@@ -61,7 +74,9 @@ See [terminal-lifecycle.md](./terminal-lifecycle.md) for the broader PTY lifecyc
 | `detectedProcessId` | Live non-agent process icon | PTY detector via IPC | No |
 | `runtimeIdentity` | Normalized live identity descriptor | Renderer IPC listener | No |
 | `everDetectedAgent` | Sticky "has hosted an agent" flag for lifecycle preservation | PTY detector via IPC | No |
-| `launchAgentId` | Spawn/restart command hint | Launcher/hydration | Yes |
+| `launchAgentId` | Spawn/restart command hint **and** exit-gated agent chrome/activity affinity | Launcher/hydration | Yes |
+
+`deriveTerminalChrome()` returns a `hasExited` flag on the descriptor (`src/utils/terminalChrome.ts`). It is `true` when a strong exit signal was observed during derivation, and is distinct from `!isAgent`: chrome can be non-agent because the agent exited _or_ because no agent identity has committed yet. The agent state inputs (`agentState`, `runtimeStatus`, `exitCode`) feed the exit gate but are documented in [agent-activity-monitoring.md](./agent-activity-monitoring.md).
 
 ## Agent-Capable Terminal
 
@@ -94,8 +109,9 @@ The backend starts the activity monitor when an agent is detected at runtime. Th
 - Session resume flags.
 - Preset/model/settings lookup.
 - Command replay after app restart.
+- Durable agent chrome/activity affinity until a strong exit signal demotes it.
 
-It must not decide chrome, agent-specific fleet actions, status badges, worktree sidebar agent rows, or activity indicators.
+Live detection (`detectedAgentId`, then an agent `runtimeIdentity`) still takes precedence: while an agent is detected, `launchAgentId` is never what's driving chrome. Its affinity role only fills the gap before detection commits or after detection clears without an exit — see Exit-Gated Demotion. It does not by itself unlock the legacy `isDemotedExAgent()` case, which `getRuntimeAgentId()` and `isAgentTerminal()` treat as non-agent.
 
 ## Reader Guidance
 

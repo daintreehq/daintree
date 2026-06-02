@@ -67,6 +67,13 @@ export interface AppDialogProps {
   onBeforeClose?: () => boolean | Promise<boolean>;
   size?: DialogSize;
   variant?: DialogVariant;
+  /**
+   * When true, switches a destructive dialog from `role="alertdialog"` to
+   * `role="dialog"`. Required for dialogs that contain scrollable preview
+   * content (commit lists, directory tables) — WAI-ARIA APG mandates
+   * `alertdialog` only for brief text-only messages.
+   */
+  hasPreview?: boolean;
   dismissible?: boolean;
   children: React.ReactNode;
   className?: string;
@@ -95,6 +102,7 @@ export function AppDialog({
   onBeforeClose,
   size = "md",
   variant = "default",
+  hasPreview = false,
   dismissible = true,
   children,
   className,
@@ -347,7 +355,7 @@ export function AppDialog({
         onPointerDown={handleBackdropPointerDown}
         onPointerUp={handleBackdropPointerUp}
         onPointerCancel={resetBackdropPointer}
-        role={variant === "destructive" ? "alertdialog" : "dialog"}
+        role={variant === "destructive" && !hasPreview ? "alertdialog" : "dialog"}
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}

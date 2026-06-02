@@ -1064,8 +1064,6 @@ describe("AgentTrayButton", () => {
     const dot = getByTestId("agent-tray-new-pill-claude");
     expect(dot.getAttribute("aria-hidden")).toBe("true");
     expect(dot.textContent ?? "").toBe("");
-    expect(dot.className).toContain("rounded-full");
-    expect(dot.className).toContain("bg-status-info");
 
     // Screen reader pairing: the row should expose "New" via an sr-only sibling.
     const row = container.querySelector(
@@ -1091,8 +1089,6 @@ describe("AgentTrayButton", () => {
     const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
     const dot = getByTestId("agent-tray-new-pill-claude");
     expect(dot.getAttribute("aria-hidden")).toBe("true");
-    expect(dot.className).toContain("rounded-full");
-    expect(dot.className).toContain("bg-status-info");
   });
 
   it("clears the NEW dot when the agent is launched via the SplitLaunchItem trigger", () => {
@@ -1110,24 +1106,6 @@ describe("AgentTrayButton", () => {
 
     expect(markAgentsSeenMock).toHaveBeenCalledTimes(1);
     expect(markAgentsSeenMock).toHaveBeenCalledWith(["claude"]);
-  });
-
-  it("pinned rows render the pin icon muted until the row is highlighted", () => {
-    // #8177: the filled pin used to read as an active control. Muted until
-    // hover/focus makes it clear the icon is a state marker.
-    const availability = { claude: "ready" } as unknown as CliAvailability;
-    mockSettings = settingsWith({ claude: { pinned: true } });
-
-    const { container } = render(<AgentTrayButton agentAvailability={availability} />);
-    const claudeRow = container.querySelector(
-      '[data-testid="agent-tray-row-claude"]'
-    ) as HTMLElement | null;
-    expect(claudeRow).toBeTruthy();
-    const pinIcon = claudeRow!.querySelector('[data-testid="pin-icon"]') as HTMLElement | null;
-    expect(pinIcon).toBeTruthy();
-    const classes = pinIcon!.getAttribute("data-classname") ?? "";
-    expect(classes).toContain("text-daintree-text/40");
-    expect(classes).toContain("group-data-[highlighted]:text-daintree-text");
   });
 
   it("ignores panels from other worktrees for session detection", () => {

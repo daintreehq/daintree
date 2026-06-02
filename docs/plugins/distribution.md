@@ -63,6 +63,7 @@ A `.dntr` file is a standard ZIP archive (PKZIP 2.0, no ZIP64 unless the archive
 | **Compression method** | DEFLATE (method 8) |
 | **Compression level** | 9 (maximum) |
 | **ZIP64** | Prohibited for archives ≤ 30 MB. Daintree rejects any archive over 30 MB. |
+| **Entry count** | Max 4096 entries (`MAX_DNTR_ENTRIES`). Archives with more are rejected at extract/verify time (zip-bomb-by-count guard). |
 | **Encryption** | Not supported. Daintree rejects encrypted entries. |
 | **Entry timestamps** | Fixed at `1980-01-01T00:00:00Z` (MS-DOS epoch). No filesystem timestamps leak in. |
 
@@ -148,7 +149,7 @@ This is the right distribution method for:
 - Team-internal plugins shared via a private repo
 - Anyone who wants to audit or modify a plugin before running it
 
-**Dev plugins:** if you're using `daintree-plugin dev` for hot-reload development, the CLI symlinks your project into `~/.daintree/plugins/` automatically. You don't sideload manually during development.
+**Dev plugins:** the hot-reload dev loop (`daintree-plugin dev`) is planned (F32b) and not yet available — the command is registered but fails immediately (`packages/daintree-plugin/src/cli.ts`). Until it ships, sideload manually using the `git clone … && npm install && npm run build` steps above and restart to pick up changes.
 
 ## File install
 
@@ -160,13 +161,14 @@ A user with a `.dntr` file can install it by:
 
 Daintree:
 
-1. Computes a content hash of the archive.
-2. Validates the manifest.
-3. Shows the install dialog: plugin name, description, declared capabilities, publisher.
-4. On user confirmation, extracts into `~/.daintree/plugins/{publisher}.{name}/`.
-5. Loads the plugin.
+1. Computes a SHA-256 hash of the archive.
+2. Validates the manifest (Zod schema + `engines.daintree` semver compatibility against the running app version).
+3. Extracts into a temp dir and atomically swaps into `~/.daintree/plugins/{publisher}.{name}/`.
+4. Loads the plugin.
 
-If a plugin with the same `name` is already installed, Daintree compares versions (via semver) and either upgrades, downgrades with explicit confirmation, or blocks with an error if the versions are identical.
+The file-install path runs without a pre-install confirmation gate enumerating capabilities or publisher. The only interstitial prompts are the plaintext-HTTP warning (URL installs only) and the update-preview confirm when re-fetching an already-installed plugin's URL. Capabilities are surfaced at MCP-tool-call time through the TOFU consent prompt, not at install time — see `docs/plugins/trust-model.md`.
+
+If a plugin with the same `name` is already installed, Daintree replaces it unconditionally: it unloads the old plugin and atomically swaps the new directory into place (`PluginInstaller.ts`). There is no semver comparison between installed and incoming versions, no downgrade confirmation, and no identical-version block — the install always wins. The swap preserves the original `installedAt` and records `updatedAt`. (Version-aware upgrade/downgrade gating is not yet implemented.)
 
 ## URL install
 
@@ -189,10 +191,10 @@ The user pastes a URL pointing to a `.dntr` file. Daintree:
 **Security considerations:**
 
 - Daintree does not validate signatures on URL-installed plugins. Trust is on the user.
-- No TLS enforcement beyond what the OS does for HTTPS. Installing from non-HTTPS URLs is allowed but flagged in the dialog.
+- No TLS enforcement beyond what the OS does for HTTPS. Installing from non-HTTPS URLs is allowed but warned (the `pendingHttpUrl` plaintext-HTTP confirm in `usePluginManager.ts`).
 - Redirects are followed by Chromium's net stack (capped at its built-in limit). Acceptance is decided from the final response's content-type; the `.dntr`-suffix fallback is checked against the **original** pasted URL's path, since the resolved URL isn't reliable through Electron's fetch.
 - Private, loopback, and link-local hosts are rejected before the fetch runs (SSRF guard).
-- The install dialog shows the original URL and the declared capabilities, so users can spot suspicious mismatches.
+- The plaintext-HTTP warning shows the original URL so the user can spot a non-HTTPS host before committing. Declared capabilities are not enumerated at install time — consent is gathered per-tool-call at runtime (TOFU; see `docs/plugins/trust-model.md`).
 
 Install only from URLs you trust.
 
@@ -234,7 +236,7 @@ For authors who want to share plugins publicly:
 - **GitHub Releases** is the default recommendation. `.dntr` files are small; releases are free; versioning maps cleanly to git tags.
 - **README with install instructions.** Include the literal URL to paste into Daintree.
 - **Semver your releases.** Daintree uses semver for version comparison and update detection.
-- **Set `engines.daintree` honestly.** Lock to the minor version you've tested against (e.g. `^0.11.0`). Don't set `*` — you'll get bug reports from users on Daintree versions you haven't supported.
+- **Set `engines.daintree` honestly.** Lock to the current minor you've tested against (e.g. `^0.15.0` against the app version you built on). Don't set `*` — you'll get bug reports from users on Daintree versions you haven't supported.
 - **Don't commit `.dntr` files to the source repo.** Build them in CI on release-tag.
 - **Pin `@daintreehq/plugin-sdk` tightly.** Pre-1.0, minor versions can break APIs.
 

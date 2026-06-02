@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { actionService } from "@/services/ActionService";
+import { actionService, installE2EActionDispatchBridge } from "@/services/ActionService";
 import {
   createActionDefinitions,
   type ActionCallbacks,
@@ -106,6 +106,7 @@ export function useActionRegistry(options: ActionCallbacks): void {
       };
     });
 
+    installE2EActionDispatchBridge();
     registeredRef.current = true;
   }, []);
 

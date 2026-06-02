@@ -1,0 +1,67 @@
+{
+  "name": "daintree.rich",
+  "version": "0.1.0",
+  "displayName": "Rich Daintree",
+  "description": "Capability- and settings-rich sample plugin (#9592). Sideloaded alongside hello-daintree so the full-plugins E2E bucket can exercise the Permissions tab, the generated settings form, and the danger summary — surfaces hello-daintree's empty manifest leaves uncovered.",
+  "main": "main/index.js",
+  "engines": {
+    "daintree": ">=0.11.0"
+  },
+  "capabilities": ["fs:project-read", "fs:project-write", "network:fetch"],
+  "scopes": {
+    "network": {
+      "allowedUrls": ["https://api.example.com"]
+    }
+  },
+  "contributes": {
+    "settings": [
+      {
+        "id": "greeting",
+        "type": "string",
+        "label": "Greeting",
+        "description": "Text the plugin greets you with.",
+        "default": "hello"
+      },
+      {
+        "id": "retries",
+        "type": "number",
+        "label": "Retries",
+        "description": "How many times to retry.",
+        "default": 3,
+        "min": 0,
+        "max": 10
+      },
+      {
+        "id": "verbose",
+        "type": "boolean",
+        "label": "Verbose mode",
+        "description": "Emit extra logging.",
+        "default": false
+      },
+      {
+        "id": "level",
+        "type": "enum",
+        "label": "Log level",
+        "options": ["debug", "info", "warn", "error"],
+        "default": "info"
+      },
+      {
+        "id": "config",
+        "type": "json",
+        "label": "Extra config",
+        "default": {}
+      },
+      {
+        "id": "apiKey",
+        "type": "secret",
+        "label": "API key"
+      },
+      {
+        "id": "projectNote",
+        "type": "string",
+        "label": "Project note",
+        "scope": "project"
+      }
+    ]
+  }
+}

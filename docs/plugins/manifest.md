@@ -54,6 +54,9 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
 
   // The plugin's UI and functional contributions.
   "contributes": {
+    "agents": [
+      /* requires the agent:register capability */
+    ],
     "panels": [
       /* ... */
     ],
@@ -151,7 +154,7 @@ Daintree is pre-1.0. Pin to a current minor during this phase — a plugin that 
 
 ### `capabilities`
 
-Array of capability tokens the plugin wants. The model is **disclosure-first with host-side policy effects** — there is no Node sandbox, so a plugin is not blocked from doing anything regardless of what it declares, but declared tokens are not purely advisory. Five high-risk tokens (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`) currently raise every action the plugin registers to a confirm dialog (`effectiveDanger: "confirm"`) via the host's `CONFIRM_TRIGGERING_CAPABILITIES` set. See the [trust model](./trust-model.md) for the full contract.
+Array of capability tokens the plugin wants. The model is **disclosure-first with host-side policy effects** — there is no Node sandbox, so a plugin is not blocked from doing anything regardless of what it declares, but declared tokens are not purely advisory. Six high-risk tokens (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`, `agent:register`) currently raise every action the plugin registers to a confirm dialog (`effectiveDanger: "confirm"`) via the host's `CONFIRM_TRIGGERING_CAPABILITIES` set. See the [trust model](./trust-model.md) for the full contract.
 
 | Token                | Intent                                                   |
 | -------------------- | -------------------------------------------------------- |
@@ -162,6 +165,7 @@ Array of capability tokens the plugin wants. The model is **disclosure-first wit
 | `network:fetch`      | Make outbound HTTP requests                              |
 | `agent:invoke`       | Send prompts to AI agents from plugin code               |
 | `agent:read`         | Observe agent state (token usage, transcripts)           |
+| `agent:register`     | Register a launchable agent CLI as a selectable agent    |
 | `git:read`           | Read git state (branches, status, log)                   |
 | `git:write`          | Make git changes (commits, branches)                     |
 | `clipboard:read`     | Read from the system clipboard                           |
@@ -194,7 +198,7 @@ Fields prefixed with `experimental_` **do** have runtime behavior — the prefix
 - `experimental_views` — `location: "panel"` is wired today (the renderer host mounts the contributed component in a grid panel). `location: "sidebar"` logs a warning and is skipped until the sidebar host ships.
 - `experimental_mcpServers` — wired: the declared `command` is lazily spawned as a real subprocess the first time its tools are enumerated, and is supervised (restart-on-crash, killed on exit). Treat a contributed MCP server as trust-gated, not inert.
 
-The non-experimental `forgeProviders` and `fileDecorationProviders` contributions are also live at runtime. See the full [Contribution points reference](./contribution-points.md) for the per-point status of every type.
+The non-experimental `forgeProviders` and `fileDecorationProviders` contributions are also live at runtime. `agents` registers a launchable agent CLI as a selectable agent and requires the `agent:register` capability — see the [Contribution points reference](./contribution-points.md) for its shape. That reference also lists the per-point status of every type.
 
 ## Validation
 

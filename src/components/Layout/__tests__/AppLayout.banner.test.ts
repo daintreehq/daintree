@@ -34,7 +34,7 @@ describe("AppLayout global banner mount — issue #9530", () => {
     // banner must be a direct child of the h-screen flex column so its
     // shrink-0 height is subtracted from the flex-1 content area instead.
     expect(source).toMatch(
-      /<PortalVisibilityController \/>\s*<Suspense fallback=\{null\}>\s*<LazyGlobalBannerCoordinator \/>\s*<\/Suspense>\s*<div \{\.\.\.\(isThemeBrowserOpen \? \{ inert: true \}/
+      /<PortalVisibilityController \/>\s*<Suspense fallback=\{null\}>\s*<LazyGlobalBannerCoordinator \/>\s*<\/Suspense>\s*<div \{\.\.\.\(chromeInert \? \{ inert: true \}/
     );
   });
 });

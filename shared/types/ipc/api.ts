@@ -1508,10 +1508,23 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onDecorationsChanged(
       callback: (payload: { scope: string; paths?: string[] }) => void
     ): () => void;
+    /**
+     * Subscribe to `daintree://` deep-link intents (#9559). Fires when the OS
+     * hands the app a deep link; the callback opens the Plugin Manager. Returns
+     * a cleanup.
+     */
+    onDeepLink(callback: (intent: import("../plugin.js").PluginDeepLinkIntent) => void): () => void;
     /** Subscribe to plugin panel kind registry changes. Returns a cleanup. */
     onPanelKindsChanged(
       callback: (payload: {
         kinds: import("../../config/panelKindRegistry.js").PanelKindConfig[];
+      }) => void
+    ): () => void;
+    /** Subscribe to plugin agent registry changes. Returns a cleanup. */
+    onAgentsChanged(
+      callback: (payload: {
+        agents: Record<string, import("../../config/agentRegistry.js").AgentConfig>;
+        complete: boolean;
       }) => void
     ): () => void;
     /** Subscribe to plugin toolbar button registry changes. Returns a cleanup. */

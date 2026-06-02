@@ -73,6 +73,146 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
   });
 
+  // ── Appearance Tab: Live CSS token preview (behavior 1) ────
+  // Selecting a theme in the ThemeBrowser must live-apply the scheme's CSS
+  // custom properties to <html> (inline style.setProperty) and flip the
+  // data-theme attribute. Token writes are RAF-coalesced, so poll rather
+  // than reading immediately after the click.
+
+  test("ThemeBrowser: CSS tokens update live when browsing themes", async () => {
+    const { window } = ctx;
+    const html = window.locator("html");
+
+    await openSettings(window);
+    await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
+
+    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Appearance" }).click();
+    await expect(window.locator("h3", { hasText: "Appearance" })).toBeVisible({ timeout: T_SHORT });
+
+    await window.locator(SEL.settings.changeThemeButton).click();
+    const themeBrowser = window.locator(SEL.settings.themeBrowserDialog);
+    await expect(themeBrowser).toBeVisible({ timeout: T_SHORT });
+    const themeListbox = themeBrowser.locator(SEL.settings.themeListbox);
+    await expect(themeListbox).toBeVisible({ timeout: T_SHORT });
+
+    // Capture the active theme id before switching.
+    const initialTheme = await html.getAttribute("data-theme");
+
+    // Pick a not-currently-selected option.
+    const options = themeListbox.locator('[role="option"]');
+    const optionCount = await options.count();
+    expect(optionCount).toBeGreaterThanOrEqual(2);
+    let targetOption = options.first();
+    for (let i = 0; i < optionCount; i++) {
+      const option = options.nth(i);
+      if ((await option.getAttribute("aria-selected")) !== "true") {
+        targetOption = option;
+        break;
+      }
+    }
+
+    await targetOption.click();
+    await expect(targetOption).toHaveAttribute("aria-selected", "true", { timeout: T_SHORT });
+
+    // The data-theme attribute flips to the newly applied scheme (RAF-coalesced;
+    // allow generous time for the write under CI CPU pressure).
+    await expect
+      .poll(async () => html.getAttribute("data-theme"), { timeout: T_MEDIUM })
+      .not.toBe(initialTheme);
+
+    // A representative theme token is written inline on <html> as a CSS custom
+    // property — proving the live token application, not just an attribute swap.
+    const accentToken = await html.evaluate((el) =>
+      (el as HTMLElement).style.getPropertyValue("--theme-accent-primary").trim()
+    );
+    expect(accentToken).not.toBe("");
+
+    await window.locator('[aria-label="Close theme browser"]').click();
+    await expect(themeBrowser).not.toBeVisible({ timeout: T_SHORT });
+    await window.keyboard.press("Escape");
+    await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
+  });
+
+  // ── Appearance Tab: Accent override contrast warning (behavior 2) ──
+  // Setting the accent override to a theme surface colour guarantees a
+  // sub-4.5:1 ratio, so accentOverrideHasLowContrast() flags it. The colour
+  // input can't be driven by fill(); set value + dispatch input/change.
+
+  test("AppThemePicker: accent override shows low-contrast warning, reset clears it", async () => {
+    const { window } = ctx;
+    const html = window.locator("html");
+
+    await openSettings(window);
+    await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
+
+    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Appearance" }).click();
+    await expect(window.locator("h3", { hasText: "Appearance" })).toBeVisible({ timeout: T_SHORT });
+
+    const accentInput = window.locator(SEL.settings.accentColorInput);
+    await expect(accentInput).toBeAttached({ timeout: T_SHORT });
+
+    // Use the live surface-canvas token as the accent: accent ≈ background ⇒
+    // ~1:1 contrast ⇒ guaranteed WCAG AA failure on any active theme.
+    const surface = await html.evaluate((el) =>
+      (el as HTMLElement).style.getPropertyValue("--theme-surface-canvas").trim()
+    );
+    // The active theme must have written its surface token inline; a missing
+    // value would silently fall back to a mid-grey that isn't guaranteed to
+    // fail contrast on a very dark theme, so surface a clear failure instead.
+    expect(surface).not.toBe("");
+    const lowContrastHex = /^#[0-9a-f]{3,6}$/i.test(surface) ? surface : "#808080";
+
+    await accentInput.evaluate((el, color) => {
+      const input = el as HTMLInputElement;
+      input.value = color;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }, lowContrastHex);
+
+    await expect(window.locator(SEL.settings.accentContrastWarning)).toBeVisible({
+      timeout: T_SHORT,
+    });
+
+    // Reset restores the theme default accent and dismisses the warning.
+    await window.locator(SEL.settings.accentColorReset).click();
+    await expect(window.locator(SEL.settings.accentContrastWarning)).not.toBeVisible({
+      timeout: T_SHORT,
+    });
+
+    await window.keyboard.press("Escape");
+    await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
+  });
+
+  // ── Appearance Tab: Random theme updates preview (behavior 2) ──
+
+  test("AppThemePicker: random theme changes the applied scheme", async () => {
+    const { window } = ctx;
+    const html = window.locator("html");
+
+    await openSettings(window);
+    await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
+
+    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Appearance" }).click();
+    await expect(window.locator("h3", { hasText: "Appearance" })).toBeVisible({ timeout: T_SHORT });
+
+    const initialTheme = await html.getAttribute("data-theme");
+
+    // The button only renders when more than one scheme exists; guard so the
+    // test fails loudly rather than silently no-op if that ever changes.
+    const randomButton = window.locator(SEL.settings.randomThemeButton);
+    await expect(randomButton).toBeEnabled({ timeout: T_SHORT });
+    await randomButton.click();
+
+    // Shuffle dequeues a different scheme; the applied data-theme changes
+    // (RAF-coalesced write).
+    await expect
+      .poll(async () => html.getAttribute("data-theme"), { timeout: T_MEDIUM })
+      .not.toBe(initialTheme);
+
+    await window.keyboard.press("Escape");
+    await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
+  });
+
   // ── Appearance Tab: Terminal Font Size ─────────────────────
 
   test("Appearance tab: change terminal font size", async () => {

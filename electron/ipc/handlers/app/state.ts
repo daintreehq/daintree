@@ -40,6 +40,7 @@ import { markPerformance } from "../../../utils/performance.js";
 import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 import { consumePrefetchedHydrateResult } from "../../../services/prefetchHydrateCache.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
+import { notifyAppViewPainted } from "../../../setup/deepLinkInstall.js";
 import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 
@@ -506,6 +507,14 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         }
       }
 
+      if ("dockedPopoverHeight" in partialState) {
+        // Mirrors dockStore's clamp (min 300, up to 80% of a large viewport).
+        const height = Number(partialState.dockedPopoverHeight);
+        if (!isNaN(height) && height >= 300 && height <= 2000) {
+          updates.dockedPopoverHeight = height;
+        }
+      }
+
       if ("hasSeenWelcome" in partialState) {
         updates.hasSeenWelcome = Boolean(partialState.hasSeenWelcome);
       }
@@ -742,6 +751,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           deps?.windowRegistry?.getByWindowId(senderWindow.id)?.services?.projectViewManager) ??
         deps?.projectViewManager;
       pvm?.signalViewPainted(ctx.webContentsId);
+      // Flush any pending `daintree://` deep link now the view has painted — its
+      // renderer-side listener is guaranteed mounted at this point (#9559).
+      notifyAppViewPainted(ctx.event.sender);
     })
   );
 

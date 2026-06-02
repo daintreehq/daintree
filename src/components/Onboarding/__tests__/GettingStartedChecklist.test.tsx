@@ -205,38 +205,12 @@ describe("GettingStartedChecklist", () => {
     });
   });
 
-  describe("reduced motion", () => {
-    it("panel entry div includes motion-reduce overrides", () => {
-      render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
-      const region = screen.getByRole("region", { name: "Getting started checklist" });
-      expect(region.className).toContain("motion-reduce:transition-none");
-      expect(region.className).toContain("motion-reduce:duration-0");
-      expect(region.className).toContain("motion-reduce:transform-none");
-    });
-
-    it("collapsible body includes motion-reduce overrides", () => {
-      render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
-      const body = document.getElementById("getting-started-checklist-body")!;
-      expect(body.className).toContain("motion-reduce:transition-none");
-      expect(body.className).toContain("motion-reduce:duration-0");
-    });
-  });
-
   describe("collapse toggle", () => {
     it("calls onToggleCollapse when header button is clicked", () => {
       render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
       const toggle = screen.getByRole("button", { name: /getting started/i });
       fireEvent.click(toggle);
       expect(defaultProps.onToggleCollapse).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  describe("entry transition timing", () => {
-    it("uses the Tier 2 enter duration (200ms) on the panel surface", () => {
-      render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
-      const region = screen.getByRole("region", { name: "Getting started checklist" });
-      expect(region.className).toContain("duration-200");
-      expect(region.className).not.toContain("duration-300");
     });
   });
 

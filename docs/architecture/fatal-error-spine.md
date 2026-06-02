@@ -12,8 +12,8 @@ The spine has one job: **on every exit path, the answer to "was the last exit cl
 
 1. **The marker is the universal dirty-exit signal.** Any path that kills the process without removing the marker — `TerminateProcess`, `SIGKILL`, OS-forced termination after `HungAppTimeout`, hard `process.exit` from the safety belt, the `before-quit` error branch — looks like a crash on next launch. This is intentional: a truncated shutdown is operationally indistinguishable from a crash.
 2. **`cleanupOnExit()` runs only on the success branch of the cleanup chain.** In `shutdown.ts`, the marker is removed inside the `Promise.race` success handler, before the safety-belt timer fires. The error/timeout branch deliberately does **not** call `cleanupOnExit()` — leaving the marker on disk is the dirty-exit signal. The marker-removal call is wrapped in `try/catch` and its failure is logged, not propagated: if the filesystem refuses the delete (AV lock, permission flap), the marker remains and the next launch will treat the exit as dirty. That is the correct outcome — the marker tracks "did the cleanup chain reach its end?", and a failed delete means the on-disk truth is still "session in progress".
-3. **Telemetry must never block the marker write.** `closeTelemetry()` is called _after_ `cleanupOnExit()` and `markCleanExit()` in the success branch (`shutdown.ts:392-403`). If telemetry hangs or throws, the marker is already gone and the exit is recorded as clean. The error branch only calls `closeTelemetry()` — no marker writes — for the same reason.
-4. **`recordCrash()` writes a marker with crash metadata.** The fatal-error path writes the marker _with_ the crash entry attached, so the next-launch banner can show details. A path that records a crash and then somehow reaches `cleanupOnExit()` cleanly is fine — `cleanupOnExit()` skips marker removal when `crashRecorded` is true (`CrashRecoveryService.ts:301`).
+3. **Telemetry must never block the marker write.** `closeTelemetry()` is called _after_ the marker writes (`cleanupOnExit()`, `markCleanExit()`, `markCleanLaunch()`) in the success branch of `Promise.race` in `shutdown.ts`. If telemetry hangs or throws, the marker is already gone and the exit is recorded as clean. The error branch only calls `closeTelemetry()` — no marker writes — for the same reason.
+4. **`recordCrash()` writes a marker with crash metadata.** The fatal-error path writes the marker _with_ the crash entry attached, so the next-launch banner can show details. A path that records a crash and then somehow reaches `cleanupOnExit()` cleanly is fine — `cleanupOnExit()` skips marker removal when `crashRecorded` is true (the `if (!this.crashRecorded)` guard in `CrashRecoveryService.ts`).
 
 ## Signal path (`SIGTERM` / `SIGINT` / `SIGUSR2` / `SIGHUP`)
 
@@ -21,13 +21,19 @@ Registered in `registerAppLifecycleHandlers` (`electron/lifecycle/appLifecycle.t
 
 ```
 setSignalShutdown();
-setTimeout(() => process.exit(0), CLEANUP_TIMEOUT_MS + 3000).unref();
+const handle = setTimeout(() => {
+  setSafetyBeltTimer(null);
+  app.exit(1);
+}, SAFETY_BELT_TIMEOUT_MS);
+handle.unref();
+setSafetyBeltTimer(handle);
 app.quit();
 ```
 
-- `setSignalShutdown()` tells the `before-quit` handler in `shutdown.ts` to skip the agent-count confirmation dialog (`isSignalShutdown()` gate at line 82). The dialog is a foot-gun when the OS is asking the app to terminate.
+- `setSignalShutdown()` tells the `before-quit` handler in `shutdown.ts` to skip the agent-count confirmation dialog (one of the `canShowDialog` conditions). The dialog is a foot-gun when the OS is asking the app to terminate.
 - `app.quit()` enters the `before-quit` cleanup chain. The chain disposes services, closes the database, and on success calls `cleanupOnExit()` → marker removed.
-- The safety-belt timer is a last-resort `process.exit(0)` so a stuck dispose call cannot wedge the process. It is sized at `CLEANUP_TIMEOUT_MS + 3000` (currently 10s + 3s = 13s): `CLEANUP_TIMEOUT_MS` covers the cleanup chain; the 3s buffer covers `closeTelemetry()` which can take up to ~2.5s (Sentry init-wait 500ms + close timeout 2000ms). `.unref()` so this timer never holds the event loop open on its own.
+- The safety-belt timer is a last-resort `app.exit(1)` (a **dirty** exit, never `process.exit(0)`) so a stuck dispose call cannot wedge the process while still reporting the correct exit code to process supervisors (systemd/nodemon). It is sized at the named `SAFETY_BELT_TIMEOUT_MS` constant (`shutdownConfig.ts`) = `CLEANUP_TIMEOUT_MS + 3_000 + 2_500` (10s + 3s + 2.5s = 15.5s): `CLEANUP_TIMEOUT_MS` covers the cleanup chain, the 3s is a historical buffer, and the 2.5s is the `closeTelemetry()` budget (Sentry init-wait cap 500ms + close timeout 2000ms). `.unref()` so this timer never holds the event loop open on its own.
+- The belt handle is stored via `setSafetyBeltTimer()` (in `signalShutdownState.ts`) so `shutdown.ts` can call `clearSafetyBeltTimer()` before each of its `app.exit()` calls. Defusing the belt first means a slow `closeTelemetry()` can't let the timer fire after a normal exit and clobber the exit code with `exit(1)`. The handle lives in `signalShutdownState.ts` rather than `appLifecycle.ts` so `shutdown.ts` can cancel it without a cross-module import cycle.
 - A second signal within 2000ms force-exits with status 1 — escape hatch when shutdown stalls. Repeats outside that window are ignored (cleanup is already running).
 
 `SIGTERM` / `SIGINT` / `SIGUSR2` are always registered. `SIGHUP` is dev-only (`!app.isPackaged`):
@@ -46,7 +52,7 @@ app.quit();
 
 The `BrowserWindow.on("session-end")` event maps to Win32's `WM_ENDSESSION` and fires on **planned** termination: user logoff, standard shutdown, restart, Windows Update reboot, and Fast Startup (which is logoff + kernel hibernate). It does **not** fire on `TerminateProcess` / `taskkill /F` — those bypass the message pump entirely; the dirty-marker fallback covers them.
 
-**Best-effort, not guaranteed.** Windows' default `HungAppTimeout` is 5 seconds. The full cleanup chain budget is `CLEANUP_TIMEOUT_MS + 3000ms` = 13 seconds. The OS will frequently kill the process mid-chain. This is acceptable because:
+**Best-effort, not guaranteed.** Windows' default `HungAppTimeout` is 5 seconds. The full safety-belt budget is `SAFETY_BELT_TIMEOUT_MS` = 15.5 seconds. The OS will frequently kill the process mid-chain. This is acceptable because:
 
 1. Without the handler, the marker is _always_ left on disk after a Windows shutdown — every reboot would look like a crash. With the handler, the chain at least _starts_, and on a fast machine often completes (DB close + a couple of service disposes is sub-second).
 2. The dirty-marker fallback is honest about truncation: a partial cleanup that gets killed at 5s leaves `running.lock` on disk, the next launch shows the pending-crash banner, and `CrashRecoveryService` surfaces session-state from the last backup. This is the same UX as a real crash, which is the right outcome for "we got killed mid-cleanup".
@@ -79,12 +85,12 @@ A re-entrant fatal (a second crash during the first crash handler) skips the tel
 
 Registered in `registerShutdownHandler` (`electron/lifecycle/shutdown.ts`). Triggered by every path above that calls `app.quit()`. The chain is `Promise.race(cleanupPromise, timeoutPromise)`:
 
-- **Success branch** (`shutdown.ts:383-407`): mark clean exit (`cleanupOnExit()` → `markCleanExit()`), then `closeTelemetry()`, then `app.exit(0)`. Marker removal precedes telemetry drain so a telemetry failure can't poison the next launch.
-- **Error/timeout branch** (`shutdown.ts:409-422`): log, `closeTelemetry()`, then `app.exit(1)`. Marker is deliberately preserved — dirty exit on next launch.
+- **Success branch**: three independent marker writes — `cleanupOnExit()` (marker removed), `getCrashLoopGuard().markCleanExit()`, and `getPanelSuspectLedger().markCleanLaunch()` — each in its own `try/catch` so one failure doesn't skip the others. Then `clearSafetyBeltTimer()`, then `closeTelemetry()`, then `app.exit(0)`. The marker writes precede the telemetry drain so a telemetry failure can't poison the next launch.
+- **Error/timeout branch**: log, `clearSafetyBeltTimer()`, `closeTelemetry()`, then `app.exit(1)`. Marker is deliberately preserved — dirty exit on next launch.
 
-The chain is also gated by an `isQuitting` flag (`shutdown.ts:71`) that prevents double-entry. This matters when two triggers race — e.g., a `SIGTERM` during a `session-end`. The first `app.quit()` sets `isQuitting`; the second `before-quit` returns immediately.
+The chain is also gated by an `isQuitting` flag (`shutdown.ts`) that prevents double-entry. This matters when two triggers race — e.g., a `SIGTERM` during a `session-end`. The first `app.quit()` sets `isQuitting`; the second `before-quit` returns immediately.
 
-`isConfirmingQuit` (`shutdown.ts:72`) suppresses re-entry while the agent-count confirmation dialog is open. The dialog is only shown when `!isSignalShutdown()` — the signal path and Windows `session-end` path both set the signal flag specifically to skip it.
+`isConfirmingQuit` suppresses re-entry while the agent-count confirmation dialog is open. The dialog (`canShowDialog`) is gated by a three-way AND: it shows only when `process.env.DAINTREE_E2E_MODE !== "1"` **and** `!isSignalShutdown()` **and** a primary `BrowserWindow` exists (`deps.windowRegistry?.getPrimary()?.browserWindow != null`). The signal path and Windows `session-end` path both set the signal flag specifically to skip it; E2E mode and a missing primary window suppress it for their own reasons.
 
 ## CrashRecoveryService fallback
 

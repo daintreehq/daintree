@@ -312,6 +312,14 @@ export async function setupWindowServices(
           );
           console.log(`[MAIN] Re-brokered ${wcIds.length} worktree port(s) after host restart`);
         }
+        if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
+          const g = globalThis as Record<string, unknown>;
+          const current =
+            typeof g.__daintreeWorkspaceHostRestartCount === "number"
+              ? g.__daintreeWorkspaceHostRestartCount
+              : 0;
+          g.__daintreeWorkspaceHostRestartCount = current + 1;
+        }
       }
     );
   }

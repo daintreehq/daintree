@@ -127,6 +127,11 @@ const DURABLE_ALLOWLIST = new Set([
   // PanelPalette selected-row left-edge accent stripe (single primary anchor per active focus region)
   "src/components/PanelPalette/PanelPalette.tsx",
 
+  // PluginManagerView selected-row left-edge accent stripe in the master-detail
+  // list, plus the detail subtab active-tab underline (single primary anchor per
+  // active focus region)
+  "src/components/Plugin/PluginManagerView.tsx",
+
   // Setup wizard step indicators, accent icon, telemetry toggle (one-time setup flow)
   "src/components/Setup/AgentSetupWizard.tsx",
 

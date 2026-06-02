@@ -26,6 +26,7 @@ type ExitCb = (e: { exitCode: number; signal?: number }) => void;
 function createControllablePty(): IPty & {
   emitData: (d: string) => void;
   emitExit: (code: number, signal?: number) => void;
+  destroy: ReturnType<typeof vi.fn>;
 } {
   let dataCb: DataCb | null = null;
   let exitCb: ExitCb | null = null;
@@ -33,6 +34,7 @@ function createControllablePty(): IPty & {
   const pty: Partial<IPty> & {
     emitData: (d: string) => void;
     emitExit: (code: number, signal?: number) => void;
+    destroy: ReturnType<typeof vi.fn>;
   } = {
     pid: 123,
     cols: 80,
@@ -40,6 +42,9 @@ function createControllablePty(): IPty & {
     write: () => {},
     resize: () => {},
     kill: vi.fn(),
+    // destroy() releases the master PTY fd; absent from the IPty type so it is
+    // accessed structurally by destroyPty() (#9539).
+    destroy: vi.fn(),
     pause: () => {},
     resume: () => {},
     onData: (cb: (data: string) => void) => {
@@ -57,7 +62,11 @@ function createControllablePty(): IPty & {
       exitCb?.({ exitCode: code, signal });
     },
   };
-  return pty as IPty & { emitData: (d: string) => void; emitExit: (c: number, s?: number) => void };
+  return pty as IPty & {
+    emitData: (d: string) => void;
+    emitExit: (c: number, s?: number) => void;
+    destroy: ReturnType<typeof vi.fn>;
+  };
 }
 
 async function emitDataAndFlush(
@@ -207,6 +216,37 @@ describe("TerminalProcess — terminal:exited event", () => {
       (c: unknown[]) => (c[0] as { terminalId: string }).terminalId === "t-lifecycle"
     );
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("TerminalProcess — master fd release (#9539)", () => {
+  it("calls destroy() to release the master fd on dispose()", () => {
+    const pty = createControllablePty();
+    const terminal = createTerminal(pty);
+
+    terminal.dispose();
+
+    expect(pty.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls destroy() exactly once when kill() precedes the natural exit", () => {
+    const pty = createControllablePty();
+    const terminal = createTerminal(pty);
+
+    terminal.kill("user requested");
+    pty.emitExit(0);
+
+    expect(pty.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls destroy() exactly once when natural exit fires after dispose()", () => {
+    const pty = createControllablePty();
+    const terminal = createTerminal(pty);
+
+    terminal.dispose();
+    pty.emitExit(0);
+
+    expect(pty.destroy).toHaveBeenCalledTimes(1);
   });
 });
 

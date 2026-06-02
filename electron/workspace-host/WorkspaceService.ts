@@ -61,6 +61,11 @@ export { probeGitLfsAvailable } from "./worktreeUtils.js";
 // Configuration
 const DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS = 2000;
 const DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS = 10000;
+// Default cap on concurrent background `git-only` file watchers per
+// workspace-host. Matches the `balanced` profile's `backgroundGitWatcherCap`
+// in `shared/types/resourceProfile.ts` — that profile must mirror the
+// hardcoded defaults. Overridden per-profile via `updateMonitorConfig`.
+const DEFAULT_BACKGROUND_GIT_WATCHER_CAP = 12;
 const WORKTREE_REMOVE_LOCK_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 3000, 5000, 8000];
 // Periodic safety-net reconcile cadence. On macOS the FSEvents-backed topology
 // watcher goes silent when `.git/worktrees/` is deleted (last worktree removed)
@@ -103,6 +108,19 @@ export class WorkspaceService {
   private circuitBreakerThreshold: number = 3;
   private gitWatchEnabled: boolean = true;
   private gitWatchDebounceMs: number = 300;
+  // Profile-aware ceiling on concurrent background `git-only` watchers (#9538).
+  // The focused worktree always keeps its (recursive) watcher and is excluded
+  // from this budget; background worktrees beyond the cap fall back to the
+  // adaptive poll path. Bounds the O(N) inotify/FSEvents/fd growth long
+  // sessions with many worktrees would otherwise hit. Per-instance (one
+  // workspace-host per project view), never global.
+  private backgroundGitWatcherCap: number = DEFAULT_BACKGROUND_GIT_WATCHER_CAP;
+  // Recency-ordered set of background worktree IDs eligible for a git-only
+  // watcher. ES Map preserves insertion order: head = least-recently-focused
+  // (LRU, first evicted), tail = most-recently-focused (MRU). The active
+  // worktree is never present here. Mutated via lruTouch/lruRemove; budget
+  // enforced by applyWatcherBudget().
+  private readonly backgroundGitWatcherLru = new Map<string, true>();
   private git: SimpleGit | null = null;
   private pollingEnabled: boolean = true;
   private projectRootPath: string | null = null;
@@ -218,7 +236,21 @@ export class WorkspaceService {
         // `linked` is the source of truth — built from the canonical
         // provider/owner/repo carried by the detection event. Flat fields are
         // derived compatibility values written alongside it.
-        const existingIssue = monitor.getSnapshot().linked?.issue;
+        const prevSnapshot = monitor.getSnapshot();
+        const existingIssue = prevSnapshot.linked?.issue;
+        // Phase-1 detection carries no CI status yet (enrichment is a
+        // fire-and-forget tail). For the same PR, keep the prior CI rollup so
+        // neither the worktree-update snapshot nor the pr-detected overlay
+        // blinks the dot to "no checks" before the phase-2 emit lands (#9551).
+        // A genuine "checks disappeared" clear arrives with the flag absent and
+        // full-replaces, preserving the prior design intent. The same-PR guard
+        // avoids carrying a stale dot across a PR reassignment.
+        const preserveCiStatus =
+          data.isCiStatusLoading === true && prevSnapshot.prNumber === data.prNumber;
+        const resolvedCiStatus = preserveCiStatus
+          ? prevSnapshot.linked?.pr?.ciStatus
+          : data.ciStatus;
+        const resolvedPrCiStatus = preserveCiStatus ? prevSnapshot.prCiStatus : data.prCiStatus;
         const linked = this.composeLinked({
           providerId: data.providerId,
           owner: data.owner,
@@ -228,7 +260,7 @@ export class WorkspaceService {
             title: data.prTitle,
             url: data.prUrl,
             state: data.prState,
-            ciStatus: data.ciStatus,
+            ciStatus: resolvedCiStatus,
             baseRef: data.baseRef,
           },
           issue:
@@ -245,7 +277,7 @@ export class WorkspaceService {
           prNumber: data.prNumber,
           prUrl: data.prUrl,
           prState: data.prState,
-          prCiStatus: data.prCiStatus,
+          prCiStatus: resolvedPrCiStatus,
           prTitle: data.prTitle,
           issueTitle: data.issueTitle,
           prLastUpdatedAt: data.prLastUpdatedAt,
@@ -262,7 +294,7 @@ export class WorkspaceService {
           prNumber: data.prNumber,
           prUrl: data.prUrl,
           prState: data.prState,
-          prCiStatus: data.prCiStatus,
+          prCiStatus: resolvedPrCiStatus,
           prTitle: data.prTitle,
           issueNumber: data.issueNumber,
           issueTitle: data.issueTitle,
@@ -530,6 +562,11 @@ export class WorkspaceService {
     if (monitorConfig?.fetchIntervalBackgroundMs !== undefined) {
       this.fetchIntervalBackgroundMs = monitorConfig.fetchIntervalBackgroundMs;
     }
+    if (monitorConfig?.backgroundGitWatcherCap !== undefined) {
+      this.backgroundGitWatcherCap = this.normalizeWatcherCap(
+        monitorConfig.backgroundGitWatcherCap
+      );
+    }
 
     const currentIds = new Set(worktrees.map((wt) => wt.id));
 
@@ -548,6 +585,7 @@ export class WorkspaceService {
         this.resourceActionExecutor.cleanupResourceActionState(id);
         monitor.stop();
         this.monitors.delete(id);
+        this.lruRemove(id);
         this.recoverWatcherIfNoMonitorsRemain();
         clearGitDirCache(monitor.path);
         invalidateGitStatusCache(monitor.path);
@@ -561,76 +599,88 @@ export class WorkspaceService {
       }
     }
 
-    // Create or update monitors
-    for (const wt of worktrees) {
-      const existingMonitor = this.monitors.get(wt.id);
-      const isActive = wt.id === activeWorktreeId;
+    // Create or update monitors. The watcher-budget reconciliation runs in a
+    // finally so a mid-loop throw (e.g. a failed stat/note-file write in
+    // addNewWorktreeMonitor) still grants the deferred new monitors their
+    // watcher and re-asserts the cap, rather than leaving them poll-only until
+    // the next sync.
+    try {
+      for (const wt of worktrees) {
+        const existingMonitor = this.monitors.get(wt.id);
+        const isActive = wt.id === activeWorktreeId;
 
-      if (existingMonitor) {
-        const branchChanged = existingMonitor.branch !== wt.branch;
-        const isCurrentChanged = existingMonitor.isCurrent !== isActive;
-        existingMonitor.branch = wt.branch;
-        existingMonitor.name = wt.name;
-        existingMonitor.isCurrent = isActive;
-        existingMonitor.isMainWorktree = wt.isMainWorktree ?? false;
-        // Keep the base-branch divergence fallback fresh if the main worktree
-        // switched branches since this monitor was created.
-        existingMonitor.setMainBranch(this.mainBranch);
+        if (existingMonitor) {
+          const branchChanged = existingMonitor.branch !== wt.branch;
+          const isCurrentChanged = existingMonitor.isCurrent !== isActive;
+          existingMonitor.branch = wt.branch;
+          existingMonitor.name = wt.name;
+          existingMonitor.isCurrent = isActive;
+          existingMonitor.isMainWorktree = wt.isMainWorktree ?? false;
+          // Keep the base-branch divergence fallback fresh if the main worktree
+          // switched branches since this monitor was created.
+          existingMonitor.setMainBranch(this.mainBranch);
 
-        const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
-        existingMonitor.updateConfig({
-          basePollingInterval: interval,
-          adaptiveBackoff: this.adaptiveBackoff,
-          pollIntervalMax: this.pollIntervalMax,
-          circuitBreakerThreshold: this.circuitBreakerThreshold,
-          gitWatchEnabled: this.gitWatchEnabled,
-          gitWatchDebounceMs: this.gitWatchDebounceMs,
-          fetchIntervalActiveMs: this.throttledFetchActiveMs,
-          fetchIntervalBackgroundMs: this.throttledFetchBackgroundMs,
-        });
+          const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
+          existingMonitor.updateConfig({
+            basePollingInterval: interval,
+            adaptiveBackoff: this.adaptiveBackoff,
+            pollIntervalMax: this.pollIntervalMax,
+            circuitBreakerThreshold: this.circuitBreakerThreshold,
+            gitWatchEnabled: this.gitWatchEnabled,
+            gitWatchDebounceMs: this.gitWatchDebounceMs,
+            fetchIntervalActiveMs: this.throttledFetchActiveMs,
+            fetchIntervalBackgroundMs: this.throttledFetchBackgroundMs,
+          });
 
-        existingMonitor.ensureWatcherState();
+          existingMonitor.ensureWatcherState();
 
-        if (branchChanged && existingMonitor.hasWatcher) {
-          existingMonitor.restartWatcherIfRunning();
-        }
+          if (branchChanged && existingMonitor.hasWatcher) {
+            existingMonitor.restartWatcherIfRunning();
+          }
 
-        // Skip this emit when the branch also changed — the branch-change
-        // block below emits the full snapshot (with updated isCurrent and
-        // cleared PR) anyway. Emitting here first would surface an
-        // intermediate frame carrying the new branch with the old PR (#8079).
-        if (isCurrentChanged && !branchChanged && existingMonitor.hasInitialStatus) {
-          this.emitUpdate(existingMonitor);
-        }
+          // Skip this emit when the branch also changed — the branch-change
+          // block below emits the full snapshot (with updated isCurrent and
+          // cleared PR) anyway. Emitting here first would surface an
+          // intermediate frame carrying the new branch with the old PR (#8079).
+          if (isCurrentChanged && !branchChanged && existingMonitor.hasInitialStatus) {
+            this.emitUpdate(existingMonitor);
+          }
 
-        if (branchChanged && wt.branch) {
-          const syncIssueNumber = extractIssueNumberSync(wt.branch, wt.name);
-          if (syncIssueNumber) {
-            existingMonitor.setIssueNumber(syncIssueNumber);
-          } else {
+          if (branchChanged && wt.branch) {
+            const syncIssueNumber = extractIssueNumberSync(wt.branch, wt.name);
+            if (syncIssueNumber) {
+              existingMonitor.setIssueNumber(syncIssueNumber);
+            } else {
+              existingMonitor.setIssueNumber(undefined);
+              void this.extractIssueNumberAsync(existingMonitor, wt.branch, wt.name);
+            }
+            existingMonitor.setIssueTitle(undefined);
+            // Bundle the PR clear into this same branch-change emit so the
+            // renderer never renders the new branch with the old PR (#8079).
+            existingMonitor.clearPRInfo();
+            existingMonitor.clearLinked();
+            if (existingMonitor.hasInitialStatus) {
+              this.emitUpdate(existingMonitor);
+            }
+          } else if (branchChanged && !wt.branch) {
             existingMonitor.setIssueNumber(undefined);
-            void this.extractIssueNumberAsync(existingMonitor, wt.branch, wt.name);
+            existingMonitor.setIssueTitle(undefined);
+            existingMonitor.clearPRInfo();
+            existingMonitor.clearLinked();
+            if (existingMonitor.hasInitialStatus) {
+              this.emitUpdate(existingMonitor);
+            }
           }
-          existingMonitor.setIssueTitle(undefined);
-          // Bundle the PR clear into this same branch-change emit so the
-          // renderer never renders the new branch with the old PR (#8079).
-          existingMonitor.clearPRInfo();
-          existingMonitor.clearLinked();
-          if (existingMonitor.hasInitialStatus) {
-            this.emitUpdate(existingMonitor);
-          }
-        } else if (branchChanged && !wt.branch) {
-          existingMonitor.setIssueNumber(undefined);
-          existingMonitor.setIssueTitle(undefined);
-          existingMonitor.clearPRInfo();
-          existingMonitor.clearLinked();
-          if (existingMonitor.hasInitialStatus) {
-            this.emitUpdate(existingMonitor);
-          }
+        } else {
+          await this.addNewWorktreeMonitor(wt, isActive, skipInitialGitStatus, true);
         }
-      } else {
-        await this.addNewWorktreeMonitor(wt, isActive, skipInitialGitStatus);
       }
+    } finally {
+      // Final reconciliation pass (#9538): enforce the watcher budget after the
+      // whole create/update loop. This is the authoritative override of any
+      // `ensureWatcherState()` call above that re-armed an evicted background
+      // watcher, and the single budget application for the deferred new monitors.
+      this.applyWatcherBudget();
     }
   }
 
@@ -692,10 +742,78 @@ export class WorkspaceService {
     }
   }
 
+  // --- Background git-watcher budget (LRU) ---
+
+  /** Clamp a requested cap to a non-negative integer, ignoring junk values. */
+  private normalizeWatcherCap(value: number): number {
+    if (!Number.isFinite(value)) return this.backgroundGitWatcherCap;
+    return Math.max(0, Math.floor(value));
+  }
+
+  /** Move (or insert) a background worktree id to the MRU end of the LRU. */
+  private lruTouch(worktreeId: string): void {
+    this.backgroundGitWatcherLru.delete(worktreeId);
+    this.backgroundGitWatcherLru.set(worktreeId, true);
+  }
+
+  /** Drop a worktree id from the LRU (active-focus, removal, dispose). */
+  private lruRemove(worktreeId: string): void {
+    this.backgroundGitWatcherLru.delete(worktreeId);
+  }
+
+  /**
+   * Enforce the background watcher budget across every monitor. The focused
+   * worktree always keeps its watcher (excluded from the cap). Background
+   * monitors are granted a watcher for the `cap` most-recently-focused entries
+   * (LRU tail) and evicted otherwise — evicted monitors stop their watcher and
+   * fall back to adaptive polling.
+   *
+   * Revocations run before grants so freed inotify/fd handles are released
+   * before any new watcher arms, keeping the live handle count bounded by the
+   * cap even mid-reconcile. Idempotent: `setGitWatchBudgetAllowed` is a no-op
+   * when the flag is unchanged, so repeated calls don't churn watchers.
+   *
+   * Also the single reconciliation point that overrides `ensureWatcherState()`
+   * re-arming an evicted watcher during `syncMonitors` (#9538 pitfall): it must
+   * run AFTER any sync/focus mutation that could re-arm watchers.
+   */
+  private applyWatcherBudget(): void {
+    // Reconcile LRU membership against live monitors: the active worktree must
+    // never be in the pool; every other running monitor must be present.
+    for (const id of [...this.backgroundGitWatcherLru.keys()]) {
+      if (!this.monitors.has(id) || id === this.activeWorktreeId) {
+        this.backgroundGitWatcherLru.delete(id);
+      }
+    }
+    for (const id of this.monitors.keys()) {
+      if (id !== this.activeWorktreeId && !this.backgroundGitWatcherLru.has(id)) {
+        this.backgroundGitWatcherLru.set(id, true);
+      }
+    }
+
+    const ids = [...this.backgroundGitWatcherLru.keys()]; // LRU → MRU
+    const cap = this.backgroundGitWatcherCap;
+    const cutoff = Math.max(0, ids.length - cap);
+
+    // Evict the oldest (head) entries beyond the cap first to free handles.
+    for (let i = 0; i < cutoff; i++) {
+      this.monitors.get(ids[i])?.setGitWatchBudgetAllowed(false);
+    }
+    // The focused worktree always keeps its watcher.
+    if (this.activeWorktreeId) {
+      this.monitors.get(this.activeWorktreeId)?.setGitWatchBudgetAllowed(true);
+    }
+    // Grant the surviving MRU tail.
+    for (let i = cutoff; i < ids.length; i++) {
+      this.monitors.get(ids[i])?.setGitWatchBudgetAllowed(true);
+    }
+  }
+
   private async addNewWorktreeMonitor(
     wt: Worktree,
     isActive: boolean,
-    skipInitialGitStatus: boolean
+    skipInitialGitStatus: boolean,
+    deferWatcherBudget: boolean = false
   ): Promise<void> {
     if (this.monitors.has(wt.id)) {
       return;
@@ -781,7 +899,28 @@ export class WorkspaceService {
     monitor.setIssueNumber(issueNumber ?? undefined);
     monitor.setCreatedAt(createdAt);
 
+    // Withhold the watcher budget from a new *background* monitor before it
+    // starts so start() never arms a watcher we may be about to evict — this
+    // bounds the cold-start handle peak to the cap instead of O(N). The active
+    // worktree keeps the default-granted budget (it's excluded from the cap).
+    // applyWatcherBudget() below grants the surviving MRU tail (evicting the
+    // oldest if this push spilled over the cap).
+    if (!isActive) {
+      monitor.setGitWatchBudgetAllowed(false);
+    }
+
     this.monitors.set(wt.id, monitor);
+
+    if (isActive) {
+      this.lruRemove(wt.id);
+    } else {
+      this.lruTouch(wt.id);
+    }
+    // syncMonitors batches a single applyWatcherBudget() after its whole loop
+    // (deferWatcherBudget) to avoid O(N²) reconciliation across a cold start.
+    if (!deferWatcherBudget) {
+      this.applyWatcherBudget();
+    }
 
     if (skipInitialGitStatus) {
       monitor.startWithoutGitStatus();
@@ -1308,7 +1447,11 @@ export class WorkspaceService {
     this.resourceActionExecutor.cleanupResourceActionState(worktreeId);
     monitor.stop();
     this.monitors.delete(worktreeId);
+    this.lruRemove(worktreeId);
     this.recoverWatcherIfNoMonitorsRemain();
+    // A freed slot lets the next most-recently-focused evicted worktree
+    // reclaim a watcher.
+    this.applyWatcherBudget();
 
     clearGitDirCache(monitor.path);
     invalidateGitStatusCache(monitor.path);
@@ -1380,6 +1523,7 @@ export class WorkspaceService {
   }
 
   setActiveWorktree(requestId: string, worktreeId: string): void {
+    const previousActiveId = this.activeWorktreeId;
     this.activeWorktreeId = worktreeId;
 
     for (const [id, monitor] of this.monitors) {
@@ -1402,6 +1546,22 @@ export class WorkspaceService {
         this.emitUpdate(monitor);
       }
     }
+
+    // Watcher-budget LRU bookkeeping (#9538): the new active worktree leaves
+    // the background pool (it keeps a watcher unconditionally); the worktree
+    // that just lost focus enters as the most-recently-focused background
+    // entry, so it's the last to be evicted. applyWatcherBudget() then enforces
+    // the cap — evicting an over-budget background watcher overrides the 3s
+    // focus-downgrade hysteresis (the deliberate-eviction path bypasses it).
+    this.lruRemove(worktreeId);
+    if (
+      previousActiveId &&
+      previousActiveId !== worktreeId &&
+      this.monitors.has(previousActiveId)
+    ) {
+      this.lruTouch(previousActiveId);
+    }
+    this.applyWatcherBudget();
 
     this.sendEvent({ type: "set-active-result", requestId, success: true });
   }
@@ -2118,7 +2278,11 @@ export class WorkspaceService {
       this.resourceActionExecutor.cleanupResourceActionState(worktreeId);
       monitor.stop();
       this.monitors.delete(worktreeId);
+      this.lruRemove(worktreeId);
       this.recoverWatcherIfNoMonitorsRemain();
+      // A freed slot lets the next most-recently-focused evicted worktree
+      // reclaim a watcher.
+      this.applyWatcherBudget();
 
       // Monitor is cleaned up. Drop the pending entry now (cancelling its
       // safety valve): any still-buffered delete event for this name is
@@ -2422,6 +2586,15 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       this.fetchIntervalBackgroundMs = config.fetchIntervalBackgroundMs;
     }
 
+    let watcherCapChanged = false;
+    if (config.backgroundGitWatcherCap !== undefined) {
+      const normalized = this.normalizeWatcherCap(config.backgroundGitWatcherCap);
+      if (normalized !== this.backgroundGitWatcherCap) {
+        this.backgroundGitWatcherCap = normalized;
+        watcherCapChanged = true;
+      }
+    }
+
     for (const [worktreeId, monitor] of this.monitors) {
       const isActive = worktreeId === this.activeWorktreeId;
       const baseInterval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
@@ -2430,6 +2603,12 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         fetchIntervalActiveMs: this.throttledFetchActiveMs,
         fetchIntervalBackgroundMs: this.throttledFetchBackgroundMs,
       });
+    }
+
+    // A shrunk cap (e.g. profile → efficiency) must immediately evict the
+    // now-over-budget background watchers; a grown cap re-arms freed slots.
+    if (watcherCapChanged) {
+      this.applyWatcherBudget();
     }
   }
 
@@ -2602,6 +2781,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       monitor.stop();
     }
     this.monitors.clear();
+    this.backgroundGitWatcherLru.clear();
     // Drop in-flight fetch chains and per-repo failure state — the next
     // project's monitors get a clean coordinator and stale completions are
     // discarded by the generation guard.
@@ -2729,6 +2909,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       monitor.stop();
     }
     this.monitors.clear();
+    this.backgroundGitWatcherLru.clear();
     this.fetchCoordinator.destroy();
     this.pollQueue.clear();
     this.listService.invalidateCache();

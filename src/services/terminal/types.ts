@@ -260,9 +260,9 @@ export const INCREMENTAL_RESTORE_CONFIG = {
  * (renderer policy `onTierApplied`, visibility-driven restore, attach open
  * path, agent promotion) stay in lockstep.
  *
- * VISIBLE is included because `customGlyphs` (xterm's pixel-perfect block /
- * box-drawing / Powerline rendering) only works under the WebGL or canvas
- * renderer — the DOM renderer always falls back to the configured font, which
+ * VISIBLE is included because xterm's pixel-perfect block / box-drawing /
+ * Powerline glyph rendering only works under the WebGL or canvas renderer —
+ * the DOM renderer always falls back to the configured font, which
  * mangles glyphs like U+2584 used in agent ASCII-art headers. Limiting WebGL
  * to FOCUSED|BURST visibly degraded rendering on every unfocused-but-visible
  * agent pane in tiled fleets.

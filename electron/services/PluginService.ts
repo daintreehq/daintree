@@ -97,6 +97,10 @@ import {
   unregisterFileDecorationProviderImpls,
   unregisterFileDecorationProviders,
 } from "./fileDecorationRegistry.js";
+import {
+  registerPluginAgents,
+  unregisterPluginAgents,
+} from "../../shared/config/pluginAgentRegistry.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
@@ -153,6 +157,10 @@ const CONFIRM_TRIGGERING_CAPABILITIES: ReadonlySet<BuiltInPluginCapability> = ne
   "fs:project-write",
   "fs:user-data-write",
   "agent:invoke",
+  // Registering a launchable agent CLI (with its own command/args, and a
+  // detection config in the full tier) is a runtime side effect on par with
+  // `agent:invoke` — a plugin holding it elevates its actions to "confirm".
+  "agent:register",
 ]);
 
 /**
@@ -221,6 +229,21 @@ function manifestTriggersCompoundElevation(
   }
 
   return false;
+}
+
+/**
+ * Aggregate danger verdict for a whole plugin (vs. the per-action
+ * `effectiveDanger` computed in {@link PluginService.validateAndBuildActionDescriptor}).
+ * Surfaced on {@link LoadedPluginInfo.pluginDanger} so the manager UI can show
+ * an effective-danger summary without re-deriving the lattice in the renderer.
+ * Single source of truth on main: reuses {@link CONFIRM_TRIGGERING_CAPABILITIES}
+ * and {@link manifestTriggersCompoundElevation} rather than spawning a third copy.
+ */
+function computePluginDanger(manifest: PluginManifest | undefined): "safe" | "confirm" {
+  const caps = manifest?.capabilities ?? [];
+  if (caps.some((c) => CONFIRM_TRIGGERING_CAPABILITIES.has(c))) return "confirm";
+  if (manifestTriggersCompoundElevation(manifest, caps)) return "confirm";
+  return "safe";
 }
 
 interface LoadedPlugin {
@@ -583,7 +606,11 @@ export class PluginService {
 
     this.settings = new PluginSettingsManager({
       getPluginsRoot: () => this.pluginsRoot,
-      getManifest: (pluginId) => this.plugins.get(pluginId)?.manifest,
+      // Fall back to disabledPlugins so settings for a launch-disabled plugin
+      // still resolve its declared fields — its row in the manager dialog now
+      // renders a settings form whether or not the plugin is running.
+      getManifest: (pluginId) =>
+        (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest,
     });
 
     this.channels = new PluginChannelRegistry({
@@ -1045,6 +1072,11 @@ export class PluginService {
 
     if (manifest.contributes.fileDecorationProviders.length > 0) {
       registerFileDecorationProviders(manifest.name, manifest.contributes.fileDecorationProviders);
+    }
+
+    if (manifest.contributes.agents.length > 0) {
+      registerPluginAgents(manifest.name, manifest.contributes.agents);
+      this.broadcaster.scheduleAgentsBroadcast(false);
     }
 
     // Insert the plugin into the registry BEFORE importing its main module so
@@ -2379,6 +2411,10 @@ export class PluginService {
     runUnloadStep(pluginId, "unregisterFileDecorationProviderImpls", () =>
       unregisterFileDecorationProviderImpls(pluginId)
     );
+    runUnloadStep(pluginId, "unregisterPluginAgents", () => unregisterPluginAgents(pluginId));
+    runUnloadStep(pluginId, "scheduleAgentsBroadcast", () =>
+      this.broadcaster.scheduleAgentsBroadcast(true)
+    );
     // Subscriber disposers already fired in flushPluginEventCleanups() above;
     // this drops any leftover subscriber-set entry and the in-memory settings
     // store caches so a reload starts from disk.
@@ -2491,6 +2527,7 @@ export class PluginService {
       // pendingRestart: desired state diverges from running state.
       // Running + now-disabled → unload pending; skipped + now-enabled → load pending.
       const pendingRestart = isRunning ? disabled : !disabled;
+      const pluginDanger = computePluginDanger(p.manifest);
       if (p.isBuiltin) {
         return {
           manifest: p.manifest,
@@ -2506,6 +2543,7 @@ export class PluginService {
           updateAvailable: null,
           devMode: false,
           pendingRestart,
+          pluginDanger,
         };
       }
       const record = installed[p.manifest.name];
@@ -2524,6 +2562,7 @@ export class PluginService {
         updateAvailable: record?.updateAvailable ?? null,
         devMode: record?.devMode ?? false,
         pendingRestart,
+        pluginDanger,
       };
     };
 

@@ -1,5 +1,5 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../../helpers/launch";
@@ -235,6 +235,44 @@ async function typeDirectlyIntoTerminal(
       .catch(() => false);
     if (responded) return;
   }
+}
+
+async function focusPanelHybridInput(
+  page: Page,
+  panel: Locator,
+  terminalId: string
+): Promise<Locator> {
+  await dismissBlockingPalette(page);
+  await panel.click();
+  await expect
+    .poll(() => getFocusedPanelId(page), { timeout: T_MEDIUM, intervals: [100, 250] })
+    .toBe(terminalId);
+  const editor = panel.locator(SEL.terminal.cmEditor).first();
+  await expect(editor).toBeVisible({ timeout: T_MEDIUM });
+  await editor.click();
+  return editor;
+}
+
+async function replaceHybridInput(page: Page, editor: Locator, text: string): Promise<void> {
+  await editor.click();
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+  await page.keyboard.press("Backspace");
+  await editor.pressSequentially(text);
+}
+
+function destructiveAppendCommand(targetName: string, runLogName: string): string {
+  if (process.platform === "win32") {
+    return `rm -rf ./${targetName}; Add-Content -Path ./${runLogName} -Value ran`;
+  }
+
+  return `rm -rf ./${targetName}; printf 'ran\\n' >> ./${runLogName}`;
+}
+
+function readRunCount(filePath: string): number {
+  if (!existsSync(filePath)) return 0;
+  return readFileSync(filePath, "utf8")
+    .split(/\r?\n/)
+    .filter((line) => line.trim() === "ran").length;
 }
 
 function quotePosixShellArg(value: string): string {
@@ -576,6 +614,105 @@ test.describe.serial("Core: Fleet terminal broadcast", () => {
           timeout: T_MEDIUM,
         });
       }
+    });
+  });
+
+  test("destructive broadcast via hybrid input gates on confirm — cancel then send", async () => {
+    test.setTimeout(120_000);
+    const { window } = ctx;
+
+    await test.step("Clear any existing fleet state", async () => {
+      await dispatchAction(window, "terminal.disarmAll", undefined, { source: "test" });
+      await expect(window.locator(SEL.fleet.ribbon)).toBeHidden({ timeout: T_MEDIUM });
+    });
+
+    await test.step("Re-enable hybrid input so Enter routes through the editor broadcast path", async () => {
+      const enableHybrid = await dispatchAction(
+        window,
+        "terminalConfig.setHybridInputEnabled",
+        { enabled: true },
+        { source: "user" }
+      );
+      expect(enableHybrid.ok, enableHybrid.error?.message).toBe(true);
+    });
+
+    let gridIds: string[] = [];
+    await test.step("Create and arm two fresh fleet panels", async () => {
+      gridIds = await createFreshFleetGridPanels(2);
+      expect(gridIds.length).toBeGreaterThanOrEqual(2);
+      for (const id of gridIds.slice(0, 2)) {
+        const arm = await dispatchAction(
+          window,
+          "terminal.arm",
+          { terminalId: id },
+          { source: "user" }
+        );
+        expect(arm.ok, arm.error?.message).toBe(true);
+      }
+      await expect(window.locator(SEL.fleet.ribbon)).toBeVisible({ timeout: T_MEDIUM });
+      await expect(window.locator(SEL.fleet.armedCountChip)).toHaveAttribute(
+        "aria-label",
+        /^2 in fleet/,
+        { timeout: T_MEDIUM }
+      );
+    });
+
+    // Distinct per-phase run logs prove actual execution, not just terminal echo
+    // of a typed-but-cancelled destructive command.
+    const cancelTarget = `fleet-e2e-cancel-${Date.now()}`;
+    const sendTarget = `fleet-e2e-send-${Date.now()}`;
+    const cancelRunLog = `${cancelTarget}.ran`;
+    const sendRunLog = `${sendTarget}.ran`;
+    const cancelRunLogPath = path.join(fixtureDir, cancelRunLog);
+    const sendRunLogPath = path.join(fixtureDir, sendRunLog);
+    const cancelCommand = destructiveAppendCommand(cancelTarget, cancelRunLog);
+    const sendCommand = destructiveAppendCommand(sendTarget, sendRunLog);
+
+    await test.step("Typing a destructive command and pressing Enter surfaces the confirm strip", async () => {
+      const editor = await focusPanelHybridInput(
+        window,
+        getPanelById(window, gridIds[0]!),
+        gridIds[0]!
+      );
+      await replaceHybridInput(window, editor, cancelCommand);
+      await window.keyboard.press("Enter");
+
+      await expect(window.locator(SEL.fleet.pasteConfirm)).toBeVisible({ timeout: T_MEDIUM });
+      await expect(window.locator(SEL.fleet.pasteConfirmSend)).toBeVisible({ timeout: T_MEDIUM });
+      await expect(window.locator(SEL.fleet.pasteConfirmCancel)).toBeVisible({ timeout: T_MEDIUM });
+    });
+
+    await test.step("Cancelling the confirm aborts the broadcast — no target receives the command", async () => {
+      await window.locator(SEL.fleet.pasteConfirmCancel).click();
+      await expect(window.locator(SEL.fleet.pasteConfirm)).toBeHidden({ timeout: T_MEDIUM });
+      // Give the PTY a beat to execute before asserting the cancellation did not
+      // create a run log.
+      await window.waitForTimeout(750);
+      expect(readRunCount(cancelRunLogPath)).toBe(0);
+    });
+
+    await test.step("Re-typing and confirming sends the command to every armed pane", async () => {
+      const editor = await focusPanelHybridInput(
+        window,
+        getPanelById(window, gridIds[0]!),
+        gridIds[0]!
+      );
+      // Clear any residual draft from the cancelled attempt so the second
+      // submission contains exactly the send command, not a doubled string.
+      await replaceHybridInput(window, editor, sendCommand);
+      await window.keyboard.press("Enter");
+
+      await expect(window.locator(SEL.fleet.pasteConfirmSend)).toBeVisible({ timeout: T_MEDIUM });
+      await window.locator(SEL.fleet.pasteConfirmSend).click();
+      await expect(window.locator(SEL.fleet.pasteConfirm)).toBeHidden({ timeout: T_MEDIUM });
+
+      await expect
+        .poll(() => readRunCount(sendRunLogPath), {
+          timeout: T_LONG,
+          intervals: [250, 500, 1000],
+        })
+        .toBeGreaterThanOrEqual(2);
+      expect(readRunCount(cancelRunLogPath)).toBe(0);
     });
   });
 });

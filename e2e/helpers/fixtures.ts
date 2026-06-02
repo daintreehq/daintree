@@ -154,6 +154,202 @@ export function createFixtureRepo(options: FixtureRepoOptions = {}): FixtureRepo
   return { dir, cleanup: makeFixtureCleanup(dir) };
 }
 
+/**
+ * Repo whose `origin` remote has advanced past the local branch, plus an
+ * uncommitted local change. Pushing the local branch is rejected as
+ * non-fast-forward (`push-rejected-outdated`), which surfaces the Review Hub
+ * push-error banner with its "Pull and rebase" / "Force push" recovery CTAs.
+ *
+ * Layout (all under tmpdir, siblings of `dir`):
+ *  - `dir`         — the working repo opened by the app
+ *  - `${dir}-bare` — the `file://` origin (bare)
+ *  - `${dir}-clone2` — throwaway clone used to advance the remote
+ *
+ * Local history holds two commits so commit-message history navigation has
+ * more than one entry to cycle through. `refs/remotes/origin/main` is fetched
+ * after the remote advances so the force-push preview (`HEAD..origin/main`)
+ * and the captured lease SHA both resolve against an ahead remote.
+ */
+export function createDivergedRemoteFixture(name = "review-hub-diverged"): FixtureRepo {
+  const dir = mkdtempSync(path.join(tmpdir(), `daintree-e2e-${name}-`));
+  const bareDir = `${dir}-bare`;
+  const cloneDir = `${dir}-clone2`;
+
+  git("init -b main", dir);
+  git('config user.email "test@daintree.dev"', dir);
+  git('config user.name "Daintree Test"', dir);
+
+  writeFileSync(path.join(dir, "README.md"), `# ${name}\n`);
+  git("add -A", dir);
+  git('commit -m "initial commit"', dir);
+
+  writeFileSync(path.join(dir, "baseline.txt"), "baseline scaffold\n");
+  git("add -A", dir);
+  git('commit -m "chore: scaffold baseline"', dir);
+
+  // `-b main` keeps the bare HEAD on `main`; without it the bare defaults to
+  // `master` on runners where init.defaultBranch is unset (Ubuntu/Windows CI),
+  // so the clone below would check out nothing and its `push origin main` would
+  // fail with "src refspec main does not match any". Local paths work directly
+  // as git remotes cross-platform — no `file://` URL (which mangles Windows
+  // backslash paths into a bogus host segment).
+  git(`init --bare -b main "${bareDir}"`, dir);
+  git(`remote add origin "${bareDir}"`, dir);
+  git("push -u origin main", dir);
+
+  // Second clone advances the remote so origin/main diverges from local.
+  git(`clone "${bareDir}" "${cloneDir}"`, dir);
+  git('config user.email "test@daintree.dev"', cloneDir);
+  git('config user.name "Daintree Test"', cloneDir);
+  writeFileSync(path.join(cloneDir, "remote-only.txt"), "added on the remote\n");
+  git("add -A", cloneDir);
+  git('commit -m "remote: add remote-only file"', cloneDir);
+  git("push origin main", cloneDir);
+
+  // Fetch so refs/remotes/origin/main is ahead of local HEAD — required for the
+  // captured lease SHA and the force-push "commits to discard" preview.
+  git("fetch origin", dir);
+
+  // Leave an uncommitted change so the Review Hub shows a stageable file.
+  writeFileSync(path.join(dir, "local-change.txt"), "local work in progress\n");
+
+  const cleanup = () => {
+    for (const sibling of [cloneDir, bareDir]) {
+      if (existsSync(sibling)) removePathSync(sibling);
+    }
+    makeFixtureCleanup(dir)();
+  };
+
+  return { dir, cleanup };
+}
+
+/**
+ * Repo left mid-conflict so the Review Hub renders the `ConflictPanel`.
+ *
+ * `mode: "merge"` leaves `main` in a MERGING state (a `git merge feature` that
+ * hit a conflict). `mode: "rebase"` leaves `feature` in a REBASING state (a
+ * `git rebase main` that hit a conflict), which also drives the rebase
+ * progress chip and sequence rail. Both edit the same line of `conflict.txt`
+ * on two branches so the conflict is deterministic.
+ */
+export function createConflictFixtureRepo(
+  mode: "merge" | "rebase",
+  name = "review-hub-conflict"
+): FixtureRepo {
+  const dir = mkdtempSync(path.join(tmpdir(), `daintree-e2e-${name}-${mode}-`));
+
+  git("init -b main", dir);
+  git('config user.email "test@daintree.dev"', dir);
+  git('config user.name "Daintree Test"', dir);
+
+  writeFileSync(path.join(dir, "README.md"), `# ${name}\n`);
+  writeFileSync(path.join(dir, "conflict.txt"), "line one\nshared base line\nline three\n");
+  git("add -A", dir);
+  git('commit -m "initial commit"', dir);
+
+  git("branch feature", dir);
+
+  git("checkout feature", dir);
+  writeFileSync(path.join(dir, "conflict.txt"), "line one\nfeature edit\nline three\n");
+  git("add -A", dir);
+  git('commit -m "feature: edit shared line"', dir);
+
+  git("checkout main", dir);
+  writeFileSync(path.join(dir, "conflict.txt"), "line one\nmain edit\nline three\n");
+  git("add -A", dir);
+  git('commit -m "main: edit shared line"', dir);
+
+  try {
+    if (mode === "merge") {
+      git("merge feature", dir);
+    } else {
+      git("checkout feature", dir);
+      git("rebase main", dir);
+    }
+  } catch {
+    // Expected — the conflict leaves the repo mid-operation, which is the
+    // state the ConflictPanel renders against.
+  }
+
+  return { dir, cleanup: makeFixtureCleanup(dir) };
+}
+
+export interface InRepoRecipeSeed {
+  /** Recipe name; the file is written as `.daintree/recipes/<slug>.json`. */
+  name: string;
+  /** Terminal definitions; defaults to a single terminal slot when omitted. */
+  terminals?: Array<Record<string, unknown>>;
+  showInEmptyState?: boolean;
+}
+
+interface FixtureRepoWithRecipesOptions extends FixtureRepoOptions {
+  /** Team (in-repo) recipes to seed under `.daintree/recipes/` before opening. */
+  inRepoRecipes?: InRepoRecipeSeed[];
+  /** `package.json` scripts so RecipeRunner can surface suggestion pills. */
+  packageScripts?: Record<string, string>;
+}
+
+function recipeSlug(name: string): string {
+  // Mirrors safeRecipeFilename's slug rules (sans the diacritics strip, which
+  // the ASCII recipe names used in E2E never need).
+  return (
+    name
+      .replace(/[\\/:*?"<>|]/g, "")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .toLowerCase()
+      .replace(/^[-.]+|[-.]+$/g, "") || "recipe"
+  );
+}
+
+/**
+ * Like createFixtureRepo, but seeds tracked `.daintree/recipes/*.json` team
+ * recipes (and optional package.json scripts) and commits them, so the project
+ * loads in-repo recipes on open. Used by recipe-coverage E2E to exercise the
+ * Team scope section, shadowing badges, and RecipeRunner suggestion pills.
+ */
+export function createFixtureRepoWithRecipes(
+  options: FixtureRepoWithRecipesOptions = {}
+): FixtureRepo {
+  const { inRepoRecipes = [], packageScripts, ...repoOptions } = options;
+  const repo = createFixtureRepo(repoOptions);
+
+  if (packageScripts) {
+    writeFileSync(
+      path.join(repo.dir, "package.json"),
+      JSON.stringify(
+        { name: repoOptions.name ?? "test-project", version: "1.0.0", scripts: packageScripts },
+        null,
+        2
+      ) + "\n"
+    );
+  }
+
+  if (inRepoRecipes.length > 0) {
+    const recipesDir = path.join(repo.dir, ".daintree", "recipes");
+    mkdirSync(recipesDir, { recursive: true });
+    for (const seed of inRepoRecipes) {
+      const slug = recipeSlug(seed.name);
+      const recipe = {
+        id: `inrepo-${slug}`,
+        name: seed.name,
+        terminals: seed.terminals ?? [{ type: "terminal", title: "", command: "", env: {} }],
+        createdAt: 1_700_000_000_000,
+        showInEmptyState: seed.showInEmptyState ?? false,
+        autoAssign: "always",
+      };
+      writeFileSync(path.join(recipesDir, `${slug}.json`), JSON.stringify(recipe, null, 2) + "\n");
+    }
+  }
+
+  if (packageScripts || inRepoRecipes.length > 0) {
+    git("add -A", repo.dir);
+    git('commit -m "seed recipes and scripts"', repo.dir);
+  }
+
+  return repo;
+}
+
 export function createFixtureRepos(count: number): FixtureRepo[] {
   const repos: FixtureRepo[] = [];
   for (let i = 0; i < count; i++) {

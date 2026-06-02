@@ -141,6 +141,7 @@ describe("plugin-sdk boundary", () => {
           contextMenus: [],
           forgeProviders: [],
           fileDecorationProviders: [],
+          agents: [],
         },
       };
       expectTypeOf(manifest.name).toEqualTypeOf<string>();

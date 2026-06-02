@@ -57,6 +57,8 @@ export default async function planFromIssue(args: { issue: number }) {
 
 _Imperative registration (escape hatch for dynamic commands):_
 
+> `@daintreehq/plugin-sdk` is the forward-looking published name for the SDK types/runtime (reserved in `shared/types/plugin-sdk.ts`, scaffolded as a dependency by the `daintree-plugin` CLI). It's distinct from the in-repo `daintree-plugin` CLI package — don't conflate the two.
+
 ```ts
 // src/index.ts
 import type { PluginHostApi } from "@daintreehq/plugin-sdk";
@@ -285,7 +287,7 @@ Keybindings map a key combination to an action.
 | `description` | no | Human-readable description of what the binding does. |
 | `when` | no | Context expression gating when the binding is active. |
 
-Bindings register when the plugin loads and unregister on unload. Conflicts with user overrides or other plugins' bindings are resolved by Daintree's existing keybinding service — plugin bindings are low-priority and yield to user overrides. See `src/services/KeybindingService.ts:325` for the registration API.
+Bindings register when the plugin loads and unregister on unload. Conflicts with user overrides or other plugins' bindings are resolved by Daintree's existing keybinding service — plugin bindings are low-priority and yield to user overrides. See `registerBinding` in `src/services/KeybindingService.ts` for the registration API.
 
 ## Settings schema — _Shipped_
 
@@ -362,9 +364,9 @@ Adds entries to right-click menus on specific UI elements.
 
 Context menus follow the same `actionId` dispatch pattern as menu items.
 
-## MCP servers — _Planned_
+## MCP servers — _Shipped_
 
-Declares Model Context Protocol servers the plugin ships. The manifest shape is validated but the `experimental_` prefix signals that it may change before the feature ships — use with awareness that the contract is not yet locked. See [Agent extensions → MCP servers](./agent-extensions.md#mcp-servers) for the full story.
+Declares Model Context Protocol servers the plugin ships. The `experimental_` manifest key retains its prefix while the contribution shape settles, but the runtime is live: `PluginMcpSupervisor` (`electron/services/PluginMcpSupervisor.ts`) spawns and supervises the stdio subprocess, and IPC handlers in `electron/ipc/handlers/pluginMcp.ts` wire start/restart/listTools/getFullSchema. See [Agent extensions → MCP servers](./agent-extensions.md#mcp-servers) for the full story.
 
 ```json
 {
@@ -393,6 +395,8 @@ Declares Model Context Protocol servers the plugin ships. The manifest shape is 
 | `env` | no | Environment variables. Values can reference settings with `${settings:settingId}` syntax. |
 
 Daintree supervises the process: lazy spawn on first tool use, hard kill on Daintree exit, exponential backoff on crash. The plugin's tools are exposed to any agent running in Daintree through the same MCP surface user-configured MCP servers use.
+
+Tool use is gated by a consent/permission/audit subsystem (`electron/services/plugin-mcp/` — `PluginMcpConsentService`, `PluginMcpTierAuth`, `PluginMcpAuditService`, `PluginMcpConsentStore`): inbound tool calls are checked against per-server permission tiers, prompt for consent when required, and are recorded to an audit log. Discovery is lazy and two-tier — a cheap tool list first, full schemas fetched on demand.
 
 **Intentionally excluded:** remote MCP transports (`url`), explicit transport types, per-server working directories, restart policies. These are deferred until use cases concretely require them.
 
@@ -476,16 +480,83 @@ Registers a forge backend — issues, pull/merge requests, reviews, CI roll-up, 
 | `name` | yes | Display label in Preferences → Forge Integrations. |
 | `matches` | yes | List of exact hostnames. The host extracts the hostname from the project's git remote (HTTPS/SSH/SCP-form URLs handled), lowercases and trims it, then matches for **exact string equality** — no glob, wildcard, or suffix matching. List every distinct hostname your forge serves as a separate entry. First matching provider wins. |
 | `capabilities` | no | Informational hints driving the Preferences "supports: …" display only; the host does not interpret them. Behavior gates on whether the runtime capability field is present. |
+| `credentialFields` | no | Array of `{ id, label, type, placeholder?, helpText? }` declaring the auth fields this provider needs. Drives the generated credential form in Preferences → Forge Integrations. |
 | `settingsScopeRef` | no | ID prefix in this plugin's `settings` contributions, used to group provider settings. |
 | `viewRefs` | no | IDs of `views` contributions shown under this provider's panel section. |
 
 The manifest entry is read eagerly so the provider populates Preferences and the remote-routing table before any plugin code runs; the implementation binds lazily in `activate()` via [`registerForgeProvider`](./host-api.md#registerforgeprovider). For the end-to-end walkthrough — implementing `ForgeProviderImpl`, state normalization, capabilities, and tests — see [Implementing a forge provider](./forge-provider.md).
 
+## File decoration providers — _Shipped_
+
+Registers a provider that decorates files (or other scoped resources) with status badges, colors, and tooltips. The manifest declares which **scopes** the provider handles so the renderer can route decoration pulls before the plugin's code has run. The first-party GitHub plugin (`plugins/builtin/github/`) uses one to decorate the worktree diff/review surface.
+
+```json
+{
+  "contributes": {
+    "fileDecorationProviders": [
+      {
+        "id": "worktree-diff-review",
+        "scopes": ["worktree-diff:*"]
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. Must match the `id` passed when the provider binds at runtime. |
+| `scopes` | yes | Non-empty list of scope patterns the provider answers for. A scope like `worktree-diff:*` matches every resource the host routes under the `worktree-diff` namespace; the host dispatches decoration pulls to the first provider whose scope matches. |
+
+The manifest entry is read eagerly so the host's decoration-routing table (`electron/services/fileDecorationRegistry.ts`) knows which provider owns a scope before any plugin code runs; the implementation binds lazily in `activate()`. See [Host API](./host-api.md) for the runtime registration signature.
+
+## Agents — _Shipped (minimal tier)_
+
+Teaches Daintree about a launchable agent CLI it doesn't ship in-tree, so the CLI shows up as a named, selectable agent rather than a generic shell. Requires the `agent:register` capability, which is surfaced to the user at install time.
+
+```json
+{
+  "capabilities": ["agent:register"],
+  "contributes": {
+    "agents": [
+      {
+        "id": "acme",
+        "name": "Acme Agent",
+        "command": "acme",
+        "args": ["--interactive"],
+        "color": "#3366ff",
+        "iconId": "terminal",
+        "supportsContextInjection": true
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Bare agent id (alphanumerics, `.`, `-`, `_`; ≤64 chars). Additive for **new** IDs only — a collision with a built-in agent id is rejected at the manifest gate, and built-in entries always shadow plugin entries. Cross-plugin id conflicts resolve first-registered-wins. |
+| `name` | yes | Display label for the agent. |
+| `command` | yes | CLI binary to launch. Same safe-id pattern as `id` (no shell metacharacters). |
+| `args` | no | Default launch arguments (≤20 entries; no control characters). |
+| `color` | yes | Brand color as a 6-digit hex (`#rrggbb`). |
+| `iconId` | yes | Icon id used for the agent. |
+| `supportsContextInjection` | no | Whether copy-tree context injection targets this agent. Defaults to `false`. |
+| `detection` | no | Reserved for the full-tracking tier. The shape (bounded, well-formed detection patterns) is **validated** at manifest-parse time but not yet wired into the live PTY matcher — minimal-tier agents launch as named, untracked terminals. |
+
+The **minimal tier** (shipped) makes the agent launchable and selectable as a named entry in the effective registry; detection is not run, so the agent always launches as a named terminal. The **full tier** (planned) will relax the built-in-only gate in output detection so a plugin-supplied `detection` config drives working/waiting state, resume, and MCP wiring.
+
+A malformed `detection` config (an un-compilable pattern, an over-long or over-numerous pattern set, or a construct prone to catastrophic backtracking) is rejected at manifest validation — the plugin fails to load loudly rather than silently shipping a bad matcher. Once the full tier lands, a _well-formed_ config that simply never matches at runtime leaves the agent launching as a named terminal and never affects detection for other terminals.
+
 ## What's missing and why
 
 A few surfaces I've decided **not** to expose as dedicated contribution points:
 
-- **Agent provider plugins.** Adding a new model backend is handled via OpenAI-compatible base URL configuration in Daintree's settings, not a plugin API. The complexity of a full provider SDK isn't justified when 95% of users just need to point Daintree at a different endpoint.
+- **Agent provider SDKs.** Registering a launchable agent CLI is a contribution point (see [Agents](#agents--shipped-minimal-tier)), but a full model-provider SDK is not. Adding a new model backend is handled via OpenAI-compatible base URL configuration in Daintree's settings — the complexity of a full provider SDK isn't justified when 95% of users just need to point Daintree at a different endpoint.
 - **Agent lifecycle hooks (PreToolUse, PostToolUse, Stop).** Use an MCP server instead. A plugin that wants to intercept tool calls ships an MCP server that the agent talks to; the server can refuse or annotate tool calls. This is simpler than a dedicated hook API and reuses the MCP ecosystem.
 - **Subagents.** Daintree spawns fresh agents natively. Plugins that want to compose agents use skills + MCP to drive the orchestration, not a dedicated subagent contribution.
 - **Status bar items, tree views, editor decorations.** Daintree isn't an editor; these surfaces don't map cleanly to what we render. Revisit if a specific need emerges.

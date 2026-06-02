@@ -3,7 +3,7 @@
 Daintree's theming system is a three-layer pipeline shared between the renderer and main process:
 
 1. `ThemePalette` Theme authors define the visual foundation in `shared/theme/palette.ts`: surfaces, text, accent, status, activity, terminal colors, syntax colors, and a small `strategy` object.
-2. Semantic tokens `createSemanticTokens()` in `shared/theme/semantic.ts` compiles a palette into the stable app token contract (`AppColorSchemeTokens` in `shared/theme/types.ts`). Internally this calls `createDaintreeTokens()` in `shared/theme/themes.ts` which derives ~100 tokens from ~40 required palette inputs.
+2. Semantic tokens `createSemanticTokens()` in `shared/theme/semantic.ts` compiles a palette into the stable app token contract (`AppColorSchemeTokens` in `shared/theme/types.ts`). Internally this calls `createDaintreeTokens()` in `shared/theme/themes.ts` which derives ~145 tokens (the full `APP_THEME_TOKEN_KEYS` contract) from ~40 required palette inputs.
 3. Component public vars Individual UI areas expose their own override surface through CSS variables such as `--toolbar-bg`, `--toolbar-project-bg`, `--settings-dialog-bg`, `--pulse-card-bg`, and `--panel-grid-bg`.
 
 ## Core Model
@@ -47,7 +47,7 @@ interface BuiltInThemeSource {
   builtin: true;
   palette: ThemePalette;
   tokens?: Partial<AppColorSchemeTokens>; // override derived semantic tokens
-  extensions?: Record<string, string>; // component-level CSS variable overrides
+  extensions?: Partial<Record<ExtensionKey, string>>; // component-level CSS variable overrides (keys constrained to the ExtensionKey union)
   location?: string;
   heroImage?: string;
 }
@@ -72,7 +72,7 @@ Component-specific styling does not belong in this layer.
 
 **See [Canonical Interaction State Recipes](./interaction-state-recipes.md)** for hover/focus implementation patterns when working with component overrides.
 
-Component CSS owns the public override surface. Themes can target specific UI regions through `extensions` without expanding the global semantic contract.
+Component CSS owns the public override surface. Themes can target specific UI regions through `extensions` without expanding the global semantic contract. The allowed extension keys are the typed `ExtensionKey` union (`EXTENSION_KEYS` in `shared/theme/types.ts`), gated and classified OPTIONAL vs REQUIRED by the registry in `shared/theme/extensionRegistry.ts` (e.g. `panel-grid-bg` is registered there and consumed in `src/index.css`).
 
 | Component | File | Variable prefix |
 | --- | --- | --- |
@@ -100,7 +100,7 @@ Extensions are applied as bare CSS custom properties on `:root` (e.g., `"toolbar
 
 - `getAppThemeCssVariables()` in `shared/theme/themes.ts` converts a scheme into CSS variables.
 - `applyAppThemeToRoot()` in `src/theme/applyAppTheme.ts` applies those variables to the root element, clears stale extension vars between switches, and sets `data-theme`, `data-colorMode`, `color-scheme`, and `.dark`/`.light` classes.
-- `applyColorVisionMode()` overrides 19 tokens for colorblind simulation ("red-green" and "blue-yellow" modes).
+- `applyColorVisionMode()` (in `src/theme/applyAppTheme.ts`) overrides 39 tokens for colorblind simulation ("red-green" and "blue-yellow" modes). The override tables live in `shared/theme/colorVisionOverrides.ts` (`RED_GREEN_OVERRIDES`, `BLUE_YELLOW_OVERRIDES`, and the union `ALL_CVD_TOKENS`).
 - Tailwind-facing aliases live in `src/index.css`.
 
 ## Import Flow
@@ -139,7 +139,8 @@ Chrome DevTools → Rendering → Emulate vision deficiency: achromatopsia. This
 | File | Purpose |
 | --- | --- |
 | `shared/theme/palette.ts` | `ThemePalette` and `ThemeStrategy` types |
-| `shared/theme/types.ts` | `APP_THEME_TOKEN_KEYS`, `AppThemeTokenKey`, `AppColorScheme` |
+| `shared/theme/types.ts` | `APP_THEME_TOKEN_KEYS`, `AppThemeTokenKey`, `AppColorScheme`, `EXTENSION_KEYS`, `ExtensionKey` |
+| `shared/theme/extensionRegistry.ts` | Extension-key registry (`EXTENSION_KEY_REGISTRY`); OPTIONAL vs REQUIRED classification of component-override keys |
 | `shared/theme/semantic.ts` | `createSemanticTokens()` — palette to tokens compiler |
 | `shared/theme/themes.ts` | `createDaintreeTokens()`, `BUILT_IN_APP_SCHEMES`, `createThemeFromSource()` |
 | `shared/theme/contrast.ts` | `getThemeContrastWarnings()` WCAG validation |
@@ -149,6 +150,7 @@ Chrome DevTools → Rendering → Emulate vision deficiency: achromatopsia. This
 | `shared/theme/terminal.ts` | Maps resolved app tokens to xterm `ITheme` |
 | `shared/theme/entityColors.ts` | Panel brand colors, branch type Tailwind classes |
 | `src/theme/applyAppTheme.ts` | DOM injection of CSS vars, CVD overrides |
+| `shared/theme/colorVisionOverrides.ts` | CVD token tables (`RED_GREEN_OVERRIDES`, `BLUE_YELLOW_OVERRIDES`, `ALL_CVD_TOKENS`) |
 | `src/index.css` | Tailwind v4 `@theme inline` mappings |
 | `src/store/appThemeStore.ts` | Renderer theme state (Zustand) |
 | `src/config/terminalColorSchemes.ts` | Terminal-specific color scheme library |

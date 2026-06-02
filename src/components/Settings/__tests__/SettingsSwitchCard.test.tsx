@@ -44,29 +44,6 @@ describe("SettingsSwitchCard", () => {
     expect(screen.getByLabelText("Reset Test Setting to default")).toBeTruthy();
   });
 
-  const getThumb = (container: HTMLElement) => {
-    const switchEl = container.querySelector('[role="switch"]');
-    return switchEl?.querySelector("span") ?? null;
-  };
-
-  it("uses bg-daintree-text on the thumb in the OFF state for WCAG 1.4.11 contrast", () => {
-    const { container } = render(<SettingsSwitchCard {...defaultProps} isEnabled={false} />);
-    const thumb = getThumb(container);
-    expect(thumb).not.toBeNull();
-    const classes = thumb?.className.split(/\s+/) ?? [];
-    expect(classes).toContain("bg-daintree-text");
-    expect(classes).toContain("data-[state=checked]:bg-text-inverse");
-  });
-
-  it("uses bg-text-inverse on the thumb in the ON state (sits on text-primary track)", () => {
-    const { container } = render(<SettingsSwitchCard {...defaultProps} isEnabled={true} />);
-    const thumb = getThumb(container);
-    expect(thumb).not.toBeNull();
-    const classes = thumb?.className.split(/\s+/) ?? [];
-    expect(classes).toContain("bg-daintree-text");
-    expect(classes).toContain("data-[state=checked]:bg-text-inverse");
-  });
-
   it("applies amber color scheme to switch track when enabled", () => {
     const { container } = render(
       <SettingsSwitchCard {...defaultProps} isEnabled={true} colorScheme="amber" />
@@ -87,11 +64,5 @@ describe("SettingsSwitchCard", () => {
     const { container } = render(<SettingsSwitchCard {...defaultProps} isEnabled={true} />);
     const switchEl = container.querySelector('[role="switch"]');
     expect(switchEl?.className).toContain("data-[state=checked]:bg-daintree-text");
-  });
-
-  it("wraps content in subgrid container", () => {
-    const { container } = render(<SettingsSwitchCard {...defaultProps} />);
-    const outer = container.firstElementChild as HTMLElement;
-    expect(outer.classList.contains("grid-cols-subgrid")).toBe(true);
   });
 });

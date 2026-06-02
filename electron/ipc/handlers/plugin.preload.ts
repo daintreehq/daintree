@@ -23,6 +23,7 @@ export const PLUGIN_METHOD_CHANNELS = {
   registerAction: "plugin:actions-register",
   unregisterAction: "plugin:actions-unregister",
   getPanelKinds: "plugin:panel-kinds-get",
+  getAgents: "plugin:agents-get",
   getForgeProviders: "plugin:forge-providers-get",
   getDecorations: "plugin:file-decorations-get",
   getAuditRecords: "plugin:get-audit-records",

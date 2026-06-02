@@ -50,7 +50,7 @@ const mockGetAppMetrics = vi.fn<() => Electron.ProcessMetric[]>(() => []);
 vi.mock("electron", () => {
   function MockWebContentsView() {
     const wc = createMockWebContents();
-    return { webContents: wc, setBounds: vi.fn() };
+    return { webContents: wc, setBounds: vi.fn(), setBackgroundColor: vi.fn() };
   }
   return {
     app: {
@@ -115,6 +115,7 @@ vi.mock("../skeletonCss.js", () => ({
   INITIAL_COLOR_SCHEME_ARG: "--daintree-initial-color-scheme-id",
   INITIAL_PROJECT_ID_ARG: "--daintree-initial-project-id",
   resolveInitialColorSchemeId: vi.fn(() => "daintree"),
+  resolveInitialCanvasBackgroundColor: vi.fn(() => "#1f1b16"),
 }));
 
 vi.mock("../../services/ProjectStore.js", () => ({

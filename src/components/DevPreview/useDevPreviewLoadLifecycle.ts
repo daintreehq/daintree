@@ -98,7 +98,6 @@ export function useDevPreviewLoadLifecycle({
   // (undefined → id) doesn't rebind the webview listeners mid-load and clear
   // the load watchdog timer.
   const projectIdRef = useRef(projectId);
-  projectIdRef.current = projectId;
 
   const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const slowLoadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -108,17 +107,29 @@ export function useDevPreviewLoadLifecycle({
   // Mirror the active preset/rotation/DPR into refs so handleDidFinishLoad can
   // re-apply overrides after cross-origin navigation without the load-listener
   // effect depending on these values (which would tear down/rebuild load timers
-  // on every change). Updated on each render from the terminal store selector.
+  // on every change). The refs are kept in sync by the effect just below.
   const terminal = usePanelStore((s) => {
     const p = s.getTerminal(id);
     return p && isDevPreviewPanel(p) ? p : undefined;
   });
   const viewportPresetRef = useRef(terminal?.viewportPreset);
-  viewportPresetRef.current = terminal?.viewportPreset;
   const viewportRotatedRef = useRef(terminal?.viewportRotated ?? false);
-  viewportRotatedRef.current = terminal?.viewportRotated ?? false;
   const viewportDprRef = useRef(terminal?.viewportDpr ?? 1);
-  viewportDprRef.current = terminal?.viewportDpr ?? 1;
+
+  // Sync the latest projectId + viewport overrides into their refs after each
+  // commit. Writing refs during render is forbidden by the React Compiler, and
+  // these refs are only read from async webview event handlers (recordVisit,
+  // page-title-updated, did-finish-load) — which always fire after commit — so
+  // the post-commit write is current by the time they run. Keeping them as refs
+  // (not effect deps) is the whole point: it stops a late projectId hydration
+  // (undefined → id) or a viewport change from rebinding the webview listeners
+  // and clearing the in-flight load watchdog timer.
+  useEffect(() => {
+    projectIdRef.current = projectId;
+    viewportPresetRef.current = terminal?.viewportPreset;
+    viewportRotatedRef.current = terminal?.viewportRotated ?? false;
+    viewportDprRef.current = terminal?.viewportDpr ?? 1;
+  });
 
   const clearLoadTimers = useCallback(() => {
     if (slowLoadTimeoutRef.current) {

@@ -68,7 +68,7 @@ gh workflow run release-linux.yml   --ref develop -f dry_run=true
 gh workflow run release-windows.yml --ref develop -f dry_run=true
 ```
 
-Each dry run executes every gate and build job for its OS — checks, unit tests, that OS's E2E buckets (`core`, `online`, and all six auto-sharded `full-*` buckets — see #8053), and that OS's `build-daintree` job (macOS sign + notarize; Linux; Windows including Store package + WACK) — but **skips** the side effects that matter for an actual release:
+Each dry run executes every gate and build job for its OS — checks, unit tests, that OS's E2E buckets (`core`, `online`, and all seven auto-sharded `full-*` buckets — see #8053), and that OS's `build-daintree` job (macOS sign + notarize; Linux; Windows including Store package + WACK) — but **skips** the side effects that matter for an actual release:
 
 - No R2 upload (binaries or metadata)
 - No Microsoft Store submission (`Submit to Microsoft Store` is gated by `inputs.dry_run != true`)
@@ -96,10 +96,10 @@ macOS builds are signed with a Developer ID Application certificate. The signing
 
 ### How signing works in CI
 
-1. `apple-actions/import-codesign-certs@v3` imports the .p12 into a temp keychain
+1. `apple-actions/import-codesign-certs@v6` imports the .p12 into a temp keychain
 2. The .p8 key content is written from `APPLE_API_KEY` secret to a temp file
 3. `APPLE_API_KEY` env var is set to the **file path** (not content) for `notarytool --key`
-4. electron-builder signs the app, then submits to Apple for notarization via `notarytool`
+4. electron-builder signs the app, then the `afterSign` hook (`scripts/notarize-macos.cjs`) submits to Apple for notarization via `notarytool`
 
 ### Local signing keys
 
@@ -124,16 +124,19 @@ Notarization is enabled. All CI builds are signed and submitted to Apple's notar
 
 ### Key technical details
 
-- electron-builder 26.8.1 + @electron/notarize 2.5.0
+- electron-builder 26.8.1. Notarization is **not** driven by electron-builder's built-in `@electron/notarize` integration (that package is only a transitive dep now). Instead a custom `afterSign` hook runs — `scripts/notarize-macos.cjs`, wired at `electron-builder.config.cjs:97` (`afterSign`).
+- `mac.notarize` is set to `false` in `electron-builder.config.cjs` (line 103); the custom `afterSign` hook performs notarization itself, so the built-in path is intentionally disabled.
 - `APPLE_API_KEY` env var = **file path** to .p8 (not content, not Key ID)
 - `APPLE_API_KEY_ID` = 10-character Key ID
 - `APPLE_API_ISSUER` = Issuer UUID
-- `mac.notarize` in package.json only accepts `true` or `false` (not an object) in electron-builder 26.8.1
-- `@electron/notarize` calls `notarytool submit --wait` with no timeout — Apple delays can block CI indefinitely
+- The hook submits and waits as **two separate steps**: `notarytool submit` (120s exec timeout) then `notarytool wait --timeout 1800` (`WAIT_TIMEOUT_SECONDS`), bounded so an Apple delay can't block CI indefinitely. It persists a resumable `.notarization-state.json` in the out dir, so a re-run can reattach to an in-flight submission instead of resubmitting, and staples each arch on success.
 
 ### Skip notarization flag
 
-The workflow has a `skip_notarization` input for manual dispatches. This passes `-c.mac.notarize=false` to electron-builder at build time, overriding whatever is in `package.json`.
+There are two skip paths:
+
+- The `skip_notarization` workflow input (manual dispatch). `release-macos.yml:193-195` sets `EXTRA_ARGS="-c.mac.notarize=false"` for electron-builder when it's true — though `notarize` is already `false` in `electron-builder.config.cjs`, so this is belt-and-suspenders.
+- The actual `afterSign` hook is gated by the `DAINTREE_SKIP_NOTARIZATION=true` env var (`scripts/notarize-macos.cjs:52`); when set, the hook returns immediately without submitting.
 
 ### Debug logging
 
@@ -153,7 +156,7 @@ Artifacts are uploaded to Cloudflare R2 via AWS CLI:
 | `R2_ACCESS_KEY_ID`     | R2 access key                    |
 | `R2_SECRET_ACCESS_KEY` | R2 secret key                    |
 | `R2_ENDPOINT`          | R2 endpoint URL                  |
-| `R2_BUCKET`            | Bucket name (`daintree-updates`) |
+| `DAINTREE_R2_BUCKET`   | Bucket name (`daintree-updates`) |
 
 ## Entitlements
 
@@ -161,6 +164,7 @@ The hardened runtime entitlements are in `build/entitlements.mac.plist`:
 
 - `com.apple.security.cs.allow-jit` — required for V8 JIT in Electron 41 (no longer requires `allow-unsigned-executable-memory`, dropped in Electron 12)
 - `com.apple.security.cs.disable-library-validation` — allows loading native .node modules at runtime (pty.node, better_sqlite3.node). Retained until the CI TeamIdentifier audit (`scripts/ci/verify-team-identifier.sh`) confirms every Mach-O in the bundle shares the expected Team ID
+- `com.apple.security.device.audio-input` (`true`) — microphone access for the voice dictation feature. `com.apple.security.device.camera` is explicitly `false`.
 
 ## Local Development Builds
 

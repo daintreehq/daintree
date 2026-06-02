@@ -1,4 +1,4 @@
-import { Profiler, Suspense, lazy, useCallback, useEffect, useState } from "react";
+import { Profiler, Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import {
   isElectronAvailable,
@@ -28,6 +28,7 @@ import { useGitHubRateLimit } from "./hooks/useGitHubRateLimit";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { usePluginActions } from "./hooks/usePluginActions";
 import { usePluginPanelKinds } from "./hooks/usePluginPanelKinds";
+import { usePluginAgents } from "./hooks/usePluginAgents";
 import { usePluginKeybindings } from "./hooks/usePluginKeybindings";
 import { useUpdateListener } from "./hooks/useUpdateListener";
 import { useStoreUpdateListener } from "./hooks/useStoreUpdateListener";
@@ -44,6 +45,10 @@ import { usePluginBridge } from "./hooks/usePluginBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { useSoundPlaybackListener } from "./hooks/useSoundPlaybackListener";
 import { notifyViewPainted, removeStartupSkeleton } from "./utils/removeStartupSkeleton";
+// Attaches the notification E2E backdoor when launched with DAINTREE_E2E_MODE=1.
+// The installer self-gates on `__DAINTREE_E2E_MODE__`, so this is inert in
+// production sessions.
+import { installE2ENotificationBackdoor } from "./lib/e2eNotificationBackdoor";
 import { useAppBoot } from "./hooks/app/useAppBoot";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
 import {
@@ -58,6 +63,7 @@ import {
   useOrchestrationMilestones,
   useAgentWaitingNudge,
   useFocusOnActivateIntent,
+  usePluginDeepLink,
   useNotificationHistoryPruning,
   useRecipeFocusReload,
   useUnloadCleanup,
@@ -207,6 +213,13 @@ const LazyShortcutReferenceDialog = lazy(() =>
   preloadShortcutReferenceDialog().then((m) => ({ default: m.ShortcutReferenceDialog }))
 );
 
+function preloadPluginManagerView() {
+  return import("./components/Plugin/PluginManagerView");
+}
+const LazyPluginManagerView = lazy(() =>
+  preloadPluginManagerView().then((m) => ({ default: m.PluginManagerView }))
+);
+
 function preloadOnboardingFlow() {
   return import("./components/Onboarding/OnboardingFlow");
 }
@@ -313,8 +326,13 @@ import {
   usePaletteStore,
   useNotificationSettingsStore,
   usePreferencesStore,
+  usePluginManagerStore,
+  useDiagnosticsStore,
+  usePerformanceModeStore,
 } from "./store";
+import { usePerfMetricsStore } from "./store/perfMetricsStore";
 import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
+import { useRecipeConflictStore } from "./store/recipeConflictStore";
 // Eager side-effect import: registers the GitHub plugin's builtin view slots
 // (bulkCreateWorktreeDialog, issueSelector) at module-eval time, before first
 // render. Must stay static — a deferred/idle import races the user, so
@@ -367,11 +385,53 @@ function AppInner() {
     // fault-mode tests to pick up a token seeded via __daintreeSeedGitHubToken
     // so the no-token empty state doesn't short-circuit IPC fault paths.
     window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__ = () => useGitHubConfigStore.getState().refresh();
+    // Parks a synthetic in-repo recipe stale-write conflict so E2E can exercise
+    // the RecipeConflictDialog without racing a real on-disk file mutation. The
+    // returned promise resolves with the user's choice; tests don't await it —
+    // they assert the dialog renders and that reload/overwrite dismiss it.
+    window.__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__ = (recipeName: string) => {
+      void useRecipeConflictStore.getState().requestConflict({
+        recipeId: `inrepo-${recipeName}`,
+        recipeName,
+        updates: { name: recipeName },
+      });
+    };
+
+    // Per-window store accessors for the multi-window isolation spec (#9599).
+    // Each project view is its own V8 context, so these Zustand singletons are
+    // per-window — mutating one window's store must not leak into another's.
+    // Gated on the preload-injected __DAINTREE_E2E_MODE__ flag (set only under
+    // DAINTREE_E2E_MODE=1) so the accessors never attach in production.
+    if (window.__DAINTREE_E2E_MODE__ === true) {
+      window.__DAINTREE_E2E_DIAGNOSTICS_STATE__ = () => ({
+        isOpen: useDiagnosticsStore.getState().isOpen,
+      });
+      window.__DAINTREE_E2E_OPEN_DIAGNOSTICS__ = () => useDiagnosticsStore.getState().openDock();
+      window.__DAINTREE_E2E_PERF_METRICS_STATE__ = () => {
+        const s = usePerfMetricsStore.getState();
+        return { fps: s.fps, lafCount30s: s.lafCount30s, cls30s: s.cls30s };
+      };
+      window.__DAINTREE_E2E_SET_PERF_METRIC__ = (fps: number) =>
+        usePerfMetricsStore.getState().setLiveMetrics({ fps, lafCount30s: 0, cls30s: 0 });
+      window.__DAINTREE_E2E_PERF_MODE_STATE__ = () => ({
+        performanceMode: usePerformanceModeStore.getState().performanceMode,
+      });
+      window.__DAINTREE_E2E_SET_PERF_MODE__ = (enabled: boolean) =>
+        usePerformanceModeStore.getState().setPerformanceMode(enabled);
+    }
+
     return () => {
       delete window.__DAINTREE_E2E_ERROR_STORE__;
       delete window.__DAINTREE_E2E_ADD_ERROR__;
       delete window.__DAINTREE_E2E_CLEAR_ERRORS__;
       delete window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__;
+      delete window.__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__;
+      delete window.__DAINTREE_E2E_DIAGNOSTICS_STATE__;
+      delete window.__DAINTREE_E2E_OPEN_DIAGNOSTICS__;
+      delete window.__DAINTREE_E2E_PERF_METRICS_STATE__;
+      delete window.__DAINTREE_E2E_SET_PERF_METRIC__;
+      delete window.__DAINTREE_E2E_PERF_MODE_STATE__;
+      delete window.__DAINTREE_E2E_SET_PERF_MODE__;
     };
   }, []);
 
@@ -455,6 +515,26 @@ function AppInner() {
 
   useThemeBrowserSettingsBridge(isSettingsOpen, setIsSettingsOpen);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  // The plugin manager graduated from a modal to a first-class view (#9558);
+  // visibility now lives in usePluginManagerStore so the `app.pluginManager`
+  // action and `daintree://` deep links can open it without prop-drilling.
+  const isPluginManagerOpen = usePluginManagerStore((s) => s.isOpen);
+  // Keep the view mounted after its first open so the plugin list and any
+  // pending operation state survive a close/reopen (mirrors SettingsDialog).
+  const [hasOpenedPluginManager, setHasOpenedPluginManager] = useState(false);
+  useEffect(() => {
+    if (isPluginManagerOpen) setHasOpenedPluginManager(true);
+  }, [isPluginManagerOpen]);
+  // Close Settings when the manager opens so the two surfaces don't stack —
+  // covers both entry points (the `app.pluginManager` action dispatched from
+  // the Plugins settings tab, and the deep-link path below). Mirrors the
+  // theme-browser <-> Settings coordination in useThemeBrowserSettingsBridge.
+  const prevPluginManagerOpenRef = useRef(false);
+  useEffect(() => {
+    const wasOpen = prevPluginManagerOpenRef.current;
+    prevPluginManagerOpenRef.current = isPluginManagerOpen;
+    if (!wasOpen && isPluginManagerOpen) setIsSettingsOpen(false);
+  }, [isPluginManagerOpen, setIsSettingsOpen]);
   const isThemePaletteOpen = usePaletteStore((state) => state.activePaletteId === "theme");
   const isLogLevelPaletteOpen = usePaletteStore((state) => state.activePaletteId === "log-level");
   const {
@@ -503,6 +583,15 @@ function AppInner() {
   // paint signal arrives before panel state is loaded — a direct dispatch
   // would silently no-op against an empty panelStore).
   useFocusOnActivateIntent(isStateLoaded);
+  // `daintree://` deep-link receiver (#9559). Surfaces the intent once hydration
+  // settles; the effect below opens the Plugin Manager, which consumes it.
+  const pluginDeepLink = usePluginDeepLink(isStateLoaded);
+  useEffect(() => {
+    if (!pluginDeepLink.intent) return;
+    // Opening the manager also closes Settings via the open-transition effect
+    // above, so the two surfaces don't stack when the deep link arrives.
+    usePluginManagerStore.getState().open();
+  }, [pluginDeepLink.intent]);
   // The skeleton is z-index 9999 and intercepts pointer events. The crash
   // recovery dialog is rendered before hydration completes, so without this
   // the dialog would be visible but unclickable until hydration finishes
@@ -548,6 +637,7 @@ function AppInner() {
       void preloadSendToAgentPalette();
       void preloadQuickCreatePalette();
       void preloadLogLevelPalette();
+      void preloadPluginManagerView();
       import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
       // Warm the FileViewerModal/DiffViewer chunk split out of the eager
@@ -591,7 +681,7 @@ function AppInner() {
 
   const overviewWorktreeActions = useWorktreeActions();
 
-  useAppEventListeners();
+  useAppEventListeners({ onOpenNewTerminalPalette: newTerminalPalette.open });
 
   const { handleErrorRetry, handleCancelRetry } = useErrorRetry();
 
@@ -649,6 +739,7 @@ function AppInner() {
 
   usePluginActions();
   usePluginPanelKinds();
+  usePluginAgents();
   usePluginKeybindings();
 
   useMenuActions();
@@ -1213,6 +1304,22 @@ function AppInner() {
 
             <ErrorBoundary
               variant="component"
+              componentName="PluginManagerView"
+              resetKeys={[Number(isPluginManagerOpen)]}
+              onError={() => usePluginManagerStore.getState().close()}
+            >
+              {(isPluginManagerOpen || hasOpenedPluginManager) && (
+                <Suspense fallback={null}>
+                  <LazyPluginManagerView
+                    deepLinkIntent={pluginDeepLink.intent}
+                    onDeepLinkConsumed={pluginDeepLink.clear}
+                  />
+                </Suspense>
+              )}
+            </ErrorBoundary>
+
+            <ErrorBoundary
+              variant="component"
               componentName="TerminalInfoDialogHost"
               resetKeys={[Number(isStateLoaded)]}
             >
@@ -1431,6 +1538,10 @@ function AppInner() {
 // the cold-start `#startup-skeleton` (a sibling of `#root`) visible during the
 // flight — it's removed by `removeStartupSkeleton()` once hydration completes.
 function App() {
+  useEffect(() => {
+    installE2ENotificationBackdoor();
+  }, []);
+
   // Signal the main process that React has committed its first frame so
   // ProjectViewManager can release the outgoing view of a cold project switch.
   // This lives in the Suspense *parent* (not `AppInner`) so it fires the moment

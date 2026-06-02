@@ -25,7 +25,7 @@ plugins/builtin/gitea/
     └── __tests__/         # unit tests, mirroring github's
 ```
 
-Keep transport, auth, and normalization in their own modules. `forgeProvider.ts` should read as a thin adapter from your transport to the typed surface — the GitHub provider's `forgeProvider.ts` is ~600 lines and almost entirely shape-mapping helpers.
+Keep transport, auth, and normalization in their own modules. `forgeProvider.ts` should read as a thin adapter from your transport to the typed surface — the GitHub provider's `forgeProvider.ts` is ~1200 lines and almost entirely shape-mapping helpers.
 
 ## Declare the manifest entry
 
@@ -38,7 +38,7 @@ Add a `forgeProviders` contribution to `plugin.json`. Daintree reads this eagerl
   "displayName": "Gitea",
   "description": "Gitea forge provider — issues, pull requests, CI status.",
   "main": "main/index.js",
-  "engines": { "daintree": "^0.11.0" },
+  "engines": { "daintree": ">=0.11.0" },
   "contributes": {
     "forgeProviders": [
       {
@@ -56,7 +56,7 @@ Add a `forgeProviders` contribution to `plugin.json`. Daintree reads this eagerl
 | --- | --- | --- |
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. The built-in GitHub plugin uses the bare `github`. Must match the `descriptor.id` you pass to `registerForgeProvider`. |
 | `name` | yes | Display label in Preferences → Forge Integrations. |
-| `matches` | yes | List of exact hostnames. The host extracts the hostname from the project's git remote (HTTPS, SSH, and SCP-form `git@host:owner/repo.git` URLs all handled), lowercases and trims it, then matches it for **exact string equality** against each entry — there is no glob, wildcard, or suffix matching. List every distinct hostname your forge serves (e.g. a self-hosted instance and its CI mirror) as separate entries. First matching provider wins. |
+| `matches` | yes | List of exact hostnames. The host extracts the hostname from the project's git remote (HTTPS, SSH, and SCP-form `git@host:owner/repo.git` URLs all handled), lowercases and trims it, then matches it for **exact string equality** against each entry. Matching is case-insensitive and strips a leading `www.` from both the remote hostname and each pattern before comparing — but there is still no glob, wildcard, or suffix matching. List every distinct hostname your forge serves (e.g. a self-hosted instance and its CI mirror) as separate entries. First matching provider wins. |
 | `capabilities` | no | Informational hints driving the Preferences "supports: …" display only. The host does **not** gate behavior on this array — see [Add optional capabilities](#add-optional-capabilities). |
 | `settingsScopeRef` | no | ID prefix in this plugin's `settings` contributions, used to group provider settings. |
 | `viewRefs` | no | IDs of `experimental_views` contributions shown under this provider's panel section. |
@@ -102,8 +102,11 @@ Return the disposer `registerForgeProvider` hands back. `descriptor.id` must mat
 | `buildPRsUrl(repo, opts?)` | `string` | — |
 | `buildCommitsUrl(repo, branch?)` | `string` | — |
 | `assignIssue(repo, n, user)` | `Promise<void>` | Throw `"Not supported"` if your forge can't assign. |
+| `unassignIssue(repo, n, user)` | `Promise<void>` | Base method, paired with `assignIssue`. Throw `"Not supported"` if your forge can't unassign. |
 | `validateToken(token)` | `Promise<AuthValidation>` | Validate an arbitrary token (used by the token-entry UI before storing it). |
 | `getRateLimit?()` | `Promise<RateLimitInfo>` | Optional. Project your transport's rate-limit signal into the uniform shape. `null` per dimension the provider doesn't report. |
+
+Beyond the base surface, `forge.ts` declares several optional performance/resilience hooks worth opting into: `findPRsByBranches?` (batch variant of `findPRByBranch` for many-branch sweeps), `clearPullRequestCaches?` (provider-owned cache invalidation on explicit refresh), `getRepoActivityProbe?` (cheap freshness token to skip expensive list refreshes), and `classifyPushError?` (map raw `git push` stderr to a provider-stable error code). Read `shared/types/forge.ts` for their full contracts.
 
 The shape-mapping is the bulk of the work. Mirror the GitHub provider's `toForgeIssue` / `toForgePR` helpers (`plugins/builtin/github/main/forgeProvider.ts`): one pure function per domain object, defensively reading untyped transport nodes and producing the typed shape.
 
@@ -150,7 +153,7 @@ export const giteaForgeProvider: ForgeProviderImpl = {
 };
 ```
 
-The capability sub-interfaces are `ReviewCapability`, `ApprovalCapability`, `ReleaseCapability`, `ProjectBoardCapability`, and `MilestoneCapability`. Omitting the field is how you declare non-support — the base interface never changes when a capability is added.
+The capability sub-interfaces are `ReviewCapability`, `ApprovalCapability`, `ReleaseCapability`, `ProjectBoardCapability`, `MilestoneCapability`, and `BatchLookupCapability`. Omitting the field is how you declare non-support — the base interface never changes when a capability is added.
 
 **Probe with truthiness, not `in`.** The host checks capability presence with `if (provider.reviews)`, not `"reviews" in provider`. An optional property explicitly set to `undefined` still satisfies the `in` operator, so `in` would falsely report the capability as available. Do the same in any code that consumes a provider.
 
@@ -158,9 +161,9 @@ The manifest's `capabilities` array is informational only — it drives the Pref
 
 ## Expose the provider's CLI to the assistant
 
-The Daintree Assistant runs forge CLIs (`gh` for GitHub) inside an allowlist at `help/.claude/settings.json`. When you add a provider whose CLI the assistant should be able to drive, that allowlist needs a corresponding `Bash(...)` entry — `Bash(glab*)` for GitLab, `Bash(tea*)` for Gitea, `Bash(bb*)` for Bitbucket.
+The Daintree Assistant runs forge CLIs inside an allowlist at `help/.claude/settings.json`. The `allow` list already grants `Bash(gh *)`, `Bash(glab *)` (GitLab), and `Bash(tea *)` (Gitea); the `deny` list blocks the destructive create/merge mutations for each (e.g. `Bash(glab mr create*)`, `Bash(glab mr merge*)`, `Bash(tea pulls merge*)`).
 
-The allowlist schema is being widened in [#8360](https://github.com/daintreehq/daintree/issues/8360); coordinate the CLI entry with that work rather than hand-editing patterns ahead of it. Note the requirement in your provider's PR so the allowlist change lands alongside it.
+When you add a provider whose CLI the assistant should be able to drive, add it directly: an `allow` entry for the CLI binary (`Bash(bb *)` for Bitbucket, etc.) plus the corresponding `deny` entries for that CLI's issue/PR create and merge commands. Bitbucket's `bb` is still to be added by a future provider.
 
 ## Tests to ship
 
@@ -182,7 +185,7 @@ External plugins use `@daintreehq/plugin-testing` (`createMockHost`) — see [De
 - [ ] `state` normalized and `rawState` preserved on every `Issue`/`PR`
 - [ ] Verbatim transport node in `rawData`; no first-party reads of it
 - [ ] Optional capabilities present only when supported; consumers probe with truthiness
-- [ ] CLI allowlist requirement noted for [#8360](https://github.com/daintreehq/daintree/issues/8360)
+- [ ] CLI allow + create/merge deny entries added to `help/.claude/settings.json` if the assistant should drive your forge's CLI
 - [ ] Unit tests mirroring the GitHub provider's coverage
 
 ## Related

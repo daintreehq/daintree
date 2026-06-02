@@ -11,10 +11,11 @@ Playwright is installed as a dev dependency (`@playwright/test`). No browser dow
 ```bash
 npm run test:e2e                   # Run every Playwright project
 npm run test:e2e:core              # Lightweight release-gating smoke
-npm run test:e2e:full              # Run all six full-* buckets
+npm run test:e2e:full              # Run all seven full-* buckets
 npm run test:e2e:full-terminal     # Run a single bucket — substitute any of:
                                    #   full-terminal full-worktree full-presets
                                    #   full-platform full-panels full-resilience
+                                   #   full-plugins
 npm run test:e2e:online            # Claude/OpenCode-dependent online tests
 npm run test:e2e:nightly           # Soak / memory-leak nightly tests
 npx playwright test e2e/full/terminal/core-terminal-search.spec.ts  # Single file
@@ -23,7 +24,7 @@ PWDEBUG=1 npx playwright test --project=core                         # Debug mod
 
 ## Test Suites
 
-Tests are split into nine Playwright projects:
+Tests are split into eleven Playwright projects:
 
 - **core** — Lightweight deterministic release-gate smoke (5 specs). This is the Playwright e2e smoke suite (`npm run test:e2e:core`), distinct from the Electron stability soak (`npm run test:smoke`). See [test:smoke vs Playwright core](#testsmoke-vs-playwright-core) below.
 - **full-terminal** — PTY mechanics, scrollback, search, layout, recipes, output flood, context injection, fleet broadcast.
@@ -32,25 +33,30 @@ Tests are split into nine Playwright projects:
 - **full-platform** — Settings, persistence, a11y, keyboard, OS-shell surfaces, oauth, security.
 - **full-panels** — Browser, dev-preview, portal, review hub, file viewer, drag-drop, action palette, toolbar chrome.
 - **full-resilience** — Errors, IPC, crashes, races, perf budgets, diagnostics.
+- **full-plugins** — Plugin manager UI, plugin lifecycle (enable/disable, restart gating), and manifest contribution rendering against the sideloaded sample plugin.
 - **online** — Tests that interact with real agent CLIs (requires `ANTHROPIC_API_KEY`).
 - **nightly** — Long-running memory-leak detection (workers=1, no retries).
+- **screenshots** — Marketing screenshot pipeline. Run on demand via `screenshots.yml`, not part of the PR/release gates.
 
 ## Configuration
 
-`playwright.config.ts` at the project root defines the projects. All `full-*` buckets share `coreTimeout` and `retries: 2 (CI)`. `core` and `online` keep their own timeouts; `nightly` runs at workers=1 with no retries.
+`playwright.config.ts` at the project root defines the projects. All `full-*` buckets share `coreTimeout` and `retries: isCI ? 2 : 0`. `core` and `online` keep their own timeouts; `nightly` runs at workers=1 with no retries.
 
-| Project         | testDir                 | retries (CI) | failOnFlakyTests | workers |
-| --------------- | ----------------------- | ------------ | ---------------- | ------- |
-| core            | `./e2e/core`            | 2            | true             | 1-2     |
-| full-terminal   | `./e2e/full/terminal`   | 2            | false            | 1-2     |
-| full-worktree   | `./e2e/full/worktree`   | 2            | false            | 1-2     |
-| full-presets    | `./e2e/full/presets`    | 2            | false            | 1-2     |
-| full-platform   | `./e2e/full/platform`   | 2            | false            | 1-2     |
-| full-panels     | `./e2e/full/panels`     | 2            | false            | 1-2     |
-| full-resilience | `./e2e/full/resilience` | 2            | false            | 1-2     |
-| online          | `./e2e/online`          | 2            | true             | 1-2     |
-| nightly         | `./e2e/nightly`         | 0            | false            | 1       |
-| screenshots     | `./e2e/screenshots`     | 0            | false            | 1-2     |
+`failOnFlakyTests` is a single **top-level** flag (not per-project), wired to `process.env.FAIL_ON_FLAKY_TESTS === "true"`. Only the release-gating runs (`core`, `online`) set that env, so a test that passes on retry fails the run there but is tolerated on PR `full-*` runs for velocity.
+
+| Project         | testDir                 | retries (CI) | workers |
+| --------------- | ----------------------- | ------------ | ------- |
+| core            | `./e2e/core`            | 2            | 1-2     |
+| full-terminal   | `./e2e/full/terminal`   | 2            | 1-2     |
+| full-worktree   | `./e2e/full/worktree`   | 2            | 1-2     |
+| full-presets    | `./e2e/full/presets`    | 2            | 1-2     |
+| full-platform   | `./e2e/full/platform`   | 2            | 1-2     |
+| full-panels     | `./e2e/full/panels`     | 2            | 1-2     |
+| full-resilience | `./e2e/full/resilience` | 2            | 1-2     |
+| full-plugins    | `./e2e/full/plugins`    | 2            | 1-2     |
+| online          | `./e2e/online`          | 1            | 1-2     |
+| nightly         | `./e2e/nightly`         | 0            | 1       |
+| screenshots     | `./e2e/screenshots`     | 0            | 1-2     |
 
 ## Directory Structure
 
@@ -60,20 +66,20 @@ e2e/
 │   ├── selectors.ts     # Centralized SEL constants for all test selectors
 │   ├── launch.ts        # launchApp(), mockOpenDialog(), AppContext
 │   ├── fixtures.ts      # createFixtureRepo(), createFixtureRepos()
-│   ├── project.ts       # openProject(), completeOnboarding(), openAndOnboardProject()
+│   ├── project.ts       # openProject(), dismissTelemetryConsent(), openAndOnboardProject()
 │   ├── terminal.ts      # getTerminalText(), waitForTerminalText(), runTerminalCommand()
 │   └── panels.ts        # getFirstGridPanel(), getGridPanelCount(), getDockPanelCount()
 ├── core/                # 5 smoke specs (release gate)
 │   └── core-*.spec.ts
 ├── full/
-│   ├── terminal/        # 15 specs — PTY mechanics
-│   ├── worktree/        # 11 specs — worktree, project, git
-│   ├── presets/         # 17 specs — agent presets, recipes
-│   ├── platform/        # 17 specs — settings, persistence, a11y, oauth
-│   ├── panels/          # 16 specs — browser, dev-preview, portal, review hub
-│   └── resilience/      # 18 specs — errors, IPC, crashes, races, perf
-├── online/              # 3 agent-integration specs (release gate)
-│   └── *-online.spec.ts
+│   ├── terminal/        # PTY mechanics
+│   ├── worktree/        # worktree, project, git
+│   ├── presets/         # agent presets, recipes
+│   ├── platform/        # settings, persistence, a11y, oauth
+│   ├── panels/          # browser, dev-preview, portal, review hub
+│   └── resilience/      # errors, IPC, crashes, races, perf
+├── online/              # agent-integration specs (release gate)
+│   └── *.spec.ts
 └── nightly/             # 2 memory-leak specs (nightly only)
     └── nightly-*.spec.ts
 ```
@@ -101,7 +107,7 @@ await window.locator(SEL.worktree.card("main")).click();
 
 ### Project Helper (`e2e/helpers/project.ts`)
 
-`openAndOnboardProject()` combines dialog mocking, folder opening, and onboarding wizard completion.
+`openAndOnboardProject()` combines dialog mocking, folder opening, and onboarding wizard completion. `dismissTelemetryConsent()` clears the first-run telemetry consent prompt when present.
 
 ### Terminal Helper (`e2e/helpers/terminal.ts`)
 
@@ -109,7 +115,7 @@ await window.locator(SEL.worktree.card("main")).click();
 
 ## Working with xterm.js Terminals
 
-xterm.js v6 uses the **DOM renderer** by default. Terminal output is rendered in `.xterm-rows`, making it readable via Playwright locators.
+Terminals lease the WebGL renderer (`@xterm/addon-webgl`) when GPU acceleration is available, so the on-screen glyphs aren't reliably present in the DOM. `getTerminalText()` reads through the `__daintreeReadTerminalBuffer` buffer-API bridge first (works with WebGL or the DOM renderer) and only falls back to `.xterm-rows` `innerText` when the buffer reader is unavailable. Prefer `getTerminalText()` / `waitForTerminalText()` over reading `.xterm-rows` directly.
 
 ### Reading terminal output
 
@@ -143,7 +149,7 @@ Components have `data-testid` and `data-worktree-branch` attributes for reliable
 
 ### `e2e.yml` (unified runner)
 
-A single reusable workflow runs every E2E suite. Pick one via the `suite` input: `full` (meta — all six buckets sequentially on one runner; workflow_dispatch default), `core`, any of the six `full-*` buckets (`full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`), `online`, or `nightly`.
+A single reusable workflow runs every E2E suite. Pick one via the `suite` input: `full` (meta — all seven buckets sequentially on one runner; workflow_dispatch default), `core`, any of the seven `full-*` buckets (`full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`, `full-plugins`), `online`, or `nightly`.
 
 - **Triggers:** workflow_dispatch, workflow_call
 - **Matrix:** macOS-14, ubuntu-22.04, windows-latest (selectable via `platform`)

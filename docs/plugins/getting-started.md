@@ -17,7 +17,7 @@ cd my-first-plugin
 
 `npx create-daintree-plugin my-first-plugin` is an equivalent npm-init shim that forwards to the same scaffolder.
 
-The scaffolder asks a few questions (plugin name, what contribution points to include, package manager) and generates:
+The scaffolder asks for a publisher segment, a display name, and a template (command, view, mcp, or full) and generates:
 
 ```
 my-first-plugin/
@@ -56,7 +56,7 @@ A minimal `plugin.json` looks like:
 }
 ```
 
-The `commands[].id` maps to `src/say-hello.{ts,tsx,js,mjs}` by filesystem convention. Its default export becomes the command handler. See [Contribution points → Commands](./contribution-points.md#commands) for full details.
+The `commands[].id` maps to `src/say-hello.{ts,tsx,js,mjs}` by filesystem convention. Its default export becomes the command handler. See [Contribution points → Commands](./contribution-points.md#commands--shipped) for full details.
 
 ## Write the command
 

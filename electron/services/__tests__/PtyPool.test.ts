@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PtyPool } from "../PtyPool.js";
+import { PtyPool, destroyPty } from "../PtyPool.js";
+import type { IPty } from "node-pty";
 
 const spawnMock = vi.fn();
 
@@ -886,5 +887,70 @@ describe("PtyPool", () => {
       expect(pool.acquireByKey("/repo", "env-c")?.process).toBe(procs[2]);
       pool.dispose();
     });
+  });
+});
+
+describe("destroyPty — Windows ConPTY double-free guard (#9551)", () => {
+  const realPlatform = process.platform;
+
+  function setPlatform(platform: NodeJS.Platform): void {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  }
+
+  afterEach(() => {
+    setPlatform(realPlatform);
+  });
+
+  function fakePty(overrides: Record<string, unknown> = {}): {
+    pty: IPty;
+    destroy: ReturnType<typeof vi.fn>;
+    kill: ReturnType<typeof vi.fn>;
+  } {
+    const destroy = vi.fn();
+    const kill = vi.fn();
+    const pty = { kill, destroy, ...overrides } as unknown as IPty;
+    return { pty, destroy, kill };
+  }
+
+  it("skips destroy()/kill() on Windows once the pty agent has recorded an exit", () => {
+    setPlatform("win32");
+    const { pty, destroy, kill } = fakePty({ _agent: { exitCode: 0 } });
+
+    destroyPty(pty);
+
+    expect(destroy).not.toHaveBeenCalled();
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("issues a single kill() on a live Windows pty and never destroy() (avoids the double native kill)", () => {
+    setPlatform("win32");
+    const { pty, destroy, kill } = fakePty({ _agent: { exitCode: undefined } });
+
+    destroyPty(pty);
+
+    // destroy() + kill() would both route to _ptyNative.kill, double-freeing the
+    // pseudoconsole. Exactly one native kill is the safe maximum on Windows.
+    expect(destroy).not.toHaveBeenCalled();
+    expect(kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("always tears down on non-Windows even after exit (releases the master fd)", () => {
+    setPlatform("linux");
+    const { pty, destroy, kill } = fakePty({ _agent: { exitCode: 0 } });
+
+    destroyPty(pty);
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("tears down mocks without an agent on Windows (no exit signal available)", () => {
+    setPlatform("win32");
+    const { pty, destroy, kill } = fakePty();
+
+    destroyPty(pty);
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(kill).toHaveBeenCalledTimes(1);
   });
 });

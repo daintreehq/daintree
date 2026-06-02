@@ -71,6 +71,11 @@ import {
   getFileDecorationImpls,
   getRegisteredFileDecorationProviders,
 } from "../fileDecorationRegistry.js";
+import {
+  clearPluginAgentRegistryForTests,
+  getPluginAgentRegistry,
+} from "../../../shared/config/pluginAgentRegistry.js";
+import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
@@ -88,6 +93,7 @@ type PluginManifestShape = {
   version: string;
   displayName?: string;
   main?: string;
+  capabilities?: string[];
   contributes?: {
     panels?: unknown[];
     toolbarButtons?: unknown[];
@@ -96,6 +102,7 @@ type PluginManifestShape = {
     mcpServers?: unknown[];
     forgeProviders?: unknown[];
     fileDecorationProviders?: unknown[];
+    agents?: unknown[];
   };
 };
 
@@ -129,6 +136,11 @@ function readMarker(key: string): unknown {
   return (globalThis as Record<string, unknown>)[key];
 }
 
+async function initializeAndActivate(service: PluginService): Promise<void> {
+  await service.initialize();
+  await service.activateStartupFinishedPlugins();
+}
+
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-plugin-int-"));
 });
@@ -143,6 +155,7 @@ afterEach(async () => {
     clearForgeProviderRegistry();
     clearFileDecorationRegistry();
     clearFileDecorationImplRegistry();
+    clearPluginAgentRegistryForTests();
     storeState.clear();
     for (const key of globalMarkers) {
       delete (globalThis as Record<string, unknown>)[key];
@@ -458,6 +471,85 @@ describe("PluginService integration — forge provider contributions", () => {
   });
 });
 
+describe("PluginService integration — agent contributions (issue #9560)", () => {
+  it("registers a manifest agents entry and unregisters it on unload", async () => {
+    await writePlugin("acme.agent-plugin", {
+      name: "acme.agent-plugin",
+      version: "1.0.0",
+      capabilities: ["agent:register"],
+      contributes: {
+        agents: [
+          {
+            id: "acme-agent",
+            name: "Acme Agent",
+            command: "acme",
+            args: ["--flag"],
+            color: "#3366ff",
+            iconId: "terminal",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    // Flush the coalesced microtask broadcast scheduled on load.
+    await Promise.resolve();
+
+    expect(getPluginAgentRegistry()["acme-agent"]).toBeDefined();
+    const config = getEffectiveAgentConfig("acme-agent");
+    expect(config?.name).toBe("Acme Agent");
+    expect(config?.command).toBe("acme");
+
+    expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledWith("events:push", {
+      name: "plugin:agents-changed",
+      payload: {
+        agents: expect.objectContaining({ "acme-agent": expect.anything() }),
+        complete: false,
+      },
+    });
+
+    vi.mocked(broadcastToRenderer).mockClear();
+    service.unloadPlugin("acme.agent-plugin");
+    await Promise.resolve();
+
+    expect(getPluginAgentRegistry()["acme-agent"]).toBeUndefined();
+    expect(getEffectiveAgentConfig("acme-agent")).toBeUndefined();
+    expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledWith(
+      "events:push",
+      expect.objectContaining({
+        name: "plugin:agents-changed",
+        payload: expect.objectContaining({ complete: true }),
+      })
+    );
+  });
+
+  it("does not register agents when the manifest omits the agent:register capability", async () => {
+    await writePlugin("acme.no-cap", {
+      name: "acme.no-cap",
+      version: "1.0.0",
+      contributes: {
+        agents: [
+          {
+            id: "uncapped-agent",
+            name: "Uncapped",
+            command: "uncapped",
+            color: "#3366ff",
+            iconId: "terminal",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    // The manifest fails strict validation (capability gate), so the plugin
+    // never loads its agent into the registry.
+    expect(getPluginAgentRegistry()["uncapped-agent"]).toBeUndefined();
+  });
+});
+
 describe("PluginService integration — file decoration provider contributions", () => {
   it("registers a manifest fileDecorationProviders entry and unregisters it on unload", async () => {
     await writePlugin("acme.decor-plugin", {
@@ -520,7 +612,7 @@ describe("PluginService integration — file decoration provider contributions",
     );
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
 
     const impls = getFileDecorationImpls("my-scope:/x");
     expect(impls).toHaveLength(1);
@@ -575,7 +667,7 @@ describe("PluginService integration — file decoration provider contributions",
     );
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
 
     expect(String(readMarker(markerKey))).toContain("is not declared in contributes");
     expect(getFileDecorationImpls("s:/x")).toEqual([]);
@@ -612,7 +704,7 @@ describe("PluginService integration — file decoration provider contributions",
     );
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
 
     expect(String(readMarker(markerKey))).toContain("is not covered by any declared");
   });
@@ -672,7 +764,7 @@ describe("PluginService integration — file decoration provider contributions",
     );
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
     const host = (globalThis as Record<string, unknown>).__postUnloadHost as {
       invalidateFileDecorations: (scope: string) => void;
     };
@@ -711,7 +803,7 @@ describe("PluginService integration — main entry execution", () => {
     expect(readMarker(markerKey)).toBeUndefined();
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
 
     expect(readMarker(markerKey)).toBe(1);
   });
@@ -743,7 +835,7 @@ describe("PluginService integration — main entry execution", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const service = new PluginService(tmpDir, "0.0.0");
-      await service.initialize();
+      await initializeAndActivate(service);
 
       expect(service.hasPlugin("acme.bad-main")).toBe(true);
       expect(errorSpy).toHaveBeenCalledWith(
@@ -860,7 +952,7 @@ describe("PluginService integration — activate() lifecycle", () => {
     );
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
 
     const marker = readMarker(markerKey) as { pluginId: string; called: boolean } | undefined;
     expect(marker).toBeDefined();
@@ -959,7 +1051,7 @@ describe("PluginService integration — activate() lifecycle", () => {
     );
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
 
     const marker = readMarker(markerKey) as
       | { pluginId: string; called: boolean; cleaned?: boolean }
@@ -998,7 +1090,7 @@ describe("PluginService integration — activate() lifecycle", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const service = new PluginService(tmpDir, "0.0.0");
-      await service.initialize();
+      await initializeAndActivate(service);
 
       expect(service.hasPlugin("acme.no-activate")).toBe(true);
       expect(readMarker(markerKey)).toBe(true);
@@ -1030,7 +1122,7 @@ describe("PluginService integration — activate() lifecycle", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const service = new PluginService(tmpDir, "0.0.0");
-      await service.initialize();
+      await initializeAndActivate(service);
 
       expect(service.hasPlugin("acme.throwing-activate")).toBe(true);
       expect(errorSpy).toHaveBeenCalledWith(
@@ -1067,7 +1159,7 @@ describe("PluginService integration — activate() lifecycle", () => {
     );
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
 
     const marker = readMarker(markerKey) as { pluginId: string } | undefined;
     expect(marker?.pluginId).toBe("acme.namespace-plugin");
@@ -1108,7 +1200,7 @@ describe("PluginService integration — full contribution fan-out", () => {
     );
 
     const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+    await initializeAndActivate(service);
 
     expect(getPanelKindConfig("acme.all-in-one.v")?.extensionId).toBe("acme.all-in-one");
     expect(getToolbarButtonConfig("acme.all-in-one.b")?.priority).toBe(2);
@@ -1215,7 +1307,7 @@ describe("PluginService integration — built-in plugin loading", () => {
     );
 
     const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
-    await service.initialize();
+    await initializeAndActivate(service);
 
     expect(readMarker(markerKey)).toBe(1);
     expect(service.listPlugins()[0].isBuiltin).toBe(true);

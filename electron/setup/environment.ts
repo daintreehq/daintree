@@ -26,6 +26,10 @@ import { existsSync } from "fs";
 import os from "os";
 import { isLinuxWaylandHybridGpu } from "../utils/gpuDetection.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+// Side-effect import: registers the macOS `daintree://` `open-url` listener on
+// the early-load path (#9559). environment.ts is imported first in main.ts, so
+// the listener is live before `app.whenReady()` resolves — see deepLinkUrlQueue.
+import "./deepLinkUrlQueue.js";
 
 export let exposeGc: (() => void) | undefined;
 try {

@@ -26,6 +26,7 @@ on:
           - full-platform
           - full-panels
           - full-resilience
+          - full-plugins
           - online
           - nightly
       test_file:

@@ -393,11 +393,13 @@ export class ActivityMonitor {
     }
   }
 
-  private isEscInterruptFallback(input: string): boolean {
-    return (
-      input.toLowerCase().includes("esc to interrupt") ||
-      input.toLowerCase().includes("esc to cancel")
-    );
+  /**
+   * @param lowerInput Pre-lowercased, ANSI-stripped text. Callers must lowercase
+   *   before calling — this avoids re-allocating a lowercased copy of the rolling
+   *   buffer on the per-chunk hot path. Both call sites already pass lowercased text.
+   */
+  private isEscInterruptFallback(lowerInput: string): boolean {
+    return lowerInput.includes("esc to interrupt") || lowerInput.includes("esc to cancel");
   }
 
   onInput(data: string): void {
@@ -476,7 +478,7 @@ export class ActivityMonitor {
 
       // Check for working patterns in the rolling buffer
       const patternResult = this.patternDetector
-        ? this.patternDetector.detect(bufferText)
+        ? this.patternDetector.detect(bufferText, { alreadyStripped: true })
         : undefined;
       if (patternResult) {
         this.lastPatternResult = patternResult;

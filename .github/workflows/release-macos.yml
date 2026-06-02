@@ -34,7 +34,9 @@ permissions:
 
 concurrency:
   # Per-OS so re-running macOS never queues behind a passing Windows/Linux run.
-  group: release-macos-${{ github.ref }}
+  # Keep real releases serialized per ref, but let dry runs bypass stale
+  # rehearsals that may be wedged on a runner from an older branch SHA.
+  group: release-macos-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && github.run_id || 'release' }}
   cancel-in-progress: false
 
 env:
@@ -91,7 +93,7 @@ jobs:
       suite: core
       platform: macos
 
-  # The six full-* domain buckets. e2e.yml auto-shards each one 4 ways
+  # The seven full-* domain buckets. e2e.yml auto-shards each one 4 ways
   # (#8053), so a single hung Windows-style spec — here, a hung macOS spec —
   # takes out 1/4 of one bucket instead of the whole macOS release.
   e2e-full-gate:
@@ -106,6 +108,7 @@ jobs:
           - full-platform
           - full-panels
           - full-resilience
+          - full-plugins
     uses: ./.github/workflows/e2e.yml
     with:
       suite: ${{ matrix.suite }}

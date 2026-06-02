@@ -28,15 +28,21 @@ The `engines.daintree` semver range is validated and compared against the runnin
 
 ### Registration
 
-Most contributions register eagerly at plugin-load time so the UI reflects them immediately — the command palette, toolbars, menus populate before any plugin code runs:
+The manifest `contributes` object has 12 contribution points (`electron/schemas/plugin.ts`). Most register eagerly at plugin-load time so the UI reflects them immediately — the command palette, toolbars, menus, keybindings, and context menus populate before any plugin code runs:
 
 - `panels` → `registerPanelKind()` in `shared/config/panelKindRegistry.ts`
 - `toolbarButtons` → `registerToolbarButton()` in `shared/config/toolbarButtonRegistry.ts`
 - `menuItems` → `registerPluginMenuItem()` in `electron/services/pluginMenuRegistry.ts`
+- `keybindings` → `registerPluginKeybinding()` (each entry's `when` expression is tracked so context changes re-evaluate)
+- `contextMenus` → `registerPluginContextMenuItem()` (`when`-tracked like keybindings)
+- `agents` → `registerPluginAgents()` — gated behind the `agent:register` capability (schema rejects `contributes.agents` without it, #9560)
+- `settings` → registered through `PluginSettingsManager`, so a settings form renders whether or not the plugin is running
 
 Commands have two registration paths. They MAY be declared in `contributes.commands` — these are registered eagerly at load as `PluginActionDescriptor`s so they appear in the palette before any plugin code runs, with their handler lazily bound to `src/{id}.{ext}` on first dispatch. Or they register imperatively via `host.registerAction()` during `activate()`. The manifest stays a static shape contract; the action system resolves handlers at runtime.
 
-Contributions that require code (e.g., a view component, an MCP server's runtime) are registered as **resolvers** — thunks that import the actual code when first needed.
+`forgeProviders` and `fileDecorationProviders` register their manifest-declared descriptors eagerly (`registerForgeProviders` / `registerFileDecorationProviders`), but their runtime implementations bind imperatively in `activate()` via `host.registerForgeProvider()` / `host.registerFileDecorationProvider()` against a declared descriptor id.
+
+Contributions that require code (e.g., a view component, an MCP server's runtime) are registered as **resolvers** — thunks that import the actual code when first needed. `experimental_mcpServers` are resolved lazily on first tool enumeration (#9235), not at activation.
 
 ### Activation
 
@@ -198,7 +204,7 @@ Plugins consuming worktree events during `activate()` — before the WorkspaceCl
 
 ## Capability disclosure
 
-Capabilities are **disclosure-first with host-side policy effects** — a hybrid model. The host does not sandbox plugin code: a plugin declaring `capabilities: []` can still make network requests and write files via raw Node APIs. But declared capabilities are not purely advisory either. They drive host-side policy, most concretely danger classification on plugin-registered actions. See the [trust model](./trust-model.md) for the full decision record, decision matrix, and forthcoming schema.
+Capabilities are **disclosure-first with host-side policy effects** — a hybrid model. The host does not sandbox plugin code: a plugin declaring `capabilities: []` can still make network requests and write files via raw Node APIs. But declared capabilities are not purely advisory either. They drive host-side policy, most concretely danger classification on plugin-registered actions. See the [trust model](./trust-model.md) for the full decision record, decision matrix, and capability schema.
 
 What disclosure does:
 
@@ -208,8 +214,9 @@ What disclosure does:
 
 What the host derives from declared capabilities:
 
-- **Danger classification (live today).** When a manifest holds any high-risk token in `CONFIRM_TRIGGERING_CAPABILITIES` (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`), every action that plugin registers is raised to `effectiveDanger: "confirm"` — gating the renderer's confirm dialog, MRU-rail eligibility, and `repeatLast`. The host may only raise danger, never lower it. This is host-side UX policy on Daintree's own action system; it does **not** block the plugin from executing code or calling IPC directly.
-- A compound-capability lattice, scope attenuation, and MCP advertisement gates are forthcoming (#9247, #9234). See the trust model for the complete list.
+- **Danger classification (live today).** When a manifest holds any high-risk token in `CONFIRM_TRIGGERING_CAPABILITIES` (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`, `agent:register`), every action that plugin registers is raised to `effectiveDanger: "confirm"` — gating the renderer's confirm dialog, MRU-rail eligibility, and `repeatLast`. The host may only raise danger, never lower it. This is host-side UX policy on Daintree's own action system; it does **not** block the plugin from executing code or calling IPC directly.
+- **Compound-capability lattice (live, #9247).** Single capabilities that aren't individually irreversible can still combine into a threat. `manifestTriggersCompoundElevation()` (`PluginService.ts`) catches two compound classes: exfiltration (a sensitive read in `SENSITIVE_READ_CAPABILITIES` paired with an unconstrained `shell:exec` or `network:fetch` sink) and remote-controlled mutation (`network:fetch` paired with a local write or shell sink). A plugin attenuates the elevation by declaring a tight `scopes.network.allowedUrls` — a scoped `network:fetch` can't be remote-controlled, so the scope removes that class. Wildcard scopes are rejected at the schema boundary.
+- **MCP consent tier (live, #9234).** A plugin's declared capabilities cap the danger tier its MCP server's tool surface can reach (`electron/services/plugin-mcp/PluginMcpTierAuth.ts`): a server that didn't declare a high-risk capability can't trigger a D2 confirmation just by advertising `destructiveHint: true` — the call is denied, not silently downgraded. See the trust model for the complete list.
 
 The purpose is to let users judge plugins by what they claim to need and to apply proportional friction at high-risk intent surfaces. A simple theme-packager plugin declaring `shell:exec` looks suspicious; a Linear integration declaring `network:fetch` looks expected. Declaring honestly matters: a plugin that silently makes network requests without declaring `network:fetch` erodes the ecosystem's trust model, even though nothing blocks the call at runtime.
 
@@ -223,19 +230,22 @@ Prior to #8321, the renderer trusted the plugin's self-reported `danger` field. 
 
 ### Mechanism
 
-`PluginService.registerPluginAction()` consults the set `CONFIRM_TRIGGERING_PERMISSIONS` (defined in `PluginService.ts`):
+The host consults the set `CONFIRM_TRIGGERING_CAPABILITIES` (defined in `PluginService.ts`):
 
-| Permission           | Effect            |
+| Capability           | Effect            |
 | -------------------- | ----------------- |
 | `shell:exec`         | Raises to confirm |
 | `git:write`          | Raises to confirm |
 | `fs:project-write`   | Raises to confirm |
 | `fs:user-data-write` | Raises to confirm |
 | `agent:invoke`       | Raises to confirm |
+| `agent:register`     | Raises to confirm |
 
-When a plugin's declared manifest `permissions` includes any of these tokens, every action that plugin registers gets `effectiveDanger: "confirm"` regardless of the self-reported value.
+When a plugin's declared manifest `capabilities` includes any of these tokens, every action that plugin registers gets `effectiveDanger: "confirm"` regardless of the self-reported value. The compound-capability lattice (`manifestTriggersCompoundElevation()`) raises danger for the multi-capability threat classes described under [Capability disclosure](#capability-disclosure).
 
-The rule is one-way: the host **may only raise danger, never lower it**. A plugin that declares `danger: "confirm"` keeps confirm regardless of permissions; a plugin that declares `danger: "safe"` is raised if it holds a high-risk permission.
+The rule is one-way: the host **may only raise danger, never lower it**. A plugin that declares `danger: "confirm"` keeps confirm regardless of capabilities; a plugin that declares `danger: "safe"` is raised if it holds a high-risk capability.
+
+The host also computes an aggregate `pluginDanger` (`"safe" | "confirm"`) per plugin via `computePluginDanger()`, surfaced on `LoadedPluginInfo.pluginDanger` so the manager UI can show an effective-danger summary without re-deriving the lattice in the renderer. It reuses the same `CONFIRM_TRIGGERING_CAPABILITIES` set and compound lattice — a single source of truth on main rather than a third copy.
 
 ### Renderer contract
 
@@ -255,7 +265,7 @@ This classification is host-side UX policy on Daintree's own action system. It d
 
 **Signing:** sideloaded and URL-installed plugins aren't signed. Trust is on the user.
 
-**Kill-switch:** Daintree polls a blocklist hosted on a CDN. Plugins matching the blocklist by `{name, versionRange, jti-if-applicable}` refuse to load on next startup. The user sees a banner explaining why. This mechanism is reserved for security responses to known-compromised plugins and is not used for normal version deprecation.
+**Kill-switch (planned, not yet implemented):** the design is a CDN-hosted blocklist that Daintree polls; plugins matching by `{name, versionRange, jti-if-applicable}` would refuse to load on next startup, with a banner explaining why, reserved for security responses to known-compromised plugins (not normal version deprecation). No blocklist/poll/revocation code exists in the plugin services today — treat this as a forward-looking design, not current behavior.
 
 Detailed infrastructure for signed distribution is planned for the eventual Daintree-authored paid-plugin channel; it does not affect sideload or URL install.
 
@@ -269,9 +279,9 @@ A short rationale for the decisions most likely to feel arbitrary:
 
 **Why `.dntr` instead of `.zip`?** OS file association. Double-clicking a `.dntr` opens Daintree's install flow; double-clicking a `.zip` opens the OS archiver. Also prevents accidental manual unzipping into the wrong place. The CLI accepts either, so authors who only want to ship `.zip` can.
 
-**Why dual-path action binding (filesystem convention + imperative)?** The filesystem convention (Raycast-style: `commands[].name` → `src/{name}.ts` default export) is delightful for simple cases — zero boilerplate, co-located with declaration. Imperative registration via `host.registerAction` is needed for truly dynamic commands and matches the existing imperative pattern Daintree uses for its own ~258 built-in actions. Supporting both is cheap and handles both ends of the complexity spectrum.
+**Why dual-path action binding (filesystem convention + imperative)?** The filesystem convention (Raycast-style: `commands[].name` → `src/{name}.ts` default export) is delightful for simple cases — zero boilerplate, co-located with declaration. Imperative registration via `host.registerAction` is needed for truly dynamic commands and matches the existing imperative pattern Daintree uses for its own ~340 built-in actions. Supporting both is cheap and handles both ends of the complexity spectrum.
 
-**Why no runtime permission enforcement?** There is no Node sandbox and there can't be one — plugins share the host's V8 + Node process, so a plugin bypasses any custom-API gate by calling `require("fs")` or `child_process.spawn` directly. Full enforcement would require Wasm sandboxing (Zed's approach — great DX cost), iframe isolation (worse DX, breaks React integration), or a prompt on every Node call (unusable). Instead of claiming enforcement we can't deliver, declared capabilities drive host-side policy effects (danger derivation today; the compound lattice and MCP consent forthcoming) while the model stays honest that it does not sandbox arbitrary code. See the [trust model](./trust-model.md).
+**Why no runtime permission enforcement?** There is no Node sandbox and there can't be one — plugins share the host's V8 + Node process, so a plugin bypasses any custom-API gate by calling `require("fs")` or `child_process.spawn` directly. Full enforcement would require Wasm sandboxing (Zed's approach — great DX cost), iframe isolation (worse DX, breaks React integration), or a prompt on every Node call (unusable). Instead of claiming enforcement we can't deliver, declared capabilities drive host-side policy effects (danger derivation, the compound-capability lattice, and the MCP consent tier) while the model stays honest that it does not sandbox arbitrary code. See the [trust model](./trust-model.md).
 
 **Why no separate hooks contribution point (PreToolUse/PostToolUse)?** An MCP server can act as a proxy in front of other tools, intercepting and modifying tool calls. This uses the ecosystem we're already committed to (MCP) rather than inventing a parallel API. Plugins that genuinely need this can build it cleanly.
 
@@ -282,7 +292,7 @@ The `@daintreehq/plugin-sdk` public type surface is defined in `shared/types/plu
 Two entry points:
 
 - `@daintreehq/plugin-sdk` — core types (manifest authoring, host API, forge providers, worktree projections)
-- `@daintreehq/plugin-sdk/react` — reserved for React hooks (F15/F36); no exports in v1
+- `@daintreehq/plugin-sdk/react` — renderer-facing SDK types (`shared/types/plugin-sdk-react.ts`). Currently exposes `UseHostChannelResult` (the return shape of `useHostChannel`); runtime implementations live in `src/hooks/` and wire into this subpath when the SDK is extracted into its own package (F15/F36). Until then, plugins reference these types through the host bundle.
 
 ### Manifest authoring
 
@@ -301,17 +311,43 @@ Types a plugin author uses to write `plugin.json`:
 | `PluginCapability` | `plugin.ts` |  |
 | `BuiltInPluginCapability` | `plugin.ts` |  |
 | `PluginActionContribution` | `plugin.ts` | Shape for `host.registerAction` (F11) |
+| `KeybindingContribution` | `plugin.ts` | `contributes.keybindings` entry |
+| `ContextMenuContribution` | `plugin.ts` | `contributes.contextMenus` entry |
+| `ContextMenuLocation` | `plugin.ts` |  |
+| `PluginManifestScopes` | `plugin.ts` | `scopes` block (network/fs attenuation) |
+| `PluginNetworkScope` | `plugin.ts` | `scopes.network.allowedUrls` |
+| `PluginFsScope` | `plugin.ts` | `scopes.fs` |
+
+### View component props
+
+| Export | Source | Notes |
+| --- | --- | --- |
+| `PanelViewProps` | `plugin.ts` | Props passed to a plugin view component (`panelId`, `pluginId`, `disposeSignal`) |
 
 ### Host API
 
 Types a plugin consumes at runtime via `activate(host)`:
 
-| Export             | Source      | Notes                                        |
-| ------------------ | ----------- | -------------------------------------------- |
-| `PluginActivate`   | `plugin.ts` | Activation entry point signature             |
-| `PluginHostApi`    | `plugin.ts` | Host API surface passed to `activate`        |
-| `PluginIpcContext` | `plugin.ts` | Context passed to IPC handlers               |
-| `PluginIpcHandler` | `plugin.ts` | Handler signature for `host.registerHandler` |
+| Export                  | Source      | Notes                                        |
+| ----------------------- | ----------- | -------------------------------------------- |
+| `PluginActivate`        | `plugin.ts` | Activation entry point signature             |
+| `PluginHostApi`         | `plugin.ts` | Host API surface passed to `activate`        |
+| `ActionHandler`         | `plugin.ts` | Handler signature for `host.registerAction`  |
+| `PluginToastOptions`    | `plugin.ts` | Options for `host.toast`                     |
+| `PluginLogger`          | `plugin.ts` | `host.log` logger surface                    |
+| `PluginIpcContext`      | `plugin.ts` | Context passed to IPC handlers               |
+| `PluginIpcHandler`      | `plugin.ts` | Handler signature for `host.registerHandler` |
+| `PluginChannelSchema`   | `plugin.ts` | Typed-IPC channel schema                     |
+| `PluginTypedIpcHandler` | `plugin.ts` | Typed-IPC handler signature                  |
+
+### Settings (`host.settings`)
+
+| Export                | Source      | Notes                                 |
+| --------------------- | ----------- | ------------------------------------- |
+| `SettingsApi`         | `plugin.ts` | `host.settings` surface               |
+| `PluginSettingsScope` | `plugin.ts` | Settings scope selector               |
+| `SettingDefinition`   | `plugin.ts` | `contributes.settings` entry shape    |
+| `SettingFieldType`    | `plugin.ts` | Field-type union for setting controls |
 
 ### Worktree projections
 
@@ -330,7 +366,7 @@ Types a forge plugin implements and registers:
 
 | Export                      | Source     | Notes                                       |
 | --------------------------- | ---------- | ------------------------------------------- |
-| `ForgeProviderImpl`         | `forge.ts` | Runtime contract (~397-line interface)      |
+| `ForgeProviderImpl`         | `forge.ts` | Runtime contract                            |
 | `ForgeProviderDescriptor`   | `forge.ts` | Passed to `host.registerForgeProvider`      |
 | `ForgeProviderContribution` | `forge.ts` | Manifest `contributes.forgeProviders` entry |
 
@@ -360,7 +396,7 @@ These types exist in `shared/types/plugin.ts` but are intentionally excluded fro
 
 | Symbol | Why internal |
 | --- | --- |
-| `BUILT_IN_PLUGIN_PERMISSIONS` | Runtime `const` array; host schema only |
+| `BUILT_IN_PLUGIN_CAPABILITIES` | Runtime `const` array; host schema only |
 | `LoadedPluginInfo` | Host loading lifecycle; `isBuiltin` is host-private |
 | `PluginActionDescriptor` | Host-computed fields (`pluginId`, `effectiveDanger`); plugin never constructs one |
 

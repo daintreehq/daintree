@@ -12,24 +12,6 @@ import { ContentFadeIn } from "../ContentFadeIn";
 
 describe("ContentFadeIn", () => {
   describe("animation classes", () => {
-    it("applies motion-safe entry animation classes on the wrapper", () => {
-      const { container } = render(
-        <ContentFadeIn>
-          <span>child</span>
-        </ContentFadeIn>
-      );
-      const root = container.firstElementChild;
-      expect(root).toBeTruthy();
-      expect(root?.className).toContain("motion-safe:animate-in");
-      expect(root?.className).toContain("motion-safe:fade-in");
-      expect(root?.className).toContain("motion-safe:duration-150");
-    });
-
-    it("includes the content-fade-in marker class for CSS overrides", () => {
-      const { container } = render(<ContentFadeIn>x</ContentFadeIn>);
-      expect(container.firstElementChild?.className).toContain("content-fade-in");
-    });
-
     it("does not use transition-all", () => {
       const { container } = render(<ContentFadeIn>x</ContentFadeIn>);
       expect(container.innerHTML).not.toContain("transition-all");

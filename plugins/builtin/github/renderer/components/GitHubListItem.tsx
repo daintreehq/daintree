@@ -122,6 +122,7 @@ export function GitHubListItem({
     <div
       id={optionId}
       role="option"
+      data-testid={`github-item-${item.number}`}
       aria-selected={isSelected}
       className={cn(
         "hover:bg-muted/50 transition-colors group cursor-default select-none",

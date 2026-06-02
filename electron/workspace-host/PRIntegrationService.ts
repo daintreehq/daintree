@@ -31,6 +31,8 @@ export interface PRIntegrationCallbacks {
       prUrl: string;
       prState: "open" | "closed" | "merged";
       prCiStatus?: GitHubPRCIStatus;
+      /** Phase-1 detection: CI status is still being fetched. The receiver preserves the prior rollup so the dot doesn't blink. */
+      isCiStatusLoading?: boolean;
       prTitle?: string;
       issueNumber?: number;
       issueTitle?: string;
@@ -111,6 +113,7 @@ export class PRIntegrationService {
           prUrl: data.prUrl,
           prState: data.prState,
           prCiStatus: data.prCiStatus,
+          isCiStatusLoading: data.isCiStatusLoading,
           prTitle: data.prTitle,
           issueNumber: data.issueNumber,
           issueTitle: data.issueTitle,

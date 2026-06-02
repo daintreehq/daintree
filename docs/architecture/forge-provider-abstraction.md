@@ -1,6 +1,8 @@
 # Forge Provider Abstraction
 
-Daintree currently has GitHub hardwired across the IPC layer, services, components, stores, and actions. This document captures the decision to refactor that integration into a plugin-shaped abstraction.
+**Status: implemented.** The forge contract, the host registry, the main↔workspace-host RPC bridge, the built-in GitHub plugin, the `forge.*` actions, the manifest schema, and the Preferences → Forge Integrations UI all landed (commits `df083b1d8`, `6ad8e2595`, `7cad3add0`, `f3db66c7a`). This doc now describes the as-built design and keeps the original rationale. Two pieces of the original plan are still outstanding and called out inline: a residual `electron/services/github/*` layer that has not fully rehomed into the plugin, and the worktree-snapshot change shipped as additive (a `linked` projection derived from the existing GitHub-shaped fields) rather than the breaking field removal the design anticipated.
+
+Daintree previously had GitHub hardwired across the IPC layer, services, components, stores, and actions. This document captures the decision to refactor that integration into a plugin-shaped abstraction.
 
 **Scope of this stage:** ship the plugin contract for forge integrations, and rehome GitHub as the first plugin on top of it. No other providers ship in this work. The contract is _designed_ to admit future providers (GitLab, Gitea, Bitbucket, Forgejo) without re-shaping the host, but those plugins are explicitly later work.
 
@@ -43,24 +45,35 @@ The host does NOT abstract: review thread shape, approval workflows, CI graphs, 
 
 ## Contribution Point: `forgeProviders`
 
-Added to `plugin.json`'s `contributes` field. Status: **Planned**, ships in this stage.
+Added to `plugin.json`'s `contributes` field, validated by `ForgeProviderContributionSchema` in `electron/schemas/plugin.ts` (alongside the sibling `fileDecorationProviders` contribution). The as-built built-in manifest (`plugins/builtin/github/plugin.json`):
 
 ```json
 {
+  "name": "daintree.github",
+  "version": "0.1.0",
   "contributes": {
     "forgeProviders": [
       {
         "id": "github",
         "name": "GitHub",
         "matches": ["github.com"],
-        "capabilities": ["issues", "pulls", "reviews", "required-checks", "releases"],
-        "settingsScopeRef": "github",
-        "viewRefs": ["github-issues", "github-prs"]
+        "capabilities": [
+          "issues",
+          "pulls",
+          "reviews",
+          "required-checks",
+          "draft-prs",
+          "assignees",
+          "releases"
+        ]
       }
-    ]
+    ],
+    "fileDecorationProviders": [{ "id": "worktree-diff-review", "scopes": ["worktree-diff:*"] }]
   }
 }
 ```
+
+The optional `settingsScopeRef` / `viewRefs` fields are part of the schema but the built-in GitHub plugin omits them.
 
 | Field | Required | Notes |
 | --- | --- | --- |

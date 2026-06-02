@@ -1375,6 +1375,87 @@ describe("WorktreeMonitor", () => {
     });
   });
 
+  describe("git-watch budget gate (#9538)", () => {
+    const WATCH_CONFIG: WorktreeMonitorConfig = {
+      ...TEST_CONFIG,
+      gitWatchEnabled: true,
+    };
+
+    beforeEach(() => {
+      mockWatcherStartResult = true;
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+    });
+
+    it("revoking the budget stops the watcher; granting re-arms it", async () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      expect(monitor.hasWatcher).toBe(true);
+      expect(monitor.gitWatchBudgetGranted).toBe(true);
+
+      monitor.setGitWatchBudgetAllowed(false);
+      expect(monitor.hasWatcher).toBe(false);
+      expect(monitor.gitWatchBudgetGranted).toBe(false);
+
+      monitor.setGitWatchBudgetAllowed(true);
+      expect(monitor.hasWatcher).toBe(true);
+      expect(monitor.gitWatchBudgetGranted).toBe(true);
+
+      monitor.stop();
+    });
+
+    it("is idempotent — re-applying the same value does not churn the watcher", async () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      const startsAfterArm = watcherStartCallCount;
+
+      // Same value: no ensureState/start work.
+      monitor.setGitWatchBudgetAllowed(true);
+      expect(watcherStartCallCount).toBe(startsAfterArm);
+      expect(monitor.hasWatcher).toBe(true);
+
+      monitor.stop();
+    });
+
+    it("granting budget never arms a watcher when git watching is disabled", async () => {
+      const monitor = new WorktreeMonitor(
+        TEST_WORKTREE,
+        { ...TEST_CONFIG, gitWatchEnabled: false },
+        makeCallbacks(),
+        "main"
+      );
+      await monitor.start();
+      expect(monitor.hasWatcher).toBe(false);
+
+      // The combined gate is AND, not OR: budget alone must not arm a watcher
+      // the user disabled.
+      monitor.setGitWatchBudgetAllowed(false);
+      monitor.setGitWatchBudgetAllowed(true);
+      expect(watcherStartCallCount).toBe(0);
+      expect(monitor.hasWatcher).toBe(false);
+
+      monitor.stop();
+    });
+
+    it("ensureWatcherState does not re-arm an evicted watcher", async () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      monitor.setGitWatchBudgetAllowed(false);
+      expect(monitor.hasWatcher).toBe(false);
+
+      // Mirrors the syncMonitors reconcile that would otherwise re-arm.
+      monitor.ensureWatcherState();
+      expect(monitor.hasWatcher).toBe(false);
+
+      monitor.stop();
+    });
+  });
+
   describe("poll queue concurrency", () => {
     let PQueue: typeof import("p-queue").default;
 

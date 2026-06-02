@@ -2,6 +2,8 @@
 
 Prioritized files that still need heavier adversarial testing.
 
+_Last reviewed: 2026-06-01. Tier 1-3 "cleared" claims predate this review and were not re-audited against backend/state files added since 2026-03-20 — re-confirm before relying on them. Co-located tests live in `__tests__/` siblings, not `*.test.ts` next to the source._
+
 ## Tier 1: Critical backend/process paths
 
 Tier 1 backlog is currently cleared. Continue with Tier 2+ for broader hardening.
@@ -16,16 +18,25 @@ Tier 3 backlog is currently cleared. Continue with Tier 4 for integration harden
 
 ## Tier 4: Action-definition integration surfaces
 
-1. `src/services/actions/definitions/terminalActions.ts`
-2. `src/services/actions/definitions/panelActions.ts`
-3. `src/services/actions/definitions/worktreeActions.ts`
-4. `src/services/actions/definitions/preferencesActions.ts`
-5. `src/services/actions/definitions/systemActions.ts`
-6. `src/services/actions/definitions/projectActions.ts`
-7. `src/services/actions/definitions/agentActions.ts`
-8. `src/services/actions/definitions/githubActions.ts`
-9. `src/services/actions/definitions/logActions.ts`
-10. `src/services/actions/definitions/workflowActions.ts`
+Terminal action definitions were split out of the old monolithic `terminalActions.ts` into eight files; the directory now holds ~57 definition files total.
+
+1. `src/services/actions/definitions/terminalConfigActions.ts`
+2. `src/services/actions/definitions/terminalInputActions.ts`
+3. `src/services/actions/definitions/terminalLayoutActions.ts`
+4. `src/services/actions/definitions/terminalLifecycleActions.ts`
+5. `src/services/actions/definitions/terminalNavigationActions.ts`
+6. `src/services/actions/definitions/terminalQueryActions.ts`
+7. `src/services/actions/definitions/terminalSpawnActions.ts`
+8. `src/services/actions/definitions/terminalWorktreeActions.ts`
+9. `src/services/actions/definitions/panelActions.ts`
+10. `src/services/actions/definitions/worktreeActions.ts`
+11. `src/services/actions/definitions/preferencesActions.ts`
+12. `src/services/actions/definitions/systemActions.ts`
+13. `src/services/actions/definitions/projectActions.ts`
+14. `src/services/actions/definitions/agentActions.ts`
+15. `src/services/actions/definitions/githubActions.ts`
+16. `src/services/actions/definitions/logActions.ts`
+17. `src/services/actions/definitions/workflowActions.ts`
 
 ## Completed In Hardening Rounds
 
@@ -33,12 +44,10 @@ Tier 3 backlog is currently cleared. Continue with Tier 4 for integration harden
 - `electron/services/GitService.ts`
 - `electron/services/CopyTreeService.ts`
 - `electron/services/ProcessDetector.ts`
-- `electron/services/NotesService.ts`
 - `electron/services/DevPreviewSessionService.ts`
 - `electron/services/PtyPool.ts`
 - `electron/services/commands/githubWorkIssue.ts`
 - `electron/services/commands/githubCreateIssue.ts`
-- `electron/services/assistant/actionTools.ts`
 - `electron/services/github/GitHubAuth.ts`
 - `electron/services/github/GitHubQueries.ts`
 - `electron/services/pty/AgentStateService.ts`
@@ -50,7 +59,6 @@ Tier 3 backlog is currently cleared. Continue with Tier 4 for integration harden
 - `src/services/terminal/TerminalOutputIngestService.ts`
 - `src/services/terminal/TerminalResizeController.ts`
 - `src/services/terminal/TerminalWakeManager.ts`
-- `src/store/assistantChatStore.ts`
 - `src/store/errorStore.ts`
 - `src/store/eventStore.ts`
 - `src/store/logsStore.ts`
@@ -71,5 +79,4 @@ Tier 3 backlog is currently cleared. Continue with Tier 4 for integration harden
 - `src/hooks/useWorktreeActions.ts`
 - `src/hooks/useTerminalLogic.ts`
 - `src/hooks/useTerminalSelectors.ts`
-- `src/hooks/useAssistantStreamProcessor.ts`
 - `src/hooks/useContextInjection.ts`

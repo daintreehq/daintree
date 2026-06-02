@@ -403,6 +403,7 @@ describe("PluginManifestSchema capabilities field", () => {
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("network:fetch");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:invoke");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:read");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:register");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("git:read");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("git:write");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("clipboard:read");
@@ -410,9 +411,9 @@ describe("PluginManifestSchema capabilities field", () => {
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("shell:exec");
   });
 
-  it("BUILT_IN_PLUGIN_CAPABILITIES has exactly 12 unique entries", () => {
-    expect(BUILT_IN_PLUGIN_CAPABILITIES).toHaveLength(12);
-    expect(new Set(BUILT_IN_PLUGIN_CAPABILITIES).size).toBe(12);
+  it("BUILT_IN_PLUGIN_CAPABILITIES has exactly 13 unique entries", () => {
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toHaveLength(13);
+    expect(new Set(BUILT_IN_PLUGIN_CAPABILITIES).size).toBe(13);
   });
 
   it("rejects null capabilities value", () => {
@@ -1040,6 +1041,92 @@ describe("PluginService", () => {
   it("setPluginArchiveHash is a silent no-op for unknown plugin ids", () => {
     const service = new PluginService(tmpDir);
     expect(() => service.setPluginArchiveHash("acme.nonexistent", "deadbeef")).not.toThrow();
+  });
+
+  describe("listPlugins pluginDanger", () => {
+    it("reports safe for a plugin with no capabilities", async () => {
+      await writePlugin("safe-plugin", { name: "acme.safe", version: "1.0.0" });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      expect(service.listPlugins()[0].pluginDanger).toBe("safe");
+    });
+
+    it("reports safe for a read-only / clipboard capability set", async () => {
+      await writePlugin("reader", {
+        name: "acme.reader",
+        version: "1.0.0",
+        capabilities: ["fs:project-read", "git:read", "clipboard:read"],
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      expect(service.listPlugins()[0].pluginDanger).toBe("safe");
+    });
+
+    it("reports confirm for an individually high-risk capability (shell:exec)", async () => {
+      await writePlugin("sheller", {
+        name: "acme.sheller",
+        version: "1.0.0",
+        capabilities: ["shell:exec"],
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      expect(service.listPlugins()[0].pluginDanger).toBe("confirm");
+    });
+
+    // Guards against accidental removal from CONFIRM_TRIGGERING_CAPABILITIES.
+    it.each([
+      "git:write",
+      "fs:project-write",
+      "fs:user-data-write",
+      "agent:invoke",
+      "agent:register",
+    ])("reports confirm for the flat-elevated capability %s", async (capability) => {
+      await writePlugin("flat", {
+        name: "acme.flat",
+        version: "1.0.0",
+        capabilities: [capability],
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      expect(service.listPlugins()[0].pluginDanger).toBe("confirm");
+    });
+
+    it("reports confirm via the compound lattice (sensitive read + unscoped network:fetch)", async () => {
+      await writePlugin("exfil", {
+        name: "acme.exfil",
+        version: "1.0.0",
+        capabilities: ["fs:project-read", "network:fetch"],
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      expect(service.listPlugins()[0].pluginDanger).toBe("confirm");
+    });
+
+    it("reports safe when a tight network scope attenuates the compound pair", async () => {
+      await writePlugin("scoped", {
+        name: "acme.scoped",
+        version: "1.0.0",
+        capabilities: ["fs:project-read", "network:fetch"],
+        scopes: { network: { allowedUrls: ["https://api.example.com/v1"] } },
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      expect(service.listPlugins()[0].pluginDanger).toBe("safe");
+    });
+
+    it("computes pluginDanger for a launch-disabled plugin too", async () => {
+      storeMock._state.set("plugins", { disabled: ["acme.off-danger"] });
+      await writePlugin("off-danger", {
+        name: "acme.off-danger",
+        version: "1.0.0",
+        capabilities: ["shell:exec"],
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      const info = service.listPlugins()[0];
+      expect(info.disabled).toBe(true);
+      expect(info.pluginDanger).toBe("confirm");
+    });
   });
 
   it("rejects manifest with empty name", async () => {
@@ -7054,7 +7141,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     await expect(waiter).resolves.toBeUndefined();
   });
 
-  it("pushSnapshotTo() sends actions, panel kinds, toolbar buttons, menu items, and context-menu items to the target webContents", async () => {
+  it("pushSnapshotTo() sends actions, panel kinds, toolbar buttons, menu items, context-menu items, and agents to the target webContents", async () => {
     const service = new PluginService(tmpDir);
     await service.activateStartupFinishedPlugins();
     const send = vi.fn();
@@ -7062,7 +7149,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.pushSnapshotTo(wc);
 
-    expect(send).toHaveBeenCalledTimes(6);
+    expect(send).toHaveBeenCalledTimes(7);
     // Every replay goes through the EVENTS_PUSH channel — the same channel the
     // renderer hooks' persistent push listeners consume, so no renderer-side
     // changes are needed for the cold-restore path.
@@ -7076,6 +7163,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     expect(names).toContain("plugin:menu-items-changed");
     expect(names).toContain("plugin:keybindings-changed");
     expect(names).toContain("plugin:context-menu-items-changed");
+    expect(names).toContain("plugin:agents-changed");
     // The keybindings replay is a full authoritative snapshot — the renderer
     // hook full-replaces its plugin bindings on every push, so `complete: true`
     // is consistent with that replace-all semantics.
@@ -7120,13 +7208,14 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.pushSnapshotTo(wc);
 
-    expect(send).toHaveBeenCalledTimes(6);
+    expect(send).toHaveBeenCalledTimes(7);
     const names = send.mock.calls.map((c) => (c[1] as { name?: string })?.name);
     expect(names).toContain("plugin:panel-kinds-changed");
     expect(names).toContain("plugin:toolbar-buttons-changed");
     expect(names).toContain("plugin:menu-items-changed");
     expect(names).toContain("plugin:keybindings-changed");
     expect(names).toContain("plugin:context-menu-items-changed");
+    expect(names).toContain("plugin:agents-changed");
   });
 
   it("pushSnapshotTo() skips a destroyed webContents", async () => {
@@ -7154,7 +7243,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.activateStartupFinishedPlugins();
     await inFlight;
-    expect(send).toHaveBeenCalledTimes(6);
+    expect(send).toHaveBeenCalledTimes(7);
   });
 
   it("pushSnapshotTo() does not send after dispose()", async () => {

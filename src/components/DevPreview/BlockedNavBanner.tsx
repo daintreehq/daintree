@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ExternalLink, AlertTriangle, CircleCheck, Copy } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "../Terminal/InlineStatusBanner";
 import { BannerOverflowMenu } from "../Terminal/BannerOverflowMenu";
@@ -36,6 +36,9 @@ type BlockedNavAction =
   | { type: "OAUTH_TIMED_OUT" }
   | { type: "OAUTH_ERROR"; message: string }
   | { type: "DISMISS" };
+
+// How long the "Copied" confirmation label lingers before reverting to "Copy URL".
+const COPY_FEEDBACK_MS = 2000;
 
 function computeRegistrableDomain(url: string): string {
   try {
@@ -104,25 +107,25 @@ export function BlockedNavBanner({
   onDispatch,
 }: BlockedNavBannerProps) {
   const [copied, setCopied] = useState(false);
-  const copyTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const handleCopyUrl = useCallback(async () => {
     if (!state) return;
     try {
       await window.electron.clipboard.writeText(state.url);
       setCopied(true);
-      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
     } catch {
       // clipboard unavailable — silently ignore
     }
   }, [state]);
 
+  // Auto-reset the "Copied" label after a beat. Driven by an effect rather than
+  // a timer ref so no ref is reachable from `buildActions()` during render —
+  // the React Compiler flags transitive ref reads from a render-phase call.
   useEffect(() => {
-    return () => {
-      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-    };
-  }, []);
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
+    return () => clearTimeout(timer);
+  }, [copied]);
 
   // Listen for OAuth loopback status events from main process
   useEffect(() => {

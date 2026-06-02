@@ -96,6 +96,12 @@ export function AppLayout({
   const layout = useLayoutState();
   const isThemeBrowserOpen = useOverlayOpen("theme-browser");
   const themeBrowserOpen = useThemeBrowserStore((s) => s.isOpen);
+  // The plugin manager (#9558) is a full-screen overlay; while it owns the
+  // viewport its claim marks the app chrome inert, same as the theme browser.
+  // The view itself is mounted in App.tsx (it carries deep-link props), so
+  // AppLayout only needs the inert coordination, not the portal.
+  const isPluginManagerOpen = useOverlayOpen("plugin-manager");
+  const chromeInert = isThemeBrowserOpen || isPluginManagerOpen;
   const reduceAnimations = usePreferencesStore((s) => s.reduceAnimations);
   const showSidebar = !layout.gestureSidebarHidden && currentProject != null;
   const showAssistant = !layout.gestureAssistantHidden && layout.helpPanelOpen;
@@ -467,7 +473,7 @@ export function AppLayout({
       <Suspense fallback={null}>
         <LazyGlobalBannerCoordinator />
       </Suspense>
-      <div {...(isThemeBrowserOpen ? { inert: true } : {})}>
+      <div {...(chromeInert ? { inert: true } : {})}>
         <Toolbar
           onLaunchAgent={handleLaunchAgent}
           onSettings={handleSettings}
@@ -485,7 +491,7 @@ export function AppLayout({
       <TerminalDestructiveActionConfirmDialog />
       <PortalCloseConfirmDialog />
       <div
-        {...(isThemeBrowserOpen ? { inert: true } : {})}
+        {...(chromeInert ? { inert: true } : {})}
         className="flex-1 flex flex-col overflow-hidden"
         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}
       >
@@ -613,7 +619,7 @@ export function AppLayout({
                 toolbar, resize handle) must not be interactive. The native
                 WebContentsView is already hidden via PortalVisibilityController. */}
             <div
-              {...(isThemeBrowserOpen ? { inert: true } : {})}
+              {...(chromeInert ? { inert: true } : {})}
               className="fixed top-12 right-0 bottom-0 z-50 shadow-2xl border-l border-daintree-border"
             >
               <PortalDock />

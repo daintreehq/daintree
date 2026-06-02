@@ -20,9 +20,6 @@
     },
     "react-dom": {
       "optional": true
-    },
-    "vite": {
-      "optional": true
     }
   }
 }
