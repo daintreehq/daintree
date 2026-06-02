@@ -51,12 +51,49 @@ html[data-dragging="true"] .sidebar-worktree-card[data-hovered="true"] {
     inset 0 0 0 2px var(--sidebar-ring);
 }
 
+/* Keyboard navigation cursor (aria-activedescendant). The grid container holds
+   the only real DOM focus, so `:focus-visible` never fires on a row during
+   arrow-key navigation — the active row is flagged with `data-keyboard-cursor`
+   instead. Render the ring with `--theme-focus-ring` (the neutral, dedicated
+   focus token), NOT `--sidebar-ring` (which resolves to the accent color the
+   current-worktree marker already owns) so the focus region carries a single
+   accent signal. */
+[data-worktree-row][data-keyboard-cursor="true"] .sidebar-worktree-card {
+  box-shadow: inset 0 0 0 2px var(--theme-focus-ring);
+}
+
+[data-worktree-row][data-keyboard-cursor="true"] .sidebar-worktree-card[data-active="true"] {
+  box-shadow:
+    inset 2px 0 0 var(--theme-overlay-selected),
+    inset 0 0 0 2px var(--theme-focus-ring);
+}
+
+/* Suppress the cursor ring when the sidebar isn't focused — the cursor only
+   matters while the user is navigating the grid. Mirrors the `data-active`
+   dimming above so a backgrounded sidebar reads as quiet. */
+.sidebar-root:not(:focus-within)
+  [data-worktree-row][data-keyboard-cursor="true"]
+  .sidebar-worktree-card {
+  box-shadow: none;
+}
+
+.sidebar-root:not(:focus-within)
+  [data-worktree-row][data-keyboard-cursor="true"]
+  .sidebar-worktree-card[data-active="true"] {
+  box-shadow: inset 2px 0 0 var(--theme-overlay-selected);
+}
+
 /* Reveal the per-row action toolbar whenever the row has keyboard focus
    (or any descendant does). Uses `:focus-visible` / `:has(:focus-visible)`
    rather than `:focus` / `:focus-within` so mousedown on a button does not
-   flash the toolbar before the click resolves. */
+   flash the toolbar before the click resolves. The cursor-row selector covers
+   grid-mode navigation, where focus stays on the container and the rules above
+   never match. */
 [data-worktree-row]:focus-visible [data-worktree-row-toolbar],
-[data-worktree-row]:has(:focus-visible) [data-worktree-row-toolbar] {
+[data-worktree-row]:has(:focus-visible) [data-worktree-row-toolbar],
+.sidebar-root:focus-within
+  [data-worktree-row][data-keyboard-cursor="true"]
+  [data-worktree-row-toolbar] {
   opacity: 1;
   pointer-events: auto;
 }
@@ -64,13 +101,26 @@ html[data-dragging="true"] .sidebar-worktree-card[data-hovered="true"] {
 /* Reveal the drag handle whenever the row has keyboard focus, matching the
    toolbar reveal pattern above. */
 [data-worktree-row]:focus-visible [data-worktree-row-drag-handle],
-[data-worktree-row]:has(:focus-visible) [data-worktree-row-drag-handle] {
+[data-worktree-row]:has(:focus-visible) [data-worktree-row-drag-handle],
+.sidebar-root:focus-within
+  [data-worktree-row][data-keyboard-cursor="true"]
+  [data-worktree-row-drag-handle] {
   color: color-mix(in srgb, var(--theme-text-primary) 30%, transparent);
   background-color: var(--theme-overlay-soft);
 }
 
 @media (forced-colors: active) {
   [data-worktree-row]:focus-visible .sidebar-worktree-card {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  /* box-shadow is stripped in forced-colors mode, so the cursor ring needs a
+     system-color outline fallback. Scope to the focused sidebar so a
+     backgrounded grid doesn't paint a stray cursor outline. */
+  .sidebar-root:focus-within
+    [data-worktree-row][data-keyboard-cursor="true"]
+    .sidebar-worktree-card {
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }

@@ -12,6 +12,7 @@ interface StaticWorktreeRowProps {
   worktreeId: string;
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
+  keyboardCursorId: string | null;
   totalWorktreeCount: number;
   selectWorktree: (id: string) => void;
   worktreeActions: WorktreeActions;
@@ -27,6 +28,7 @@ function StaticWorktreeRow({
   worktreeId,
   activeWorktreeId,
   focusedWorktreeId,
+  keyboardCursorId,
   totalWorktreeCount,
   selectWorktree,
   worktreeActions,
@@ -71,12 +73,14 @@ function StaticWorktreeRow({
   if (!worktree) return null;
 
   const isActive = worktreeId === activeWorktreeId;
+  const isKeyboardCursor = worktreeId === keyboardCursorId;
 
   return (
     <div
       role="row"
       id={getWorktreeSidebarRowId(worktreeId)}
       data-worktree-row={worktreeId}
+      data-keyboard-cursor={isKeyboardCursor ? "true" : undefined}
       tabIndex={-1}
       aria-rowindex={ariaRowIndex}
       aria-current={isActive ? "true" : undefined}

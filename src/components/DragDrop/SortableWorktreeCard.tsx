@@ -37,6 +37,7 @@ interface SortableWorktreeCardProps {
   disabled?: boolean;
   ariaRowIndex: number;
   isActive: boolean;
+  isKeyboardCursor?: boolean;
   children: (props: {
     isDraggingSort: boolean;
     dragHandleListeners: SyntheticListenerMap | undefined;
@@ -53,6 +54,7 @@ function sortableWorktreeCardPropsAreEqual(
     prev.disabled !== next.disabled ||
     prev.ariaRowIndex !== next.ariaRowIndex ||
     prev.isActive !== next.isActive ||
+    prev.isKeyboardCursor !== next.isKeyboardCursor ||
     prev.children !== next.children
   ) {
     return false;
@@ -71,6 +73,7 @@ export const SortableWorktreeCard = React.memo(function SortableWorktreeCard({
   disabled,
   ariaRowIndex,
   isActive,
+  isKeyboardCursor,
   children,
 }: SortableWorktreeCardProps) {
   const dragData: WorktreeSortDragData = {
@@ -138,6 +141,7 @@ export const SortableWorktreeCard = React.memo(function SortableWorktreeCard({
       aria-current={isActive ? "true" : undefined}
       aria-keyshortcuts={disabled ? undefined : "Alt+ArrowUp Alt+ArrowDown"}
       data-worktree-row={worktreeId}
+      data-keyboard-cursor={isKeyboardCursor ? "true" : undefined}
       tabIndex={-1}
       className="relative"
       {...filteredAttributes}

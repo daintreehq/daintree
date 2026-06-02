@@ -61,6 +61,15 @@ export interface UseWorktreeSidebarKeyboardOptions {
 export interface UseWorktreeSidebarKeyboardReturn {
   gridRef: React.RefObject<HTMLDivElement | null>;
   activeDescendantId: string | undefined;
+  /**
+   * Worktree id the keyboard navigation cursor currently points at, or null.
+   *
+   * The grid uses aria-activedescendant, so rows never take real DOM focus and
+   * `:focus-visible` never fires for arrow-key navigation. Rows consume this id
+   * to render a visible cursor ring on the active row. Null in toolbar mode
+   * (focus has moved into a real DOM button, which carries its own focus ring).
+   */
+  keyboardCursorId: string | null;
   handleGridKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => void;
   handleGridFocus: (e: React.FocusEvent<HTMLDivElement>) => void;
   handleGridFocusCapture: (e: React.FocusEvent<HTMLDivElement>) => void;
@@ -527,9 +536,15 @@ export function useWorktreeSidebarKeyboard({
   const activeDescendantId =
     mode === "list" && activeWorktreeId ? getWorktreeSidebarRowId(activeWorktreeId) : undefined;
 
+  // Mirror the activeDescendant mode-guard: only expose a cursor in list mode.
+  // In toolbar mode focus has descended into a real DOM button, which owns the
+  // visible focus ring, so the row-level cursor ring would be a duplicate.
+  const keyboardCursorId = mode === "list" ? activeWorktreeId : null;
+
   return {
     gridRef,
     activeDescendantId,
+    keyboardCursorId,
     handleGridKeyDown,
     handleGridFocus,
     handleGridFocusCapture,

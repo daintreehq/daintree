@@ -166,6 +166,7 @@ type SidebarFlatItem = SidebarHeaderFlatItem | SidebarRowFlatItem;
 interface SidebarVirtuosoContext {
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
+  keyboardCursorId: string | null;
   totalWorktreeCount: number;
   selectWorktree: (id: string) => void;
   worktreeActions: WorktreeActions;
@@ -253,6 +254,7 @@ function renderSidebarFlatItem(
         worktreeId={item.worktreeId}
         activeWorktreeId={context.activeWorktreeId}
         focusedWorktreeId={context.focusedWorktreeId}
+        keyboardCursorId={context.keyboardCursorId}
         totalWorktreeCount={context.totalWorktreeCount}
         selectWorktree={context.selectWorktree}
         worktreeActions={context.worktreeActions}
@@ -268,6 +270,7 @@ function renderSidebarFlatItem(
       worktreeId={item.worktreeId}
       activeWorktreeId={context.activeWorktreeId}
       focusedWorktreeId={context.focusedWorktreeId}
+      keyboardCursorId={context.keyboardCursorId}
       totalWorktreeCount={context.totalWorktreeCount}
       selectWorktree={context.selectWorktree}
       worktreeActions={context.worktreeActions}
@@ -1234,6 +1237,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const {
     gridRef,
     activeDescendantId,
+    keyboardCursorId,
     handleGridKeyDown,
     handleGridFocus,
     handleGridFocusCapture,
@@ -1249,6 +1253,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     () => ({
       activeWorktreeId,
       focusedWorktreeId,
+      keyboardCursorId,
       totalWorktreeCount: deferredWorktrees.length,
       selectWorktree,
       worktreeActions,
@@ -1261,6 +1266,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     [
       activeWorktreeId,
       focusedWorktreeId,
+      keyboardCursorId,
       deferredWorktrees.length,
       selectWorktree,
       worktreeActions,
@@ -1617,6 +1623,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               worktreeId={mainWorktree.id}
               activeWorktreeId={activeWorktreeId}
               focusedWorktreeId={focusedWorktreeId}
+              keyboardCursorId={keyboardCursorId}
               totalWorktreeCount={deferredWorktrees.length}
               selectWorktree={selectWorktree}
               worktreeActions={worktreeActions}
@@ -1641,6 +1648,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               worktreeId={integrationWorktree.id}
               activeWorktreeId={activeWorktreeId}
               focusedWorktreeId={focusedWorktreeId}
+              keyboardCursorId={keyboardCursorId}
               totalWorktreeCount={deferredWorktrees.length}
               selectWorktree={selectWorktree}
               worktreeActions={worktreeActions}
