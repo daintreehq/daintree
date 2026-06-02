@@ -242,3 +242,82 @@ describe("--anti-flicker-delay-palette CSS contract", () => {
     expect(UI_PALETTE_STALE_DELAY).toBeLessThan(UI_DOHERTY_THRESHOLD);
   });
 });
+
+describe("discrete-feedback easing CSS contract", () => {
+  // Discrete, user-triggered feedback animations must use the front-loaded
+  // --ease-out-expo token so they snap immediately on trigger. The symmetric
+  // Material curve cubic-bezier(0.4, 0, 0.2, 1) reads as sluggish for one-shot
+  // feedback — it belongs to ambient loops (terminal-ping wash) and interactive
+  // base transitions (--focus-transition-easing), which intentionally retain it.
+  // This contract guards against either drifting back onto the symmetric literal.
+  const css = readFileSync(resolve(__dirname, "../../index.css"), "utf8");
+
+  // Each selector's block is extracted individually so the negative assertion
+  // can't tunnel across a closing brace into a neighbouring rule that legitimately
+  // keeps the symmetric literal (terminal-ping, --focus-transition-easing).
+  const discreteFeedbackSelectors = [
+    ".animate-badge-bump",
+    ".animate-action-row-bump",
+    ".animate-diagnostics-flash",
+    ".animate-upstream-badge-flash",
+    ".animate-activity-blip",
+    ".animate-trash-pulse",
+    ".animate-fleet-bar-refocus-pulse::before",
+    ".animate-fleet-bar-commit-flash::before",
+    ".fleet-exit-pulse-overlay",
+    ".fleet-preview-enter-overlay",
+  ];
+
+  const blockRegex = (selector: string): RegExp => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`, "g");
+  };
+
+  const extractBlock = (selector: string): string | null =>
+    css.match(blockRegex(selector))?.[0].match(/\{([\s\S]*?)\}/)?.[1] ?? null;
+
+  it("anchors the swap to the source-of-truth token value", () => {
+    // The 10 swaps only matter if --ease-out-expo still resolves to the
+    // front-loaded curve. Link the CSS token to the TS constant so a silent
+    // redefinition can't pass the per-selector reference checks below.
+    const match = css.match(/--ease-out-expo\s*:\s*([^;]+);/);
+    expect(match?.[1]?.trim()).toBe(EASE_OUT_EXPO);
+  });
+
+  it.each(discreteFeedbackSelectors)(
+    "%s — any duplicate block only disables motion",
+    (selector) => {
+      // extractBlock reads the first (base) rule. These selectors legitimately
+      // recur inside the reduced-motion media query, but only to set
+      // `animation: none`. Guard the false-negative the review flagged: a later
+      // duplicate that reverted the easing to a real curve would win the cascade
+      // while the base-block checks below still passed.
+      const bodies = [...css.matchAll(blockRegex(selector))].map((m) => m[1]);
+      expect(bodies.length).toBeGreaterThanOrEqual(1);
+      bodies.slice(1).forEach((body) => {
+        expect(body).toMatch(/animation:\s*none/);
+      });
+    }
+  );
+
+  it.each(discreteFeedbackSelectors)("%s references var(--ease-out-expo)", (selector) => {
+    const block = extractBlock(selector);
+    expect(block).not.toBeNull();
+    // (?<!-) rules out a custom property like `--animation:` shadowing the real one.
+    expect(block).toMatch(/(?<!-)animation:[^;]*var\(--ease-out-expo\)/);
+  });
+
+  it.each(discreteFeedbackSelectors)(
+    "%s does not fall back to the symmetric Material curve (literal, alias, or longhand)",
+    (selector) => {
+      const block = extractBlock(selector);
+      expect(block).not.toBeNull();
+      // Ban the raw literal, the --focus-transition-easing alias that resolves
+      // to it, and any animation-timing-function longhand that would silently
+      // override the shorthand's easing.
+      expect(block).not.toMatch(/cubic-bezier\(0\.4,\s*0,\s*0\.2,\s*1\)/);
+      expect(block).not.toMatch(/var\(--focus-transition-easing\)/);
+      expect(block).not.toMatch(/animation-timing-function\s*:/);
+    }
+  );
+});
