@@ -49,6 +49,7 @@ lerna-debug.log*
 
 # Signing keys (local only — NEVER commit)
 keys/
+.signing/
 
 # Environment
 .env
