@@ -54,9 +54,11 @@ npm run rebuild      # Rebuild native modules
 
 ## Architecture
 
-- **Main (`electron/`):** node-pty, git operations, services, IPC.
-- **Renderer (`src/`):** React 19 UI. Communicates via `window.electron`.
-- **Shared (`shared/`):** Types and config shared between main and renderer.
+Three process boundaries — `ls` shows the folder names; what matters is which process owns what and where each kind of code conventionally lives:
+
+- **Main (`electron/`):** node-pty, git, and OS access. Backend services in `services/`; IPC handlers by domain in `ipc/handlers/` (channels in `ipc/channels.ts`); window/multi-window in `window/`; the PTY and worktree-monitoring subprocesses in `pty-host/` and `workspace-host/`.
+- **Renderer (`src/`):** React 19 UI, talks to Main only via `window.electron`. Conventional homes: action definitions → `services/actions/definitions/`; per-kind panel modules → `panels/<kind>/`; Zustand stores → `store/`; UI → `components/` (by domain); React hooks → `hooks/`; IPC client wrappers → `clients/`.
+- **Shared (`shared/`):** cross-process code only. Types in `types/` (incl. `ipc/`); registries and config in `config/` (`panelKindRegistry`, `agentRegistry`, …); the theme system in `theme/`.
 
 ### Actions System
 
