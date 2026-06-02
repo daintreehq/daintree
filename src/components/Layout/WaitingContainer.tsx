@@ -323,7 +323,7 @@ function WaitingSingleItem({
       <div className="flex-1 flex items-center gap-1.5 min-w-0">
         <span
           className={cn(
-            "truncate font-medium text-daintree-text/80 group-hover/row:text-daintree-text transition-colors",
+            "min-w-0 truncate font-medium text-daintree-text/80 group-hover/row:text-daintree-text transition-colors",
             compact ? "text-[11px]" : "text-xs"
           )}
         >

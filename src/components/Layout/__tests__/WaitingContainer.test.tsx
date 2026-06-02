@@ -256,11 +256,14 @@ describe("WaitingContainer", () => {
       expect(within(row).getByTestId("live-time-ago")).toBeTruthy();
     });
 
-    it("does not repeat the shared state word on each row (surfaced once in the header)", () => {
+    it("does not render the redundant per-row state chip (state is surfaced once in the header)", () => {
       mockTerminals = [makeTerminal({ id: "t1", title: "Fix auth bug" })];
       render(<WaitingContainer />);
       const row = screen.getByTestId("waiting-single-item");
-      expect((row.textContent ?? "").toLowerCase()).not.toContain("waiting");
+      // The removed state chip carried STATE_COLORS.waiting ("text-state-waiting");
+      // asserting on the class (not row text) avoids false-failing on titles/headlines
+      // that legitimately contain the substring "waiting" (e.g. "Awaiting permission").
+      expect(row.querySelector(".text-state-waiting")).toBeNull();
     });
 
     it("keeps the kill button hidden until row hover/focus (invisible, not just transparent)", () => {
