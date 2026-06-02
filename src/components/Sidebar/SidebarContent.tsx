@@ -46,6 +46,8 @@ import {
   isWorktreeSortDragData,
 } from "@/components/DragDrop/SortableWorktreeCard";
 import { applyManualWorktreeReorder } from "@/lib/worktreeReorder";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore, useWorktreeSelectionStore, useProjectStore } from "@/store";
 import type { PendingCreation } from "@/store/worktreeStore";
 import { useFleetArmingStore, collectFilterArmEligibleIds } from "@/store/fleetArmingStore";
@@ -1103,6 +1105,45 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     isSortDisabledRef.current = isSortDisabled;
   }, [isSortDisabled]);
 
+  // Filter-scope + sort-disabled state. Hoisted above the early returns below so
+  // the announcement effects that depend on them keep a stable hook order.
+  const filteredCount = filteredWorktrees.length;
+  const showScope = hasActiveFilters() && filteredCount !== totalCount;
+  const dragDisabledReason = hasQuery
+    ? "Sorting disabled while searching"
+    : isGroupedByType
+      ? "Sorting disabled while grouped by type"
+      : null;
+
+  // Announce the filtered worktree count to screen readers, debounced so rapid
+  // typing in the search box doesn't flood the AT speech queue. Routed through
+  // the global announcer (document.ariaNotify + always-mounted fallback) rather
+  // than a persistent aria-atomic live region — that region re-announced the
+  // whole status line, including the persistent sort-disabled text, on every
+  // keystroke (#9665).
+  useEffect(() => {
+    if (!showScope) return;
+    const timer = window.setTimeout(() => {
+      useAnnouncerStore.getState().announce(`${filteredCount} of ${totalCount} worktrees`);
+    }, UI_DOHERTY_THRESHOLD);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [showScope, filteredCount, totalCount]);
+
+  // Announce the sort-disabled reason once, only when it first appears. The
+  // re-enable transition ("Manual reorder available") is handled by the
+  // isSortDisabledPrevRef effect above, so we deliberately skip the
+  // string → null direction here to avoid double-speaking.
+  const prevDragDisabledReasonRef = useRef<string | null>(dragDisabledReason);
+  useEffect(() => {
+    const prev = prevDragDisabledReasonRef.current;
+    prevDragDisabledReasonRef.current = dragDisabledReason;
+    if (prev === null && dragDisabledReason !== null) {
+      useAnnouncerStore.getState().announce(dragDisabledReason);
+    }
+  }, [dragDisabledReason]);
+
   const mainRowIndex = mainVisible ? 1 : 0;
   const integrationRowIndex = integrationVisible ? mainRowIndex + 1 : mainRowIndex;
   const firstScrollableRowIndex = integrationRowIndex + 1;
@@ -1438,14 +1479,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       <TooltipContent side="bottom">{armMatchingLabel}</TooltipContent>
     </Tooltip>
   );
-  const filteredCount = filteredWorktrees.length;
-  const showScope = hasActiveFilters() && filteredCount !== totalCount;
-  const dragDisabledReason = hasQuery
-    ? "Sorting disabled while searching"
-    : isGroupedByType
-      ? "Sorting disabled while grouped by type"
-      : null;
-
   return (
     <div className="flex flex-col h-full">
       {worktreeLoadErrorBanner}
@@ -1517,14 +1550,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         </div>
       </div>
 
-      {/* Filter scope and sort-disabled status */}
+      {/* Filter scope and sort-disabled status. Visual-only — screen readers
+          are served by the debounced announcer effects above, not a live region
+          here, so the persistent sort-disabled text isn't re-announced on every
+          keystroke (#9665). */}
       {(showScope || dragDisabledReason) && (
-        <div
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          className="px-4 shrink-0 text-xs text-daintree-text/50 leading-5"
-        >
+        <div className="px-4 shrink-0 text-xs text-daintree-text/50 leading-5">
           {showScope && (
             <span>
               {filteredCount} of {totalCount} worktrees

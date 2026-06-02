@@ -14,7 +14,7 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
   // Slice from the header group to the inline search bar comment to isolate
   // the status line region. This sits between the header and the search bar.
   function statusLineRegion(src: string): string {
-    const start = src.indexOf("{/* Filter scope and sort-disabled status */}");
+    const start = src.indexOf("{/* Filter scope and sort-disabled status");
     const end = src.indexOf("{/* Inline search bar", start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
@@ -30,11 +30,16 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     expect(region).toMatch(/\{\(showScope \|\| dragDisabledReason\) &&/);
   });
 
-  it("uses ARIA live region for screen reader announcements", () => {
+  it("keeps the visible status line free of live-region attributes (#9665)", () => {
+    // The status line mixes a dynamic filter count with persistent
+    // sort-disabled text. role="status" carries an implicit aria-atomic, so a
+    // live region here re-announced the whole line — including the persistent
+    // text — on every keystroke. Announcements are now routed through the
+    // debounced global announcer instead.
     const region = statusLineRegion(source);
-    expect(region).toContain('role="status"');
-    expect(region).toContain('aria-live="polite"');
-    expect(region).toContain('aria-atomic="true"');
+    expect(region).not.toContain('role="status"');
+    expect(region).not.toContain("aria-live");
+    expect(region).not.toContain("aria-atomic");
   });
 
   it("renders scope text 'N of M worktrees' pattern when filters narrow results", () => {
@@ -73,5 +78,42 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     expect(source).toMatch(
       /showScope\s*=\s*hasActiveFilters\(\)\s*&&\s*filteredCount\s*!==\s*totalCount/
     );
+  });
+});
+
+describe("SidebarContent screen-reader announcements — issue #9665", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
+  });
+
+  it("routes announcements through the global announcer store", () => {
+    expect(source).toContain(
+      'import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore"'
+    );
+    expect(source).toContain("useAnnouncerStore.getState().announce(");
+  });
+
+  it("debounces the count announcement on the shared Doherty threshold", () => {
+    expect(source).toContain('import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils"');
+    // The count announcement is scheduled on a timer cleared on re-run, so
+    // rapid keystrokes coalesce into a single late announcement.
+    expect(source).toMatch(
+      /setTimeout\([\s\S]*?announce\(`\$\{filteredCount\} of \$\{totalCount\} worktrees`\)[\s\S]*?\},\s*UI_DOHERTY_THRESHOLD\)/
+    );
+    expect(source).toMatch(/clearTimeout\(timer\)/);
+  });
+
+  it("gates the count announcement on showScope being active", () => {
+    // No filters narrowing the list → no count announcement at all.
+    expect(source).toMatch(/if \(!showScope\) return;/);
+  });
+
+  it("announces the sort-disabled reason only on the null → string transition", () => {
+    // Persistent text must not re-fire while the reason stays set; the
+    // re-enable path is owned by the isSortDisabledPrevRef effect.
+    expect(source).toContain("prevDragDisabledReasonRef");
+    expect(source).toMatch(/prev === null && dragDisabledReason !== null/);
   });
 });
