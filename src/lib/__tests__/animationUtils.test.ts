@@ -268,24 +268,56 @@ describe("discrete-feedback easing CSS contract", () => {
     ".fleet-preview-enter-overlay",
   ];
 
-  const extractBlock = (selector: string): string | null => {
+  const blockRegex = (selector: string): RegExp => {
     const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const match = css.match(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`));
-    return match?.[1] ?? null;
+    return new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`, "g");
   };
+
+  const extractBlock = (selector: string): string | null =>
+    css.match(blockRegex(selector))?.[0].match(/\{([\s\S]*?)\}/)?.[1] ?? null;
+
+  it("anchors the swap to the source-of-truth token value", () => {
+    // The 10 swaps only matter if --ease-out-expo still resolves to the
+    // front-loaded curve. Link the CSS token to the TS constant so a silent
+    // redefinition can't pass the per-selector reference checks below.
+    const match = css.match(/--ease-out-expo\s*:\s*([^;]+);/);
+    expect(match?.[1]?.trim()).toBe(EASE_OUT_EXPO);
+  });
+
+  it.each(discreteFeedbackSelectors)(
+    "%s — any duplicate block only disables motion",
+    (selector) => {
+      // extractBlock reads the first (base) rule. These selectors legitimately
+      // recur inside the reduced-motion media query, but only to set
+      // `animation: none`. Guard the false-negative the review flagged: a later
+      // duplicate that reverted the easing to a real curve would win the cascade
+      // while the base-block checks below still passed.
+      const bodies = [...css.matchAll(blockRegex(selector))].map((m) => m[1]);
+      expect(bodies.length).toBeGreaterThanOrEqual(1);
+      bodies.slice(1).forEach((body) => {
+        expect(body).toMatch(/animation:\s*none/);
+      });
+    }
+  );
 
   it.each(discreteFeedbackSelectors)("%s references var(--ease-out-expo)", (selector) => {
     const block = extractBlock(selector);
     expect(block).not.toBeNull();
-    expect(block).toMatch(/animation:[^;]*var\(--ease-out-expo\)/);
+    // (?<!-) rules out a custom property like `--animation:` shadowing the real one.
+    expect(block).toMatch(/(?<!-)animation:[^;]*var\(--ease-out-expo\)/);
   });
 
   it.each(discreteFeedbackSelectors)(
-    "%s does not fall back to the symmetric Material literal",
+    "%s does not fall back to the symmetric Material curve (literal, alias, or longhand)",
     (selector) => {
       const block = extractBlock(selector);
       expect(block).not.toBeNull();
+      // Ban the raw literal, the --focus-transition-easing alias that resolves
+      // to it, and any animation-timing-function longhand that would silently
+      // override the shorthand's easing.
       expect(block).not.toMatch(/cubic-bezier\(0\.4,\s*0,\s*0\.2,\s*1\)/);
+      expect(block).not.toMatch(/var\(--focus-transition-easing\)/);
+      expect(block).not.toMatch(/animation-timing-function\s*:/);
     }
   );
 });
