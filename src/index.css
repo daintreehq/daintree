@@ -1367,7 +1367,9 @@ body,
 }
 
 /* Label crossfade — used by AnimatedLabel for text/number swaps. Outgoing
- * label fades out & lifts up + slight blur; incoming rises in from below.
+ * label fades out & lifts up; incoming rises in from below. Opacity +
+ * transform only (no filter) so the text never gets promoted to a composited
+ * layer that would disable subpixel antialiasing and soften the glyphs.
  * Container holds both spans in a CSS grid cell so width is the natural max
  * of both labels and no layout shift occurs during the swap.
  */
@@ -1375,12 +1377,10 @@ body,
   0% {
     opacity: 1;
     transform: translateY(0);
-    filter: blur(0);
   }
   100% {
     opacity: 0;
     transform: translateY(-4px);
-    filter: blur(2px);
   }
 }
 
@@ -1388,23 +1388,21 @@ body,
   0% {
     opacity: 0;
     transform: translateY(4px);
-    filter: blur(2px);
   }
   100% {
     opacity: 1;
     transform: translateY(0);
-    filter: blur(0);
   }
 }
 
 .animate-label-swap-out {
   animation: label-swap-out var(--duration-150) var(--ease-out-expo) both;
-  will-change: opacity, transform, filter;
+  will-change: opacity, transform;
 }
 
 .animate-label-swap-in {
   animation: label-swap-in var(--duration-150) var(--ease-out-expo) both;
-  will-change: opacity, transform, filter;
+  will-change: opacity, transform;
 }
 
 /* Card border accent flash — opacity-only sibling overlay so we never animate
@@ -1712,7 +1710,6 @@ body,
   .animate-label-swap-in {
     animation: none;
     transform: none !important;
-    filter: none !important;
     will-change: auto;
   }
 
