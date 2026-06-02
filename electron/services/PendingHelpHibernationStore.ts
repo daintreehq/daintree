@@ -96,7 +96,11 @@ export class PendingHelpHibernationStore {
       typeof v.cwd === "string" &&
       v.cwd !== "" &&
       typeof v.capturedAt === "number" &&
-      Number.isFinite(v.capturedAt)
+      Number.isFinite(v.capturedAt) &&
+      // Reject far-future timestamps (corruption / clock skew): the staleness
+      // cutoff is `capturedAt < now - 14d`, so a future stamp would never age
+      // out and would pin a dead resume entry permanently.
+      v.capturedAt <= Date.now()
     );
   }
 

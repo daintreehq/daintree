@@ -165,6 +165,30 @@ describe("PendingHelpHibernationStore", () => {
     expect(store.get("proj-stale-sentinel")).toBeNull();
   });
 
+  it("rejects entries with a far-future capturedAt (corruption / clock skew)", async () => {
+    // A future timestamp would never satisfy the `capturedAt < now - 14d` stale
+    // cutoff, pinning a dead resume entry forever — isValid must drop it.
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "proj-future-stamp": {
+            agentId: "claude",
+            agentSessionId: "future-id",
+            cwd: "/future",
+            capturedAt: Date.now() + 999_999_999_999,
+          },
+        },
+      }),
+      "utf-8"
+    );
+
+    const store = new PendingHelpHibernationStore(filePath);
+    await store.load();
+    expect(store.get("proj-future-stamp")).toBeNull();
+  });
+
   it("ignores entries with the wrong shape", async () => {
     await fs.writeFile(
       filePath,
