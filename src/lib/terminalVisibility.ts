@@ -23,7 +23,7 @@ export function isTerminalVisible(
   if (isInTrash(terminal.id)) return false;
   if (terminal.location === "trash") return false;
   if (terminal.location === "background") return false;
-  if (isPtyPanel(terminal) && terminal.ephemeral === true) return false;
+  if (isPtyPanel(terminal) && terminal.excludeFromPersistence === true) return false;
   if (isTerminalOrphaned(terminal, worktreeIds)) return false;
   return true;
 }

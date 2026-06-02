@@ -361,10 +361,17 @@ export interface PtyPanelData extends BasePanelData {
   /** Focus policy applied when this panel was created. */
   focusPolicy?: AddPanelFocusPolicy;
   /**
-   * When true, this panel is excluded from persisted layout snapshots and is
-   * never rehydrated on app restart (e.g. Daintree assistant dock terminals).
+   * When true, this panel is excluded from persisted layout snapshots and from
+   * user-visible terminal surfaces (counts, switchers, bulk actions). Such
+   * panels are never rehydrated on app restart (e.g. Daintree assistant dock
+   * terminals). Independent of `removeOnExit`.
    */
-  ephemeral?: boolean;
+  excludeFromPersistence?: boolean;
+  /**
+   * When true, this panel is removed immediately when its PTY exits instead of
+   * being retained under the trash TTL. Independent of `excludeFromPersistence`.
+   */
+  removeOnExit?: boolean;
   /** Timestamp when this terminal was created */
   startedAt?: number;
   /** Exit code from the last process exit */
@@ -595,10 +602,12 @@ export interface TerminalInstance {
   /** Focus policy applied when this panel was created. */
   focusPolicy?: AddPanelFocusPolicy;
   /**
-   * When true, this panel is excluded from persisted layout snapshots and is
-   * never rehydrated on app restart (e.g. Daintree assistant dock terminals).
+   * When true, this panel is excluded from persisted layout snapshots and from
+   * user-visible terminal surfaces (counts, switchers, bulk actions). Such
+   * panels are never rehydrated on app restart (e.g. Daintree assistant dock
+   * terminals).
    */
-  ephemeral?: boolean;
+  excludeFromPersistence?: boolean;
   /** Timestamp when this terminal was created */
   startedAt?: number;
   /** Exit code from the last process exit */

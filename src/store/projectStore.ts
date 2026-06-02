@@ -35,7 +35,7 @@ function shouldPersistTerminal(t: NonNullable<CarrierPanel>): boolean {
     // runtime can still hand us an assistant panel whose kind escapes the
     // declared union, so widen to string before comparing.
     (t.kind as string) !== "assistant" &&
-    !(isPtyPanel(t) && t.ephemeral === true) &&
+    !(isPtyPanel(t) && t.excludeFromPersistence === true) &&
     !isSmokeTestTerminalId(t.id)
   );
 }

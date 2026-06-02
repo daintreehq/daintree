@@ -112,7 +112,7 @@ export function useErrorTerminals(): PtyPanelData[] {
         if (!isPtyPanel(panel)) continue;
         if (panel.agentState !== "exited") continue;
         if (typeof panel.exitCode !== "number" || panel.exitCode === 0) continue;
-        // isTerminalVisible rejects trash/background/ephemeral/orphaned;
+        // isTerminalVisible rejects trash/background/excluded/orphaned;
         // isTerminalErrorClusterEligible adds the dock-location exclusion.
         // Without the orphan gate, clicking an entry from a deleted worktree
         // would call selectWorktree() on a stale ID and persist it.

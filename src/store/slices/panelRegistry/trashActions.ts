@@ -45,10 +45,10 @@ export const createTrashActions = (
     // a panel that's been moved to trash (and reappear when the user undoes).
     cancelReconnectErrorDebounce(id);
 
-    // Ephemeral panels (e.g. the help-panel assistant terminal) are bound to
-    // a transient UI surface and must never linger in trash for the TTL window
-    // — they bypass the trash flow and are removed outright.
-    if (isPtyPanel(terminal) && terminal.ephemeral === true) {
+    // Remove-on-exit panels (e.g. the help-panel assistant terminal) are bound
+    // to a transient UI surface and must never linger in trash for the TTL
+    // window — they bypass the trash flow and are removed outright.
+    if (isPtyPanel(terminal) && terminal.removeOnExit === true) {
       get().removePanel(id);
       return;
     }

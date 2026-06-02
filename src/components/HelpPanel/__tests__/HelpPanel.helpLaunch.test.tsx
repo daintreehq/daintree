@@ -973,7 +973,8 @@ describe("HelpPanel — handleRunAnyway", () => {
         cwd: "/help",
         requestedId: expect.stringMatching(/^terminal-/),
         activateDockOnCreate: true,
-        ephemeral: true,
+        excludeFromPersistence: true,
+        removeOnExit: true,
         force: true,
       }),
       { source: "user" }
@@ -1842,7 +1843,8 @@ describe("HelpPanel — + New session destructive reset", () => {
         agentId: "claude",
         requestedId: expect.stringMatching(/^terminal-/),
         activateDockOnCreate: true,
-        ephemeral: true,
+        excludeFromPersistence: true,
+        removeOnExit: true,
       }),
       { source: "user" }
     );

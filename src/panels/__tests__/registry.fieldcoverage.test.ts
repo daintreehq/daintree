@@ -101,7 +101,8 @@ const PTY_FIELD_CLASSIFICATION = {
   detectedAgentId: false,
   spawnedBy: false,
   focusPolicy: false,
-  ephemeral: false,
+  excludeFromPersistence: false,
+  removeOnExit: false,
   startedAt: false,
   exitCode: false,
   // BasePanelData carrier-bookkeeping timestamps — written by the base

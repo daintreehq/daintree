@@ -1013,9 +1013,10 @@ describe("workflow.focusNextAttention", () => {
     expect(result.state).toBe("none");
   });
 
-  it("ignores background and ephemeral terminals (mirrors isTerminalVisible)", async () => {
-    // A waiting terminal in a background panel and an ephemeral one would
-    // be skipped by focusNextWaiting — the macro must not claim focused: true.
+  it("ignores background and excluded terminals (mirrors isTerminalVisible)", async () => {
+    // A waiting terminal in a background panel and one excluded from
+    // persistence would be skipped by focusNextWaiting — the macro must not
+    // claim focused: true.
     setPanelTerminals(
       [
         { id: "t1", agentState: "waiting", worktreeId: "wt-1", location: "background" },
@@ -1023,10 +1024,16 @@ describe("workflow.focusNextAttention", () => {
       ],
       new Map([["wt-1", { worktreeId: "wt-1" }]])
     );
-    // mark t2 as ephemeral
+    // mark t2 as excluded from persistence
     selectorMock.selectOrderedTerminals.mockReturnValue([
       { id: "t1", agentState: "waiting", worktreeId: "wt-1", location: "background" },
-      { id: "t2", agentState: "waiting", worktreeId: "wt-1", location: "grid", ephemeral: true },
+      {
+        id: "t2",
+        agentState: "waiting",
+        worktreeId: "wt-1",
+        location: "grid",
+        excludeFromPersistence: true,
+      },
     ]);
     const def = setupActions(makeCallbacks())("workflow.focusNextAttention");
     const result = (await def.run(undefined, {} as never)) as Record<string, unknown>;

@@ -102,7 +102,7 @@ describe("terminal.getStatus", () => {
           kind: "terminal",
           location: "dock",
           agentState: "idle",
-          ephemeral: true,
+          excludeFromPersistence: true,
         },
       },
     });
@@ -162,7 +162,7 @@ describe("terminal.getStatus", () => {
           kind: "terminal",
           location: "dock",
           agentState: "idle",
-          ephemeral: true,
+          excludeFromPersistence: true,
         },
       },
     });

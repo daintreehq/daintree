@@ -410,7 +410,7 @@ describe("agentActions adversarial", () => {
           id: "term-ephemeral",
           launchAgentId: "claude",
           agentState: "working",
-          ephemeral: true,
+          excludeFromPersistence: true,
         },
         "term-real": {
           id: "term-real",

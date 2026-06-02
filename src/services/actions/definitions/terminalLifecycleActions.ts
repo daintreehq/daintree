@@ -401,7 +401,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.hibernateAllIdle",
     title: "Sleep All Idle Terminals",
     description:
-      "Hibernate every idle, completed, or exited terminal. Skips ephemeral panels and active agents.",
+      "Hibernate every idle, completed, or exited terminal. Skips tooling-internal panels and active agents.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -414,7 +414,7 @@ export function registerTerminalLifecycleActions(
         if (!panel) continue;
         if (!panel.kind || !panelKindHasPty(panel.kind)) continue;
         if (panel.location === "trash") continue;
-        if ("ephemeral" in panel && panel.ephemeral === true) continue;
+        if (isPtyPanel(panel) && panel.excludeFromPersistence === true) continue;
         const agentState = "agentState" in panel ? panel.agentState : undefined;
         if (
           agentState !== undefined &&
@@ -441,14 +441,14 @@ export function registerTerminalLifecycleActions(
     run: async () => {
       const state = usePanelStore.getState();
       const activeWorktreeId = callbacks.getActiveWorktreeId();
-      // Skip ephemeral panels — the Daintree Assistant's own dock terminal
-      // shouldn't get swept up by a "close all" command.
+      // Skip tooling-internal panels — the Daintree Assistant's own dock
+      // terminal shouldn't get swept up by a "close all" command.
       const idsToClose = state.panelIds.filter((id) => {
         const t = state.panelsById[id];
         if (!t) return false;
-        const isEphemeral = isPtyPanel(t) && t.ephemeral === true;
+        const isToolingInternal = isPtyPanel(t) && t.excludeFromPersistence === true;
         return (
-          !isEphemeral &&
+          !isToolingInternal &&
           t.location !== "trash" &&
           (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         );
@@ -473,19 +473,19 @@ export function registerTerminalLifecycleActions(
     danger: "confirm",
     scope: "renderer",
     dangerRationale:
-      "Permanently kills every non-ephemeral terminal. All scrollback and session state are lost.",
+      "Permanently kills every user-facing terminal. All scrollback and session state are lost.",
     keywords: ["terminate", "stop", "remove", "delete"],
     argsSchema: z.object({ confirmed: z.boolean().optional() }).optional(),
     run: async (args: unknown) => {
       // Don't reuse bulkCloseAll() — it indiscriminately removes every panel,
-      // including the ephemeral assistant terminal. Filter ephemerals out
+      // including the tooling-internal assistant terminal. Filter those out
       // before issuing per-panel removes.
       const state = usePanelStore.getState();
       const targets = state.panelIds
         .map((id) => state.panelsById[id])
         .filter((t): t is NonNullable<typeof t> => {
           if (t == null) return false;
-          return !(isPtyPanel(t) && t.ephemeral === true);
+          return !(isPtyPanel(t) && t.excludeFromPersistence === true);
         });
       if (targets.length === 0) return;
       const runningAgents = collectRunningAgentTerminals(targets);

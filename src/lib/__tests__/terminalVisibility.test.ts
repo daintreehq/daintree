@@ -7,7 +7,7 @@ function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
     id: "t1",
     worktreeId: "wt1",
     location: "grid" as const,
-    ephemeral: false,
+    excludeFromPersistence: false,
     agentState: "working",
     ...overrides,
   } as PtyPanelData;
@@ -60,8 +60,8 @@ describe("isTerminalVisible", () => {
     expect(isTerminalVisible(t, isInTrash, worktreeIds)).toBe(false);
   });
 
-  it("returns false for ephemeral terminals", () => {
-    const t = makeTerminal({ ephemeral: true });
+  it("returns false for excludeFromPersistence terminals", () => {
+    const t = makeTerminal({ excludeFromPersistence: true });
     expect(isTerminalVisible(t, isInTrash, worktreeIds)).toBe(false);
   });
 

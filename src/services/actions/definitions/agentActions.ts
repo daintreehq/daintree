@@ -35,7 +35,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       presetId: z.string().nullable().optional(),
       activateDockOnCreate: z.boolean().optional(),
       env: z.record(z.string(), z.string()).optional(),
-      ephemeral: z.boolean().optional(),
+      excludeFromPersistence: z.boolean().optional(),
+      removeOnExit: z.boolean().optional(),
       agentLaunchFlags: z.array(z.string()).optional(),
       spawnedBy: TerminalSpawnSourceSchema.optional(),
       focusPolicy: AddPanelFocusPolicySchema.optional(),
@@ -61,7 +62,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         presetId,
         activateDockOnCreate,
         env,
-        ephemeral,
+        excludeFromPersistence,
+        removeOnExit,
         agentLaunchFlags,
         spawnedBy,
         focusPolicy,
@@ -78,7 +80,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         presetId?: string | null;
         activateDockOnCreate?: boolean;
         env?: Record<string, string>;
-        ephemeral?: boolean;
+        excludeFromPersistence?: boolean;
+        removeOnExit?: boolean;
         agentLaunchFlags?: string[];
         spawnedBy?: TerminalSpawnSource;
         focusPolicy?: "auto" | "preserve" | "take";
@@ -95,7 +98,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         presetId,
         activateDockOnCreate,
         env,
-        ephemeral,
+        excludeFromPersistence,
+        removeOnExit,
         agentLaunchFlags,
         spawnedBy,
         focusPolicy,
@@ -389,10 +393,10 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       const state = usePanelStore.getState();
       for (const id of state.panelIds) {
         const panel = state.panelsById[id];
-        // Skip ephemeral panels (e.g. the Daintree Assistant's own dock
+        // Skip tooling-internal panels (e.g. the Daintree Assistant's own dock
         // terminal) for the same reason terminal.list filters them — the
         // assistant must not be able to introspect its own process.
-        if (!panel || !isPtyPanel(panel) || panel.ephemeral === true) continue;
+        if (!panel || !isPtyPanel(panel) || panel.excludeFromPersistence === true) continue;
         const effectiveAgentId = panel.detectedAgentId ?? panel.launchAgentId;
         if (effectiveAgentId === agentId) {
           return {

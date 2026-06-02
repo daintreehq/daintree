@@ -303,7 +303,7 @@ describe("getVisibleWorktreesForCycling", () => {
     expect(ids).not.toContain("wt-bg");
   });
 
-  it("excludes ephemeral terminals from quickStateFilter matching", () => {
+  it("excludes excludeFromPersistence terminals from quickStateFilter matching", () => {
     useWorktreeFilterStore.setState({ quickStateFilter: "waiting" });
     setWorktrees([
       createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
@@ -317,7 +317,7 @@ describe("getVisibleWorktreesForCycling", () => {
           type: "terminal",
           worktreeId: "wt-eph",
           location: "grid",
-          ephemeral: true,
+          excludeFromPersistence: true,
           agentState: "waiting",
           detectedAgentId: "claude",
         },

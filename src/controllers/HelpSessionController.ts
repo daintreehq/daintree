@@ -1344,7 +1344,8 @@ export class HelpSessionController {
       command,
       cwd,
       location: "dock",
-      ephemeral: true,
+      excludeFromPersistence: true,
+      removeOnExit: true,
       ...(env && { env }),
       ...(customLaunchFlags.length > 0 && { agentLaunchFlags: customLaunchFlags }),
     });
@@ -1479,7 +1480,8 @@ export class HelpSessionController {
           agentId: launchAgentId,
           location: "dock",
           cwd,
-          ephemeral: true,
+          excludeFromPersistence: true,
+          removeOnExit: true,
           ...(env && { env }),
           ...(customLaunchFlags.length > 0 && { agentLaunchFlags: customLaunchFlags }),
         },
@@ -1704,7 +1706,8 @@ export class HelpSessionController {
         agentId: launchAgentId,
         location: "dock",
         cwd,
-        ephemeral: true,
+        excludeFromPersistence: true,
+        removeOnExit: true,
       };
       if (env) dispatchArgs.env = env;
       if (customLaunchFlags.length > 0) dispatchArgs.agentLaunchFlags = customLaunchFlags;
