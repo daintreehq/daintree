@@ -285,12 +285,21 @@ function Toast({
     TYPE_ICON_CONFIG[notification.type] ?? DEFAULT_ICON_CONFIG;
 
   // Stack depth: frontmost (newest) toast is 0; background toasts lift up and
-  // scale down per index to read as a coordinated pile. Dismissed/exiting
-  // toasts are passed index 0 by the parent so the remaining toasts slide into
-  // their compacted positions without the exiting one jerking. Clamp at 2 as a
-  // defensive floor against a transient over-cap from dismissed-state races
-  // (MAX_VISIBLE_TOASTS keeps the live count at 3).
+  // scale down per index to read as a coordinated pile. The parent passes
+  // dismissed/exiting toasts index 0 so the remaining *live* toasts slide into
+  // their compacted positions. Clamp at 2 as a defensive floor against a
+  // transient over-cap from dismissed-state races (MAX_VISIBLE_TOASTS keeps the
+  // live count at 3).
   const depth = Math.min(Math.max(stackIndex, 0), 2);
+
+  // Freeze the exit position at the toast's last live depth. Without this, an
+  // evicted *background* toast (e.g. index 2 when MAX_VISIBLE_TOASTS evicts the
+  // oldest) would fall off the parent's visible-index map, receive index 0, and
+  // animate from the back of the pile toward the front as it fades — a visible
+  // forward lurch. Holding the last depth lets it fade out in place.
+  const lastDepthRef = useRef(depth);
+  if (!notification.dismissed) lastDepthRef.current = depth;
+  const renderDepth = notification.dismissed ? lastDepthRef.current : depth;
 
   // Two-node split: the outer wrapper owns ALL transform/opacity motion (entry
   // slide, stack lift/scale, exit) and the interaction surface (ref, role,
@@ -310,7 +319,7 @@ function Toast({
       )}
       style={
         {
-          "--toast-index": depth,
+          "--toast-index": renderDepth,
           transform: `translateX(${isVisible ? "0px" : "2rem"}) translateY(calc(var(--toast-index) * -10px)) scale(calc(1 - var(--toast-index) * 0.05))`,
           transitionDuration: `${isVisible ? UI_ENTER_DURATION : UI_EXIT_DURATION}ms`,
           transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
