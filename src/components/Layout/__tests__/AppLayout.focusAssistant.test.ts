@@ -29,7 +29,9 @@ describe("AppLayout focus-mode assistant reconciliation — issue #9641", () => 
     // Symmetric with the sidebar revert ("the snapshot only owns the deltas it
     // caused"): an assistant the gesture never hid must not be touched on exit.
     expect(source).toContain("const restoreAssistant = snapshot.hidAssistant");
-    expect(source).toMatch(/if \(restoreAssistant\) \{\s*\n\s*useHelpPanelStore\.getState\(\)\.setOpen/);
+    expect(source).toMatch(
+      /if \(restoreAssistant\) \{\s*\n\s*useHelpPanelStore\.getState\(\)\.setOpen/
+    );
   });
 
   it("keeps the two visibility gates independent — showAssistant stays a compound predicate", () => {

@@ -294,21 +294,17 @@ describe("focusStore assistant isOpen restore (issue #9641)", () => {
   const panelState: PanelState = { sidebarWidth: 320, diagnosticsOpen: false };
 
   it("captures assistantWasOpen in the snapshot when passed true", () => {
-    useFocusStore.getState().toggleFocusMode(
-      panelState,
-      { sidebarVisible: true, assistantVisible: true },
-      true
-    );
+    useFocusStore
+      .getState()
+      .toggleFocusMode(panelState, { sidebarVisible: true, assistantVisible: true }, true);
 
     expect(useFocusStore.getState().gestureSnapshot?.assistantWasOpen).toBe(true);
   });
 
   it("captures assistantWasOpen in the snapshot when passed false", () => {
-    useFocusStore.getState().toggleFocusMode(
-      panelState,
-      { sidebarVisible: true, assistantVisible: false },
-      false
-    );
+    useFocusStore
+      .getState()
+      .toggleFocusMode(panelState, { sidebarVisible: true, assistantVisible: false }, false);
 
     expect(useFocusStore.getState().gestureSnapshot?.assistantWasOpen).toBe(false);
   });
@@ -357,11 +353,9 @@ describe("focus-mode exit assistant reconciliation contract (issue #9641)", () =
   it("reopens an assistant that was open at entry, even after a toolbar close during focus mode", () => {
     // Assistant open via toolbar, gesture hides it (captures assistantWasOpen=true).
     useHelpPanelStore.setState({ isOpen: true });
-    useFocusStore.getState().toggleFocusMode(
-      panelState,
-      { sidebarVisible: true, assistantVisible: true },
-      true
-    );
+    useFocusStore
+      .getState()
+      .toggleFocusMode(panelState, { sidebarVisible: true, assistantVisible: true }, true);
     // User closes the assistant via the toolbar while in focus mode.
     useHelpPanelStore.getState().setOpen(false);
 
@@ -374,11 +368,9 @@ describe("focus-mode exit assistant reconciliation contract (issue #9641)", () =
   it("leaves a mid-focus toolbar-opened assistant open when the gesture never hid it (sidebar-only gesture)", () => {
     // Assistant closed at entry; gesture hides only the sidebar (hidAssistant=false).
     useHelpPanelStore.setState({ isOpen: false });
-    useFocusStore.getState().toggleFocusMode(
-      panelState,
-      { sidebarVisible: true, assistantVisible: false },
-      false
-    );
+    useFocusStore
+      .getState()
+      .toggleFocusMode(panelState, { sidebarVisible: true, assistantVisible: false }, false);
     // User opens the assistant via the toolbar while in focus mode.
     useHelpPanelStore.getState().setOpen(true);
 
@@ -390,11 +382,9 @@ describe("focus-mode exit assistant reconciliation contract (issue #9641)", () =
 
   it("restores the assistant on an assistant-only gesture round-trip without touching the sidebar", () => {
     useHelpPanelStore.setState({ isOpen: true });
-    useFocusStore.getState().toggleFocusMode(
-      panelState,
-      { sidebarVisible: false, assistantVisible: true },
-      true
-    );
+    useFocusStore
+      .getState()
+      .toggleFocusMode(panelState, { sidebarVisible: false, assistantVisible: true }, true);
     // Assistant masked by the gesture; user closes it via toolbar mid-focus.
     useHelpPanelStore.getState().setOpen(false);
 
@@ -407,11 +397,9 @@ describe("focus-mode exit assistant reconciliation contract (issue #9641)", () =
 
   it("keeps the assistant closed when it was closed at entry and gesture hid only the sidebar", () => {
     useHelpPanelStore.setState({ isOpen: false });
-    useFocusStore.getState().toggleFocusMode(
-      panelState,
-      { sidebarVisible: true, assistantVisible: false },
-      false
-    );
+    useFocusStore
+      .getState()
+      .toggleFocusMode(panelState, { sidebarVisible: true, assistantVisible: false }, false);
 
     exitFocusGesture();
 
