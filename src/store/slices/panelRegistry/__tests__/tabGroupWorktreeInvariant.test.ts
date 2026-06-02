@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
 import type { PtyPanelData, TabGroup } from "@shared/types/panel";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { NO_WORKTREE } from "../worktreeIndex";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -557,7 +558,7 @@ describe("Tab Group Worktree Invariant", () => {
     function commitOnePanelToIndexOnly(panel: PtyPanelData, committedIds: string[] = []) {
       const byId: Record<string, PtyPanelData> = { [panel.id]: panel };
       const index: Record<string, string[]> = {};
-      const bucket = panel.worktreeId ?? "__none__";
+      const bucket = panel.worktreeId ?? NO_WORKTREE;
       index[bucket] = [...committedIds, panel.id];
       usePanelStore.setState({
         panelsById: byId,
@@ -577,8 +578,15 @@ describe("Tab Group Worktree Invariant", () => {
       expect(state.panelIdsByWorktreeId["wt-a"]).toContain("recipe-1");
 
       const groups = state.getTabGroups("grid", "wt-a");
-      const allIds = groups.flatMap((g) => g.panelIds);
-      expect(allIds).toContain("recipe-1");
+      expect(groups).toEqual([
+        {
+          id: "recipe-1",
+          location: "grid",
+          worktreeId: "wt-a",
+          activeTabId: "recipe-1",
+          panelIds: ["recipe-1"],
+        },
+      ]);
     });
 
     it("includes a global dock panel in a worktree-scoped dock query before flush", () => {
@@ -587,7 +595,7 @@ describe("Tab Group Worktree Invariant", () => {
 
       const state = usePanelStore.getState();
       expect(state.panelIds).not.toContain("dock-1");
-      expect(state.panelIdsByWorktreeId["__none__"]).toContain("dock-1");
+      expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toContain("dock-1");
 
       // Dock-global rule: a panel with worktreeId === undefined must still
       // appear in a dock query scoped to a concrete worktree.
@@ -605,6 +613,21 @@ describe("Tab Group Worktree Invariant", () => {
       expect(allIds).not.toContain("recipe-1");
     });
 
+    it("keeps a global pending panel out of a concrete worktree's grid", () => {
+      // The NO_WORKTREE bucket is scanned for grid queries too, but the in-loop
+      // panelMatchesWorktreeScope filter must still keep global panels out of a
+      // worktree-scoped grid (only dock queries surface them).
+      const globalPanel = createMockTerminal("global-1", undefined, "grid");
+      commitOnePanelToIndexOnly(globalPanel);
+
+      const state = usePanelStore.getState();
+      expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toContain("global-1");
+
+      const groups = state.getTabGroups("grid", "wt-a");
+      const allIds = groups.flatMap((g) => g.panelIds);
+      expect(allIds).not.toContain("global-1");
+    });
+
     it("preserves committed panelIds ordering and appends batched panels last", () => {
       const committed = createMockTerminal("committed-1", "wt-a", "grid");
       const batched = createMockTerminal("batched-2", "wt-a", "grid");
@@ -618,6 +641,21 @@ describe("Tab Group Worktree Invariant", () => {
       const groups = usePanelStore.getState().getTabGroups("grid", "wt-a");
       const orderedIds = groups.flatMap((g) => g.panelIds);
       expect(orderedIds).toEqual(["committed-1", "batched-2"]);
+    });
+
+    it("does not duplicate a panel once it lands in both panelIds and the index after flush", () => {
+      const panel = createMockTerminal("recipe-1", "wt-a", "grid");
+      // Post-flush state: the id is now in BOTH panelIds and the index bucket.
+      usePanelStore.setState({
+        panelsById: { "recipe-1": panel },
+        panelIds: ["recipe-1"],
+        panelIdsByWorktreeId: { "wt-a": ["recipe-1"] },
+        tabGroups: new Map(),
+      });
+
+      const groups = usePanelStore.getState().getTabGroups("grid", "wt-a");
+      const allIds = groups.flatMap((g) => g.panelIds);
+      expect(allIds).toEqual(["recipe-1"]);
     });
   });
 });
