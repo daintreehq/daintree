@@ -128,6 +128,44 @@ describe("webContentsRegistry", () => {
     expect(getAppView(win)).toBeNull();
   });
 
+  it("falls back to win.webContents when the app view's webContents is destroyed but still present", async () => {
+    const { getAppView, getAppWebContents, registerAppView } = await loadRegistry();
+    const win = createWindow(1);
+    const wc = createWebContents(107);
+    const view = createView(wc);
+
+    registerAppView(win, view);
+    expect(getAppWebContents(win)).toBe(wc);
+
+    // webContents object is still present (not undefined) but reports destroyed —
+    // exercises the second half of the `view.webContents && !isDestroyed()` guard
+    // without firing the `destroyed` event that would prune the map.
+    wc.setDestroyed(true);
+
+    expect(getAppWebContents(win)).toBe(win.webContents);
+    expect(getAppView(win)).toBeNull();
+  });
+
+  it("getAllAppWebContents prunes only the stale window's app view, not live ones", async () => {
+    const { getAllAppWebContents, getAppView, registerAppView } = await loadRegistry();
+    const winA = createWindow(1);
+    const winB = createWindow(2);
+    const wcA = createWebContents(108);
+    const wcB = createWebContents(109);
+    const viewA = createView(wcA);
+    const viewB = createView(wcB);
+
+    registerAppView(winA, viewA);
+    registerAppView(winB, viewB);
+
+    (viewA as unknown as { webContents: unknown }).webContents = undefined;
+
+    const result = getAllAppWebContents();
+    expect(result).toEqual([wcB]);
+    expect(getAppView(winA)).toBeNull();
+    expect(getAppView(winB)).toBe(viewB);
+  });
+
   it("getAllAppWebContents prunes app views whose webContents became undefined", async () => {
     const { getAllAppWebContents, getAppView, registerAppView } = await loadRegistry();
     const win = createWindow(1);
