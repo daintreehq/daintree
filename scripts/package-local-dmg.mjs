@@ -31,6 +31,12 @@ const run = (cmd, args) =>
 run("npm", ["run", "build"]);
 run("npx", [
   "electron-builder",
+  // electron-builder does not auto-detect the `.config.cjs` infix, so the full
+  // config (appId, asar, files, protocols, output dir) is only applied when
+  // passed explicitly — same as the release workflows. Without this the build
+  // falls back to defaults and lands in dist/ instead of release/.
+  "--config",
+  "electron-builder.config.cjs",
   "--mac",
   target,
   "-c.mac.identity=null",
