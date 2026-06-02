@@ -8,6 +8,7 @@ import { WorktreeSidebarSearchBar } from "../WorktreeSidebarSearchBar";
 function resetWorktreeFilterStore() {
   useWorktreeFilterStore.setState({
     query: "",
+    liveQuery: "",
     orderBy: "created",
     groupByType: false,
     statusFilters: new Set(),
@@ -71,10 +72,9 @@ describe("WorktreeSidebarSearchBar", () => {
       useWorktreeFilterStore.getState().setQuickStateFilter("working");
     });
     fireEvent.change(getInput(), { target: { value: "foo" } });
-    // Flush the 200 ms debounce so store.query reflects the typed value.
+    // The visible query (liveQuery) updates instantly; force the persisted
+    // write so store.query reflects the typed value without waiting on the debounce.
     act(() => {
-      // Force-set the store value directly; the debounce path is exercised
-      // implicitly by the input's onChange already updating localQuery.
       useWorktreeFilterStore.getState().setQuery("foo");
     });
     expect(useWorktreeFilterStore.getState().query).toBe("foo");
@@ -241,15 +241,16 @@ describe("WorktreeSidebarSearchBar", () => {
         useWorktreeFilterStore.getState().toggleStatusFilter("active");
       });
       fireEvent.change(getInput(), { target: { value: "foo" } });
-      // Debounce is now scheduled; store.query is still "".
+      // Debounce is now scheduled; store.query is still "" (liveQuery updated instantly).
       expect(useWorktreeFilterStore.getState().query).toBe("");
-      // External clearAll (e.g., popover footer) fires before the 200 ms elapses.
+      expect(useWorktreeFilterStore.getState().liveQuery).toBe("foo");
+      // External clearAll (e.g., popover footer) fires before the 500 ms elapses.
       act(() => {
         useWorktreeFilterStore.getState().clearAll();
       });
       // Advance past the debounce window.
       act(() => {
-        vi.advanceTimersByTime(250);
+        vi.advanceTimersByTime(550);
       });
       // Query must NOT be silently resurrected to "foo".
       expect(useWorktreeFilterStore.getState().query).toBe("");
@@ -270,10 +271,29 @@ describe("WorktreeSidebarSearchBar", () => {
       // pending debounce and calls setQuery("").
       fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
       act(() => {
-        vi.advanceTimersByTime(250);
+        vi.advanceTimersByTime(550);
       });
       expect(useWorktreeFilterStore.getState().query).toBe("");
       expect(getInput().value).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("typing updates the visible query instantly but defers the persisted write", () => {
+    vi.useFakeTimers();
+    try {
+      renderBar();
+      fireEvent.change(getInput(), { target: { value: "feat" } });
+      // Visible input + filter query reflect the keystroke immediately.
+      expect(getInput().value).toBe("feat");
+      expect(useWorktreeFilterStore.getState().liveQuery).toBe("feat");
+      // The persisted query stays empty until the debounce window elapses.
+      expect(useWorktreeFilterStore.getState().query).toBe("");
+      act(() => {
+        vi.advanceTimersByTime(550);
+      });
+      expect(useWorktreeFilterStore.getState().query).toBe("feat");
     } finally {
       vi.useRealTimers();
     }

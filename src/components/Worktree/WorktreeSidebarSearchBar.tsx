@@ -10,6 +10,10 @@ interface WorktreeSidebarSearchBarProps {
   chipCounts?: ChipCounts;
 }
 
+// The visible filter updates instantly via `liveQuery`; only the persisted
+// `query` write to localStorage is debounced, so typing never feels laggy.
+const QUERY_PERSIST_DEBOUNCE_MS = 500;
+
 function assignForwardedRef<T>(ref: React.Ref<T> | undefined, value: T | null): void {
   if (typeof ref === "function") {
     ref(value);
@@ -20,42 +24,48 @@ function assignForwardedRef<T>(ref: React.Ref<T> | undefined, value: T | null): 
 
 export function WorktreeSidebarSearchBar({ inputRef, chipCounts }: WorktreeSidebarSearchBarProps) {
   const query = useWorktreeFilterStore((state) => state.query);
+  const liveQuery = useWorktreeFilterStore((state) => state.liveQuery);
   const setQuery = useWorktreeFilterStore((state) => state.setQuery);
+  const setLiveQuery = useWorktreeFilterStore((state) => state.setLiveQuery);
   const clearAll = useWorktreeFilterStore((state) => state.clearAll);
   const quickStateFilter = useWorktreeFilterStore((state) => state.quickStateFilter);
   const hasFacetFilters = useWorktreeFilterStore((state) => state.hasFacetFilters());
   const hasActiveFiltersValue = useWorktreeFilterStore((state) => state.hasActiveFilters());
 
-  const [localQuery, setLocalQuery] = useState("");
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const internalRef = useRef<HTMLInputElement | null>(null);
   const prevHasActiveFiltersRef = useRef(hasActiveFiltersValue);
 
+  // Sync the instant `liveQuery` and cancel any pending persistence write when
+  // the persisted `query` changes from outside this input (hydration,
+  // programmatic resets, another window). During normal typing `query` only
+  // changes when the debounce commits, at which point `liveQuery` already
+  // matches, so this is a no-op.
   useEffect(() => {
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
-    setLocalQuery(query);
-  }, [query]);
+    setLiveQuery(query);
+  }, [query, setLiveQuery]);
 
   // Cancel any pending debounce when ANY filter is cleared externally
   // (popover footer "Clear all filters", sidebar empty-state CTA, etc.).
   // The `[query]` effect above only catches transitions of `query` itself;
   // when the typed-but-uncommitted query coincides with an external clearAll,
   // the store's `query` stays "" and the debounce would silently resurrect
-  // the typed value 200 ms later.
+  // the typed value after the persist delay.
   useEffect(() => {
     if (prevHasActiveFiltersRef.current && !hasActiveFiltersValue) {
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
         debounceRef.current = null;
       }
-      setLocalQuery("");
+      setLiveQuery("");
     }
     prevHasActiveFiltersRef.current = hasActiveFiltersValue;
-  }, [hasActiveFiltersValue]);
+  }, [hasActiveFiltersValue, setLiveQuery]);
 
   useEffect(() => {
     return () => {
@@ -67,15 +77,18 @@ export function WorktreeSidebarSearchBar({ inputRef, chipCounts }: WorktreeSideb
 
   const handleQueryChange = useCallback(
     (value: string) => {
-      setLocalQuery(value);
+      // Instant: drives the visible filter and input on every keystroke.
+      setLiveQuery(value);
+      // Debounced: only the localStorage persistence write is throttled.
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
       }
       debounceRef.current = setTimeout(() => {
+        debounceRef.current = null;
         setQuery(value);
-      }, 200);
+      }, QUERY_PERSIST_DEBOUNCE_MS);
     },
-    [setQuery]
+    [setQuery, setLiveQuery]
   );
 
   const handleClearSearch = useCallback(() => {
@@ -83,19 +96,19 @@ export function WorktreeSidebarSearchBar({ inputRef, chipCounts }: WorktreeSideb
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
-    setLocalQuery("");
+    setLiveQuery("");
     setQuery("");
     // Keep focus on input after clearing, per ARIA APG combobox guidance —
-    // the X button unmounts when localQuery clears, so focus would otherwise fall to body.
+    // the X button unmounts when the query clears, so focus would otherwise fall to body.
     internalRef.current?.focus();
-  }, [setQuery]);
+  }, [setQuery, setLiveQuery]);
 
   const handleClearAll = useCallback(() => {
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
-    setLocalQuery("");
+    // `clearAll` resets both `query` and `liveQuery` in the store.
     clearAll();
   }, [clearAll]);
 
@@ -108,14 +121,14 @@ export function WorktreeSidebarSearchBar({ inputRef, chipCounts }: WorktreeSideb
         setIsPopoverOpen(false);
         return;
       }
-      if (localQuery) {
+      if (liveQuery) {
         e.stopPropagation();
         handleClearSearch();
         return;
       }
       internalRef.current?.blur();
     },
-    [isPopoverOpen, localQuery, handleClearSearch]
+    [isPopoverOpen, liveQuery, handleClearSearch]
   );
 
   const setRefs = useCallback(
@@ -126,9 +139,9 @@ export function WorktreeSidebarSearchBar({ inputRef, chipCounts }: WorktreeSideb
     [inputRef]
   );
 
-  const showClear = !!localQuery;
+  const showClear = !!liveQuery;
   const activeAxisCount =
-    (localQuery.trim() ? 1 : 0) + (quickStateFilter !== "all" ? 1 : 0) + (hasFacetFilters ? 1 : 0);
+    (liveQuery.trim() ? 1 : 0) + (quickStateFilter !== "all" ? 1 : 0) + (hasFacetFilters ? 1 : 0);
   const showClearAll = activeAxisCount >= 2;
 
   return (
@@ -148,7 +161,7 @@ export function WorktreeSidebarSearchBar({ inputRef, chipCounts }: WorktreeSideb
         <input
           ref={setRefs}
           type="text"
-          value={localQuery}
+          value={liveQuery}
           onChange={(e) => handleQueryChange(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Search worktrees..."

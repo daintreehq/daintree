@@ -5,6 +5,7 @@ import { useWorktreeFilterStore } from "../worktreeFilterStore";
 function resetWorktreeFilterStore() {
   useWorktreeFilterStore.setState({
     query: "",
+    liveQuery: "",
     orderBy: "created",
     groupByType: false,
     statusFilters: new Set(),
@@ -63,6 +64,24 @@ describe("worktreeFilterStore", () => {
 
     expect(useWorktreeFilterStore.getState().hasActiveFilters()).toBe(false);
     expect(useWorktreeFilterStore.getState().getActiveFilterCount()).toBe(0);
+  });
+
+  it("setLiveQuery updates the transient live query without touching the persisted query", () => {
+    useWorktreeFilterStore.getState().setLiveQuery("draft");
+
+    expect(useWorktreeFilterStore.getState().liveQuery).toBe("draft");
+    // The persisted (debounced) query is independent and stays empty.
+    expect(useWorktreeFilterStore.getState().query).toBe("");
+  });
+
+  it("clearAll resets the live query alongside the persisted query", () => {
+    useWorktreeFilterStore.getState().setLiveQuery("draft");
+    useWorktreeFilterStore.getState().setQuery("committed");
+
+    useWorktreeFilterStore.getState().clearAll();
+
+    expect(useWorktreeFilterStore.getState().liveQuery).toBe("");
+    expect(useWorktreeFilterStore.getState().query).toBe("");
   });
 
   describe("per-section clear actions", () => {
