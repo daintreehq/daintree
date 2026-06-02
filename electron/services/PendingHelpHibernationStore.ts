@@ -86,11 +86,13 @@ export class PendingHelpHibernationStore {
   private isValid(value: unknown): value is PendingHelpHibernation {
     if (!value || typeof value !== "object") return false;
     const v = value as Record<string, unknown>;
+    // An empty `agentSessionId` is the valid resume-latest sentinel (#9639):
+    // it routes the renderer down `buildResumeLatestCommand` rather than a
+    // fresh launch. Only the field's type is required, not non-emptiness.
     return (
       typeof v.agentId === "string" &&
       v.agentId !== "" &&
       typeof v.agentSessionId === "string" &&
-      v.agentSessionId !== "" &&
       typeof v.cwd === "string" &&
       v.cwd !== "" &&
       typeof v.capturedAt === "number" &&

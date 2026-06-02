@@ -2289,6 +2289,62 @@ describe("HelpPanel — resume from main-captured hibernation (eviction recovery
     );
   });
 
+  it("resumes via resume-latest when main returns the empty-sentinel placeholder (#9639)", async () => {
+    // The eviction race fix writes an empty-`agentSessionId` placeholder before
+    // gracefulKill resolves. A switch-back that lands in that window pulls the
+    // sentinel — the controller must take the resume-latest path (claude
+    // `--continue`) rather than a fresh `agent.launch`, so the user's assistant
+    // resumes instead of visibly restarting.
+    helpPanelState.terminalId = null;
+    helpPanelState.agentId = null;
+    helpPanelState.preferredAgentId = "claude";
+    helpPanelState.sessionId = null;
+    helpPanelState.hibernateSessions = {};
+
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockTakePendingHibernation.mockResolvedValueOnce({
+      agentId: "claude",
+      agentSessionId: "",
+      cwd: "/help/session-dir",
+    });
+    helpPanelState.setHibernateSession = vi.fn(
+      (projectId: string, entry: { sessionId: string; cwd: string; agentId: string }) => {
+        helpPanelState.hibernateSessions[projectId] = entry;
+      }
+    );
+    panelStoreState.addPanel.mockResolvedValueOnce("term-resumed-latest");
+
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith(
+      projectStoreState.currentProject?.id,
+      expect.objectContaining({ sessionId: "", agentId: "claude" })
+    );
+    // Resume-latest spawns through addPanel with the `--continue` flag.
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "terminal",
+        launchAgentId: "claude",
+        command: expect.stringContaining("--continue"),
+      })
+    );
+    // The visible "restart" — a fresh launch — must NOT fire.
+    expect(mockDispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
   it("falls through to a fresh launch when main has no pending hibernation", async () => {
     helpPanelState.terminalId = null;
     helpPanelState.agentId = null;
