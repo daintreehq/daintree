@@ -146,6 +146,58 @@ describe("spawnPanelsFromRecipe", () => {
     expect(cb).toHaveBeenCalledWith(0, "panel-id-123");
   });
 
+  it("persists computed launch flags so resume reproduces the launch (#9650)", async () => {
+    // Real buildAgentLaunchFlags runs (only generateAgentCommand is mocked),
+    // so the dangerous flag and recipe args must surface in agentLaunchFlags.
+    await spawnPanelsFromRecipe({
+      terminals: [makeAgent({ args: "--recipe-arg value" })],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+      agentSettings: { agents: { claude: { dangerousEnabled: true } } },
+      clipboardDirectory: "/tmp/daintree/daintree-clipboard",
+    });
+
+    const call = mockAddPanel.mock.calls[0]?.[0] as { agentLaunchFlags?: string[] };
+    expect(call.agentLaunchFlags).toEqual(
+      expect.arrayContaining(["--dangerously-skip-permissions", "--recipe-arg", "value"])
+    );
+    // Never the stale (always-undefined) recipe-terminal field.
+    expect(call.agentLaunchFlags).not.toBeUndefined();
+  });
+
+  it("forwards recipe args to the initial command (#9650)", async () => {
+    await spawnPanelsFromRecipe({
+      terminals: [makeAgent({ args: "--recipe-arg" })],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+      agentSettings: { agents: { claude: {} } },
+      clipboardDirectory: "/tmp/daintree/daintree-clipboard",
+    });
+
+    expect(mockGenerateAgentCommand).toHaveBeenCalledWith(
+      "claude",
+      {},
+      "claude",
+      expect.objectContaining({ recipeArgs: "--recipe-arg" })
+    );
+  });
+
+  it("produces no blank flag tokens when recipe args are empty (#9650)", async () => {
+    await spawnPanelsFromRecipe({
+      terminals: [makeAgent({ args: "   " })],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+      agentSettings: { agents: { claude: { dangerousEnabled: true } } },
+      clipboardDirectory: "/tmp/daintree/daintree-clipboard",
+    });
+
+    const call = mockAddPanel.mock.calls[0]?.[0] as { agentLaunchFlags?: string[] };
+    expect(call.agentLaunchFlags).toEqual(
+      expect.arrayContaining(["--dangerously-skip-permissions"])
+    );
+    expect(call.agentLaunchFlags?.every((f) => f.trim().length > 0)).toBe(true);
+  });
+
   it("fetches agent settings internally when not provided", async () => {
     await spawnPanelsFromRecipe({
       terminals: [makeAgent()],
