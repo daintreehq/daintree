@@ -59,7 +59,6 @@ import {
   type OverDropData,
 } from "./dropResolution";
 import {
-  UI_ANIMATION_DURATION,
   DURATION_100,
   DURATION_300,
   EASE_SNAPPY,
@@ -67,6 +66,8 @@ import {
   EASE_OUT_EXPO,
   DRAG_OVERLAY_ENTRY_SCALE,
   DRAG_OVERLAY_ENTRY_OPACITY,
+  DRAG_OVERLAY_SPRING_VISUAL_DURATION,
+  DRAG_OVERLAY_SPRING_BOUNCE,
   getUiAnimationDuration,
 } from "@/lib/animationUtils";
 
@@ -461,8 +462,15 @@ function DragOverlayWithCursorTracking({
               : { scale: DRAG_OVERLAY_ENTRY_SCALE, opacity: DRAG_OVERLAY_ENTRY_OPACITY }
           }
           animate={{ scale: 1, opacity: 1 }}
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- framer-motion v12 Easing type doesn't include CSS cubic-bezier strings
-          transition={{ duration: UI_ANIMATION_DURATION / 1000, ease: EASE_SNAPPY } as any}
+          transition={
+            prefersReducedMotion
+              ? { type: "tween", duration: 0 }
+              : {
+                  type: "spring",
+                  visualDuration: DRAG_OVERLAY_SPRING_VISUAL_DURATION,
+                  bounce: DRAG_OVERLAY_SPRING_BOUNCE,
+                }
+          }
         >
           {overlayContent}
         </m.div>

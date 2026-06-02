@@ -175,6 +175,12 @@ export const DRAG_GHOST_OPACITY = 0.4;
 export const DRAG_GHOST_EASING = "easeOut";
 export const DRAG_OVERLAY_ENTRY_SCALE = 0.95;
 export const DRAG_OVERLAY_ENTRY_OPACITY = 0.8;
+/** Perceptual spring tuning for the drag-overlay pickup. `visualDuration` is in
+ *  seconds (Framer Motion 12 perceptual spring API) and tracks the prior ~150ms
+ *  tween feel; near-zero `bounce` keeps overshoot sub-pixel so the pickup reads
+ *  crisp in a dense grid rather than springy. */
+export const DRAG_OVERLAY_SPRING_VISUAL_DURATION = 0.15;
+export const DRAG_OVERLAY_SPRING_BOUNCE = 0.05;
 
 export const PANEL_MINIMIZE_EASING = "cubic-bezier(0.3, 0, 0.8, 0.15)";
 export const PANEL_RESTORE_EASING = EASE_OUT_EXPO;
