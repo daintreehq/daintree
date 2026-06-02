@@ -13,7 +13,7 @@
 export type PanelIdsByWorktreeId = Record<string, string[]>;
 
 /** Bucket key for panels with `worktreeId === undefined`. */
-const NO_WORKTREE = "__none__";
+export const NO_WORKTREE = "__none__";
 
 function bucketKey(worktreeId: string | undefined | null): string {
   return worktreeId ?? NO_WORKTREE;
