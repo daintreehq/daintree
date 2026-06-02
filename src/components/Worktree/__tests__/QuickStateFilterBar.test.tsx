@@ -230,10 +230,10 @@ describe("QuickStateFilterBar", () => {
     }
   });
 
-  it("renders the active count at full text opacity and inactive counts at /50 — issue #7971", () => {
+  it("renders the active count at full text opacity and inactive counts at /60 — issue #7971", () => {
     // The count digit is the load-bearing signal in icon-only segments — the
     // active segment must read at full neutral text opacity (no /N suffix);
-    // inactive segments stay muted at /50 to preserve the active hierarchy.
+    // inactive segments stay muted at /60 to preserve the active hierarchy.
     renderBar(
       <QuickStateFilterBar
         value="working"
@@ -249,7 +249,7 @@ describe("QuickStateFilterBar", () => {
     const inactiveClass = inactiveCount.getAttribute("class") ?? "";
     expect(activeClass).toContain("text-daintree-text");
     expect(activeClass).not.toContain("text-daintree-text/");
-    expect(inactiveClass).toContain("text-daintree-text/50");
+    expect(inactiveClass).toContain("text-daintree-text/60");
   });
 
   it("renders the optional trailing slot past a divider", () => {

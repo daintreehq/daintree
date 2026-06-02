@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import type { QuickStateFilter } from "@/lib/worktreeFilters";
+import { CheckCircle2 } from "lucide-react";
 import { HollowCircle, SpinnerCircle } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { STATE_COLORS } from "./terminalStateConfig";
@@ -15,9 +16,9 @@ const FILTER_VISUALS: Record<
   Exclude<QuickStateFilter, "all">,
   { Icon: React.ComponentType<{ className?: string }>; color: string }
 > = {
-  working: { Icon: HollowCircle, color: STATE_COLORS.working },
+  working: { Icon: SpinnerCircle, color: STATE_COLORS.working },
   waiting: { Icon: HollowCircle, color: STATE_COLORS.waiting },
-  finished: { Icon: HollowCircle, color: "text-category-blue" },
+  finished: { Icon: CheckCircle2, color: "text-category-blue" },
 };
 
 interface QuickStateFilterBarProps {
@@ -101,7 +102,7 @@ export function QuickStateFilterBar({
                     aria-hidden="true"
                     className={cn(
                       "text-xs tabular-nums",
-                      isActive ? "text-daintree-text" : "text-daintree-text/50"
+                      isActive ? "text-daintree-text" : "text-daintree-text/60"
                     )}
                   >
                     {rawCount}
