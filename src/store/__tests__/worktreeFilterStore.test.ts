@@ -80,35 +80,43 @@ describe("worktreeFilterStore", () => {
 
     // Each section is described by a thunk that reads its current Set and a thunk
     // that invokes its clear action — typed references avoid dynamic string-key
-    // indexing so the isolation assertion stays fully type-checked.
+    // indexing so the isolation assertion stays fully type-checked. `populated`
+    // is the exact count `populateAllSections` leaves in that Set, so bystander
+    // assertions can check exact membership rather than a weak `> 0`.
     const sections = [
       {
         name: "status",
+        populated: 2,
         size: () => useWorktreeFilterStore.getState().statusFilters.size,
         clear: () => useWorktreeFilterStore.getState().clearStatusFilters(),
       },
       {
         name: "branch type",
+        populated: 1,
         size: () => useWorktreeFilterStore.getState().typeFilters.size,
         clear: () => useWorktreeFilterStore.getState().clearTypeFilters(),
       },
       {
         name: "issues & PRs",
+        populated: 1,
         size: () => useWorktreeFilterStore.getState().prIssueFilters.size,
         clear: () => useWorktreeFilterStore.getState().clearPrIssueFilters(),
       },
       {
         name: "sessions",
+        populated: 1,
         size: () => useWorktreeFilterStore.getState().sessionFilters.size,
         clear: () => useWorktreeFilterStore.getState().clearSessionFilters(),
       },
       {
         name: "activity",
+        populated: 1,
         size: () => useWorktreeFilterStore.getState().activityFilters.size,
         clear: () => useWorktreeFilterStore.getState().clearActivityFilters(),
       },
       {
         name: "dev server",
+        populated: 1,
         size: () => useWorktreeFilterStore.getState().devServerFilters.size,
         clear: () => useWorktreeFilterStore.getState().clearDevServerFilters(),
       },
@@ -122,7 +130,9 @@ describe("worktreeFilterStore", () => {
       expect(target.size()).toBe(0);
       for (const other of sections) {
         if (other.name === target.name) continue;
-        expect(other.size()).toBeGreaterThan(0);
+        // Bystander sections keep their exact populated count — a clear that
+        // accidentally dropped one entry would still pass a `> 0` check.
+        expect(other.size()).toBe(other.populated);
       }
     });
 

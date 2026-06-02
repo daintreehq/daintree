@@ -34,11 +34,13 @@ function FilterSection({
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const contentId = `filter-section-${title.toLowerCase().replace(/\s+/g, "-")}`;
   const hasActive = activeCount > 0;
+  const expandButtonRef = useRef<HTMLButtonElement>(null);
 
   return (
     <div className="flex flex-col border-b border-daintree-border last:border-b-0">
       <div className="flex items-center">
         <button
+          ref={expandButtonRef}
           type="button"
           onClick={() => setIsOpen(!isOpen)}
           aria-expanded={isOpen}
@@ -62,6 +64,9 @@ function FilterSection({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
+              // The Clear button unmounts itself once activeCount hits 0, so move
+              // focus to the adjacent expand toggle first to keep it off body.
+              expandButtonRef.current?.focus();
               onClear();
             }}
             aria-label={`Clear ${title} filters`}
