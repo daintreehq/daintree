@@ -2,6 +2,8 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act, render, cleanup } from "@testing-library/react";
 import { AnimatedLabel } from "../AnimatedLabel";
 
@@ -95,5 +97,37 @@ describe("AnimatedLabel", () => {
     rerender(<AnimatedLabel label="3" />);
     expect(container.querySelector(".animate-label-swap-in")?.textContent).toBe("3");
     expect(container.querySelector(".animate-label-swap-out")?.textContent).toBe("2");
+  });
+});
+
+// Regression guard for #9615: the crossfade must stay filter-free. A blur (or
+// any filter / will-change: filter) promotes the always-visible count text to a
+// composited layer that disables subpixel antialiasing and softens the glyphs
+// even at rest. JSDOM doesn't apply stylesheets, so we assert against the CSS
+// source directly — this fails if anyone reintroduces filter into the swap.
+describe("AnimatedLabel CSS contract", () => {
+  const css = readFileSync(resolve(process.cwd(), "src/index.css"), "utf8");
+
+  const extractBlock = (header: string) => {
+    const start = css.indexOf(header);
+    expect(start, `expected to find "${header}" in index.css`).toBeGreaterThanOrEqual(0);
+    const open = css.indexOf("{", start);
+    let depth = 0;
+    for (let i = open; i < css.length; i++) {
+      if (css[i] === "{") depth++;
+      else if (css[i] === "}" && --depth === 0) return css.slice(open + 1, i);
+    }
+    throw new Error(`unterminated block for "${header}"`);
+  };
+
+  it.each([
+    "@keyframes label-swap-out",
+    "@keyframes label-swap-in",
+    ".animate-label-swap-out {",
+    ".animate-label-swap-in {",
+  ])("keeps %s free of filter/blur", (header) => {
+    const block = extractBlock(header);
+    expect(block).not.toMatch(/\bfilter\s*:/);
+    expect(block).not.toMatch(/blur\(/);
   });
 });

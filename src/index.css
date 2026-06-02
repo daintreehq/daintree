@@ -1368,8 +1368,10 @@ body,
 
 /* Label crossfade — used by AnimatedLabel for text/number swaps. Outgoing
  * label fades out & lifts up; incoming rises in from below. Opacity +
- * transform only (no filter) so the text never gets promoted to a composited
- * layer that would disable subpixel antialiasing and soften the glyphs.
+ * transform only (no filter): filter was the culprit — `will-change: filter`
+ * promotes the text to a composited layer even at rest, permanently disabling
+ * subpixel antialiasing and softening the glyphs. opacity/transform only
+ * promote transiently during the 150ms swap, not at rest.
  * Container holds both spans in a CSS grid cell so width is the natural max
  * of both labels and no layout shift occurs during the swap.
  */
