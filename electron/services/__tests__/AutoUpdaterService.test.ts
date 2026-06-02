@@ -61,6 +61,8 @@ const storeMock = vi.hoisted(() => ({
 }));
 
 const cleanupOnExitMock = vi.hoisted(() => vi.fn());
+const markCleanExitMock = vi.hoisted(() => vi.fn());
+const markCleanLaunchMock = vi.hoisted(() => vi.fn());
 
 const fsMock = vi.hoisted(() => ({
   existsSync: vi.fn(() => false),
@@ -71,6 +73,14 @@ vi.mock("fs", () => fsMock);
 
 vi.mock("../CrashRecoveryService.js", () => ({
   getCrashRecoveryService: () => ({ cleanupOnExit: cleanupOnExitMock }),
+}));
+
+vi.mock("../CrashLoopGuardService.js", () => ({
+  getCrashLoopGuard: () => ({ markCleanExit: markCleanExitMock }),
+}));
+
+vi.mock("../PanelSuspectLedgerService.js", () => ({
+  getPanelSuspectLedger: () => ({ markCleanLaunch: markCleanLaunchMock }),
 }));
 
 vi.mock("../TelemetryService.js", () => ({
@@ -421,6 +431,80 @@ describe("AutoUpdaterService", () => {
       quitAndInstallHandler(TRUSTED_SENDER);
 
       expect(cleanupOnExitMock).toHaveBeenCalledTimes(1);
+      vi.advanceTimersToNextTimer();
+      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+    });
+
+    // Issue #9638: the update relaunch must write the same clean-exit markers
+    // the normal shutdown chain does, so the post-update boot isn't treated as
+    // a crash.
+    it("writes clean-exit markers before the deferred quitAndInstall", () => {
+      downloadedHandler({ version: "2.0.0" });
+
+      quitAndInstallHandler(TRUSTED_SENDER);
+
+      expect(markCleanExitMock).toHaveBeenCalledTimes(1);
+      expect(markCleanLaunchMock).toHaveBeenCalledTimes(1);
+      vi.advanceTimersToNextTimer();
+      expect(markCleanExitMock.mock.invocationCallOrder[0]).toBeLessThan(
+        autoUpdaterMock.quitAndInstall.mock.invocationCallOrder[0]
+      );
+      expect(markCleanLaunchMock.mock.invocationCallOrder[0]).toBeLessThan(
+        autoUpdaterMock.quitAndInstall.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("does not write clean-exit markers when no update is downloaded", () => {
+      quitAndInstallHandler(TRUSTED_SENDER);
+
+      expect(markCleanExitMock).not.toHaveBeenCalled();
+      expect(markCleanLaunchMock).not.toHaveBeenCalled();
+    });
+
+    it("does not write clean-exit markers for an untrusted sender", () => {
+      downloadedHandler({ version: "2.0.0" });
+
+      quitAndInstallHandler({ senderFrame: { url: "https://evil.example.com/x.html" } });
+
+      expect(markCleanExitMock).not.toHaveBeenCalled();
+      expect(markCleanLaunchMock).not.toHaveBeenCalled();
+    });
+
+    it("still writes markCleanLaunch and installs when cleanupOnExit throws", () => {
+      downloadedHandler({ version: "2.0.0" });
+      cleanupOnExitMock.mockImplementationOnce(() => {
+        throw new Error("cleanup failed");
+      });
+
+      quitAndInstallHandler(TRUSTED_SENDER);
+
+      expect(markCleanExitMock).toHaveBeenCalledTimes(1);
+      expect(markCleanLaunchMock).toHaveBeenCalledTimes(1);
+      vi.advanceTimersToNextTimer();
+      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+    });
+
+    it("still writes markCleanLaunch and installs when markCleanExit throws", () => {
+      downloadedHandler({ version: "2.0.0" });
+      markCleanExitMock.mockImplementationOnce(() => {
+        throw new Error("markCleanExit failed");
+      });
+
+      quitAndInstallHandler(TRUSTED_SENDER);
+
+      expect(markCleanLaunchMock).toHaveBeenCalledTimes(1);
+      vi.advanceTimersToNextTimer();
+      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+    });
+
+    it("still installs when markCleanLaunch throws", () => {
+      downloadedHandler({ version: "2.0.0" });
+      markCleanLaunchMock.mockImplementationOnce(() => {
+        throw new Error("markCleanLaunch failed");
+      });
+
+      quitAndInstallHandler(TRUSTED_SENDER);
+
       vi.advanceTimersToNextTimer();
       expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
     });
@@ -1874,6 +1958,67 @@ describe("AutoUpdaterService", () => {
       autoUpdaterService.quitAndInstallIfReady();
 
       expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(false);
+    });
+
+    // Issue #9638: mirror the shutdown chain's clean-exit markers so an update
+    // relaunch isn't counted as a crash on the next boot.
+    it("writes clean-exit markers before the deferred quitAndInstall when ready", () => {
+      downloadedHandler({ version: "2.0.0" });
+
+      autoUpdaterService.quitAndInstallIfReady();
+
+      expect(markCleanExitMock).toHaveBeenCalledTimes(1);
+      expect(markCleanLaunchMock).toHaveBeenCalledTimes(1);
+      // Markers must commit before the install runs.
+      expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
+      vi.advanceTimersToNextTimer();
+      expect(markCleanExitMock.mock.invocationCallOrder[0]).toBeLessThan(
+        autoUpdaterMock.quitAndInstall.mock.invocationCallOrder[0]
+      );
+      expect(markCleanLaunchMock.mock.invocationCallOrder[0]).toBeLessThan(
+        autoUpdaterMock.quitAndInstall.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("does not write clean-exit markers when state is idle", () => {
+      autoUpdaterService.quitAndInstallIfReady();
+
+      expect(markCleanExitMock).not.toHaveBeenCalled();
+      expect(markCleanLaunchMock).not.toHaveBeenCalled();
+    });
+
+    it("writes the markers only once on a rapid double-call", () => {
+      downloadedHandler({ version: "2.0.0" });
+
+      autoUpdaterService.quitAndInstallIfReady();
+      autoUpdaterService.quitAndInstallIfReady();
+
+      expect(markCleanExitMock).toHaveBeenCalledTimes(1);
+      expect(markCleanLaunchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("still writes markCleanLaunch and installs when markCleanExit throws", () => {
+      downloadedHandler({ version: "2.0.0" });
+      markCleanExitMock.mockImplementationOnce(() => {
+        throw new Error("markCleanExit failed");
+      });
+
+      expect(autoUpdaterService.quitAndInstallIfReady()).toBe(true);
+
+      expect(markCleanLaunchMock).toHaveBeenCalledTimes(1);
+      vi.advanceTimersToNextTimer();
+      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+    });
+
+    it("still installs when markCleanLaunch throws", () => {
+      downloadedHandler({ version: "2.0.0" });
+      markCleanLaunchMock.mockImplementationOnce(() => {
+        throw new Error("markCleanLaunch failed");
+      });
+
+      expect(autoUpdaterService.quitAndInstallIfReady()).toBe(true);
+      vi.advanceTimersToNextTimer();
+      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
     });
   });
 
