@@ -57,7 +57,9 @@ export function ShortcutHint() {
   // a dedicated sr-only status node always in the DOM and only swap its text.
   // Lead the announcement with the action's name so the shortcut has meaning;
   // fall back to the generic "Shortcut:" prefix for unnamed/plugin actions.
-  const liveTitle = activeHint ? actionService.getTitle(activeHint.actionId as ActionId) : "";
+  const liveTitle = activeHint
+    ? actionService.getTitle(activeHint.actionId as ActionId).trim()
+    : "";
   const liveRegion = (
     <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
       {activeHint
@@ -70,7 +72,7 @@ export function ShortcutHint() {
 
   if (!shouldRender || !hint) return liveRegion;
 
-  const title = actionService.getTitle(hint.actionId as ActionId);
+  const title = actionService.getTitle(hint.actionId as ActionId).trim();
 
   const vw = window.innerWidth;
   const vh = window.innerHeight;

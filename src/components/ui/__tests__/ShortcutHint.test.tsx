@@ -112,6 +112,15 @@ describe("ShortcutHint live region — issue #8942", () => {
     expect(tooltip?.textContent).toContain("⌘K");
   });
 
+  it("falls back to 'Tip:' when the title is only whitespace", () => {
+    getTitleMock.mockReturnValue("   ");
+    render(<ShortcutHint />);
+    activate("⌘K");
+    const tooltip = document.querySelector('[aria-hidden="true"]');
+    expect(tooltip?.textContent).toContain("Tip:");
+    expect(liveRegion()?.textContent).toBe("Shortcut: ⌘K");
+  });
+
   it("marks the visual tooltip aria-hidden so it doesn't double-announce", () => {
     getTitleMock.mockReturnValue("Open command palette");
     render(<ShortcutHint />);
