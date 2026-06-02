@@ -8,6 +8,8 @@ import * as semver from "semver";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { getCrashRecoveryService } from "./CrashRecoveryService.js";
+import { getCrashLoopGuard } from "./CrashLoopGuardService.js";
+import { getPanelSuspectLedger } from "./PanelSuspectLedgerService.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { trackEvent } from "./TelemetryService.js";
 import { store } from "../store.js";
@@ -247,6 +249,26 @@ class AutoUpdaterService {
       getCrashRecoveryService().cleanupOnExit();
     } catch (err) {
       console.error("[MAIN] Crash recovery cleanup before quit-and-install failed:", err);
+    }
+    // An update relaunch is a clean exit, but quitAndInstall() bypasses the
+    // before-quit cleanup chain (issue #9638), so the two clean-exit markers the
+    // normal shutdown path writes are skipped — leaving cleanExit:false and
+    // firing a false crash-recovery prompt on the post-update boot. Mirror
+    // shutdown.ts: each marker in its own try/catch so one failure can't skip
+    // the next (lesson #7158). markCleanExit/markCleanLaunch are synchronous
+    // writeFileSync, so they commit before the setImmediate-deferred install.
+    try {
+      getCrashLoopGuard().markCleanExit();
+    } catch (err) {
+      console.error("[MAIN] CrashLoopGuard.markCleanExit before quit-and-install failed:", err);
+    }
+    try {
+      getPanelSuspectLedger().markCleanLaunch();
+    } catch (err) {
+      console.error(
+        "[MAIN] PanelSuspectLedger.markCleanLaunch before quit-and-install failed:",
+        err
+      );
     }
     // Disarm the before-quit listener so the explicit quitAndInstall() path
     // and the autoInstallOnAppQuit path don't race the installer subprocess.
@@ -719,6 +741,22 @@ class AutoUpdaterService {
           getCrashRecoveryService().cleanupOnExit();
         } catch (err) {
           console.error("[MAIN] Crash recovery cleanup before quit-and-install failed:", err);
+        }
+        // Issue #9638: write the clean-exit markers the before-quit chain would
+        // otherwise skip on an update relaunch. Independent try/catch per marker
+        // (lesson #7158); both are synchronous so they commit before the install.
+        try {
+          getCrashLoopGuard().markCleanExit();
+        } catch (err) {
+          console.error("[MAIN] CrashLoopGuard.markCleanExit before quit-and-install failed:", err);
+        }
+        try {
+          getPanelSuspectLedger().markCleanLaunch();
+        } catch (err) {
+          console.error(
+            "[MAIN] PanelSuspectLedger.markCleanLaunch before quit-and-install failed:",
+            err
+          );
         }
         autoUpdater.autoInstallOnAppQuit = false;
         this.executeQuitAndInstall();
