@@ -7,6 +7,7 @@ import { actionService } from "@/services/ActionService";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { logDebug } from "@/utils/logger";
 import { useUrlHistoryStore } from "./urlHistoryStore";
+import { useHelpPanelStore } from "./helpPanelStore";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { panelPersistence, panelToSnapshot } from "./persistence/panelPersistence";
@@ -606,6 +607,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         set({ currentProject: null });
       }
       useUrlHistoryStore.getState().removeProjectHistory(id);
+      useHelpPanelStore.getState().clearHibernateSession(id);
       set({ isLoading: false });
     } catch (error) {
       logErrorWithContext(error, {
@@ -744,6 +746,12 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     try {
       const updated = await projectClient.locate(projectId);
       if (updated) {
+        // Relocation regenerates the project id from its new path (sha256(path)),
+        // so the pre-relocation id is now dead. GC its orphaned hibernate session.
+        // Skip when the id is unchanged (canonicalization produced the same hash).
+        if (updated.id !== projectId) {
+          useHelpPanelStore.getState().clearHibernateSession(projectId);
+        }
         const projects = await projectClient.getAll();
         set({ projects });
       }
