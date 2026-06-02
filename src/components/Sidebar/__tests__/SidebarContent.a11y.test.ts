@@ -66,7 +66,10 @@ describe("SidebarContent accessibility — issue #9662", () => {
       expect(refreshButton).not.toBeNull();
       const button = refreshButton![0];
       expect(button).toMatch(/aria-disabled=\{isRefreshing \|\| undefined\}/);
-      expect(button).not.toMatch(/[^-]disabled=\{isRefreshing\}/);
+      // Reject ANY native disabled binding on the button (not just the literal
+      // disabled={isRefreshing}), since aria-disabled is the whole point.
+      // The [^-] guard keeps this from matching aria-disabled.
+      expect(button).not.toMatch(/[^-]disabled=\{/);
     });
 
     it("uses aria-disabled: Tailwind variants for the disabled styling", () => {

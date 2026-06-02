@@ -448,6 +448,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     if (showReconnecting && !prevReconnecting.current) {
       useAnnouncerStore.getState().announce("Reconnecting…", "polite");
     }
+    // Gate escalation on `showReconnecting` (the Doherty-gated value) too:
+    // `showReconnectingEscalated` reads raw `isReconnecting`, so mounting mid-
+    // outage could otherwise fire "Still reconnecting…" 400ms before the base
+    // "Reconnecting…" announcement and invert their order.
     if (showReconnectingEscalated && !prevEscalated.current) {
       useAnnouncerStore.getState().announce("Still reconnecting…", "polite");
     }
