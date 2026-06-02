@@ -1062,8 +1062,12 @@ describe("HelpSessionService", () => {
       expect(mockPtyGracefulKill).toHaveBeenCalledWith("term-evicted");
       // Hard kill is skipped because gracefulKill captured a real ID.
       expect(mockPtyKill).not.toHaveBeenCalled();
-      expect(hibernationStore.set).toHaveBeenCalledWith(
-        "proj-evicted",
+      // #9639: an empty-sentinel placeholder is written SYNCHRONOUSLY before
+      // gracefulKill so a racing switch-back resumes rather than fresh-launches;
+      // the real resume ID overwrites it once gracefulKill resolves.
+      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-evicted");
+      expect(setCalls[0][1].agentSessionId).toBe("");
+      expect(setCalls[setCalls.length - 1][1]).toEqual(
         expect.objectContaining({
           agentId: "claude",
           agentSessionId: "agent-resume-id-123",
@@ -1073,7 +1077,7 @@ describe("HelpSessionService", () => {
       expect(service.validateToken(result.token)).toBe(false);
     });
 
-    it("falls back to hard kill when gracefulKill returns null and skips writing a pending entry", async () => {
+    it("writes an empty-sentinel placeholder and leaves it intact when gracefulKill returns null", async () => {
       mockPtyGracefulKill.mockResolvedValueOnce(null);
 
       const result = await service.provisionSession({
@@ -1088,7 +1092,12 @@ describe("HelpSessionService", () => {
       await Promise.resolve();
 
       expect(mockPtyKill).toHaveBeenCalledWith("term-no-resume", "help-session-revoked");
-      expect(hibernationStore.set).not.toHaveBeenCalled();
+      // #9639: with no real resume ID, the empty-sentinel placeholder stays —
+      // resume-latest on next open beats a fresh launch. Exactly one write
+      // (the placeholder), never overwritten.
+      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-no-resume");
+      expect(setCalls).toHaveLength(1);
+      expect(setCalls[0][1].agentSessionId).toBe("");
     });
 
     it("does NOT capture on a user-driven revokeSession (newSession / explicit close)", async () => {
@@ -1211,8 +1220,14 @@ describe("HelpSessionService", () => {
       await Promise.resolve();
 
       // The stale capture must NOT clobber the new active session by writing
-      // an old resume ID into pendingHibernation for the same project.
-      expect(hibernationStore.set).not.toHaveBeenCalled();
+      // an old resume ID into pendingHibernation for the same project. The
+      // #9639 placeholder was written synchronously, but displacement clears it
+      // and releases ownership so the post-gracefulKill overwrite is skipped.
+      expect(hibernationStore.set).not.toHaveBeenCalledWith(
+        "proj-race",
+        expect.objectContaining({ agentSessionId: "stale-resume-id-from-displaced-session" })
+      );
+      expect(hibernationStore.clear).toHaveBeenCalledWith("proj-race");
     });
 
     it("a gracefulKill rejection does not abort the eviction revoke — bearer still invalidated", async () => {
@@ -1228,10 +1243,75 @@ describe("HelpSessionService", () => {
       await service.revokeByWebContentsId(5);
       await Promise.resolve();
 
-      // No capture written; hard kill fires as fallback; token is dead.
-      expect(hibernationStore.set).not.toHaveBeenCalled();
+      // The #9639 placeholder is written synchronously before gracefulKill; the
+      // rejection leaves it as the empty-sentinel (no real id to overwrite).
+      // Hard kill fires as fallback and the token is dead.
+      const setCalls = hibernationStore.set.mock.calls;
+      expect(setCalls).toHaveLength(1);
+      expect(setCalls[0][1].agentSessionId).toBe("");
       expect(mockPtyKill).toHaveBeenCalledWith("term-pty-down", "help-session-revoked");
       expect(service.validateToken(result.token)).toBe(false);
+    });
+
+    it("placeholder is visible to takePendingHibernation before gracefulKill resolves, then overwritten with the real id (#9639)", async () => {
+      // The core race: eviction's revokeByWebContentsId is fire-and-forget, so
+      // the renderer can reopen and call takePendingHibernation while
+      // gracefulKill is still in flight. A stateful store proves the synchronous
+      // placeholder is observable in that window.
+      type PendingHelpHibernationLike = {
+        agentId: string;
+        agentSessionId: string;
+        cwd: string;
+        capturedAt: number;
+      };
+      const backing = new Map<string, PendingHelpHibernationLike>();
+      const statefulStore = {
+        get: vi.fn((projectId: string) => backing.get(projectId) ?? null),
+        set: vi.fn((projectId: string, entry: PendingHelpHibernationLike) => {
+          backing.set(projectId, entry);
+          return Promise.resolve();
+        }),
+        clear: vi.fn((projectId: string) => {
+          backing.delete(projectId);
+          return Promise.resolve();
+        }),
+      };
+      service.setPendingHibernationStore(statefulStore as never);
+
+      let resolveGraceful: (value: string | null) => void = () => {};
+      mockPtyGracefulKill.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveGraceful = resolve;
+          })
+      );
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 77,
+        projectId: "proj-visible",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-visible")).toBe(true);
+
+      // Kick off eviction-revoke; it hangs on gracefulKill.
+      const revokePromise = service.revokeByWebContentsId(77);
+
+      // Before gracefulKill resolves, the renderer's takePendingHibernation
+      // sees the empty-sentinel placeholder — so it resumes instead of starting
+      // a fresh session (the visible "restart" this issue fixes).
+      const early = await service.takePendingHibernation("proj-visible");
+      expect(early).toEqual(
+        expect.objectContaining({ agentId: "claude", agentSessionId: "", cwd: result.sessionPath })
+      );
+
+      // gracefulKill finally yields the real resume id; the placeholder is
+      // overwritten so a later open resumes the exact session.
+      resolveGraceful("real-resume-id-xyz");
+      await revokePromise;
+      await Promise.resolve();
+
+      expect(backing.get("proj-visible")?.agentSessionId).toBe("real-resume-id-xyz");
     });
   });
 
