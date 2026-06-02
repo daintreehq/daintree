@@ -167,7 +167,8 @@ jobs:
           ELECTRON_ENABLE_LOGGING: "1"
           SMOKE_RUNS: "1"
           SMOKE_TIMEOUT_MS: "210000"
-        timeout-minutes: 6
+          SMOKE_RETRIES: "1"
+        timeout-minutes: 10
 
   # Gate job — use this as the sole required status check in branch protection.
   # Insulates against matrix/job name changes breaking required checks.

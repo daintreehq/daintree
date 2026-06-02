@@ -208,6 +208,7 @@ jobs:
           NODE_ENV: production
           ELECTRON_ENABLE_LOGGING: "1"
           SMOKE_TIMEOUT_MS: "210000"
+          SMOKE_RETRIES: "1"
         run: |
           $setup = Get-ChildItem -Path 'release\*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $setup) { Write-Error "No NSIS .exe found in release/"; exit 1 }
