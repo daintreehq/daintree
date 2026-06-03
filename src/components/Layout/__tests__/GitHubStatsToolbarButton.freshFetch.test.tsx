@@ -281,9 +281,9 @@ describe("GitHubStatsToolbarButton list-count badge wiring", () => {
   });
 
   it("uses the display count in the issue + PR aria-labels and tooltips", () => {
-    expect(source).toContain("${issueDisplayCount ?? \"—\"} open issues");
-    expect(source).toContain("${prDisplayCount ?? \"—\"} open pull requests");
-    expect(source).toContain("${prDisplayCount ?? \"—\"} open PRs");
+    expect(source).toContain('${issueDisplayCount ?? "—"} open issues');
+    expect(source).toContain('${prDisplayCount ?? "—"} open pull requests');
+    expect(source).toContain('${prDisplayCount ?? "—"} open PRs');
   });
 
   it("resets the list counts on project switch (lastUpdated → null)", () => {
