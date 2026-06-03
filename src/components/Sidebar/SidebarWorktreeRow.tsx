@@ -14,6 +14,7 @@ interface SidebarWorktreeRowProps {
   worktreeId: string;
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
+  keyboardCursorId: string | null;
   totalWorktreeCount: number;
   selectWorktree: (id: string) => void;
   worktreeActions: WorktreeActions;
@@ -31,6 +32,7 @@ function SidebarWorktreeRow({
   worktreeId,
   activeWorktreeId,
   focusedWorktreeId,
+  keyboardCursorId,
   totalWorktreeCount,
   selectWorktree,
   worktreeActions,
@@ -100,6 +102,7 @@ function SidebarWorktreeRow({
 
   const isActive = worktreeId === activeWorktreeId;
   const isFocused = worktreeId === focusedWorktreeId;
+  const isKeyboardCursor = worktreeId === keyboardCursorId;
   const isSingleWorktree = totalWorktreeCount === 1;
   const moveUpHandler = dragEnabled ? onMoveUp : undefined;
   const moveDownHandler = dragEnabled ? onMoveDown : undefined;
@@ -113,6 +116,7 @@ function SidebarWorktreeRow({
       disabled={isSortDisabled || isPinned}
       ariaRowIndex={ariaRowIndex}
       isActive={isActive}
+      isKeyboardCursor={isKeyboardCursor}
     >
       {({ isDraggingSort, dragHandleListeners, dragHandleActivatorRef }) => (
         <ErrorBoundary
