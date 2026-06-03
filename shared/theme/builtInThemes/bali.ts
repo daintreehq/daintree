@@ -9,12 +9,23 @@ export const theme: BuiltInThemeSource = {
   heroImage: "/themes/bali.webp",
   palette: {
     type: "light",
+    // Redesign (#9710): the old ramp drowned every surface in a saturated
+    // mid-olive (grid..elevated all C≈0.023–0.039 in a dim L≈0.875–0.95 band),
+    // so the whole workbench read as one muddy, depressing sheet. The fix keeps
+    // Bali's terraced-paddy green IDENTITY but treats saturation as a budget:
+    // the chrome rail (grid/sidebar) holds the green, and chroma FALLS as the
+    // surface rises so content planes become a clean, sun-bleached sage-white.
+    // Lightness is lifted toward near-white the way the Bondi sibling does, and
+    // the floating tier reaches #FDFEFA. OKLab L: grid 0.896 → sidebar 0.921 →
+    // canvas 0.948 → panel 0.971 → elevated 0.995 (span 0.099, every step
+    // ≥ 0.02, panel→elevated is not the weakest lift). Text keeps its warm dark
+    // green and clears AA with large margin on every tier.
     surfaces: {
-      grid: "#D2DABE",
-      sidebar: "#DCE3C9",
-      canvas: "#E4EAD2",
-      panel: "#ECF1E0",
-      elevated: "#FBFCF6",
+      grid: "#D9E0CB",
+      sidebar: "#E2E8D5",
+      canvas: "#ECF0E3",
+      panel: "#F4F7EE",
+      elevated: "#FDFEFA",
     },
     text: {
       primary: "#1D2B1E",
@@ -71,8 +82,16 @@ export const theme: BuiltInThemeSource = {
       chip: "#6CC8B0",
     },
     strategy: {
-      materialBlur: 10,
-      materialSaturation: 118,
+      // Depth on light comes from the lightness ramp + shadows + borders (you
+      // can't darken to recede). The engine already defaults light themes to the
+      // "light" shadow profile; pinning it here makes the contract explicit and,
+      // now that the surfaces are near-white, those soft shadows actually read.
+      shadowStyle: "light",
+      // 12px / 110% mirrors Bondi: a touch less backdrop saturation than before
+      // (was 118) so blurred material overlays don't re-amplify the olive cast
+      // over the cleaner surfaces.
+      materialBlur: 12,
+      materialSaturation: 110,
     },
   },
   tokens: {
@@ -81,10 +100,13 @@ export const theme: BuiltInThemeSource = {
     "accent-foreground": "#FFFFFF",
     "text-link": "#0C763A",
     "text-placeholder": "#728675",
-    "border-divider": "rgba(20,40,25,0.10)",
+    // Hairline budget eased a notch (#9710 review): on the lifted ramp the
+    // sidebar accumulated too many equally-weighted seams. Divider/subtle relax
+    // slightly; strong (containment edges, selected-row marker) stays put.
+    "border-divider": "rgba(20,40,25,0.085)",
     "border-interactive": "rgba(31,130,68,0.34)",
     "border-strong": "rgba(20,40,25,0.20)",
-    "border-subtle": "rgba(20,40,25,0.09)",
+    "border-subtle": "rgba(20,40,25,0.075)",
     "category-amber": "oklch(0.62 0.14 65)",
     "category-blue": "oklch(0.58 0.13 242)",
     "category-cyan": "oklch(0.6 0.11 198)",
@@ -98,34 +120,37 @@ export const theme: BuiltInThemeSource = {
     "category-violet": "oklch(0.57 0.13 295)",
     "focus-ring": "rgba(31,130,68,0.40)",
     "focus-ring-offset": "3px",
+    // Two-layer contact+spread shadow ladder in Bali's green-black ink (same
+    // recipe as the sibling light redesigns): the engine's single 6% ambient
+    // layer dissolves on the near-white ramp, so cards/popovers/dialogs lift
+    // with a crisp contact line plus a soft ambient spread instead of relying
+    // on hairlines alone.
+    "shadow-ambient": "0 1px 2px rgba(20,40,25,0.10), 0 4px 12px rgba(20,40,25,0.10)",
+    "shadow-floating": "0 2px 6px rgba(20,40,25,0.12), 0 14px 36px rgba(20,40,25,0.16)",
+    "shadow-dialog": "0 4px 10px rgba(20,40,25,0.13), 0 26px 60px rgba(20,40,25,0.18)",
     // B1: pr-draft / pr-merged / pr-open / pr-closed re-darkened to clear AA
     // (4.5:1) on the panel surface where PR badges render. The GitHub-brand
     // defaults (pr-draft #85909C = 2.82:1, pr-open #188537 = 4.10:1, pr-merged
     // #864BE8 = 4.35:1) failed on bali's near-white panel; these keep the same
-    // hue family, lowered in L.
+    // hue family, lowered in L. The brighter redesign panel only widens their
+    // margin (all now ≥ 5:1).
     "pr-closed": "#C81824",
     "pr-draft": "#5E6A77",
     "pr-merged": "#6B3BC0",
     "pr-open": "#137A30",
-    "overlay-emphasis": "rgba(20,40,25,0.20)",
-    "overlay-medium": "rgba(20,40,25,0.11)",
-    "overlay-soft": "rgba(20,40,25,0.07)",
-    "overlay-strong": "rgba(20,40,25,0.15)",
-    "overlay-subtle": "rgba(20,40,25,0.045)",
-    "overlay-hover": "rgba(20,40,25,0.19)",
-    "overlay-active": "rgba(20,40,25,0.28)",
-    "overlay-selected": "rgba(20,40,25,0.20)",
-    "overlay-elevated": "rgba(20,40,25,0.16)",
-    // E1 elevate-to-select: NOT overridden. The engine light default
-    // (color-mix elevated 92% + text-primary) sits a hair darker than the pure
-    // elevated surface, so a selected menu/tab item still steps visibly even
-    // when it sits ON an elevated floating plane. Pinning it to the raw
-    // elevated hex would collapse that step on floating surfaces.
-    // B1 filter-selected (membership, never accent): a lighter/elevated fill +
-    // border-strong containment edge, lifting just above the panel rather than
-    // the old overlayBase@0.08/0.12 darken.
-    "filter-selected-bg-soft": "#F3F7EA",
-    "filter-selected-bg-strong": "#FBFCF6",
+    // Overlay ladder: NOT overridden (#9710). The old overrides ran every tier
+    // 2-3x over the engine's light defaults (hover 0.19 vs 0.065, active 0.28
+    // vs 0.11) — alphas raised to survive the old saturated mid-olive ramp.
+    // The engine's light ladder is already Weber-tuned (RC-2) and routes
+    // through overlayBase (Bali's green-black #142819 tint), so hover/active/
+    // selected keep the green identity without re-muddying the lifted ramp.
+    // E1 elevate-to-select / overlay-raised: NOT overridden — the engine light
+    // default (color-mix elevated 92% + text-primary) applies, same as Bondi.
+    // B1 filter-selected: NOT overridden (matches Bondi). The old elevate-style
+    // overrides existed to escape the muddy ramp; with panel near-white there is
+    // no headroom for two lift steps below the ceiling, and the engine's graded
+    // overlayBase darken (8%/12%) separates cleanly on the new panel
+    // (ΔE 0.052 / 0.026, both over the 0.02 JND matrix floor).
     // E7: cool-slate-hued, lowered scrims so the modal backdrop dims without a
     // heavy black slab over a near-white workbench.
     "scrim-medium": "rgba(20,40,25,0.36)",
@@ -142,66 +167,71 @@ export const theme: BuiltInThemeSource = {
     "surface-hover": "rgba(20,40,25,0.19)",
     "surface-active": "rgba(20,40,25,0.28)",
     // E8: input is a recessed inset well, not the brightest object on screen.
-    // Dropped the old raised #F2F6E8 (elevated) override so the engine's
-    // recessed light default applies (canvas pulled a hair toward text).
-    "surface-inset": "#DBE2C7",
-    "surface-toolbar": "#DEE5CC",
+    // Sits a hair below the chrome rail (L≈0.912) so fields read recessed on the
+    // lifted ramp. Tracks the redesign surfaces.
+    "surface-inset": "#E0E4D4",
+    "surface-toolbar": "#DFE4D2",
     "terminal-black": "#182B1B",
     "terminal-white": "#DCE6D9",
   },
   extensions: {
-    "panel-grid-bg": "#D7DEC4",
-    // S1: dialog body recedes to surface-panel; cards/list-items elevate above it.
-    // Body and card were both #FBFCF6 (collapsed, card inverted at/below body); body
-    // now sits at panel #ECF1E0 so the elevated card (#FBFCF6, +0.039 L) reads lifted.
-    "settings-dialog-bg": "#ECF1E0",
-    "settings-card-bg": "#FBFCF6",
-    "settings-list-item-bg": "#FBFCF6",
-    "pulse-before-bg": "#CBBF9A",
-    "pulse-card-bg": "#FBFCF6",
-    "pulse-card-shadow": "0 2px 6px rgba(23,33,48,0.10)",
+    // Empty-grid gutter sits just below the new grid surface so panel tiles read
+    // as figure on a receding ground (no figure-ground inversion).
+    "panel-grid-bg": "#D6DCC8",
+    // S1: dialog body recedes to surface-panel; cards/list-items elevate above
+    // it. Repinned to the redesign ramp — body at the new panel, card at the new
+    // elevated (+0.024 L) so the lift survives.
+    "settings-dialog-bg": "#F4F7EE",
+    "settings-card-bg": "#FDFEFA",
+    "settings-list-item-bg": "#FDFEFA",
+    // Warm-sand Pulse family lightened (#9710 review): the old stops were tuned
+    // against the muddy ramp and read beige-brown inside the now near-white
+    // card. Same sand hue (Bali beach, hue-distinct from the green heat fills),
+    // lifted in L only.
+    "pulse-before-bg": "#D9CFB2",
+    "pulse-card-bg": "#FDFEFA",
+    // Tighter 1px/3px shadow — crisper on the near-white field than the old
+    // 2px/6px, which smeared against the darker base.
+    "pulse-card-shadow": "0 1px 3px rgba(23,33,48,0.10)",
     "pulse-control-hover-bg": "rgba(20,40,25,0.06)",
-    // P-Heat: empty cell was #D2BD9E (L 0.808) — so dark it read as active and
-    // the missed-day danger fill only reached 2.77:1 over it. Lightened to
-    // #E6DCC4 (L 0.896), same warm-sand hue, so the opaque missed-day danger
-    // now clears 3.71:1.
-    "pulse-empty-bg": "#E6DCC4",
+    // P-Heat: empty cell stays warm-sand (separate hue from the sage surfaces
+    // and the green heat fills) so worked vs empty days separate by hue, not
+    // just alpha; lightened so the missed-day danger fill now clears 4.06:1.
+    "pulse-empty-bg": "#EDE6D3",
     "pulse-heat-high-opacity": "0.85",
     "pulse-heat-low-opacity": "0.38",
     "pulse-heat-medium-opacity": "0.62",
-    // P-Heat missed-day (streak break): was a ~14% transparent red film (~1.3:1
-    // over empty, invisible). Now an opaque brighter danger fill clearing 3:1;
-    // the shape-cue inset ring is added by the component on light.
+    // P-Heat missed-day (streak break): opaque brighter danger fill clearing
+    // 3:1; the shape-cue inset ring is added by the component on light.
     "pulse-missed-bg": "#C0453A",
-    "pulse-range-bg": "#E4EAD2",
-    "pulse-ring-offset": "#FBFCF6",
-    "pulse-skeleton-gradient": "linear-gradient(90deg, #CFC4A0 25%, #DAD0B8 50%, #CFC4A0 75%)",
-    "settings-kbd-bg": "#E4EAD2",
-    "settings-search-bg": "#E4EAD2",
+    "pulse-range-bg": "#ECF0E3",
+    "pulse-ring-offset": "#FDFEFA",
+    "pulse-skeleton-gradient": "linear-gradient(90deg, #E0D8C0 25%, #EAE3D2 50%, #E0D8C0 75%)",
+    "settings-kbd-bg": "#ECF0E3",
+    "settings-search-bg": "#ECF0E3",
     // S1: single accent anchor is the 2px nav marker (SettingsDialog.tsx). The
-    // active-nav FILL is now a NEUTRAL elevated lift (no accent rgb) instead of
-    // the old accent-tinted darken rgba(31,130,68,0.18). The accent inset ring
-    // (settings-nav-active-shadow) is dropped — S1 removed its CSS consumer and
-    // is retiring the key; bali drops its value to support that retirement.
-    "settings-nav-active-bg": "#F4F7EA",
+    // active-nav FILL is a NEUTRAL elevated lift (no accent rgb), repinned to the
+    // new panel level.
+    "settings-nav-active-bg": "#F4F7EE",
     "settings-nav-hover-bg": "rgba(20,40,25,0.07)",
     "sidebar-action-hover-bg": "rgba(20,40,25,0.07)",
-    // Issue 1: selection ELEVATES on light. The active row lifts to an opaque
-    // surface between panel and elevated (+0.067 OKLab L over surface-sidebar,
-    // clearing the JND audit); hover sits between sidebar and canvas (+0.029),
-    // so idle < hover < selected all clear JND. The sidebar.css left-marker is
-    // border-strong (containment edge). Dark is unchanged (white-alpha fallback
-    // in sidebar.css). NOTE: extensionRegistry SIDEBAR_ACTIVE/SIDEBAR_HOVER
-    // still enforce the OLD rgba(0,0,0,*) darken contract — these opaque values
-    // require the registry owner to update that governance (flagged).
-    "sidebar-active-bg": "#F4F7EA",
-    "sidebar-hover-bg": "#E6ECD6",
+    // Issue 1 + #9710: the sidebar is now a clearly-tinted green chrome rail
+    // (L 0.921) distinct from the airy canvas, so its states have room to step.
+    // Selection ELEVATES to a near-elevated card plane (#FAFBF5, +0.065 L over
+    // the rail) and hover sits at the canvas level (+0.027), giving a clean
+    // idle < hover < selected stair. The sidebar.css left-marker is
+    // border-strong (containment edge); accent is never used for membership.
+    // NOTE: extensionRegistry SIDEBAR_ACTIVE/SIDEBAR_HOVER still enforce the OLD
+    // rgba(0,0,0,*) darken contract — these opaque lift values require the
+    // registry owner to update that governance (flagged, pre-existing).
+    "sidebar-active-bg": "#FAFBF5",
+    "sidebar-hover-bg": "#ECF0E3",
     "toolbar-agent-hover-bg": "rgba(20,40,25,0.07)",
     "toolbar-control-hover-bg": "rgba(20,40,25,0.07)",
     "toolbar-control-hover-fg": "#1F8244",
     "toolbar-divider": "rgba(20,40,25,0.10)",
     "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(31,130,68,0.05), rgba(20,40,25,0.07)), linear-gradient(135deg, #DEE5CC, #D2DABE)",
+      "linear-gradient(180deg, rgba(31,130,68,0.05), rgba(20,40,25,0.07)), linear-gradient(135deg, #DFE4D2, #D9E0CB)",
     "toolbar-project-border": "rgba(20,40,25,0.10)",
     "toolbar-project-chip-bg": "rgba(20,40,25,0.08)",
     "toolbar-project-chip-border": "rgba(20,40,25,0.10)",
