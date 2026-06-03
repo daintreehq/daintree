@@ -97,9 +97,7 @@ describe("AgentStateCircles a11y", () => {
     ["ExitedCircle", ExitedCircle, 0.9],
   ])("%s keeps its inner detail strokes proportional to the ring", (_name, Component, ratio) => {
     const { container } = render(<Component />);
-    const ringStroke = parseFloat(
-      container.querySelector("circle")!.getAttribute("stroke-width")!
-    );
+    const ringStroke = parseFloat(container.querySelector("circle")!.getAttribute("stroke-width")!);
     const lines = container.querySelectorAll("line");
     expect(lines.length).toBeGreaterThan(0);
     for (const line of lines) {
