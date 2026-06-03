@@ -1763,6 +1763,18 @@ describe("ActionService", () => {
       expect(mockShow).not.toHaveBeenCalled();
       expect(mockIncrementCount).not.toHaveBeenCalled();
     });
+
+    it("does not emit hint when the action opts out via suppressShortcutHint", async () => {
+      mockGetEffectiveCombo.mockReturnValue("Cmd+K");
+      mockGetDisplayCombo.mockReturnValue("⌘K");
+      mockShow.mockReturnValue(true);
+
+      service.register({ ...makeAction("test.suppressed"), suppressShortcutHint: true });
+      await service.dispatch("test.suppressed" as ActionId, undefined, { source: "user" });
+
+      expect(mockShow).not.toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
+    });
   });
 
   describe("action definition validation", () => {

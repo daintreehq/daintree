@@ -1209,7 +1209,7 @@ function NeedsAttentionSection({
       <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-daintree-text/50">
         Needs attention
       </div>
-      <div role="group" aria-label="Needs attention" className="divide-y divide-tint/[0.04]">
+      <div role="group" aria-label="Needs attention">
         {groups.map((group, idx) => {
           const flatIndex = indexOffset + idx;
           return renderGroup(
@@ -1296,7 +1296,7 @@ function ChronoSection({
           onMarkRead={() => onMarkIdsRead(sectionUnreadIds, { resetLastClosed: false })}
         />
       )}
-      <div role="group" aria-label={sectionLabel} className="divide-y divide-tint/[0.04]">
+      <div role="group" aria-label={sectionLabel}>
         {section.groups.map((group, idx) => {
           const groupKey = group.correlationId ?? group.entries[0]!.id;
           const isDivider = dividerGroupId !== null && groupKey === dividerGroupId;

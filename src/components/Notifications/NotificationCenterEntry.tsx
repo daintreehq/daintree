@@ -180,14 +180,17 @@ export function NotificationCenterEntry({
       role={role}
       onFocus={onFocus}
       className={cn(
-        "group flex items-start gap-2.5 px-3 py-2 hover:bg-overlay-medium transition-colors",
+        "group flex items-start gap-2 px-3 py-2.5 hover:bg-overlay-medium transition-colors",
         tabIndex !== undefined &&
           "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-daintree-accent/50"
       )}
     >
       <span
         aria-hidden="true"
-        className={cn("w-1.5 shrink-0 self-center", isNew && "h-1.5 rounded-full bg-status-info")}
+        className={cn(
+          "w-1.5 shrink-0 self-start mt-1.5",
+          isNew && "h-1.5 rounded-full bg-status-info"
+        )}
       />
       <div className={cn("mt-0.5 shrink-0", config.className)}>
         <Icon className="h-3.5 w-3.5" />

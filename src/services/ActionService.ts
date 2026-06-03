@@ -438,7 +438,7 @@ export class ActionService {
         confirmed: options?.confirmed,
         pluginId: definition.pluginId,
       });
-      this.emitShortcutHint(actionId, source);
+      if (!definition.suppressShortcutHint) this.emitShortcutHint(actionId, source);
       return { ok: true, result: result as Result };
     } catch (err) {
       const error: ActionError = {
