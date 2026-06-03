@@ -4,7 +4,12 @@ import { describe, expect, it } from "vitest";
 import { BUILT_IN_THEME_SOURCES } from "../builtInThemes/index.js";
 import { getThemeContrastWarnings } from "../contrast.js";
 import { EXTENSION_KEY_REGISTRY, isExtensionKeyRequired } from "../extensionRegistry.js";
-import { auditSurfaceRamp, auditAccentProminence, auditCrossThemeAccents } from "../oklch.js";
+import {
+  auditSurfaceRamp,
+  auditAccentProminence,
+  auditCrossThemeAccents,
+  auditBorderSeparation,
+} from "../oklch.js";
 import { BUILT_IN_APP_SCHEMES } from "../themes.js";
 import { APP_THEME_TOKEN_KEYS, EXTENSION_KEYS } from "../types.js";
 
@@ -252,13 +257,64 @@ describe("built-in themes", () => {
 
   it("surface elevation ramp passes OKLCH audit", () => {
     for (const source of BUILT_IN_THEME_SOURCES) {
-      const result = auditSurfaceRamp(source.palette.surfaces, source.id);
+      // Light themes carry depth in the ramp itself, so the JND/span/shape
+      // checks are hard failures there (RC-1); dark stays warn-only.
+      const result = auditSurfaceRamp(source.palette.surfaces, source.id, source.type);
       for (const warning of result.warnings) {
         console.warn(`[OKLCH ramp] ${warning}`);
       }
       expect(
         result.failures,
         `${source.id} ramp failures:\n${result.failures.join("\n")}`
+      ).toHaveLength(0);
+    }
+  });
+
+  it("light surface ramps clear the depth budget (span, per-step JND, panel→elevated lift)", () => {
+    // Behavioural guard, not a value mirror: a light ramp whose span collapses,
+    // whose steps merge, or whose floating tier gets the weakest lift will fail
+    // here even though every other token passes (RC-1).
+    const lightSources = BUILT_IN_THEME_SOURCES.filter((s) => s.type === "light");
+    expect(lightSources.length).toBeGreaterThan(0);
+    for (const source of lightSources) {
+      const result = auditSurfaceRamp(source.palette.surfaces, source.id, "light");
+      expect(
+        result.failures,
+        `${source.id} light ramp failures:\n${result.failures.join("\n")}`
+      ).toHaveLength(0);
+    }
+  });
+
+  it("light borders clear the separation floor vs the brightest surface", () => {
+    // RC-6: when overlay/shadow depth dies on a near-white field, separation
+    // falls to borders. border-default and border-interactive must stay
+    // perceptible against the brightest surface they can sit against.
+    const schemesById = new Map(BUILT_IN_APP_SCHEMES.map((s) => [s.id, s] as const));
+    const lightSources = BUILT_IN_THEME_SOURCES.filter((s) => s.type === "light");
+    expect(lightSources.length).toBeGreaterThan(0);
+    for (const source of lightSources) {
+      const scheme = schemesById.get(source.id);
+      expect(scheme, `${source.id} has no compiled scheme`).toBeDefined();
+      if (!scheme) continue;
+      const surfaces: Record<string, string> = {
+        "surface-grid": scheme.tokens["surface-grid"],
+        "surface-sidebar": scheme.tokens["surface-sidebar"],
+        "surface-canvas": scheme.tokens["surface-canvas"],
+        "surface-panel": scheme.tokens["surface-panel"],
+        "surface-panel-elevated": scheme.tokens["surface-panel-elevated"],
+      };
+      const result = auditBorderSeparation(
+        {
+          borderDefault: scheme.tokens["border-default"],
+          borderInteractive: scheme.tokens["border-interactive"],
+          surfaces,
+        },
+        source.id,
+        "light"
+      );
+      expect(
+        result.failures,
+        `${source.id} border separation failures:\n${result.failures.join("\n")}`
       ).toHaveLength(0);
     }
   });

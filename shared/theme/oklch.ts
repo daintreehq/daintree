@@ -1,4 +1,11 @@
-import { isHexColor, hexToRgb, hexToLinear } from "./contrast.js";
+import {
+  isHexColor,
+  hexToRgb,
+  hexToLinear,
+  contrastRatio,
+  parseRgba,
+  blendOverBackground,
+} from "./contrast.js";
 import type { ThemePalette } from "./palette.js";
 import type { BuiltInThemeSource } from "./builtInThemeSources.js";
 
@@ -24,6 +31,24 @@ const RAMP_DL_JND = 0.02;
 // Runaway ratio: max adjacent dL / min adjacent dL. Above this, one step
 // dominates the ramp and the elevation progression reads as uneven.
 const RAMP_RUNAWAY_RATIO = 3;
+
+// Light-theme depth budget (RC-1). On a near-white canvas the eye's luminance
+// discrimination is compressed against the L=1.0 ceiling, so the additive-glow
+// machinery (overlay/shadow/border) has 2-3x less perceptual room. Depth must
+// therefore be carried by the surface ramp itself, and these are hard failures
+// for LIGHT themes only — dark themes run wider ramps natively and several dark
+// palettes sit (intentionally) below the JND on a single step.
+//
+// - Span floor: total grid→elevated dL must clear this so the five planes don't
+//   converge into one undifferentiated sheet (light cohort spans ~0.10-0.12).
+// - Step floor: every adjacent step must clear the JND so no two stacked planes
+//   merge perceptually.
+// - Panel→elevated must NOT be the smallest step: the floating tier needs the
+//   strongest lift, mirroring the dark themes (which reserve their largest step
+//   for it). The pre-fix light themes inverted this, giving floating elements no
+//   luminance lift at the top of the stack.
+const LIGHT_RAMP_SPAN_FLOOR = 0.09;
+const LIGHT_RAMP_STEP_FLOOR = RAMP_DL_JND;
 
 // Accent chroma floor: below this in OKLCH, a color reads as a tinted
 // neutral rather than unambiguously colored.
@@ -98,9 +123,21 @@ export function deltaOklch(a: OklchColor, b: OklchColor): number {
  * Audit the 5-tier surface elevation ramp for perceptual evenness.
  * Checks each adjacent pair for collapse (below JND) and for runaway
  * steps (one step dramatically larger than its neighbours).
+ *
+ * For LIGHT themes the depth-collapse checks are HARD FAILURES, not advisory
+ * warnings (RC-1): on a near-white canvas the surface ramp is the primary
+ * depth channel because the additive overlay/shadow machinery has little room
+ * to work. `type` defaults to "dark" so existing dark callers keep warn-only
+ * semantics. The runaway/JND-warning behaviour is unchanged for dark.
  */
-export function auditSurfaceRamp(surfaces: ThemePalette["surfaces"], themeId: string): AuditResult {
+export function auditSurfaceRamp(
+  surfaces: ThemePalette["surfaces"],
+  themeId: string,
+  type: "dark" | "light" = "dark"
+): AuditResult {
+  const failures: string[] = [];
   const warnings: string[] = [];
+  const isLight = type === "light";
 
   const oklchValues: Array<{ key: string; l: number }> = [];
   for (const key of SURFACE_RAMP_KEYS) {
@@ -118,6 +155,7 @@ export function auditSurfaceRamp(surfaces: ThemePalette["surfaces"], themeId: st
 
   // Adjacent-pair dL check
   const adjacentDLs: number[] = [];
+  const keyedSteps: Array<{ from: string; to: string; dL: number }> = [];
   for (let i = 1; i < oklchValues.length; i++) {
     const prev = oklchValues[i - 1];
     const curr = oklchValues[i];
@@ -126,10 +164,35 @@ export function auditSurfaceRamp(surfaces: ThemePalette["surfaces"], themeId: st
 
     const dL = Math.abs(curr.l - prev.l);
     adjacentDLs.push(dL);
+    keyedSteps.push({ from: prev.key, to: curr.key, dL });
 
     if (dL < RAMP_DL_JND) {
-      warnings.push(
-        `${themeId}: surface-${prev.key} → surface-${curr.key} dL=${dL.toFixed(4)} is below JND threshold (${RAMP_DL_JND}) — surfaces may perceptually merge`
+      const msg = `${themeId}: surface-${prev.key} → surface-${curr.key} dL=${dL.toFixed(4)} is below JND threshold (${RAMP_DL_JND}) — surfaces may perceptually merge`;
+      // Light themes carry depth in the ramp itself (RC-1): a sub-JND step is a
+      // hard failure, not advice.
+      if (isLight && dL < LIGHT_RAMP_STEP_FLOOR) failures.push(msg);
+      else warnings.push(msg);
+    }
+  }
+
+  // Light-only depth-budget hard checks (RC-1).
+  if (isLight && adjacentDLs.length === SURFACE_RAMP_KEYS.length - 1) {
+    const first = oklchValues[0];
+    const last = oklchValues[oklchValues.length - 1];
+    if (first && last && !isNaN(first.l) && !isNaN(last.l)) {
+      const span = Math.abs(last.l - first.l);
+      if (span < LIGHT_RAMP_SPAN_FLOOR) {
+        failures.push(
+          `${themeId}: light surface ramp span dL=${span.toFixed(4)} (surface-${first.key} → surface-${last.key}) is below the light depth floor (${LIGHT_RAMP_SPAN_FLOOR}) — the five planes converge into one sheet`
+        );
+      }
+    }
+
+    const minStep = Math.min(...adjacentDLs);
+    const panelToElevated = keyedSteps.find((s) => s.from === "panel" && s.to === "elevated");
+    if (panelToElevated && panelToElevated.dL <= minStep + 1e-9) {
+      failures.push(
+        `${themeId}: light surface-panel → surface-elevated dL=${panelToElevated.dL.toFixed(4)} is the smallest adjacent step — the floating tier must get the strongest luminance lift, not the weakest (RC-1 ramp-shape inversion)`
       );
     }
   }
@@ -149,7 +212,88 @@ export function auditSurfaceRamp(surfaces: ThemePalette["surfaces"], themeId: st
     }
   }
 
-  return { failures: [], warnings };
+  return { failures, warnings };
+}
+
+// --- Border Separation Audit ---
+
+// Minimum WCAG contrast a border must clear against the brightest surface it
+// can sit against (RC-6). On light themes overlay/shadow depth cues collapse,
+// so separation falls to borders — but the engine historically under-powered
+// them. 1.18 is below the 3:1 WCAG non-text floor (borders are decorative
+// separators, not UI-component boundaries that 1.4.11 governs) but high enough
+// that the line is perceptible against a near-white field. Light-only: dark
+// border-default routinely composites near-invisible against its surface (it
+// leans on luminance stepping instead) so this guard would false-fail dark.
+const LIGHT_BORDER_MIN_CONTRAST = 1.18;
+
+const BORDER_AUDIT_SURFACES = [
+  "surface-grid",
+  "surface-sidebar",
+  "surface-canvas",
+  "surface-panel",
+  "surface-panel-elevated",
+] as const;
+
+function compositeBorder(value: string, surfaceHex: string): string | null {
+  if (isHexColor(value)) return value;
+  const rgba = parseRgba(value);
+  if (rgba) return blendOverBackground(rgba.hex, surfaceHex, rgba.opacity);
+  return null;
+}
+
+/**
+ * Audit border separation for LIGHT themes (RC-6). `border-default` and
+ * `border-interactive` must clear `LIGHT_BORDER_MIN_CONTRAST` against the
+ * brightest display surface — that is the worst case, since the brightest
+ * surface gives a border the least luminance to contrast against. Both inputs
+ * may be hex or rgba; rgba is composited over the surface before measuring.
+ *
+ * Returns warn-only for dark (and emits no checks there) so a single call site
+ * can run it for every theme without special-casing the polarity.
+ */
+export function auditBorderSeparation(
+  tokens: { borderDefault: string; borderInteractive: string; surfaces: Record<string, string> },
+  themeId: string,
+  type: "dark" | "light"
+): AuditResult {
+  const failures: string[] = [];
+  const warnings: string[] = [];
+  if (type !== "light") return { failures, warnings };
+
+  const surfaceHexes = BORDER_AUDIT_SURFACES.map((k) => tokens.surfaces[k]).filter(
+    (v): v is string => typeof v === "string" && isHexColor(v)
+  );
+  if (surfaceHexes.length === 0) {
+    warnings.push(`${themeId}: no evaluable display surface — skipping border separation audit`);
+    return { failures, warnings };
+  }
+
+  // Brightest = highest OKLab L; a border has the least room against it.
+  const brightest = surfaceHexes.reduce((a, b) => (hexToOklch(b)!.l > hexToOklch(a)!.l ? b : a));
+
+  for (const [label, value] of [
+    ["border-default", tokens.borderDefault],
+    ["border-interactive", tokens.borderInteractive],
+  ] as const) {
+    if (typeof value !== "string" || !value.trim()) {
+      failures.push(`${themeId}: ${label} is missing — cannot audit border separation`);
+      continue;
+    }
+    const composited = compositeBorder(value, brightest);
+    if (!composited) {
+      warnings.push(`${themeId}: ${label} "${value}" is neither hex nor rgba — skipping`);
+      continue;
+    }
+    const ratio = contrastRatio(composited, brightest);
+    if (ratio < LIGHT_BORDER_MIN_CONTRAST) {
+      failures.push(
+        `${themeId}: light ${label} ("${value}") contrast against brightest surface ${brightest} is ${ratio.toFixed(3)}:1; floor is ${LIGHT_BORDER_MIN_CONTRAST}:1 — the separator is imperceptible on a near-white field (RC-6)`
+      );
+    }
+  }
+
+  return { failures, warnings };
 }
 
 // --- Accent Prominence Audit ---

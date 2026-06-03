@@ -61,7 +61,7 @@ export const theme: BuiltInThemeSource = {
     syntax: {
       comment: "#59697E",
       punctuation: "#5C6875",
-      number: "#8C6000",
+      number: "#895E00",
       string: "#1C7350",
       operator: "#0B7184",
       keyword: "#7536C8",
