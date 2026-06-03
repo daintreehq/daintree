@@ -391,44 +391,23 @@ describe("PanelHeader", () => {
     });
   });
 
-  describe("Collapse to Dock button", () => {
-    it("renders when location is dock and onMinimize is provided", () => {
+  describe("Collapse to Dock button (removed — collapse via Escape/outside-click/chip)", () => {
+    it("never renders a dedicated collapse button on docked panels", () => {
       const onMinimize = vi.fn();
       render(<PanelHeader {...makeProps({ location: "dock", onMinimize })} />);
-      const btn = screen.getByTestId("panel-collapse-to-dock");
-      expect(btn).toBeDefined();
-      expect(btn.getAttribute("aria-label")).toBe("Collapse to Dock");
-    });
-
-    it("calls onMinimize when clicked", () => {
-      const onMinimize = vi.fn();
-      render(<PanelHeader {...makeProps({ location: "dock", onMinimize })} />);
-      const btn = screen.getByTestId("panel-collapse-to-dock");
-      btn.click();
-      expect(onMinimize).toHaveBeenCalledTimes(1);
-    });
-
-    it("does not render when location is grid", () => {
-      const onMinimize = vi.fn();
-      render(<PanelHeader {...makeProps({ location: "grid", onMinimize })} />);
-      expect(screen.queryByTestId("panel-collapse-to-dock")).toBeNull();
-    });
-
-    it("does not render when onMinimize is not provided", () => {
-      render(<PanelHeader {...makeProps({ location: "dock" })} />);
       expect(screen.queryByTestId("panel-collapse-to-dock")).toBeNull();
     });
   });
 
-  describe("Open in grid button", () => {
+  describe("Move to grid button", () => {
     it("renders when docked with onRestore and showRestoreControl", () => {
       const onRestore = vi.fn();
       render(
         <PanelHeader {...makeProps({ location: "dock", onRestore, showRestoreControl: true })} />
       );
-      const btn = screen.getByTestId("panel-open-in-grid");
+      const btn = screen.getByTestId("panel-move-to-grid");
       expect(btn).toBeDefined();
-      expect(btn.getAttribute("aria-label")).toBe("Open in grid");
+      expect(btn.getAttribute("aria-label")).toBe("Move to grid");
     });
 
     it("calls onRestore when clicked", () => {
@@ -436,7 +415,7 @@ describe("PanelHeader", () => {
       render(
         <PanelHeader {...makeProps({ location: "dock", onRestore, showRestoreControl: true })} />
       );
-      screen.getByTestId("panel-open-in-grid").click();
+      screen.getByTestId("panel-move-to-grid").click();
       expect(onRestore).toHaveBeenCalledTimes(1);
     });
 
@@ -445,7 +424,7 @@ describe("PanelHeader", () => {
       render(
         <PanelHeader {...makeProps({ location: "dock", onRestore, showRestoreControl: false })} />
       );
-      expect(screen.queryByTestId("panel-open-in-grid")).toBeNull();
+      expect(screen.queryByTestId("panel-move-to-grid")).toBeNull();
     });
 
     it("does not render when onRestore is not provided", () => {
@@ -454,7 +433,7 @@ describe("PanelHeader", () => {
           {...makeProps({ location: "dock", onMinimize: vi.fn(), showRestoreControl: true })}
         />
       );
-      expect(screen.queryByTestId("panel-open-in-grid")).toBeNull();
+      expect(screen.queryByTestId("panel-move-to-grid")).toBeNull();
     });
 
     it("does not render when location is grid", () => {
@@ -462,10 +441,10 @@ describe("PanelHeader", () => {
       render(
         <PanelHeader {...makeProps({ location: "grid", onRestore, showRestoreControl: true })} />
       );
-      expect(screen.queryByTestId("panel-open-in-grid")).toBeNull();
+      expect(screen.queryByTestId("panel-move-to-grid")).toBeNull();
     });
 
-    it("renders alongside Collapse to Dock, each firing only its own handler", () => {
+    it("fires only onRestore, never onMinimize, when clicked", () => {
       const onRestore = vi.fn();
       const onMinimize = vi.fn();
       render(
@@ -478,20 +457,16 @@ describe("PanelHeader", () => {
           })}
         />
       );
-      screen.getByTestId("panel-open-in-grid").click();
+      screen.getByTestId("panel-move-to-grid").click();
       expect(onRestore).toHaveBeenCalledTimes(1);
       expect(onMinimize).not.toHaveBeenCalled();
-
-      screen.getByTestId("panel-collapse-to-dock").click();
-      expect(onMinimize).toHaveBeenCalledTimes(1);
-      expect(onRestore).toHaveBeenCalledTimes(1);
     });
   });
 
-  describe("Restore to Grid in overflow menu", () => {
-    it("renders 'Restore to Grid' menu item when docked with onRestore", () => {
+  describe("Move to grid in overflow menu", () => {
+    it("renders 'Move to grid' menu item when docked with onRestore", () => {
       render(<PanelHeader {...makeProps({ location: "dock", onRestore: vi.fn() })} />);
-      const menuItem = screen.getByText("Restore to Grid");
+      const menuItem = screen.getByText("Move to grid");
       expect(menuItem).toBeDefined();
     });
   });
@@ -524,7 +499,7 @@ describe("PanelHeader", () => {
     });
   });
 
-  describe("Move to Dock button", () => {
+  describe("Move to dock button", () => {
     it("does not render when location is dock", () => {
       render(<PanelHeader {...makeProps({ location: "dock", onMinimize: vi.fn() })} />);
       expect(screen.queryByTestId("panel-move-to-dock")).toBeNull();
