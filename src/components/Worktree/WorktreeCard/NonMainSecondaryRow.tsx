@@ -89,7 +89,6 @@ export function NonMainSecondaryRow({
       onOpen={badges.onOpenPR}
       isActive={isActive}
       underlineOnHover={underlineOnHover}
-      rowLastUpdatedAt={worktree.prLastUpdatedAt}
       prDetectionPaused={prDetectionPaused}
     />
   ) : null;
@@ -122,7 +121,6 @@ export function NonMainSecondaryRow({
           onOpen={badges.onOpenIssue}
           isActive={isActive}
           underlineOnHover={underlineOnHover}
-          rowLastUpdatedAt={worktree.issueLastUpdatedAt}
         />
       )}
       {upstreamFirst ? upstreamBadge : prBadge}

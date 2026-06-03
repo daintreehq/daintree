@@ -94,35 +94,29 @@ describe("badgeFreshnessSuffix", () => {
   const now = 10_000_000_000;
 
   it("returns empty string for undefined cause", () => {
-    expect(badgeFreshnessSuffix(undefined, null, now)).toBe("");
-  });
-
-  it("returns aging suffix with time for stale cause", () => {
-    const suffix = badgeFreshnessSuffix("stale", now - 120_000, now);
-    expect(suffix).toContain("updated");
-    expect(suffix).toContain("2m ago");
+    expect(badgeFreshnessSuffix(undefined, now)).toBe("");
   });
 
   it("returns rate limited suffix without reset time when resetAt is null", () => {
-    const suffix = badgeFreshnessSuffix("rate-limit", null, now, null);
+    const suffix = badgeFreshnessSuffix("rate-limit", now, null);
     expect(suffix).toBe(" · rate limited");
   });
 
   it("returns rate limited suffix without reset time when resetAt is in the past", () => {
-    const suffix = badgeFreshnessSuffix("rate-limit", null, now, now - 1000);
+    const suffix = badgeFreshnessSuffix("rate-limit", now, now - 1000);
     expect(suffix).toBe(" · rate limited");
   });
 
   it("returns rate limited suffix with retry time when resetAt is in the future", () => {
     // 1 hour from now
     const resetAt = now + 3_600_000;
-    const suffix = badgeFreshnessSuffix("rate-limit", null, now, resetAt);
+    const suffix = badgeFreshnessSuffix("rate-limit", now, resetAt);
     expect(suffix).toContain("rate limited");
     expect(suffix).toContain("retry at");
   });
 
   it("returns circuit-breaker suffix", () => {
-    const suffix = badgeFreshnessSuffix("circuit-breaker", null, now);
+    const suffix = badgeFreshnessSuffix("circuit-breaker", now);
     expect(suffix).toBe(" · data may be stale — PR detection paused");
   });
 });

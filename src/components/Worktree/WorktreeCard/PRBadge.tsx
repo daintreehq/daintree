@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
-import { Clock, CloudOff, CornerDownRight, GitPullRequest } from "lucide-react";
+import { CloudOff, CornerDownRight, GitPullRequest } from "lucide-react";
 import type { CIStatus } from "@shared/types/forge";
 import type { NormalizedPRState } from "@shared/types/forge";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
@@ -21,7 +21,6 @@ interface PRBadgeProps {
   onOpen?: () => void;
   isActive?: boolean;
   underlineOnHover?: boolean;
-  rowLastUpdatedAt?: number;
   /** Service-wide PR detection circuit breaker tripped — this rollup may be stale. */
   prDetectionPaused?: boolean;
   /**
@@ -42,7 +41,6 @@ export function PRBadge({
   onOpen,
   isActive,
   underlineOnHover,
-  rowLastUpdatedAt,
   prDetectionPaused,
   isHeadline,
   prTitle,
@@ -73,10 +71,7 @@ export function PRBadge({
     onOpen,
   });
 
-  const { freshnessCause, cacheLastUpdatedAt, rateLimitResetAt, now } = useGitHubBadgeFreshness(
-    "pr",
-    rowLastUpdatedAt
-  );
+  const { freshnessCause, rateLimitResetAt, now } = useGitHubBadgeFreshness("pr");
 
   const prStateColor =
     prState === "merged"
@@ -94,7 +89,6 @@ export function PRBadge({
 
   const ciVisual = getCIStatusVisual(prCiStatus);
 
-  const showStaleGlyph = freshnessCause === "stale" && !missingToken;
   const showPausedGlyph =
     (freshnessCause === "rate-limit" ||
       freshnessCause === "circuit-breaker" ||
@@ -115,14 +109,8 @@ export function PRBadge({
           : "");
 
   const freshnessSuffixStr = useMemo(
-    () =>
-      badgeFreshnessSuffix(
-        freshnessCause,
-        rowLastUpdatedAt ?? cacheLastUpdatedAt,
-        now,
-        rateLimitResetAt
-      ),
-    [freshnessCause, rowLastUpdatedAt, cacheLastUpdatedAt, rateLimitResetAt, now]
+    () => badgeFreshnessSuffix(freshnessCause, now, rateLimitResetAt),
+    [freshnessCause, rateLimitResetAt, now]
   );
 
   return (
@@ -199,13 +187,6 @@ export function PRBadge({
                 <span className={cn("block w-2 h-2 rounded-full", ciVisual.colorClass)} />
               )}
             </span>
-          )}
-          {showStaleGlyph && (
-            <Clock
-              className="w-3 h-3 shrink-0 text-text-muted"
-              strokeWidth={2.5}
-              aria-hidden="true"
-            />
           )}
           {showPausedGlyph && (
             <CloudOff className="w-3 h-3 shrink-0 text-text-muted" aria-hidden="true" />

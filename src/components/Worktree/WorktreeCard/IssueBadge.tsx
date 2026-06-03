@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
-import { CircleDot, Clock, CloudOff } from "lucide-react";
+import { CircleDot, CloudOff } from "lucide-react";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { useIssueTooltip } from "@/hooks/useGitHubTooltip";
@@ -17,7 +17,6 @@ interface IssueBadgeProps {
   isHeadline?: boolean;
   isActive?: boolean;
   underlineOnHover?: boolean;
-  rowLastUpdatedAt?: number;
 }
 
 export function IssueBadge({
@@ -28,7 +27,6 @@ export function IssueBadge({
   isHeadline,
   isActive,
   underlineOnHover,
-  rowLastUpdatedAt,
 }: IssueBadgeProps) {
   // Detects the cold-title gap by comparing issueNumber to its previous-render
   // value via a ref; the lag (ref written in effect, no re-render) is what
@@ -63,21 +61,14 @@ export function IssueBadge({
     prevIssueNumber.current = issueNumber;
   }, [issueNumber]);
 
-  const { freshnessLevel, freshnessCause, cacheLastUpdatedAt, rateLimitResetAt, now } =
-    useGitHubBadgeFreshness("issue", rowLastUpdatedAt);
+  const { freshnessLevel, freshnessCause, rateLimitResetAt, now } =
+    useGitHubBadgeFreshness("issue");
 
   const freshnessSuffixStr = useMemo(
-    () =>
-      badgeFreshnessSuffix(
-        freshnessCause,
-        rowLastUpdatedAt ?? cacheLastUpdatedAt,
-        now,
-        rateLimitResetAt
-      ),
-    [freshnessCause, rowLastUpdatedAt, cacheLastUpdatedAt, rateLimitResetAt, now]
+    () => badgeFreshnessSuffix(freshnessCause, now, rateLimitResetAt),
+    [freshnessCause, rateLimitResetAt, now]
   );
 
-  const showStaleGlyph = freshnessCause === "stale" && !missingToken;
   const showPausedGlyph = freshnessCause === "rate-limit" && !missingToken;
 
   return (
@@ -131,13 +122,6 @@ export function IssueBadge({
                 </span>
               ))}
           </span>
-          {showStaleGlyph && (
-            <Clock
-              className="w-3 h-3 shrink-0 text-text-muted"
-              strokeWidth={2.5}
-              aria-hidden="true"
-            />
-          )}
           {showPausedGlyph && (
             <CloudOff className="w-3 h-3 shrink-0 text-text-muted" aria-hidden="true" />
           )}

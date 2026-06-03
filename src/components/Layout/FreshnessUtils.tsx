@@ -1,6 +1,6 @@
 import type { FreshnessLevel } from "@/hooks/useRepositoryStats";
 
-export type BadgeFreshnessCause = "stale" | "rate-limit" | "circuit-breaker";
+export type BadgeFreshnessCause = "rate-limit" | "circuit-breaker";
 
 export function freshnessClass(level: FreshnessLevel): string {
   switch (level) {
@@ -50,13 +50,10 @@ export function freshnessSuffix(
 
 export function badgeFreshnessSuffix(
   cause: BadgeFreshnessCause | undefined,
-  lastUpdated: number | null,
   now: number,
   resetAt?: number | null
 ): string {
   switch (cause) {
-    case "stale":
-      return ` · updated ${formatTimeSince(lastUpdated, now)}`;
     case "rate-limit": {
       let suffix = " · rate limited";
       if (resetAt != null && resetAt > now) {
