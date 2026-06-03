@@ -98,7 +98,14 @@ describe("injectSkeletonCss accent override (#9162)", () => {
 
 describe("injectSkeletonCss var scoping (#9716)", () => {
   beforeEach(() => {
-    storeMock.get.mockClear();
+    // Reset to a deterministic default each test so the Bondi override below
+    // can't leak its implementation into adjacent tests.
+    storeMock.get.mockReset();
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appState") return { sidebarWidth: 350, focusMode: false };
+      if (key === "appTheme") return { colorSchemeId: "daintree" };
+      return undefined;
+    });
   });
 
   it("scopes seeded theme vars to #startup-skeleton, never :root", () => {

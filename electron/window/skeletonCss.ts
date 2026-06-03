@@ -173,7 +173,11 @@ export function injectSkeletonCss(wc: WebContents, project?: Pick<Project, "colo
     lines.push("#startup-skeleton .skeleton-sidebar { display: none; }");
   }
 
-  void wc.insertCSS(lines.join("\n"), { cssOrigin: "user" });
+  void wc.insertCSS(lines.join("\n"), { cssOrigin: "user" }).catch(() => {
+    // Best-effort first-paint seed: a destroyed/navigated WebContents during
+    // rapid project switching rejects here. Swallow — the index.html skeleton
+    // styles carry hardcoded fallbacks, so the splash still paints.
+  });
 }
 
 /**
