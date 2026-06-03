@@ -9,12 +9,20 @@ export const theme: BuiltInThemeSource = {
   heroImage: "/themes/svalbard.webp",
   palette: {
     type: "light",
+    // Ramp rebalance (#9714): the prior band floored at L≈0.87 (grid #C9D6E2),
+    // which read as an overcast mid-gray rather than arctic snow. Lifted into an
+    // airy band where the content surfaces (canvas/panel/elevated) trend toward
+    // clean glacial white while the structural floor (grid) and the sidebar rail
+    // hold the cool chroma. The sidebar→canvas step is the largest in the ramp
+    // (dL≈0.033) so the navigation rail reads as a distinct deeper zone instead
+    // of merging into the canvas. Audit-clean: even ramp, span 0.106,
+    // panel→elevated keeps the strongest top-tier lift.
     surfaces: {
-      grid: "#C9D6E2",
-      sidebar: "#D2DEE8",
-      canvas: "#DCE6EE",
-      panel: "#E6EFF5",
-      elevated: "#F4F9FC",
+      grid: "#CFDDE8",
+      sidebar: "#D7E4ED",
+      canvas: "#E6EEF3",
+      panel: "#F1F6F9",
+      elevated: "#FCFEFF",
     },
     text: {
       primary: "#1B2A38",
@@ -22,7 +30,7 @@ export const theme: BuiltInThemeSource = {
       muted: "#586B7E",
       inverse: "#FFFFFF",
     },
-    border: "#9DAEBD",
+    border: "#A2B1BD",
     accent: "#1577A8",
     accentSecondary: "#1F7E62",
     status: {
@@ -107,46 +115,49 @@ export const theme: BuiltInThemeSource = {
     "search-match-badge-text": "#1A5066",
     "search-selected-result-border": "#1A5066",
     "search-selected-result-icon": "#1A5066",
-    "surface-input": "#D6E1EA",
-    "surface-inset": "#CFDBE5",
-    "surface-toolbar": "#D8E3EC",
+    "surface-input": "#E2EAF0",
+    "surface-inset": "#D5E1E9",
+    "surface-toolbar": "#DAE5ED",
     "terminal-black": "#1C2630",
     "terminal-bright-black": "#52606B",
     "terminal-white": "#D2D9E0",
   },
   extensions: {
-    "panel-grid-bg": "#D8E2EB",
-    "pulse-before-bg": "#D2DEE8",
-    "pulse-card-bg": "#F4F9FC",
+    "panel-grid-bg": "#D0DEE8",
+    "pulse-before-bg": "#D7E4ED",
+    "pulse-card-bg": "#FCFEFF",
     "pulse-control-hover-bg": "rgba(20,35,50,0.05)",
-    "pulse-empty-bg": "#D8E3EC",
+    "pulse-empty-bg": "#E6EEF3",
     "pulse-heat-high-opacity": "0.90",
     "pulse-heat-low-opacity": "0.42",
     "pulse-heat-medium-opacity": "0.66",
     "pulse-missed-bg": "#C0413E",
-    "pulse-range-bg": "#D8E3EC",
-    "pulse-ring-offset": "#F4F9FC",
-    "pulse-skeleton-gradient": "linear-gradient(90deg, #CFDBE5 25%, #DDE7EF 50%, #CFDBE5 75%)",
-    "settings-card-bg": "#F4F9FC",
-    "settings-kbd-bg": "#CFDBE5",
+    "pulse-range-bg": "#E6EEF3",
+    "pulse-ring-offset": "#FCFEFF",
+    "pulse-skeleton-gradient": "linear-gradient(90deg, #D5E1E9 25%, #E6EEF3 50%, #D5E1E9 75%)",
+    "settings-card-bg": "#FCFEFF",
+    "settings-kbd-bg": "#D5E1E9",
     "settings-kbd-border": "rgba(20,35,50,0.10)",
-    "settings-list-item-bg": "#F4F9FC",
-    "settings-nav-active-bg": "#F4F9FC",
-    "settings-search-bg": "#D6E1EA",
-    "settings-sidebar-bg": "#D2DEE8",
-    // Issue 1: selection elevates, container recedes. Selected lifts to panel
-    // (L 0.947 vs sidebar 0.894), hover to canvas (L 0.920) — idle < hover < selected.
-    "sidebar-active-bg": "#E6EFF5",
-    "sidebar-hover-bg": "#DCE6EE",
+    "settings-list-item-bg": "#FCFEFF",
+    "settings-nav-active-bg": "#FCFEFF",
+    "settings-search-bg": "#E2EAF0",
+    "settings-sidebar-bg": "#D7E4ED",
+    // Issue 1: selection elevates, container recedes. Selected lifts to elevated
+    // (L 0.996 vs sidebar 0.912), hover to canvas (L 0.944) — idle < hover < selected.
+    "sidebar-active-bg": "#FCFEFF",
+    "sidebar-hover-bg": "#E6EEF3",
     "toolbar-control-hover-fg": "#1577A8",
-    "toolbar-divider": "rgba(157,174,189,0.55)",
+    "toolbar-divider": "rgba(162,177,189,0.55)",
     "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(21,119,168,0.06), rgba(20,35,50,0.05)), linear-gradient(135deg, #D6E2EB, #BFCEDB)",
-    "toolbar-project-border": "rgba(157,174,189,0.65)",
+      "linear-gradient(180deg, rgba(21,119,168,0.06), rgba(20,35,50,0.05)), linear-gradient(135deg, #DCE7EF, #CFDDE8)",
+    "toolbar-project-border": "rgba(162,177,189,0.65)",
     "toolbar-project-chip-bg": "rgba(20,35,50,0.05)",
-    "toolbar-project-chip-border": "rgba(157,174,189,0.65)",
+    "toolbar-project-chip-border": "rgba(162,177,189,0.65)",
     "toolbar-project-shadow": "inset 0 1px 0 rgba(255,255,255,0.45)",
-    "toolbar-stats-border": "rgba(157,174,189,0.55)",
-    "toolbar-stats-divider": "rgba(157,174,189,0.55)",
+    "toolbar-stats-border": "rgba(162,177,189,0.55)",
+    "toolbar-stats-divider": "rgba(162,177,189,0.55)",
+    // Recessed filter strip ~0.05 L below the sidebar rail. Inert until the
+    // `worktree-filter-bar-bg` extension infra lands with #9723 (Hokkaido).
+    "worktree-filter-bar-bg": "#C5D4DF",
   },
 };
