@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { AgentState } from "@/types";
+import type { TrashedTerminalGroupMetadata } from "@/store/slices";
 
 const watchPanelMock = vi.fn();
 const unwatchPanelMock = vi.fn();
@@ -15,7 +16,10 @@ const selectWorktreeMock = vi.fn();
 const trackTerminalFocusMock = vi.fn();
 
 let mockTerminals: PtyPanelData[] = [];
-let mockBackgroundedTerminals = new Map<string, { groupRestoreId?: string }>();
+let mockBackgroundedTerminals = new Map<
+  string,
+  { groupRestoreId?: string; groupMetadata?: TrashedTerminalGroupMetadata }
+>();
 let mockWatchedPanels = new Set<string>();
 
 vi.mock("@/hooks/useTerminalSelectors", () => ({
@@ -358,6 +362,7 @@ describe("BackgroundContainer", () => {
       expect(screen.queryByTestId("kill-confirm-dialog")).toBeNull();
       fireEvent.click(screen.getByTestId("bg-kill-button"));
       expect(screen.getByTestId("kill-confirm-dialog")).toBeTruthy();
+      expect(screen.getByTestId("confirm-title").textContent).toBe("Kill terminal?");
       expect(removePanelMock).not.toHaveBeenCalled();
     });
 
@@ -434,6 +439,29 @@ describe("BackgroundContainer", () => {
       expect(pointer.preventDefault).toHaveBeenCalledTimes(1);
       expect(interact.preventDefault).toHaveBeenCalledTimes(1);
       expect(escape.preventDefault).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("tab group default expansion", () => {
+    it("renders tab groups expanded by default, matching the Waiting container", () => {
+      const groupMetadata: TrashedTerminalGroupMetadata = {
+        panelIds: ["t1", "t2"],
+        activeTabId: "t1",
+        location: "dock",
+        worktreeId: "wt-1",
+      };
+      mockTerminals = [
+        makeTerminal({ id: "t1", title: "claude" }),
+        makeTerminal({ id: "t2", title: "gemini" }),
+      ];
+      mockBackgroundedTerminals = new Map([
+        ["t1", { groupRestoreId: "g1", groupMetadata }],
+        ["t2", { groupRestoreId: "g1", groupMetadata }],
+      ]);
+      render(<BackgroundContainer />);
+      // Expanded by default → the toggle offers to collapse, not expand.
+      expect(screen.getByRole("button", { name: "Collapse group" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Expand group" })).toBeNull();
     });
   });
 });
