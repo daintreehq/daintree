@@ -25,7 +25,7 @@ export const theme: BuiltInThemeSource = {
       sidebar: "#DAD6E4",
       canvas: "#E5E3EF",
       panel: "#EDEBF4",
-      elevated: "#FBF9FD",
+      elevated: "#F8FAFE",
     },
     text: {
       // Nudged a hair darker (#2B2F42→#282C3E, imperceptible at full opacity,
@@ -34,7 +34,7 @@ export const theme: BuiltInThemeSource = {
       primary: "#282C3E",
       secondary: "#565C78",
       muted: "#5E6685",
-      inverse: "#FDFCFF",
+      inverse: "#FBFDFF",
     },
     border: "#BFBBD2",
     accent: "#6E57DB",
@@ -58,7 +58,7 @@ export const theme: BuiltInThemeSource = {
     },
     overlayTint: "#525276",
     terminal: {
-      background: "#22273B",
+      background: "#26263A",
       foreground: "#E2E8F4",
       muted: "#80A0D6",
       cursor: "#C2A170",
@@ -122,7 +122,7 @@ export const theme: BuiltInThemeSource = {
     "category-teal": "oklch(0.57 0.09 186)",
     "category-violet": "oklch(0.55 0.11 292)",
     "focus-ring": "rgba(110,87,219,0.30)",
-    // AA 4.5:1 on hokkaido's near-white panel (#EDEBF4) & elevated (#FBF9FD);
+    // AA 4.5:1 on hokkaido's near-white panel (#EDEBF4) & elevated (#F8FAFE);
     // prior values were 4.11/2.39/3.86/3.91:1. Darkened keeping hue (E6/B1).
     "pr-closed": "#C02631",
     "pr-draft": "#525B66",
@@ -133,9 +133,10 @@ export const theme: BuiltInThemeSource = {
     // filter-selected (membership, never accent): elevate-to-select. The engine
     // darkening default left strong-vs-soft at ΔE 0.019 (sub-JND merge on hokkaido's
     // tight violet ramp); explicit opaque lifts clear the JND (soft-vs-panel 0.021,
-    // strong-vs-soft 0.023). panel #EDEBF4 < soft < strong toward elevated #FBF9FD.
-    "filter-selected-bg-soft": "#F4F2FA",
-    "filter-selected-bg-strong": "#FCFAFE",
+    // strong-vs-soft 0.023). panel #EDEBF4 < soft < strong toward elevated #F8FAFE.
+    // Round 2 (#9712): cooled with the snow family (H ~300 → ~270, same L).
+    "filter-selected-bg-soft": "#F1F3FA",
+    "filter-selected-bg-strong": "#F9FBFF",
     "shadow-color": "rgba(38,33,58,0.12)",
     // E7: scrim overrides dropped. The engine now derives the light scrim from the
     // hued overlayBase (overlayTint #525276) at lowered alphas (soft 0.22 / medium
@@ -153,6 +154,16 @@ export const theme: BuiltInThemeSource = {
     "search-selected-result-border": "#3A6FC0",
     "search-selected-result-icon": "#27539A",
     "overlay-hover": "rgba(82,82,118,0.10)",
+    // Round 2 (#9712): the engine derives overlay-subtle/soft at 2%/3% alpha —
+    // invisible on a near-white workbench, so kbd chips (KbdChord), palette
+    // aria-selected rows and other soft fills rendered as ghost outlines.
+    // Raise them to a perceptible-but-quiet 6%/8%, keeping the ordering
+    // subtle (0.06) < soft (0.08) < hover (0.10) < active (0.11). border-subtle
+    // likewise rises 0.09 → 0.14 (still under border-strong 0.18) so card
+    // edges, kbd chips and settings rows resolve as real shapes.
+    "overlay-subtle": "rgba(82,82,118,0.06)",
+    "overlay-soft": "rgba(82,82,118,0.08)",
+    "border-subtle": "rgba(38,33,58,0.14)",
     "state-chip-bg-opacity": "0.12",
     "state-chip-border-opacity": "0.32",
     // E8: surface-input override dropped. It used to pin the input to #FAF8FD
@@ -161,11 +172,15 @@ export const theme: BuiltInThemeSource = {
     // (color-mix(surface-canvas 96%, text-primary) ≈ just below canvas) so the
     // input field sits in a well; placeholder over it clears ~3:1 at the raised
     // 0.58 alpha. Inheriting the recessed default is the E8 fix.
-    // Re-laddered with the darkened surfaces (#9712): inset stays a recessed
-    // well below grid (now #D1CDDC) and toolbar sits between grid and the
-    // darkened sidebar, so wells still sink and the top chrome reads distinct
-    // from canvas.
-    "surface-inset": "#CAC6D5",
+    // Re-laddered with the darkened surfaces (#9712): toolbar sits between
+    // grid and the darkened sidebar so the top chrome reads distinct from
+    // canvas. Round 2: surface-inset LIFTED from #CAC6D5 (L 0.834) to #D2CFDE
+    // (L 0.861, just below sidebar) — the worktree card's commit/details wells
+    // paint with it, and at 0.834 the well inside the bright selected card
+    // (#F5F7FD) was the darkest slab in the sidebar, stealing focus from the
+    // selection itself. 0.861 keeps wells sunken on every card surface without
+    // inverting figure-ground on the active one.
+    "surface-inset": "#D2CFDE",
     "surface-toolbar": "#D6D2E1",
     "terminal-black": "#2D334A",
     "terminal-bright-black": "#6A708C",
@@ -180,8 +195,8 @@ export const theme: BuiltInThemeSource = {
     // tiles read as raised figures. Re-deepened with the darkened grid (#9712):
     // #CBC7D6 (L 0.837) sits just below the new surface-grid (#D1CDDC, L 0.856).
     "panel-grid-bg": "#CBC7D6",
-    "pulse-card-bg": "#FBF9FD",
-    "pulse-control-hover-bg": "rgba(82,82,118,0.065)",
+    "pulse-card-bg": "#F8FAFE",
+    "pulse-control-hover-bg": "rgba(82,82,118,0.10)",
     "pulse-empty-bg": "#E9E7F2",
     "pulse-heat-high-opacity": "0.85",
     "pulse-heat-low-opacity": "0.38",
@@ -193,41 +208,42 @@ export const theme: BuiltInThemeSource = {
     // shape cue on light.
     "pulse-missed-bg": "#BE3C48",
     "pulse-range-bg": "#E9E7F2",
-    "pulse-ring-offset": "#FBF9FD",
+    "pulse-ring-offset": "#F8FAFE",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #D8D5E6 25%, #E6E3F1 50%, #D8D5E6 75%)",
     // S1: the settings dialog body was pinned at #FBF9FD (= elevated, L 0.985 —
     // the ceiling), so cards/list-items that default to surface-panel-elevated
-    // collapsed flush into the body. Recess the body to #EDEBF4 (= surface-panel)
+    // collapsed flush into the body. Recess the body to surface-panel level
+    // (round 2: a hair below it, #E9E8F3, so the elevated cards lift further)
     // so cards on the elevated plane lift above it (the S1 "cards above the dialog
     // body" model). Card/list-item bg are intentionally left unset — they inherit
     // the surface-panel-elevated fallback the S1 consumer ships.
-    "settings-dialog-bg": "#EDEBF4",
+    "settings-dialog-bg": "#E9E8F3",
     "dialog-header-bg": "rgba(218,214,228,0.55)",
     "settings-kbd-bg": "#E2DFEE",
     // S1: the single load-bearing accent in the settings nav is the 2px marker
     // (before:bg-daintree-accent). The active-row FILL must not be a second accent
     // cue, so drop the accent-rgb tint (was rgba(110,87,219,0.16)) for a NEUTRAL
-    // elevated hex (#F4F2FA, L 0.965 — a lift over the recessed nav). The accent
+    // elevated hex (#F1F3FA, L 0.965 — a lift over the recessed nav). The accent
     // inset ring (settings-nav-active-shadow) is retired below.
-    "settings-nav-active-bg": "#F4F2FA",
-    "settings-nav-hover-bg": "rgba(82,82,118,0.065)",
-    "settings-search-bg": "#FAF8FD",
+    "settings-nav-active-bg": "#F1F3FA",
+    "settings-nav-hover-bg": "rgba(82,82,118,0.10)",
+    "settings-search-bg": "#F7F9FD",
     "settings-sidebar-bg": "rgba(206,202,217,0.78)",
-    "sidebar-action-hover-bg": "rgba(82,82,118,0.065)",
+    "sidebar-action-hover-bg": "rgba(82,82,118,0.10)",
     // Issue 1: the selected worktree row must ELEVATE on light, not darken. These
     // were rgba(0,0,0,*) ink (the selected row sank below its own recessed
     // sidebar container — grime, not lift). Replace with OPAQUE surfaces stepping
-    // UP from the sidebar (now L 0.883, #9712): hover #EBE9F3 (L 0.939, dL
-    // +0.056) then selected #F8F6FC (L 0.976, dL +0.093 vs sidebar, +0.038 vs
+    // UP from the sidebar (now L 0.883, #9712): hover #E8EAF4 (L 0.939, dL
+    // +0.056) then selected #F5F7FD (L 0.976, dL +0.093 vs sidebar, +0.038 vs
     // hover) — the darkened sidebar strengthens both lifts — idle <
     // hover < selected, every step clearing the JND. The sidebar.css consumer
     // pairs this lift with a border-strong containment edge. NOTE: this trips the
     // extensionRegistry SIDEBAR_ACTIVE/SIDEBAR_HOVER perceptibility guard, which
     // still mandates the old rgba(0,0,0,*) darken form — see flagged notes.
-    "sidebar-active-bg": "#F8F6FC",
-    "sidebar-hover-bg": "#EBE9F3",
-    "toolbar-agent-hover-bg": "rgba(82,82,118,0.065)",
-    "toolbar-control-hover-bg": "rgba(82,82,118,0.065)",
+    "sidebar-active-bg": "#F5F7FD",
+    "sidebar-hover-bg": "#E8EAF4",
+    "toolbar-agent-hover-bg": "rgba(82,82,118,0.10)",
+    "toolbar-control-hover-bg": "rgba(82,82,118,0.10)",
     "toolbar-control-hover-fg": "#6E57DB",
     "toolbar-divider": "rgba(191,187,210,0.6)",
     "toolbar-project-bg":
@@ -238,8 +254,8 @@ export const theme: BuiltInThemeSource = {
     "toolbar-stats-bg": "rgba(82,82,118,0.055)",
     "toolbar-stats-border": "rgba(191,187,210,0.6)",
     "toolbar-stats-divider": "rgba(191,187,210,0.6)",
-    "toolbar-stats-hover-bg": "rgba(82,82,118,0.065)",
-    "worktree-section-hover-bg": "rgba(82,82,118,0.065)",
+    "toolbar-stats-hover-bg": "rgba(82,82,118,0.10)",
+    "worktree-section-hover-bg": "rgba(82,82,118,0.10)",
     // Redesign (#9712): give the worktree filter/search bar its own recessed
     // surface so the sidebar isn't a single flat shade. #CBC5D9 (L 0.835,
     // C 0.028) is recessed ~0.048 below surface-sidebar (0.883) — well past
@@ -249,7 +265,7 @@ export const theme: BuiltInThemeSource = {
     // (inherits the sidebar).
     "worktree-filter-bar-bg": "#CBC5D9",
     "dock-bg": "#CFCBDA",
-    "dock-border": "rgba(82,82,118,0.16)",
+    "dock-border": "rgba(82,82,118,0.24)",
     "dock-shadow":
       "inset 0 1px 0 rgba(255,255,255,0.55), 0 -2px 8px rgb(from var(--theme-shadow-color) r g b / 0.35)",
   },
