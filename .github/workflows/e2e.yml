@@ -245,7 +245,11 @@ jobs:
         shell: pwsh
         run: |
           # Disable real-time monitoring entirely (exclusions alone are insufficient)
-          Set-MpPreference -DisableRealtimeMonitoring $true
+          try {
+            Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
+          } catch {
+            Write-Host "::warning::Could not disable Windows Defender real-time monitoring: $($_.Exception.Message)"
+          }
 
           # Disable Windows Search indexer to prevent file handle contention
           Stop-Service -Name "WSearch" -Force -ErrorAction SilentlyContinue

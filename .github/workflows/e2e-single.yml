@@ -91,7 +91,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Set-MpPreference -DisableRealtimeMonitoring $true
+          try {
+            Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
+          } catch {
+            Write-Host "::warning::Could not disable Windows Defender real-time monitoring: $($_.Exception.Message)"
+          }
           Stop-Service -Name "WSearch" -Force -ErrorAction SilentlyContinue
           Set-Service -Name "WSearch" -StartupType Disabled -ErrorAction SilentlyContinue
           Stop-Service -Name "SysMain" -Force -ErrorAction SilentlyContinue

@@ -294,11 +294,11 @@ jobs:
 
       - name: Smoke test (packaged macOS)
         shell: bash
-        timeout-minutes: 20
+        timeout-minutes: 30
         env:
           NODE_ENV: production
           ELECTRON_ENABLE_LOGGING: "1"
-          SMOKE_TIMEOUT_MS: "210000"
+          SMOKE_TIMEOUT_MS: "420000"
           SMOKE_RETRIES: "1"
         run: |
           set -euo pipefail

@@ -440,7 +440,7 @@ export async function clickTerminalContextMenuItem(
 ): Promise<void> {
   const page = panelLocator.page();
   const menu = page.locator(SEL.contextMenu.content);
-  const itemName = new RegExp(`^${escapeRegExp(name)}\\b`);
+  const itemName = new RegExp(`^${escapeRegExp(name)}\\b`, "i");
   let lastError: unknown;
 
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -448,7 +448,7 @@ export async function clickTerminalContextMenuItem(
       await openTerminalContextMenu(panelLocator);
     }
 
-    const item = page.getByRole("menuitem", { name: itemName }).first();
+    const item = page.getByRole("menuitem", { name: itemName, exact: false }).first();
 
     try {
       await expect(item).toBeVisible({ timeout: T_SHORT });

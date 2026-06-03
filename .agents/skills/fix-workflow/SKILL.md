@@ -13,6 +13,7 @@ Drive Daintree release dry-run and nightly workflows to green. Treat this as a d
 - Keep the branch focused on release/nightly reliability. Do not mix unrelated cleanup, dependency upgrades, or feature work into the fix.
 - Prefer fixing Daintree over relaxing tests. Update a test only when the test is stale, over-specific, or asserting behavior that the product no longer promises.
 - Do not blindly rerun the same failing job without learning something. Rerun after a code/test/workflow fix, or once for an obvious external/transient service failure.
+- Never allow more than one active GitHub Actions run per target workflow on the repair branch. For release dry runs, at most three full release runs may be active at once: one `release-macos.yml`, one `release-linux.yml`, and one `release-windows.yml`. For nightly, at most one `nightly.yml` run may be active. Before dispatching a replacement full workflow, list active runs for that workflow and cancel or wait for the superseded run to stop; this is especially important for macOS runner cost.
 - Unless the user explicitly says not to, make local testing the first validation line after harvesting the failure: reproduce the narrow failure locally, then run the local E2E surface that matches the workflow before leaning on GitHub Actions. For release workflow fixes, this means the full release-gated Playwright command (`core`, all `full-*`, and `online`) before redispatching a dry run. For nightly fixes, include the `nightly` project as well. This repo is expected to be worked on from a powerful local Mac, so prefer using it.
 - Expect several hours of iteration. Do not stop after the first fixed test, the first green single-spec run, or the first green job; the task is complete only when the full nightly or full release dry-run workflow passes on the repair branch.
 - After each full workflow failure, harvest all failed jobs before editing. Fix the earliest/root failure first, but keep the other failures in a visible queue so secondary failures are not lost.
@@ -188,6 +189,15 @@ Run a whole E2E suite in CI:
 
 ```bash
 gh workflow run e2e.yml --ref <branch> -f platform=<platform> -f suite=<suite>
+```
+
+Before starting a replacement full release or nightly run, cancel or wait for any older active run of the same workflow on the branch:
+
+```bash
+gh run list --workflow <workflow.yml> --branch <branch> \
+  --status in_progress --status queued --limit 20 \
+  --json databaseId,headSha,status,url
+gh run cancel <superseded-run-id>
 ```
 
 Run the full nightly workflow:
