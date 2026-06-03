@@ -28,14 +28,21 @@ const PR_STATE_DARK_TOKENS: Pick<
   "pr-draft": "#8b949e",
 };
 
+// Light pr-* defaults are darkened from the GitHub brand hues (hue preserved,
+// L/C lowered) so the colored badge clears AA 4.5:1 on the brightest light-theme
+// panel/elevated surfaces (E6/B1). The unaltered brand values (pr-open #1A7F37 =
+// 4.30:1, pr-merged #8250DF = 4.27:1, pr-draft #8B949E = 2.61:1) failed AA on the
+// near-white panels of the no-override light themes (table-mountain, hokkaido,
+// atacama). pr-closed #CF222E already cleared (4.54:1) and is unchanged. Dark uses
+// PR_STATE_DARK_TOKENS and is untouched.
 const PR_STATE_LIGHT_TOKENS: Pick<
   AppColorSchemeTokens,
   "pr-open" | "pr-merged" | "pr-closed" | "pr-draft"
 > = {
-  "pr-open": "#1A7F37",
-  "pr-merged": "#8250DF",
+  "pr-open": "#176E31",
+  "pr-merged": "#7544CC",
   "pr-closed": "#CF222E",
-  "pr-draft": "#8B949E",
+  "pr-draft": "#5C6571",
 };
 
 export function createDaintreeTokens(
@@ -204,6 +211,20 @@ export function createDaintreeTokens(
       tokens["overlay-selected"] ?? withAlpha(dark ? overlayTone : overlayBase, dark ? 0.04 : 0.08),
     "overlay-elevated":
       tokens["overlay-elevated"] ?? withAlpha(dark ? overlayTone : overlayBase, dark ? 0.06 : 0.1),
+    // E1: the elevate-to-select primitive. On a near-white canvas, darkening a
+    // surface to mark it selected reads as grime exactly where the eye's
+    // luminance discrimination is most compressed; the correct light idiom is
+    // the inverse — the selection lifts toward the brightest plane. So on LIGHT
+    // this is the opaque `elevated` surface nudged a hair toward text (a faint
+    // cool-gray highlight, macOS / VS Code style), a real upward lift over the
+    // recessed sidebar/canvas/panel containers. On DARK it aliases the additive-
+    // white `overlay-selected` (withAlpha(overlayTone, 0.04)) so dark is byte-for-
+    // byte unchanged. `?? `-sourced so a per-theme override wins.
+    "overlay-raised":
+      tokens["overlay-raised"] ??
+      (dark
+        ? withAlpha(overlayTone, 0.04)
+        : `color-mix(in oklab, ${tokens["surface-panel-elevated"]} 92%, ${tokens["text-primary"]})`),
     "filter-selected-bg-soft":
       tokens["filter-selected-bg-soft"] ?? withAlpha(dark ? tint : overlayBase, dark ? 0.08 : 0.08),
     "filter-selected-bg-strong":
@@ -212,9 +233,16 @@ export function createDaintreeTokens(
     "wash-subtle": tokens["wash-subtle"] ?? withAlpha(overlayBase, 0.02),
     "wash-medium": tokens["wash-medium"] ?? withAlpha(overlayBase, 0.04),
     "wash-strong": tokens["wash-strong"] ?? withAlpha(overlayBase, 0.08),
-    "scrim-soft": tokens["scrim-soft"] ?? (dark ? "rgba(0, 0, 0, 0.2)" : "rgba(0, 0, 0, 0.3)"),
-    "scrim-medium": tokens["scrim-medium"] ?? (dark ? "rgba(0, 0, 0, 0.45)" : "rgba(0, 0, 0, 0.5)"),
-    "scrim-strong": tokens["scrim-strong"] ?? (dark ? "rgba(0, 0, 0, 0.62)" : "rgba(0, 0, 0, 0.7)"),
+    // E7: on light, a 0.50-black scrim reads as a heavy slab over a near-white
+    // workbench. Lower the mid scrim toward ~0.36 and hue it through `overlayBase`
+    // (the per-theme tint, cool near-black) so the dimming behind a modal stays
+    // on-temperature rather than a flat black wash. Dark scrims unchanged.
+    "scrim-soft":
+      tokens["scrim-soft"] ?? (dark ? "rgba(0, 0, 0, 0.2)" : withAlpha(overlayBase, 0.22)),
+    "scrim-medium":
+      tokens["scrim-medium"] ?? (dark ? "rgba(0, 0, 0, 0.45)" : withAlpha(overlayBase, 0.36)),
+    "scrim-strong":
+      tokens["scrim-strong"] ?? (dark ? "rgba(0, 0, 0, 0.62)" : withAlpha(overlayBase, 0.55)),
     "shadow-color": tokens["shadow-color"] ?? (dark ? "rgba(0, 0, 0, 0.5)" : "rgba(0, 0, 0, 0.12)"),
     "shadow-ambient": shadowAmbient,
     "shadow-floating": shadowFloating,
@@ -239,9 +267,18 @@ export function createDaintreeTokens(
     "surface-toolbar":
       tokens["surface-toolbar"] ??
       `color-mix(in oklab, ${tokens["surface-sidebar"]} ${dark ? "67%" : "40%"}, ${tokens["surface-canvas"]})`,
+    // E8: on light, an input field is an inset WELL, not the brightest object on
+    // screen (the macOS / VS Code idiom). The old default put it at `surface-panel`
+    // (raised). Re-derive it RECESSED — `surface-canvas` pulled a hair toward text
+    // so it sits just below canvas — and consumers pair it with a 1px inset top
+    // shadow. Dark keeps the raised `surface-panel-elevated` (a dark inset well
+    // would vanish). Palettes that still override this to their elevated hex are
+    // flagged for the palette owner.
     "surface-input":
       tokens["surface-input"] ??
-      (dark ? tokens["surface-panel-elevated"] : tokens["surface-panel"]),
+      (dark
+        ? tokens["surface-panel-elevated"]
+        : `color-mix(in oklab, ${tokens["surface-canvas"]} 96%, ${tokens["text-primary"]})`),
     // RC-2 siblings: same failure mode as the overlay ladder. Light raised ~2x and
     // routed through `overlayBase` so the per-theme tint reaches the primary hover
     // surface. Dark keeps `overlayTone` unchanged.
@@ -254,8 +291,11 @@ export function createDaintreeTokens(
     "surface-disabled":
       tokens["surface-disabled"] ??
       `color-mix(in oklab, ${tokens["surface-input"] ?? (dark ? tokens["surface-panel-elevated"] : tokens["surface-panel"])} 70%, ${tokens["surface-canvas"]})`,
+    // RC-8 / E8: light placeholder raised to ~0.58 (from 0.32). On the now-RECESSED
+    // surface-input the old 0.32 dropped further below the 3:1 graphical floor; at
+    // 0.58 a placeholder over a near-white input clears ~3:1. Dark unchanged.
     "text-placeholder":
-      tokens["text-placeholder"] ?? withAlpha(tokens["text-primary"], dark ? 0.35 : 0.32),
+      tokens["text-placeholder"] ?? withAlpha(tokens["text-primary"], dark ? 0.35 : 0.58),
     "text-link": tokens["text-link"] ?? tokens["accent-primary"],
     "accent-secondary": accentSecondary,
     "accent-secondary-soft": accentSecondarySoft,

@@ -4,19 +4,38 @@
     box-shadow var(--duration-150) var(--ease-out-expo);
 }
 
+/* Selected row: the active worktree ELEVATES (selection lifts, container
+   recedes). The per-palette `sidebar-active-bg` is an opaque surface one-to-two
+   steps brighter than `surface-sidebar` on light (set by the palettes); the
+   white-alpha fallback is the dark additive lift.
+
+   The left marker is the `--sidebar-active-marker` containment edge. On light it
+   is `border-strong` (the cool borderInk slate, contrast-floored, composites
+   near-neutral) instead of a near-black `overlay-selected` hairline — it is what
+   makes the row read as selected even where the luminance lift is marginal on
+   thin ramps. Dark is unchanged: the `.dark` override below restores the exact
+   `overlay-selected` marker the row shipped with (selection on dark is additive,
+   so the white-alpha marker is already polarity-correct there). */
 .sidebar-worktree-card[data-active="true"] {
+  --sidebar-active-marker: var(--theme-border-strong);
   background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.05));
-  box-shadow: inset 2px 0 0 var(--theme-overlay-selected);
+  box-shadow: inset 2px 0 0 var(--sidebar-active-marker);
+}
+
+.dark .sidebar-worktree-card[data-active="true"] {
+  --sidebar-active-marker: var(--theme-overlay-selected);
 }
 
 /* Inactive selection: when the sidebar loses focus the selected row must stay
    visibly selected, not blank. Selection is distinct from focus and persists
    when focus leaves the list (WAI-ARIA APG tree view; macOS HIG secondary
    highlight; VS Code `list.inactiveSelectionBackground`). Keep the neutral fill
-   and a dimmed left-edge marker rather than zeroing the box-shadow. */
+   and a dimmed left-edge marker rather than zeroing the box-shadow. Drives off
+   the same `--sidebar-active-marker` so the 45% dim follows the polarity-correct
+   marker token (light: border-strong; dark: overlay-selected, byte-for-byte). */
 .sidebar-root:not(:focus-within) .sidebar-worktree-card[data-active="true"] {
   background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.05));
-  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--theme-overlay-selected) 45%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--sidebar-active-marker) 45%, transparent);
 }
 
 .sidebar-worktree-card[data-hoverable="true"]:hover,

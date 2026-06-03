@@ -175,8 +175,16 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                     "transition-colors duration-150",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
                     lifted
-                      ? "ring-1 ring-border-strong bg-surface-panel-elevated/95 hover:bg-surface-panel-elevated"
-                      : "ring-1 ring-border-strong/40 hover:bg-overlay-soft"
+                      ? // Correct elevate-to-select inversion (ring-border-strong
+                        // + elevated fill). Dark keeps its /95 wash; on light the
+                        // alpha makes the elevated lift translucency-inert (RC-9),
+                        // so .light forces the fully opaque elevated surface to
+                        // preserve the real ~0.03-0.04 dL lift over the panel.
+                        "ring-1 ring-border-strong bg-surface-panel-elevated/95 [.light_&]:bg-surface-panel-elevated hover:bg-surface-panel-elevated"
+                      : // Idle hover: overlay-soft already clears the JND on dark
+                        // but composites sub-JND over the light panel, so .light
+                        // steps it up to overlay-medium.
+                        "ring-1 ring-border-strong/40 hover:bg-overlay-soft [.light_&]:hover:bg-overlay-medium"
                   )}
                 >
                   <span className="flex items-center gap-2 text-sm font-medium text-daintree-text">

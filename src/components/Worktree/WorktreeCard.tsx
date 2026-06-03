@@ -735,7 +735,14 @@ export function WorktreeCard({
               className={cn(
                 "absolute inset-0 z-20 pointer-events-none border border-overlay animate-border-flash",
                 variant === "grid" && "rounded-lg",
-                isActive && "mix-blend-screen dark:mix-blend-plus-lighter"
+                // The active row carries a brighten blend so the flash reads over
+                // its own elevated fill. On dark that fill is a dark surface, so
+                // screen/plus-lighter lightens it (visible). On light the active
+                // row is now an opaque near-white surface (Issue 1 elevate-to-
+                // select), and screen-blending the dark `border-strong` flash over
+                // near-white is ~invisible — so the blend is dark-only and light
+                // paints the border with normal compositing.
+                isActive && "dark:mix-blend-plus-lighter"
               )}
               aria-hidden="true"
             />

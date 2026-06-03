@@ -47,8 +47,15 @@ const RAMP_RUNAWAY_RATIO = 3;
 //   strongest lift, mirroring the dark themes (which reserve their largest step
 //   for it). The pre-fix light themes inverted this, giving floating elements no
 //   luminance lift at the top of the stack.
-const LIGHT_RAMP_SPAN_FLOOR = 0.09;
-const LIGHT_RAMP_STEP_FLOOR = RAMP_DL_JND;
+// Lightness rebalance: the surface ramps were lifted into a lighter band so the
+// light themes read as genuinely light (the prior ~0.87 grid floor read as a
+// mid-gray, and the empty panel grid looked too dark). Depth is now carried
+// across the whole budget — surface step + shadow + border + overlay (the
+// additive channels added earlier) — so the surface span itself can be shorter.
+// These floors are loosened to permit the lighter, airier ramp while still
+// preventing the five planes from collapsing into one sheet.
+const LIGHT_RAMP_SPAN_FLOOR = 0.075;
+const LIGHT_RAMP_STEP_FLOOR = 0.018;
 
 // Accent chroma floor: below this in OKLCH, a color reads as a tinted
 // neutral rather than unambiguously colored.
@@ -213,6 +220,133 @@ export function auditSurfaceRamp(
   }
 
   return { failures, warnings };
+}
+
+// --- Light elevation-direction audits (Round 2) ---
+//
+// The Round-2 thesis: on LIGHT, selection/active/armed must ELEVATE — a selected
+// row, an active tile, a focused pane must read as a brighter/opaque surface that
+// pops toward `surface-panel-elevated`, never as a darker blob (the eye's luminance
+// discrimination is compressed near the white ceiling, so darkening reads as grime,
+// not lift). The two structural inversions these guards catch:
+//   - the worktree sidebar selected row sitting BELOW its container (Issue 1)
+//   - the grid gutter painted BRIGHTER than the tiles it frames (G1 figure-ground)
+// Both are LIGHT-only: dark carries selection as additive white glow and runs the
+// opposite (and correct) polarity, so these guards emit nothing for dark.
+
+/**
+ * The selected worktree row must lift ABOVE its sidebar container by at least a
+ * JND on light (Issue 1 / E1). `selectedHex` is the *composited* selected-row fill
+ * (sidebar-active-bg resolved over surface-sidebar) and `sidebarHex` is the resting
+ * sidebar surface. Both must be parseable hex; non-hex (e.g. an unresolved color-mix)
+ * is skipped with a warning. Dark emits nothing.
+ */
+export function auditSidebarSelectedLift(
+  selectedHex: string,
+  sidebarHex: string,
+  themeId: string,
+  type: "dark" | "light"
+): AuditResult {
+  const failures: string[] = [];
+  const warnings: string[] = [];
+  if (type !== "light") return { failures, warnings };
+
+  const sel = hexToOklch(selectedHex);
+  const side = hexToOklch(sidebarHex);
+  if (!sel || !side) {
+    warnings.push(
+      `${themeId}: cannot audit sidebar-selected lift — selected="${selectedHex}" / sidebar="${sidebarHex}" not both parseable hex`
+    );
+    return { failures, warnings };
+  }
+
+  const dL = sel.l - side.l;
+  if (dL < RAMP_DL_JND) {
+    failures.push(
+      `${themeId}: light sidebar selected row (L=${sel.l.toFixed(3)}) must elevate above its container surface-sidebar (L=${side.l.toFixed(3)}) by ≥ JND (${RAMP_DL_JND}); actual dL=${dL.toFixed(4)} — selection darkens/recedes instead of lifting (Issue 1)`
+    );
+  }
+
+  return { failures, warnings };
+}
+
+/**
+ * The grid gutter (panel-grid-bg) must sit AT OR BELOW the panel tiles it frames on
+ * light (G1). When the gutter is brighter than the panels, the tiles read as wells —
+ * a figure-ground inversion worse than a weak cue. `gridBgHex` resolved over the grid
+ * surface; `panelHex` is surface-panel. Dark emits nothing.
+ */
+export function auditGridBgBelowPanel(
+  gridBgHex: string,
+  panelHex: string,
+  themeId: string,
+  type: "dark" | "light"
+): AuditResult {
+  const failures: string[] = [];
+  const warnings: string[] = [];
+  if (type !== "light") return { failures, warnings };
+
+  const grid = hexToOklch(gridBgHex);
+  const panel = hexToOklch(panelHex);
+  if (!grid || !panel) {
+    warnings.push(
+      `${themeId}: cannot audit grid-bg vs panel — grid-bg="${gridBgHex}" / panel="${panelHex}" not both parseable hex`
+    );
+    return { failures, warnings };
+  }
+
+  if (grid.l >= panel.l) {
+    failures.push(
+      `${themeId}: light grid-bg (L=${grid.l.toFixed(3)}) is at/above surface-panel (L=${panel.l.toFixed(3)}) — the gutter is brighter than the tiles it frames, so panels read as wells (G1 figure-ground inversion)`
+    );
+  }
+
+  return { failures, warnings };
+}
+
+/**
+ * Standalone re-export of the "panel→elevated must not be the smallest step" guard
+ * for light themes (E5). `auditSurfaceRamp` already enforces this inside its light
+ * branch; this thin wrapper lets the Round-2 matrix surface it as a discrete named
+ * check without re-running the whole ramp audit's other failures. Dark emits nothing.
+ */
+export function auditPanelElevatedNotSmallest(
+  surfaces: ThemePalette["surfaces"],
+  themeId: string,
+  type: "dark" | "light"
+): AuditResult {
+  if (type !== "light") return { failures: [], warnings: [] };
+
+  const steps: number[] = [];
+  let panelToElevated = NaN;
+  for (let i = 1; i < SURFACE_RAMP_KEYS.length; i++) {
+    const prevKey = SURFACE_RAMP_KEYS[i - 1]!;
+    const currKey = SURFACE_RAMP_KEYS[i]!;
+    const prev = hexToOklch(surfaces[prevKey]);
+    const curr = hexToOklch(surfaces[currKey]);
+    if (!prev || !curr) continue;
+    const dL = Math.abs(curr.l - prev.l);
+    steps.push(dL);
+    if (prevKey === "panel" && currKey === "elevated") panelToElevated = dL;
+  }
+
+  if (steps.length === 0 || Number.isNaN(panelToElevated)) {
+    return {
+      failures: [],
+      warnings: [`${themeId}: cannot audit panel→elevated step — ramp not fully parseable`],
+    };
+  }
+
+  const minStep = Math.min(...steps);
+  if (panelToElevated <= minStep + 1e-9) {
+    return {
+      failures: [
+        `${themeId}: light surface-panel → surface-elevated dL=${panelToElevated.toFixed(4)} is the smallest adjacent step — the floating/elevate-to-select tier needs the strongest lift, not the weakest (E5)`,
+      ],
+      warnings: [],
+    };
+  }
+  return { failures: [], warnings: [] };
 }
 
 // --- Border Separation Audit ---

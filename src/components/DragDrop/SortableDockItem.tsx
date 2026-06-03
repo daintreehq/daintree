@@ -90,7 +90,15 @@ export function SortableDockItem({
             aria-hidden="true"
             data-dock-drop-indicator={dropDirection}
             className={cn(
+              // Transient drop affordance. On dark, border-strong reads as a
+              // clear hairline against the deep grid (kept byte-for-byte). On
+              // light borderInk@0.18 composites near-invisible (~1.4:1, below
+              // the 3:1 graphical-indicator floor), so .light substitutes a
+              // strong text-ink line at /70, which clears 3:1 on every light
+              // theme and surface (>=4.2:1) — a conventional crisp placement
+              // line, kept neutral rather than borrowing the accent anchor.
               "pointer-events-none absolute inset-y-0 z-10 w-0.5 bg-border-strong",
+              "[.light_&]:bg-daintree-text/70",
               dropDirection === "before" ? "-left-px" : "-right-px"
             )}
           />

@@ -72,6 +72,14 @@ export const APP_THEME_TOKEN_KEYS = [
   "overlay-active",
   "overlay-selected",
   "overlay-elevated",
+  // Elevate-to-select primitive (E1). The generic "this item is selected/active/
+  // armed" fill. On LIGHT it is a real upward lift (the brightest `elevated`
+  // plane nudged a hair toward text — a faint cool-gray highlight, the macOS /
+  // VS Code light idiom: the container recedes, the selection elevates). On DARK
+  // it aliases the additive-white `overlay-selected` behavior so dark is
+  // unchanged. Consumers: menu/select/palette active item, active tab, focused
+  // pane, notification row / active-filter chip.
+  "overlay-raised",
 
   // Selected-state pill backgrounds (tint-derived; neutral across hued themes)
   "filter-selected-bg-soft",
@@ -234,6 +242,10 @@ export const EXTENSION_KEYS = [
   "pulse-control-hover-bg",
   "pulse-empty-bg",
   "pulse-heat-color",
+  "pulse-heat-1",
+  "pulse-heat-2",
+  "pulse-heat-3",
+  "pulse-heat-4",
   "pulse-heat-high-opacity",
   "pulse-heat-low-opacity",
   "pulse-heat-medium-opacity",

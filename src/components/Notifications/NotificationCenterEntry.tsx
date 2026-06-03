@@ -180,7 +180,7 @@ export function NotificationCenterEntry({
       role={role}
       onFocus={onFocus}
       className={cn(
-        "group flex items-start gap-2 px-3 py-2.5 hover:bg-overlay-medium transition-colors",
+        "group flex items-start gap-2 px-3 py-2.5 hover:bg-overlay-raised transition-colors",
         tabIndex !== undefined &&
           "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-daintree-accent/50"
       )}

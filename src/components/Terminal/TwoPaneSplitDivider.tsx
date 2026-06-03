@@ -178,7 +178,12 @@ export function TwoPaneSplitDivider({
       tabIndex={0}
       className={cn(
         "group cursor-col-resize flex items-center justify-center z-10 shrink-0",
-        "hover:bg-overlay-soft transition-colors focus-visible:outline-hidden focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-daintree-accent/50",
+        // On dark, overlay-soft already clears the JND (~0.022-0.032 dL), so it
+        // stays. On light it composites sub-JND (~0.012-0.018 dL), so .light
+        // alone steps the resting hover scrim up to overlay-medium. The accent
+        // lives on the focus ring only — the single anchor for this region —
+        // so the grip below stays neutral on focus to avoid a doubled accent.
+        "hover:bg-overlay-soft [.light_&]:hover:bg-overlay-medium transition-colors focus-visible:outline-hidden focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-daintree-accent/50",
         isDragging && "bg-overlay-medium"
       )}
       style={{ width: DIVIDER_WIDTH_PX }}
@@ -189,9 +194,16 @@ export function TwoPaneSplitDivider({
       <div
         className={cn(
           "w-px h-16 rounded-full transition-[width] duration-150 delay-100 group-hover:w-0.5",
-          "bg-daintree-text/20",
-          "group-hover:bg-daintree-text/35 group-focus-visible:bg-daintree-accent",
-          isDragging && "bg-daintree-text/50"
+          // Dark keeps its original ink ladder (/20 rest, /35 hover, accent on
+          // focus, /50 drag) byte-for-byte. On light the low-alpha ink reads too
+          // faint over the near-white track, so .light raises every step and
+          // drops the focus accent to a strong neutral — the focus ring is
+          // already the single accent anchor for this region, so the grip need
+          // not double it.
+          "bg-daintree-text/20 group-hover:bg-daintree-text/35 group-focus-visible:bg-daintree-accent",
+          "[.light_&]:bg-daintree-text/25 [.light_&]:group-hover:bg-daintree-text/45",
+          "[.light_&]:group-focus-visible:bg-daintree-text/55",
+          isDragging && "bg-daintree-text/50 [.light_&]:bg-daintree-text/55"
         )}
       />
     </div>

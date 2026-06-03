@@ -1,9 +1,23 @@
-import type { AppColorScheme, AppThemeValidationWarning, AppThemeTokenKey } from "./types.js";
+import type {
+  AppColorScheme,
+  AppThemeValidationWarning,
+  AppThemeTokenKey,
+  ExtensionKey,
+} from "./types.js";
 // Function-level cyclic reference (colorValidator imports the color math below):
 // safe because both sides are called at runtime, after module init, not at
 // top-level evaluation. The overlay Weber floor lives in colorValidator per the
 // validation-domain split; we re-run it here so it joins the same contrast gate.
 import { getOverlayContrastWarnings } from "./colorValidator.js";
+// Round-2 light elevation-direction audits. The cyclic import (oklch imports the
+// color math in this file) is safe: every reference here is called at runtime,
+// after module init — never during top-level evaluation.
+import {
+  auditSidebarSelectedLift,
+  auditGridBgBelowPanel,
+  auditPanelElevatedNotSmallest,
+  type AuditResult,
+} from "./oklch.js";
 
 const DISPLAY_SURFACES: AppThemeTokenKey[] = [
   "surface-grid",
@@ -553,4 +567,387 @@ export function accentOverrideHasLowContrast(scheme: AppColorScheme): boolean {
     const background = scheme.tokens[key];
     return isHexColor(background) && contrastRatio(accent, background) < ACCENT_MIN_CONTRAST;
   });
+}
+
+// ── Round-2 light validation matrix (E6) ─────────────────────────────────────
+//
+// A consolidated, polarity-aware audit covering the surface/component pairs that
+// shipped wrong in round 1 because no guard existed for them: status/PR/activity
+// indicators against the surface they render on, input text against the recessed
+// input well, scrollbar visibility, selected-filter separation, the pulse heat
+// ramp, and the two elevation-direction inversions (sidebar selection, grid
+// figure-ground). EVERYTHING here is ADVISORY — `getLightThemeMatrixWarnings`
+// returns a flat warning list and is NOT joined into `getThemeContrastWarnings`,
+// so the build stays green while the palette work lands. The Harden phase flips
+// the wiring (calls these from the test as hard-fail) once the palettes clear.
+//
+// Most checks are LIGHT-only: the failures they target are light-mode inversions
+// (darken-to-select, black-ink chrome, grid brighter than tiles). Where a check
+// is meaningful in both polarities (graphical-indicator ≥3:1, input-text AA) it
+// runs for both — dark already clears them, so it stays silent there.
+
+const RAMP_DL_JND_MATRIX = 0.02;
+
+/**
+ * Resolve a token (from `scheme.tokens`) or extension (from `scheme.extensions`)
+ * to a concrete hex by compositing over a render surface when it carries alpha.
+ * Returns `{ hex }` when evaluable, or `{ skip }` with a reason when the value is
+ * missing, an unresolved `color-mix()`/`oklch()`/`var()`, or otherwise non-numeric.
+ * The matrix is advisory, so unevaluable values are skipped (not failed): the
+ * runtime CSS does the color-mix the static checker can't.
+ */
+function resolveToHex(
+  raw: string | undefined,
+  surfaceHex: string | undefined
+): { hex: string } | { skip: string } {
+  if (typeof raw !== "string" || !raw.trim()) return { skip: "missing/empty" };
+  const trimmed = raw.trim();
+  if (isHexColor(trimmed)) {
+    // 8-digit hex carries alpha; composite if we can, else use the RGB as-is.
+    return { hex: trimmed };
+  }
+  const rgba = parseRgba(trimmed);
+  if (rgba) {
+    if (rgba.opacity >= 1) return { hex: rgba.hex };
+    if (surfaceHex && isHexColor(surfaceHex)) {
+      return { hex: blendOverBackground(rgba.hex, surfaceHex, rgba.opacity) };
+    }
+    return { skip: `rgba needs a surface to composite over (none evaluable)` };
+  }
+  return { skip: `non-evaluable form "${trimmed}" (color-mix/oklch/var/named)` };
+}
+
+function tokenVal(scheme: AppColorScheme, key: AppThemeTokenKey): string | undefined {
+  return scheme.tokens[key];
+}
+
+function extVal(scheme: AppColorScheme, key: ExtensionKey): string | undefined {
+  return scheme.extensions?.[key];
+}
+
+interface MatrixContrastPair {
+  /** Foreground token. */
+  fg: AppThemeTokenKey;
+  /** Background token (resolved; rgba composited over `over`). */
+  bg: AppThemeTokenKey;
+  /** Surface key the bg is composited over when it carries alpha. */
+  over?: AppThemeTokenKey;
+  minimum: number;
+  label: string;
+  appliesTo?: "light" | "dark";
+}
+
+// Graphical/status indicators must clear 3:1 (WCAG 1.4.11). Text against its well
+// must clear AA 4.5:1. These are the gaps E6 names explicitly.
+//
+// LIGHT-only scoping (matching the `appliesTo: "light"` precedent in CONTRAST_PAIRS):
+// the activity/pr/scrollbar deficits E6 targets are light-mode failures — on a
+// near-white field the quiet idle dot, the AA-forced dark PR hue, and the subtle
+// thumb all collapse. Dark runs intentionally lower, sanctioned calibrations for
+// the SAME tokens (a deliberately recessive idle dot, a low-key scrollbar) that
+// these floors would false-fail; gating to light keeps the Harden flip from ever
+// tripping the established dark themes (owner decision: dark stays byte-for-byte).
+const MATRIX_CONTRAST_PAIRS: MatrixContrastPair[] = [
+  // activity-* dots render on panel/elevated/canvas chrome — graphical ≥3:1.
+  ...(
+    [
+      ["activity-active", "active"],
+      ["activity-idle", "idle"],
+      ["activity-working", "working"],
+      ["activity-waiting", "waiting"],
+      ["activity-completed", "completed"],
+    ] as const
+  ).flatMap(([tok, name]) =>
+    (["surface-panel", "surface-panel-elevated", "surface-canvas"] as const).map((bg) => ({
+      fg: tok as AppThemeTokenKey,
+      bg: bg as AppThemeTokenKey,
+      minimum: 3.0,
+      label: `${name} dot vs ${bg}`,
+      appliesTo: "light" as const,
+    }))
+  ),
+  // pr-* badges render as colored text/glyph on panel/elevated — AA 4.5:1.
+  ...(["pr-open", "pr-merged", "pr-closed", "pr-draft"] as const).flatMap((tok) =>
+    (["surface-panel", "surface-panel-elevated"] as const).map((bg) => ({
+      fg: tok as AppThemeTokenKey,
+      bg: bg as AppThemeTokenKey,
+      minimum: 4.5,
+      label: `${tok} vs ${bg}`,
+      appliesTo: "light" as const,
+    }))
+  ),
+  // scrollbar-thumb must be visible against the track / its surface — graphical 3:1.
+  {
+    fg: "scrollbar-thumb",
+    bg: "surface-panel",
+    minimum: 3.0,
+    label: "scrollbar-thumb vs surface-panel",
+    appliesTo: "light",
+  },
+  {
+    fg: "scrollbar-thumb",
+    bg: "surface-canvas",
+    minimum: 3.0,
+    label: "scrollbar-thumb vs surface-canvas",
+    appliesTo: "light",
+  },
+  // input text must be legible against the (now recessed) input well — AA 4.5:1.
+  {
+    fg: "text-primary",
+    bg: "surface-input",
+    minimum: 4.5,
+    label: "input text-primary vs surface-input",
+  },
+  // placeholder is a graphical-tier de-emphasis floor on the input well — 3:1.
+  {
+    fg: "text-placeholder",
+    bg: "surface-input",
+    over: "surface-input",
+    minimum: 3.0,
+    label: "input placeholder vs surface-input",
+    appliesTo: "light",
+  },
+];
+
+function runMatrixContrastPairs(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const out: AppThemeValidationWarning[] = [];
+  for (const pair of MATRIX_CONTRAST_PAIRS) {
+    if (pair.appliesTo && pair.appliesTo !== scheme.type) continue;
+    const fgRaw = tokenVal(scheme, pair.fg);
+    const overSurface = pair.over ? tokenVal(scheme, pair.over) : tokenVal(scheme, pair.bg);
+    const fg = resolveToHex(fgRaw, overSurface);
+    const bg = resolveToHex(tokenVal(scheme, pair.bg), tokenVal(scheme, pair.bg));
+    if ("skip" in fg || "skip" in bg) continue; // advisory: skip unevaluable
+    const ratio = contrastRatio(fg.hex, bg.hex);
+    if (ratio < pair.minimum) {
+      out.push({
+        message: `[matrix] ${scheme.id}: ${pair.label} is ${ratio.toFixed(2)}:1; target is ${pair.minimum.toFixed(1)}:1`,
+      });
+    }
+  }
+  return out;
+}
+
+interface MatrixSeparationPair {
+  /** First resolved color (composited over `aOver`). */
+  a: { token?: AppThemeTokenKey; ext?: ExtensionKey; over?: AppThemeTokenKey };
+  b: { token?: AppThemeTokenKey; ext?: ExtensionKey; over?: AppThemeTokenKey };
+  /** Minimum OKLab ΔE between the two. */
+  minDeltaE: number;
+  label: string;
+  appliesTo?: "light" | "dark";
+}
+
+function resolvePart(
+  scheme: AppColorScheme,
+  part: { token?: AppThemeTokenKey; ext?: ExtensionKey; over?: AppThemeTokenKey }
+): { hex: string } | { skip: string } {
+  const raw = part.token
+    ? tokenVal(scheme, part.token)
+    : part.ext
+      ? extVal(scheme, part.ext)
+      : undefined;
+  const surface = part.over ? tokenVal(scheme, part.over) : undefined;
+  return resolveToHex(raw, surface);
+}
+
+// Selected/active fills must separate from their unselected sibling by a JND
+// (ΔE ≈ 0.02 is the OKLab JND). filter-selected-soft vs -strong is the within-
+// popover membership ramp; both are tint-derived alphas composited over panel.
+const MATRIX_SEPARATION_PAIRS: MatrixSeparationPair[] = [
+  {
+    a: { token: "filter-selected-bg-soft", over: "surface-panel" },
+    b: { token: "surface-panel" },
+    minDeltaE: RAMP_DL_JND_MATRIX,
+    label: "filter-selected-soft separates from surface-panel",
+  },
+  {
+    a: { token: "filter-selected-bg-strong", over: "surface-panel" },
+    b: { token: "filter-selected-bg-soft", over: "surface-panel" },
+    minDeltaE: RAMP_DL_JND_MATRIX,
+    label: "filter-selected strong separates from soft",
+  },
+];
+
+function runMatrixSeparationPairs(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const out: AppThemeValidationWarning[] = [];
+  for (const pair of MATRIX_SEPARATION_PAIRS) {
+    if (pair.appliesTo && pair.appliesTo !== scheme.type) continue;
+    const a = resolvePart(scheme, pair.a);
+    const b = resolvePart(scheme, pair.b);
+    if ("skip" in a || "skip" in b) continue;
+    const de = deltaEOK(a.hex, b.hex);
+    if (de < pair.minDeltaE) {
+      out.push({
+        message: `[matrix] ${scheme.id}: ${pair.label} — ΔE=${de.toFixed(4)} below ${pair.minDeltaE.toFixed(3)} (perceptually merges)`,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Card surfaces (settings cards / list items) must read as LIFTED above the dialog
+ * body they sit on — light only (S1). When `settings-card-bg` is darker than or
+ * equal to `settings-dialog-bg` the card inverts (bali ships this). Both come from
+ * `scheme.extensions`; either being unset means the consumer falls back to a shared
+ * default and there is nothing to compare, so skip.
+ */
+function runCardAboveDialogBody(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  if (scheme.type !== "light") return [];
+  const out: AppThemeValidationWarning[] = [];
+  const card = resolveToHex(extVal(scheme, "settings-card-bg"), tokenVal(scheme, "surface-panel"));
+  const body = resolveToHex(
+    extVal(scheme, "settings-dialog-bg"),
+    tokenVal(scheme, "surface-panel")
+  );
+  if ("skip" in card || "skip" in body) return out;
+  const cardL = relativeLuminance(card.hex);
+  const bodyL = relativeLuminance(body.hex);
+  if (cardL <= bodyL) {
+    out.push({
+      message: `[matrix] ${scheme.id}: light settings card (L≈${cardL.toFixed(3)}) is at/below the dialog body (L≈${bodyL.toFixed(3)}) — the card must lift above its container, not recede (S1)`,
+    });
+  }
+  return out;
+}
+
+/**
+ * The pulse heatmap composites a single hue at four alpha stops over the empty cell
+ * (RC-2 in miniature). Light-only (P-Heat). Two failures this catches: (1) the
+ * lowest heat stop is sub-JND against the empty cell, so a worked day is invisible;
+ * (2) the missed-day film (a destructive streak-break signal) is sub-3:1 against the
+ * empty cell. Requires `pulse-heat-color`; themes that leave it unset fall back at
+ * the consumer and are skipped.
+ */
+function runPulseHeatSeparation(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  if (scheme.type !== "light") return [];
+  const out: AppThemeValidationWarning[] = [];
+  const emptyRaw = extVal(scheme, "pulse-empty-bg") ?? tokenVal(scheme, "surface-canvas");
+  const empty = resolveToHex(emptyRaw, tokenVal(scheme, "surface-canvas"));
+  if ("skip" in empty) return out;
+
+  const heatColor = extVal(scheme, "pulse-heat-color");
+  const lowOp = Number(extVal(scheme, "pulse-heat-low-opacity"));
+  if (typeof heatColor === "string" && isHexColor(heatColor) && Number.isFinite(lowOp)) {
+    const stop1 = blendOverBackground(heatColor, empty.hex, lowOp);
+    const de = deltaEOK(stop1, empty.hex);
+    if (de < RAMP_DL_JND_MATRIX) {
+      out.push({
+        message: `[matrix] ${scheme.id}: pulse heat level-1 (heat-color @${lowOp}) ΔE=${de.toFixed(4)} vs empty cell is below JND (${RAMP_DL_JND_MATRIX}) — a worked day is invisible (P-Heat)`,
+      });
+    }
+  }
+
+  const missed = resolveToHex(extVal(scheme, "pulse-missed-bg"), empty.hex);
+  if (!("skip" in missed)) {
+    const ratio = contrastRatio(missed.hex, empty.hex);
+    if (ratio < 3.0) {
+      out.push({
+        message: `[matrix] ${scheme.id}: pulse missed-day fill vs empty cell is ${ratio.toFixed(2)}:1; target is 3.0:1 — the streak-break signal is imperceptible (P-Heat)`,
+      });
+    }
+  }
+
+  return out;
+}
+
+/**
+ * working vs waiting activity dots are commonly separated by hue alone, which fails
+ * on the deuteranope confusion line at 6px. Flag when their OKLab separation is below
+ * a clearly-distinct floor so the palette/shape work knows to act (B2). Advisory in
+ * both polarities; the backlog's primary remedy is the shape channel, so this is a
+ * heads-up, not a mandate to brighten.
+ */
+function runActivityWorkingWaitingSeparation(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const out: AppThemeValidationWarning[] = [];
+  const working = tokenVal(scheme, "activity-working");
+  const waiting = tokenVal(scheme, "activity-waiting");
+  if (
+    typeof working !== "string" ||
+    typeof waiting !== "string" ||
+    !isHexColor(working) ||
+    !isHexColor(waiting)
+  ) {
+    return out;
+  }
+  const de = deltaEOK(working, waiting);
+  // 0.10 ≈ "clearly distinct" lower bound in OKLab; below it the two dots lean on
+  // hue, which the deuteranope confusion line erases on a small dot.
+  if (de < 0.1) {
+    out.push({
+      message: `[matrix] ${scheme.id}: activity working vs waiting ΔE=${de.toFixed(3)} (<0.10) — near-isoluminant, separable by hue only; lean on the shape channel (B2)`,
+    });
+  }
+  return out;
+}
+
+/**
+ * The consolidated Round-2 light validation matrix (E6). Returns a flat advisory
+ * warning list. NOT wired into `getThemeContrastWarnings` — the Harden phase calls
+ * this from the test and flips it to hard-fail once the palettes clear. Each block
+ * is independently skippable so an unevaluable token never masks a real failure.
+ *
+ * Coverage map (backlog → check):
+ *   activity-*-vs-surface (≥3:1) ......... runMatrixContrastPairs
+ *   pr-*-vs-surface (AA) ................. runMatrixContrastPairs
+ *   scrollbar-thumb-vs-surface (3:1) ..... runMatrixContrastPairs
+ *   input-text-vs-surface-input (AA) ..... runMatrixContrastPairs
+ *   filter-selected separation (JND) ..... runMatrixSeparationPairs
+ *   card-vs-dialog-body (light) .......... runCardAboveDialogBody
+ *   pulse heat/missed separation ......... runPulseHeatSeparation
+ *   activity working/waiting separation .. runActivityWorkingWaitingSeparation
+ *   sidebar-selected-above-container ..... auditSidebarSelectedLift (oklch)
+ *   grid-bg-below-panel (light) .......... auditGridBgBelowPanel (oklch)
+ *   panel→elevated not-smallest (light) .. auditPanelElevatedNotSmallest (oklch)
+ *
+ * category-*-vs-render-surface is intentionally a NO-OP here: every built-in ships
+ * `category-*` as `oklch(...)`, which composites at runtime via CSS `color-mix` into
+ * the render surface — there is no static hex the matrix can resolve, so the check
+ * would only ever skip. It is documented as deferred to a runtime/visual pass (B1)
+ * rather than emit noise. `resolveToHex` will surface it the moment a theme ships a
+ * hex category override.
+ */
+export function getLightThemeMatrixWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const warnings: AppThemeValidationWarning[] = [];
+
+  warnings.push(...runMatrixContrastPairs(scheme));
+  warnings.push(...runMatrixSeparationPairs(scheme));
+  warnings.push(...runCardAboveDialogBody(scheme));
+  warnings.push(...runPulseHeatSeparation(scheme));
+  warnings.push(...runActivityWorkingWaitingSeparation(scheme));
+
+  const collect = (r: AuditResult, prefix: string) => {
+    for (const f of r.failures) warnings.push({ message: `[matrix] ${prefix}${f}` });
+    for (const w of r.warnings) warnings.push({ message: `[matrix] ${prefix}${w}` });
+  };
+
+  // Elevation-direction inversions (OKLab, light-only). Resolve the composited
+  // selected-row fill and grid gutter before handing hex to the oklch audits.
+  if (scheme.type === "light") {
+    const sidebar = tokenVal(scheme, "surface-sidebar");
+    const selectedRaw = extVal(scheme, "sidebar-active-bg");
+    const selected = resolveToHex(selectedRaw, sidebar);
+    if (!("skip" in selected) && typeof sidebar === "string") {
+      collect(auditSidebarSelectedLift(selected.hex, sidebar, scheme.id, "light"), "");
+    } else {
+      warnings.push({
+        message: `[matrix] ${scheme.id}: skipped sidebar-selected lift — sidebar-active-bg unevaluable (${"skip" in selected ? selected.skip : "no sidebar surface"})`,
+      });
+    }
+
+    const grid = tokenVal(scheme, "surface-grid");
+    const gridBgRaw = extVal(scheme, "panel-grid-bg");
+    const gridBg = resolveToHex(gridBgRaw, grid);
+    const panel = tokenVal(scheme, "surface-panel");
+    if (!("skip" in gridBg) && typeof panel === "string") {
+      collect(auditGridBgBelowPanel(gridBg.hex, panel, scheme.id, "light"), "");
+    }
+
+    if (scheme.palette?.surfaces) {
+      collect(auditPanelElevatedNotSmallest(scheme.palette.surfaces, scheme.id, "light"), "");
+    }
+  }
+
+  return warnings;
 }

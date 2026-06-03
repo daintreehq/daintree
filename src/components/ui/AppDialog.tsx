@@ -365,7 +365,7 @@ export function AppDialog({
           ref={dialogRef}
           tabIndex={-1}
           className={cn(
-            "bg-surface-panel border border-border-default rounded-[var(--radius-xl)] shadow-[var(--theme-shadow-dialog)] mx-4 flex flex-col overflow-hidden",
+            "bg-surface-panel-elevated border border-border-default rounded-[var(--radius-xl)] shadow-[var(--theme-shadow-dialog)] mx-4 flex flex-col overflow-hidden",
             maxHeight,
             sizeClasses[size],
             "w-full",
@@ -443,7 +443,7 @@ AppDialog.CloseButton = function AppDialogCloseButton({ className }: AppDialogCl
       type="button"
       onClick={context?.onClose}
       className={cn(
-        "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-strong transition-colors p-1 rounded",
+        "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-raised transition-colors p-1 rounded",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
         className
       )}
@@ -515,7 +515,7 @@ AppDialog.Footer = function AppDialogFooter({
   return (
     <div
       className={cn(
-        "px-6 py-4 border-t border-daintree-border flex items-center gap-3 shrink-0",
+        "px-6 py-4 border-t border-daintree-border bg-surface-panel flex items-center gap-3 shrink-0",
         hint ? "justify-between" : "justify-end",
         className
       )}

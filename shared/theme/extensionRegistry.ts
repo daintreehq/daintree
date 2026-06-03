@@ -35,13 +35,20 @@ export interface ExtensionKeyMetadata {
 
 const OPTIONAL: ExtensionKeyMetadata = { required: false };
 
+// Round-2 selection-direction flip (Issue 1): on LIGHT, the selected/hovered
+// sidebar row must ELEVATE toward an opaque brighter surface (panel/canvas) — a
+// darkening rgba(0,0,0,*) reads as grime on near-white, not lift. So the light
+// governance now expects an opaque hex (no black-alpha tint, no alpha floor) and
+// the lift relationship is enforced behaviourally by the OKLab idle<hover<selected
+// audit in builtInThemes.test.ts. DARK is unchanged: selection is still an additive
+// white-alpha glow, so dark keeps the rgba(255,255,255,*) tint + alpha floors.
 const SIDEBAR_HOVER: ExtensionKeyMetadata = {
   required: true,
   perceptibility: {
-    minAlpha: { dark: 0.03, light: 0.025 },
+    minAlpha: { dark: 0.03 },
     expectedTint: {
       dark: /rgba\(\s*255\s*,\s*255\s*,\s*255/,
-      light: /rgba\(\s*0\s*,\s*0\s*,\s*0/,
+      light: /^#[0-9a-fA-F]{6}$/,
     },
   },
 };
@@ -49,14 +56,27 @@ const SIDEBAR_HOVER: ExtensionKeyMetadata = {
 const SIDEBAR_ACTIVE: ExtensionKeyMetadata = {
   required: true,
   perceptibility: {
-    minAlpha: { dark: 0.05, light: 0.04 },
+    minAlpha: { dark: 0.05 },
     expectedTint: {
       dark: /rgba\(\s*255\s*,\s*255\s*,\s*255/,
-      light: /rgba\(\s*0\s*,\s*0\s*,\s*0/,
+      light: /^#[0-9a-fA-F]{6}$/,
     },
   },
 };
 
+// toolbar-control-armed-shadow is the inset ring on armed toolbar controls
+// (dropdown open / toggle on). The CSS fallback in toolbar.css is now
+// `inset 0 0 0 1px var(--theme-border-strong)` — the cool borderInk slate,
+// which is contrast-floored and polarity-correct on BOTH modes, replacing the
+// old hardcoded rgba(0,0,0,0.18) that went near-invisible on dark and read as a
+// black hairline on light (round-2 Issue 2 / Pattern B). Because the fallback
+// is now correct on light, light themes inherit it and must NOT ship their own
+// override (forbidWhenNotRequired) — a white-tinted ring copy-pasted from dark
+// would invert the original #8175 bug on a light toolbar. Dark themes still
+// REQUIRE a per-theme white-tinted override: border-strong is a valid fallback
+// there too, but the curated white ring reads crisper on dark chrome, so the
+// dark requirement is retained for fidelity (the perceptibility/format guards
+// below police those dark override values).
 const TOOLBAR_ARMED: ExtensionKeyMetadata = {
   required: (mode) => mode === "dark",
   forbidWhenNotRequired: true,
@@ -104,6 +124,10 @@ export const EXTENSION_KEY_REGISTRY = {
   "pulse-control-hover-bg": OPTIONAL,
   "pulse-empty-bg": OPTIONAL,
   "pulse-heat-color": OPTIONAL,
+  "pulse-heat-1": OPTIONAL,
+  "pulse-heat-2": OPTIONAL,
+  "pulse-heat-3": OPTIONAL,
+  "pulse-heat-4": OPTIONAL,
   "pulse-heat-high-opacity": OPTIONAL,
   "pulse-heat-low-opacity": OPTIONAL,
   "pulse-heat-medium-opacity": OPTIONAL,
@@ -135,10 +159,11 @@ export const EXTENSION_KEY_REGISTRY = {
   "sidebar-active-bg": SIDEBAR_ACTIVE,
   "sidebar-hover-bg": SIDEBAR_HOVER,
 
-  // Toolbar — toolbar-control-armed-shadow is polarity-conditional. Dark
-  // themes must override the CSS fallback (which is black-tinted, invisible
-  // on dark surfaces); light themes must inherit the fallback or they put
-  // a white ring on a light toolbar (the original #8175 inversion).
+  // Toolbar — toolbar-control-armed-shadow is polarity-conditional. The CSS
+  // fallback is now border-strong (cool borderInk, correct on both modes), so
+  // light themes inherit it; they must NOT add a white-ring override (that
+  // would invert the original #8175 bug on a light toolbar). Dark themes still
+  // ship a per-theme white-tinted ring for crispness on dark chrome.
   "toolbar-agent-hover-bg": OPTIONAL,
   "toolbar-bg": OPTIONAL,
   "toolbar-control-active-bg": OPTIONAL,

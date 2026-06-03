@@ -205,7 +205,7 @@ export function AppPaletteDialog({
         aria-label={ariaLabel}
         tabIndex={-1}
         className={cn(
-          "w-full max-w-xl mx-4 bg-daintree-bg border border-[var(--border-overlay)] rounded-[var(--radius-xl)] shadow-modal overflow-hidden origin-top",
+          "w-full max-w-xl mx-4 bg-surface-panel-elevated border border-[var(--border-overlay)] rounded-[var(--radius-xl)] shadow-modal overflow-hidden origin-top",
           "transition-[opacity,transform]",
           "motion-reduce:transition-opacity motion-reduce:scale-100",
           isVisible ? "opacity-100 scale-100" : "opacity-0 scale-[0.96]",
@@ -217,7 +217,7 @@ export function AppPaletteDialog({
               ? `${UI_PALETTE_ENTER_DURATION}ms`
               : `${UI_PALETTE_EXIT_DURATION}ms`,
             transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
-            "--scroll-shadow-color": "var(--color-surface-canvas)",
+            "--scroll-shadow-color": "var(--color-surface-panel-elevated)",
           } as CSSProperties
         }
         onClick={(e) => e.stopPropagation()}
@@ -326,7 +326,7 @@ AppPaletteDialog.Footer = function AppPaletteFooter({
   return (
     <div
       className={cn(
-        "px-3 py-2 border-t border-daintree-border bg-daintree-sidebar/50 text-xs text-daintree-text/50 flex items-center gap-4",
+        "px-3 py-2 border-t border-daintree-border bg-surface-panel text-xs text-daintree-text/50 flex items-center gap-4",
         className
       )}
     >
@@ -429,7 +429,7 @@ AppPaletteDialog.Input = function AppPaletteInput({
       <div
         className={cn(
           "flex w-full items-center gap-1.5 pl-2 pr-3 py-1.5",
-          "bg-daintree-sidebar border border-daintree-border rounded-[var(--radius-md)]",
+          "bg-surface-input border border-daintree-border rounded-[var(--radius-md)]",
           "focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
         )}
       >
@@ -454,7 +454,7 @@ AppPaletteDialog.Input = function AppPaletteInput({
       type="text"
       className={cn(
         "w-full px-3 py-2 text-sm",
-        "bg-daintree-sidebar border border-daintree-border rounded-[var(--radius-md)]",
+        "bg-surface-input border border-daintree-border rounded-[var(--radius-md)]",
         "text-daintree-text placeholder:text-text-muted",
         "focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/20",
         className

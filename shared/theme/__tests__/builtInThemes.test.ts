@@ -2,13 +2,14 @@ import { readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BUILT_IN_THEME_SOURCES } from "../builtInThemes/index.js";
-import { getThemeContrastWarnings } from "../contrast.js";
+import { getThemeContrastWarnings, getLightThemeMatrixWarnings } from "../contrast.js";
 import { EXTENSION_KEY_REGISTRY, isExtensionKeyRequired } from "../extensionRegistry.js";
 import {
   auditSurfaceRamp,
   auditAccentProminence,
   auditCrossThemeAccents,
   auditBorderSeparation,
+  hexToOklch,
 } from "../oklch.js";
 import { BUILT_IN_APP_SCHEMES } from "../themes.js";
 import { APP_THEME_TOKEN_KEYS, EXTENSION_KEYS } from "../types.js";
@@ -226,18 +227,38 @@ describe("built-in themes", () => {
         }
       }
 
-      // Cross-key invariant: sidebar-active-bg must be stronger than sidebar-hover-bg
-      // so the selected row is distinguishable from the hovered row.
+      // Cross-key invariant: the selected row must read as MORE prominent than
+      // the hovered row. The polarity-correct measure of "more prominent" differs:
+      //   - dark: additive white-alpha glow, so stronger = higher alpha.
+      //   - light (round-2 Issue 1): opaque elevate-to-select, so stronger = higher
+      //     OKLab lightness (selected lifts further toward elevated than hover).
       const hover = extensions["sidebar-hover-bg"];
       const active = extensions["sidebar-active-bg"];
       if (hover !== undefined && active !== undefined) {
-        const hoverAlpha = parseAlpha(hover);
-        const activeAlpha = parseAlpha(active);
-        if (!(activeAlpha > hoverAlpha)) {
-          failures.push(
-            `${source.id} sidebar-active-bg (alpha ${activeAlpha}) must be stronger than ` +
-              `sidebar-hover-bg (alpha ${hoverAlpha}); values "${active}" vs "${hover}"`
-          );
+        if (polarity === "dark") {
+          const hoverAlpha = parseAlpha(hover);
+          const activeAlpha = parseAlpha(active);
+          if (!(activeAlpha > hoverAlpha)) {
+            failures.push(
+              `${source.id} sidebar-active-bg (alpha ${activeAlpha}) must be stronger than ` +
+                `sidebar-hover-bg (alpha ${hoverAlpha}); values "${active}" vs "${hover}"`
+            );
+          }
+        } else {
+          const activeL = hexToOklch(active)?.l;
+          const hoverL = hexToOklch(hover)?.l;
+          if (activeL === undefined || hoverL === undefined) {
+            failures.push(
+              `${source.id} light sidebar selection rows must be opaque hex so their lift is ` +
+                `measurable; got active="${active}" hover="${hover}"`
+            );
+          } else if (!(activeL > hoverL)) {
+            failures.push(
+              `${source.id} light sidebar-active-bg (L ${activeL.toFixed(3)}) must lift above ` +
+                `sidebar-hover-bg (L ${hoverL.toFixed(3)}); selected must elevate further than ` +
+                `hover (Issue 1); values "${active}" vs "${hover}"`
+            );
+          }
         }
       }
 
@@ -315,6 +336,48 @@ describe("built-in themes", () => {
       expect(
         result.failures,
         `${source.id} border separation failures:\n${result.failures.join("\n")}`
+      ).toHaveLength(0);
+    }
+  });
+
+  it("LIGHT themes clear the round-2 selection/elevation validation matrix (hard-fail)", () => {
+    // Harden phase: the consolidated round-2 matrix (E6) — activity/pr/scrollbar
+    // floors, input/placeholder legibility, filter-selected separation, settings
+    // card lift, pulse heat/missed, and the OKLab elevation-direction inversions
+    // (sidebar selected lift, grid-bg-below-panel, panel→elevated not smallest) —
+    // is now a HARD FAILURE for LIGHT themes. Every check is behavioural: it
+    // computes a real contrast ratio / OKLab ΔE / luminance relationship from the
+    // resolved token values, never mirrors a literal, so it only fires when the
+    // perceptual relationship actually breaks. getLightThemeMatrixWarnings is
+    // internally light-scoped (every block either gates appliesTo:"light" or is a
+    // both-polarity check that dark already clears), so this loop is safe to run
+    // across all schemes — but we restrict the hard assertion to light and merely
+    // surface any dark output as a warning to keep dark byte-for-byte unaffected.
+    const lightSchemes = BUILT_IN_APP_SCHEMES.filter((s) => s.type === "light");
+    expect(lightSchemes.length).toBeGreaterThan(0);
+    for (const scheme of lightSchemes) {
+      const warnings = getLightThemeMatrixWarnings(scheme);
+      expect(
+        warnings,
+        `${scheme.id} round-2 matrix failures:\n${warnings.map((w) => w.message).join("\n")}`
+      ).toHaveLength(0);
+    }
+  });
+
+  it("DARK themes emit no round-2 light-matrix failures (warn-only, unaffected)", () => {
+    // Guard the dark byte-for-byte invariant: the round-2 matrix must never trip a
+    // dark theme. If a future matrix pair forgets its light-scoping this fails loud
+    // rather than silently regressing dark.
+    const darkSchemes = BUILT_IN_APP_SCHEMES.filter((s) => s.type === "dark");
+    expect(darkSchemes.length).toBeGreaterThan(0);
+    for (const scheme of darkSchemes) {
+      const warnings = getLightThemeMatrixWarnings(scheme);
+      for (const w of warnings) console.warn(`[round-2 matrix:dark] ${scheme.id}: ${w.message}`);
+      expect(
+        warnings,
+        `${scheme.id} unexpectedly tripped the round-2 light matrix:\n${warnings
+          .map((w) => w.message)
+          .join("\n")}`
       ).toHaveLength(0);
     }
   });
