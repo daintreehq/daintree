@@ -78,6 +78,16 @@ const DEFAULT_PAINT_GATE_TIMEOUT_MS = 1_500;
  */
 const DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS = 4_000;
 /**
+ * Soft/hard timeouts for the WARM reactivation paint gate (#9679). A cached
+ * view's renderer is already running — only its WebGL atlas repair + one clean
+ * rAF stand between reattach and a correct frame — so the bridge can be far
+ * tighter than the cold-start gate (no React mount, no data load). The hard
+ * ceiling still guarantees the outgoing view is never held hostage by a wake
+ * fan-out that stalls (IPC backpressure, oversized incremental restore).
+ */
+const DEFAULT_WARM_PAINT_GATE_TIMEOUT_MS = 500;
+const DEFAULT_WARM_PAINT_GATE_HARD_TIMEOUT_MS = 1_500;
+/**
  * Period between renderer-memory samples for cached (non-active) views. 30 s
  * matches `ProcessMemoryMonitor` and keeps the synchronous `app.getAppMetrics()`
  * call (5–50 ms per invocation) out of the budget that would risk main-thread
@@ -91,6 +101,15 @@ type PaintGateOutcome = "signal" | "hard-timeout" | "cancelled";
 
 interface PaintGate {
   webContentsId: number;
+  /**
+   * Which renderer signal releases this gate. Cold-start gates wait on the
+   * one-shot `APP_VIEW_PAINTED` (`"painted"`); warm-reactivation gates wait on
+   * the re-fireable `APP_VIEW_WARM_PAINTED` (`"warm-painted"`), because a cached
+   * view's V8 context already fired its one-shot painted signal on first load
+   * and will never re-emit it (#9679). The discriminator keeps a stray signal of
+   * the wrong kind from releasing the bridge early.
+   */
+  releaseChannel: "painted" | "warm-painted";
   /**
    * The view that was visible when the gate opened — still attached during the
    * wait. This may be a registered project view or the unbound welcome view on
@@ -165,6 +184,19 @@ export interface ProjectViewManagerOptions {
    * fall-through deactivation deterministically.
    */
   paintGateHardTimeoutMs?: number;
+  /**
+   * Override the soft WARM paint-gate timeout (default 500 ms) used when
+   * reactivating a cached view (#9679). Tests that don't exercise the warm
+   * anti-flash bridge can set this (and the hard bound) to 0 so warm
+   * reactivations resolve immediately instead of waiting on a renderer signal.
+   */
+  warmPaintGateTimeoutMs?: number;
+  /**
+   * Override the hard WARM paint-gate timeout (default 1500 ms). At this bound
+   * the outgoing bridge view is detached even without a warm paint signal, so a
+   * renderer stalled in its wake fan-out can't wedge the reactivation.
+   */
+  warmPaintGateHardTimeoutMs?: number;
 }
 
 export class ProjectViewManager {
@@ -189,6 +221,8 @@ export class ProjectViewManager {
   private pendingPaintGate: PaintGate | null = null;
   private paintGateTimeoutMs = DEFAULT_PAINT_GATE_TIMEOUT_MS;
   private paintGateHardTimeoutMs = DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS;
+  private warmPaintGateTimeoutMs = DEFAULT_WARM_PAINT_GATE_TIMEOUT_MS;
+  private warmPaintGateHardTimeoutMs = DEFAULT_WARM_PAINT_GATE_HARD_TIMEOUT_MS;
   // One-shot focus intent consumed by the next switchTo for this projectId.
   // Lives on the instance (not module) so multi-window does not cross-leak.
   // Cleared after delivery or discard so a later unrelated switch can't
@@ -217,6 +251,12 @@ export class ProjectViewManager {
     }
     if (opts.paintGateHardTimeoutMs != null) {
       this.paintGateHardTimeoutMs = Math.max(0, opts.paintGateHardTimeoutMs);
+    }
+    if (opts.warmPaintGateTimeoutMs != null) {
+      this.warmPaintGateTimeoutMs = Math.max(0, opts.warmPaintGateTimeoutMs);
+    }
+    if (opts.warmPaintGateHardTimeoutMs != null) {
+      this.warmPaintGateHardTimeoutMs = Math.max(0, opts.warmPaintGateHardTimeoutMs);
     }
 
     // Single resize handler that always updates the active view's bounds.
@@ -326,13 +366,9 @@ export class ProjectViewManager {
     const unboundOutgoingView = previousEntry ? null : this.getUnboundOutgoingView();
     const outgoingView = previousEntry?.view ?? unboundOutgoingView;
 
-    // Try to activate cached view (fast path — already painted, no skeleton gate needed)
+    // Try to activate cached view (fast path — renderer already mounted).
     const cached = this.views.get(projectId);
     if (cached && !cached.view.webContents.isDestroyed()) {
-      // Detach current active view immediately for cached reactivations —
-      // the cached view is already rendered and there is no perceptible flash
-      // window to bridge.
-      this.deactivateCurrentView();
       // "revival" measures time since this projectId was last evicted — not time
       // since the current cached view (a cold-started successor) was last active.
       // Eviction destroys the original view, so any cache hit for a previously-
@@ -341,12 +377,63 @@ export class ProjectViewManager {
       // observable at the project level. Consumed on read to fire only once per
       // eviction → return cycle.
       const evictedAt = this.evictionTimestamps.get(projectId);
-      // `activateView` re-attaches the already-painted renderer; `notifyViewPainted`
-      // is one-shot per V8 context and will not re-fire, so the synchronous
-      // attach window is the only measurable "made visible" delta available.
-      // Lower bound (DOM attach, not GPU paint) but consistent across cache hits.
       const warmStart = performance.now();
-      this.activateView(cached);
+
+      if (outgoingView) {
+        // Warm anti-flash bridge (#9679): the cached view was detached + frozen
+        // (Page.setWebLifecycleState) while backgrounded, so on reattach the
+        // compositor can push its stale pre-freeze WebGL surface for a frame —
+        // visible as flashing solid glyph blocks in agent terminals — before the
+        // renderer's visibilitychange-driven wake fan-out repairs each atlas.
+        // Mirror the cold-start bridge: keep the outgoing view ON TOP, reattach
+        // the cached view BEHIND it (occluded, but unfrozen so its rAF + wake run),
+        // and only detach the outgoing once the renderer signals a clean
+        // post-repair frame via APP_VIEW_WARM_PAINTED — or the hard timeout fires.
+        // notifyViewPainted is one-shot per V8 context, so the warm path needs its
+        // own re-fireable channel.
+        this.activateView(cached, /* insertBehind */ true);
+        const warmSoftMs = this.warmPaintGateTimeoutMs;
+        const warmHardMs = Math.max(this.warmPaintGateHardTimeoutMs, warmSoftMs);
+        const warmGate = this.waitForPaint(
+          cached.view.webContents.id,
+          outgoingView,
+          previousEntry?.projectId ?? null,
+          () => {
+            logWarn("projectview.warmpaintgate.softtimeout", {
+              projectId,
+              waitedMs: warmSoftMs,
+            });
+          },
+          {
+            releaseChannel: "warm-painted",
+            softMs: warmSoftMs,
+            hardMs: warmHardMs,
+          }
+        );
+        const gateResult = await warmGate;
+        if (gateResult === "hard-timeout") {
+          logWarn("projectview.warmpaintgate.hardtimeout", {
+            projectId,
+            waitedMs: warmHardMs,
+          });
+        }
+        // Clean frame painted (or grace period exhausted) — detach the outgoing
+        // bridge view, revealing the repaired cached view. Guard on the active
+        // project still being this one in case a superseding switch cancelled the
+        // gate ("cancelled" leaves the new switch to own the teardown).
+        if (gateResult !== "cancelled" && this.activeProjectId === projectId) {
+          if (previousEntry) {
+            this.deactivateEntry(previousEntry);
+          } else if (unboundOutgoingView) {
+            this.detachUnboundOutgoingView(unboundOutgoingView);
+          }
+        }
+      } else {
+        // No outgoing view to bridge through (e.g. first-run with no welcome
+        // view) — nothing to flash past, so reveal the cached view immediately.
+        this.activateView(cached);
+      }
+
       const visibleMs = Math.round(performance.now() - warmStart);
       if (evictedAt !== undefined) {
         logInfo("projectview.revival", {
@@ -360,6 +447,11 @@ export class ProjectViewManager {
         projectId,
         visibleMs,
       });
+      // Re-assert focus after the bridge teardown — detaching the outgoing view
+      // can move focus, and the warm gate may have run for hundreds of ms.
+      if (!cached.view.webContents.isDestroyed()) {
+        cached.view.webContents.focus();
+      }
       const cachedIntent = this.consumePendingFocusIntent(projectId);
       if (cachedIntent) {
         this.deliverFocusIntent(cached.view, cachedIntent);
@@ -564,23 +656,30 @@ export class ProjectViewManager {
     webContentsId: number,
     outgoingView: WebContentsView | null,
     outgoingProjectId: string | null,
-    onSoftTimeout?: () => void
+    onSoftTimeout?: () => void,
+    options?: {
+      releaseChannel?: "painted" | "warm-painted";
+      softMs?: number;
+      hardMs?: number;
+    }
   ): Promise<PaintGateOutcome> {
     // Cancel any prior gate from a previous switch attempt. Should not
     // normally occur (switchChain serializes), but guards against re-entry
     // from rollback paths.
     this.clearPaintGate();
 
-    const softMs = this.paintGateTimeoutMs;
+    const releaseChannel = options?.releaseChannel ?? "painted";
+    const softMs = options?.softMs ?? this.paintGateTimeoutMs;
     // Guarantee hard >= soft at gate-creation time so the soft callback
     // always fires before the hard fall-through, regardless of how the two
     // setters are ordered by the resource-profile push.
-    const hardMs = Math.max(this.paintGateHardTimeoutMs, softMs);
+    const hardMs = Math.max(options?.hardMs ?? this.paintGateHardTimeoutMs, softMs);
 
     return new Promise<PaintGateOutcome>((resolveOuter) => {
       let settled = false;
       const gate: PaintGate = {
         webContentsId,
+        releaseChannel,
         outgoingView,
         outgoingProjectId,
         softTimeout: setTimeout(() => {
@@ -626,6 +725,23 @@ export class ProjectViewManager {
   signalViewPainted(webContentsId: number): void {
     const gate = this.pendingPaintGate;
     if (!gate) return;
+    if (gate.releaseChannel !== "painted") return;
+    if (gate.webContentsId !== webContentsId) return;
+    gate.resolve("signal");
+  }
+
+  /**
+   * Warm-reactivation gate release. Called from the `APP_VIEW_WARM_PAINTED` IPC
+   * handler after a cached view's wake fan-out completes and a clean
+   * post-atlas-repair frame paints (#9679). Only releases a gate that is
+   * actually waiting on the warm channel — a warm signal arriving with a
+   * cold-start gate pending (or no gate at all) is silently ignored, so the
+   * unconditional renderer-side fire is a safe no-op when main isn't bridging.
+   */
+  signalWarmViewPainted(webContentsId: number): void {
+    const gate = this.pendingPaintGate;
+    if (!gate) return;
+    if (gate.releaseChannel !== "warm-painted") return;
     if (gate.webContentsId !== webContentsId) return;
     gate.resolve("signal");
   }
@@ -891,7 +1007,7 @@ export class ProjectViewManager {
     }
   }
 
-  private activateView(entry: ViewEntry): void {
+  private activateView(entry: ViewEntry, insertBehind = false): void {
     registerAppView(this.win, entry.view);
 
     // Defensive unfreeze BEFORE restoring CPU rate: efficiency transitions and
@@ -914,7 +1030,15 @@ export class ProjectViewManager {
       void unthrottleCpuWebContents(entry.view.webContents);
     }
 
-    this.win.contentView.addChildView(entry.view);
+    // `insertBehind` stacks the incoming view at z-index 0 (below the still-
+    // attached outgoing view) so it can wake + repair its WebGL atlas while
+    // occluded, before the warm paint gate detaches the outgoing bridge (#9679).
+    // Top-attach (default) is the immediate-reveal path used everywhere else.
+    if (insertBehind) {
+      this.win.contentView.addChildView(entry.view, 0);
+    } else {
+      this.win.contentView.addChildView(entry.view);
+    }
     this.updateViewBounds(entry.view);
 
     // Explicit focus — addChildView does not auto-focus

@@ -87,6 +87,7 @@ type FullWakeTestService = {
     lockResize: (id: string, locked: boolean, ms?: number) => void;
   };
   dataBuffer: { resumeFlush: (id: string) => void };
+  webGLManager: { repairAtlasForReactivation: (id: string) => boolean };
   handlePostWake: (id: string) => void;
   unhibernate: (id: string) => void;
   fullWakeForVisibilityRestore: (id: string) => Promise<void>;
@@ -176,6 +177,51 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     expect(wakeAndRestore).toHaveBeenCalledWith(id);
     expect(handlePostWake).toHaveBeenCalledWith(id);
     expect(resumeFlush).toHaveBeenCalledWith(id);
+  });
+
+  it("repairs the WebGL atlas before the async wakeAndRestore IPC (#9679)", async () => {
+    const id = "fw-webgl";
+    const instance = makeInstance();
+    service.instances.set(id, instance);
+
+    const calls: string[] = [];
+    vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
+    const repair = vi
+      .spyOn(service.webGLManager, "repairAtlasForReactivation")
+      .mockImplementation(() => {
+        calls.push("repairAtlasForReactivation");
+        return true;
+      });
+    vi.spyOn(service.wakeManager, "wakeAndRestore").mockImplementation(async () => {
+      calls.push("wakeAndRestore");
+      return true;
+    });
+    vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
+    vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    expect(repair).toHaveBeenCalledWith(id);
+    // The stale-atlas repair must land synchronously before the wake IPC so the
+    // first composited frame after reactivation samples the repaired model.
+    expect(calls).toEqual(["repairAtlasForReactivation", "wakeAndRestore"]);
+  });
+
+  it("still wakes when atlas repair reports no WebGL context (DOM renderer)", async () => {
+    const id = "fw-dom";
+    const instance = makeInstance();
+    service.instances.set(id, instance);
+
+    vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(false);
+    const wakeAndRestore = vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+    vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
+    vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    // A false repair (no pooled context) must not short-circuit the wake.
+    expect(wakeAndRestore).toHaveBeenCalledWith(id);
   });
 
   it("still calls resumeFlush when wakeAndRestore returns false, but skips handlePostWake", async () => {

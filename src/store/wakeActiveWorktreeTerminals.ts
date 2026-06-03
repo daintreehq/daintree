@@ -3,6 +3,7 @@ import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { logWarn } from "@/utils/logger";
+import { notifyWarmReactivationComplete } from "@/utils/warmReactivationGate";
 
 const WAKE_CONCURRENCY = 2;
 
@@ -38,6 +39,17 @@ const WAKE_CONCURRENCY = 2;
  * Dock and trash terminals are excluded — they manage their own visibility.
  */
 export async function wakeActiveWorktreeTerminals(): Promise<void> {
+  try {
+    await wakeActiveWorktreeTerminalsInner();
+  } finally {
+    // Always release any warm-reactivation paint gate main may be holding for
+    // this view (#9679), even on a zero-terminal grid or a thrown fan-out —
+    // otherwise the opaque cover lingers until main's hard-timeout fallback.
+    notifyWarmReactivationComplete();
+  }
+}
+
+async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
   const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId ?? null;
   const { panelIds, panelsById } = usePanelStore.getState();
 

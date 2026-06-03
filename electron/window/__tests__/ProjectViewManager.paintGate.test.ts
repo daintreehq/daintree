@@ -445,7 +445,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
   });
 
-  it("cached revival skips the paint gate", async () => {
+  it("cached revival bridges behind the outgoing view until the warm paint signal", async () => {
     const incomingWc = createMockWebContents();
     wcQueue.push(incomingWc);
 
@@ -460,13 +460,107 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     win.contentView.addChildView.mockClear();
     vi.mocked(logInfo).mockClear();
 
-    // Switching back to A (a cached project) must NOT block on a paint signal.
+    // Switch back to A (a cached project, wc === initialWc). The warm bridge
+    // reattaches A behind B and holds B attached until the warm signal arrives.
     const switchBack = manager.switchTo("proj-a", "/path/a");
-    // No signal sent — cached path completes anyway.
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+
+    // Bridge armed: A reattached, B (outgoing) still attached — not yet detached.
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    // A's renderer signals its post-repair frame painted.
+    manager.signalWarmViewPainted(initialWc.id);
     const result = await switchBack;
 
     expect(result.isNew).toBe(false);
     expect(manager.getActiveProjectId()).toBe("proj-a");
+    // Outgoing B detached exactly once, only after the warm signal.
+    expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+  });
+
+  it("warm bridge falls through to the hard timeout when no warm signal arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      const incomingWc = createMockWebContents();
+      wcQueue.push(incomingWc);
+
+      const firstSwitch = manager.switchTo("proj-b", "/path/b");
+      await vi.advanceTimersByTimeAsync(0);
+      manager.signalViewPainted(incomingWc.id);
+      await firstSwitch;
+
+      win.contentView.removeChildView.mockClear();
+      vi.mocked(logWarn).mockClear();
+
+      const switchBack = manager.switchTo("proj-a", "/path/a");
+      await vi.advanceTimersByTimeAsync(0);
+      // Outgoing held during the soft tail.
+      expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+      // Advance past the 1500 ms warm hard timeout — the bridge reveals A anyway
+      // so a renderer stuck in its wake fan-out can't wedge the switch.
+      await vi.advanceTimersByTimeAsync(1500);
+      await switchBack;
+
+      expect(manager.getActiveProjectId()).toBe("proj-a");
+      expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+      expect(
+        vi.mocked(logWarn).mock.calls.filter(([e]) => e === "projectview.warmpaintgate.hardtimeout")
+      ).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores a warm signal from the wrong webContents", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    const firstSwitch = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalViewPainted(incomingWc.id);
+    await firstSwitch;
+
+    win.contentView.removeChildView.mockClear();
+
+    const switchBack = manager.switchTo("proj-a", "/path/a");
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+
+    // A mismatched warm signal must not release the bridge.
+    manager.signalWarmViewPainted(99_999);
+    await Promise.resolve();
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    // The correct signal does.
+    manager.signalWarmViewPainted(initialWc.id);
+    await switchBack;
+    expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+  });
+
+  it("a cold paint signal does not release a warm bridge gate", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    const firstSwitch = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalViewPainted(incomingWc.id);
+    await firstSwitch;
+
+    win.contentView.removeChildView.mockClear();
+
+    const switchBack = manager.switchTo("proj-a", "/path/a");
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+
+    // The one-shot cold channel must not satisfy the warm gate (different
+    // releaseChannel), even with a matching webContentsId.
+    manager.signalViewPainted(initialWc.id);
+    await Promise.resolve();
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    manager.signalWarmViewPainted(initialWc.id);
+    await switchBack;
     expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
   });
 
