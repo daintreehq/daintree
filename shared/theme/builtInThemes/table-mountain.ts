@@ -18,32 +18,36 @@ export const theme: BuiltInThemeSource = {
     // than collapsing to bleached white, which is what made the old light theme
     // read as flat and cold up top.
     surfaces: {
-      grid: "#D4C9B8", // L 0.840  gutter / structural base
+      grid: "#D1CAB6", // L 0.839  gutter / structural base — a trace of fynbos olive in the warm sand
       sidebar: "#DED4C4", // L 0.874  left rail + toolbar
       canvas: "#EBE4D9", // L 0.921  content canvas
       panel: "#F1EBE0", // L 0.942  cards / dialogs
-      elevated: "#FBF6EC", // L 0.974  tooltips / popovers — kept warm (C 0.014), not bleached white
+      elevated: "#FBF5E8", // L 0.971  tooltips / popovers — sunlit warm paper (C 0.018), never bleached
     },
     text: {
       primary: "#2C2622",
       secondary: "#574E47",
-      // Darkened a step (was #6F665C) to clear 3.5:1 on the deeper grid.
-      muted: "#6A6157",
+      // Darkened (was #6F665C) to clear 3.5:1 on the deeper grid and keep
+      // empty-state copy legible on the bright canvas; still a clear step
+      // lighter than secondary so the text hierarchy holds.
+      muted: "#635A50",
       inverse: "#FCFAF6",
     },
-    border: "#C2B9AC",
+    // One notch darker and more golden than before (#C2B9AC): cards and wells get a
+    // confident sandstone containment edge instead of a loose hairline.
+    border: "#BBAF9B",
     accent: "#B0466F",
     accentSecondary: "#3C7A4C",
     status: {
       success: "#357E4A",
       warning: "#9C6210",
       danger: "#BC4339",
-      info: "#3A6F90",
+      info: "#2F6E86",
     },
     activity: {
-      active: "#1E8A42",
+      active: "#2E8246",
       idle: "#857B6F",
-      working: "#1E8A42",
+      working: "#2E8246",
       waiting: "#9C6E0C",
     },
     overlayTint: "#3C3026",
@@ -101,9 +105,9 @@ export const theme: BuiltInThemeSource = {
     // The engine's light overlay-subtle (0.02 ink) is invisible on a near-white
     // workbench, so membership/active-segment fills (e.g. the worktree quick-state
     // filter bar's active tab) read as unstyled. Raise to a perceptible warm wash.
-    "overlay-subtle": "rgba(60,48,38,0.07)",
+    "overlay-subtle": "rgba(60,48,38,0.09)",
     // The engine derives overlay-raised as mix(elevated 92%, text-primary); with
-    // the warmer elevated (L 0.974) that lands at ~L 0.918 — BELOW canvas/panel,
+    // the warmer elevated (L 0.971) that lands at ~L 0.918 — BELOW canvas/panel,
     // inverting the elevate-to-select contract. Pin an opaque warm lift instead:
     // L 0.966, above panel (0.942), just under elevated.
     "overlay-raised": "#F8F3EA",
@@ -111,6 +115,9 @@ export const theme: BuiltInThemeSource = {
     // panel-level, so disabled fields read raised. Pin it to the input-well
     // neighborhood instead (L 0.903, just below canvas).
     "surface-disabled": "#E5DED3",
+    // Crisper containment for kbd chips, the search field, and quiet outlines —
+    // the derived 0.09 ink hairline read unfinished on the brightest surfaces.
+    "border-subtle": "rgba(42,33,26,0.13)",
     // With the espresso border ink, the derived divider composites ~1.176:1 on
     // elevated — a hair under the documented 1.18 separator floor. Nudge it over.
     "border-divider": "rgba(42,33,26,0.09)",
@@ -123,14 +130,16 @@ export const theme: BuiltInThemeSource = {
     // scrollbar-thumb must clear 3:1 vs panel & canvas (E6): #9B8E7E was 2.75/2.54.
     "scrollbar-thumb": "#7E7363",
     "scrollbar-thumb-hover": "color-mix(in oklab, #7E7363 80%, #2C2622)",
-    "search-highlight-background": "rgba(58,111,144,0.18)",
-    "search-highlight-text": "#2F5A77",
-    "search-match-badge-background": "rgba(58,111,144,0.14)",
-    "search-match-badge-text": "#2F5A77",
-    "search-selected-result-border": "rgba(58,111,144,0.40)",
-    "search-selected-result-icon": "#2F5A77",
-    // E8: drop the raised surface-input override so it inherits the engine's
-    // RECESSED default mix(canvas 96%, text) — the inset-well idiom.
+    "search-highlight-background": "rgba(47,110,134,0.18)",
+    "search-highlight-text": "#2A5E72",
+    "search-match-badge-background": "rgba(47,110,134,0.14)",
+    "search-match-badge-text": "#2A5E72",
+    "search-selected-result-border": "rgba(47,110,134,0.40)",
+    "search-selected-result-icon": "#2A5E72",
+    // E8: inputs stay RECESSED wells (below canvas), but the engine's
+    // mix(canvas 96%, text) default desaturates into the one cold-grey note on
+    // this warm workbench — pin an on-temperature sandstone well instead.
+    "surface-input": "#E3DBCE",
     // filter-selected (membership, never accent): elevate on light, don't darken.
     // soft lifts above the rail (L 0.918, clear of surface-panel), strong toward
     // elevated (L 0.963).
@@ -147,13 +156,13 @@ export const theme: BuiltInThemeSource = {
   },
   extensions: {
     // G1: the gutter must recede BELOW the panel tiles it frames. Pinned to
-    // surface-grid (L 0.840, well below panel L 0.942) so panels read as raised
+    // surface-grid (L 0.839, well below panel L 0.942) so panels read as raised
     // figures, not wells.
-    "panel-grid-bg": "#D4C9B8",
+    "panel-grid-bg": "#D1CAB6",
     "settings-dialog-bg": "#F1EBE0",
-    "settings-card-bg": "#FBF6EC",
-    "settings-list-item-bg": "#FBF6EC",
-    "pulse-card-bg": "#FBF6EC",
+    "settings-card-bg": "#FBF5E8",
+    "settings-list-item-bg": "#FBF5E8",
+    "pulse-card-bg": "#FBF5E8",
     "pulse-card-shadow": "0 1px 3px rgba(60,48,38,0.12)",
     "pulse-control-hover-bg": "rgba(60,48,38,0.05)",
     "pulse-empty-bg": "#EDE7DD",
@@ -163,7 +172,7 @@ export const theme: BuiltInThemeSource = {
     // high-opacity stops clear contrast. Opaque per-theme pulse-heat-1..4 stops
     // (GitHub light L+C ramp) are blocked on the registry owner registering those
     // EXTENSION_KEYs; flagged for that owner.
-    "pulse-heat-color": "#1E8A42",
+    "pulse-heat-color": "#2E8246",
     "pulse-heat-high-opacity": "0.92",
     "pulse-heat-low-opacity": "0.38",
     "pulse-heat-medium-opacity": "0.62",
@@ -172,9 +181,9 @@ export const theme: BuiltInThemeSource = {
     // danger ring as a redundant shape cue. Kept destructive-tier (status-danger).
     "pulse-missed-bg": "#BC4339",
     "pulse-range-bg": "#EAE3D9",
-    "pulse-ring-offset": "#FBF6EC",
-    "pulse-skeleton-gradient": "linear-gradient(90deg, #D4C9B8 25%, #DFD6C7 50%, #D4C9B8 75%)",
-    "dialog-header-bg": "rgba(212,201,184,0.55)",
+    "pulse-ring-offset": "#FBF5E8",
+    "pulse-skeleton-gradient": "linear-gradient(90deg, #D1CAB6 25%, #DDD5C3 50%, #D1CAB6 75%)",
+    "dialog-header-bg": "rgba(209,202,182,0.55)",
     "settings-kbd-bg": "#ECE6DC",
     // S1: the single load-bearing accent in the settings region is the 2px nav
     // marker (SettingsDialog.tsx). The nav-active FILL must be NEUTRAL + elevated
@@ -185,7 +194,7 @@ export const theme: BuiltInThemeSource = {
     "settings-nav-active-bg": "#F0EAE2",
     "settings-nav-hover-bg": "rgba(60,48,38,0.06)",
     "settings-search-bg": "#ECE6DC",
-    "settings-sidebar-bg": "rgba(212,201,184,0.55)",
+    "settings-sidebar-bg": "rgba(209,202,182,0.55)",
     "sidebar-action-hover-bg": "rgba(60,48,38,0.08)",
     // Issue 1: selection LIFTS on light — the row elevates toward an opaque
     // brighter surface, it does not darken. Against the now-deeper rail (sidebar
@@ -197,16 +206,19 @@ export const theme: BuiltInThemeSource = {
     "toolbar-agent-hover-bg": "rgba(60,48,38,0.08)",
     "toolbar-control-hover-bg": "rgba(60,48,38,0.08)",
     "toolbar-control-hover-fg": "#A03A64",
-    "toolbar-divider": "rgba(194,185,172,0.6)",
+    "toolbar-divider": "rgba(42,33,26,0.12)",
+    // Accent restraint: the protea rose is reserved for load-bearing signals, so
+    // the project pill leans on a neutral espresso wash over sandstone instead
+    // of an ambient rose film.
     "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(176,70,111,0.05), rgba(60,48,38,0.06)), linear-gradient(135deg, #E2D9CA, #D6CCBB)",
-    "toolbar-project-border": "rgba(194,185,172,0.7)",
+      "linear-gradient(180deg, rgba(60,48,38,0.04), rgba(60,48,38,0.06)), linear-gradient(135deg, #E2D9CA, #D6CCBB)",
+    "toolbar-project-border": "rgba(187,175,155,0.7)",
     "toolbar-project-chip-bg": "rgba(60,48,38,0.05)",
-    "toolbar-project-chip-border": "rgba(194,185,172,0.7)",
+    "toolbar-project-chip-border": "rgba(187,175,155,0.7)",
     "toolbar-project-shadow": "inset 0 1px 0 rgba(60,48,38,0.07)",
     "toolbar-stats-bg": "rgba(60,48,38,0.05)",
-    "toolbar-stats-border": "rgba(194,185,172,0.6)",
-    "toolbar-stats-divider": "rgba(194,185,172,0.6)",
+    "toolbar-stats-border": "rgba(42,33,26,0.12)",
+    "toolbar-stats-divider": "rgba(42,33,26,0.12)",
     "toolbar-stats-hover-bg": "rgba(60,48,38,0.08)",
     "worktree-section-hover-bg": "rgba(60,48,38,0.06)",
   },
