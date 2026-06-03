@@ -215,8 +215,83 @@ describe("GitHubStatsToolbarButton corner activity chip wiring", () => {
 
   it("clears both chip pulses on project switch alongside the count refs", () => {
     const effectStart = source.indexOf("if (statsLoading || statsError)");
-    const slice = source.slice(effectStart, effectStart + 1500);
+    const slice = source.slice(effectStart, effectStart + 2000);
     expect(slice).toContain("setIssuesPulseAt(null)");
     expect(slice).toContain("setPrsPulseAt(null)");
+  });
+});
+
+/**
+ * Badge count bound to the dropdown's loaded items (issue #9693).
+ *
+ * The toolbar badge used to render the stats query's `totalCount`, which can
+ * exceed the first page the dropdown actually lists. The fix threads an
+ * `onCountUpdate(count, hasMore)` callback from each `GitHubResourceList` and
+ * derives a display value (`20+` when paginated) that binds the badge to what
+ * the dropdown shows. The numeric `count` prop stays on the stats path so the
+ * digit-pulse delta detection is unaffected.
+ */
+describe("GitHubStatsToolbarButton list-count badge wiring", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+  });
+
+  it("declares list-count + has-more state for issues and PRs", () => {
+    expect(source).toMatch(
+      /\[issueListCount,\s*setIssueListCount\]\s*=\s*useState<number\s*\|\s*null>\(null\)/
+    );
+    expect(source).toMatch(/\[issueListHasMore,\s*setIssueListHasMore\]\s*=\s*useState\(false\)/);
+    expect(source).toMatch(
+      /\[prListCount,\s*setPrListCount\]\s*=\s*useState<number\s*\|\s*null>\(null\)/
+    );
+    expect(source).toMatch(/\[prListHasMore,\s*setPrListHasMore\]\s*=\s*useState\(false\)/);
+  });
+
+  it("derives a truncated display count only when more pages exist", () => {
+    // issueDisplayCount: list count wins once loaded; suffixed with "+" when
+    // hasMore, otherwise the exact count; falls back to the stats total before
+    // the dropdown loads.
+    expect(source).toMatch(
+      /issueDisplayCount[\s\S]{0,160}?issueListCount\s*!==\s*null[\s\S]{0,120}?issueListHasMore[\s\S]{0,60}?`\$\{issueListCount\}\+`[\s\S]{0,80}?:\s*issueCount/
+    );
+    expect(source).toMatch(
+      /prDisplayCount[\s\S]{0,160}?prListCount\s*!==\s*null[\s\S]{0,120}?prListHasMore[\s\S]{0,60}?`\$\{prListCount\}\+`[\s\S]{0,80}?:\s*prCount/
+    );
+  });
+
+  it("passes displayCount to the issue and PR pills", () => {
+    expect(source).toContain("displayCount={issueDisplayCount}");
+    expect(source).toContain("displayCount={prDisplayCount}");
+  });
+
+  it("threads onCountUpdate to all four list instances (issue + PR × eager + lazy)", () => {
+    const issueMatches = source.match(/onCountUpdate=\{handleIssueListCountUpdate\}/g);
+    const prMatches = source.match(/onCountUpdate=\{handlePrListCountUpdate\}/g);
+    expect(issueMatches?.length).toBe(2);
+    expect(prMatches?.length).toBe(2);
+  });
+
+  it("keeps the numeric count prop on the stats path for animation deltas", () => {
+    // The digit-pulse compares raw stats counts, so the pill's `count` prop
+    // must stay numeric (issueCount/prCount), not the display string.
+    expect(source).toContain("count={issueCount}");
+    expect(source).toContain("count={prCount}");
+  });
+
+  it("uses the display count in the issue + PR aria-labels and tooltips", () => {
+    expect(source).toContain('${issueDisplayCount ?? "—"} open issues');
+    expect(source).toContain('${prDisplayCount ?? "—"} open pull requests');
+    expect(source).toContain('${prDisplayCount ?? "—"} open PRs');
+  });
+
+  it("resets the list counts on project switch (lastUpdated → null)", () => {
+    const effectStart = source.indexOf("if (statsLoading || statsError)");
+    const slice = source.slice(effectStart, effectStart + 2000);
+    expect(slice).toContain("setIssueListCount(null)");
+    expect(slice).toContain("setIssueListHasMore(false)");
+    expect(slice).toContain("setPrListCount(null)");
+    expect(slice).toContain("setPrListHasMore(false)");
   });
 });

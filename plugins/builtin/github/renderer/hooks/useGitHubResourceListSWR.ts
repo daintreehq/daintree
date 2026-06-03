@@ -46,6 +46,7 @@ interface UseGitHubResourceListSWRParams {
   sortOrder: GitHubSortOrder;
   githubConfig: { hasToken: boolean } | null;
   onFreshFetch?: () => void;
+  onCountUpdate?: (count: number, hasMore: boolean) => void;
 }
 
 export interface UseGitHubResourceListSWRReturn {
@@ -76,6 +77,7 @@ export function useGitHubResourceListSWR({
   sortOrder,
   githubConfig,
   onFreshFetch,
+  onCountUpdate,
 }: UseGitHubResourceListSWRParams): UseGitHubResourceListSWRReturn {
   const debouncedSearch = useDebounce(searchQuery, 300);
 
@@ -272,6 +274,25 @@ export function useGitHubResourceListSWR({
                 timestamp: now,
               });
               setLastUpdatedAt(now);
+              // Bind the toolbar count badge to what the dropdown actually
+              // lists: the loaded first-page length plus whether more pages
+              // exist. Fires on cold-mount AND revalidation (NOT gated on
+              // `isRevalidate`) so the badge reconciles to the visible count
+              // the moment the dropdown first loads, not just on a later
+              // background refresh. The stats query's `totalCount` can exceed
+              // the loaded page, so the badge would otherwise assert a higher
+              // number than the list shows (issue #9693).
+              //
+              // Gated to the `open` filter: the badge represents the OPEN
+              // issue/PR count (its aria-label and tooltip say "open"). The
+              // hook is kept mounted across filter tabs, so without this gate
+              // switching the dropdown to Closed/Merged would fire
+              // `onCountUpdate` with the closed/merged count and poison the
+              // open badge. The last known open count stays correct while the
+              // user browses other states.
+              if (filterState === "open") {
+                onCountUpdate?.(result.items.length, result.pageInfo.hasNextPage);
+              }
               // Notify parent (toolbar count badge) that fresh first-page data
               // landed. Gated on `isRevalidate` so it fires only when
               // `bypassCache: true` was sent — the main process's
@@ -339,7 +360,16 @@ export function useGitHubResourceListSWR({
         }
       }
     },
-    [projectPath, debouncedSearch, filterState, type, sortOrder, numberQuery, onFreshFetch]
+    [
+      projectPath,
+      debouncedSearch,
+      filterState,
+      type,
+      sortOrder,
+      numberQuery,
+      onFreshFetch,
+      onCountUpdate,
+    ]
   );
 
   // ── Mount / filter-change effect ──────────────────────────────────────

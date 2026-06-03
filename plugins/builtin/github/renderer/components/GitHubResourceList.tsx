@@ -124,6 +124,14 @@ interface GitHubResourceListProps {
    * for the next 30s stats poll.
    */
   onFreshFetch?: () => void;
+  /**
+   * Called whenever fresh first-page data lands (cold-mount and revalidation)
+   * with the number of loaded items and whether more pages exist. The toolbar
+   * count badge uses this to display what the dropdown actually lists (e.g.
+   * `20+` when paginated) instead of the stats query's full `totalCount`,
+   * which can be higher than the loaded page (issue #9693).
+   */
+  onCountUpdate?: (count: number, hasMore: boolean) => void;
 }
 
 export function GitHubResourceList({
@@ -132,6 +140,7 @@ export function GitHubResourceList({
   onClose,
   initialCount,
   onFreshFetch,
+  onCountUpdate,
 }: GitHubResourceListProps) {
   const searchQuery = useGitHubFilterStore((s) =>
     type === "issue" ? s.issueSearchQuery : s.prSearchQuery
@@ -187,6 +196,7 @@ export function GitHubResourceList({
     sortOrder,
     githubConfig,
     onFreshFetch,
+    onCountUpdate,
   });
 
   const [activeIndex, setActiveIndex] = useState(-1);
