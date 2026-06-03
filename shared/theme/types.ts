@@ -314,6 +314,7 @@ export const EXTENSION_KEYS = [
 
   // Worktree section
   "worktree-section-hover-bg",
+  "worktree-filter-bar-bg",
 ] as const;
 
 export type ExtensionKey = (typeof EXTENSION_KEYS)[number];

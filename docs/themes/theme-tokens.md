@@ -394,7 +394,7 @@ Add a `tokens` object to override any semantic values that don't derive well. Co
 
 Add an `extensions` object for component-specific overrides. These become bare CSS custom properties. Only add what you need — omitted extensions fall back to semantic tokens.
 
-Common extension families: `toolbar-*`, `sidebar-*`, `settings-*`, `pulse-*`, `dock-*`, `panel-grid-bg`, `worktree-section-hover-bg`.
+Common extension families: `toolbar-*`, `sidebar-*`, `settings-*`, `pulse-*`, `dock-*`, `panel-grid-bg`, `worktree-section-hover-bg`, `worktree-filter-bar-bg` (opt-in distinct surface for the worktree sidebar's filter/search bar — unset themes keep the bar transparent).
 
 ### 4. Register the theme
 

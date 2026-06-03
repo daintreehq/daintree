@@ -112,6 +112,15 @@ html[data-dragging="true"] .sidebar-worktree-card[data-hovered="true"] {
   background: var(--worktree-section-hover-bg, var(--theme-overlay-hover));
 }
 
+/* Optional distinct surface for the worktree filter/search/sort bar. A theme
+   that sets the `worktree-filter-bar-bg` extension gives the bar its own
+   tinted or recessed surface so the sidebar isn't a single flat shade; themes
+   that leave it unset fall through to `transparent` and the bar keeps
+   inheriting the sidebar surface exactly as before. */
+.worktree-filter-bar {
+  background: var(--worktree-filter-bar-bg, transparent);
+}
+
 @variant reduce-motion {
   .sidebar-worktree-card {
     transition: none;

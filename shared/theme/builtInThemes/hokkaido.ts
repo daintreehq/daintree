@@ -10,14 +10,28 @@ export const theme: BuiltInThemeSource = {
   palette: {
     type: "light",
     surfaces: {
-      grid: "#D6D3E3",
-      sidebar: "#DEDBEA",
+      // Redesign (#9712): the recessed planes were darkened to widen the
+      // mid-ramp. grid/sidebar/canvas/panel previously sat in a 0.874–0.944
+      // band with ~0.023 steps — adjacent surfaces at the JND, so the
+      // workbench read as one flat lavender sheet. Dropping grid (0.874→0.856)
+      // and sidebar (0.898→0.883) lifts the sidebar→canvas step to ~0.037 and
+      // grid→sidebar to ~0.027 while canvas/panel/elevated stay pinned (they
+      // anchor the tightest contrast gates: activity-waiting 3.07:1,
+      // overlay-hover Weber 13.4%, filter-selected JND). grid is held at 0.856
+      // rather than deeper so text-muted keeps its 3.5:1 floor on it; the
+      // visible gutter behind tiles recedes further via panel-grid-bg.
+      // panel→elevated (0.0406) remains the strongest lift, never the smallest.
+      grid: "#D1CDDC",
+      sidebar: "#DAD6E4",
       canvas: "#E5E3EF",
       panel: "#EDEBF4",
       elevated: "#FBF9FD",
     },
     text: {
-      primary: "#2B2F42",
+      // Nudged a hair darker (#2B2F42→#282C3E, imperceptible at full opacity,
+      // 8.6:1 on grid) to restore the aging-tier margin (text-primary at 75%
+      // opacity ≥ 4.5:1) that darkening the grid surface consumed (#9712).
+      primary: "#282C3E",
       secondary: "#565C78",
       muted: "#5E6685",
       inverse: "#FDFCFF",
@@ -84,6 +98,17 @@ export const theme: BuiltInThemeSource = {
   tokens: {
     "accent-muted": "rgba(110,87,219,0.30)",
     "accent-soft": "rgba(110,87,219,0.18)",
+    // Redesign (#9712): the derived "light" shadow profile is huge-radius and
+    // low-alpha — it dissolves on a near-white workbench, leaving borders as
+    // the only depth cue (the flat-look failure mode). Replace it with a
+    // two-layer ladder tinted in Hokkaido's own violet-charcoal ink
+    // (rgba(38,33,58) = shadow-color): a tight contact shadow that defines an
+    // element's footprint plus a soft ambient spread. Alphas stay in the
+    // 0.10–0.20 range light surfaces need to register, so cards, popovers and
+    // dialogs lift off the deepened ramp instead of relying on hairlines.
+    "shadow-ambient": "0 1px 2px rgba(38,33,58,0.10), 0 4px 12px rgba(38,33,58,0.10)",
+    "shadow-floating": "0 2px 6px rgba(38,33,58,0.12), 0 14px 36px rgba(38,33,58,0.16)",
+    "shadow-dialog": "0 4px 10px rgba(38,33,58,0.13), 0 26px 60px rgba(38,33,58,0.18)",
     "category-amber": "oklch(0.60 0.11 72)",
     "category-blue": "oklch(0.55 0.12 246)",
     "category-cyan": "oklch(0.58 0.08 214)",
@@ -136,8 +161,12 @@ export const theme: BuiltInThemeSource = {
     // (color-mix(surface-canvas 96%, text-primary) ≈ just below canvas) so the
     // input field sits in a well; placeholder over it clears ~3:1 at the raised
     // 0.58 alpha. Inheriting the recessed default is the E8 fix.
-    "surface-inset": "#CECBDD",
-    "surface-toolbar": "#DAD7E7",
+    // Re-laddered with the darkened surfaces (#9712): inset stays a recessed
+    // well below grid (now #D1CDDC) and toolbar sits between grid and the
+    // darkened sidebar, so wells still sink and the top chrome reads distinct
+    // from canvas.
+    "surface-inset": "#CAC6D5",
+    "surface-toolbar": "#D6D2E1",
     "terminal-black": "#2D334A",
     "terminal-bright-black": "#6A708C",
     "terminal-white": "#E2E8F4",
@@ -146,11 +175,11 @@ export const theme: BuiltInThemeSource = {
   },
   extensions: {
     // G1: panel-grid-bg is the gutter behind the panel tiles. It was #E5E3EF
-    // (= canvas, L 0.921) — BRIGHTER than the panel tiles, a figure-ground
-    // inversion that made the tiles read as wells. Drop it to #D2CFE0 (L 0.862,
-    // at/below surface-grid L 0.874) so the gutter recedes and the tiles read as
-    // raised figures against it.
-    "panel-grid-bg": "#D2CFE0",
+    // (= canvas) — BRIGHTER than the panel tiles, a figure-ground inversion that
+    // made the tiles read as wells. It must recede at/below surface-grid so the
+    // tiles read as raised figures. Re-deepened with the darkened grid (#9712):
+    // #CBC7D6 (L 0.837) sits just below the new surface-grid (#D1CDDC, L 0.856).
+    "panel-grid-bg": "#CBC7D6",
     "pulse-card-bg": "#FBF9FD",
     "pulse-control-hover-bg": "rgba(82,82,118,0.065)",
     "pulse-empty-bg": "#E9E7F2",
@@ -173,7 +202,7 @@ export const theme: BuiltInThemeSource = {
     // body" model). Card/list-item bg are intentionally left unset — they inherit
     // the surface-panel-elevated fallback the S1 consumer ships.
     "settings-dialog-bg": "#EDEBF4",
-    "dialog-header-bg": "rgba(222,219,234,0.55)",
+    "dialog-header-bg": "rgba(218,214,228,0.55)",
     "settings-kbd-bg": "#E2DFEE",
     // S1: the single load-bearing accent in the settings nav is the 2px marker
     // (before:bg-daintree-accent). The active-row FILL must not be a second accent
@@ -183,13 +212,14 @@ export const theme: BuiltInThemeSource = {
     "settings-nav-active-bg": "#F4F2FA",
     "settings-nav-hover-bg": "rgba(82,82,118,0.065)",
     "settings-search-bg": "#FAF8FD",
-    "settings-sidebar-bg": "rgba(214,211,227,0.78)",
+    "settings-sidebar-bg": "rgba(206,202,217,0.78)",
     "sidebar-action-hover-bg": "rgba(82,82,118,0.065)",
     // Issue 1: the selected worktree row must ELEVATE on light, not darken. These
     // were rgba(0,0,0,*) ink (the selected row sank below its own recessed
     // sidebar container — grime, not lift). Replace with OPAQUE surfaces stepping
-    // UP from the sidebar (L 0.898): hover #EBE9F3 (L 0.939, dL +0.040) then
-    // selected #F8F6FC (L 0.976, dL +0.078 vs sidebar, +0.038 vs hover) — idle <
+    // UP from the sidebar (now L 0.883, #9712): hover #EBE9F3 (L 0.939, dL
+    // +0.056) then selected #F8F6FC (L 0.976, dL +0.093 vs sidebar, +0.038 vs
+    // hover) — the darkened sidebar strengthens both lifts — idle <
     // hover < selected, every step clearing the JND. The sidebar.css consumer
     // pairs this lift with a border-strong containment edge. NOTE: this trips the
     // extensionRegistry SIDEBAR_ACTIVE/SIDEBAR_HOVER perceptibility guard, which
@@ -210,7 +240,15 @@ export const theme: BuiltInThemeSource = {
     "toolbar-stats-divider": "rgba(191,187,210,0.6)",
     "toolbar-stats-hover-bg": "rgba(82,82,118,0.065)",
     "worktree-section-hover-bg": "rgba(82,82,118,0.065)",
-    "dock-bg": "#D2CFE0",
+    // Redesign (#9712): give the worktree filter/search bar its own recessed
+    // surface so the sidebar isn't a single flat shade. #CBC5D9 (L 0.835,
+    // C 0.028) is recessed ~0.048 below surface-sidebar (0.883) — well past
+    // the JND, a deliberate darker violet control strip at the top of the
+    // rail, against which the canvas-colored search pill reads as an inset
+    // field. Opt-in only; themes that don't set this keep the bar transparent
+    // (inherits the sidebar).
+    "worktree-filter-bar-bg": "#CBC5D9",
+    "dock-bg": "#CFCBDA",
     "dock-border": "rgba(82,82,118,0.16)",
     "dock-shadow":
       "inset 0 1px 0 rgba(255,255,255,0.55), 0 -2px 8px rgb(from var(--theme-shadow-color) r g b / 0.35)",
