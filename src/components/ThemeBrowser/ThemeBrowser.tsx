@@ -465,7 +465,7 @@ export function ThemeBrowser() {
         {/* Media-overlay caption: sits on a guaranteed-dark scrim over the hero
             image, so the white label text is intentional and stays readable on
             every theme. `text-inverse` flips dark on dark themes — not usable here. */}
-        <div className="absolute bottom-0 inset-x-0 bg-scrim-medium backdrop-blur-sm px-3 py-1.5 flex items-center justify-between">
+        <div className="absolute bottom-0 inset-x-0 bg-scrim-strong backdrop-blur-sm px-3 py-1.5 flex items-center justify-between">
           <span className="text-sm font-medium text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
             {activeScheme.name}
           </span>

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Check, X } from "lucide-react";
 import { HexColorInput, HexColorPicker } from "react-colorful";
-import { relativeLuminance } from "@shared/theme";
+import { contrastRatio } from "@shared/theme";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
@@ -146,9 +146,12 @@ export function PresetColorPicker({
                     className={cn(
                       "absolute inset-0 m-auto drop-shadow pointer-events-none",
                       // The swatch colors are fixed (not theme tokens), so pick the
-                      // checkmark contrast from the swatch's own luminance — a white
-                      // checkmark disappears on the lighter swatches (#e5c07b, #abb2bf).
-                      relativeLuminance(c) > 0.35 ? "text-black/80" : "text-white"
+                      // checkmark ink that has the most contrast against the swatch —
+                      // a white check disappears on the lighter swatches (#e5c07b,
+                      // #abb2bf) and dark ink disappears on the dark ones.
+                      contrastRatio("#ffffff", c) >= contrastRatio("#000000", c)
+                        ? "text-white"
+                        : "text-black/80"
                     )}
                     strokeWidth={3}
                   />
