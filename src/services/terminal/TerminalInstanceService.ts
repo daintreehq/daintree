@@ -2061,8 +2061,16 @@ class TerminalInstanceService {
 
       logDebug(`resetRenderer running for ${id}`);
 
-      managed.terminal.clearTextureAtlas();
-      managed.terminal.refresh(0, managed.terminal.rows - 1);
+      // Recover this terminal's renderer WITHOUT clearing the shared texture
+      // atlas: clearTextureAtlas() flushes xterm's module-global atlas shared by
+      // every WebGL terminal with matching font/theme, blanking co-owner panes
+      // until they get their own resize/click trigger (#9701). repairAtlasForReactivation
+      // does a local-only model reset + refresh on this terminal's pool entry and
+      // returns false for DOM-renderer terminals, where we fall back to a plain
+      // refresh so the targeted pane still repaints.
+      if (!this.webGLManager.repairAtlasForReactivation(id)) {
+        managed.terminal.refresh(0, managed.terminal.rows - 1);
+      }
 
       try {
         this.resizeController.fit(id);
