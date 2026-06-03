@@ -365,7 +365,7 @@ export function AppDialog({
           ref={dialogRef}
           tabIndex={-1}
           className={cn(
-            "bg-surface-panel-elevated border border-border-default rounded-[var(--radius-xl)] shadow-[var(--theme-shadow-dialog)] mx-4 flex flex-col overflow-hidden",
+            "bg-surface-dialog border border-border-default rounded-[var(--radius-xl)] shadow-[var(--theme-shadow-dialog)] mx-4 flex flex-col overflow-hidden",
             maxHeight,
             sizeClasses[size],
             "w-full",
@@ -404,7 +404,7 @@ AppDialog.Header = function AppDialogHeader({ children, className }: AppDialogHe
   return (
     <div
       className={cn(
-        "px-6 py-4 border-b border-daintree-border dialog-header flex items-center justify-between shrink-0",
+        "px-6 py-4 border-b border-border-strong dialog-header flex items-center justify-between shrink-0",
         className
       )}
     >
@@ -515,7 +515,7 @@ AppDialog.Footer = function AppDialogFooter({
   return (
     <div
       className={cn(
-        "px-6 py-4 border-t border-daintree-border bg-surface-panel flex items-center gap-3 shrink-0",
+        "px-6 py-4 border-t border-border-strong bg-surface-panel flex items-center gap-3 shrink-0",
         hint ? "justify-between" : "justify-end",
         className
       )}

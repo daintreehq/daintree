@@ -886,7 +886,7 @@ export function BulkCreateWorktreeDialog({
           <div className="space-y-4">
             {/* Assign to self (issues only) */}
             {mode === "issue" && currentUser && (
-              <div className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border bg-daintree-bg/50 border-daintree-border transition-colors">
+              <div className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border bg-daintree-bg border-border-strong transition-colors">
                 {currentUserAvatar ? (
                   <img
                     src={`${currentUserAvatar}${currentUserAvatar.includes("?") ? "&" : "?"}s=64`}
@@ -946,7 +946,7 @@ export function BulkCreateWorktreeDialog({
               <label className="block text-sm font-medium text-daintree-text">
                 Worktrees to create
               </label>
-              <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-daintree-border divide-y divide-daintree-border">
+              <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg divide-y divide-daintree-border">
                 {planned.map((item) => (
                   <div
                     key={item.item.number}
@@ -984,7 +984,7 @@ export function BulkCreateWorktreeDialog({
         ) : (
           <div className="space-y-4">
             {/* Per-item status list */}
-            <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-daintree-border divide-y divide-daintree-border">
+            <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg divide-y divide-daintree-border">
               {planned
                 .filter((p) => progress.items.has(p.item.number))
                 .map((item) => {

@@ -40,6 +40,7 @@
   --color-surface-toolbar: var(--theme-surface-toolbar);
   --color-surface-panel: var(--theme-surface-panel);
   --color-surface-panel-elevated: var(--theme-surface-panel-elevated);
+  --color-surface-dialog: var(--theme-surface-dialog);
   --color-surface-grid: var(--theme-surface-grid);
   --color-surface-input: var(--theme-surface-input);
   --color-surface-inset: var(--theme-surface-inset);
@@ -583,6 +584,13 @@ code.hljs {
 :root {
   interpolate-size: allow-keywords;
 
+  /* Dialog surface is polarity-aware (consumed via `bg-surface-dialog`). `:root`
+     is the dark source of truth: dark dialogs sit on `surface-panel` (the
+     historical look), not the lightest `surface-panel-elevated` plane, whose
+     grey reads as washed-out against the near-black workbench. The `.light`
+     block overrides to the elevated plane (the round-2 light-contrast audit). */
+  --theme-surface-dialog: var(--theme-surface-panel);
+
   /* Z-index tier system
    * Establishes a clear stacking hierarchy for UI layers.
    * Higher tiers always appear above lower tiers.
@@ -753,6 +761,8 @@ code.hljs {
  * The black-derived :root stack stays the dark source of truth. The `.light`
  * class is toggled on the root by applyAppThemeToRoot. */
 .light {
+  /* See the `.dark` note: light dialogs stay on the elevated plane. */
+  --theme-surface-dialog: var(--theme-surface-panel-elevated);
   --shadow-overlay: 0 1px 0 rgba(255, 255, 255, 0.6) inset, var(--theme-shadow-floating);
   --shadow-modal: 0 1px 0 rgba(255, 255, 255, 0.6) inset, var(--theme-shadow-dialog);
   --shadow-dock-popover: 0 1px 0 rgba(255, 255, 255, 0.6) inset, var(--theme-shadow-dialog);

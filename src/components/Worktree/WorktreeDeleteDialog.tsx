@@ -253,7 +253,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           </div>
           <p className="text-xs text-daintree-text/50">This cannot be undone.</p>
 
-          <div className="text-xs text-daintree-text/60 bg-daintree-bg/50 p-3 rounded border border-daintree-border font-mono break-all">
+          <div className="text-xs text-daintree-text/60 bg-daintree-bg p-3 rounded border border-border-strong font-mono break-all">
             {worktree.path}
           </div>
 
@@ -264,7 +264,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               type="checkbox"
               checked={force}
               onChange={(e) => setForce(e.target.checked)}
-              className="rounded border-daintree-border bg-daintree-bg text-status-error focus:ring-status-error"
+              className="rounded border-border-strong bg-daintree-bg text-status-error focus:ring-status-error"
             />
             <span className="text-sm text-daintree-text">
               {hasTrackedChanges && hasUntrackedFiles
@@ -280,7 +280,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               type="checkbox"
               checked={closeTerminals}
               onChange={(e) => setCloseTerminals(e.target.checked)}
-              className="rounded border-daintree-border bg-daintree-bg text-daintree-accent focus:ring-daintree-accent"
+              className="rounded border-border-strong bg-daintree-bg text-daintree-accent focus:ring-daintree-accent"
             />
             <span className="text-sm text-daintree-text">
               Close all terminals{hasTerminals ? ` (${terminalCounts.total})` : ""}
@@ -293,13 +293,13 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 type="checkbox"
                 checked={deleteBranch}
                 onChange={(e) => setDeleteBranch(e.target.checked)}
-                className="mt-0.5 rounded border-daintree-border bg-daintree-bg text-status-error focus:ring-status-error"
+                className="mt-0.5 rounded border-border-strong bg-daintree-bg text-status-error focus:ring-status-error"
               />
               <span className="text-sm text-daintree-text">
                 <span className="flex items-center gap-1.5">
                   <FolderGit2 className="w-3.5 h-3.5" />
                   Delete branch{" "}
-                  <code className="text-xs bg-daintree-bg/50 px-1.5 py-0.5 rounded border border-daintree-border">
+                  <code className="text-xs bg-daintree-bg px-1.5 py-0.5 rounded border border-border-strong">
                     {worktree.branch}
                   </code>
                 </span>
