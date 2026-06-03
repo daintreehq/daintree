@@ -38,6 +38,11 @@ const isDir = dirIdx !== -1;
 if (isDir) passthrough.splice(dirIdx, 1);
 const target = isDir ? "--dir" : "dmg";
 
+// `--install` copies the freshly built app into /Applications and relaunches it.
+const installIdx = passthrough.indexOf("--install");
+const doInstall = installIdx !== -1;
+if (doInstall) passthrough.splice(installIdx, 1);
+
 // Signed iff a code-signing cert is configured and the file exists. Resolve
 // CSC_LINK to an absolute path so electron-builder finds it regardless of cwd.
 let signed = false;
@@ -88,3 +93,8 @@ run("npx", [
   ...(signed ? [] : unsignedArgs),
   ...passthrough,
 ]);
+
+if (doInstall) {
+  const { installApp } = await import("./install-local.mjs");
+  await installApp(root, { relaunch: true });
+}
