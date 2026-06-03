@@ -66,12 +66,6 @@ export function getFleetBroadcastHistoryKey(projectId: string | undefined): stri
 }
 
 /**
- * Bytes in UTF-8 rather than JS string length — keeps accounting honest for
- * multi-byte characters when we compare against the backend's paste buffer.
- */
-export const FLEET_CONFIRM_BYTE_THRESHOLD = 512;
-
-/**
  * Payloads at or above this size trigger cross-target batching so the IPC
  * fan-out doesn't block the renderer for multi-hundred-ms stretches when a
  * large paste hits N armed terminals at once. 100 KB matches documented
@@ -86,81 +80,12 @@ export const FLEET_LARGE_PASTE_BYTE_THRESHOLD = 102_400;
  */
 export const FLEET_LARGE_PASTE_BATCH_SIZE = 5;
 
-/**
- * Conservative — flags commands that are usually destructive outside a sandbox.
- * Intentionally does NOT try to be a shell parser. False positives are fine
- * (an extra confirm). False negatives are the real cost.
- */
-export const FLEET_DESTRUCTIVE_RE =
-  /(\brm\s+(?:-[rRfv]{1,4}\s|-[rRfv]{1,4}[^\s]*\s|--recursive\s|--force\s))|(^|\s)sudo\s|(\bgit\s+clean\s+-[a-z]*f[a-z]*\b)|(\bdrop\s+(?:table|database|schema)\b)|(\btruncate\s+table\b)|(\bchmod\s+-R\s+)|(\bmkfs\b)|(\bdd\s+if=)|(\bforkbomb\b)|(:\(\)\s*\{)/i;
-
-export interface FleetBroadcastWarnings {
-  multiline: boolean;
-  overByteLimit: boolean;
-  destructive: boolean;
-}
-
-/**
- * Position and substring of the first destructive match in a payload, used
- * by the confirm gate to point the user at the actual command instead of
- * showing only a category label ("destructive command detected").
- */
-export interface FleetBroadcastDestructiveMatch {
-  substring: string;
-  index: number;
-}
-
 export function getFleetBroadcastByteLength(text: string): number {
   if (typeof TextEncoder !== "undefined") {
     return new TextEncoder().encode(text).length;
   }
   // Fallback approximation — only hit in non-browser runtimes.
   return text.length;
-}
-
-export function getFleetBroadcastWarnings(text: string): FleetBroadcastWarnings {
-  return {
-    multiline: text.includes("\n"),
-    overByteLimit: getFleetBroadcastByteLength(text) > FLEET_CONFIRM_BYTE_THRESHOLD,
-    destructive: FLEET_DESTRUCTIVE_RE.test(text),
-  };
-}
-
-/**
- * `FLEET_DESTRUCTIVE_RE` has no `/g` or `/y` flag, so module-level `.exec()`
- * is safe to call without resetting `lastIndex`. Returns `null` for safe
- * text; the caller decides display truncation.
- */
-export function getFleetBroadcastDestructiveMatch(
-  text: string
-): FleetBroadcastDestructiveMatch | null {
-  const match = FLEET_DESTRUCTIVE_RE.exec(text);
-  if (match === null) return null;
-  return { substring: match[0], index: match.index };
-}
-
-/**
- * Confirmation gate. The optional `resolvedPayloads` argument lets the
- * caller surface the *resolved fan-out* (after recipe-variable substitution)
- * so a draft that's under-threshold but expands per-target to over-threshold
- * still triggers confirm. Any single non-excluded resolved payload above
- * the threshold is the meaningful danger signal — not the aggregate.
- *
- * Resolved payloads are passed as `string[]` (not `FleetTargetPreview[]`)
- * to avoid a circular import with `fleetExecution.ts`.
- */
-export function needsFleetBroadcastConfirmation(
-  text: string,
-  resolvedPayloads?: readonly string[]
-): boolean {
-  const w = getFleetBroadcastWarnings(text);
-  if (w.multiline || w.overByteLimit || w.destructive) return true;
-  if (!resolvedPayloads) return false;
-  for (const payload of resolvedPayloads) {
-    if (getFleetBroadcastByteLength(payload) > FLEET_CONFIRM_BYTE_THRESHOLD) return true;
-    if (FLEET_DESTRUCTIVE_RE.test(payload)) return true;
-  }
-  return false;
 }
 
 /**

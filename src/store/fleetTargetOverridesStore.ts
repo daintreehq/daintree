@@ -9,9 +9,9 @@ import { create } from "zustand";
  * Per-target overrides MUST NOT persist into saved fleet recipes
  * (#8691 constraint) — clear on disarm / popover close / broadcast end.
  *
- * Module-level resolver pattern mirrors fleetBroadcastConfirmStore: the
- * Enter-broadcast pipeline reads `getState()` synchronously inside `doSend`
- * so values are never stale from a closure captured at call time.
+ * The Enter-broadcast pipeline snapshots `getState()` synchronously at
+ * Enter-press time inside `doSend` so values are never stale from a
+ * closure captured at call time.
  */
 interface FleetTargetOverridesState {
   payloadOverrides: Record<string, string>;

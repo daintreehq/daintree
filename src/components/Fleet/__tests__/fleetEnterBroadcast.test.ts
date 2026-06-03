@@ -2,10 +2,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
-import {
-  useFleetBroadcastConfirmStore,
-  resolveFleetBroadcastConfirmation,
-} from "@/store/fleetBroadcastConfirmStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewStore";
 import {
@@ -70,7 +66,6 @@ beforeEach(() => {
   });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
   useFleetFailureStore.getState().clear();
-  useFleetBroadcastConfirmStore.setState({ pending: null });
   useFleetBroadcastProgressStore.setState({
     completed: 0,
     total: 0,
@@ -157,10 +152,9 @@ describe("tryFleetBroadcastFromEditor — a11y announcements", () => {
       },
     });
     try {
+      // Large payload fires immediately (no confirmation); the batched
+      // path + cancel produce skippedCount>0.
       tryFleetBroadcastFromEditor(ids[0]!, "x".repeat(120_000), vi.fn());
-      // Large payload triggers confirmation flow — resolve it so the
-      // broadcast fires, then the batched path + cancel produce skippedCount>0.
-      resolveFleetBroadcastConfirmation();
       for (let i = 0; i < 20; i += 1) await flush();
       expect(useAnnouncerStore.getState().polite?.msg).toBe(
         "Broadcast cancelled — 5 sent, 7 terminals skipped"
@@ -295,25 +289,11 @@ describe("tryFleetBroadcastFromEditor — permanent failure auto-disarm (#8706)"
   });
 });
 
-describe("tryFleetBroadcastFromEditor — confirmation gate", () => {
-  it("opens the confirm gate with destructiveMatch snapshot for destructive drafts", () => {
-    arm(["a", "b"]);
+describe("tryFleetBroadcastFromEditor — fires immediately without confirmation (#9722)", () => {
+  it("fans a destructive draft out to every armed target with no confirm step", async () => {
+    arm(["a", "b", "c"]);
     const consumed = tryFleetBroadcastFromEditor("a", "rm -rf /tmp", vi.fn());
     expect(consumed).toBe(true);
-    const pending = useFleetBroadcastConfirmStore.getState().pending;
-    expect(pending).not.toBeNull();
-    expect(pending!.destructiveMatch).not.toBeNull();
-    expect(pending!.destructiveMatch!.substring.toLowerCase()).toContain("rm");
-    // Nothing has dispatched yet — submit only fires after confirmation.
-    expect(submitMock).not.toHaveBeenCalled();
-  });
-
-  it("confirming dispatches to every armed target", async () => {
-    arm(["a", "b", "c"]);
-    tryFleetBroadcastFromEditor("a", "rm -rf /tmp", vi.fn());
-    expect(useFleetBroadcastConfirmStore.getState().pending).not.toBeNull();
-
-    resolveFleetBroadcastConfirmation();
     await flush();
     await flush();
 
@@ -321,20 +301,25 @@ describe("tryFleetBroadcastFromEditor — confirmation gate", () => {
     expect(submittedIds).toEqual(["a", "b", "c"]);
   });
 
-  it("skips the confirm gate for short, single-line, safe text", async () => {
+  it("fans short, single-line, safe text out immediately", async () => {
     arm(["a", "b"]);
     tryFleetBroadcastFromEditor("a", "npm test", vi.fn());
-    expect(useFleetBroadcastConfirmStore.getState().pending).toBeNull();
     await flush();
     expect(submitMock).toHaveBeenCalled();
   });
 
-  it("drops targets that became ineligible while the confirm dialog was open", async () => {
-    arm(["a", "b", "c"]);
-    tryFleetBroadcastFromEditor("a", "rm -rf /tmp", vi.fn());
-    expect(useFleetBroadcastConfirmStore.getState().pending).not.toBeNull();
+  it("fires the ribbon commit flash on a successful broadcast", async () => {
+    arm(["a", "b"]);
+    const before = useFleetArmingStore.getState().broadcastSignal;
+    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+    await flush();
+    await flush();
+    expect(useFleetArmingStore.getState().broadcastSignal).toBe(before + 1);
+  });
 
-    // Pane B is trashed between confirm-request and confirm-submit.
+  it("drops targets that became ineligible between Enter-press and dispatch", async () => {
+    arm(["a", "b", "c"]);
+    // Pane B is trashed before the async dispatch re-checks eligibility.
     usePanelStore.setState({
       panelsById: {
         a: makeAgent("a"),
@@ -344,7 +329,7 @@ describe("tryFleetBroadcastFromEditor — confirmation gate", () => {
       panelIds: ["a", "b", "c"],
     });
 
-    resolveFleetBroadcastConfirmation();
+    tryFleetBroadcastFromEditor("a", "rm -rf /tmp", vi.fn());
     await flush();
     await flush();
 
@@ -401,9 +386,6 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
     useFleetTargetOverridesStore.getState().setPayloadOverride("b", "custom for b");
 
     tryFleetBroadcastFromEditor("a", "hello", vi.fn());
-    // Override triggers divergence → confirm path. Resolve it.
-    expect(useFleetBroadcastConfirmStore.getState().pending).not.toBeNull();
-    resolveFleetBroadcastConfirmation();
     await flush();
     await flush();
 
@@ -417,8 +399,6 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
     useFleetTargetOverridesStore.getState().setSkipped("c", true);
 
     tryFleetBroadcastFromEditor("a", "hello", vi.fn());
-    expect(useFleetBroadcastConfirmStore.getState().pending).not.toBeNull();
-    resolveFleetBroadcastConfirmation();
     await flush();
     await flush();
 
@@ -439,52 +419,18 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
     expect(useAnnouncerStore.getState().polite?.msg).toMatch(/all targets/i);
   });
 
-  it("routes through confirm dialog when any override is set", () => {
-    arm(["a", "b"]);
-    useFleetTargetOverridesStore.getState().setPayloadOverride("b", "edited");
-    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
-    const pending = useFleetBroadcastConfirmStore.getState().pending;
-    expect(pending).not.toBeNull();
-    expect(pending!.divergence).not.toBeUndefined();
-    expect(pending!.divergence!.targets).toHaveLength(2);
-    expect(pending!.divergence!.targets.find((t) => t.terminalId === "b")?.overridden).toBe(true);
-  });
-
-  it("routes through confirm dialog when any target is skipped", () => {
-    arm(["a", "b"]);
-    useFleetTargetOverridesStore.getState().setSkipped("b", true);
-    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
-    const pending = useFleetBroadcastConfirmStore.getState().pending;
-    expect(pending!.divergence?.targets.find((t) => t.terminalId === "b")?.skipped).toBe(true);
-  });
-
-  it("bypasses the confirm dialog when no overrides, skips, or warnings exist", async () => {
-    arm(["a", "b"]);
-    const onSent = vi.fn();
-    tryFleetBroadcastFromEditor("a", "hello", onSent);
-    await flush();
-    // No pending confirm — broadcast fires immediately.
-    expect(useFleetBroadcastConfirmStore.getState().pending).toBeNull();
-    expect(submitMock).toHaveBeenCalledTimes(2);
-    expect(onSent).toHaveBeenCalled();
-  });
-
-  it("submits the snapshot — live overrides cleared after confirm opens are ignored", async () => {
-    // Regression: when the divergence ConfirmDialog mounts it traps focus,
-    // which causes the popover to close, which causes the popover's
-    // useEffect to clear the overrides store. The broadcast must submit
-    // what the user reviewed in the dialog, not the cleared store
-    // (#8691, D2 silent-fallback safeguard).
+  it("submits the snapshot — overrides cleared mid-send are ignored", async () => {
+    // Regression (#8691, #9722): the broadcast snapshots overrides at
+    // Enter-press time. A popover-close effect that clears the overrides
+    // store while the async fan-out is in flight must not change what the
+    // user already committed — the snapshot is the source of truth.
     arm(["a", "b", "c"]);
     useFleetTargetOverridesStore.getState().setPayloadOverride("b", "reviewed");
     tryFleetBroadcastFromEditor("a", "hello", vi.fn());
-    expect(useFleetBroadcastConfirmStore.getState().pending).not.toBeNull();
 
-    // Simulate the popover-close clear that fires when the ConfirmDialog
-    // grabs focus.
+    // Simulate the popover-close clear racing the in-flight broadcast.
     useFleetTargetOverridesStore.getState().clear();
 
-    resolveFleetBroadcastConfirmation();
     await flush();
     await flush();
 
@@ -497,7 +443,6 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
     arm(["a", "b"]);
     useFleetTargetOverridesStore.getState().setPayloadOverride("b", "x");
     tryFleetBroadcastFromEditor("a", "hello", vi.fn());
-    resolveFleetBroadcastConfirmation();
     await flush();
     await flush();
     expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({});
@@ -516,39 +461,13 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
     expect(useFleetTargetOverridesStore.getState().skippedIds.size).toBe(0);
   });
 
-  it("clears overrides and calls onSent when targets drain to zero during confirm", async () => {
-    arm(["a", "b"]);
-    useFleetTargetOverridesStore.getState().setPayloadOverride("b", "x");
-    const onSent = vi.fn();
-    tryFleetBroadcastFromEditor("a", "hello", onSent);
-    expect(useFleetBroadcastConfirmStore.getState().pending).not.toBeNull();
-
-    // Simulate disarming every terminal during the confirm pause.
-    useFleetArmingStore.setState({
-      armedIds: new Set<string>(),
-      armOrder: [],
-      armOrderById: {},
-      lastArmedId: null,
-    });
-
-    resolveFleetBroadcastConfirmation();
-    await flush();
-    await flush();
-
-    expect(submitMock).not.toHaveBeenCalled();
-    expect(onSent).toHaveBeenCalled();
-    expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({});
-  });
-
-  it("does not force a confirm for overrides on disarmed terminals", async () => {
+  it("fans out cleanly with a stale override left for a disarmed terminal", async () => {
     // A user could leave a stale override for a terminal that later
-    // disarmed — that shouldn't surface a spurious divergence dialog
-    // when the user broadcasts an unrelated draft to the remaining fleet.
+    // disarmed — it must not affect the broadcast to the remaining fleet.
     useFleetTargetOverridesStore.getState().setPayloadOverride("ghost", "stale");
     arm(["a", "b"]);
     const onSent = vi.fn();
     tryFleetBroadcastFromEditor("a", "hello", onSent);
-    expect(useFleetBroadcastConfirmStore.getState().pending).toBeNull();
     await flush();
     expect(submitMock).toHaveBeenCalledTimes(2);
     expect(onSent).toHaveBeenCalled();

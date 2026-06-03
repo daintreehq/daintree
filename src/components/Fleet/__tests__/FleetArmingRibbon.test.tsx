@@ -77,7 +77,6 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
 import { FleetArmingRibbon } from "../FleetArmingRibbon";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
-import { useFleetBroadcastConfirmStore } from "@/store/fleetBroadcastConfirmStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetPickerSessionStore } from "@/store/fleetPickerSessionStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -98,7 +97,6 @@ function resetStores() {
     previewArmedIds: new Set<string>(),
   });
   useFleetPendingActionStore.setState({ pending: null });
-  useFleetBroadcastConfirmStore.setState({ pending: null });
   usePanelStore.setState({ panelsById: {}, panelIds: [], focusedId: null });
   useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", isFleetScopeActive: false });
   useWorktreeFilterStore.setState({ quickStateFilter: "all" });
@@ -175,20 +173,6 @@ describe("FleetArmingRibbon", () => {
     expect(lead.getAttribute("aria-label")).toBe("Exit fleet mode");
     fireEvent.click(lead);
     expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
-  });
-
-  it("hides the leading × during a pending broadcast confirm", () => {
-    useFleetArmingStore.getState().armIds(["a", "b"]);
-    useFleetBroadcastConfirmStore.setState({
-      pending: {
-        requestId: "test-1",
-        text: "rm -rf /",
-        warningReasons: ["destructive"],
-      },
-    });
-    render(<FleetArmingRibbon />);
-    expect(screen.queryByTestId("fleet-leading-exit")).toBeNull();
-    expect(screen.getByRole("button", { name: "Send broadcast" })).toBeTruthy();
   });
 
   it("surfaces the cross-worktree count in the chip's visible label", () => {
@@ -558,25 +542,6 @@ describe("FleetArmingRibbon", () => {
     useFleetArmingStore.getState().armIds(["t1", "t2", "t3"]);
     useFleetPendingActionStore.setState({
       pending: { kind: "interrupt", targetCount: 3, sessionLossCount: 0 },
-    });
-    const actionServiceModule = await import("@/services/ActionService");
-    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
-    render(<FleetArmingRibbon />);
-    fireEvent.keyDown(window, { key: "Escape" });
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
-    dispatchSpy.mockRestore();
-  });
-
-  it("bare Escape Escape while a pending broadcast confirm is open does NOT dispatch fleet.interrupt", async () => {
-    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
-    useFleetArmingStore.getState().armIds(["t1", "t2"]);
-    useFleetBroadcastConfirmStore.setState({
-      pending: {
-        requestId: "test-1",
-        text: "rm -rf /",
-        warningReasons: ["destructive"],
-      },
     });
     const actionServiceModule = await import("@/services/ActionService");
     const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");

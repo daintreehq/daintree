@@ -8,8 +8,8 @@ import {
 /**
  * Fleet resolution preview state — decouples the input bar (writer) from
  * FleetDraftingPill (renderer) so the popover can stay open even if the
- * pill re-renders independently. Follows the fleetBroadcastConfirmStore
- * pattern: a dedicated store with imperative getState() access.
+ * pill re-renders independently. A dedicated store with imperative
+ * getState() access.
  */
 interface FleetResolutionPreviewState {
   draft: string;

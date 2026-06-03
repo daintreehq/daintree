@@ -23,10 +23,6 @@ import {
   type FleetArmScope,
 } from "@/store/fleetArmingStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import {
-  useFleetBroadcastConfirmStore,
-  resolveFleetBroadcastConfirmation,
-} from "@/store/fleetBroadcastConfirmStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -51,11 +47,6 @@ export function FleetArmingRibbon(): ReactElement | null {
   const pending = useFleetPendingActionStore((s) => s.pending);
   const clearPending = useFleetPendingActionStore((s) => s.clear);
 
-  // Pending broadcast that needs user confirmation — fed by Enter-broadcast
-  // from a fleet primary's hybrid input bar.
-  const pendingBroadcast = useFleetBroadcastConfirmStore((s) => s.pending);
-  const clearPendingBroadcast = useFleetBroadcastConfirmStore((s) => s.clear);
-
   const progressCompleted = useFleetBroadcastProgressStore((s) => s.completed);
   const progressTotal = useFleetBroadcastProgressStore((s) => s.total);
   const progressFailed = useFleetBroadcastProgressStore((s) => s.failed);
@@ -71,21 +62,8 @@ export function FleetArmingRibbon(): ReactElement | null {
   const savedScopes = useProjectSettingsStore(
     useShallow((s) => s.settings?.fleetSavedScopes ?? [])
   );
-  const pasteCancelRef = useRef<HTMLButtonElement | null>(null);
   const ribbonRef = useRef<HTMLDivElement | null>(null);
   const reduceMotion = useReducedMotion();
-
-  useEffect(() => {
-    if (pendingBroadcast !== null) {
-      pasteCancelRef.current?.focus();
-    }
-  }, [pendingBroadcast]);
-
-  useEffect(() => {
-    if (armedCount < 2 && pendingBroadcast !== null) {
-      clearPendingBroadcast();
-    }
-  }, [armedCount, pendingBroadcast, clearPendingBroadcast]);
 
   useEffect(() => {
     if (armedCount < 2 && popoverOpen) {
@@ -108,15 +86,13 @@ export function FleetArmingRibbon(): ReactElement | null {
   // Escape stack: confirmation cancel is owned here so a pending confirm
   // absorbs bare Escape before it reaches the targets. The armed-list
   // popover gets its own entry so bare Escape closes the list without
-  // disarming the fleet. Broadcast confirmation also absorbs bare Escape so
-  // the user can cancel a queued destructive send with a single tap.
+  // disarming the fleet.
   // Bare Escape with focus inside the ribbon (Exit button, count chip,
   // selection-menu trigger) exits the fleet — see handleRibbonKeyDown
   // below. Bare Escape from anywhere else (xterm, hybrid input) still
   // belongs to the agents (#5750) — only the ⌘Esc chord exits globally.
   useEscapeStack(pending !== null, clearPending);
   useEscapeStack(popoverOpen, () => setPopoverOpen(false));
-  useEscapeStack(pendingBroadcast !== null, clearPendingBroadcast);
 
   const exitFleet = useCallback(() => {
     const target = useFleetArmingStore.getState().lastArmedId;
@@ -192,7 +168,7 @@ export function FleetArmingRibbon(): ReactElement | null {
     return () => window.removeEventListener("keydown", handler, true);
   }, [pending]);
 
-  useFleetEscapeChords(armedCount, exitFleet, pending, popoverOpen, pendingBroadcast);
+  useFleetEscapeChords(armedCount, exitFleet, pending, popoverOpen);
 
   useFleetRibbonFlashes(ribbonRef);
 
@@ -212,15 +188,6 @@ export function FleetArmingRibbon(): ReactElement | null {
       useFleetArmingStore.getState().clearPreviewArmedIds();
     };
   }, []);
-
-  const cancelPendingBroadcast = useCallback(() => {
-    clearPendingBroadcast();
-  }, [clearPendingBroadcast]);
-
-  const confirmPendingBroadcast = useCallback(() => {
-    if (pendingBroadcast == null) return;
-    resolveFleetBroadcastConfirmation();
-  }, [pendingBroadcast]);
 
   const handleRequestDeleteFleet = useCallback((id: string) => {
     // Close the selection menu first so its modal layer tears down before
@@ -374,18 +341,12 @@ export function FleetArmingRibbon(): ReactElement | null {
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       if (e.key !== "Escape") return;
       if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-      if (
-        pendingBroadcast !== null ||
-        popoverOpen ||
-        pending !== null ||
-        pendingDeleteFleetId !== null
-      )
-        return;
+      if (popoverOpen || pending !== null || pendingDeleteFleetId !== null) return;
       e.preventDefault();
       e.stopPropagation();
       exitFleet();
     },
-    [exitFleet, pendingBroadcast, popoverOpen, pending, pendingDeleteFleetId]
+    [exitFleet, popoverOpen, pending, pendingDeleteFleetId]
   );
 
   // Render confirmation before the armedCount<2 null guard so single-agent
@@ -466,28 +427,6 @@ export function FleetArmingRibbon(): ReactElement | null {
 
   const exitChordLabel = isMac() ? "⌘Esc" : "Ctrl+Esc";
 
-  // Two confirm shapes share the same pending entry:
-  //   - warnings-only (destructive/multi-line/byte-limit) → inline ribbon
-  //     strip with a single warning sentence — fast, low-friction. The
-  //     right-side controls collapse to the confirm question so we keep one
-  //     ribbon row instead of stacking a second strip below. Per-pane red
-  //     dots (PanelHeader) still carry per-target failure state; the
-  //     `FleetFailureBanner` below adds the Tier-2 multi-terminal surface
-  //     with the retry action.
-  //   - divergence (per-target overrides, skips, unresolved vars) →
-  //     ConfirmDialog modal with a scrollable per-target preview so the
-  //     user sees exactly what each terminal will receive (D2 from
-  //     CLAUDE.md, #8691). The modal also folds in any warning reasons.
-  const isDivergenceConfirmActive =
-    pendingBroadcast !== null && pendingBroadcast.divergence !== undefined;
-  const isBroadcastConfirmActive = pendingBroadcast !== null && !isDivergenceConfirmActive;
-
-  const divergenceTargets = pendingBroadcast?.divergence?.targets ?? [];
-  const activeDivergenceTargets = divergenceTargets.filter((t) => !t.skipped && !t.excluded);
-  const divergenceConfirmDescription = pendingBroadcast?.warningReasons.length
-    ? `${pendingBroadcast.warningReasons.join(", ")}. Review what each target will receive.`
-    : "Per-target payloads diverge from your draft. Review what each target will receive.";
-
   return (
     <div data-testid="fleet-arming-ribbon-group">
       <ConfirmDialog
@@ -509,87 +448,12 @@ export function FleetArmingRibbon(): ReactElement | null {
         onClose={() => setPendingDeleteFleetId(null)}
       />
       <FleetFailureBanner />
-      <ConfirmDialog
-        isOpen={isDivergenceConfirmActive}
-        variant={
-          pendingBroadcast?.warningReasons.some((r) => r.startsWith("destructive"))
-            ? "destructive"
-            : "default"
-        }
-        title={`Send broadcast to ${activeDivergenceTargets.length}?`}
-        description={divergenceConfirmDescription}
-        confirmLabel="Send broadcast"
-        onConfirm={confirmPendingBroadcast}
-        onClose={cancelPendingBroadcast}
-      >
-        {pendingBroadcast?.destructiveMatch ? (
-          <div
-            data-testid="fleet-broadcast-destructive-callout"
-            className="mb-2 rounded border border-category-rose-border bg-category-rose-subtle px-2 py-1.5 text-[11px] text-category-rose-text"
-          >
-            Destructive command detected:{" "}
-            <code className="font-mono">{pendingBroadcast.destructiveMatch.substring}</code>
-          </div>
-        ) : null}
-        <ul
-          data-testid="fleet-divergence-preview-list"
-          className="max-h-[280px] overflow-y-auto rounded border border-daintree-border bg-tint/[0.03]"
-        >
-          {divergenceTargets.map((t) => (
-            <li
-              key={t.terminalId}
-              data-testid="fleet-divergence-preview-row"
-              data-skipped={t.skipped ? "true" : undefined}
-              className={cn(
-                "border-b border-daintree-border/40 px-2 py-1.5 text-[11px] last:border-b-0",
-                t.skipped && "opacity-50"
-              )}
-            >
-              <div className="flex items-center gap-1.5 font-medium text-daintree-text/80">
-                <span className={cn("truncate", t.skipped && "line-through")}>{t.title}</span>
-                {t.skipped && (
-                  <span className="ml-auto shrink-0 text-[10px] text-daintree-text/50">
-                    Skipped
-                  </span>
-                )}
-                {t.overridden && !t.skipped && (
-                  <span className="ml-auto shrink-0 text-[10px] text-category-amber-text">
-                    Edited
-                  </span>
-                )}
-              </div>
-              {!t.skipped && (
-                <div className="mt-0.5 leading-relaxed break-all text-daintree-text">
-                  {t.payload === "" ? (
-                    <span className="text-daintree-text/40">(empty)</span>
-                  ) : (
-                    t.payload
-                  )}
-                </div>
-              )}
-              {!t.skipped && t.unresolvedVars.length > 0 && (
-                <div className="mt-0.5 flex flex-wrap gap-1">
-                  {t.unresolvedVars.map((v) => (
-                    <span
-                      key={v}
-                      className="inline-flex items-center rounded-full px-1.5 py-px text-[9px] bg-category-rose-subtle text-category-rose-text"
-                    >
-                      {`{{${v}}}`} unresolved
-                    </span>
-                  ))}
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
-      </ConfirmDialog>
       <AnimatePresence initial={false}>
         <m.div
           ref={ribbonRef}
           key="fleet-arming-ribbon"
-          role={isBroadcastConfirmActive ? "alertdialog" : "status"}
-          aria-live={isBroadcastConfirmActive ? "polite" : "off"}
-          aria-atomic={isBroadcastConfirmActive ? "true" : undefined}
+          role="status"
+          aria-live="off"
           tabIndex={-1}
           onKeyDown={handleRibbonKeyDown}
           className={cn(
@@ -604,17 +468,15 @@ export function FleetArmingRibbon(): ReactElement | null {
           data-testid="fleet-arming-ribbon"
           {...ribbonMotionProps}
         >
-          {!isBroadcastConfirmActive ? (
-            <button
-              type="button"
-              onClick={exitFleet}
-              aria-label="Exit fleet mode"
-              data-testid="fleet-leading-exit"
-              className="rounded p-1 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
+          <button
+            type="button"
+            onClick={exitFleet}
+            aria-label="Exit fleet mode"
+            data-testid="fleet-leading-exit"
+            className="rounded p-1 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
           <FleetCountChip
             armedCount={armedCount}
             open={popoverOpen}
@@ -668,51 +530,23 @@ export function FleetArmingRibbon(): ReactElement | null {
               {selectionMenuItems}
             </DropdownMenuContent>
           </DropdownMenu>
-          {isBroadcastConfirmActive && pendingBroadcast ? (
-            <div
-              data-testid="fleet-paste-confirm"
-              className="ml-auto flex items-center gap-2 text-[11px] text-daintree-text"
+          <div className="ml-auto flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={exitFleet}
+              aria-label={`Exit fleet mode (${exitChordLabel})`}
+              data-testid="fleet-exit"
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[11px] transition-colors",
+                "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-daintree-text"
+              )}
             >
-              <span className="text-daintree-text/85">
-                Send to {armedCount} — {pendingBroadcast.warningReasons.join(", ")}?
-              </span>
-              <button
-                type="button"
-                ref={pasteCancelRef}
-                onClick={cancelPendingBroadcast}
-                data-testid="fleet-paste-confirm-cancel"
-                className="rounded px-2 py-0.5 text-daintree-text/70 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => confirmPendingBroadcast()}
-                data-testid="fleet-paste-confirm-send"
-                className="rounded bg-category-amber-subtle border border-category-amber-border px-2 py-0.5 text-category-amber-text transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none"
-              >
-                Send broadcast
-              </button>
-            </div>
-          ) : (
-            <div className="ml-auto flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={exitFleet}
-                aria-label={`Exit fleet mode (${exitChordLabel})`}
-                data-testid="fleet-exit"
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[11px] transition-colors",
-                  "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-daintree-text"
-                )}
-              >
-                <span>Exit</span>
-                <kbd className="rounded border border-category-amber-border bg-category-amber-subtle px-1 font-mono text-[10px] leading-tight text-category-amber-text">
-                  {exitChordLabel}
-                </kbd>
-              </button>
-            </div>
-          )}
+              <span>Exit</span>
+              <kbd className="rounded border border-category-amber-border bg-category-amber-subtle px-1 font-mono text-[10px] leading-tight text-category-amber-text">
+                {exitChordLabel}
+              </kbd>
+            </button>
+          </div>
         </m.div>
       </AnimatePresence>
     </div>
