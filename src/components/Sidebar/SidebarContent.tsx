@@ -53,6 +53,7 @@ import { useShallow } from "zustand/react/shallow";
 import { systemClient } from "@/clients";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useWorktreeDevServerStore } from "@/store/worktreeDevServerStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   matchesFilters,
   matchesQuickStateFilter,
@@ -434,6 +435,29 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // sub-400ms port replacements don't flash the spinner. A real host crash
   // takes 2–4s to recover, well past the threshold.
   const showReconnecting = useDohertyGate(isReconnecting);
+  // One-shot screen-reader announcements on the rising edges of the reconnecting
+  // state. The visible indicator's text is rewritten every second by the 1Hz
+  // tick above; routing those changes through an `aria-live` region would make
+  // the AT re-announce on every tick. Instead the visible span is `aria-hidden`
+  // and we fire a single announcement here when reconnecting starts and again
+  // when it escalates. Recovery is intentionally silent — the spinner vanishing
+  // is self-evident, and a "Connected" announcement would be noise.
+  const prevReconnecting = useRef(false);
+  const prevEscalated = useRef(false);
+  useEffect(() => {
+    if (showReconnecting && !prevReconnecting.current) {
+      useAnnouncerStore.getState().announce("Reconnecting…", "polite");
+    }
+    // Gate escalation on `showReconnecting` (the Doherty-gated value) too:
+    // `showReconnectingEscalated` reads raw `isReconnecting`, so mounting mid-
+    // outage could otherwise fire "Still reconnecting…" 400ms before the base
+    // "Reconnecting…" announcement and invert their order.
+    if (showReconnectingEscalated && !prevEscalated.current) {
+      useAnnouncerStore.getState().announce("Still reconnecting…", "polite");
+    }
+    prevReconnecting.current = showReconnecting;
+    prevEscalated.current = showReconnectingEscalated;
+  }, [showReconnecting, showReconnectingEscalated]);
   const currentProject = useProjectStore((state) => state.currentProject);
   const worktreeLoadError = useProjectStore((state) => state.worktreeLoadError);
   useProjectSettings();
@@ -1431,8 +1455,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
           {showReconnecting && (
             <span
-              role="status"
-              aria-live="polite"
+              aria-hidden="true"
               className="flex items-center gap-1 text-daintree-text/60 text-xs"
               data-reconnect-escalated={showReconnectingEscalated ? "true" : undefined}
             >
@@ -1467,8 +1490,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             <button
               type="button"
               onClick={handleRefreshAll}
-              disabled={isRefreshing}
-              className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-daintree-text/40"
+              aria-disabled={isRefreshing || undefined}
+              className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-daintree-text/40"
               aria-label="Refresh sidebar"
               aria-keyshortcuts={refreshAriaShortcut}
               title={formatButtonTitle("Refresh sidebar", refreshShortcut)}
