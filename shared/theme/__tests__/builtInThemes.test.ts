@@ -11,8 +11,57 @@ import {
   auditBorderSeparation,
   hexToOklch,
 } from "../oklch.js";
-import { BUILT_IN_APP_SCHEMES } from "../themes.js";
+import { BUILT_IN_APP_SCHEMES, createDaintreeTokens } from "../themes.js";
 import { APP_THEME_TOKEN_KEYS, EXTENSION_KEYS } from "../types.js";
+
+// Minimal hex-only engine input covering createDaintreeTokens' required Pick.
+// Deliberately omits border-* and status-*-surface so the engine derives them
+// (the knob tests below assert on those derivations).
+const LIGHT_ENGINE_INPUT = {
+  "surface-canvas": "#f5f8fb",
+  "surface-sidebar": "#d8dee6",
+  "surface-panel": "#ffffff",
+  "surface-panel-elevated": "#ffffff",
+  "surface-grid": "#cdd3db",
+  "text-primary": "#1a2230",
+  "text-secondary": "#3a4658",
+  "text-muted": "#6b7686",
+  "text-inverse": "#ffffff",
+  "border-default": "#c2cad6",
+  "accent-primary": "#2f6fed",
+  "status-success": "#1f9d57",
+  "status-warning": "#c98a17",
+  "status-danger": "#d23b3b",
+  "status-info": "#2f6fed",
+  "activity-active": "#1f9d57",
+  "activity-idle": "#9aa4b2",
+  "activity-working": "#c98a17",
+  "activity-waiting": "#2f6fed",
+  "terminal-selection": "#2f6fed",
+  "terminal-red": "#d23b3b",
+  "terminal-green": "#1f9d57",
+  "terminal-yellow": "#c98a17",
+  "terminal-blue": "#2f6fed",
+  "terminal-magenta": "#a64fd2",
+  "terminal-cyan": "#1797a6",
+  "terminal-bright-red": "#d23b3b",
+  "terminal-bright-green": "#1f9d57",
+  "terminal-bright-yellow": "#c98a17",
+  "terminal-bright-blue": "#2f6fed",
+  "terminal-bright-magenta": "#a64fd2",
+  "terminal-bright-cyan": "#1797a6",
+  "terminal-bright-white": "#1a2230",
+  "syntax-comment": "#6b7686",
+  "syntax-punctuation": "#3a4658",
+  "syntax-number": "#c98a17",
+  "syntax-string": "#1f9d57",
+  "syntax-operator": "#3a4658",
+  "syntax-keyword": "#a64fd2",
+  "syntax-function": "#2f6fed",
+  "syntax-link": "#2f6fed",
+  "syntax-quote": "#1797a6",
+  "syntax-chip": "#3a4658",
+} as const;
 
 describe("built-in themes", () => {
   it("every source compiles to a valid AppColorScheme", () => {
@@ -114,13 +163,49 @@ describe("built-in themes", () => {
     }
   });
 
-  it("status-danger-surface token derives as transparent wash", () => {
+  it("every status-*-surface token derives as a low-alpha wash, not color-mix(..., transparent)", () => {
     for (const scheme of BUILT_IN_APP_SCHEMES) {
-      expect(
-        scheme.tokens["status-danger-surface"],
-        `${scheme.id} status-danger-surface should be transparent wash`
-      ).toMatch(
-        /rgba\(.*,\s*0\.\d+\)|color-mix\(in oklab,\s*var\(--theme-status-danger\)\s*\d+%,\s*transparent\)/
+      for (const status of ["danger", "success", "warning", "info"] as const) {
+        const key = `status-${status}-surface` as const;
+        const value = scheme.tokens[key];
+        expect(value, `${scheme.id} ${key} should exist`).toBeTruthy();
+        // Built-in palettes use hex status colors, so withAlpha emits rgba() —
+        // never the color-mix(..., transparent) form that black-shifts on light.
+        expect(value, `${scheme.id} ${key} should be an rgba wash`).toMatch(/^rgba\(/);
+        const alpha = parseAlpha(value);
+        expect(alpha, `${scheme.id} ${key} alpha in (0, 1)`).toBeGreaterThan(0);
+        expect(alpha, `${scheme.id} ${key} alpha in (0, 1)`).toBeLessThan(1);
+      }
+    }
+  });
+
+  it("borderInkOverride strategy retints the border ladder without per-token overrides", () => {
+    const base = createDaintreeTokens("light", LIGHT_ENGINE_INPUT);
+    const warm = createDaintreeTokens("light", LIGHT_ENGINE_INPUT, {
+      borderInkOverride: "#3a2a1a",
+    });
+    // The warm ink composites to a different border value than the cool default,
+    // and it propagates across the whole ladder (subtle/strong/divider/interactive).
+    for (const key of [
+      "border-subtle",
+      "border-strong",
+      "border-divider",
+      "border-interactive",
+    ] as const) {
+      expect(warm[key], `${key} should shift with borderInkOverride`).not.toBe(base[key]);
+    }
+  });
+
+  it("statusSurfaceOpacity strategy scales every status-surface alpha", () => {
+    const base = createDaintreeTokens("light", LIGHT_ENGINE_INPUT);
+    const dimmed = createDaintreeTokens("light", LIGHT_ENGINE_INPUT, {
+      statusSurfaceOpacity: 0.5,
+    });
+    for (const status of ["danger", "success", "warning", "info"] as const) {
+      const key = `status-${status}-surface` as const;
+      expect(parseAlpha(dimmed[key]), `${key} alpha should halve`).toBeCloseTo(
+        parseAlpha(base[key]) * 0.5,
+        4
       );
     }
   });

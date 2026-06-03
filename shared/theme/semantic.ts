@@ -76,5 +76,8 @@ export function createSemanticTokens(palette: ThemePalette): AppColorSchemeToken
     "chrome-noise-texture": resolveChromeNoiseTexture(palette.type, strategy?.noiseOpacity),
     "panel-state-edge-width":
       (strategy?.panelStateEdge ?? palette.type === "light") ? "2px" : "0px",
+  }, {
+    borderInkOverride: strategy?.borderInkOverride,
+    statusSurfaceOpacity: strategy?.statusSurfaceOpacity,
   });
 }

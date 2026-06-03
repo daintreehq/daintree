@@ -50,7 +50,13 @@ export const APP_THEME_TOKEN_KEYS = [
   "status-warning",
   "status-danger",
   "status-info",
+  // Status surfaces: low-alpha tinted washes for banner/pill backgrounds.
+  // Derived via withAlpha() so hex status colors emit rgba() (not the
+  // color-mix(..., transparent) form, which black-shifts on light backgrounds).
   "status-danger-surface",
+  "status-success-surface",
+  "status-warning-surface",
+  "status-info-surface",
 
   // Activity (real-time agent states)
   "activity-active",

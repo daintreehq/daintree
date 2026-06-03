@@ -5,6 +5,22 @@ export interface ThemeStrategy {
   materialSaturation?: number;
   radiusScale?: number;
   panelStateEdge?: boolean;
+  /**
+   * Override the ink the engine composites into the border ladder
+   * (border-subtle/strong/divider/interactive). The engine defaults to a cool
+   * near-black on light / additive white on dark. Warm or cool light themes can
+   * set an on-temperature ink (e.g. a warm charcoal for Atacama) to get borders
+   * that match their identity without overriding all four border tokens by hand.
+   * Hex string; falls back to the engine default when omitted.
+   */
+  borderInkOverride?: string;
+  /**
+   * Scalar multiplier (default 1) applied to the per-polarity alpha of every
+   * status surface wash (success/warning/danger/info). Lets a theme dial the
+   * tint intensity of banners/pills up or down — e.g. lighter washes on a
+   * high-key light palette — without redefining each surface token.
+   */
+  statusSurfaceOpacity?: number;
 }
 
 export interface ThemePalette {
