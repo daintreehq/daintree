@@ -18,6 +18,7 @@ import {
   resolveAppTheme,
 } from "@shared/theme";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
+import { Button } from "@/components/ui/button";
 import { APP_THEME_PREVIEW_KEYS } from "@shared/theme";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -351,13 +352,9 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
         <div className="flex items-center justify-between px-3 py-2 border-t border-daintree-border bg-daintree-bg">
           <span className="text-xs text-daintree-text/60">Current theme</span>
           {onClose && (
-            <button
-              type="button"
-              onClick={handleChangeTheme}
-              className="text-xs font-medium text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors"
-            >
+            <Button variant="contrast" size="sm" onClick={handleChangeTheme}>
               Change theme…
-            </button>
+            </Button>
           )}
         </div>
       </div>

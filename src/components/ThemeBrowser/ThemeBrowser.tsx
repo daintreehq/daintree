@@ -14,6 +14,7 @@ import {
   resolveAppTheme,
 } from "@shared/theme";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
+import { Button } from "@/components/ui/button";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
@@ -559,23 +560,25 @@ export function ThemeBrowser() {
         )}
       </div>
 
-      {/* Sticky action bar */}
+      {/* Sticky action bar. The commit button uses the high-contrast `contrast`
+          variant (near-black fill + off-white text on dark themes, near-white
+          fill + off-black text on light) rather than an accent fill: the accent
+          would otherwise be the *previewed* theme's accent (the button restyles
+          on every preview) and the old hardcoded `text-white` was unreadable on
+          light accents (e.g. white on Daintree's #36CE94 ~1.6:1). The monochrome
+          CTA stays consistently legible and highly noticeable across previews. */}
       <div className="flex items-center justify-end gap-2 px-2.5 py-2 border-t border-daintree-border shrink-0">
-        <button
-          type="button"
-          onClick={handleCancel}
-          className="px-3 py-1.5 text-xs text-daintree-text/70 hover:text-daintree-text transition-colors rounded-[var(--radius-md)]"
-        >
+        <Button variant="ghost" size="sm" onClick={handleCancel}>
           Cancel
-        </button>
-        <button
+        </Button>
+        <Button
           ref={commitButtonRef}
-          type="button"
+          variant="contrast"
+          size="sm"
           onClick={() => void handleCommit()}
-          className="px-3 py-1.5 text-xs font-medium bg-daintree-accent text-white rounded-[var(--radius-md)] hover:bg-daintree-accent/90 transition-colors"
         >
           Set theme
-        </button>
+        </Button>
       </div>
 
       <div aria-live="polite" aria-atomic="true" className="sr-only">

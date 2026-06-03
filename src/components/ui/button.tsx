@@ -16,6 +16,15 @@ const buttonVariants = cva(
           "bg-destructive text-text-inverse [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-tint/20 shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 active:brightness-95 active:inset-shadow-none focus-visible:outline-destructive",
         outline:
           "ring-1 ring-border-strong bg-surface-panel-elevated/95 backdrop-blur-md text-daintree-text shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_var(--color-overlay-soft)] hover:bg-surface-panel-elevated hover:ring-border-default hover:text-daintree-text active:bg-overlay-soft active:shadow-none",
+        // High-contrast monochrome CTA: near-black fill + off-white text on dark
+        // themes, near-white fill + off-black text on light themes. `text-inverse`
+        // is the canvas-polar shade (near-black on dark / near-white on light) and
+        // `text-primary` is its opposite, so the pair is always maximal contrast
+        // (~14:1) and theme-agnostic. Use where the chromatic accent would be
+        // unreadable (e.g. white text on a bright-green accent) or would
+        // distractingly restyle, and the action needs to be highly noticeable.
+        contrast:
+          "bg-text-inverse text-daintree-text ring-1 ring-border-strong shadow-[var(--theme-shadow-ambient)] hover:opacity-90 active:opacity-100 active:shadow-none",
         secondary:
           "bg-secondary text-secondary-foreground ring-1 ring-tint/[0.08] shadow-[var(--theme-shadow-ambient)] hover:bg-secondary/90 active:shadow-none",
         ghost:
