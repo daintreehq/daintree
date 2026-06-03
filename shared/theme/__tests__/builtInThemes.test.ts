@@ -11,11 +11,7 @@ import {
   auditBorderSeparation,
   hexToOklch,
 } from "../oklch.js";
-import {
-  BUILT_IN_APP_SCHEMES,
-  createDaintreeTokens,
-  normalizeAppColorScheme,
-} from "../themes.js";
+import { BUILT_IN_APP_SCHEMES, createDaintreeTokens, normalizeAppColorScheme } from "../themes.js";
 import { RED_GREEN_OVERRIDES, BLUE_YELLOW_OVERRIDES } from "../colorVisionOverrides.js";
 import { APP_THEME_TOKEN_KEYS, EXTENSION_KEYS } from "../types.js";
 
