@@ -53,6 +53,7 @@ type ReflowTestService = {
   resetRenderer: (id: string) => void;
   resizeController: { fit: (id: string) => unknown };
   getSynchronizedOutputMode: (id: string) => boolean | null;
+  webGLManager: { repairAtlasForReactivation: (id: string) => boolean };
 };
 
 function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
@@ -291,7 +292,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     expect(managed.lastReflowAt).toBeGreaterThan(0);
   });
 
-  it("resetRenderer calls forceXtermReflow and clears the throttle", () => {
+  it("resetRenderer falls back to a local refresh for DOM-renderer terminals and never clears the shared atlas", () => {
     const managed = makeManaged({ lastReflowAt: 99999 });
     Object.defineProperty(managed.hostElement, "clientWidth", { value: 200, configurable: true });
     Object.defineProperty(managed.hostElement, "clientHeight", { value: 200, configurable: true });
@@ -306,14 +307,54 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     term.refresh = vi.fn();
     service.instances.set("t1", managed);
     vi.spyOn(service.resizeController, "fit").mockImplementation(() => null);
+    // DOM-renderer terminal (no WebGL pool entry) — repair declines and the
+    // caller owns the repaint.
+    const repair = vi
+      .spyOn(service.webGLManager, "repairAtlasForReactivation")
+      .mockReturnValue(false);
 
     service.resetRenderer("t1");
 
-    expect(term.clearTextureAtlas).toHaveBeenCalled();
+    // #9701: clearing the shared texture atlas blanks co-owner panes — it must
+    // never be called on the per-pane Redraw path.
+    expect(term.clearTextureAtlas).not.toHaveBeenCalled();
+    expect(repair).toHaveBeenCalledWith("t1");
+    // DOM-renderer fallback still repaints the targeted pane.
     expect(term.refresh).toHaveBeenCalledWith(0, 23);
     expect(paddingHistory(managed)).toContain("0.01px");
     // Throttle is cleared so the next onWriteParsed/heartbeat tick
     // reflows immediately.
+    expect(managed.lastReflowAt).toBe(0);
+  });
+
+  it("resetRenderer uses the local WebGL repair and skips the fallback refresh when a pool entry is repaired", () => {
+    const managed = makeManaged({ lastReflowAt: 99999 });
+    Object.defineProperty(managed.hostElement, "clientWidth", { value: 200, configurable: true });
+    Object.defineProperty(managed.hostElement, "clientHeight", { value: 200, configurable: true });
+    const term = managed.terminal as unknown as {
+      element: HTMLElement;
+      rows: number;
+      clearTextureAtlas: () => void;
+      refresh: (a: number, b: number) => void;
+    };
+    term.rows = 24;
+    term.clearTextureAtlas = vi.fn();
+    term.refresh = vi.fn();
+    service.instances.set("t1", managed);
+    vi.spyOn(service.resizeController, "fit").mockImplementation(() => null);
+    // WebGL terminal: repair handles its own local reset + refresh, so the
+    // caller must not issue a redundant fallback refresh.
+    const repair = vi
+      .spyOn(service.webGLManager, "repairAtlasForReactivation")
+      .mockReturnValue(true);
+
+    service.resetRenderer("t1");
+
+    expect(repair).toHaveBeenCalledWith("t1");
+    expect(term.clearTextureAtlas).not.toHaveBeenCalled();
+    expect(term.refresh).not.toHaveBeenCalled();
+    // forceXtermReflow still fires and the throttle is still cleared.
+    expect(paddingHistory(managed)).toContain("0.01px");
     expect(managed.lastReflowAt).toBe(0);
   });
 
