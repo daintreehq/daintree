@@ -289,8 +289,15 @@ describe("palette distinguishability", () => {
   });
 
   describe("CVD override maps internal distinguishability", () => {
-    const RED_GREEN_UNIQUE = [...new Set(Object.values(RED_GREEN_OVERRIDES).map(normHex))];
-    const BLUE_YELLOW_UNIQUE = [...new Set(Object.values(BLUE_YELLOW_OVERRIDES).map(normHex))];
+    // Only the opaque signal colors must be mutually distinguishable. The
+    // derived status-*-surface washes are translucent backgrounds, not signals,
+    // so they're excluded from this gate.
+    const signalHexValues = (map: Record<string, string>) =>
+      Object.entries(map)
+        .filter(([token]) => !token.endsWith("-surface"))
+        .map(([, value]) => normHex(value));
+    const RED_GREEN_UNIQUE = [...new Set(signalHexValues(RED_GREEN_OVERRIDES))];
+    const BLUE_YELLOW_UNIQUE = [...new Set(signalHexValues(BLUE_YELLOW_OVERRIDES))];
 
     function testOverrideMap(name: string, uniqueHex: string[], deficiencies: Deficiency[]) {
       it(`${name}: no two override colors collapse to identity under target deficiencies`, () => {

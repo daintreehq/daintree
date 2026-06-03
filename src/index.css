@@ -74,6 +74,9 @@
   --color-status-danger: var(--theme-status-danger);
   --color-status-info: var(--theme-status-info);
   --color-status-danger-surface: var(--theme-status-danger-surface);
+  --color-status-success-surface: var(--theme-status-success-surface);
+  --color-status-warning-surface: var(--theme-status-warning-surface);
+  --color-status-info-surface: var(--theme-status-info-surface);
   --color-knob-base: var(--theme-knob-base);
   --color-state-modified: var(--theme-state-modified);
   --color-activity-active: var(--theme-activity-active);
@@ -405,6 +408,7 @@
   --color-grid-bg: var(--panel-grid-bg, var(--terminal-grid-bg, var(--theme-surface-grid)));
   --color-daintree-focus: var(--theme-focus-ring);
   --color-status-error: var(--theme-status-danger);
+  --color-status-error-surface: var(--theme-status-danger-surface);
   --color-state-active: var(--theme-activity-active);
   --color-state-idle: var(--theme-activity-idle);
   --color-state-working: var(--theme-activity-working);

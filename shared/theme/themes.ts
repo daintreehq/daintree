@@ -45,6 +45,17 @@ const PR_STATE_LIGHT_TOKENS: Pick<
   "pr-draft": "#5C6571",
 };
 
+/**
+ * Engine-level designability knobs sourced from `ThemeStrategy`. They feed
+ * derivations that aren't part of the semantic-token contract (border ink,
+ * status-surface alpha) so a theme can shape them without overriding every
+ * derived token by hand.
+ */
+export interface DaintreeTokenOptions {
+  borderInkOverride?: string;
+  statusSurfaceOpacity?: number;
+}
+
 export function createDaintreeTokens(
   type: "dark" | "light",
   tokens: Partial<AppColorSchemeTokens> &
@@ -93,7 +104,8 @@ export function createDaintreeTokens(
       | "syntax-link"
       | "syntax-quote"
       | "syntax-chip"
-    >
+    >,
+  options?: DaintreeTokenOptions
 ): AppColorSchemeTokens {
   const dark = type === "dark";
   const overlayTone = dark ? "#ffffff" : "#000000";
@@ -102,7 +114,11 @@ export function createDaintreeTokens(
   // canvas, pure black at dark's alphas barely registers and reads as grime, so
   // light uses a cool near-black ink (slight blue) that composites near-neutral
   // at the raised alphas below — present, but not an accent highlight.
-  const borderInk = dark ? overlayTone : "#0f141b";
+  // A theme may swap the border ink for an on-temperature one (e.g. warm
+  // charcoal) via strategy.borderInkOverride; otherwise the engine default holds.
+  const borderInk = options?.borderInkOverride ?? (dark ? overlayTone : "#0f141b");
+  // Per-theme dial on the status-surface wash intensity (default 1).
+  const statusSurfaceAlpha = (base: number) => base * (options?.statusSurfaceOpacity ?? 1);
   // overlay-base tints the entire hover/fill ladder. Defaults to overlayTone (pure
   // white/black). Set to a hued color for themed overlays (icy blue, warm cream, etc.).
   // On light, the interactive ladder routes through overlayBase (RC-3) so the
@@ -341,8 +357,21 @@ export function createDaintreeTokens(
     "diff-selected-background":
       tokens["diff-selected-background"] ?? withAlpha(overlayTone, dark ? 0.06 : 0.06),
     "diff-omit-gutter-line": tokens["diff-omit-gutter-line"] ?? tokens["activity-idle"],
+    // Status surfaces: pre-baked tinted washes for banners/pills. Derived via
+    // withAlpha (rgba for hex) so they don't carry the color-mix(..., transparent)
+    // form, which black-shifts on light backgrounds in oklab (Chromium).
     "status-danger-surface":
-      tokens["status-danger-surface"] ?? withAlpha(tokens["status-danger"], dark ? 0.1 : 0.08),
+      tokens["status-danger-surface"] ??
+      withAlpha(tokens["status-danger"], statusSurfaceAlpha(dark ? 0.1 : 0.08)),
+    "status-success-surface":
+      tokens["status-success-surface"] ??
+      withAlpha(tokens["status-success"], statusSurfaceAlpha(dark ? 0.1 : 0.08)),
+    "status-warning-surface":
+      tokens["status-warning-surface"] ??
+      withAlpha(tokens["status-warning"], statusSurfaceAlpha(dark ? 0.1 : 0.08)),
+    "status-info-surface":
+      tokens["status-info-surface"] ??
+      withAlpha(tokens["status-info"], statusSurfaceAlpha(dark ? 0.1 : 0.08)),
     ...tokens,
   };
 }
@@ -786,67 +815,74 @@ function compilePaletteToTokens(palette: ThemePalette): AppColorSchemeTokens {
   const shadowStyle = strategy?.shadowStyle ?? (palette.type === "dark" ? "soft" : "light");
   const shadowProfiles = resolveShadowProfiles(shadowStyle);
 
-  return createDaintreeTokens(palette.type, {
-    "surface-grid": palette.surfaces.grid,
-    "surface-sidebar": palette.surfaces.sidebar,
-    "surface-canvas": palette.surfaces.canvas,
-    "surface-panel": palette.surfaces.panel,
-    "surface-panel-elevated": palette.surfaces.elevated,
-    "text-primary": palette.text.primary,
-    "text-secondary": palette.text.secondary,
-    "text-muted": palette.text.muted,
-    "text-inverse": palette.text.inverse,
-    "border-default": palette.border,
-    "accent-primary": palette.accent,
-    ...(palette.accentSecondary ? { "accent-secondary": palette.accentSecondary } : {}),
-    "status-success": palette.status.success,
-    "status-warning": palette.status.warning,
-    "status-danger": palette.status.danger,
-    "status-info": palette.status.info,
-    "activity-active": palette.activity.active,
-    "activity-idle": palette.activity.idle,
-    "activity-working": palette.activity.working,
-    "activity-waiting": palette.activity.waiting,
-    ...(palette.overlayTint ? { "overlay-base": palette.overlayTint } : {}),
-    "terminal-background": palette.terminal?.background ?? palette.surfaces.canvas,
-    "terminal-foreground": palette.terminal?.foreground ?? palette.text.primary,
-    "terminal-muted": palette.terminal?.muted ?? palette.text.muted,
-    "terminal-cursor": palette.terminal?.cursor ?? palette.accent,
-    "terminal-selection": palette.terminal?.selection ?? palette.accent,
-    "terminal-red": palette.terminal?.red ?? palette.status.danger,
-    "terminal-green": palette.terminal?.green ?? palette.status.success,
-    "terminal-yellow": palette.terminal?.yellow ?? palette.status.warning,
-    "terminal-blue": palette.terminal?.blue ?? palette.status.info,
-    "terminal-magenta": palette.terminal?.magenta ?? ANSI_MAGENTA_FALLBACK,
-    "terminal-cyan": palette.terminal?.cyan ?? ANSI_CYAN_FALLBACK,
-    "terminal-bright-red": palette.terminal?.brightRed ?? palette.status.danger,
-    "terminal-bright-green": palette.terminal?.brightGreen ?? palette.status.success,
-    "terminal-bright-yellow": palette.terminal?.brightYellow ?? palette.status.warning,
-    "terminal-bright-blue": palette.terminal?.brightBlue ?? palette.status.info,
-    "terminal-bright-magenta": palette.terminal?.brightMagenta ?? ANSI_MAGENTA_FALLBACK,
-    "terminal-bright-cyan": palette.terminal?.brightCyan ?? ANSI_CYAN_FALLBACK,
-    "terminal-bright-white": palette.terminal?.brightWhite ?? palette.text.primary,
-    "syntax-comment": palette.syntax.comment,
-    "syntax-punctuation": palette.syntax.punctuation,
-    "syntax-number": palette.syntax.number,
-    "syntax-string": palette.syntax.string,
-    "syntax-operator": palette.syntax.operator,
-    "syntax-keyword": palette.syntax.keyword,
-    "syntax-function": palette.syntax.function,
-    "syntax-link": palette.syntax.link,
-    "syntax-quote": palette.syntax.quote,
-    "syntax-chip": palette.syntax.chip,
-    "shadow-ambient": shadowProfiles.ambient,
-    "shadow-floating": shadowProfiles.floating,
-    "shadow-dialog": shadowProfiles.dialog,
-    "material-blur": `${strategy?.materialBlur ?? 0}px`,
-    "material-saturation": `${strategy?.materialSaturation ?? 100}%`,
-    "material-opacity": resolveMaterialOpacity(palette.type, strategy?.materialBlur),
-    "radius-scale": String(strategy?.radiusScale ?? 1),
-    "chrome-noise-texture": resolveChromeNoiseTexture(palette.type, strategy?.noiseOpacity),
-    "panel-state-edge-width":
-      (strategy?.panelStateEdge ?? palette.type === "light") ? "2px" : "0px",
-  });
+  return createDaintreeTokens(
+    palette.type,
+    {
+      "surface-grid": palette.surfaces.grid,
+      "surface-sidebar": palette.surfaces.sidebar,
+      "surface-canvas": palette.surfaces.canvas,
+      "surface-panel": palette.surfaces.panel,
+      "surface-panel-elevated": palette.surfaces.elevated,
+      "text-primary": palette.text.primary,
+      "text-secondary": palette.text.secondary,
+      "text-muted": palette.text.muted,
+      "text-inverse": palette.text.inverse,
+      "border-default": palette.border,
+      "accent-primary": palette.accent,
+      ...(palette.accentSecondary ? { "accent-secondary": palette.accentSecondary } : {}),
+      "status-success": palette.status.success,
+      "status-warning": palette.status.warning,
+      "status-danger": palette.status.danger,
+      "status-info": palette.status.info,
+      "activity-active": palette.activity.active,
+      "activity-idle": palette.activity.idle,
+      "activity-working": palette.activity.working,
+      "activity-waiting": palette.activity.waiting,
+      ...(palette.overlayTint ? { "overlay-base": palette.overlayTint } : {}),
+      "terminal-background": palette.terminal?.background ?? palette.surfaces.canvas,
+      "terminal-foreground": palette.terminal?.foreground ?? palette.text.primary,
+      "terminal-muted": palette.terminal?.muted ?? palette.text.muted,
+      "terminal-cursor": palette.terminal?.cursor ?? palette.accent,
+      "terminal-selection": palette.terminal?.selection ?? palette.accent,
+      "terminal-red": palette.terminal?.red ?? palette.status.danger,
+      "terminal-green": palette.terminal?.green ?? palette.status.success,
+      "terminal-yellow": palette.terminal?.yellow ?? palette.status.warning,
+      "terminal-blue": palette.terminal?.blue ?? palette.status.info,
+      "terminal-magenta": palette.terminal?.magenta ?? ANSI_MAGENTA_FALLBACK,
+      "terminal-cyan": palette.terminal?.cyan ?? ANSI_CYAN_FALLBACK,
+      "terminal-bright-red": palette.terminal?.brightRed ?? palette.status.danger,
+      "terminal-bright-green": palette.terminal?.brightGreen ?? palette.status.success,
+      "terminal-bright-yellow": palette.terminal?.brightYellow ?? palette.status.warning,
+      "terminal-bright-blue": palette.terminal?.brightBlue ?? palette.status.info,
+      "terminal-bright-magenta": palette.terminal?.brightMagenta ?? ANSI_MAGENTA_FALLBACK,
+      "terminal-bright-cyan": palette.terminal?.brightCyan ?? ANSI_CYAN_FALLBACK,
+      "terminal-bright-white": palette.terminal?.brightWhite ?? palette.text.primary,
+      "syntax-comment": palette.syntax.comment,
+      "syntax-punctuation": palette.syntax.punctuation,
+      "syntax-number": palette.syntax.number,
+      "syntax-string": palette.syntax.string,
+      "syntax-operator": palette.syntax.operator,
+      "syntax-keyword": palette.syntax.keyword,
+      "syntax-function": palette.syntax.function,
+      "syntax-link": palette.syntax.link,
+      "syntax-quote": palette.syntax.quote,
+      "syntax-chip": palette.syntax.chip,
+      "shadow-ambient": shadowProfiles.ambient,
+      "shadow-floating": shadowProfiles.floating,
+      "shadow-dialog": shadowProfiles.dialog,
+      "material-blur": `${strategy?.materialBlur ?? 0}px`,
+      "material-saturation": `${strategy?.materialSaturation ?? 100}%`,
+      "material-opacity": resolveMaterialOpacity(palette.type, strategy?.materialBlur),
+      "radius-scale": String(strategy?.radiusScale ?? 1),
+      "chrome-noise-texture": resolveChromeNoiseTexture(palette.type, strategy?.noiseOpacity),
+      "panel-state-edge-width":
+        (strategy?.panelStateEdge ?? palette.type === "light") ? "2px" : "0px",
+    },
+    {
+      borderInkOverride: strategy?.borderInkOverride,
+      statusSurfaceOpacity: strategy?.statusSurfaceOpacity,
+    }
+  );
 }
 
 export function normalizeAppColorScheme(
@@ -887,14 +923,21 @@ export function normalizeAppColorScheme(
   }
 
   if (!palette && typeof rawTokens === "object") {
-    if (
-      typeof normalizedTokens["status-danger-surface"] !== "string" &&
-      typeof normalizedTokens["status-danger"] === "string"
-    ) {
-      normalizedTokens["status-danger-surface"] = withAlpha(
-        normalizedTokens["status-danger"],
-        resolvedType === "dark" ? 0.1 : 0.08
-      );
+    const statusSurfaceAlpha = resolvedType === "dark" ? 0.1 : 0.08;
+    for (const status of ["danger", "success", "warning", "info"] as const) {
+      const surfaceKey = `status-${status}-surface` as const;
+      const baseKey = `status-${status}` as const;
+      // normalizedTokens is seeded from the fallback scheme, so its surface key
+      // is always a string — guarding on it would never fire. Re-derive only
+      // when the plugin set a custom base color but no matching surface, else
+      // the fallback scheme's (differently-hued) surface would leak through.
+      if (
+        typeof tokenOverrides[surfaceKey] !== "string" &&
+        typeof tokenOverrides[baseKey] === "string" &&
+        typeof normalizedTokens[baseKey] === "string"
+      ) {
+        normalizedTokens[surfaceKey] = withAlpha(normalizedTokens[baseKey], statusSurfaceAlpha);
+      }
     }
     if (
       typeof normalizedTokens["state-modified"] !== "string" &&
