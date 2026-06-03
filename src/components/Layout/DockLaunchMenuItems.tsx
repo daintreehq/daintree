@@ -204,17 +204,25 @@ export function DockLaunchMenuItems({
           </C.Item>
         ))
       ) : (
-        // First-run discovery cue: route to the recipe editor instead of
-        // hiding the section, so users who have never made a recipe can find
-        // their way in. recipe.editor.open is danger:"safe" and MRU-eligible.
+        // First-run discovery cue: route into recipes instead of hiding the
+        // section, so users who have never made one can find their way in.
+        // With an active worktree, open the editor scoped to it; without one
+        // (the common first-run case), fall back to the manager — the editor's
+        // event handler hard-requires a string worktreeId and silently no-ops
+        // on undefined, so dispatching the editor here would do nothing. Both
+        // actions are danger:"safe" and MRU-eligible.
         <C.Item
-          onSelect={() =>
-            void actionService.dispatch(
-              "recipe.editor.open",
-              { worktreeId: activeWorktreeId ?? undefined },
-              { source: settingsSource }
-            )
-          }
+          onSelect={() => {
+            if (activeWorktreeId) {
+              void actionService.dispatch(
+                "recipe.editor.open",
+                { worktreeId: activeWorktreeId },
+                { source: settingsSource }
+              );
+            } else {
+              void actionService.dispatch("recipe.manager.open", {}, { source: settingsSource });
+            }
+          }}
         >
           <Workflow className="w-3.5 h-3.5 mr-2" />
           No recipes yet

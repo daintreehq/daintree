@@ -375,6 +375,45 @@ describe("DockLaunchButton", () => {
     );
   });
 
+  it("falls back to the recipe manager from the cue when no worktree is active", () => {
+    // recipe.editor.open's handler hard-requires a string worktreeId and
+    // silently no-ops on undefined — the common first-run case has no active
+    // worktree, so the cue must route to the manager instead of dead-ending.
+    mockRecipes = [];
+    const { getByText } = render(
+      <DockLaunchButton
+        agents={AGENTS}
+        hasDevPreview={false}
+        onLaunchAgent={vi.fn()}
+        activeWorktreeId={null}
+        cwd="/tmp"
+      />
+    );
+
+    fireEvent.click(getByText("No recipes yet"));
+    expect(actionDispatchMock).toHaveBeenCalledWith("recipe.manager.open", {}, { source: "menu" });
+    expect(actionDispatchMock).not.toHaveBeenCalledWith(
+      "recipe.editor.open",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it("does not render the No recipes yet cue when recipes exist", () => {
+    mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
+    const { queryByText, getByText } = render(
+      <DockLaunchButton
+        agents={AGENTS}
+        hasDevPreview={false}
+        onLaunchAgent={vi.fn()}
+        activeWorktreeId="wt-1"
+        cwd="/tmp"
+      />
+    );
+    expect(getByText("My recipe")).toBeTruthy();
+    expect(queryByText("No recipes yet")).toBeNull();
+  });
+
   it("lists project-wide recipes and recipes scoped to the active worktree", () => {
     mockRecipes = [
       { id: "r-global", name: "Project recipe", worktreeId: undefined },
