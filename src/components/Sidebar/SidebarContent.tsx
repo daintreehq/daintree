@@ -563,13 +563,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const hasActiveFilters = useWorktreeFilterStore((state) => state.hasActiveFilters);
   const hasFacetFilters = useWorktreeFilterStore((state) => state.hasFacetFilters);
   const hasFacetFiltersActive = hasFacetFilters();
-  const activeFacetFilterCount =
-    statusFilters.size +
-    typeFilters.size +
-    prIssueFilters.size +
-    sessionFilters.size +
-    activityFilters.size +
-    devServerFilters.size;
   const collapsedWorktrees = useWorktreeFilterStore((state) => state.collapsedWorktrees);
   const pruneStaleWorktreeIds = useWorktreeFilterStore((state) => state.pruneStaleWorktreeIds);
   const setQuickStateFilter = useWorktreeFilterStore((state) => state.setQuickStateFilter);
@@ -1664,9 +1657,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               variant="filtered-empty"
               scale="sidebar"
               instant
-              title={`No worktrees match ${QUICK_STATE_LABELS[quickStateFilter]} with ${activeFacetFilterCount} ${
-                activeFacetFilterCount === 1 ? "filter" : "filters"
-              }`}
+              title={
+                hasQuery
+                  ? `No matches for "${truncateSearchQuery(query.trim())}"`
+                  : "No matching worktrees"
+              }
               action={
                 <>
                   <button
