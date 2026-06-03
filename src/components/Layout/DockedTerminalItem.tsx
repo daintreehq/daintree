@@ -406,7 +406,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
                 className="invisible opacity-0 pointer-events-none group-hover/chip:visible group-hover/chip:opacity-100 group-hover/chip:pointer-events-auto group-focus-within/chip:visible group-focus-within/chip:opacity-100 group-focus-within/chip:pointer-events-auto focus-visible:visible focus-visible:opacity-100 focus-visible:pointer-events-auto transition-[opacity,visibility] duration-150 motion-reduce:transition-none shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-                aria-label="Open in grid"
+                aria-label={`Open ${displayTitle} in grid`}
               >
                 <SquareArrowOutUpRight className="w-3 h-3" aria-hidden="true" />
               </button>

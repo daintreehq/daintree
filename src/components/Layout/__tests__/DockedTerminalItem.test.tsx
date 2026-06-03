@@ -144,14 +144,26 @@ describe("DockedTerminalItem move-to-grid affordance (#9683)", () => {
 
   it("renders an Open in grid button on the chip", () => {
     render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
-    expect(screen.getByRole("button", { name: "Open in grid" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open Terminal in grid" })).toBeTruthy();
+  });
+
+  it("gives each chip's button a label naming its own terminal", () => {
+    render(
+      <>
+        <DockedTerminalItem terminal={makeTerminal({ id: "t-1", title: "Claude" })} />
+        <DockedTerminalItem terminal={makeTerminal({ id: "t-2", title: "Gemini" })} />
+      </>
+    );
+
+    expect(screen.getByRole("button", { name: "Open Claude in grid" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open Gemini in grid" })).toBeTruthy();
   });
 
   it("moves the terminal to the grid when the button is clicked", () => {
     moveTerminalToGridMock.mockReturnValue(true);
     render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Open in grid" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Terminal in grid" }));
 
     expect(moveTerminalToGridMock).toHaveBeenCalledWith("t-1");
   });
@@ -160,7 +172,7 @@ describe("DockedTerminalItem move-to-grid affordance (#9683)", () => {
     moveTerminalToGridMock.mockReturnValue(true);
     render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Open in grid" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Terminal in grid" }));
 
     expect(closeDockTerminalMock).toHaveBeenCalledTimes(1);
   });
@@ -169,7 +181,7 @@ describe("DockedTerminalItem move-to-grid affordance (#9683)", () => {
     moveTerminalToGridMock.mockReturnValue(false);
     render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Open in grid" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Terminal in grid" }));
 
     expect(moveTerminalToGridMock).toHaveBeenCalledWith("t-1");
     expect(closeDockTerminalMock).not.toHaveBeenCalled();
@@ -179,7 +191,7 @@ describe("DockedTerminalItem move-to-grid affordance (#9683)", () => {
     moveTerminalToGridMock.mockReturnValue(true);
     render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Open in grid" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Terminal in grid" }));
 
     expect(openDockTerminalMock).not.toHaveBeenCalled();
   });
