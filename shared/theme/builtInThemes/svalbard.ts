@@ -156,8 +156,5 @@ export const theme: BuiltInThemeSource = {
     "toolbar-project-shadow": "inset 0 1px 0 rgba(255,255,255,0.45)",
     "toolbar-stats-border": "rgba(162,177,189,0.55)",
     "toolbar-stats-divider": "rgba(162,177,189,0.55)",
-    // Recessed filter strip ~0.05 L below the sidebar rail. Inert until the
-    // `worktree-filter-bar-bg` extension infra lands with #9723 (Hokkaido).
-    "worktree-filter-bar-bg": "#C5D4DF",
   },
 };
