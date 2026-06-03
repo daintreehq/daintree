@@ -467,6 +467,113 @@ describe("GitHubResourceList SWR behavior", () => {
     expect(onFreshFetch).not.toHaveBeenCalled();
   });
 
+  it("calls onCountUpdate with the loaded length and hasMore on a cold-mount fetch (issue #9693)", async () => {
+    // No cache — cold mount. The badge must bind to what the list loads, not
+    // the stats query's totalCount, so onCountUpdate fires even though this is
+    // not a revalidation (unlike onFreshFetch).
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1), makeIssue(2)]));
+    const onCountUpdate = vi.fn();
+
+    render(
+      <GitHubResourceList type="issue" projectPath="/test/proj" onCountUpdate={onCountUpdate} />
+    );
+
+    await waitFor(() => {
+      expect(onCountUpdate).toHaveBeenCalledWith(2, false);
+    });
+    // Cold mount is the bypassCache:false path — onFreshFetch would skip here,
+    // but onCountUpdate must still fire.
+    expect(mockListIssues.mock.calls[0]?.[0]?.bypassCache).toBe(false);
+  });
+
+  it("reports hasMore=true via onCountUpdate when the first page is paginated", async () => {
+    mockListIssues.mockResolvedValue({
+      items: [makeIssue(1), makeIssue(2)],
+      pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+    });
+    const onCountUpdate = vi.fn();
+
+    render(
+      <GitHubResourceList type="issue" projectPath="/test/proj" onCountUpdate={onCountUpdate} />
+    );
+
+    await waitFor(() => {
+      expect(onCountUpdate).toHaveBeenCalledWith(2, true);
+    });
+  });
+
+  it("calls onCountUpdate again after a successful background revalidation", async () => {
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(cacheKey, {
+      items: [makeIssue(10)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+
+    // Revalidation lands a larger page — the badge must converge to it.
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(10), makeIssue(11)]));
+    const onCountUpdate = vi.fn();
+
+    render(
+      <GitHubResourceList type="issue" projectPath="/test/proj" onCountUpdate={onCountUpdate} />
+    );
+
+    await waitFor(() => {
+      expect(onCountUpdate).toHaveBeenCalledWith(2, false);
+    });
+    expect(mockListIssues.mock.calls[0]?.[0]?.bypassCache).toBe(true);
+  });
+
+  it("does not call onCountUpdate when loading more (append) pages", async () => {
+    mockListIssues.mockResolvedValueOnce({
+      items: [makeIssue(1), makeIssue(2)],
+      pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+    });
+    const onCountUpdate = vi.fn();
+
+    render(
+      <GitHubResourceList type="issue" projectPath="/test/proj" onCountUpdate={onCountUpdate} />
+    );
+
+    await waitFor(() => {
+      expect(onCountUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    // Second page (append) — must not move the badge count.
+    mockListIssues.mockResolvedValueOnce({
+      items: [makeIssue(3), makeIssue(4)],
+      pageInfo: { hasNextPage: false, endCursor: null },
+    });
+    const loadMore = await screen.findByRole("button", { name: /load more/i });
+    act(() => {
+      loadMore.click();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("item-3")).toBeTruthy();
+    });
+    // Still exactly one onCountUpdate call — the append fetch is gated out.
+    expect(onCountUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call onCountUpdate for search-filtered fetches", async () => {
+    useGitHubFilterStore.getState().setIssueSearchQuery("needle");
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+    const onCountUpdate = vi.fn();
+
+    render(
+      <GitHubResourceList type="issue" projectPath="/test/proj" onCountUpdate={onCountUpdate} />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("item-1")).toBeTruthy();
+    });
+    // Search results aren't cached and must not drive the badge count, which
+    // tracks the unfiltered list.
+    expect(onCountUpdate).not.toHaveBeenCalled();
+  });
+
   it("different project paths use separate cache entries", async () => {
     const keyA = buildCacheKey("/proj-a", "issue", "open", "created");
     setCache(keyA, {
