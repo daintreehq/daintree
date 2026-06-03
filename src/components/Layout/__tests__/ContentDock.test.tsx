@@ -262,9 +262,7 @@ describe("ContentDock regression test", () => {
     it("tracks the previously focused chip in a dedicated ref", () => {
       const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
 
-      expect(content).toContain(
-        "prevFocusedDockItemRef = useRef<HTMLElement | null>(null)"
-      );
+      expect(content).toContain("prevFocusedDockItemRef = useRef<HTMLElement | null>(null)");
       // The recovery ref sits alongside the existing roving-index ref.
       const indexRefIdx = content.indexOf("activeDockIndexRef = useRef");
       const focusRefIdx = content.indexOf("prevFocusedDockItemRef = useRef");
@@ -290,9 +288,7 @@ describe("ContentDock regression test", () => {
       const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
 
       // Eviction detection: prev focused chip no longer in the live list.
-      expect(content).toMatch(
-        /if\s*\(prevFocused\s*&&\s*!items\.includes\(prevFocused\)\)/
-      );
+      expect(content).toMatch(/if\s*\(prevFocused\s*&&\s*!items\.includes\(prevFocused\)\)/);
       // The portal guard must gate the .focus() call.
       const guard = content.indexOf("document.activeElement === document.body");
       const focusCall = content.indexOf("items[clamped]?.focus()");
