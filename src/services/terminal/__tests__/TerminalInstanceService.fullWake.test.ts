@@ -68,6 +68,7 @@ type ManagedTerminalMock = {
   isVisible: boolean;
   isResizeSuppressed: boolean;
   resizeSuppressionEndTime: number | undefined;
+  pendingVisibilityWake?: boolean;
   latestCols: number;
   latestRows: number;
   terminal: {
@@ -91,6 +92,7 @@ type FullWakeTestService = {
   handlePostWake: (id: string) => void;
   unhibernate: (id: string) => void;
   fullWakeForVisibilityRestore: (id: string) => Promise<void>;
+  notifyAttachSettledWaiters: (id: string) => void;
 };
 
 function makeInstance(overrides: Partial<ManagedTerminalMock> = {}): ManagedTerminalMock {
@@ -269,6 +271,36 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     expect(relockTtl).toBeLessThanOrEqual(1500);
   });
 
+  it("still bypasses the resize lock when isResizeSuppressed is true but the end time is missing", async () => {
+    const id = "fw-3b";
+    const instance = makeInstance({
+      isResizeSuppressed: true,
+      resizeSuppressionEndTime: undefined,
+    });
+    service.instances.set(id, instance);
+
+    const calls: string[] = [];
+    const lockResize = vi
+      .spyOn(service.resizeController, "lockResize")
+      .mockImplementation((_id, locked) => {
+        calls.push(locked ? "lock" : "unlock");
+      });
+    vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {
+      calls.push("applyDeferredResize");
+    });
+    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+    vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
+    vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    // Unlock must precede the resize so geometry resyncs, then relock after —
+    // even with no end time (TTL falls back to 0).
+    expect(calls).toEqual(["unlock", "applyDeferredResize", "lock"]);
+    expect(lockResize).toHaveBeenNthCalledWith(1, id, false);
+    expect(lockResize).toHaveBeenNthCalledWith(2, id, true, 0);
+  });
+
   it("does not touch the resize lock when isResizeSuppressed is false", async () => {
     const id = "fw-4";
     const instance = makeInstance({ isResizeSuppressed: false });
@@ -303,7 +335,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     expect(wakeAndRestore).not.toHaveBeenCalled();
   });
 
-  it("bails when terminal is currently attaching", async () => {
+  it("bails when terminal is currently attaching and marks it for a deferred wake (#9702)", async () => {
     const id = "fw-6";
     const instance = makeInstance({ isAttaching: true });
     service.instances.set(id, instance);
@@ -317,6 +349,72 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
 
     expect(applyDeferredResize).not.toHaveBeenCalled();
     expect(wakeAndRestore).not.toHaveBeenCalled();
+    // The skipped wake must leave a flag so it re-runs once attach settles.
+    expect(instance.pendingVisibilityWake).toBe(true);
+  });
+
+  it("clears a stale pendingVisibilityWake flag when proceeding with an immediate wake (#9702)", async () => {
+    const id = "fw-clear";
+    const instance = makeInstance({ pendingVisibilityWake: true });
+    service.instances.set(id, instance);
+
+    vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
+    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+    vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
+    vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    expect(instance.pendingVisibilityWake).toBe(false);
+  });
+
+  it("re-runs the deferred wake via notifyAttachSettledWaiters once attach settles (#9702)", async () => {
+    const id = "fw-deferred";
+    // hostElement must be connected for isAttachSettled() to return true.
+    const hostElement = document.createElement("div");
+    document.body.appendChild(hostElement);
+    const instance = makeInstance({
+      isAttaching: false,
+      pendingVisibilityWake: true,
+      hostElement,
+    });
+    service.instances.set(id, instance);
+
+    const applyDeferredResize = vi
+      .spyOn(service.resizeController, "applyDeferredResize")
+      .mockImplementation(() => {});
+    const wakeAndRestore = vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+    vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
+    vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
+
+    service.notifyAttachSettledWaiters(id);
+    // The deferred wake is dispatched as a floating promise; flush microtasks.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(instance.pendingVisibilityWake).toBe(false);
+    expect(applyDeferredResize).toHaveBeenCalledWith(id);
+    expect(wakeAndRestore).toHaveBeenCalledWith(id);
+
+    document.body.removeChild(hostElement);
+  });
+
+  it("does not fire a deferred wake when pendingVisibilityWake is unset (#9702)", async () => {
+    const id = "fw-nodefer";
+    const hostElement = document.createElement("div");
+    document.body.appendChild(hostElement);
+    const instance = makeInstance({ isAttaching: false, hostElement });
+    service.instances.set(id, instance);
+
+    const wakeAndRestore = vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+
+    service.notifyAttachSettledWaiters(id);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(wakeAndRestore).not.toHaveBeenCalled();
+
+    document.body.removeChild(hostElement);
   });
 
   it("no-ops cleanly when terminal does not exist", async () => {
