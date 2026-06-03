@@ -214,6 +214,29 @@ describe("IssueTooltipContent freshness item", () => {
     expect(screen.getByText(/rate limited, retry at /)).toBeTruthy();
   });
 
+  it.each([
+    ["null", null],
+    ["past", 999],
+    ["equal to now", 1000],
+    ["non-finite", Number.POSITIVE_INFINITY],
+  ])("omits the retry time when reset is %s", (_label, rateLimitResetAt) => {
+    render(
+      <IssueTooltipContent
+        data={issueData}
+        freshness={{ cause: "rate-limit", now: 1000, rateLimitResetAt }}
+      />
+    );
+    expect(screen.getByText("rate limited")).toBeTruthy();
+    expect(screen.queryByText(/retry at/)).toBeNull();
+  });
+
+  it("renders a single freshness item — no duplicate when data is present", () => {
+    const { container } = render(
+      <IssueTooltipContent data={issueData} freshness={{ cause: "rate-limit", now: 1000 }} />
+    );
+    expect(container.querySelectorAll(".lucide-clock")).toHaveLength(1);
+  });
+
   it("renders a circuit-breaker cause as a PauseCircle, not a Clock", () => {
     const { container } = render(
       <IssueTooltipContent data={issueData} freshness={{ cause: "circuit-breaker", now: 1000 }} />

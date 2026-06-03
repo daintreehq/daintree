@@ -104,7 +104,7 @@ function freshnessItem(
     case "rate-limit": {
       let label = "rate limited";
       const { rateLimitResetAt, now } = freshness;
-      if (rateLimitResetAt != null && rateLimitResetAt > now) {
+      if (rateLimitResetAt != null && Number.isFinite(rateLimitResetAt) && rateLimitResetAt > now) {
         const retryTime = new Intl.DateTimeFormat("en-US", {
           hour: "numeric",
           minute: "2-digit",
