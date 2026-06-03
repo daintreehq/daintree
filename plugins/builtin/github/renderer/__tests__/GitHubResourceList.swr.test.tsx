@@ -185,9 +185,13 @@ const makeIssue = (n: number): GitHubIssue => ({
   commentCount: 0,
 });
 
-const makeResponse = (items: GitHubIssue[]): GitHubListResponse<GitHubIssue> => ({
+const makeResponse = (
+  items: GitHubIssue[],
+  totalCount?: number
+): GitHubListResponse<GitHubIssue> => ({
   items,
   pageInfo: { hasNextPage: false, endCursor: null },
+  ...(totalCount === undefined ? {} : { totalCount }),
 });
 
 beforeEach(() => {
@@ -486,7 +490,9 @@ describe("GitHubResourceList SWR behavior", () => {
     expect(mockListIssues.mock.calls[0]?.[0]?.bypassCache).toBe(false);
   });
 
-  it("reports hasMore=true via onCountUpdate when the first page is paginated", async () => {
+  it("falls back to loaded length + hasMore via onCountUpdate when no totalCount is present", async () => {
+    // No server totalCount (e.g. search/cache path): the badge approximates
+    // with the loaded length and the real hasNextPage flag, yielding "2+".
     mockListIssues.mockResolvedValue({
       items: [makeIssue(1), makeIssue(2)],
       pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
@@ -500,6 +506,72 @@ describe("GitHubResourceList SWR behavior", () => {
     await waitFor(() => {
       expect(onCountUpdate).toHaveBeenCalledWith(2, true);
     });
+  });
+
+  it("reports the server totalCount as an exact count via onCountUpdate when paginated (issue #9717)", async () => {
+    // First page is capped at 20 with more pages, but the GraphQL response
+    // carries the real open total. The badge must show that total exactly,
+    // not "20+": the count is the totalCount and the approximate flag is false
+    // even though hasNextPage is true.
+    const items = Array.from({ length: 20 }, (_, i) => makeIssue(i + 1));
+    mockListIssues.mockResolvedValue({
+      items,
+      pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+      totalCount: 47,
+    });
+    const onCountUpdate = vi.fn();
+
+    render(
+      <GitHubResourceList type="issue" projectPath="/test/proj" onCountUpdate={onCountUpdate} />
+    );
+
+    await waitFor(() => {
+      expect(onCountUpdate).toHaveBeenCalled();
+    });
+    const [count, isApproximate] = onCountUpdate.mock.calls.at(-1) ?? [];
+    // totalCount is preferred over the loaded length (20)...
+    expect(count).toBe(47);
+    expect(count).not.toBe(items.length);
+    // ...and the count is exact, so the badge drops the "+" suffix.
+    expect(isApproximate).toBe(false);
+  });
+
+  it("treats a server totalCount of 0 as authoritative via onCountUpdate", async () => {
+    // `?? items.length` (not `|| items.length`) must keep a real zero total.
+    mockListIssues.mockResolvedValue(makeResponse([], 0));
+    const onCountUpdate = vi.fn();
+
+    render(
+      <GitHubResourceList type="issue" projectPath="/test/proj" onCountUpdate={onCountUpdate} />
+    );
+
+    await waitFor(() => {
+      expect(onCountUpdate).toHaveBeenCalledWith(0, false);
+    });
+  });
+
+  it("reports the server totalCount exactly for PR lists too (issue #9717)", async () => {
+    const prs = Array.from({ length: 20 }, (_, i) => ({
+      ...makeIssue(i + 1),
+      isDraft: false,
+      ciStatus: "SUCCESS" as const,
+    }));
+    mockListPRs.mockResolvedValue({
+      items: prs,
+      pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+      totalCount: 61,
+    });
+    const onCountUpdate = vi.fn();
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" onCountUpdate={onCountUpdate} />);
+
+    await waitFor(() => {
+      expect(onCountUpdate).toHaveBeenCalled();
+    });
+    const [count, isApproximate] = onCountUpdate.mock.calls.at(-1) ?? [];
+    expect(count).toBe(61);
+    expect(count).not.toBe(prs.length);
+    expect(isApproximate).toBe(false);
   });
 
   it("calls onCountUpdate again after a successful background revalidation", async () => {
@@ -574,9 +646,11 @@ describe("GitHubResourceList SWR behavior", () => {
     onCountUpdate.mockClear();
 
     // Switch to the "closed" tab — a fresh first-page fetch fires for the
-    // closed filter key. It must NOT report into the open-count badge.
+    // closed filter key, carrying the closed totalCount. It must NOT report
+    // into the open-count badge (the open gate, not the count source, is the
+    // defense).
     mockListIssues.mockResolvedValue(
-      makeResponse([makeIssue(3), makeIssue(4), makeIssue(5), makeIssue(6)])
+      makeResponse([makeIssue(3), makeIssue(4), makeIssue(5), makeIssue(6)], 500)
     );
     act(() => {
       useGitHubFilterStore.getState().setIssueFilter("closed");
