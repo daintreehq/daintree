@@ -11,7 +11,12 @@ import {
   auditBorderSeparation,
   hexToOklch,
 } from "../oklch.js";
-import { BUILT_IN_APP_SCHEMES, createDaintreeTokens } from "../themes.js";
+import {
+  BUILT_IN_APP_SCHEMES,
+  createDaintreeTokens,
+  normalizeAppColorScheme,
+} from "../themes.js";
+import { RED_GREEN_OVERRIDES, BLUE_YELLOW_OVERRIDES } from "../colorVisionOverrides.js";
 import { APP_THEME_TOKEN_KEYS, EXTENSION_KEYS } from "../types.js";
 
 // Minimal hex-only engine input covering createDaintreeTokens' required Pick.
@@ -207,6 +212,38 @@ describe("built-in themes", () => {
         parseAlpha(base[key]) * 0.5,
         4
       );
+    }
+  });
+
+  it("plugin theme that overrides a status color re-derives its surface to match", () => {
+    // Raw-token (no palette) path: a plugin sets a custom magenta info color but
+    // no explicit surface — the engine must derive a magenta wash, not leak the
+    // fallback scheme's (differently-hued) info surface.
+    const scheme = normalizeAppColorScheme({ tokens: { "status-info": "#ff00ff" } });
+    expect(scheme.tokens["status-info-surface"]).toMatch(/^rgba\(\s*255,\s*0,\s*255,/);
+  });
+
+  it("plugin theme keeps an explicit status surface override untouched", () => {
+    const scheme = normalizeAppColorScheme({
+      tokens: { "status-info": "#ff00ff", "status-info-surface": "rgba(1, 2, 3, 0.5)" },
+    });
+    expect(scheme.tokens["status-info-surface"]).toBe("rgba(1, 2, 3, 0.5)");
+  });
+
+  it("CVD overrides re-derive a status surface for every patched status base color", () => {
+    // When a CVD map patches a status base color, it must also patch the
+    // matching surface token (consumed directly as bg-status-*-surface), else
+    // the pre-baked wash keeps the original — now indistinguishable — hue.
+    for (const overrides of [RED_GREEN_OVERRIDES, BLUE_YELLOW_OVERRIDES]) {
+      for (const status of ["success", "danger", "warning", "info"] as const) {
+        const baseHex = overrides[`--theme-status-${status}`];
+        if (!baseHex) continue;
+        const surface = overrides[`--theme-status-${status}-surface`];
+        expect(surface, `surface override missing for status-${status}`).toBeTruthy();
+        // The surface must carry the override's own RGB, not an arbitrary value.
+        const [r, g, b] = hexToRgbTuple(baseHex);
+        expect(surface).toMatch(new RegExp(`^rgba\\(\\s*${r},\\s*${g},\\s*${b},`));
+      }
     }
   });
 
@@ -701,4 +738,20 @@ function walk(dir: string, out: string[], accept: (path: string) => boolean): vo
 function parseAlpha(value: string): number {
   const match = value.match(/rgba?\([^)]*?,\s*([0-9.]+)\s*\)/);
   return match ? Number(match[1]) : NaN;
+}
+
+function hexToRgbTuple(hex: string): [number, number, number] {
+  const clean = hex.replace("#", "");
+  const expanded =
+    clean.length === 3
+      ? clean
+          .split("")
+          .map((c) => `${c}${c}`)
+          .join("")
+      : clean;
+  return [
+    parseInt(expanded.slice(0, 2), 16),
+    parseInt(expanded.slice(2, 4), 16),
+    parseInt(expanded.slice(4, 6), 16),
+  ];
 }

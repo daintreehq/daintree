@@ -923,8 +923,13 @@ export function normalizeAppColorScheme(
     for (const status of ["danger", "success", "warning", "info"] as const) {
       const surfaceKey = `status-${status}-surface` as const;
       const baseKey = `status-${status}` as const;
+      // normalizedTokens is seeded from the fallback scheme, so its surface key
+      // is always a string — guarding on it would never fire. Re-derive only
+      // when the plugin set a custom base color but no matching surface, else
+      // the fallback scheme's (differently-hued) surface would leak through.
       if (
-        typeof normalizedTokens[surfaceKey] !== "string" &&
+        typeof tokenOverrides[surfaceKey] !== "string" &&
+        typeof tokenOverrides[baseKey] === "string" &&
         typeof normalizedTokens[baseKey] === "string"
       ) {
         normalizedTokens[surfaceKey] = withAlpha(normalizedTokens[baseKey], statusSurfaceAlpha);

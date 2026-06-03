@@ -124,8 +124,9 @@ describe("applyColorVisionMode", () => {
   it("ALL_CVD_TOKENS covers the expected token count", () => {
     // Canary: if someone adds or removes tokens from either map,
     // this size changes and the test catches it for review.
-    // 31 red-green + 26 blue-yellow = 57 total, 39 unique after dedup
-    expect(ALL_CVD_TOKENS.size).toBe(39);
+    // 33 red-green (incl. 2 status surfaces) + 28 blue-yellow (incl. 2 status
+    // surfaces) = 61 total, 43 unique after dedup
+    expect(ALL_CVD_TOKENS.size).toBe(43);
   });
 
   it("switches from blue-yellow to red-green clearing blue-yellow-only tokens", () => {

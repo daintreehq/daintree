@@ -7,12 +7,14 @@ import { z } from "zod";
 const appColorSchemeTokenSchema = z.record(z.string(), z.string());
 
 const themeStrategySchema = z.object({
-  shadowStyle: z.enum(["none", "crisp", "soft", "atmospheric"]).optional(),
+  shadowStyle: z.enum(["none", "crisp", "soft", "atmospheric", "light"]).optional(),
   noiseOpacity: z.number().optional(),
   materialBlur: z.number().optional(),
   materialSaturation: z.number().optional(),
   radiusScale: z.number().optional(),
   panelStateEdge: z.boolean().optional(),
+  borderInkOverride: z.string().optional(),
+  statusSurfaceOpacity: z.number().optional(),
 });
 
 const themePaletteSchema = z.object({
