@@ -248,4 +248,87 @@ describe("ContentDock regression test", () => {
       expect(tabGroup).toContain('data-dock-item=""');
     });
   });
+
+  // Issue #9681 — when the focused chip unmounts, the roving-tabindex
+  // useLayoutEffect re-homes the tab stop but focus has already dropped to
+  // <body>, killing keyboard navigation. The dock mirrors Toolbar.tsx's
+  // prevFocusedToolbarItemRef recovery: track the focused chip, and on
+  // eviction redirect focus onto the promoted chip — but only when focus
+  // genuinely fell to <body> (not into a Radix portal). Two further fixes:
+  // the scroll chevrons are decorative pointer-only controls and must leave
+  // the tab order, and the scroll container needs scroll-padding so focused
+  // edge chips are not parked behind the gradient scrim.
+  describe("focus recovery — issue #9681", () => {
+    it("tracks the previously focused chip in a dedicated ref", () => {
+      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+      expect(content).toContain("prevFocusedDockItemRef = useRef<HTMLElement | null>(null)");
+      // The recovery ref sits alongside the existing roving-index ref.
+      const indexRefIdx = content.indexOf("activeDockIndexRef = useRef");
+      const focusRefIdx = content.indexOf("prevFocusedDockItemRef = useRef");
+      expect(indexRefIdx).toBeGreaterThan(0);
+      expect(focusRefIdx).toBeGreaterThan(indexRefIdx);
+    });
+
+    it("records the focused chip in handleDockFocusCapture", () => {
+      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+      // The assignment must live inside handleDockFocusCapture's idx-found
+      // branch so the ref always reflects the live focused chip.
+      const handlerStart = content.indexOf("handleDockFocusCapture = useCallback");
+      const assign = content.indexOf("prevFocusedDockItemRef.current = target", handlerStart);
+      const handlerEnd = content.indexOf("handleDockKeyDown = useCallback", handlerStart);
+
+      expect(handlerStart).toBeGreaterThan(0);
+      expect(assign).toBeGreaterThan(handlerStart);
+      expect(assign).toBeLessThan(handlerEnd);
+    });
+
+    it("redirects focus to the promoted chip only when focus fell to <body>", () => {
+      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+      // Eviction detection: prev focused chip no longer in the live list.
+      expect(content).toMatch(/if\s*\(prevFocused\s*&&\s*!items\.includes\(prevFocused\)\)/);
+      // The portal guard must gate the .focus() call.
+      const guard = content.indexOf("document.activeElement === document.body");
+      const focusCall = content.indexOf("items[clamped]?.focus()");
+      expect(guard).toBeGreaterThan(0);
+      expect(focusCall).toBeGreaterThan(guard);
+    });
+
+    it("clears the recovery ref unconditionally on eviction (before the body guard)", () => {
+      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+      // A stale ref would trigger a phantom redirect on a later unrelated
+      // render, so the clear must precede the activeElement guard.
+      const clear = content.indexOf("prevFocusedDockItemRef.current = null");
+      const guard = content.indexOf("document.activeElement === document.body");
+      expect(clear).toBeGreaterThan(0);
+      expect(guard).toBeGreaterThan(clear);
+    });
+
+    it("removes the scroll chevrons from the tab order", () => {
+      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+      // Both decorative chevron buttons must carry tabIndex={-1} + aria-hidden.
+      const tabIndexCount = (content.match(/tabIndex=\{-1\}/g) ?? []).length;
+      expect(tabIndexCount).toBeGreaterThanOrEqual(2);
+
+      // Anchor each aria-hidden to its chevron's label so the assertion can't
+      // pass on an unrelated pre-existing aria-hidden elsewhere in the file.
+      const leftBtn = content.indexOf("onClick={scrollLeft}");
+      const leftLabel = content.indexOf('aria-label="Scroll left"', leftBtn);
+      expect(content.slice(leftBtn, leftLabel)).toContain('aria-hidden="true"');
+
+      const rightBtn = content.indexOf("onClick={scrollRight}");
+      const rightLabel = content.indexOf('aria-label="Scroll right"', rightBtn);
+      expect(content.slice(rightBtn, rightLabel)).toContain('aria-hidden="true"');
+    });
+
+    it("applies scroll-padding so focused edge chips clear the gradient scrim", () => {
+      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+      expect(content).toContain("scroll-px-4");
+    });
+  });
 });
