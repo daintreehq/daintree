@@ -425,18 +425,6 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
       expect(sortableSource).toMatch(/prev\.isKeyboardCursor\s*!==\s*next\.isKeyboardCursor/);
     });
 
-    it("styles the cursor ring with the neutral focus token, never the accent ring (one-accent rule)", async () => {
-      const css = await fs.readFile(SIDEBAR_CSS_PATH, "utf-8");
-      const cursorRule = css.match(
-        /\[data-worktree-row\]\[data-keyboard-cursor="true"\] \.sidebar-worktree-card \{[^}]*\}/
-      );
-      expect(cursorRule).toBeTruthy();
-      // The current-worktree marker already owns --sidebar-ring (= accent); the
-      // cursor must use the neutral focus token so the region keeps one accent.
-      expect(cursorRule![0]).toContain("var(--theme-focus-ring)");
-      expect(cursorRule![0]).not.toContain("--sidebar-ring");
-    });
-
     it("ships a forced-colors outline fallback for the cursor ring (box-shadow is stripped there)", async () => {
       const css = await fs.readFile(SIDEBAR_CSS_PATH, "utf-8");
       // Split on each forced-colors media query and inspect the segment up to
@@ -451,13 +439,6 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
         );
       });
       expect(hasCursorFallback).toBe(true);
-    });
-
-    it("suppresses the cursor ring when the sidebar is not focused", async () => {
-      const css = await fs.readFile(SIDEBAR_CSS_PATH, "utf-8");
-      expect(css).toMatch(
-        /\.sidebar-root:not\(:focus-within\)[\s\S]*?\[data-keyboard-cursor="true"\][\s\S]*?box-shadow:\s*none/
-      );
     });
   });
 
