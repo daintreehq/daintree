@@ -349,10 +349,10 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
           </div>
         </div>
 
-        <div className="flex items-center justify-between px-3 py-2 border-t border-daintree-border bg-daintree-bg">
-          <span className="text-xs text-daintree-text/60">Current theme</span>
+        <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-daintree-border bg-daintree-bg">
+          <span className="min-w-0 truncate text-xs text-daintree-text/60">Current theme</span>
           {onClose && (
-            <Button variant="contrast" size="sm" onClick={handleChangeTheme}>
+            <Button variant="contrast" size="sm" onClick={handleChangeTheme} className="shrink-0">
               Change theme…
             </Button>
           )}

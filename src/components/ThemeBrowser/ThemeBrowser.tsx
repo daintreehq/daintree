@@ -560,14 +560,15 @@ export function ThemeBrowser() {
         )}
       </div>
 
-      {/* Sticky action bar. The commit button uses the high-contrast `contrast`
-          variant (near-black fill + off-white text on dark themes, near-white
-          fill + off-black text on light) rather than an accent fill: the accent
-          would otherwise be the *previewed* theme's accent (the button restyles
-          on every preview) and the old hardcoded `text-white` was unreadable on
-          light accents (e.g. white on Daintree's #36CE94 ~1.6:1). The monochrome
-          CTA stays consistently legible and highly noticeable across previews. */}
-      <div className="flex items-center justify-end gap-2 px-2.5 py-2 border-t border-daintree-border shrink-0">
+      {/* Bottom action bar (the conventional, always-visible spot for a commit
+          CTA — Material 3 / Apple HIG; the close ✕ stays top-right on the hero).
+          It's a non-scrolling flex child — the list above is the scroll area — so
+          it isn't position:sticky; the opaque bg is a belt-and-braces guard.
+          The commit button uses the high-contrast INVERSE `contrast` variant
+          (near-white fill + off-black text on dark themes, near-black fill +
+          off-white text on light) so it's highly visible and never restyles to
+          the previewed accent. */}
+      <div className="flex items-center justify-end gap-2 px-2.5 py-2 border-t border-daintree-border bg-daintree-bg shrink-0">
         <Button variant="ghost" size="sm" onClick={handleCancel}>
           Cancel
         </Button>

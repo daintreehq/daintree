@@ -622,8 +622,13 @@ export function AppLayout({
               componentName="ThemeBrowser"
               onError={() => useThemeBrowserStore.getState().close()}
             >
+              {/* Offset the panel below the top toolbar. The toolbar is z-[60]
+                  / h-12 (Toolbar.tsx) and paints over the viewport's top 48px, so
+                  a top-0 panel had its top strip (hero ✕ close, any top bar) hidden
+                  behind it. Start at top-12 (= toolbar h-12) so the whole panel —
+                  including the close button — is visible. */}
               <div
-                className="fixed inset-y-0 z-40 pointer-events-auto"
+                className="fixed top-12 bottom-0 z-40 pointer-events-auto"
                 style={{
                   right: "var(--right-obstruction-offset, 0px)",
                 }}
