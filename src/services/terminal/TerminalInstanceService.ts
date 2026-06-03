@@ -854,10 +854,17 @@ class TerminalInstanceService {
     // flag (e.g. a prior skip whose deferred re-run we are now satisfying).
     current.pendingVisibilityWake = false;
 
+    // Unlock symmetrically with the relock in the finally below: bypass the
+    // lock whenever resize is suppressed, even if the suppression end time was
+    // already cleared (the timer can fire between switch-back and this deferred
+    // wake). Without the unlock, applyDeferredResize would no-op under the lock
+    // and geometry would stay stale.
     const needsLockBypass = current.isResizeSuppressed === true;
     let remainingMs = 0;
-    if (needsLockBypass && current.resizeSuppressionEndTime) {
-      remainingMs = Math.max(0, current.resizeSuppressionEndTime - Date.now());
+    if (needsLockBypass) {
+      remainingMs = current.resizeSuppressionEndTime
+        ? Math.max(0, current.resizeSuppressionEndTime - Date.now())
+        : 0;
       this.resizeController.lockResize(id, false);
     }
     try {

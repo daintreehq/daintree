@@ -271,6 +271,36 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     expect(relockTtl).toBeLessThanOrEqual(1500);
   });
 
+  it("still bypasses the resize lock when isResizeSuppressed is true but the end time is missing", async () => {
+    const id = "fw-3b";
+    const instance = makeInstance({
+      isResizeSuppressed: true,
+      resizeSuppressionEndTime: undefined,
+    });
+    service.instances.set(id, instance);
+
+    const calls: string[] = [];
+    const lockResize = vi
+      .spyOn(service.resizeController, "lockResize")
+      .mockImplementation((_id, locked) => {
+        calls.push(locked ? "lock" : "unlock");
+      });
+    vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {
+      calls.push("applyDeferredResize");
+    });
+    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+    vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
+    vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    // Unlock must precede the resize so geometry resyncs, then relock after —
+    // even with no end time (TTL falls back to 0).
+    expect(calls).toEqual(["unlock", "applyDeferredResize", "lock"]);
+    expect(lockResize).toHaveBeenNthCalledWith(1, id, false);
+    expect(lockResize).toHaveBeenNthCalledWith(2, id, true, 0);
+  });
+
   it("does not touch the resize lock when isResizeSuppressed is false", async () => {
     const id = "fw-4";
     const instance = makeInstance({ isResizeSuppressed: false });
