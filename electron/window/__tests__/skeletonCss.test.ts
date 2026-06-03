@@ -96,6 +96,43 @@ describe("injectSkeletonCss accent override (#9162)", () => {
   });
 });
 
+describe("injectSkeletonCss var scoping (#9716)", () => {
+  beforeEach(() => {
+    storeMock.get.mockClear();
+  });
+
+  it("scopes seeded theme vars to #startup-skeleton, never :root", () => {
+    const wc = makeWc();
+    injectSkeletonCss(wc as never);
+    const css = wc.insertCSS.mock.calls[0]?.[0] as string;
+    // A :root-scoped block would persist (user-origin insertCSS is never
+    // removed) and leak removed optional tokens after a theme switch.
+    expect(css).toContain("#startup-skeleton {");
+    expect(css).not.toMatch(/(^|\s):root\s*\{/);
+  });
+
+  it("emits the light theme's optional panel-grid-bg extension under #startup-skeleton, not :root", () => {
+    // Bondi is a light theme that defines the `panel-grid-bg` extension. Before
+    // the fix this was injected at `:root` and survived a light→dark switch
+    // because the dark theme removes the inline override, leaving the stale
+    // skeleton value to win the cascade.
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appState") return { sidebarWidth: 350, focusMode: false };
+      if (key === "appTheme") return { colorSchemeId: "bondi" };
+      return undefined;
+    });
+    const wc = makeWc();
+    injectSkeletonCss(wc as never);
+    const css = wc.insertCSS.mock.calls[0]?.[0] as string;
+    // The extension token is still emitted (so the splash paints correctly)...
+    expect(css).toContain("--panel-grid-bg:");
+    // ...but the only selector wrapping it is the scoped one.
+    const selectors = css.match(/[^\s][^{]*\{/g) ?? [];
+    expect(selectors.some((s) => s.trim().startsWith("#startup-skeleton"))).toBe(true);
+    expect(selectors.some((s) => s.trim().startsWith(":root"))).toBe(false);
+  });
+});
+
 describe("injectSkeletonProjectIdentity (#9162)", () => {
   it("paints emoji and name into the title via executeJavaScript", () => {
     const wc = makeWc();

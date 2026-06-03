@@ -133,8 +133,19 @@ export function injectSkeletonCss(wc: WebContents, project?: Pick<Project, "colo
   const themedScheme = applyAccentOverrideToScheme(scheme, project?.color);
   const themeVars = getAppThemeCssVariables(themedScheme);
 
-  // Build CSS string
-  const lines: string[] = [":root {"];
+  // Scope the seeded vars to `#startup-skeleton`, NOT `:root`. This stylesheet
+  // is injected via user-origin `insertCSS` and is never removed — it persists
+  // for the whole session. Required `--theme-*` tokens are harmless because the
+  // renderer re-sets them inline on `documentElement` on every theme switch, and
+  // inline (author-origin) styles outrank user-origin rules (#9333). But OPTIONAL
+  // extension tokens (e.g. `--panel-grid-bg`, emitted only by light themes) are
+  // REMOVED inline on a light→dark switch — with no inline value left, a `:root`
+  // declaration here would win the cascade and leak the old light value until
+  // restart (#9716). Scoping to `#startup-skeleton` keeps the splash themed (its
+  // descendants inherit these vars) while ensuring nothing leaks into the live
+  // app, whose own vars live on `:root` via applyDefaultAppTheme. `#root` is a
+  // sibling of `#startup-skeleton`, so the app never inherits this block.
+  const lines: string[] = ["#startup-skeleton {"];
 
   // Theme tokens (--theme-surface-canvas, --theme-border-default, etc.)
   for (const [prop, value] of Object.entries(themeVars)) {
