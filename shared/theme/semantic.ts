@@ -1,35 +1,20 @@
 import type { ThemePalette } from "./palette.js";
-import { ANSI_CYAN_FALLBACK, ANSI_MAGENTA_FALLBACK, createDaintreeTokens } from "./themes.js";
+import {
+  ANSI_CYAN_FALLBACK,
+  ANSI_MAGENTA_FALLBACK,
+  createDaintreeTokens,
+  resolveChromeNoiseTexture,
+  resolveMaterialOpacity,
+  resolveShadowProfiles,
+} from "./themes.js";
 import type { AppColorSchemeTokens } from "./types.js";
 
 export function createSemanticTokens(palette: ThemePalette): AppColorSchemeTokens {
   const strategy = palette.strategy;
-  const shadowStyle = strategy?.shadowStyle ?? (palette.type === "dark" ? "soft" : "crisp");
-
-  const shadowProfiles =
-    shadowStyle === "none"
-      ? {
-          ambient: "none",
-          floating: "none",
-          dialog: "0 0 0 1px var(--theme-border-subtle)",
-        }
-      : shadowStyle === "crisp"
-        ? {
-            ambient: "0 1px 2px rgba(0, 0, 0, 0.2)",
-            floating: "0 4px 8px rgba(0, 0, 0, 0.3)",
-            dialog: "0 8px 16px rgba(0, 0, 0, 0.3)",
-          }
-        : shadowStyle === "atmospheric"
-          ? {
-              ambient: "0 4px 16px rgba(0, 0, 0, 0.15)",
-              floating: "0 14px 40px rgba(0, 0, 0, 0.25)",
-              dialog: "0 20px 56px rgba(0, 0, 0, 0.3)",
-            }
-          : {
-              ambient: "0 2px 8px rgba(0, 0, 0, 0.06)",
-              floating: "0 4px 12px rgba(0, 0, 0, 0.12)",
-              dialog: "0 12px 32px rgba(0, 0, 0, 0.15)",
-            };
+  // RC-5: light themes default to the large-radius, low-alpha, cool-ink "light"
+  // shadow profile instead of the dirty "crisp" hairline. "crisp" stays an opt-in.
+  const shadowStyle = strategy?.shadowStyle ?? (palette.type === "dark" ? "soft" : "light");
+  const shadowProfiles = resolveShadowProfiles(shadowStyle);
 
   return createDaintreeTokens(palette.type, {
     "surface-grid": palette.surfaces.grid,
@@ -86,12 +71,9 @@ export function createSemanticTokens(palette: ThemePalette): AppColorSchemeToken
     "shadow-dialog": shadowProfiles.dialog,
     "material-blur": `${strategy?.materialBlur ?? 0}px`,
     "material-saturation": `${strategy?.materialSaturation ?? 100}%`,
-    "material-opacity": strategy?.materialBlur && strategy.materialBlur > 0 ? "0.9" : "1",
+    "material-opacity": resolveMaterialOpacity(palette.type, strategy?.materialBlur),
     "radius-scale": String(strategy?.radiusScale ?? 1),
-    "chrome-noise-texture":
-      strategy?.noiseOpacity && strategy.noiseOpacity > 0
-        ? `radial-gradient(circle at 20% 20%, rgb(255 255 255 / ${strategy.noiseOpacity}), transparent 55%)`
-        : "none",
+    "chrome-noise-texture": resolveChromeNoiseTexture(palette.type, strategy?.noiseOpacity),
     "panel-state-edge-width":
       (strategy?.panelStateEdge ?? palette.type === "light") ? "2px" : "0px",
   });

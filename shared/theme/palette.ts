@@ -1,5 +1,5 @@
 export interface ThemeStrategy {
-  shadowStyle?: "none" | "crisp" | "soft" | "atmospheric";
+  shadowStyle?: "none" | "crisp" | "soft" | "atmospheric" | "light";
   noiseOpacity?: number;
   materialBlur?: number;
   materialSaturation?: number;

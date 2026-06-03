@@ -1,4 +1,9 @@
 import type { AppColorScheme, AppThemeValidationWarning, AppThemeTokenKey } from "./types.js";
+// Function-level cyclic reference (colorValidator imports the color math below):
+// safe because both sides are called at runtime, after module init, not at
+// top-level evaluation. The overlay Weber floor lives in colorValidator per the
+// validation-domain split; we re-run it here so it joins the same contrast gate.
+import { getOverlayContrastWarnings } from "./colorValidator.js";
 
 const DISPLAY_SURFACES: AppThemeTokenKey[] = [
   "surface-grid",
@@ -12,6 +17,11 @@ const CONTRAST_PAIRS: Array<{
   foreground: AppThemeTokenKey;
   background: AppThemeTokenKey;
   minimum: number;
+  // When set, the pair is only enforced for that polarity. Used for roles whose
+  // legible-on-canvas target is a documented light-mode requirement, while the
+  // dark mode runs an intentionally lower, sanctioned calibration (e.g. muted
+  // label text, the on-canvas accent link) that must not regress (RC-4 / RC-8).
+  appliesTo?: "light" | "dark";
 }> = [
   { foreground: "text-primary", background: "surface-grid", minimum: 4.5 },
   { foreground: "text-primary", background: "surface-sidebar", minimum: 4.5 },
@@ -23,6 +33,30 @@ const CONTRAST_PAIRS: Array<{
   { foreground: "text-secondary", background: "surface-canvas", minimum: 3.0 },
   { foreground: "text-secondary", background: "surface-panel", minimum: 3.0 },
   { foreground: "text-secondary", background: "surface-panel-elevated", minimum: 3.0 },
+  // text-muted is the de-emphasized label tier. A 3.0 floor (matching text-secondary)
+  // is too permissive — muted text routinely drained below legibility on the light
+  // palettes while still clearing 3.0. A floor of 3.5 keeps it honest as
+  // readable-but-quiet (RC-8). Light-only: dark muted runs an intentionally lower,
+  // sanctioned calibration (visual-guide.md sanctions sub-AA muted; daintree itself
+  // sits ~4.1, namib ~2.2) which this guard must not regress.
+  { foreground: "text-muted", background: "surface-grid", minimum: 3.5, appliesTo: "light" },
+  { foreground: "text-muted", background: "surface-sidebar", minimum: 3.5, appliesTo: "light" },
+  { foreground: "text-muted", background: "surface-canvas", minimum: 3.5, appliesTo: "light" },
+  { foreground: "text-muted", background: "surface-panel", minimum: 3.5, appliesTo: "light" },
+  {
+    foreground: "text-muted",
+    background: "surface-panel-elevated",
+    minimum: 3.5,
+    appliesTo: "light",
+  },
+  // text-link is rendered as on-canvas accent-colored text. On dark it advances as
+  // a bright object; on light, the AA-forced dark/low-chroma accent recedes below
+  // the surface and the engine never flagged it because no link-vs-canvas pair
+  // existed (RC-4/RC-8). 4.5 = AA body text, since a link IS readable body text.
+  // Light-only: the receding-link figure-ground inversion is a light-mode defect;
+  // dark links are bright by construction (and arashiyama's deliberate 4.38 must
+  // not regress).
+  { foreground: "text-link", background: "surface-canvas", minimum: 4.5, appliesTo: "light" },
   { foreground: "status-success", background: "surface-panel", minimum: 3.0 },
   { foreground: "status-success", background: "surface-grid", minimum: 3.0 },
   { foreground: "status-success", background: "surface-sidebar", minimum: 3.0 },
@@ -72,7 +106,7 @@ export function hexToRgb(hex: string): [number, number, number] {
   ];
 }
 
-function parseRgba(value: string): { hex: string; opacity: number } | null {
+export function parseRgba(value: string): { hex: string; opacity: number } | null {
   const trimmed = value.trim();
   const match = trimmed.match(/^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)$/);
   if (!match) return null;
@@ -82,7 +116,7 @@ function parseRgba(value: string): { hex: string; opacity: number } | null {
   };
 }
 
-function blendOverBackground(fgHex: string, bgHex: string, opacity: number): string {
+export function blendOverBackground(fgHex: string, bgHex: string, opacity: number): string {
   const [fr, fg, fb] = hexToRgb(fgHex);
   const [br, bg, bb] = hexToRgb(bgHex);
   const r = Math.round(fr * opacity + br * (1 - opacity));
@@ -100,7 +134,7 @@ export function hexToLinear(channel: number): number {
   return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
 }
 
-function relativeLuminance(hex: string): number {
+export function relativeLuminance(hex: string): number {
   const clean = hex.trim().replace("#", "");
   let rgb: string;
   if (clean.length === 3 || clean.length === 4) {
@@ -233,6 +267,19 @@ const SOFT_LEGIBILITY_FLOOR = 0.18;
 // current themes simply don't differentiate base/bright pairs more than this.
 const DISTINCTNESS_FLOOR = 0.03;
 
+// Syntax roles are painted on surface-canvas in the file viewer (editorTheme.ts),
+// not on the always-dark terminal-background. The terminal legibility loop above
+// validates the TERMINAL render surface; this validates the EDITOR render surface
+// (RC-8). WCAG ratios are reliable here because surface-canvas is a real, possibly
+// light, surface — so we use contrastRatio, not OKLab dL. Editor code is body text
+// → AA 4.5:1; de-emphasized roles (comment, quote) get a relaxed legible floor.
+const SYNTAX_CANVAS_MIN_CONTRAST = 4.5;
+const SYNTAX_CANVAS_SOFT_MIN_CONTRAST = 3.0;
+const SYNTAX_CANVAS_SURFACE: AppThemeTokenKey = "surface-canvas";
+// Roles that aren't legibility-bearing foreground code text on the canvas:
+// chip is a fill/badge, not a glyph color, so it's excluded from the render check.
+const SYNTAX_CANVAS_SKIP: ReadonlySet<AppThemeTokenKey> = new Set(["syntax-chip"]);
+
 interface DistinctnessPair {
   a: AppThemeTokenKey;
   b: AppThemeTokenKey;
@@ -310,6 +357,28 @@ function getTerminalSyntaxWarnings(scheme: AppColorScheme): AppThemeValidationWa
     }
   }
 
+  // Editor render-surface legibility — syntax roles are painted on surface-canvas
+  // in the file viewer, in ADDITION to the terminal (RC-8). For light themes the
+  // terminal background (dark) and the canvas (near-white) diverge, so a role that
+  // passes the dark-terminal check can be invisible on the canvas it renders on.
+  const canvas = scheme.tokens[SYNTAX_CANVAS_SURFACE];
+  if (typeof canvas === "string" && isHexColor(canvas)) {
+    for (const tokenKey of TERMINAL_SYNTAX_ROLES) {
+      if (SYNTAX_CANVAS_SKIP.has(tokenKey)) continue;
+      const fg = scheme.tokens[tokenKey];
+      if (typeof fg !== "string" || !isHexColor(fg)) continue; // terminal loop already reported non-hex/missing
+      const ratio = contrastRatio(fg, canvas);
+      const floor = SOFT_LEGIBILITY_ROLES.has(tokenKey)
+        ? SYNTAX_CANVAS_SOFT_MIN_CONTRAST
+        : SYNTAX_CANVAS_MIN_CONTRAST;
+      if (ratio < floor) {
+        warnings.push({
+          message: `${tokenKey} on ${SYNTAX_CANVAS_SURFACE} (editor render surface) is ${ratio.toFixed(2)}:1; target is ${floor.toFixed(1)}:1`,
+        });
+      }
+    }
+  }
+
   // Distinctness — independent of background, always run.
   for (const pair of DISTINCTNESS_PAIRS) {
     const aVal = scheme.tokens[pair.a];
@@ -340,6 +409,7 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
   const warnings: AppThemeValidationWarning[] = [];
 
   for (const pair of CONTRAST_PAIRS) {
+    if (pair.appliesTo && pair.appliesTo !== scheme.type) continue;
     const fg = scheme.tokens[pair.foreground];
     const bg = scheme.tokens[pair.background];
     if (!isHexColor(fg)) {
@@ -456,6 +526,10 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
   // Terminal ANSI / syntax legibility and distinctness — OKLab-based because
   // the terminal background is always dark and WCAG ratios are unreliable there.
   warnings.push(...getTerminalSyntaxWarnings(scheme));
+
+  // Interactive overlay perceptibility (RC-2) — both-polarity Weber floor on the
+  // hover overlay over surface-canvas. Lives in colorValidator; joined here.
+  warnings.push(...getOverlayContrastWarnings(scheme));
 
   return warnings;
 }

@@ -90,13 +90,21 @@ export function createDaintreeTokens(
 ): AppColorSchemeTokens {
   const dark = type === "dark";
   const overlayTone = dark ? "#ffffff" : "#000000";
+  // Light ink for borders/separators. The engine is an additive-glow model tuned
+  // for dark (layering white over a low-L canvas reads as glow). On a near-white
+  // canvas, pure black at dark's alphas barely registers and reads as grime, so
+  // light uses a cool near-black ink (slight blue) that composites near-neutral
+  // at the raised alphas below — present, but not an accent highlight.
+  const borderInk = dark ? overlayTone : "#0f141b";
   // overlay-base tints the entire hover/fill ladder. Defaults to overlayTone (pure
   // white/black). Set to a hued color for themed overlays (icy blue, warm cream, etc.).
+  // On light, the interactive ladder routes through overlayBase (RC-3) so the
+  // per-theme tint carries hue identity now that the alphas are perceptible (RC-2).
   const overlayBase = tokens["overlay-base"] ?? overlayTone;
   const accentSoft =
-    tokens["accent-soft"] ?? withAlpha(tokens["accent-primary"], dark ? 0.18 : 0.12);
+    tokens["accent-soft"] ?? withAlpha(tokens["accent-primary"], dark ? 0.18 : 0.18);
   const accentMuted =
-    tokens["accent-muted"] ?? withAlpha(tokens["accent-primary"], dark ? 0.3 : 0.2);
+    tokens["accent-muted"] ?? withAlpha(tokens["accent-primary"], dark ? 0.3 : 0.3);
   const accentRgb = tokens["accent-primary"].startsWith("#")
     ? hexToRgbTriplet(tokens["accent-primary"])
     : "0, 0, 0";
@@ -157,14 +165,20 @@ export function createDaintreeTokens(
   return {
     ...prStateDefaults,
     ...categoryDefaults,
-    "border-subtle": tokens["border-subtle"] ?? withAlpha(overlayTone, dark ? 0.08 : 0.05),
-    "border-strong": tokens["border-strong"] ?? withAlpha(overlayTone, dark ? 0.14 : 0.14),
-    "border-divider": tokens["border-divider"] ?? withAlpha(overlayTone, dark ? 0.05 : 0.04),
-    "border-interactive": tokens["border-interactive"] ?? withAlpha(overlayTone, dark ? 0.2 : 0.1),
+    // RC-6: light borders raised and floored by contrast vs the brightest adjacent
+    // surface (target ≥~1.18). When overlay/shadow depth cues collapse on a near-white
+    // canvas, separation falls to borders — so the light ladder is roughly doubled and
+    // driven from the cool near-black `borderInk`, which composites near-neutral.
+    "border-subtle": tokens["border-subtle"] ?? withAlpha(borderInk, dark ? 0.08 : 0.09),
+    "border-strong": tokens["border-strong"] ?? withAlpha(borderInk, dark ? 0.14 : 0.18),
+    "border-divider": tokens["border-divider"] ?? withAlpha(borderInk, dark ? 0.05 : 0.085),
+    "border-interactive": tokens["border-interactive"] ?? withAlpha(borderInk, dark ? 0.2 : 0.2),
     "accent-foreground": tokens["accent-foreground"] ?? tokens["text-inverse"],
+    // RC-4 (engine slice): on light, brighten the accent on hover (mix toward white)
+    // so it advances on interaction instead of darkening into the canvas.
     "accent-hover":
       tokens["accent-hover"] ??
-      `color-mix(in oklab, ${tokens["accent-primary"]} 90%, ${dark ? "#ffffff" : "#000000"})`,
+      `color-mix(in oklab, ${tokens["accent-primary"]} 90%, ${dark ? "#ffffff" : "#ffffff"})`,
     "accent-soft": accentSoft,
     "accent-muted": accentMuted,
     "accent-rgb": tokens["accent-rgb"] ?? accentRgb,
@@ -175,14 +189,26 @@ export function createDaintreeTokens(
     "overlay-medium": tokens["overlay-medium"] ?? withAlpha(overlayBase, dark ? 0.04 : 0.05),
     "overlay-strong": tokens["overlay-strong"] ?? withAlpha(overlayBase, dark ? 0.06 : 0.08),
     "overlay-emphasis": tokens["overlay-emphasis"] ?? withAlpha(overlayBase, dark ? 0.1 : 0.12),
-    "overlay-hover": tokens["overlay-hover"] ?? withAlpha(overlayTone, dark ? 0.05 : 0.03),
-    "overlay-active": tokens["overlay-active"] ?? withAlpha(overlayTone, dark ? 0.08 : 0.06),
-    "overlay-selected": tokens["overlay-selected"] ?? withAlpha(overlayTone, dark ? 0.04 : 0.05),
-    "overlay-elevated": tokens["overlay-elevated"] ?? withAlpha(overlayTone, dark ? 0.06 : 0.08),
+    // RC-2: the four highest-traffic interactive fills. Dark layers white over a
+    // low-L canvas and reads as glow; light layers ink over near-white where the
+    // eye's luminance discrimination is compressed, so the light alphas are raised
+    // ~2x to a perceptual Weber target (~15-25% over surface-canvas) instead of
+    // mirroring dark's alphas. RC-3: light routes these through `overlayBase` (the
+    // hued tint) rather than pure tone, so the per-theme tint carries hue identity
+    // now that the alphas are perceptible. Dark keeps `overlayTone` unchanged.
+    "overlay-hover":
+      tokens["overlay-hover"] ?? withAlpha(dark ? overlayTone : overlayBase, dark ? 0.05 : 0.065),
+    "overlay-active":
+      tokens["overlay-active"] ?? withAlpha(dark ? overlayTone : overlayBase, dark ? 0.08 : 0.11),
+    "overlay-selected":
+      tokens["overlay-selected"] ?? withAlpha(dark ? overlayTone : overlayBase, dark ? 0.04 : 0.08),
+    "overlay-elevated":
+      tokens["overlay-elevated"] ?? withAlpha(dark ? overlayTone : overlayBase, dark ? 0.06 : 0.1),
     "filter-selected-bg-soft":
-      tokens["filter-selected-bg-soft"] ?? withAlpha(tint, dark ? 0.08 : 0.06),
+      tokens["filter-selected-bg-soft"] ?? withAlpha(dark ? tint : overlayBase, dark ? 0.08 : 0.08),
     "filter-selected-bg-strong":
-      tokens["filter-selected-bg-strong"] ?? withAlpha(tint, dark ? 0.12 : 0.1),
+      tokens["filter-selected-bg-strong"] ??
+      withAlpha(dark ? tint : overlayBase, dark ? 0.12 : 0.12),
     "wash-subtle": tokens["wash-subtle"] ?? withAlpha(overlayBase, 0.02),
     "wash-medium": tokens["wash-medium"] ?? withAlpha(overlayBase, 0.04),
     "wash-strong": tokens["wash-strong"] ?? withAlpha(overlayBase, 0.08),
@@ -216,9 +242,15 @@ export function createDaintreeTokens(
     "surface-input":
       tokens["surface-input"] ??
       (dark ? tokens["surface-panel-elevated"] : tokens["surface-panel"]),
-    "surface-inset": tokens["surface-inset"] ?? withAlpha(overlayTone, dark ? 0.03 : 0.04),
-    "surface-hover": tokens["surface-hover"] ?? withAlpha(overlayTone, dark ? 0.05 : 0.03),
-    "surface-active": tokens["surface-active"] ?? withAlpha(overlayTone, dark ? 0.08 : 0.06),
+    // RC-2 siblings: same failure mode as the overlay ladder. Light raised ~2x and
+    // routed through `overlayBase` so the per-theme tint reaches the primary hover
+    // surface. Dark keeps `overlayTone` unchanged.
+    "surface-inset":
+      tokens["surface-inset"] ?? withAlpha(dark ? overlayTone : overlayBase, dark ? 0.03 : 0.06),
+    "surface-hover":
+      tokens["surface-hover"] ?? withAlpha(dark ? overlayTone : overlayBase, dark ? 0.05 : 0.065),
+    "surface-active":
+      tokens["surface-active"] ?? withAlpha(dark ? overlayTone : overlayBase, dark ? 0.08 : 0.11),
     "surface-disabled":
       tokens["surface-disabled"] ??
       `color-mix(in oklab, ${tokens["surface-input"] ?? (dark ? tokens["surface-panel-elevated"] : tokens["surface-panel"])} 70%, ${tokens["surface-canvas"]})`,
@@ -273,6 +305,86 @@ export function createDaintreeTokens(
       tokens["status-danger-surface"] ?? withAlpha(tokens["status-danger"], dark ? 0.1 : 0.08),
     ...tokens,
   };
+}
+
+export interface ShadowProfiles {
+  ambient: string;
+  floating: string;
+  dialog: string;
+}
+
+/**
+ * Resolve the three elevation-shadow tokens from a shadow style. Shared by
+ * `compilePaletteToTokens` and `createSemanticTokens` so both code paths stay
+ * in lockstep.
+ *
+ * RC-5: the "light" profile is the default for light themes. The dark engine is
+ * an additive-glow model — atmospheric/soft shadows read as foggy depth over a
+ * low-L field. On a near-white canvas, dark's hard "crisp" hairline reads as a
+ * dirty edge, so the light profile uses large radii with low-but-present alpha
+ * (~0.10-0.14) and a cool/hued ink (slate-blue) so the shadow reads as airy lift,
+ * not grime. "crisp" stays available as an explicit per-theme opt-in.
+ */
+export function resolveShadowProfiles(
+  shadowStyle: "none" | "crisp" | "soft" | "atmospheric" | "light"
+): ShadowProfiles {
+  switch (shadowStyle) {
+    case "none":
+      return {
+        ambient: "none",
+        floating: "none",
+        dialog: "0 0 0 1px var(--theme-border-subtle)",
+      };
+    case "crisp":
+      return {
+        ambient: "0 1px 2px rgba(0, 0, 0, 0.2)",
+        floating: "0 4px 8px rgba(0, 0, 0, 0.3)",
+        dialog: "0 8px 16px rgba(0, 0, 0, 0.3)",
+      };
+    case "atmospheric":
+      return {
+        ambient: "0 4px 16px rgba(0, 0, 0, 0.15)",
+        floating: "0 14px 40px rgba(0, 0, 0, 0.25)",
+        dialog: "0 20px 56px rgba(0, 0, 0, 0.3)",
+      };
+    case "light":
+      return {
+        ambient: "0 8px 24px rgba(23, 33, 48, 0.1)",
+        floating: "0 18px 48px rgba(23, 33, 48, 0.13)",
+        dialog: "0 28px 64px rgba(23, 33, 48, 0.14)",
+      };
+    default:
+      return {
+        ambient: "0 2px 8px rgba(0, 0, 0, 0.06)",
+        floating: "0 4px 12px rgba(0, 0, 0, 0.12)",
+        dialog: "0 12px 32px rgba(0, 0, 0, 0.15)",
+      };
+  }
+}
+
+/**
+ * Material opacity for translucent chrome. Blur>0 implies a frosted-glass
+ * surface that needs a hair of transparency to read as glass on dark. RC-9:
+ * on light, translucent chrome over a near-white field shows nothing through
+ * and only hazes the chrome, so light stays fully opaque.
+ */
+export function resolveMaterialOpacity(type: "dark" | "light", blur: number | undefined): string {
+  if (type === "light") return "1";
+  return blur && blur > 0 ? "0.9" : "1";
+}
+
+/**
+ * Chrome grain texture. RC-9: the gradient ink is type-aware — white grain over
+ * a dark field, a cool near-black grain over a light field (a white radial is
+ * invisible on near-white and only the dark grain registers).
+ */
+export function resolveChromeNoiseTexture(
+  type: "dark" | "light",
+  noiseOpacity: number | undefined
+): string {
+  if (!noiseOpacity || noiseOpacity <= 0) return "none";
+  const ink = type === "light" ? "15 20 28" : "255 255 255";
+  return `radial-gradient(circle at 20% 20%, rgb(${ink} / ${noiseOpacity}), transparent 55%)`;
 }
 
 function withAlpha(color: string, alpha: number): string {
@@ -429,9 +541,9 @@ export function normalizeAccentHex(value: unknown): string | null {
  * from a theme's native accent.
  *
  * - `accent-primary`: the hex itself
- * - `accent-hover`: `color-mix(in oklab, hex 90%, #fff/#000)` (brightened for dark, darkened for light)
- * - `accent-soft`: `rgba(triplet, 0.18 dark / 0.12 light)`
- * - `accent-muted`: `rgba(triplet, 0.30 dark / 0.20 light)`
+ * - `accent-hover`: `color-mix(in oklab, hex 90%, #fff)` (brightened — advances on hover for both polarities)
+ * - `accent-soft`: `rgba(triplet, 0.18)`
+ * - `accent-muted`: `rgba(triplet, 0.30)`
  * - `accent-rgb`: `R, G, B` triplet for use inside `rgba(var(--theme-accent-rgb), a)`
  * - `accent-foreground`: best WCAG contrast from the scheme's own text-inverse / text-primary + white/black
  */
@@ -454,9 +566,9 @@ export function computeAccentOverrideTokens(
   const dark = baseScheme.type === "dark";
   return {
     "accent-primary": normalized,
-    "accent-hover": `color-mix(in oklab, ${normalized} 90%, ${dark ? "#ffffff" : "#000000"})`,
-    "accent-soft": withAlpha(normalized, dark ? 0.18 : 0.12),
-    "accent-muted": withAlpha(normalized, dark ? 0.3 : 0.2),
+    "accent-hover": `color-mix(in oklab, ${normalized} 90%, #ffffff)`,
+    "accent-soft": withAlpha(normalized, dark ? 0.18 : 0.18),
+    "accent-muted": withAlpha(normalized, dark ? 0.3 : 0.3),
     "accent-rgb": hexToRgbTriplet(normalized),
     "accent-foreground": pickReadableForeground(normalized, [
       baseScheme.tokens["text-inverse"],
@@ -631,31 +743,8 @@ export function getAppThemeWarnings(scheme: AppColorScheme): AppThemeValidationW
 
 function compilePaletteToTokens(palette: ThemePalette): AppColorSchemeTokens {
   const strategy = palette.strategy;
-  const shadowStyle = strategy?.shadowStyle ?? (palette.type === "dark" ? "soft" : "crisp");
-  const shadowProfiles =
-    shadowStyle === "none"
-      ? {
-          ambient: "none",
-          floating: "none",
-          dialog: "0 0 0 1px var(--theme-border-subtle)",
-        }
-      : shadowStyle === "crisp"
-        ? {
-            ambient: "0 1px 2px rgba(0, 0, 0, 0.2)",
-            floating: "0 4px 8px rgba(0, 0, 0, 0.3)",
-            dialog: "0 8px 16px rgba(0, 0, 0, 0.3)",
-          }
-        : shadowStyle === "atmospheric"
-          ? {
-              ambient: "0 4px 16px rgba(0, 0, 0, 0.15)",
-              floating: "0 14px 40px rgba(0, 0, 0, 0.25)",
-              dialog: "0 20px 56px rgba(0, 0, 0, 0.3)",
-            }
-          : {
-              ambient: "0 2px 8px rgba(0, 0, 0, 0.06)",
-              floating: "0 4px 12px rgba(0, 0, 0, 0.12)",
-              dialog: "0 12px 32px rgba(0, 0, 0, 0.15)",
-            };
+  const shadowStyle = strategy?.shadowStyle ?? (palette.type === "dark" ? "soft" : "light");
+  const shadowProfiles = resolveShadowProfiles(shadowStyle);
 
   return createDaintreeTokens(palette.type, {
     "surface-grid": palette.surfaces.grid,
@@ -712,12 +801,9 @@ function compilePaletteToTokens(palette: ThemePalette): AppColorSchemeTokens {
     "shadow-dialog": shadowProfiles.dialog,
     "material-blur": `${strategy?.materialBlur ?? 0}px`,
     "material-saturation": `${strategy?.materialSaturation ?? 100}%`,
-    "material-opacity": strategy?.materialBlur && strategy.materialBlur > 0 ? "0.9" : "1",
+    "material-opacity": resolveMaterialOpacity(palette.type, strategy?.materialBlur),
     "radius-scale": String(strategy?.radiusScale ?? 1),
-    "chrome-noise-texture":
-      strategy?.noiseOpacity && strategy.noiseOpacity > 0
-        ? `radial-gradient(circle at 20% 20%, rgb(255 255 255 / ${strategy.noiseOpacity}), transparent 55%)`
-        : "none",
+    "chrome-noise-texture": resolveChromeNoiseTexture(palette.type, strategy?.noiseOpacity),
     "panel-state-edge-width":
       (strategy?.panelStateEdge ?? palette.type === "light") ? "2px" : "0px",
   });

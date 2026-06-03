@@ -1,4 +1,10 @@
-import { APP_THEME_TOKEN_KEYS, type AppThemeTokenKey } from "./types.js";
+import {
+  APP_THEME_TOKEN_KEYS,
+  type AppThemeTokenKey,
+  type AppColorScheme,
+  type AppThemeValidationWarning,
+} from "./types.js";
+import { blendOverBackground, parseRgba, relativeLuminance } from "./contrast.js";
 
 const APP_THEME_TOKEN_KEY_SET: ReadonlySet<string> = new Set<string>(APP_THEME_TOKEN_KEYS);
 
@@ -317,6 +323,76 @@ export function isValidAccentRgbTriplet(value: string): boolean {
     if (!Number.isFinite(component) || component < 0 || component > 255) return false;
   }
   return true;
+}
+
+/**
+ * Minimum Weber contrast the hover overlay must reach against surface-canvas,
+ * in EITHER polarity. The interactive overlay ladder is `withAlpha(overlayTone, α)`
+ * where overlayTone flips white (dark) → black (light) — a perceptual mirror that
+ * doesn't hold near the white ceiling, where the same alpha barely moves luminance
+ * (RC-2). Dark hover lands ~47% Weber; the light cohort collapsed to ~6-7%, an
+ * invisible hover. 12% is a perceptible-but-not-shouty floor that catches a too-weak
+ * overlay on BOTH light and dark — it is NOT a literal alpha mirror, it is a
+ * behavioral floor on the rendered luminance step.
+ */
+const OVERLAY_HOVER_WEBER_FLOOR = 0.12;
+
+/**
+ * Weber contrast of a composited foreground against its background surface:
+ * |Lfg − Lbg| / max(Lbg, ε). Symmetric in intent across polarities — a white
+ * film lifting a dark surface and a black film darkening a light surface both
+ * register as a positive step. Returns null if either luminance can't be derived.
+ */
+function weberContrast(compositedHex: string, surfaceHex: string): number {
+  const lFg = relativeLuminance(compositedHex);
+  const lBg = relativeLuminance(surfaceHex);
+  // Normalize against the brighter term so dark and light surfaces are treated
+  // symmetrically (classic Weber uses the background; near the black floor that
+  // explodes, so we guard with the max and a small epsilon).
+  const denom = Math.max(lFg, lBg, 0.001);
+  return Math.abs(lFg - lBg) / denom;
+}
+
+/**
+ * Behavioral floor (RC-2): the `overlay-hover` fill, composited over
+ * `surface-canvas`, must produce a perceptible luminance step in either polarity.
+ * Returns a warning if the step is below `OVERLAY_HOVER_WEBER_FLOOR`. This is the
+ * runtime guard that a light theme's black-at-dark's-alpha hover is too weak to
+ * see — and equally that a dark theme's white hover hasn't been muted. Tokens
+ * that aren't evaluable (missing, non-hex non-rgba) are skipped silently here;
+ * structural validity is the import validator's job.
+ */
+export function getOverlayContrastWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const warnings: AppThemeValidationWarning[] = [];
+  const overlay = scheme.tokens["overlay-hover"];
+  const canvas = scheme.tokens["surface-canvas"];
+
+  if (typeof overlay !== "string" || typeof canvas !== "string") return warnings;
+  if (!isValidCssColor(canvas) || !HEX_RE.test(canvas.trim())) return warnings;
+
+  let compositedHex: string | null = null;
+  const trimmedOverlay = overlay.trim();
+  if (HEX_RE.test(trimmedOverlay)) {
+    // Opaque hex overlay — its own luminance is the rendered result.
+    compositedHex = trimmedOverlay;
+  } else {
+    const rgba = parseRgba(trimmedOverlay);
+    if (rgba) {
+      compositedHex =
+        rgba.opacity >= 1 ? rgba.hex : blendOverBackground(rgba.hex, canvas.trim(), rgba.opacity);
+    }
+  }
+
+  if (compositedHex === null) return warnings; // not an evaluable overlay form
+
+  const weber = weberContrast(compositedHex, canvas.trim());
+  if (weber < OVERLAY_HOVER_WEBER_FLOOR) {
+    warnings.push({
+      message: `overlay-hover over surface-canvas Weber contrast is ${(weber * 100).toFixed(1)}%; floor is ${(OVERLAY_HOVER_WEBER_FLOOR * 100).toFixed(0)}% (RC-2 interactive overlay must be perceptible in both polarities)`,
+    });
+  }
+
+  return warnings;
 }
 
 const DATA_IMAGE_URL_RE = /^data:image\/[a-z0-9.+-]+[;,]/i;

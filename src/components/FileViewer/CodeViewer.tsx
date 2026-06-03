@@ -13,7 +13,8 @@ import { type Extension, StateEffect, StateField, EditorState } from "@codemirro
 import { LanguageDescription, syntaxTree } from "@codemirror/language";
 import { type SyntaxNode } from "@lezer/common";
 import { search, openSearchPanel, gotoLine } from "@codemirror/search";
-import { daintreeTheme } from "./editorTheme";
+import { getDaintreeEditorTheme } from "./editorTheme";
+import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
 import { editorSearchHighlightTheme } from "./editorSearchTheme";
 import { CODEMIRROR_LANGUAGES } from "./codeMirrorLanguages";
 import { cn } from "@/lib/utils";
@@ -198,6 +199,11 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
   const [stickyScope, setStickyScope] = useState<string | null>(null);
   const [cmLineHeight, setCmLineHeight] = useState<number>(24);
 
+  // Track the active palette's polarity so CodeMirror's internal base matches
+  // the canvas it renders on (RC-8) — a light palette must not get the dark base.
+  const schemePolarity = useActiveAppScheme().type;
+  const editorTheme = getDaintreeEditorTheme(schemePolarity);
+
   useImperativeHandle(
     ref,
     () => ({
@@ -371,7 +377,7 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
       </div>
       <CodeMirror
         value={content}
-        theme={daintreeTheme}
+        theme={editorTheme}
         extensions={extensions}
         editable={false}
         readOnly={true}
