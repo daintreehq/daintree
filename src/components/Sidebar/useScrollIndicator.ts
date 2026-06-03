@@ -40,10 +40,13 @@ function useScrollIndicator({ items }: UseScrollIndicatorParams): UseScrollIndic
   const [scrollerEl, setScrollerEl] = useState<HTMLElement | null>(null);
   // Latest `items` mirrored into a ref so the stable callbacks below always read
   // the current list without taking it as a dependency (which would churn their
-  // identity and break the rAF coalescing). Written during render — safe for a
-  // "latest value" ref.
+  // identity and break the rAF coalescing). Updated in an effect — all readers
+  // (Virtuoso callbacks, scroll/resize handlers, the items-changed effect) run
+  // after commit, so the ref is current by the time they read it.
   const itemsRef = useRef(items);
-  itemsRef.current = items;
+  useEffect(() => {
+    itemsRef.current = items;
+  });
   // Latest per-item geometry from Virtuoso's `itemsRendered`. Held in a ref (not
   // state) because `itemsRendered` only fires when the rendered set changes —
   // intra-overscan scrolls reuse this cached geometry via `handleScroll`, so it
