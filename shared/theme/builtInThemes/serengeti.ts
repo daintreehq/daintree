@@ -9,32 +9,38 @@ export const theme: BuiltInThemeSource = {
   heroImage: "/themes/serengeti.webp",
   palette: {
     type: "light",
+    // Deep savanna chrome (grid/sidebar) framing bright cream content
+    // (canvas/panel/elevated). The ladder is deliberately wider than the other
+    // light themes (#9713): OKLab L ~0.84 → 0.99 so the sidebar reads as a
+    // distinct warm column instead of the same shade as the canvas.
     surfaces: {
-      grid: "#E2D4AB",
-      sidebar: "#ECE0BF",
-      canvas: "#F2E8CE",
-      panel: "#F7EFD9",
-      elevated: "#FFFCF4",
+      grid: "#DCCB9D",
+      sidebar: "#E7D8B0",
+      canvas: "#F1E6C9",
+      panel: "#F8F0DA",
+      elevated: "#FFFEFA",
     },
     text: {
       primary: "#382818",
       secondary: "#5E4D33",
       muted: "#766338",
-      inverse: "#FFFCF4",
+      inverse: "#FFFEFA",
     },
-    border: "#D4C499",
+    border: "#C4B27E",
     accent: "#8B6D08",
     accentSecondary: "#467030",
+    // Status hues nudged a few percent deeper than the original Serengeti
+    // values so they clear the 3:1 graphical floor on the deeper grid chrome.
     status: {
-      success: "#4B862B",
-      warning: "#A86310",
+      success: "#467D28",
+      warning: "#A36010",
       danger: "#C2402F",
-      info: "#3A7AA8",
+      info: "#346C94",
     },
     activity: {
-      active: "#4B862B",
+      active: "#467D28",
       idle: "#8A7850",
-      working: "#4B862B",
+      working: "#467D28",
       waiting: "#A87529",
     },
     overlayTint: "#2C210F",
@@ -73,11 +79,15 @@ export const theme: BuiltInThemeSource = {
     strategy: {
       shadowStyle: "light",
       materialBlur: 12,
-      materialSaturation: 115,
+      materialSaturation: 100,
+      // Warm charcoal border ink (near text-primary) so the derived border
+      // ladder stays on-temperature; the engine's cool default reads as gray
+      // grime against the savanna tan.
+      borderInkOverride: "#3A2A18",
     },
   },
   tokens: {
-    "accent-foreground": "#FFFCF4",
+    "accent-foreground": "#FFFEFA",
     "category-amber": "oklch(0.60 0.15 75)",
     "category-blue": "oklch(0.54 0.11 235)",
     "category-cyan": "oklch(0.56 0.09 190)",
@@ -90,7 +100,7 @@ export const theme: BuiltInThemeSource = {
     "category-slate": "oklch(0.50 0.03 230)",
     "category-teal": "oklch(0.55 0.09 180)",
     "category-violet": "oklch(0.53 0.11 295)",
-    "focus-ring": "rgba(139,109,8,0.42)",
+    "focus-ring": "rgba(139,109,8,0.55)",
     "pr-closed": "#C81F2B",
     "pr-draft": "#656E79",
     "pr-merged": "#7340CC",
@@ -106,51 +116,64 @@ export const theme: BuiltInThemeSource = {
     "search-match-badge-text": "#3E6A2A",
     "search-selected-result-border": "#3E6A2A",
     "search-selected-result-icon": "#3E6A2A",
-    "surface-input": "#EBE0C7",
-    "surface-inset": "#EADEC0",
-    "surface-toolbar": "#EFE5C8",
+    // Warm-ink shadows: same magnitudes as the engine's "light" profile, but
+    // tinted with the theme's overlay ink (#2C210F) instead of the profile's
+    // cool blue-gray, which hazes gray over the warm tan surfaces.
+    "shadow-ambient": "0 8px 24px rgba(44, 33, 15, 0.10)",
+    "shadow-color": "rgba(44, 33, 15, 0.12)",
+    "shadow-dialog": "0 28px 64px rgba(44, 33, 15, 0.14)",
+    "shadow-floating": "0 18px 48px rgba(44, 33, 15, 0.13)",
     "terminal-black": "#2C2115",
     "terminal-white": "#E8DDC5",
     "text-link": "#6E5400",
     "text-placeholder": "#8E7C54",
   },
   extensions: {
-    "panel-grid-bg": "#E1D2A8",
-    "settings-dialog-bg": "#F7EFD9",
-    "settings-card-bg": "#FFFCF4",
-    "settings-list-item-bg": "#FFFCF4",
-    "pulse-card-bg": "#FFFCF4",
+    "panel-grid-bg": "#D9C796",
+    "settings-dialog-bg": "#F8F0DA",
+    "settings-card-bg": "#FFFEFA",
+    "settings-list-item-bg": "#FFFEFA",
+    "pulse-card-bg": "#FFFEFA",
     "pulse-card-shadow": "0 1px 3px rgba(44,33,15,0.08)",
     "pulse-control-hover-bg": "rgba(44,33,15,0.05)",
-    "pulse-empty-bg": "#F2E8CE",
+    "pulse-empty-bg": "#F1E6C9",
     "pulse-heat-color": "#3E7A1E",
     "pulse-heat-high-opacity": "0.88",
     "pulse-heat-low-opacity": "0.42",
     "pulse-heat-medium-opacity": "0.65",
     "pulse-missed-bg": "#C2402F",
-    "pulse-range-bg": "#F2E8CE",
-    "pulse-ring-offset": "#FFFCF4",
-    "pulse-skeleton-gradient": "linear-gradient(90deg, #E2D4AB 25%, #EFE3C4 50%, #E2D4AB 75%)",
+    "pulse-range-bg": "#F1E6C9",
+    "pulse-ring-offset": "#FFFEFA",
+    "pulse-skeleton-gradient": "linear-gradient(90deg, #DCCB9D 25%, #ECE0C0 50%, #DCCB9D 75%)",
     "settings-nav-active-bg": "#FBF5E6",
     "settings-nav-hover-bg": "rgba(139,109,8,0.08)",
-    "settings-search-bg": "#EADCBA",
-    "settings-sidebar-bg": "#E0D1A8",
+    // Settings nav rail drops to grid-chrome depth so the dialog gets the same
+    // chrome-frames-content separation as the main window.
+    "settings-sidebar-bg": "#DCCB9D",
     "sidebar-action-hover-bg": "rgba(139,109,8,0.08)",
-    "sidebar-active-bg": "#FAF4E2",
-    "sidebar-hover-bg": "#F2E9CF",
+    // Row states re-baselined as upward opaque lifts over the deeper sidebar:
+    // idle #E7D8B0 < hover #EFE2BF < active #F7EDCF < elevated.
+    "sidebar-active-bg": "#F7EDCF",
+    "sidebar-hover-bg": "#EFE2BF",
     "toolbar-agent-hover-bg": "rgba(139,109,8,0.07)",
     "toolbar-control-hover-bg": "rgba(139,109,8,0.08)",
-    "toolbar-divider": "rgba(212,196,153,0.55)",
+    "toolbar-divider": "rgba(196,178,126,0.55)",
     "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(44,33,15,0.03), rgba(44,33,15,0.06)), linear-gradient(135deg, #EEE2C4, #DECFA6)",
-    "toolbar-project-border": "rgba(212,196,153,0.65)",
+      "linear-gradient(180deg, rgba(44,33,15,0.03), rgba(44,33,15,0.06)), linear-gradient(135deg, #ECDFBD, #DCCB9D)",
+    "toolbar-project-border": "rgba(196,178,126,0.65)",
     "toolbar-project-chip-bg": "rgba(44,33,15,0.06)",
-    "toolbar-project-chip-border": "rgba(212,196,153,0.65)",
-    "toolbar-project-shadow": "inset 0 1px 0 rgba(255,252,244,0.5)",
+    "toolbar-project-chip-border": "rgba(196,178,126,0.65)",
+    "toolbar-project-shadow": "inset 0 1px 0 rgba(255,254,250,0.5)",
     "toolbar-stats-bg": "rgba(139,109,8,0.07)",
-    "toolbar-stats-border": "rgba(212,196,153,0.55)",
-    "toolbar-stats-divider": "rgba(212,196,153,0.55)",
+    "toolbar-stats-border": "rgba(196,178,126,0.55)",
+    "toolbar-stats-divider": "rgba(196,178,126,0.55)",
     "toolbar-stats-hover-bg": "rgba(139,109,8,0.08)",
-    "worktree-section-hover-bg": "rgba(139,109,8,0.08)",
+    // Recessed savanna header band behind the worktree search/filter region —
+    // one step deeper and warmer than the sidebar so the top of the column
+    // reads as structured chrome instead of more of the same beige.
+    "worktree-filter-bar-bg": "#DBC894",
+    // Opaque warm lift (was an 8% gold alpha, which darkened on light — wrong
+    // polarity for the light selection matrix).
+    "worktree-section-hover-bg": "#F0E7CD",
   },
 };
