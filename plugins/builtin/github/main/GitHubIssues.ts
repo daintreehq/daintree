@@ -618,6 +618,7 @@ export async function listIssues(
             hasNextPage: issues?.pageInfo?.hasNextPage ?? false,
             endCursor: issues?.pageInfo?.endCursor ?? null,
           },
+          totalCount,
         };
 
         issueListCache.set(cacheKey, result);
