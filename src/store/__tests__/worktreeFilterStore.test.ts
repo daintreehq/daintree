@@ -5,6 +5,7 @@ import { useWorktreeFilterStore } from "../worktreeFilterStore";
 function resetWorktreeFilterStore() {
   useWorktreeFilterStore.setState({
     query: "",
+    liveQuery: "",
     orderBy: "created",
     groupByType: false,
     statusFilters: new Set(),
@@ -63,6 +64,24 @@ describe("worktreeFilterStore", () => {
 
     expect(useWorktreeFilterStore.getState().hasActiveFilters()).toBe(false);
     expect(useWorktreeFilterStore.getState().getActiveFilterCount()).toBe(0);
+  });
+
+  it("setLiveQuery updates the transient live query without touching the persisted query", () => {
+    useWorktreeFilterStore.getState().setLiveQuery("draft");
+
+    expect(useWorktreeFilterStore.getState().liveQuery).toBe("draft");
+    // The persisted (debounced) query is independent and stays empty.
+    expect(useWorktreeFilterStore.getState().query).toBe("");
+  });
+
+  it("clearAll resets the live query alongside the persisted query", () => {
+    useWorktreeFilterStore.getState().setLiveQuery("draft");
+    useWorktreeFilterStore.getState().setQuery("committed");
+
+    useWorktreeFilterStore.getState().clearAll();
+
+    expect(useWorktreeFilterStore.getState().liveQuery).toBe("");
+    expect(useWorktreeFilterStore.getState().query).toBe("");
   });
 
   describe("per-section clear actions", () => {
@@ -557,6 +576,60 @@ describe("worktreeFilterStore persistence scoping", () => {
       const parsed = JSON.parse(globalBlob) as { state: Record<string, unknown> };
       expect(parsed.state).not.toHaveProperty("pinnedWorktrees");
     }
+  });
+
+  it("does not serialize the transient liveQuery to the scoped key", async () => {
+    const writes = new Map<string, string>();
+    installLocalStorage({
+      getItem: () => null,
+      setItem: (key, value) => {
+        writes.set(key, value);
+      },
+      removeItem: (key) => {
+        writes.delete(key);
+      },
+    });
+
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    store.getState().setLiveQuery("draft");
+
+    // The in-memory live query updates, but partialize must keep it out of the
+    // persisted blob so it never leaks across sessions.
+    expect(store.getState().liveQuery).toBe("draft");
+    const blob = writes.get(PROJECT_KEY);
+    expect(blob).toBeDefined();
+    const parsed = JSON.parse(blob!) as { state: Record<string, unknown> };
+    expect(parsed.state).not.toHaveProperty("liveQuery");
+  });
+
+  it("seeds liveQuery from the persisted query on hydration", async () => {
+    const scopedBlob = JSON.stringify({
+      state: {
+        query: "restored",
+        statusFilters: [],
+        typeFilters: [],
+        prIssueFilters: [],
+        sessionFilters: [],
+        activityFilters: [],
+        pinnedWorktrees: [],
+        collapsedWorktrees: [],
+        manualOrder: [],
+      },
+      version: 2,
+    });
+    installLocalStorage({
+      getItem: (key) => (key === PROJECT_KEY ? scopedBlob : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
+
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    // A restored search must show in the input/filter immediately, so the
+    // transient live query is seeded from the persisted query at hydrate time.
+    expect(store.getState().query).toBe("restored");
+    expect(store.getState().liveQuery).toBe("restored");
   });
 
   it("persists global preferences to the global key, not the scoped key", async () => {

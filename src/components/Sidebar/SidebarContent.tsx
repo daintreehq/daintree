@@ -530,7 +530,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   // Filter/sort state - destructured for stable memoization
   const {
-    query,
+    liveQuery,
     orderBy,
     groupByType: isGroupedByType,
     statusFilters,
@@ -546,7 +546,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     quickStateFilter,
   } = useWorktreeFilterStore(
     useShallow((state) => ({
-      query: state.query,
+      liveQuery: state.liveQuery,
       orderBy: state.orderBy,
       groupByType: state.groupByType,
       statusFilters: state.statusFilters,
@@ -565,9 +565,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   const devServerSessions = useWorktreeDevServerStore((s) => s.sessionsByWorktreeId);
 
-  const isSortDisabledPrevRef = useRef(isGroupedByType || query.trim().length > 0);
+  // Lag the expensive filtering work behind the input so keystrokes stay
+  // responsive. `liveQuery` updates instantly (input + urgent UI state); the
+  // filtering memos consume `deferredQuery`, which yields to input events.
+  const deferredQuery = useDeferredValue(liveQuery);
+
+  const isSortDisabledPrevRef = useRef(isGroupedByType || liveQuery.trim().length > 0);
   useEffect(() => {
-    const current = isGroupedByType || query.trim().length > 0;
+    const current = isGroupedByType || liveQuery.trim().length > 0;
     const prev = isSortDisabledPrevRef.current;
     isSortDisabledPrevRef.current = current;
     if (prev && !current) {
@@ -585,10 +590,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         reorderAnnouncementTimerRef.current = null;
       }
     };
-  }, [isGroupedByType, query]);
+  }, [isGroupedByType, liveQuery]);
 
   const clearAllFilters = useWorktreeFilterStore((state) => state.clearAll);
-  const hasActiveFilters = useWorktreeFilterStore((state) => state.hasActiveFilters);
   const hasFacetFilters = useWorktreeFilterStore((state) => state.hasFacetFilters);
   const hasFacetFiltersActive = hasFacetFilters();
   const collapsedWorktrees = useWorktreeFilterStore((state) => state.collapsedWorktrees);
@@ -803,7 +807,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       derivedMetaMap,
       activeWorktreeId,
       {
-        query,
+        query: deferredQuery,
         statusFilters,
         typeFilters,
         prIssueFilters,
@@ -819,7 +823,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     mainWorktree,
     integrationWorktree,
     activeWorktreeId,
-    query,
+    deferredQuery,
     statusFilters,
     typeFilters,
     prIssueFilters,
@@ -850,7 +854,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const { filteredWorktrees, groupedSections, hasResultsWithoutQuickState, totalCount } =
     useMemo(() => {
       const filters: FilterState = {
-        query,
+        query: deferredQuery,
         statusFilters,
         typeFilters,
         prIssueFilters,
@@ -875,7 +879,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           chipState: null,
         };
         const isActive = worktree.id === activeWorktreeId;
-        const hasActiveQuery = query.trim().length > 0;
+        const hasActiveQuery = deferredQuery.trim().length > 0;
 
         // Counterfactual: would this worktree be visible if the quick state
         // filter were "all"? Mirrors the same precedence below (active /
@@ -927,9 +931,15 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       const existingWorktreeIds = new Set(deferredWorktrees.map((w) => w.id));
       const validPinnedWorktrees = pinnedWorktrees.filter((id) => existingWorktreeIds.has(id));
 
-      const hasQuery = query.trim().length > 0;
+      const hasQuery = deferredQuery.trim().length > 0;
       const sorted = hasQuery
-        ? sortWorktreesByRelevance(filtered, query, orderBy, validPinnedWorktrees, manualOrder)
+        ? sortWorktreesByRelevance(
+            filtered,
+            deferredQuery,
+            orderBy,
+            validPinnedWorktrees,
+            manualOrder
+          )
         : sortWorktrees(filtered, orderBy, validPinnedWorktrees, manualOrder);
 
       if (isGroupedByType && !hasQuery) {
@@ -949,7 +959,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       };
     }, [
       deferredWorktrees,
-      query,
+      deferredQuery,
       orderBy,
       isGroupedByType,
       statusFilters,
@@ -1021,16 +1031,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // in a single, render-order-stable position. Without this hoist the hooks
   // would sit after `if (isLoading) return …`, breaking rules-of-hooks.
   const worktreeMatchesQueryPre = (w: WorktreeState) => {
-    if (!query) return true;
-    const exactNum = parseExactNumber(query);
+    if (!deferredQuery) return true;
+    const exactNum = parseExactNumber(deferredQuery);
     if (exactNum !== null) {
       return w.issueNumber === exactNum || w.linked?.pr?.ref.number === exactNum;
     }
-    return scoreWorktree(w, query) > 0;
+    return scoreWorktree(w, deferredQuery) > 0;
   };
 
   const pinnedFiltersPre: FilterState = {
-    query,
+    query: deferredQuery,
     statusFilters,
     typeFilters,
     prIssueFilters,
@@ -1082,7 +1092,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       ));
   const integrationVisible = integrationMatchesQueryPre && integrationMatchesFacetsPre;
 
-  const hasQuery = query.trim().length > 0;
+  const hasQuery = liveQuery.trim().length > 0;
   const isSortDisabled = isGroupedByType || hasQuery;
   useEffect(() => {
     isSortDisabledRef.current = isSortDisabled;
@@ -1090,8 +1100,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   // Filter-scope + sort-disabled state. Hoisted above the early returns below so
   // the announcement effects that depend on them keep a stable hook order.
+  // `hasFilters` mirrors the store's `hasActiveFilters()` but uses the instant
+  // `liveQuery` so filter-dependent UI (scope line, filtered-empty state) reacts
+  // immediately rather than after the persisted-query debounce.
+  const hasFilters =
+    liveQuery.trim().length > 0 || hasFacetFiltersActive || quickStateFilter !== "all";
   const filteredCount = filteredWorktrees.length;
-  const showScope = hasActiveFilters() && filteredCount !== totalCount;
+  const showScope = hasFilters && filteredCount !== totalCount;
   const dragDisabledReason = hasQuery
     ? "Sorting disabled while searching"
     : isGroupedByType
@@ -1434,7 +1449,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   }
 
   const hasNonMainWorktrees = deferredWorktrees.length > 1;
-  const hasFilters = hasActiveFilters();
   const showQuickStateEmptyState =
     filteredWorktrees.length === 0 &&
     quickStateFilter !== "all" &&
@@ -1727,7 +1741,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               instant
               title={
                 hasQuery
-                  ? `No matches for "${truncateSearchQuery(query.trim())}"`
+                  ? `No matches for "${truncateSearchQuery(deferredQuery.trim())}"`
                   : "No matching worktrees"
               }
               action={
@@ -1760,8 +1774,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               scale="sidebar"
               instant
               title={
-                hasQuery
-                  ? `No matches for "${truncateSearchQuery(query.trim())}"`
+                deferredQuery.trim()
+                  ? `No matches for "${truncateSearchQuery(deferredQuery.trim())}"`
                   : "No matching worktrees"
               }
               action={

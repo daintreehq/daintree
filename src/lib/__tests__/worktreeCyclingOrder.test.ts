@@ -44,6 +44,7 @@ function setWorktrees(snaps: WorktreeSnapshot[]): void {
 function resetFilterStore(): void {
   useWorktreeFilterStore.setState({
     query: "",
+    liveQuery: "",
     orderBy: "created",
     groupByType: false,
     statusFilters: new Set(),
@@ -167,8 +168,10 @@ describe("getVisibleWorktreesForCycling", () => {
     expect(ids[0]).toBe("main");
   });
 
-  it("applies the text query filter to main and integration worktrees", () => {
-    useWorktreeFilterStore.setState({ query: "alpha" });
+  it("applies the live text query filter to main and integration worktrees", () => {
+    // Cycling mirrors the sidebar's visible list, which filters on the instant
+    // liveQuery — not the debounced persisted query.
+    useWorktreeFilterStore.setState({ liveQuery: "alpha" });
     setWorktrees([
       createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
       createSnapshot({ id: "dev", name: "develop", branch: "develop" }),

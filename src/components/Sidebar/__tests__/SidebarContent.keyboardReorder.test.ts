@@ -97,13 +97,13 @@ describe("SidebarContent reorder re-enable announcement — issue #8395", () => 
 
   it("tracks the previous sort-disabled state in a ref", () => {
     expect(source).toMatch(
-      /const\s+isSortDisabledPrevRef\s*=\s*useRef\(isGroupedByType\s*\|\|\s*query\.trim\(\)\.length\s*>\s*0\)/
+      /const\s+isSortDisabledPrevRef\s*=\s*useRef\(isGroupedByType\s*\|\|\s*liveQuery\.trim\(\)\.length\s*>\s*0\)/
     );
   });
 
-  it("fires useEffect when isGroupedByType or query changes", () => {
+  it("fires useEffect when isGroupedByType or the live query changes", () => {
     expect(source).toMatch(
-      /useEffect\(\(\)\s*=>\s*\{[\s\S]*isSortDisabledPrevRef[\s\S]*\},\s*\[isGroupedByType,\s*query\]\)/
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]*isSortDisabledPrevRef[\s\S]*\},\s*\[isGroupedByType,\s*liveQuery\]\)/
     );
   });
 

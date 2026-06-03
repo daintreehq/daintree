@@ -123,10 +123,12 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       const branchEnd = source.indexOf(") : filteredWorktrees.length === 0 &&", branchStart);
       const branch = source.slice(branchStart, branchEnd);
       expect(branch).toContain('"No matching worktrees"');
-      expect(branch).toContain('No matches for "${truncateSearchQuery(query.trim())}"');
+      expect(branch).toContain('No matches for "${truncateSearchQuery(deferredQuery.trim())}"');
       // The search-aware copy is the hasQuery arm, the plain copy the fallback —
       // guard against an inverted ternary by checking the query arm comes first.
-      const queryIdx = branch.indexOf('No matches for "${truncateSearchQuery(query.trim())}"');
+      const queryIdx = branch.indexOf(
+        'No matches for "${truncateSearchQuery(deferredQuery.trim())}"'
+      );
       const fallbackIdx = branch.indexOf('"No matching worktrees"');
       expect(branch.indexOf("hasQuery")).toBeLessThan(queryIdx);
       expect(queryIdx).toBeLessThan(fallbackIdx);
@@ -229,7 +231,9 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       expect(branch).toContain("<EmptyState");
       expect(branch).toContain('variant="filtered-empty"');
       expect(branch).toContain('"No matching worktrees"');
-      expect(branch).toMatch(/hasQuery/);
+      // The title gates on the deferred query (consistent with the filtered
+      // list) rather than the instant hasQuery flag.
+      expect(branch).toMatch(/deferredQuery\.trim\(\)/);
       expect(branch).toMatch(/truncateSearchQuery/);
       expect(branch).toMatch(/onClick=\{clearAllFilters\}[\s\S]*?>\s*Show all worktrees\s*</);
       expect(branch).toMatch(/onClick=\{onOpenOverview\}[\s\S]*?>\s*Open overview\s*</);

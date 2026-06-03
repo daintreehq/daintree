@@ -44,7 +44,15 @@ function isPrIssueFilter(value: unknown): value is PrIssueFilter {
 }
 
 interface WorktreeFilterState {
+  /** Persisted, debounced search query — the source of truth restored across sessions. */
   query: string;
+  /**
+   * Transient, instant-updating search query that drives the visible filter and
+   * input display. Updated on every keystroke; `query` is written behind a
+   * debounce so only the localStorage write is throttled, not the filtering.
+   * Not persisted (seeded from `query` on hydrate).
+   */
+  liveQuery: string;
   orderBy: OrderBy;
   groupByType: boolean;
   statusFilters: Set<StatusFilter>;
@@ -66,6 +74,7 @@ interface WorktreeFilterState {
 
 interface WorktreeFilterActions {
   setQuery: (query: string) => void;
+  setLiveQuery: (query: string) => void;
   setOrderBy: (orderBy: OrderBy) => void;
   setGroupByType: (enabled: boolean) => void;
   toggleStatusFilter: (filter: StatusFilter) => void;
@@ -125,6 +134,8 @@ interface GlobalPrefsState {
  */
 interface ProjectScopedState {
   query: string;
+  /** Transient session-only instant query (not persisted; seeded from `query`). */
+  liveQuery: string;
   statusFilters: Set<StatusFilter>;
   typeFilters: Set<TypeFilter>;
   prIssueFilters: Set<PrIssueFilter>;
@@ -340,6 +351,7 @@ const _projectStore = create<ProjectScopedState>()(
   persist(
     (): ProjectScopedState => ({
       query: _legacySeed.query ?? "",
+      liveQuery: _legacySeed.query ?? "",
       statusFilters: new Set<StatusFilter>(_legacySeed.statusFilters ?? []),
       typeFilters: new Set<TypeFilter>(_legacySeed.typeFilters ?? []),
       prIssueFilters: new Set<PrIssueFilter>(_legacySeed.prIssueFilters ?? []),
@@ -390,9 +402,13 @@ const _projectStore = create<ProjectScopedState>()(
       merge: (persisted, current) => {
         const p = persisted as Partial<ProjectPersistedShape> | undefined;
         const persistedSessionFilters = stripLegacySessionFilters(p?.sessionFilters);
+        const restoredQuery = p?.query ?? current.query;
         return {
           ...current,
-          query: p?.query ?? current.query,
+          query: restoredQuery,
+          // Seed the transient live query from the persisted value so a restored
+          // search shows in the input and filter immediately after hydration.
+          liveQuery: restoredQuery,
           statusFilters: new Set(p?.statusFilters ?? Array.from(current.statusFilters)),
           typeFilters: new Set(p?.typeFilters ?? Array.from(current.typeFilters)),
           prIssueFilters: new Set(p?.prIssueFilters ?? Array.from(current.prIssueFilters)),
@@ -414,6 +430,9 @@ const _projectStore = create<ProjectScopedState>()(
 const _actions: WorktreeFilterActions = {
   setQuery: (query) => {
     _projectStore.setState({ query });
+  },
+  setLiveQuery: (liveQuery) => {
+    _projectStore.setState({ liveQuery });
   },
   setOrderBy: (orderBy) => {
     _globalPrefsStore.setState({ orderBy });
@@ -556,6 +575,7 @@ const _actions: WorktreeFilterActions = {
   clearAll: () => {
     _projectStore.setState({
       query: "",
+      liveQuery: "",
       statusFilters: new Set(),
       typeFilters: new Set(),
       prIssueFilters: new Set(),
@@ -620,6 +640,7 @@ function _computeMergedState(): WorktreeFilterStore {
   const p = _projectStore.getState();
   return {
     query: p.query,
+    liveQuery: p.liveQuery,
     orderBy: g.orderBy,
     groupByType: g.groupByType,
     statusFilters: p.statusFilters,

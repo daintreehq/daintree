@@ -42,7 +42,7 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     expect(region).not.toContain("aria-atomic");
   });
 
-  it("renders scope text 'N of M worktrees' pattern when filters narrow results", () => {
+  it("renders the visual count as 'N of M worktrees' from filteredCount", () => {
     // The source uses template literals for dynamic counts
     expect(source).toContain("{filteredCount} of {totalCount} worktrees");
   });
@@ -74,10 +74,16 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     expect(source).toContain("totalCount: nonMain.length");
   });
 
-  it("computes showScope from hasActiveFilters and count comparison", () => {
-    expect(source).toMatch(
-      /showScope\s*=\s*hasActiveFilters\(\)\s*&&\s*filteredCount\s*!==\s*totalCount/
-    );
+  it("computes showScope from the instant live-query filter state and count comparison", () => {
+    expect(source).toMatch(/showScope\s*=\s*hasFilters\s*&&\s*filteredCount\s*!==\s*totalCount/);
+    // hasFilters mirrors the store's hasActiveFilters() but uses liveQuery so the
+    // scope line reacts immediately rather than after the persisted-query debounce.
+    expect(source).toMatch(/hasFilters\s*=\s*[\s\S]*?liveQuery\.trim\(\)\.length\s*>\s*0/);
+  });
+
+  it("drives the filtering memo from a deferred query so keystrokes stay responsive", () => {
+    expect(source).toContain("const deferredQuery = useDeferredValue(liveQuery)");
+    expect(source).toMatch(/query:\s*deferredQuery/);
   });
 });
 
