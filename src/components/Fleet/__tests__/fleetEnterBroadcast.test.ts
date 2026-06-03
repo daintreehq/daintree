@@ -317,6 +317,40 @@ describe("tryFleetBroadcastFromEditor — fires immediately without confirmation
     expect(useFleetArmingStore.getState().broadcastSignal).toBe(before + 1);
   });
 
+  it("does NOT fire the ribbon commit flash on a partial failure", async () => {
+    // Symmetric guard for the noteBroadcastCommit placement: it lives in the
+    // full-success branch only, so a run with any failure must not flash.
+    submitMock.mockImplementation(async (id) => {
+      if (id === "c") throw new Error("ENOSPC: disk full");
+    });
+    arm(["a", "b", "c"]);
+    const before = useFleetArmingStore.getState().broadcastSignal;
+    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+    await flush();
+    await flush();
+    expect(useFleetArmingStore.getState().broadcastSignal).toBe(before);
+  });
+
+  it("returns false so the caller does its own submit when every armed pane is ineligible", async () => {
+    arm(["a", "b"]);
+    // Both armed panes are trashed → resolveFleetBroadcastTargetIds yields
+    // no eligible targets, so the fleet path declines and the caller falls
+    // back to its normal single-pane submit.
+    usePanelStore.setState({
+      panelsById: {
+        a: { ...makeAgent("a"), location: "trash" } as PtyPanelData,
+        b: { ...makeAgent("b"), location: "trash" } as PtyPanelData,
+      },
+      panelIds: ["a", "b"],
+    });
+    const before = useFleetArmingStore.getState().broadcastSignal;
+    const consumed = tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+    expect(consumed).toBe(false);
+    await flush();
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(useFleetArmingStore.getState().broadcastSignal).toBe(before);
+  });
+
   it("drops targets that became ineligible between Enter-press and dispatch", async () => {
     arm(["a", "b", "c"]);
     // Pane B is trashed before the async dispatch re-checks eligibility.

@@ -10,8 +10,8 @@ import { create } from "zustand";
  * (#8691 constraint) — clear on disarm / popover close / broadcast end.
  *
  * The Enter-broadcast pipeline snapshots `getState()` synchronously at
- * Enter-press time inside `doSend` so values are never stale from a
- * closure captured at call time.
+ * Enter-press time in `tryFleetBroadcastFromEditor` (before `doSend` is
+ * invoked) so values are never stale from a closure captured at call time.
  */
 interface FleetTargetOverridesState {
   payloadOverrides: Record<string, string>;
