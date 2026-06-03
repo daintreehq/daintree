@@ -563,9 +563,7 @@ describe("GitHubResourceList SWR behavior", () => {
     });
     const onCountUpdate = vi.fn();
 
-    render(
-      <GitHubResourceList type="pr" projectPath="/test/proj" onCountUpdate={onCountUpdate} />
-    );
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" onCountUpdate={onCountUpdate} />);
 
     await waitFor(() => {
       expect(onCountUpdate).toHaveBeenCalled();
