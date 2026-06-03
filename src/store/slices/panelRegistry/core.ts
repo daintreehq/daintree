@@ -439,6 +439,10 @@ export const createCorePanelActions = (
   },
 
   moveTerminalToDock: (id) => {
+    // Overlay panels (the Daintree Assistant) self-manage their placement and
+    // must never be relocated into the dock by a layout action (#9699).
+    if (get().panelsById[id]?.location === "overlay") return;
+
     // Check if panel is in a group - if so, move the entire group
     const group = get().getPanelGroup(id);
     if (group) {
@@ -479,6 +483,10 @@ export const createCorePanelActions = (
   },
 
   moveTerminalToGrid: (id) => {
+    // Overlay panels (the Daintree Assistant) self-manage their placement and
+    // must never be relocated into the grid by a layout action (#9699).
+    if (get().panelsById[id]?.location === "overlay") return false;
+
     // Check if panel is in a group - if so, move the entire group
     const group = get().getPanelGroup(id);
     if (group) {
