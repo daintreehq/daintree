@@ -866,6 +866,13 @@ class TerminalInstanceService {
       }
     }
 
+    // Repair the stale local WebGL glyph model synchronously, before the async
+    // wakeAndRestore IPC and before the view's first composited frame. On warm
+    // project-view reactivation the compositor can flash the pre-freeze atlas
+    // state; resetting the local model here (no breaker, no shared-atlas churn)
+    // clears it in place. No-op for DOM-renderer terminals.
+    this.webGLManager.repairAtlasForReactivation(id);
+
     const ok = await this.wakeManager.wakeAndRestore(id);
 
     // Re-check after async: terminal may have been destroyed, hibernated, or

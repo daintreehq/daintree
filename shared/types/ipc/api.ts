@@ -407,6 +407,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     clearQuarantinedPanel(panelId: string): Promise<{ cleared: boolean }>;
     notifyFirstInteractive(): Promise<void>;
     notifyViewPainted(): Promise<void>;
+    notifyWarmViewPainted(): Promise<void>;
     onMenuAction(callback: (payload: { actionId: string; args?: unknown }) => void): () => void;
     reloadConfig(): Promise<{ success: boolean }>;
     onConfigReloaded(callback: () => void): () => void;

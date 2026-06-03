@@ -211,6 +211,10 @@ describe("ProjectViewManager — pending focus intent", () => {
       dirname: "/test",
       paintGateTimeoutMs: 50,
       paintGateHardTimeoutMs: 150,
+      // Resolve the warm anti-flash bridge immediately — these tests assert
+      // focus-intent delivery on reactivation, not the warm gate timing (#9679).
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 

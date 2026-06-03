@@ -180,6 +180,8 @@ describe("ProjectViewManager adversarial", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -213,6 +215,8 @@ describe("ProjectViewManager adversarial", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -247,6 +251,8 @@ describe("ProjectViewManager adversarial", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -279,6 +285,8 @@ describe("ProjectViewManager adversarial", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -315,6 +323,8 @@ describe("ProjectViewManager adversarial", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 

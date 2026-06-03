@@ -4,6 +4,7 @@ import type { PanelInstance } from "@shared/types/panel";
 const fullWakeMock = vi.fn();
 const isFocusedMock = vi.fn();
 const logWarnMock = vi.fn();
+const notifyWarmReactivationCompleteMock = vi.fn();
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
@@ -14,6 +15,10 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 
 vi.mock("@/utils/logger", () => ({
   logWarn: logWarnMock,
+}));
+
+vi.mock("@/utils/warmReactivationGate", () => ({
+  notifyWarmReactivationComplete: notifyWarmReactivationCompleteMock,
 }));
 
 let mockActiveWorktreeId: string | null = null;
@@ -57,6 +62,7 @@ beforeEach(() => {
   isFocusedMock.mockReset();
   isFocusedMock.mockReturnValue(false);
   logWarnMock.mockReset();
+  notifyWarmReactivationCompleteMock.mockReset();
   mockActiveWorktreeId = null;
   mockPanelIds = [];
   mockPanelsById = {};
@@ -76,6 +82,41 @@ describe("wakeActiveWorktreeTerminals", () => {
     expect(fullWakeMock).toHaveBeenCalledTimes(2);
     expect(fullWakeMock).toHaveBeenCalledWith("a");
     expect(fullWakeMock).toHaveBeenCalledWith("b");
+  });
+
+  it("releases the warm reactivation gate after waking (#9679)", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    mockPanelIds = ["a"];
+    mockPanelsById = { a };
+
+    await wakeActiveWorktreeTerminals();
+
+    expect(notifyWarmReactivationCompleteMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the warm reactivation gate even with zero grid terminals", async () => {
+    // No matching panels — the early return must still fire the warm signal so
+    // the bridge cover doesn't linger until main's hard timeout on empty grids.
+    mockActiveWorktreeId = "wt-1";
+
+    await wakeActiveWorktreeTerminals();
+
+    expect(fullWakeMock).not.toHaveBeenCalled();
+    expect(notifyWarmReactivationCompleteMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the warm reactivation gate even when a wake throws", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    mockPanelIds = ["a"];
+    mockPanelsById = { a };
+    // A wake rejection is caught per-terminal, but assert the finally still runs.
+    fullWakeMock.mockRejectedValue(new Error("wake boom"));
+
+    await wakeActiveWorktreeTerminals();
+
+    expect(notifyWarmReactivationCompleteMock).toHaveBeenCalledTimes(1);
   });
 
   it("excludes terminals from other worktrees", async () => {

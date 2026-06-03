@@ -287,6 +287,42 @@ export class TerminalWebGLManager {
     return this.pool.has(id);
   }
 
+  // Proactively repair a single renderer's local glyph model before its view
+  // becomes compositable again. On warm project-view reactivation (Chromium
+  // freeze → active), the compositor can push a stale cached GPU surface before
+  // the renderer's wake fan-out runs, briefly flashing the pre-freeze atlas
+  // state. Running the same local resize-like reset as runAtlasResync — without
+  // the rAF coalescing, the breaker, or touching the shared CPU atlas — clears
+  // the stale local model in place so the first painted frame samples current
+  // glyph state. Synchronous and called directly from the wake seam, so it also
+  // bypasses the setVisible webGLRestoreTimer debounce. Returns true when a live
+  // pool entry was repaired and repainted; false for DOM-renderer terminals, a
+  // missing/just-released context, or a zero-size grid.
+  repairAtlasForReactivation(id: string): boolean {
+    const entry = this.pool.get(id);
+    if (!entry) return false;
+    // Only repair a live, sized, visible-capable renderer. A not-yet-laid-out
+    // grid (rows/cols 0) has no model worth clearing — its first real resize on
+    // wake builds the model fresh — and a closed terminal has no element to
+    // repaint.
+    if (!entry.managed.isOpened) return false;
+    const { cols, rows } = entry.managed.terminal;
+    if (cols <= 0 || rows <= 0) return false;
+    if (!resetLocalWebGLRenderer(entry.addon, cols, rows)) {
+      return false;
+    }
+    try {
+      // Re-check identity after the local reset: the addon can synchronously
+      // lose context and release itself before we ask xterm to repaint.
+      if (this.pool.get(id) !== entry) return false;
+      entry.managed.terminal.refresh(0, rows - 1);
+    } catch {
+      // ignore — a DOM-renderer fallback or later WebGL ensure will repaint
+      return false;
+    }
+    return true;
+  }
+
   // Test/diagnostic introspection — not part of the consumer API.
   getMode(): Mode {
     return this.mode;
