@@ -1,5 +1,7 @@
 import type { GitHubUser, IssueTooltipData, PRTooltipData } from "@shared/types/github";
-import { Calendar, KeyRound, PenLine, UserCheck } from "lucide-react";
+import { Calendar, KeyRound, PenLine, UserCheck, Clock, CirclePause } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import type { BadgeFreshnessCause } from "@/components/Layout/FreshnessUtils";
 import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/Avatar";
 
@@ -88,6 +90,60 @@ function AssigneeMeta({ assignees }: { assignees: GitHubUser[] }) {
   );
 }
 
+export interface TooltipFreshness {
+  cause: BadgeFreshnessCause | undefined;
+  now: number;
+  rateLimitResetAt?: number | null;
+}
+
+function freshnessItem(
+  freshness: TooltipFreshness | undefined
+): { Icon: LucideIcon; label: string } | null {
+  if (!freshness) return null;
+  switch (freshness.cause) {
+    case "rate-limit": {
+      let label = "rate limited";
+      const { rateLimitResetAt, now } = freshness;
+      if (rateLimitResetAt != null && rateLimitResetAt > now) {
+        const retryTime = new Intl.DateTimeFormat("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+        }).format(new Date(rateLimitResetAt));
+        label += `, retry at ${retryTime}`;
+      }
+      return { Icon: Clock, label };
+    }
+    case "circuit-breaker":
+      return { Icon: CirclePause, label: "data may be stale — PR detection paused" };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Freshness status as a metadata-row item: a small Lucide icon + label that
+ * matches the author/assignee/date entries. Folds the old `·`-prefixed block
+ * line (#9696) onto the metadata row. Rendered standalone with a `className`
+ * (e.g. `mt-1`) by the badges when the tooltip body has no data row to host it.
+ */
+export function FreshnessMetaItem({
+  freshness,
+  className,
+}: {
+  freshness?: TooltipFreshness;
+  className?: string;
+}) {
+  const item = freshnessItem(freshness);
+  if (!item) return null;
+  const { Icon, label } = item;
+  return (
+    <span className={cn("flex items-center gap-1", className)}>
+      <Icon className="w-3 h-3 shrink-0" aria-hidden="true" />
+      {label}
+    </span>
+  );
+}
+
 export function TooltipLoading() {
   // Doherty-gated skeleton: `animate-pulse-delayed` keeps the bars invisible
   // for the first 400ms, so a fast cache-warm response (the common case after
@@ -145,9 +201,10 @@ function LabelBadge({ name, color }: LabelBadgeProps) {
 
 interface IssueTooltipContentProps {
   data: IssueTooltipData;
+  freshness?: TooltipFreshness;
 }
 
-export function IssueTooltipContent({ data }: IssueTooltipContentProps) {
+export function IssueTooltipContent({ data, freshness }: IssueTooltipContentProps) {
   const stateColor = data.state === "OPEN" ? "text-pr-open" : "text-pr-merged";
 
   return (
@@ -175,6 +232,8 @@ export function IssueTooltipContent({ data }: IssueTooltipContentProps) {
           <Calendar className="w-3 h-3" />
           {formatDate(data.createdAt)}
         </span>
+
+        <FreshnessMetaItem freshness={freshness} />
       </div>
 
       {data.labels.length > 0 && (
@@ -195,9 +254,10 @@ export function IssueTooltipContent({ data }: IssueTooltipContentProps) {
 
 interface PRTooltipContentProps {
   data: PRTooltipData;
+  freshness?: TooltipFreshness;
 }
 
-export function PRTooltipContent({ data }: PRTooltipContentProps) {
+export function PRTooltipContent({ data, freshness }: PRTooltipContentProps) {
   const stateColor =
     data.state === "MERGED"
       ? "text-pr-merged"
@@ -244,6 +304,8 @@ export function PRTooltipContent({ data }: PRTooltipContentProps) {
           <Calendar className="w-3 h-3" />
           {formatDate(data.createdAt)}
         </span>
+
+        <FreshnessMetaItem freshness={freshness} />
       </div>
 
       {data.labels.length > 0 && (

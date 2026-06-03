@@ -154,3 +154,96 @@ describe("GitHubTooltipContent avatars", () => {
     expect(screen.getByText("Assigned to alice, bob")).toBeDefined();
   });
 });
+
+const issueData: IssueTooltipData = {
+  number: 42,
+  title: "Something is broken",
+  bodyExcerpt: "Steps to reproduce…",
+  state: "OPEN",
+  createdAt: "2026-01-02T00:00:00.000Z",
+  author: user("octocat"),
+  assignees: [],
+  labels: [],
+};
+
+const prData: PRTooltipData = {
+  number: 7,
+  title: "Fix the thing",
+  bodyExcerpt: "This fixes the thing.",
+  state: "OPEN",
+  isDraft: false,
+  createdAt: "2026-01-02T00:00:00.000Z",
+  author: user("octocat"),
+  assignees: [],
+  labels: [],
+};
+
+describe("IssueTooltipContent freshness item", () => {
+  it("renders no freshness item when freshness is absent", () => {
+    const { container } = render(<IssueTooltipContent data={issueData} />);
+    expect(container.querySelector(".lucide-clock")).toBeNull();
+    expect(container.querySelector(".lucide-circle-pause")).toBeNull();
+    expect(screen.queryByText(/rate limited/)).toBeNull();
+  });
+
+  it("renders no freshness item when the cause is undefined", () => {
+    const { container } = render(
+      <IssueTooltipContent data={issueData} freshness={{ cause: undefined, now: 1000 }} />
+    );
+    expect(container.querySelector(".lucide-clock")).toBeNull();
+    expect(container.querySelector(".lucide-circle-pause")).toBeNull();
+  });
+
+  it("folds a rate-limit cause onto the metadata row as a Clock + label", () => {
+    const { container } = render(
+      <IssueTooltipContent data={issueData} freshness={{ cause: "rate-limit", now: 1000 }} />
+    );
+    expect(container.querySelector(".lucide-clock")).toBeTruthy();
+    expect(screen.getByText(/^rate limited$/)).toBeTruthy();
+  });
+
+  it("includes the retry time when a future reset is provided", () => {
+    const now = 1000;
+    const { container } = render(
+      <IssueTooltipContent
+        data={issueData}
+        freshness={{ cause: "rate-limit", now, rateLimitResetAt: now + 60_000 }}
+      />
+    );
+    expect(container.querySelector(".lucide-clock")).toBeTruthy();
+    expect(screen.getByText(/rate limited, retry at /)).toBeTruthy();
+  });
+
+  it("renders a circuit-breaker cause as a PauseCircle, not a Clock", () => {
+    const { container } = render(
+      <IssueTooltipContent data={issueData} freshness={{ cause: "circuit-breaker", now: 1000 }} />
+    );
+    expect(container.querySelector(".lucide-circle-pause")).toBeTruthy();
+    expect(container.querySelector(".lucide-clock")).toBeNull();
+    expect(screen.getByText(/data may be stale/)).toBeTruthy();
+  });
+});
+
+describe("PRTooltipContent freshness item", () => {
+  it("renders no freshness item when freshness is absent", () => {
+    const { container } = render(<PRTooltipContent data={prData} />);
+    expect(container.querySelector(".lucide-clock")).toBeNull();
+    expect(container.querySelector(".lucide-circle-pause")).toBeNull();
+  });
+
+  it("folds a rate-limit cause onto the metadata row as a Clock + label", () => {
+    const { container } = render(
+      <PRTooltipContent data={prData} freshness={{ cause: "rate-limit", now: 1000 }} />
+    );
+    expect(container.querySelector(".lucide-clock")).toBeTruthy();
+    expect(screen.getByText(/^rate limited$/)).toBeTruthy();
+  });
+
+  it("renders a circuit-breaker cause as a PauseCircle", () => {
+    const { container } = render(
+      <PRTooltipContent data={prData} freshness={{ cause: "circuit-breaker", now: 1000 }} />
+    );
+    expect(container.querySelector(".lucide-circle-pause")).toBeTruthy();
+    expect(screen.getByText(/data may be stale/)).toBeTruthy();
+  });
+});
