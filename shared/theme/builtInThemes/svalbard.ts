@@ -15,14 +15,14 @@ export const theme: BuiltInThemeSource = {
     // clean glacial white while the structural floor (grid) and the sidebar rail
     // hold the cool chroma. The sidebar→canvas step is the largest in the ramp
     // (dL≈0.033) so the navigation rail reads as a distinct deeper zone instead
-    // of merging into the canvas. Audit-clean: even ramp, span 0.106,
+    // of merging into the canvas. Audit-clean: even ramp, span 0.104,
     // panel→elevated keeps the strongest top-tier lift.
     surfaces: {
       grid: "#CFDDE8",
       sidebar: "#D7E4ED",
       canvas: "#E6EEF3",
       panel: "#F1F6F9",
-      elevated: "#FCFEFF",
+      elevated: "#FAFEFF",
     },
     text: {
       primary: "#1B2A38",
@@ -35,7 +35,10 @@ export const theme: BuiltInThemeSource = {
     accentSecondary: "#1F7E62",
     status: {
       success: "#1E7A5C",
-      warning: "#8A661A",
+      // Cold-sunlight amber (OKLCH hue ~62) instead of the old olive #8A661A
+      // (hue ~81) — the lone khaki note on an otherwise cool field read as
+      // mustard against arctic blue. Same lightness, AA-clean on all surfaces.
+      warning: "#9A5F24",
       danger: "#C0413E",
       info: "#2E6E96",
     },
@@ -43,14 +46,16 @@ export const theme: BuiltInThemeSource = {
       active: "#1E7A5C",
       idle: "#586B7E",
       working: "#1E7A5C",
-      waiting: "#8A661A",
+      waiting: "#9A5F24",
     },
     overlayTint: "#142332",
     terminal: {
       background: "#1C2630",
       foreground: "#D2D9E0",
       muted: "#8C9E94",
-      cursor: "#8F7335",
+      // Icy caret (5.8:1 on the dark field) — the old muddy gold #8F7335 was
+      // the one warm spike on the cold terminal and sat at 3.4:1.
+      cursor: "#7DA4C0",
       selection: "#2A3A4A",
       red: "#C87878",
       green: "#5DA88A",
@@ -86,8 +91,15 @@ export const theme: BuiltInThemeSource = {
   },
   tokens: {
     "accent-hover": "color-mix(in oklab, #1577A8 90%, #ffffff)",
+    // Two-layer contact+spread shadows tinted in Svalbard's own ink
+    // (rgb(20,35,50), the overlayTint) — the derived "light" profile's wide
+    // thin blur renders zero visible pixels against this theme's near-white
+    // surfaces, so tooltips/popovers/cards separated by border alone.
+    "shadow-ambient": "0 1px 2px rgba(20,35,50,0.10), 0 4px 12px rgba(20,35,50,0.09)",
+    "shadow-floating": "0 2px 6px rgba(20,35,50,0.12), 0 14px 36px rgba(20,35,50,0.15)",
+    "shadow-dialog": "0 4px 10px rgba(20,35,50,0.13), 0 26px 60px rgba(20,35,50,0.18)",
     "text-link": "#1E5A72",
-    "text-placeholder": "#67737E",
+    "text-placeholder": "#5E6B77",
     "category-amber": "oklch(0.60 0.110 75)",
     "category-blue": "oklch(0.58 0.110 242)",
     "category-cyan": "oklch(0.59 0.080 198)",
@@ -116,16 +128,18 @@ export const theme: BuiltInThemeSource = {
     "search-selected-result-border": "#1A5066",
     "search-selected-result-icon": "#1A5066",
     "surface-input": "#E2EAF0",
-    "surface-inset": "#D5E1E9",
+    // A real well: deep enough to read as recessed on the sidebar rail
+    // (dL -0.027), not just on the snow-white selected row.
+    "surface-inset": "#CEDBE5",
     "surface-toolbar": "#DAE5ED",
     "terminal-black": "#1C2630",
     "terminal-bright-black": "#52606B",
     "terminal-white": "#D2D9E0",
   },
   extensions: {
-    "panel-grid-bg": "#D0DEE8",
+    "panel-grid-bg": "#C9D7E2",
     "pulse-before-bg": "#D7E4ED",
-    "pulse-card-bg": "#FCFEFF",
+    "pulse-card-bg": "#FAFEFF",
     "pulse-control-hover-bg": "rgba(20,35,50,0.05)",
     "pulse-empty-bg": "#E6EEF3",
     "pulse-heat-high-opacity": "0.90",
@@ -133,18 +147,18 @@ export const theme: BuiltInThemeSource = {
     "pulse-heat-medium-opacity": "0.66",
     "pulse-missed-bg": "#C0413E",
     "pulse-range-bg": "#E6EEF3",
-    "pulse-ring-offset": "#FCFEFF",
-    "pulse-skeleton-gradient": "linear-gradient(90deg, #D5E1E9 25%, #E6EEF3 50%, #D5E1E9 75%)",
-    "settings-card-bg": "#FCFEFF",
-    "settings-kbd-bg": "#D5E1E9",
+    "pulse-ring-offset": "#FAFEFF",
+    "pulse-skeleton-gradient": "linear-gradient(90deg, #CEDBE5 25%, #E6EEF3 50%, #CEDBE5 75%)",
+    "settings-card-bg": "#FAFEFF",
+    "settings-kbd-bg": "#CEDBE5",
     "settings-kbd-border": "rgba(20,35,50,0.10)",
-    "settings-list-item-bg": "#FCFEFF",
-    "settings-nav-active-bg": "#FCFEFF",
+    "settings-list-item-bg": "#FAFEFF",
+    "settings-nav-active-bg": "#FAFEFF",
     "settings-search-bg": "#E2EAF0",
     "settings-sidebar-bg": "#D7E4ED",
     // Issue 1: selection elevates, container recedes. Selected lifts to elevated
-    // (L 0.996 vs sidebar 0.912), hover to canvas (L 0.944) — idle < hover < selected.
-    "sidebar-active-bg": "#FCFEFF",
+    // (L 0.994 vs sidebar 0.912), hover to canvas (L 0.944) — idle < hover < selected.
+    "sidebar-active-bg": "#FAFEFF",
     "sidebar-hover-bg": "#E6EEF3",
     "toolbar-control-hover-fg": "#1577A8",
     "toolbar-divider": "rgba(162,177,189,0.55)",
