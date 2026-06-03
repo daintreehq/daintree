@@ -223,7 +223,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
             </span>
           </div>
 
-          <div className="p-1 flex flex-col gap-1 max-h-[360px] overflow-y-auto">
+          <div className="flex flex-col max-h-[360px] overflow-y-auto">
             {displayItems.map((item) => {
               if (item.type === "group") {
                 return (
@@ -308,8 +308,8 @@ function WaitingSingleItem({
         }
       }}
       className={cn(
-        "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] border-l-2 border-l-transparent hover:bg-tint/5 focus:bg-tint/5 focus-visible:outline-2 focus-visible:outline-daintree-accent outline-hidden transition-colors group/row cursor-pointer w-full",
-        compact && "py-1 pl-1.5"
+        "flex items-center gap-2 px-3 py-2.5 hover:bg-muted/50 focus:bg-muted/50 focus-visible:outline-2 focus-visible:outline-daintree-accent outline-hidden transition-colors group/row cursor-pointer w-full select-none",
+        compact && "py-1.5 pl-1.5"
       )}
       aria-label={`Focus ${title}`}
     >
@@ -396,8 +396,8 @@ function WaitingGroupItem({
   const groupName = `Tab group (${tabCount} waiting)`;
 
   return (
-    <div className="rounded-[var(--radius-sm)] bg-transparent hover:bg-tint/5 transition-colors">
-      <div className="flex items-center gap-2 px-2.5 py-1.5 group">
+    <div className="bg-transparent transition-colors">
+      <div className="flex items-center gap-2 px-3 py-2.5 hover:bg-muted/50 transition-colors group">
         <Button
           variant="ghost"
           size="icon-sm"
@@ -430,7 +430,7 @@ function WaitingGroupItem({
           id={`waiting-group-${group.id}`}
           role="region"
           aria-label="Group panels"
-          className="pl-5 pr-1 pb-1.5 space-y-0.5"
+          className="pl-5 pb-1"
         >
           {[...waitingTerminals]
             .sort((a, b) => {

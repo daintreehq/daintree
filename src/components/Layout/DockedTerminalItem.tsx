@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDndMonitor } from "@dnd-kit/core";
-import { SquareArrowOutUpRight } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn, getBaseTitle } from "@/lib/utils";
 import { useTerminalInputStore, usePanelStore, useFocusStore } from "@/store";
@@ -307,7 +306,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   return (
     <DockPopoverChildProvider>
       <Popover open={isOpen} onOpenChange={handleOpenChange}>
-        <div className="relative group/chip flex items-center">
+        <div className="relative flex items-center">
           <TerminalContextMenu terminalId={terminal.id} forceLocation="dock">
             <PopoverTrigger asChild>
               <button
@@ -390,29 +389,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
               </button>
             </PopoverTrigger>
           </TerminalContextMenu>
-
-          {/* Reveal-on-hover/focus move-to-grid affordance. Rendered as a
-              sibling of the chip button (a button cannot be nested inside the
-              PopoverTrigger button). Double-click on the chip remains a
-              backstop. */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                data-no-dnd
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleMoveToGrid();
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="invisible opacity-0 pointer-events-none group-hover/chip:visible group-hover/chip:opacity-100 group-hover/chip:pointer-events-auto group-focus-within/chip:visible group-focus-within/chip:opacity-100 group-focus-within/chip:pointer-events-auto focus-visible:visible focus-visible:opacity-100 focus-visible:pointer-events-auto transition-[opacity,visibility] duration-150 motion-reduce:transition-none shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-                aria-label={`Open ${displayTitle} in grid`}
-              >
-                <SquareArrowOutUpRight className="w-3 h-3" aria-hidden="true" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Open in grid</TooltipContent>
-          </Tooltip>
         </div>
 
         <PopoverContent

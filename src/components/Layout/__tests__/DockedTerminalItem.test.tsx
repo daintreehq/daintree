@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 /**
- * DockedTerminalItem — move-to-grid affordance (#9683).
+ * DockedTerminalItem — move-to-grid gesture.
  *
- * The single docked chip exposes a reveal-on-hover "Open in grid" button (the
- * gesture was previously only reachable via double-click / context menu). These
- * tests drive the button and the double-click backstop through a render harness
- * (no source-string assertions) and verify the store wiring: the dock popover
- * only closes when moveTerminalToGrid succeeds.
+ * The single docked chip moves to the grid via double-click (the dedicated
+ * reveal-on-hover button was removed; move-to-grid also remains reachable via
+ * the right-click context menu). These tests drive the double-click through a
+ * render harness (no source-string assertions) and verify the store wiring: the
+ * dock popover only closes when moveTerminalToGrid succeeds.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
@@ -134,7 +134,7 @@ function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   } as PtyPanelData;
 }
 
-describe("DockedTerminalItem move-to-grid affordance (#9683)", () => {
+describe("DockedTerminalItem move-to-grid gesture", () => {
   beforeEach(() => {
     openDockTerminalMock.mockReset();
     closeDockTerminalMock.mockReset();
@@ -142,61 +142,12 @@ describe("DockedTerminalItem move-to-grid affordance (#9683)", () => {
     mockActiveDockTerminalId = null;
   });
 
-  it("renders an Open in grid button on the chip", () => {
+  it("does not render a dedicated Open in grid button on the chip", () => {
     render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
-    expect(screen.getByRole("button", { name: "Open Terminal in grid" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open Terminal in grid" })).toBeNull();
   });
 
-  it("gives each chip's button a label naming its own terminal", () => {
-    render(
-      <>
-        <DockedTerminalItem terminal={makeTerminal({ id: "t-1", title: "Claude" })} />
-        <DockedTerminalItem terminal={makeTerminal({ id: "t-2", title: "Gemini" })} />
-      </>
-    );
-
-    expect(screen.getByRole("button", { name: "Open Claude in grid" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open Gemini in grid" })).toBeTruthy();
-  });
-
-  it("moves the terminal to the grid when the button is clicked", () => {
-    moveTerminalToGridMock.mockReturnValue(true);
-    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Open Terminal in grid" }));
-
-    expect(moveTerminalToGridMock).toHaveBeenCalledWith("t-1");
-  });
-
-  it("closes the dock popover only when the move succeeds", () => {
-    moveTerminalToGridMock.mockReturnValue(true);
-    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Open Terminal in grid" }));
-
-    expect(closeDockTerminalMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not close the dock popover when the move is rejected", () => {
-    moveTerminalToGridMock.mockReturnValue(false);
-    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Open Terminal in grid" }));
-
-    expect(moveTerminalToGridMock).toHaveBeenCalledWith("t-1");
-    expect(closeDockTerminalMock).not.toHaveBeenCalled();
-  });
-
-  it("does not open the dock preview when the button is clicked", () => {
-    moveTerminalToGridMock.mockReturnValue(true);
-    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Open Terminal in grid" }));
-
-    expect(openDockTerminalMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps double-click on the chip as a move-to-grid backstop", () => {
+  it("moves the terminal to the grid on double-click and closes the dock on success", () => {
     moveTerminalToGridMock.mockReturnValue(true);
     render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
 
@@ -205,5 +156,16 @@ describe("DockedTerminalItem move-to-grid affordance (#9683)", () => {
 
     expect(moveTerminalToGridMock).toHaveBeenCalledWith("t-1");
     expect(closeDockTerminalMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not close the dock popover when the move is rejected", () => {
+    moveTerminalToGridMock.mockReturnValue(false);
+    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+
+    const chip = screen.getByRole("button", { name: /double-click to move to grid/i });
+    fireEvent.doubleClick(chip);
+
+    expect(moveTerminalToGridMock).toHaveBeenCalledWith("t-1");
+    expect(closeDockTerminalMock).not.toHaveBeenCalled();
   });
 });
