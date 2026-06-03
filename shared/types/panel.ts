@@ -16,7 +16,7 @@ export type { BuiltInPanelKind };
 export type PanelKind = BuiltInPanelKind | (string & {});
 
 /** Location of a panel instance in the UI */
-export type PanelLocation = "grid" | "dock" | "trash" | "background";
+export type PanelLocation = "grid" | "dock" | "overlay" | "trash" | "background";
 
 /** Tab group location (subset of PanelLocation, excludes trash) */
 export type TabGroupLocation = "grid" | "dock";

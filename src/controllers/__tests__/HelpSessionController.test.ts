@@ -380,6 +380,17 @@ describe("HelpSessionController — launch phase FSM", () => {
     await vi.waitFor(() => {
       expect(ctrl.getSnapshot().phase).toBe("live");
     });
+    // The assistant terminal must spawn as an overlay panel, not a phantom dock item (#9640),
+    // and must stay out of persisted/restored app state.
+    expect(vi.mocked(actionService.dispatch)).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({
+        location: "overlay",
+        excludeFromPersistence: true,
+        removeOnExit: true,
+      }),
+      expect.anything()
+    );
     ctrl.stop();
   });
 

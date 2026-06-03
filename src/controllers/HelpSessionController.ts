@@ -1343,7 +1343,7 @@ export class HelpSessionController {
       launchAgentId,
       command,
       cwd,
-      location: "dock",
+      location: "overlay",
       excludeFromPersistence: true,
       removeOnExit: true,
       ...(env && { env }),
@@ -1478,7 +1478,7 @@ export class HelpSessionController {
         "agent.launch",
         {
           agentId: launchAgentId,
-          location: "dock",
+          location: "overlay",
           cwd,
           excludeFromPersistence: true,
           removeOnExit: true,
@@ -1704,7 +1704,7 @@ export class HelpSessionController {
 
       const dispatchArgs: Record<string, unknown> = {
         agentId: launchAgentId,
-        location: "dock",
+        location: "overlay",
         cwd,
         excludeFromPersistence: true,
         removeOnExit: true,

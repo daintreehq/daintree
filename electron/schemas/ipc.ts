@@ -23,7 +23,7 @@ export const AppStateTerminalLocationSchema = z.enum(["grid", "dock"]);
 /**
  * Schema for terminal location in project state - includes all locations.
  */
-export const TerminalLocationSchema = z.enum(["grid", "dock", "trash", "background"]);
+export const TerminalLocationSchema = z.enum(["grid", "dock", "overlay", "trash", "background"]);
 
 /**
  * Schema for panel/terminal kind - distinguishes built-in panel types.

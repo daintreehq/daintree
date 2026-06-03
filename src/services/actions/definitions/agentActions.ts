@@ -71,7 +71,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         force,
       } = args as {
         agentId: string;
-        location?: "grid" | "dock";
+        location?: "grid" | "dock" | "overlay";
         cwd?: string;
         worktreeId?: string;
         prompt?: string;
@@ -156,7 +156,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       resultSchema: shortcutResultSchema,
       run: async (args: unknown) => {
         const { location, spawnedBy, focusPolicy } = (args ?? {}) as {
-          location?: "grid" | "dock";
+          location?: "grid" | "dock" | "overlay";
           spawnedBy?: TerminalSpawnSource;
           focusPolicy?: "auto" | "preserve" | "take";
         };
@@ -183,7 +183,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     resultSchema: shortcutResultSchema,
     run: async (args: unknown) => {
       const { location, spawnedBy, focusPolicy } = (args ?? {}) as {
-        location?: "grid" | "dock";
+        location?: "grid" | "dock" | "overlay";
         spawnedBy?: TerminalSpawnSource;
         focusPolicy?: "auto" | "preserve" | "take";
       };
@@ -209,7 +209,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     resultSchema: shortcutResultSchema,
     run: async (args: unknown) => {
       const { location, spawnedBy } = (args ?? {}) as {
-        location?: "grid" | "dock";
+        location?: "grid" | "dock" | "overlay";
         spawnedBy?: TerminalSpawnSource;
       };
       const result = await callbacks.onLaunchAgent("browser", {
