@@ -19,9 +19,41 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, isAbsolute } from "node:path";
-import { readFileSync as read, existsSync } from "node:fs";
+import { readFileSync as read, existsSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+// Concurrency guard: two local builds writing to release/ and the shared
+// Electron cache at once corrupt each other ("ENOENT app.asar" / "corrupted
+// Electron dist"). Refuse to start if another build is already running.
+const lockPath = join(root, ".local-build.lock");
+const pidAlive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === "EPERM"; // exists but unsignalable = alive; ESRCH = dead
+  }
+};
+if (existsSync(lockPath)) {
+  const prev = Number(readFileSync(lockPath, "utf8").trim());
+  if (prev && prev !== process.pid && pidAlive(prev)) {
+    console.error(
+      `A local build is already running (pid ${prev}). Wait for it to finish — ` +
+        `concurrent builds corrupt release/ and the Electron cache.`
+    );
+    process.exit(1);
+  }
+}
+writeFileSync(lockPath, String(process.pid));
+process.on("exit", () => {
+  try {
+    rmSync(lockPath, { force: true });
+  } catch {
+    // best-effort
+  }
+});
 
 // Load gitignored signing credentials, if present, into process.env (inherited
 // by the electron-builder child below).
@@ -30,7 +62,14 @@ if (existsSync(envPath)) process.loadEnvFile(envPath);
 
 const { version } = JSON.parse(read(join(root, "package.json"), "utf8"));
 const [major, minor] = version.split("-")[0].split(".").map(Number);
-const devVersion = `${major}.${minor + 1}.0-dev`;
+// Date-stamp the dev version so each local build is distinguishable, e.g.
+// 0.16.0 -> 0.17.0-dev.20260603. Local build time (not UTC).
+const now = new Date();
+const stamp =
+  `${now.getFullYear()}` +
+  `${String(now.getMonth() + 1).padStart(2, "0")}` +
+  `${String(now.getDate()).padStart(2, "0")}`;
+const devVersion = `${major}.${minor + 1}.0-dev.${stamp}`;
 
 const passthrough = process.argv.slice(2);
 const dirIdx = passthrough.indexOf("--dir");
@@ -42,6 +81,25 @@ const target = isDir ? "--dir" : "dmg";
 const installIdx = passthrough.indexOf("--install");
 const doInstall = installIdx !== -1;
 if (doInstall) passthrough.splice(installIdx, 1);
+
+// `--clean` also nukes the global Electron caches (forces a re-download). Only
+// needed if those ever get corrupted; not part of a normal build.
+const cleanIdx = passthrough.indexOf("--clean");
+const deepClean = cleanIdx !== -1;
+if (deepClean) passthrough.splice(cleanIdx, 1);
+
+// Always start from clean build outputs so stale/half-written artifacts can't
+// poison the package (the `release/` app.asar corruption seen during races).
+console.log("Cleaning build outputs (release/, dist/, dist-electron/)…");
+for (const d of ["release", "dist", "dist-electron"]) {
+  rmSync(join(root, d), { recursive: true, force: true });
+}
+if (deepClean) {
+  console.log("Deep clean: clearing Electron caches (will re-download Electron)…");
+  for (const c of ["electron", "electron-builder"]) {
+    rmSync(join(homedir(), "Library", "Caches", c), { recursive: true, force: true });
+  }
+}
 
 // Signed iff a code-signing cert is configured and the file exists. Resolve
 // CSC_LINK to an absolute path so electron-builder finds it regardless of cwd.
