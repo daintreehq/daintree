@@ -195,6 +195,7 @@ export const EXTENSION_KEY_REGISTRY = {
 
   // Worktree section
   "worktree-section-hover-bg": OPTIONAL,
+  "worktree-filter-bar-bg": OPTIONAL,
 } as const satisfies Record<ExtensionKey, ExtensionKeyMetadata>;
 
 export function isExtensionKeyRequired(key: ExtensionKey, mode: ColorMode): boolean {

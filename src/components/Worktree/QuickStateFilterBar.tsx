@@ -42,7 +42,7 @@ export function QuickStateFilterBar({
   const workingActive = counts !== undefined && counts.working > 0;
   return (
     <div
-      className="flex border-b border-border-default"
+      className="worktree-filter-bar flex border-b border-border-default"
       role="toolbar"
       aria-label="Quick state filter"
     >
