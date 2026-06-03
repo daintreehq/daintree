@@ -23,6 +23,9 @@ export function isTerminalVisible(
   if (isInTrash(terminal.id)) return false;
   if (terminal.location === "trash") return false;
   if (terminal.location === "background") return false;
+  // Overlay panels (the Daintree Assistant) are never a member of the visible
+  // terminal set — counts, switchers, and waiting lists must skip them (#9699).
+  if (terminal.location === "overlay") return false;
   if (isPtyPanel(terminal) && terminal.excludeFromPersistence === true) return false;
   if (isTerminalOrphaned(terminal, worktreeIds)) return false;
   return true;

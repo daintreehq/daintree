@@ -1,5 +1,10 @@
 import type { BuiltInAgentId } from "@shared/config/agentIds";
-import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
+import {
+  isGridPanelLocation,
+  isPtyPanel,
+  type PanelInstance,
+  type PtyPanelData,
+} from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { getBuiltInRuntimeAgentId } from "@/utils/terminalType";
 
@@ -21,7 +26,7 @@ export function isTerminalFleetEligible(
 ): t is PtyPanelData {
   if (!t) return false;
   if (!isPtyPanel(t)) return false;
-  if (t.location === "trash" || t.location === "background" || t.location === "dock") return false;
+  if (!isGridPanelLocation(t.location)) return false;
   if (t.hasPty === false) return false;
   // `runtimeStatus` is the renderer's authoritative liveness signal. `hasPty`
   // can lag after backend snapshots/reconnect for panels preserved after exit.
@@ -42,7 +47,7 @@ export function isTerminalErrorClusterEligible(
 ): t is PtyPanelData {
   if (!t) return false;
   if (!isPtyPanel(t)) return false;
-  if (t.location === "trash" || t.location === "background" || t.location === "dock") return false;
+  if (!isGridPanelLocation(t.location)) return false;
   if (t.hasPty === false) return false;
   return true;
 }

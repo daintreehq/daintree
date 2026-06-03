@@ -3,8 +3,10 @@ import {
   isBuiltInPanelKind,
   isBrowserPanel,
   isDevPreviewPanel,
+  isGridPanelLocation,
   isPtyPanel,
   type PanelInstance,
+  type PanelLocation,
   type TerminalInstance,
 } from "../panel.js";
 import { BUILT_IN_PANEL_KINDS } from "../../config/panelKindRegistry.js";
@@ -31,6 +33,29 @@ describe("isBuiltInPanelKind", () => {
   it("is case-sensitive", () => {
     expect(isBuiltInPanelKind("Terminal")).toBe(false);
     expect(isBuiltInPanelKind("DEV-PREVIEW")).toBe(false);
+  });
+});
+
+describe("isGridPanelLocation", () => {
+  it("treats only grid and undefined as grid members", () => {
+    expect(isGridPanelLocation("grid")).toBe(true);
+    // Legacy panels persisted before the location field existed.
+    expect(isGridPanelLocation(undefined)).toBe(true);
+  });
+
+  it("excludes dock, overlay, trash, and background from the grid", () => {
+    expect(isGridPanelLocation("dock")).toBe(false);
+    // overlay = Daintree Assistant; must never be counted as a grid member (#9699).
+    expect(isGridPanelLocation("overlay")).toBe(false);
+    expect(isGridPanelLocation("trash")).toBe(false);
+    expect(isGridPanelLocation("background")).toBe(false);
+  });
+
+  it("classifies every PanelLocation value (no value silently defaults to grid)", () => {
+    const allLocations: PanelLocation[] = ["grid", "dock", "overlay", "trash", "background"];
+    const gridMembers = allLocations.filter((loc) => isGridPanelLocation(loc));
+    // Exactly one concrete location ("grid") is a grid member; the rest are not.
+    expect(gridMembers).toEqual(["grid"]);
   });
 });
 

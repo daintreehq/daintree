@@ -211,7 +211,8 @@ export function AgentButton({
         const p = state.panelsById[pid];
         if (!p || !isPtyPanel(p)) continue;
         if (getRuntimeOrBootAgentId(p) !== type) continue;
-        if (p.location === "trash" || p.location === "background") continue;
+        if (p.location === "trash" || p.location === "background" || p.location === "overlay")
+          continue;
         if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;
         if (!firstId) firstId = pid;
         states.push(p.agentState);

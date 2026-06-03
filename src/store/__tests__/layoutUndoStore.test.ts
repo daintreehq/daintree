@@ -144,6 +144,24 @@ describe("layoutUndoStore", () => {
     expect(state.focusedId).toBe("t1");
   });
 
+  it("undo preserves an overlay assistant panel instead of orphaning it (#9699)", () => {
+    const grid = makeTerminal({ id: "grid1", location: "grid", worktreeId: "w1" });
+    const assistant = makeTerminal({ id: "assistant", location: "overlay", worktreeId: "w1" });
+    seedTerminals([grid, assistant]);
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+    // Simulate a layout change to the grid panel, then undo.
+    setTerminals([{ ...grid, location: "dock" }, assistant]);
+    useLayoutUndoStore.getState().undo();
+
+    const state = usePanelStore.getState();
+    // The assistant must still exist in the store and remain an overlay — the
+    // full-replacement rebuild in applySnapshot must not drop it.
+    expect(state.panelsById["assistant"]).toBeDefined();
+    expect(state.panelsById["assistant"]!.location).toBe("overlay");
+  });
+
   it("redo reverses undo", () => {
     const t1 = makeTerminal({ id: "t1", location: "grid" });
     seedTerminals([t1]);

@@ -60,11 +60,11 @@ async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
     if ((panel.kind ?? "terminal") !== "terminal") continue;
     if ((panel.worktreeId ?? null) !== activeWorktreeId) continue;
     const location = panel.location ?? "grid";
-    if (location === "dock" || location === "trash") continue;
+    if (location === "dock" || location === "trash" || location === "overlay") continue;
     targets.push(id);
   }
 
-  // The Daintree Assistant terminal is a `location: "dock"` panel and so is
+  // The Daintree Assistant terminal is a `location: "overlay"` panel and so is
   // excluded by the loop above, but it's rendered persistently in `HelpPanel`
   // (not via the dock popover), so nothing else wakes it on view reactivation.
   // Without this it stays frozen — accumulating headless-mirror output but

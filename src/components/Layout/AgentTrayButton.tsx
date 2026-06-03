@@ -411,7 +411,14 @@ export function AgentTrayButton({
       // Runtime identity wins so a plain shell that starts Claude/Codex is
       // tracked under the same tray entry. Launch intent is only a boot-window
       // fallback before any detector result has committed.
-      if (!p || !isPtyPanel(p) || p.location === "trash" || p.location === "background") continue;
+      if (
+        !p ||
+        !isPtyPanel(p) ||
+        p.location === "trash" ||
+        p.location === "background" ||
+        p.location === "overlay"
+      )
+        continue;
       const agentId = getRuntimeOrBootAgentId(p);
       if (!agentId) continue;
       if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;
