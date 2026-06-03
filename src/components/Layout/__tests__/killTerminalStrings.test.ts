@@ -17,6 +17,13 @@ describe("killTerminalStrings", () => {
     expect(killTerminalDescription()).toBe(fallback);
     expect(killTerminalDescription(undefined)).toBe(fallback);
     expect(killTerminalDescription("")).toBe(fallback);
+    expect(killTerminalDescription("   ")).toBe(fallback);
+  });
+
+  it("trims surrounding whitespace from the terminal name", () => {
+    expect(killTerminalDescription("  build  ")).toBe(
+      "build will be terminated and cannot be recovered."
+    );
   });
 
   it("ends every variant with the same irreversibility warning", () => {
