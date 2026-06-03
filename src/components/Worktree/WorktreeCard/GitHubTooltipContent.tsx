@@ -1,6 +1,7 @@
-import type { IssueTooltipData, PRTooltipData } from "@shared/types/github";
-import { User, Users, Calendar, KeyRound } from "lucide-react";
+import type { GitHubUser, IssueTooltipData, PRTooltipData } from "@shared/types/github";
+import { Calendar, KeyRound, PenLine, UserCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Avatar } from "@/components/ui/Avatar";
 
 function formatDate(dateString: string): string {
   const date = new Date(dateString);
@@ -9,6 +10,82 @@ function formatDate(dateString: string): string {
     day: "numeric",
     year: "numeric",
   });
+}
+
+// GitHub's avatar CDN honours a `?s=` pixel size. Request 2× the rendered size
+// for crisp HiDPI, replacing any existing `s=` so we never double up the param.
+function withAvatarSize(url: string | undefined, size: number): string {
+  if (!url) return "";
+  if (/[?&]s=\d+/.test(url)) {
+    return url.replace(/([?&])s=\d+/, `$1s=${size}`);
+  }
+  return `${url}${url.includes("?") ? "&" : "?"}s=${size}`;
+}
+
+// Author / single-assignee avatar: the login renders as adjacent text, so the
+// image is decorative (`alt=""`) and carries no redundant hover title.
+function GitHubAvatar({
+  user,
+  sizeClass,
+  urlSize,
+}: {
+  user: GitHubUser;
+  sizeClass: string;
+  urlSize: number;
+}) {
+  return (
+    <Avatar
+      src={withAvatarSize(user.avatarUrl, urlSize)}
+      alt=""
+      className={cn(sizeClass, "shrink-0")}
+    />
+  );
+}
+
+// Assignee metadata cell. A `UserCheck` glyph marks the role (vs the author
+// row's `PenLine`) so creator and assignee read apart at a glance. One assignee
+// → glyph + avatar + login. Two or more → an overlapping avatar stack capped at
+// 3 with a `+N` overflow; the stack is aria-hidden (each avatar exposes its
+// login on hover via a native `title`, which survives the app-level
+// `disableHoverableContent` provider) and an sr-only sentence names everyone.
+function AssigneeMeta({ assignees }: { assignees: GitHubUser[] }) {
+  if (assignees.length === 1) {
+    return (
+      <span className="flex items-center gap-1">
+        <UserCheck className="w-3 h-3 shrink-0" aria-hidden="true" />
+        <GitHubAvatar user={assignees[0]!} sizeClass="w-3.5 h-3.5" urlSize={28} />
+        <span className="sr-only">Assigned to </span>
+        {assignees[0]!.login}
+      </span>
+    );
+  }
+
+  const shown = assignees.slice(0, 3);
+  const overflow = assignees.length - shown.length;
+
+  return (
+    <span className="flex items-center gap-1">
+      <UserCheck className="w-3 h-3 shrink-0" aria-hidden="true" />
+      <span className="flex items-center -space-x-1" aria-hidden="true">
+        {shown.map((user, i) => (
+          <span
+            key={user.login}
+            title={user.login}
+            className="relative inline-flex rounded-full"
+            style={{ zIndex: shown.length - i }}
+          >
+            <Avatar
+              src={withAvatarSize(user.avatarUrl, 24)}
+              alt=""
+              className="w-3 h-3 shrink-0 rounded-full ring-2 ring-[var(--color-surface-sidebar)]"
+            />
+          </span>
+        ))}
+      </span>
+      {overflow > 0 && <span aria-hidden="true">+{overflow}</span>}
+      <span className="sr-only">Assigned to {assignees.map((u) => u.login).join(", ")}</span>
+    </span>
+  );
 }
 
 export function TooltipLoading() {
@@ -86,18 +163,13 @@ export function IssueTooltipContent({ data }: IssueTooltipContentProps) {
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-daintree-text/50">
         <span className="flex items-center gap-1">
-          <User className="w-3 h-3" />
+          <PenLine className="w-3 h-3 shrink-0" aria-hidden="true" />
+          <GitHubAvatar user={data.author} sizeClass="w-3.5 h-3.5" urlSize={28} />
+          <span className="sr-only">Created by </span>
           {data.author.login}
         </span>
 
-        {data.assignees.length > 0 && (
-          <span className="flex items-center gap-1">
-            <Users className="w-3 h-3" />
-            {data.assignees.length === 1
-              ? data.assignees[0]!.login
-              : `${data.assignees.length} assignees`}
-          </span>
-        )}
+        {data.assignees.length > 0 && <AssigneeMeta assignees={data.assignees} />}
 
         <span className="flex items-center gap-1">
           <Calendar className="w-3 h-3" />
@@ -160,18 +232,13 @@ export function PRTooltipContent({ data }: PRTooltipContentProps) {
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-daintree-text/50">
         <span className="flex items-center gap-1">
-          <User className="w-3 h-3" />
+          <PenLine className="w-3 h-3 shrink-0" aria-hidden="true" />
+          <GitHubAvatar user={data.author} sizeClass="w-3.5 h-3.5" urlSize={28} />
+          <span className="sr-only">Created by </span>
           {data.author.login}
         </span>
 
-        {data.assignees.length > 0 && (
-          <span className="flex items-center gap-1">
-            <Users className="w-3 h-3" />
-            {data.assignees.length === 1
-              ? data.assignees[0]!.login
-              : `${data.assignees.length} assignees`}
-          </span>
-        )}
+        {data.assignees.length > 0 && <AssigneeMeta assignees={data.assignees} />}
 
         <span className="flex items-center gap-1">
           <Calendar className="w-3 h-3" />
