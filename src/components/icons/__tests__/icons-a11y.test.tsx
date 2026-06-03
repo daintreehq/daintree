@@ -86,6 +86,28 @@ describe("AgentStateCircles a11y", () => {
     expect(customRatio).toBeCloseTo(lucideRatio, 3);
   });
 
+  // InteractingCircle and ExitedCircle draw inner detail lines that are
+  // deliberately thinner than the outer ring (hand-tuned to 0.75x and 0.9x of the
+  // ring stroke). The #9705 fix scaled the ring AND the inner lines by the same
+  // factor, so this proportion must be preserved. Asserting the inner/outer ratio
+  // (not the literal stroke-width) catches a regression where the ring is rescaled
+  // but the inner lines are forgotten, or vice versa.
+  it.each([
+    ["InteractingCircle", InteractingCircle, 0.75],
+    ["ExitedCircle", ExitedCircle, 0.9],
+  ])("%s keeps its inner detail strokes proportional to the ring", (_name, Component, ratio) => {
+    const { container } = render(<Component />);
+    const ringStroke = parseFloat(
+      container.querySelector("circle")!.getAttribute("stroke-width")!
+    );
+    const lines = container.querySelectorAll("line");
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      const lineStroke = parseFloat(line.getAttribute("stroke-width")!);
+      expect(lineStroke / ringStroke).toBeCloseTo(ratio, 2);
+    }
+  });
+
   it("re-exports SpinnerCircle through the barrel", () => {
     expect(SpinnerCircle).toBe(DirectSpinnerCircle);
     const { container } = render(<SpinnerCircle />);
