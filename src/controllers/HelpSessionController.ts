@@ -31,7 +31,7 @@ const DEFAULT_HIBERNATE_MINUTES = 30;
 // countdown each time.
 const HIBERNATE_BUSY_RECHECK_MS = 2 * 60 * 1000;
 
-const RESUME_BANNER_AUTO_DISMISS_MS = 10_000;
+const RESUME_BANNER_AUTO_DISMISS_MS = 4_000;
 const SNAPSHOT_BANNER_AUTO_DISMISS_MS = 12_000;
 
 // Minimum disabled period after a manual "Check again" click — keeps the
