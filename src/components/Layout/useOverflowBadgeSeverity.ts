@@ -73,7 +73,14 @@ export function useOverflowBadgeSeverity(
       // meant to surface.
       for (const pid of panelIds) {
         const p = panelsById[pid];
-        if (!p || !isPtyPanel(p) || p.location === "trash" || p.location === "background") continue;
+        if (
+          !p ||
+          !isPtyPanel(p) ||
+          p.location === "trash" ||
+          p.location === "background" ||
+          p.location === "overlay"
+        )
+          continue;
         const agentId = getRuntimeOrBootAgentId(p);
         if (!agentId || !overflowedAgentSet.has(agentId)) continue;
         if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;

@@ -71,7 +71,10 @@ export function registerWorktreeSessionActions(
         .map((id) => state.panelsById[id])
         .filter(
           (t): t is NonNullable<typeof t> =>
-            t != null && t.worktreeId === targetWorktreeId && t.location !== "trash"
+            t != null &&
+            t.worktreeId === targetWorktreeId &&
+            t.location !== "trash" &&
+            t.location !== "overlay"
         );
       if (targets.length === 0) return;
       const runningAgents = collectRunningAgentTerminals(targets);
@@ -160,7 +163,10 @@ export function registerWorktreeSessionActions(
         .map((id) => state.panelsById[id])
         .filter(
           (t): t is NonNullable<typeof t> =>
-            t != null && t.worktreeId === targetWorktreeId && t.location !== "trash"
+            t != null &&
+            t.worktreeId === targetWorktreeId &&
+            t.location !== "trash" &&
+            t.location !== "overlay"
         );
       if (targets.length === 0) return;
       if (confirmed !== true) {

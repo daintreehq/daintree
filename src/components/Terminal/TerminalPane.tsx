@@ -1029,6 +1029,7 @@ function TerminalPaneComponent({
         t.id !== id &&
         t.location !== "trash" &&
         t.location !== "background" &&
+        t.location !== "overlay" &&
         (t.kind ? panelKindHasPty(t.kind) : true) &&
         (!isPtyPanel(t) || t.hasPty !== false)
       );

@@ -37,7 +37,12 @@ function captureCurrentLayout(): LayoutSnapshot {
   return {
     terminals: state.panelIds
       .map((id) => state.panelsById[id])
-      .filter((t): t is CarrierPanel => Boolean(t) && t!.location !== "trash")
+      // Overlay panels (the Daintree Assistant) self-manage their lifecycle and
+      // must never be captured into a layout snapshot — restoring one would pin
+      // the assistant into the grid on undo/redo (#9699).
+      .filter(
+        (t): t is CarrierPanel => Boolean(t) && t!.location !== "trash" && t!.location !== "overlay"
+      )
       .map((t) => ({
         id: t.id,
         location: t.location,
@@ -72,7 +77,7 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
   const postSnapshotEntries: TerminalLayoutEntry[] = [];
   for (const tid of panelIds) {
     const t = panelsById[tid];
-    if (t && !snapshotIds.has(t.id) && t.location !== "trash") {
+    if (t && !snapshotIds.has(t.id) && t.location !== "trash" && t.location !== "overlay") {
       postSnapshotEntries.push({ id: t.id, location: t.location, worktreeId: t.worktreeId });
     }
   }
