@@ -1,5 +1,5 @@
 import type { GitHubUser, IssueTooltipData, PRTooltipData } from "@shared/types/github";
-import { Calendar, KeyRound } from "lucide-react";
+import { Calendar, KeyRound, PenLine, UserCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/Avatar";
 
@@ -42,15 +42,19 @@ function GitHubAvatar({
   );
 }
 
-// Assignee metadata cell. One assignee → avatar + login (mirrors the author
-// row). Two or more → an overlapping avatar stack capped at 3 with a `+N`
-// overflow; the stack is aria-hidden and an sr-only sentence names everyone,
-// while each visible avatar exposes its login on hover via `title`.
+// Assignee metadata cell. A `UserCheck` glyph marks the role (vs the author
+// row's `PenLine`) so creator and assignee read apart at a glance. One assignee
+// → glyph + avatar + login. Two or more → an overlapping avatar stack capped at
+// 3 with a `+N` overflow; the stack is aria-hidden (each avatar exposes its
+// login on hover via a native `title`, which survives the app-level
+// `disableHoverableContent` provider) and an sr-only sentence names everyone.
 function AssigneeMeta({ assignees }: { assignees: GitHubUser[] }) {
   if (assignees.length === 1) {
     return (
       <span className="flex items-center gap-1">
+        <UserCheck className="w-3 h-3 shrink-0" aria-hidden="true" />
         <GitHubAvatar user={assignees[0]!} sizeClass="w-3.5 h-3.5" urlSize={28} />
+        <span className="sr-only">Assigned to </span>
         {assignees[0]!.login}
       </span>
     );
@@ -61,17 +65,18 @@ function AssigneeMeta({ assignees }: { assignees: GitHubUser[] }) {
 
   return (
     <span className="flex items-center gap-1">
+      <UserCheck className="w-3 h-3 shrink-0" aria-hidden="true" />
       <span className="flex items-center -space-x-1" aria-hidden="true">
         {shown.map((user, i) => (
           <span
             key={user.login}
+            title={user.login}
             className="relative inline-flex rounded-full"
             style={{ zIndex: shown.length - i }}
           >
             <Avatar
               src={withAvatarSize(user.avatarUrl, 24)}
               alt=""
-              title={user.login}
               className="w-3 h-3 shrink-0 rounded-full ring-2 ring-[var(--color-surface-sidebar)]"
             />
           </span>
@@ -158,7 +163,9 @@ export function IssueTooltipContent({ data }: IssueTooltipContentProps) {
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-daintree-text/50">
         <span className="flex items-center gap-1">
+          <PenLine className="w-3 h-3 shrink-0" aria-hidden="true" />
           <GitHubAvatar user={data.author} sizeClass="w-3.5 h-3.5" urlSize={28} />
+          <span className="sr-only">Created by </span>
           {data.author.login}
         </span>
 
@@ -225,7 +232,9 @@ export function PRTooltipContent({ data }: PRTooltipContentProps) {
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-daintree-text/50">
         <span className="flex items-center gap-1">
+          <PenLine className="w-3 h-3 shrink-0" aria-hidden="true" />
           <GitHubAvatar user={data.author} sizeClass="w-3.5 h-3.5" urlSize={28} />
+          <span className="sr-only">Created by </span>
           {data.author.login}
         </span>
 

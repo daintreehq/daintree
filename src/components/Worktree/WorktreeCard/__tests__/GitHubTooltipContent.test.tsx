@@ -68,6 +68,31 @@ describe("GitHubTooltipContent avatars", () => {
     expect(src.match(/s=/g)).toHaveLength(1);
   });
 
+  it("distinguishes the creator from the assignee role", () => {
+    const data = { ...baseIssue, assignees: [user("alice")] };
+    render(<IssueTooltipContent data={data} />);
+    // Distinct role labels mean the two chips are not interchangeable, even
+    // when the same person is both author and assignee.
+    expect(screen.getByText("Created by")).toBeDefined();
+    expect(screen.getByText("Assigned to")).toBeDefined();
+  });
+
+  it("requests smaller avatars for the stacked assignees than for the author", () => {
+    const data = {
+      ...baseIssue,
+      assignees: [user("alice"), user("bob"), user("carol"), user("dave")],
+    };
+    const { container } = render(<IssueTooltipContent data={data} />);
+    const srcs = imgSrcs(container);
+    // Author avatar renders first at the larger size; the stack follows at 2x
+    // of the smaller rendered size.
+    expect(srcs[0]).toContain("s=28");
+    expect(srcs.slice(1)).toHaveLength(3);
+    for (const src of srcs.slice(1)) {
+      expect(src).toContain("s=24");
+    }
+  });
+
   it("renders the author login next to an avatar image", () => {
     const { container } = render(<IssueTooltipContent data={baseIssue} />);
     expect(screen.getByText("octocat")).toBeDefined();
