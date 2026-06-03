@@ -214,6 +214,23 @@ describe("QuickStateFilterBar", () => {
     expect(svg?.getAttribute("class") ?? "").not.toContain("animate-spin-slow");
   });
 
+  it("only the working segment can spin — waiting and finished icons never animate", () => {
+    // The spinner is the working segment's distinguishing shape signal; the
+    // spin class must stay scoped to working even when every state has a count.
+    renderBar(
+      <QuickStateFilterBar
+        value="all"
+        onChange={() => {}}
+        counts={{ all: 9, working: 3, waiting: 2, finished: 4 }}
+      />
+    );
+    for (const name of [/Waiting/, /Finished/]) {
+      const svg = screen.getByRole("button", { name }).querySelector("svg");
+      expect(svg).not.toBeNull();
+      expect(svg?.getAttribute("class") ?? "").not.toContain("animate-spin-slow");
+    }
+  });
+
   it("marks each segment icon as aria-hidden so the accessible name stays clean", () => {
     renderBar(
       <QuickStateFilterBar
@@ -230,10 +247,10 @@ describe("QuickStateFilterBar", () => {
     }
   });
 
-  it("renders the active count at full text opacity and inactive counts at /50 — issue #7971", () => {
+  it("renders the active count at full text opacity and inactive counts at /60 — issue #7971", () => {
     // The count digit is the load-bearing signal in icon-only segments — the
     // active segment must read at full neutral text opacity (no /N suffix);
-    // inactive segments stay muted at /50 to preserve the active hierarchy.
+    // inactive segments stay muted at /60 to preserve the active hierarchy.
     renderBar(
       <QuickStateFilterBar
         value="working"
@@ -249,7 +266,7 @@ describe("QuickStateFilterBar", () => {
     const inactiveClass = inactiveCount.getAttribute("class") ?? "";
     expect(activeClass).toContain("text-daintree-text");
     expect(activeClass).not.toContain("text-daintree-text/");
-    expect(inactiveClass).toContain("text-daintree-text/50");
+    expect(inactiveClass).toContain("text-daintree-text/60");
   });
 
   it("renders the optional trailing slot past a divider", () => {
