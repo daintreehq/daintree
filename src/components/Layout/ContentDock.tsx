@@ -162,6 +162,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const activeDockIndexRef = useRef(0);
+  const prevFocusedDockItemRef = useRef<HTMLElement | null>(null);
   const { canScrollLeft, canScrollRight, scrollLeft, scrollRight } =
     useHorizontalScrollControls(scrollContainerRef);
 
@@ -194,6 +195,23 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     const clamped = Math.min(activeDockIndexRef.current, items.length - 1);
     activeDockIndexRef.current = clamped;
     syncDockTabStops(items, clamped);
+
+    // Issue #9681 — when the focused chip unmounts (terminal closed, group
+    // collapsed), the roving tabindex above re-homes the tab stop but focus
+    // has already fallen to <body>. Redirect it onto the promoted chip so
+    // keyboard navigation survives. Mirrors Toolbar.tsx's recovery pattern.
+    const prevFocused = prevFocusedDockItemRef.current;
+    if (prevFocused && !items.includes(prevFocused)) {
+      // Clear unconditionally — a stale ref left set would trigger a phantom
+      // redirect on an unrelated later render even when focus moved elsewhere.
+      prevFocusedDockItemRef.current = null;
+      // Only reclaim focus when it genuinely fell to <body>. Focus inside a
+      // Radix portal (tooltip, context menu) sets activeElement to the portal
+      // node, not body, and must not be hijacked.
+      if (document.activeElement === document.body) {
+        items[clamped]?.focus();
+      }
+    }
   });
 
   const handleDockFocusCapture = useCallback(
@@ -203,6 +221,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
       const idx = items.indexOf(target);
       if (idx !== -1) {
         activeDockIndexRef.current = idx;
+        prevFocusedDockItemRef.current = target;
         syncDockTabStops(items, idx);
       }
     },
@@ -357,6 +376,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                     <button
                       type="button"
                       onClick={scrollLeft}
+                      tabIndex={-1}
+                      aria-hidden="true"
                       className={cn(
                         "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-daintree-text",
                         "rounded-[var(--radius-md)] transition-colors",
@@ -382,7 +403,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
               onKeyDown={handleDockKeyDown}
               onFocusCapture={handleDockFocusCapture}
               className={cn(
-                "flex items-center gap-[var(--dock-gap)] overflow-x-auto overscroll-x-none flex-1 min-h-[var(--dock-item-height)] no-scrollbar scroll-smooth px-1 transition-[color,background-color,box-shadow]",
+                "flex items-center gap-[var(--dock-gap)] overflow-x-auto overscroll-x-none flex-1 min-h-[var(--dock-item-height)] no-scrollbar scroll-smooth scroll-px-4 px-1 transition-[color,background-color,box-shadow]",
                 isWorktreeSortDragging && "cursor-no-drop",
                 isOver &&
                   !isWorktreeSortDragging &&
@@ -436,6 +457,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                     <button
                       type="button"
                       onClick={scrollRight}
+                      tabIndex={-1}
+                      aria-hidden="true"
                       className={cn(
                         "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-daintree-text",
                         "rounded-[var(--radius-md)] transition-colors",
