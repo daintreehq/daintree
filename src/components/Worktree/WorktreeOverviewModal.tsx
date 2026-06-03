@@ -1027,7 +1027,9 @@ export function WorktreeOverviewModal({
             Stays mounted during selection mode so the user can refine the
             target set without losing the selection (visible-id sync drops
             hidden selections naturally — see selectedIds reconciliation). */}
-        {hasNonMainWorktrees && <WorktreeSidebarSearchBar chipCounts={chipCounts} />}
+        {hasNonMainWorktrees && (
+          <WorktreeSidebarSearchBar variant="modal" chipCounts={chipCounts} />
+        )}
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">

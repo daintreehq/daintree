@@ -8,6 +8,13 @@ import type { ChipCounts } from "@/lib/worktreeFilters";
 interface WorktreeSidebarSearchBarProps {
   inputRef?: React.Ref<HTMLInputElement>;
   chipCounts?: ChipCounts;
+  /**
+   * Where the bar is mounted. The sidebar variant carries the optional
+   * `--worktree-filter-bar-bg` theme surface (a recessed strip at the top of
+   * the rail); the modal variant stays transparent so the strip doesn't leak
+   * onto the elevated overview dialog.
+   */
+  variant?: "sidebar" | "modal";
 }
 
 // The visible filter updates instantly via `liveQuery`; only the persisted
@@ -22,7 +29,11 @@ function assignForwardedRef<T>(ref: React.Ref<T> | undefined, value: T | null): 
   }
 }
 
-export function WorktreeSidebarSearchBar({ inputRef, chipCounts }: WorktreeSidebarSearchBarProps) {
+export function WorktreeSidebarSearchBar({
+  inputRef,
+  chipCounts,
+  variant = "sidebar",
+}: WorktreeSidebarSearchBarProps) {
   const query = useWorktreeFilterStore((state) => state.query);
   const liveQuery = useWorktreeFilterStore((state) => state.liveQuery);
   const setQuery = useWorktreeFilterStore((state) => state.setQuery);
@@ -150,7 +161,12 @@ export function WorktreeSidebarSearchBar({ inputRef, chipCounts }: WorktreeSideb
   const showClearAll = activeAxisCount >= 2;
 
   return (
-    <div className="px-3 py-2 border-b border-divider shrink-0">
+    <div
+      className={cn(
+        "px-3 py-2 border-b border-divider shrink-0",
+        variant === "sidebar" && "worktree-filter-bar"
+      )}
+    >
       <div
         role="search"
         className={cn(
