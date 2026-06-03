@@ -296,10 +296,15 @@ function Toast({
   // evicted *background* toast (e.g. index 2 when MAX_VISIBLE_TOASTS evicts the
   // oldest) would fall off the parent's visible-index map, receive index 0, and
   // animate from the back of the pile toward the front as it fades — a visible
-  // forward lurch. Holding the last depth lets it fade out in place.
-  const lastDepthRef = useRef(depth);
-  if (!notification.dismissed) lastDepthRef.current = depth;
-  const renderDepth = notification.dismissed ? lastDepthRef.current : depth;
+  // forward lurch. Holding the last depth lets it fade out in place. Uses
+  // state + useLayoutEffect rather than a render-time ref write so the React
+  // Compiler can reason about the value; the extra render on depth change is
+  // synchronous (pre-paint) so it never causes a frame of jank.
+  const [frozenDepth, setFrozenDepth] = useState(depth);
+  useLayoutEffect(() => {
+    if (!notification.dismissed) setFrozenDepth(depth);
+  }, [depth, notification.dismissed]);
+  const renderDepth = notification.dismissed ? frozenDepth : depth;
 
   // Two-node split: the outer wrapper owns ALL transform/opacity motion (entry
   // slide, stack lift/scale, exit) and the interaction surface (ref, role,
