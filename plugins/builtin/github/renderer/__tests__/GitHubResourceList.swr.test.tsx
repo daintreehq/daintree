@@ -550,6 +550,32 @@ describe("GitHubResourceList SWR behavior", () => {
     });
   });
 
+  it("reports the server totalCount exactly for PR lists too (issue #9717)", async () => {
+    const prs = Array.from({ length: 20 }, (_, i) => ({
+      ...makeIssue(i + 1),
+      isDraft: false,
+      ciStatus: "SUCCESS" as const,
+    }));
+    mockListPRs.mockResolvedValue({
+      items: prs,
+      pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+      totalCount: 61,
+    });
+    const onCountUpdate = vi.fn();
+
+    render(
+      <GitHubResourceList type="pr" projectPath="/test/proj" onCountUpdate={onCountUpdate} />
+    );
+
+    await waitFor(() => {
+      expect(onCountUpdate).toHaveBeenCalled();
+    });
+    const [count, isApproximate] = onCountUpdate.mock.calls.at(-1) ?? [];
+    expect(count).toBe(61);
+    expect(count).not.toBe(prs.length);
+    expect(isApproximate).toBe(false);
+  });
+
   it("calls onCountUpdate again after a successful background revalidation", async () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
@@ -622,9 +648,11 @@ describe("GitHubResourceList SWR behavior", () => {
     onCountUpdate.mockClear();
 
     // Switch to the "closed" tab — a fresh first-page fetch fires for the
-    // closed filter key. It must NOT report into the open-count badge.
+    // closed filter key, carrying the closed totalCount. It must NOT report
+    // into the open-count badge (the open gate, not the count source, is the
+    // defense).
     mockListIssues.mockResolvedValue(
-      makeResponse([makeIssue(3), makeIssue(4), makeIssue(5), makeIssue(6)])
+      makeResponse([makeIssue(3), makeIssue(4), makeIssue(5), makeIssue(6)], 500)
     );
     act(() => {
       useGitHubFilterStore.getState().setIssueFilter("closed");

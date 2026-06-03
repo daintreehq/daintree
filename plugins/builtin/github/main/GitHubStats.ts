@@ -422,6 +422,7 @@ export async function getRepoStatsAndPage(
             hasNextPage: snapshot.issues.hasNextPage,
             endCursor: snapshot.issues.endCursor,
           },
+          totalCount: snapshot.issues.totalCount,
         });
         prListCache.set(prsListCacheKey, {
           items: snapshot.prs.items,
@@ -429,6 +430,7 @@ export async function getRepoStatsAndPage(
             hasNextPage: snapshot.prs.hasNextPage,
             endCursor: snapshot.prs.endCursor,
           },
+          totalCount: snapshot.prs.totalCount,
         });
         // Re-stamp the durable disk cache too. The 60s in-memory caches above
         // keep hot polls fast, but the disk cache is the failure-mode fallback:
@@ -560,10 +562,12 @@ export async function getRepoStatsAndPage(
     issueListCache.set(issuesListCacheKey, {
       items: issuesPage.items,
       pageInfo: { hasNextPage: issuesPage.hasNextPage, endCursor: issuesPage.endCursor },
+      totalCount: issuesPage.totalCount,
     });
     prListCache.set(prsListCacheKey, {
       items: prsPage.items,
       pageInfo: { hasNextPage: prsPage.hasNextPage, endCursor: prsPage.endCursor },
+      totalCount: prsPage.totalCount,
     });
 
     // Record the snapshot so the next poll can skip the heavy query when the
