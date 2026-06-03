@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
-import { ChevronDown, ChevronRight, Layers, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Layers, OctagonX } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,11 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
 import type { TabGroup } from "@/types";
+import {
+  KILL_TERMINAL_TITLE,
+  KILL_TERMINAL_CONFIRM_LABEL,
+  killTerminalDescription,
+} from "./killTerminalStrings";
 
 interface WaitingContainerProps {
   compact?: boolean;
@@ -253,14 +258,10 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
       <ConfirmDialog
         isOpen={killConfirmId !== null}
         onClose={() => setKillConfirmId(null)}
-        title="Kill terminal?"
-        description={
-          killTarget
-            ? `${killTarget.title || "The terminal"} will be terminated and cannot be recovered.`
-            : "The terminal will be terminated and cannot be recovered."
-        }
+        title={KILL_TERMINAL_TITLE}
+        description={killTerminalDescription(killTarget?.title || undefined)}
         variant="destructive"
-        confirmLabel="Kill terminal"
+        confirmLabel={KILL_TERMINAL_CONFIRM_LABEL}
         onConfirm={handleKillConfirm}
       />
     </Popover>
@@ -365,7 +366,7 @@ function WaitingSingleItem({
               aria-label={`Kill ${title}`}
               data-testid="waiting-kill-button"
             >
-              <Trash2 aria-hidden="true" />
+              <OctagonX aria-hidden="true" />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">{`Kill ${title}`}</TooltipContent>
