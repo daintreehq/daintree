@@ -282,7 +282,17 @@ export function useGitHubResourceListSWR({
               // background refresh. The stats query's `totalCount` can exceed
               // the loaded page, so the badge would otherwise assert a higher
               // number than the list shows (issue #9693).
-              onCountUpdate?.(result.items.length, result.pageInfo.hasNextPage);
+              //
+              // Gated to the `open` filter: the badge represents the OPEN
+              // issue/PR count (its aria-label and tooltip say "open"). The
+              // hook is kept mounted across filter tabs, so without this gate
+              // switching the dropdown to Closed/Merged would fire
+              // `onCountUpdate` with the closed/merged count and poison the
+              // open badge. The last known open count stays correct while the
+              // user browses other states.
+              if (filterState === "open") {
+                onCountUpdate?.(result.items.length, result.pageInfo.hasNextPage);
+              }
               // Notify parent (toolbar count badge) that fresh first-page data
               // landed. Gated on `isRevalidate` so it fires only when
               // `bypassCache: true` was sent — the main process's

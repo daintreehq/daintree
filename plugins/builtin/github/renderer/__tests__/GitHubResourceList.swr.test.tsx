@@ -557,6 +557,37 @@ describe("GitHubResourceList SWR behavior", () => {
     expect(onCountUpdate).toHaveBeenCalledTimes(1);
   });
 
+  it("does not poison the badge count when the dropdown filter switches away from open", async () => {
+    // The badge shows the OPEN count. Switching the dropdown to Closed must
+    // not overwrite it with the closed count (the hook stays mounted across
+    // filter tabs).
+    mockListIssues.mockResolvedValueOnce(makeResponse([makeIssue(1), makeIssue(2)]));
+    const onCountUpdate = vi.fn();
+
+    render(
+      <GitHubResourceList type="issue" projectPath="/test/proj" onCountUpdate={onCountUpdate} />
+    );
+
+    await waitFor(() => {
+      expect(onCountUpdate).toHaveBeenCalledWith(2, false);
+    });
+    onCountUpdate.mockClear();
+
+    // Switch to the "closed" tab — a fresh first-page fetch fires for the
+    // closed filter key. It must NOT report into the open-count badge.
+    mockListIssues.mockResolvedValue(
+      makeResponse([makeIssue(3), makeIssue(4), makeIssue(5), makeIssue(6)])
+    );
+    act(() => {
+      useGitHubFilterStore.getState().setIssueFilter("closed");
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("item-3")).toBeTruthy();
+    });
+    expect(onCountUpdate).not.toHaveBeenCalled();
+  });
+
   it("does not call onCountUpdate for search-filtered fetches", async () => {
     useGitHubFilterStore.getState().setIssueSearchQuery("needle");
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
