@@ -372,6 +372,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     term.clearTextureAtlas = vi.fn();
     term.refresh = vi.fn();
     service.instances.set("t1", managed);
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(false);
     vi.spyOn(service.resizeController, "fit").mockImplementation(() => {
       throw new Error("fit boom");
     });
@@ -380,6 +381,45 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     // The escape hatch — forceXtermReflow — must still run even if fit throws.
     expect(paddingHistory(managed)).toContain("0.01px");
     expect(managed.lastReflowAt).toBe(0);
+    // Even on the error path, Redraw never flushes the shared atlas.
+    expect(term.clearTextureAtlas).not.toHaveBeenCalled();
+  });
+
+  it("resetRenderer leaves sibling panes untouched (#9701 isolation)", () => {
+    const target = makeManaged({ lastReflowAt: 99999 });
+    Object.defineProperty(target.hostElement, "clientWidth", { value: 200, configurable: true });
+    Object.defineProperty(target.hostElement, "clientHeight", { value: 200, configurable: true });
+    const targetTerm = target.terminal as unknown as {
+      rows: number;
+      clearTextureAtlas: () => void;
+      refresh: (a: number, b: number) => void;
+    };
+    targetTerm.rows = 24;
+    targetTerm.clearTextureAtlas = vi.fn();
+    targetTerm.refresh = vi.fn();
+
+    // A co-owner pane that shares the WebGL texture atlas. Redraw on the target
+    // must not call anything on this terminal — the old clearTextureAtlas() path
+    // corrupted it until it got its own resize/click.
+    const sibling = makeManaged();
+    const siblingTerm = sibling.terminal as unknown as {
+      clearTextureAtlas: () => void;
+      refresh: (a: number, b: number) => void;
+    };
+    siblingTerm.clearTextureAtlas = vi.fn();
+    siblingTerm.refresh = vi.fn();
+
+    service.instances.set("t1", target);
+    service.instances.set("t2", sibling);
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(false);
+    vi.spyOn(service.resizeController, "fit").mockImplementation(() => null);
+
+    service.resetRenderer("t1");
+
+    expect(siblingTerm.clearTextureAtlas).not.toHaveBeenCalled();
+    expect(siblingTerm.refresh).not.toHaveBeenCalled();
+    expect(paddingHistory(sibling).length).toBe(0);
+    expect(sibling.lastReflowAt).toBe(0);
   });
 });
 
