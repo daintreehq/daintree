@@ -51,10 +51,13 @@ export function SortableDockItem({
 
   // Directional insertion-line indicator: only fire for dock sort drags (a
   // grid→dock cross-container drag also raises isOver, but its own highlight
-  // handles that), and only when dnd-kit has measured the dragged rect.
-  // Compare horizontal midpoints — index comparison gives the optimistic
-  // visual slot, not the user's intent relative to the hovered chip.
-  const isDockSortDragOver = isOver && active?.data.current?.sourceLocation === "dock";
+  // handles that; an accordion-origin drag of a docked terminal also reports
+  // sourceLocation "dock", so exclude it via `origin`), and only when dnd-kit
+  // has measured the dragged rect. Compare horizontal midpoints — index
+  // comparison gives the optimistic visual slot, not the user's intent
+  // relative to the hovered chip.
+  const isDockSortDragOver =
+    isOver && active?.data.current?.sourceLocation === "dock" && !active?.data.current?.origin;
   const translatedRect = active?.rect.current.translated;
   let dropDirection: "before" | "after" | null = null;
   if (isDockSortDragOver && translatedRect && over) {

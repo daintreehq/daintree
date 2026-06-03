@@ -9,7 +9,7 @@ interface MockSortableState {
   isDragging?: boolean;
   isOver?: boolean;
   active?: {
-    data: { current: { sourceLocation?: string } };
+    data: { current: { sourceLocation?: string; origin?: string } };
     rect: { current: { translated: { left: number; width: number } | null } };
   } | null;
   over?: { rect: { left: number; width: number } } | null;
@@ -159,6 +159,23 @@ describe("SortableDockItem", () => {
       isOver: true,
       active: {
         data: { current: { sourceLocation: "grid" } },
+        rect: { current: { translated: { left: 0, width: 40 } } },
+      },
+      over: { rect: { left: 100, width: 40 } },
+    };
+    const { container } = render(
+      <SortableDockItem terminal={terminal} sourceIndex={0}>
+        <div />
+      </SortableDockItem>
+    );
+    expect(container.querySelector("[data-dock-drop-indicator]")).toBeNull();
+  });
+
+  it("renders no indicator for an accordion-origin drag of a docked terminal", () => {
+    mockState = {
+      isOver: true,
+      active: {
+        data: { current: { sourceLocation: "dock", origin: "accordion" } },
         rect: { current: { translated: { left: 0, width: 40 } } },
       },
       over: { rect: { left: 100, width: 40 } },
