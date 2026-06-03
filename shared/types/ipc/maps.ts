@@ -461,6 +461,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "app:view-warm-painted": {
+    args: [];
+    result: void;
+  };
   "app:reload-config": {
     args: [];
     result: { success: boolean };

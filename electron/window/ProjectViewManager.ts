@@ -925,13 +925,6 @@ export class ProjectViewManager {
 
   // ── Private ──
 
-  private deactivateCurrentView(): void {
-    if (!this.activeProjectId) return;
-    const current = this.views.get(this.activeProjectId);
-    if (!current) return;
-    this.deactivateEntry(current);
-  }
-
   private deactivateEntry(current: ViewEntry): void {
     if (this.win.isDestroyed()) return;
 
@@ -1041,8 +1034,12 @@ export class ProjectViewManager {
     }
     this.updateViewBounds(entry.view);
 
-    // Explicit focus — addChildView does not auto-focus
-    if (!entry.view.webContents.isDestroyed()) {
+    // Explicit focus — addChildView does not auto-focus. Skip it while the view
+    // is bridged BEHIND the still-visible outgoing view: keyboard focus and menu
+    // shortcuts should stay with what the user actually sees until the warm gate
+    // reveals the cached view. performSwitch re-focuses once the bridge tears
+    // down (#9679); the cold-start path likewise defers focus until after its gate.
+    if (!insertBehind && !entry.view.webContents.isDestroyed()) {
       entry.view.webContents.focus();
     }
 

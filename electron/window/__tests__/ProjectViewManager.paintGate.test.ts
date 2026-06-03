@@ -465,6 +465,14 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     const switchBack = manager.switchTo("proj-a", "/path/a");
     for (let i = 0; i < 6; i++) await Promise.resolve();
 
+    // Core anti-flash invariant: A is reattached at z-index 0 (BEHIND the still-
+    // visible B), not on top — otherwise its stale pre-freeze surface would flash.
+    const reattach = win.contentView.addChildView.mock.calls.find(
+      ([view]) => (view as { webContents?: MockWc }).webContents === initialWc
+    );
+    expect(reattach).toBeDefined();
+    expect(reattach?.[1]).toBe(0);
+
     // Bridge armed: A reattached, B (outgoing) still attached — not yet detached.
     expect(win.contentView.removeChildView).not.toHaveBeenCalled();
 
