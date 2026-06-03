@@ -123,10 +123,12 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       const branchEnd = source.indexOf(") : filteredWorktrees.length === 0 &&", branchStart);
       const branch = source.slice(branchStart, branchEnd);
       expect(branch).toContain('"No matching worktrees"');
-      expect(branch).toContain('No matches for "${truncateSearchQuery(query.trim())}"');
+      expect(branch).toContain('No matches for "${truncateSearchQuery(deferredQuery.trim())}"');
       // The search-aware copy is the hasQuery arm, the plain copy the fallback —
       // guard against an inverted ternary by checking the query arm comes first.
-      const queryIdx = branch.indexOf('No matches for "${truncateSearchQuery(query.trim())}"');
+      const queryIdx = branch.indexOf(
+        'No matches for "${truncateSearchQuery(deferredQuery.trim())}"'
+      );
       const fallbackIdx = branch.indexOf('"No matching worktrees"');
       expect(branch.indexOf("hasQuery")).toBeLessThan(queryIdx);
       expect(queryIdx).toBeLessThan(fallbackIdx);
