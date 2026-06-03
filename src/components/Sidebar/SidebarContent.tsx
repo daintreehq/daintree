@@ -55,7 +55,6 @@ import { useShallow } from "zustand/react/shallow";
 import { systemClient } from "@/clients";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useWorktreeDevServerStore } from "@/store/worktreeDevServerStore";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   matchesFilters,
   matchesQuickStateFilter,
