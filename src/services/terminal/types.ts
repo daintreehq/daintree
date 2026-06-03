@@ -99,6 +99,12 @@ export interface ManagedTerminal {
   pendingWrites?: number;
   needsWake?: boolean;
 
+  // One-shot flag (#9702): a fullWakeForVisibilityRestore was requested while
+  // this terminal was mid-attach (isAttaching) and skipped to avoid racing the
+  // attach. Consumed by notifyAttachSettledWaiters, which re-runs the wake once
+  // attach has settled.
+  pendingVisibilityWake?: boolean;
+
   // Typing burst timer
   inputBurstTimer?: number;
 

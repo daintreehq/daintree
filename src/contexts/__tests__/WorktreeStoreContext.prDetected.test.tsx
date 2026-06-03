@@ -11,9 +11,16 @@ import {
   _resetForTests as resetCache,
 } from "@/lib/githubResourceCache";
 import { useProjectStore } from "@/store/projectStore";
+import { wakeActiveWorktreeTerminals } from "@/store/wakeActiveWorktreeTerminals";
 import type { GitHubPR, GitHubPRCIStatus } from "@shared/types/github";
 import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
 import type { Project } from "@shared/types/project";
+
+vi.mock("@/store/wakeActiveWorktreeTerminals", () => ({
+  wakeActiveWorktreeTerminals: vi.fn(() => Promise.resolve()),
+}));
+
+const wakeMock = vi.mocked(wakeActiveWorktreeTerminals);
 
 // Host-minted `(epoch, seq)` versions (#8403). The mock host uses a fixed
 // epoch; `get-all-states` reports seq 0 and push events advance the seq.
@@ -1221,6 +1228,66 @@ describe("WorktreeStoreProvider visibilitychange (#8066 consolidation)", () => {
     });
 
     expect(requestMock.mock.calls.length).toBe(initialCallCount);
+  });
+});
+
+describe("WorktreeStoreProvider resume event (#9702)", () => {
+  function setVisibility(state: "visible" | "hidden"): void {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => state,
+    });
+  }
+
+  it("does not wake when resume fires while the document is hidden", async () => {
+    setVisibility("hidden");
+    await renderProvider();
+    wakeMock.mockClear();
+
+    act(() => {
+      document.dispatchEvent(new Event("resume"));
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(wakeMock).not.toHaveBeenCalled();
+  });
+
+  it("wakes once when resume fires while visible", async () => {
+    setVisibility("visible");
+    await renderProvider();
+    wakeMock.mockClear();
+
+    act(() => {
+      document.dispatchEvent(new Event("resume"));
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(wakeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces a resume + visibilitychange pair into a single wake", async () => {
+    setVisibility("visible");
+    await renderProvider();
+    wakeMock.mockClear();
+
+    // Chromium fires resume immediately before visibilitychange on thaw; both
+    // land in the same turn and must collapse to one fan-out.
+    act(() => {
+      document.dispatchEvent(new Event("resume"));
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(wakeMock).toHaveBeenCalledTimes(1);
   });
 });
 

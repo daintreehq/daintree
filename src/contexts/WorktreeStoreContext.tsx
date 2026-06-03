@@ -581,12 +581,42 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // workspace host's `refreshOnWake` already mirrors via `worktree-update`
     // push events. Re-entering this handler for short alt-tabs no longer
     // triggers redundant `get-all-states` fetches.
+    // De-dupe guard: on warm reactivation Chromium fires the Page Lifecycle
+    // `resume` event immediately before `visibilitychange` in the same turn
+    // (#9702). Coalesce both into a single wake fan-out via a microtask so a
+    // resume+visibilitychange pair doesn't run the fan-out twice.
+    let wakePending = false;
+    function scheduleWake() {
+      if (wakePending) return;
+      wakePending = true;
+      void Promise.resolve().then(() => {
+        wakePending = false;
+        if (document.visibilityState === "visible") {
+          void wakeActiveWorktreeTerminals();
+        }
+      });
+    }
+
     function handleVisibilityChange() {
       if (document.visibilityState !== "visible") return;
-      void wakeActiveWorktreeTerminals();
+      scheduleWake();
     }
     document.addEventListener("visibilitychange", handleVisibilityChange);
     cleanups.push(() => document.removeEventListener("visibilitychange", handleVisibilityChange));
+
+    // `resume` fires when a frozen renderer is thawed (CDP
+    // Page.setWebLifecycleState("active")). On project switch-back the queued
+    // `visibilitychange` can be processed while the renderer is still frozen
+    // and the wake fan-out then runs in a lifecycle that can't execute it
+    // (#9702). The `resume` event is the renderer's authoritative "now
+    // executable" signal, so re-run the fan-out here too — coalesced with the
+    // visibilitychange path above.
+    function handleResume() {
+      if (document.visibilityState !== "visible") return;
+      scheduleWake();
+    }
+    document.addEventListener("resume", handleResume);
+    cleanups.push(() => document.removeEventListener("resume", handleResume));
 
     // Missed-event guard: if the view is already visible by the time this
     // listener installs (fast cached reactivation), the visibilitychange
