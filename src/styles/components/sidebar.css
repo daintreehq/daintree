@@ -9,9 +9,14 @@
   box-shadow: inset 2px 0 0 var(--theme-overlay-selected);
 }
 
+/* Inactive selection: when the sidebar loses focus the selected row must stay
+   visibly selected, not blank. Selection is distinct from focus and persists
+   when focus leaves the list (WAI-ARIA APG tree view; macOS HIG secondary
+   highlight; VS Code `list.inactiveSelectionBackground`). Keep the neutral fill
+   and a dimmed left-edge marker rather than zeroing the box-shadow. */
 .sidebar-root:not(:focus-within) .sidebar-worktree-card[data-active="true"] {
-  background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.03));
-  box-shadow: none;
+  background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.05));
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--theme-overlay-selected) 45%, transparent);
 }
 
 .sidebar-worktree-card[data-hoverable="true"]:hover,
@@ -25,13 +30,13 @@ html[data-dragging="true"] .sidebar-worktree-card[data-hovered="true"] {
 }
 
 .sidebar-worktree-card:has(> button:focus-visible) {
-  box-shadow: inset 0 0 0 2px var(--sidebar-ring);
+  box-shadow: inset 0 0 0 2px var(--theme-focus-ring);
 }
 
 .sidebar-worktree-card[data-active="true"]:has(> button:focus-visible) {
   box-shadow:
     inset 2px 0 0 var(--theme-overlay-selected),
-    inset 0 0 0 2px var(--sidebar-ring);
+    inset 0 0 0 2px var(--theme-focus-ring);
 }
 
 /* Roving-tabindex grid: when the row wrapper itself is keyboard-focused,
@@ -42,22 +47,22 @@ html[data-dragging="true"] .sidebar-worktree-card[data-hovered="true"] {
 }
 
 [data-worktree-row]:focus-visible .sidebar-worktree-card {
-  box-shadow: inset 0 0 0 2px var(--sidebar-ring);
+  box-shadow: inset 0 0 0 2px var(--theme-focus-ring);
 }
 
 [data-worktree-row]:focus-visible .sidebar-worktree-card[data-active="true"] {
   box-shadow:
     inset 2px 0 0 var(--theme-overlay-selected),
-    inset 0 0 0 2px var(--sidebar-ring);
+    inset 0 0 0 2px var(--theme-focus-ring);
 }
 
 /* Keyboard navigation cursor (aria-activedescendant). The grid container holds
    the only real DOM focus, so `:focus-visible` never fires on a row during
    arrow-key navigation — the active row is flagged with `data-keyboard-cursor`
-   instead. Render the ring with `--theme-focus-ring` (the neutral, dedicated
-   focus token), NOT `--sidebar-ring` (which resolves to the accent color the
-   current-worktree marker already owns) so the focus region carries a single
-   accent signal. */
+   instead. Like every other focus/cursor ring above, it uses the neutral
+   `--theme-focus-ring`, never the accent: focus is a separate channel from
+   selection (WCAG 2.4.13), so accent stays reserved for the current-worktree
+   marker and the region carries a single accent signal. */
 [data-worktree-row][data-keyboard-cursor="true"] .sidebar-worktree-card {
   box-shadow: inset 0 0 0 2px var(--theme-focus-ring);
 }
