@@ -611,7 +611,9 @@ describe("DockLaunchButton", () => {
       );
 
       // First "Codex" is the band row.
-      fireEvent.click(getAllByText("Codex")[0]);
+      const codexElement = getAllByText("Codex")[0];
+      expect(codexElement).toBeDefined();
+      fireEvent.click(codexElement!);
       expect(onLaunchAgent).toHaveBeenCalledWith("codex");
       expect(recordActionMruMock).toHaveBeenCalledWith("agent.codex");
     });
