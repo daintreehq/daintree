@@ -458,11 +458,14 @@ export function ThemeBrowser() {
           type="button"
           onClick={handleCancel}
           aria-label="Close theme browser"
-          className="absolute top-2 right-2 p-1 rounded-full bg-black/40 text-white/90 hover:bg-black/60 transition-colors"
+          className="absolute top-2 right-2 p-1 rounded-full bg-scrim-medium text-white/90 hover:bg-scrim-strong transition-colors"
         >
           <X className="w-4 h-4" />
         </button>
-        <div className="absolute bottom-0 inset-x-0 bg-black/40 backdrop-blur-sm px-3 py-1.5 flex items-center justify-between">
+        {/* Media-overlay caption: sits on a guaranteed-dark scrim over the hero
+            image, so the white label text is intentional and stays readable on
+            every theme. `text-inverse` flips dark on dark themes — not usable here. */}
+        <div className="absolute bottom-0 inset-x-0 bg-scrim-medium backdrop-blur-sm px-3 py-1.5 flex items-center justify-between">
           <span className="text-sm font-medium text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
             {activeScheme.name}
           </span>

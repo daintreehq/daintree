@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Check, X } from "lucide-react";
 import { HexColorInput, HexColorPicker } from "react-colorful";
+import { relativeLuminance } from "@shared/theme";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
@@ -142,7 +143,13 @@ export function PresetColorPicker({
                 {isSelected && (
                   <Check
                     size={10}
-                    className="absolute inset-0 m-auto text-white drop-shadow pointer-events-none"
+                    className={cn(
+                      "absolute inset-0 m-auto drop-shadow pointer-events-none",
+                      // The swatch colors are fixed (not theme tokens), so pick the
+                      // checkmark contrast from the swatch's own luminance — a white
+                      // checkmark disappears on the lighter swatches (#e5c07b, #abb2bf).
+                      relativeLuminance(c) > 0.35 ? "text-black/80" : "text-white"
+                    )}
                     strokeWidth={3}
                   />
                 )}

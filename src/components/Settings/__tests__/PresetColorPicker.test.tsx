@@ -4,7 +4,9 @@ import { render, fireEvent, act } from "@testing-library/react";
 import { PresetColorPicker } from "../PresetColorPicker";
 
 vi.mock("lucide-react", () => ({
-  Check: () => <span data-testid="check-icon" />,
+  Check: ({ className }: { className?: string }) => (
+    <span data-testid="check-icon" className={className} />
+  ),
   X: () => <span data-testid="x-icon" />,
 }));
 
@@ -160,6 +162,24 @@ describe("PresetColorPicker", () => {
     expect(done.disabled).toBe(true);
     fireEvent.click(done);
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("checkmark uses dark ink on a light swatch so it stays visible", () => {
+    // #abb2bf (light gray, luminance ~0.44) — a white checkmark would wash out.
+    const { getByTestId } = render(
+      <PresetColorPicker color="#abb2bf" onChange={onChange} agentColor="#888888" />
+    );
+    expect(getByTestId("check-icon").className).toContain("text-black/80");
+    expect(getByTestId("check-icon").className).not.toContain("text-white");
+  });
+
+  it("checkmark uses white ink on a dark swatch", () => {
+    // #be5046 (dark red, luminance ~0.17) — white reads cleanly.
+    const { getByTestId } = render(
+      <PresetColorPicker color="#be5046" onChange={onChange} agentColor="#888888" />
+    );
+    expect(getByTestId("check-icon").className).toContain("text-white");
+    expect(getByTestId("check-icon").className).not.toContain("text-black");
   });
 
   it("selected palette swatch is marked aria-pressed for the draft color", () => {
