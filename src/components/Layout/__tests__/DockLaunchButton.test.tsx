@@ -8,8 +8,10 @@ let mockRecipes: Array<{
   name: string;
   worktreeId?: string;
 }> = [];
+let mockMruEntries: Array<{ id: string; score: number; lastAccessedAt: number }> = [];
 const runRecipeMock = vi.fn();
 const actionDispatchMock = vi.fn();
+const recordActionMruMock = vi.fn();
 let dropdownCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 let dropdownPointerDownOutsideSpy: (() => void) | null = null;
 
@@ -19,6 +21,16 @@ vi.mock("@/store/recipeStore", () => ({
       selector({ recipes: mockRecipes }),
     {
       getState: () => ({ runRecipe: runRecipeMock }),
+    }
+  ),
+}));
+
+vi.mock("@/store/actionMruStore", () => ({
+  useActionMruStore: Object.assign(
+    (selector: (s: { getSortedActionMruList: () => typeof mockMruEntries }) => unknown) =>
+      selector({ getSortedActionMruList: () => mockMruEntries }),
+    {
+      getState: () => ({ recordActionMru: recordActionMruMock }),
     }
   ),
 }));
@@ -95,8 +107,10 @@ const AGENTS: DockLaunchAgent[] = [
 
 beforeEach(() => {
   mockRecipes = [];
+  mockMruEntries = [];
   runRecipeMock.mockReset();
   actionDispatchMock.mockReset();
+  recordActionMruMock.mockReset();
   dropdownCloseAutoFocusSpy = null;
   dropdownPointerDownOutsideSpy = null;
 });
@@ -145,7 +159,7 @@ describe("DockLaunchButton", () => {
     );
 
     const labels = getAllByTestId("dock-launcher-label").map((el) => el.textContent);
-    expect(labels).toEqual(["Pinned", "Other", "Launch panel"]);
+    expect(labels).toEqual(["Pinned", "Other", "Launch panel", "Launch recipe"]);
 
     // Assert document order so a regression that puts both agents under one
     // group (or swaps them) is caught: Pinned → Claude → Other → Gemini.
@@ -168,7 +182,7 @@ describe("DockLaunchButton", () => {
     );
 
     const labels = getAllByTestId("dock-launcher-label").map((el) => el.textContent);
-    expect(labels).toEqual(["Launch agent", "Launch panel"]);
+    expect(labels).toEqual(["Launch agent", "Launch panel", "Launch recipe"]);
   });
 
   it("invokes onLaunchAgent for a launchable agent", () => {
@@ -186,6 +200,9 @@ describe("DockLaunchButton", () => {
     fireEvent.click(getByText("Claude"));
     expect(onLaunchAgent).toHaveBeenCalledWith("claude");
     expect(actionDispatchMock).not.toHaveBeenCalled();
+    // The dock launch path must record MRU so the agent surfaces in the
+    // recency band on the next open (previously this path recorded nothing).
+    expect(recordActionMruMock).toHaveBeenCalledWith("agent.claude");
   });
 
   it("routes non-launchable agent clicks to the agent settings subtab", () => {
@@ -207,6 +224,8 @@ describe("DockLaunchButton", () => {
       { tab: "agents", subtab: "gemini" },
       { source: "menu" }
     );
+    // A settings redirect is not a launch — it must not pollute the band.
+    expect(recordActionMruMock).not.toHaveBeenCalled();
   });
 
   it("discriminates tooltip copy between blocked and installed-only agents", () => {
@@ -320,9 +339,9 @@ describe("DockLaunchButton", () => {
     expect(onLaunchAgent).toHaveBeenLastCalledWith("dev-preview");
   });
 
-  it("hides the recipe section when no recipes match the active worktree", () => {
+  it("shows a No recipes yet discovery cue when no recipes match the active worktree", () => {
     mockRecipes = [];
-    const { queryByText } = render(
+    const { getByText } = render(
       <DockLaunchButton
         agents={AGENTS}
         hasDevPreview={false}
@@ -331,8 +350,29 @@ describe("DockLaunchButton", () => {
         cwd="/tmp"
       />
     );
-    expect(queryByText("Launch recipe")).toBeNull();
-    expect(queryByText("No recipes")).toBeNull();
+    // The recipe section now always renders so first-run users can discover it.
+    expect(getByText("Launch recipe")).toBeTruthy();
+    expect(getByText("No recipes yet")).toBeTruthy();
+  });
+
+  it("dispatches recipe.editor.open from the No recipes yet cue", () => {
+    mockRecipes = [];
+    const { getByText } = render(
+      <DockLaunchButton
+        agents={AGENTS}
+        hasDevPreview={false}
+        onLaunchAgent={vi.fn()}
+        activeWorktreeId="wt-1"
+        cwd="/tmp"
+      />
+    );
+
+    fireEvent.click(getByText("No recipes yet"));
+    expect(actionDispatchMock).toHaveBeenCalledWith(
+      "recipe.editor.open",
+      { worktreeId: "wt-1" },
+      { source: "menu" }
+    );
   });
 
   it("lists project-wide recipes and recipes scoped to the active worktree", () => {
@@ -412,5 +452,129 @@ describe("DockLaunchButton", () => {
 
     fireEvent.click(getByText("My recipe"));
     expect(runRecipeMock).toHaveBeenCalledWith("r-1", "/path/to/wt", "wt-1", recipeContext);
+  });
+
+  describe("Recently launched band", () => {
+    const MANY: DockLaunchAgent[] = [
+      { id: "claude", name: "Claude", availability: "ready" },
+      { id: "gemini", name: "Gemini", availability: "ready" },
+      { id: "codex", name: "Codex", availability: "ready" },
+      { id: "cursor", name: "Cursor", availability: "ready" },
+    ];
+
+    it("hides the band when the MRU is empty", () => {
+      mockMruEntries = [];
+      const { queryByText } = render(
+        <DockLaunchButton
+          agents={MANY}
+          hasDevPreview={false}
+          onLaunchAgent={vi.fn()}
+          activeWorktreeId={null}
+          cwd="/tmp"
+        />
+      );
+      expect(queryByText("Recently launched")).toBeNull();
+    });
+
+    it("renders recent agents in frecency order, capped at 3", () => {
+      // Pre-sorted as getSortedActionMruList would return them; the component
+      // does not re-sort. Four entries, cap is 3 — Gemini (4th) is dropped.
+      mockMruEntries = [
+        { id: "agent.claude", score: 4, lastAccessedAt: 4000 },
+        { id: "agent.codex", score: 3, lastAccessedAt: 3000 },
+        { id: "agent.cursor", score: 2, lastAccessedAt: 2000 },
+        { id: "agent.gemini", score: 1, lastAccessedAt: 1000 },
+      ];
+
+      const { getByText, getAllByText, getAllByTestId, container } = render(
+        <DockLaunchButton
+          agents={MANY}
+          hasDevPreview={false}
+          onLaunchAgent={vi.fn()}
+          activeWorktreeId={null}
+          cwd="/tmp"
+        />
+      );
+
+      // Band header leads the menu.
+      const labels = getAllByTestId("dock-launcher-label").map((el) => el.textContent);
+      expect(labels[0]).toBe("Recently launched");
+      expect(getByText("Recently launched")).toBeTruthy();
+
+      // Band entries are duplicated below in the flat agent group — the band is
+      // a shortcut, not a replacement grouping. Capped entries appear twice;
+      // the dropped 4th appears only once (in the group).
+      expect(getAllByText("Claude").length).toBe(2);
+      expect(getAllByText("Codex").length).toBe(2);
+      expect(getAllByText("Cursor").length).toBe(2);
+      expect(getAllByText("Gemini").length).toBe(1);
+
+      // First occurrence of each name is its band row (band renders first), so
+      // first-occurrence order reflects the band's frecency order.
+      const text = container.textContent ?? "";
+      expect(text.indexOf("Claude")).toBeLessThan(text.indexOf("Codex"));
+      expect(text.indexOf("Codex")).toBeLessThan(text.indexOf("Cursor"));
+    });
+
+    it("excludes never-launched cold-start entries (lastAccessedAt === 0)", () => {
+      mockMruEntries = [{ id: "agent.claude", score: 5, lastAccessedAt: 0 }];
+      const { queryByText } = render(
+        <DockLaunchButton
+          agents={MANY}
+          hasDevPreview={false}
+          onLaunchAgent={vi.fn()}
+          activeWorktreeId={null}
+          cwd="/tmp"
+        />
+      );
+      expect(queryByText("Recently launched")).toBeNull();
+    });
+
+    it("ignores non-agent MRU entries", () => {
+      mockMruEntries = [{ id: "recipe.editor.open", score: 5, lastAccessedAt: 5000 }];
+      const { queryByText } = render(
+        <DockLaunchButton
+          agents={MANY}
+          hasDevPreview={false}
+          onLaunchAgent={vi.fn()}
+          activeWorktreeId={null}
+          cwd="/tmp"
+        />
+      );
+      expect(queryByText("Recently launched")).toBeNull();
+    });
+
+    it("drops stale MRU entries for agents no longer present", () => {
+      mockMruEntries = [{ id: "agent.ghost", score: 5, lastAccessedAt: 5000 }];
+      const { queryByText } = render(
+        <DockLaunchButton
+          agents={MANY}
+          hasDevPreview={false}
+          onLaunchAgent={vi.fn()}
+          activeWorktreeId={null}
+          cwd="/tmp"
+        />
+      );
+      expect(queryByText("Recently launched")).toBeNull();
+    });
+
+    it("launching a band row records MRU and invokes onLaunchAgent", () => {
+      mockMruEntries = [{ id: "agent.codex", score: 3, lastAccessedAt: 3000 }];
+      const onLaunchAgent = vi.fn();
+      const { getAllByText } = render(
+        <DockLaunchButton
+          agents={MANY}
+          hasDevPreview={false}
+          onLaunchAgent={onLaunchAgent}
+          activeWorktreeId={null}
+          cwd="/tmp"
+        />
+      );
+
+      // First "Codex" is the band row.
+      fireEvent.click(getAllByText("Codex")[0]);
+      expect(onLaunchAgent).toHaveBeenCalledWith("codex");
+      expect(recordActionMruMock).toHaveBeenCalledWith("agent.codex");
+    });
   });
 });
