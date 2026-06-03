@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDndMonitor } from "@dnd-kit/core";
+import { SquareArrowOutUpRight } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn, getBaseTitle } from "@/lib/utils";
 import { useTerminalInputStore, usePanelStore, useFocusStore } from "@/store";
@@ -174,6 +175,14 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     [terminal.id, openDockTerminal, closeDockTerminal]
   );
 
+  // Move this terminal out of the dock and into the grid. Mirrors the
+  // double-click backstop: only close the dock popover if the move succeeded
+  // (the store wrapper clears activeDockTerminalId — see #4997).
+  const handleMoveToGrid = useCallback(() => {
+    const moved = moveTerminalToGrid(terminal.id);
+    if (moved) closeDockTerminal();
+  }, [terminal.id, moveTerminalToGrid, closeDockTerminal]);
+
   const presetCustomPresets = useAgentSettingsStore((s) =>
     terminal.launchAgentId ? s.settings?.agents?.[terminal.launchAgentId]?.customPresets : undefined
   );
@@ -298,89 +307,113 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   return (
     <DockPopoverChildProvider>
       <Popover open={isOpen} onOpenChange={handleOpenChange}>
-        <TerminalContextMenu terminalId={terminal.id} forceLocation="dock">
-          <PopoverTrigger asChild>
-            <button
-              data-dock-item=""
-              className={cn(
-                "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
-                "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-daintree-text/70",
-                "hover:text-daintree-text hover:bg-[var(--dock-item-bg-hover)]",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
-                "cursor-grab active:cursor-grabbing",
-                isOpen &&
-                  "bg-[var(--dock-item-bg-active)] text-daintree-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-daintree-accent/30",
-                !isOpen &&
-                  showDockAgentHighlights &&
-                  blockedState === "waiting" &&
-                  "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
-                isDeprioritized && "opacity-50"
-              )}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (e.detail >= 2) return;
-                if (isOpen) {
-                  closeDockTerminal();
-                } else {
-                  openDockTerminal(terminal.id);
-                }
-              }}
-              onDoubleClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const moved = moveTerminalToGrid(terminal.id);
-                if (moved) closeDockTerminal();
-              }}
-              aria-label={`${terminal.title} - Click to preview, double-click to move to grid, drag to reorder`}
-            >
-              <div className="flex items-center justify-center shrink-0">
-                <TerminalIcon kind={terminal.kind} chrome={chrome} className="w-3.5 h-3.5" />
-              </div>
-              <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
-                {displayTitle}
-              </span>
+        <div className="relative group/chip flex items-center">
+          <TerminalContextMenu terminalId={terminal.id} forceLocation="dock">
+            <PopoverTrigger asChild>
+              <button
+                data-dock-item=""
+                className={cn(
+                  "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
+                  "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-daintree-text/70",
+                  "hover:text-daintree-text hover:bg-[var(--dock-item-bg-hover)]",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
+                  "cursor-grab active:cursor-grabbing",
+                  isOpen &&
+                    "bg-[var(--dock-item-bg-active)] text-daintree-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-daintree-accent/30",
+                  !isOpen &&
+                    showDockAgentHighlights &&
+                    blockedState === "waiting" &&
+                    "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
+                  isDeprioritized && "text-daintree-text/40 border-[var(--dock-item-border)]/50"
+                )}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (e.detail >= 2) return;
+                  if (isOpen) {
+                    closeDockTerminal();
+                  } else {
+                    openDockTerminal(terminal.id);
+                  }
+                }}
+                onDoubleClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleMoveToGrid();
+                }}
+                aria-label={`${terminal.title} - Click to preview, double-click to move to grid, drag to reorder`}
+              >
+                <div className="flex items-center justify-center shrink-0">
+                  <TerminalIcon kind={terminal.kind} chrome={chrome} className="w-3.5 h-3.5" />
+                </div>
+                <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
+                  {displayTitle}
+                </span>
 
-              {isActive && commandText && (
-                <>
-                  <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
+                {isActive && commandText && (
+                  <>
+                    <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="truncate flex-1 min-w-0 text-[11px] text-daintree-text/50 font-mono">
+                          {commandText}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">{commandText}</TooltipContent>
+                    </Tooltip>
+                  </>
+                )}
+
+                {/* State icon (compact spacing from title) */}
+                {displayAgentState && StateIcon && (
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <span className="truncate flex-1 min-w-0 text-[11px] text-daintree-text/50 font-mono">
-                        {commandText}
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">{commandText}</TooltipContent>
-                  </Tooltip>
-                </>
-              )}
-
-              {/* State icon (compact spacing from title) */}
-              {displayAgentState && StateIcon && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div
-                      className={cn(
-                        "flex items-center shrink-0",
-                        getEffectiveStateColor(displayAgentState)
-                      )}
-                    >
-                      <StateIcon
+                      <div
                         className={cn(
-                          "w-3.5 h-3.5",
-                          displayAgentState === "working" && "animate-spin-slow",
-                          "motion-reduce:animate-none"
+                          "flex items-center shrink-0",
+                          getEffectiveStateColor(displayAgentState)
                         )}
-                        aria-hidden="true"
-                      />
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">{`Agent ${displayAgentState}`}</TooltipContent>
-                </Tooltip>
-              )}
-            </button>
-          </PopoverTrigger>
-        </TerminalContextMenu>
+                      >
+                        <StateIcon
+                          className={cn(
+                            "w-3.5 h-3.5",
+                            displayAgentState === "working" && "animate-spin-slow",
+                            "motion-reduce:animate-none"
+                          )}
+                          aria-hidden="true"
+                        />
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{`Agent ${displayAgentState}`}</TooltipContent>
+                  </Tooltip>
+                )}
+              </button>
+            </PopoverTrigger>
+          </TerminalContextMenu>
+
+          {/* Reveal-on-hover/focus move-to-grid affordance. Rendered as a
+              sibling of the chip button (a button cannot be nested inside the
+              PopoverTrigger button). Double-click on the chip remains a
+              backstop. */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                data-no-dnd
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleMoveToGrid();
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="invisible opacity-0 pointer-events-none group-hover/chip:visible group-hover/chip:opacity-100 group-hover/chip:pointer-events-auto group-focus-within/chip:visible group-focus-within/chip:opacity-100 group-focus-within/chip:pointer-events-auto focus-visible:visible focus-visible:opacity-100 focus-visible:pointer-events-auto transition-[opacity,visibility] duration-150 motion-reduce:transition-none shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                aria-label="Open in grid"
+              >
+                <SquareArrowOutUpRight className="w-3 h-3" aria-hidden="true" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Open in grid</TooltipContent>
+          </Tooltip>
+        </div>
 
         <PopoverContent
           className="w-[700px] max-w-[90vw] h-[500px] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-[120ms] data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1"
