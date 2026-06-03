@@ -103,6 +103,25 @@ export const theme: BuiltInThemeSource = {
     "surface-inset": "#E0D4C0",
     "surface-input": "#EEE7DA",
     "surface-toolbar": "#ECE3D5",
+    // Warm-ink shadow system (Hokkaido pattern). The derived "light" profile
+    // composites from a cool slate ink and the default shadow-color is pure
+    // black — both dissolve into an off-temperature haze on warm sand, leaving
+    // floating surfaces to hang on hairlines. A two-layer contact+spread
+    // ladder in the theme's own charcoal (51,43,35 = overlayTint) gives
+    // palettes/menus/dialogs real lift that stays on-temperature.
+    "shadow-color": "rgba(51,43,35,0.13)",
+    "shadow-ambient": "0 1px 2px rgba(51,43,35,0.10), 0 4px 12px rgba(51,43,35,0.10)",
+    "shadow-floating": "0 2px 4px rgba(51,43,35,0.12), 0 10px 28px rgba(51,43,35,0.14)",
+    "shadow-dialog": "0 4px 8px rgba(51,43,35,0.14), 0 18px 44px rgba(51,43,35,0.18)",
+    // Selected/raised fill (menus, active tabs, settings nav): the engine
+    // default is elevated pulled toward charcoal — an inert grey nudge beside
+    // Atacama's terracotta-tinted hover language. Elevated nudged ~10% toward
+    // the accent instead: the same warmth as the rgba(178,80,36,0.08) hovers,
+    // as a fill only (no second accent anchor).
+    "overlay-raised": "#F6EBE3",
+    // Derived divider (8.5% ink) vanishes on the elevated menu surface; 12%
+    // keeps it a quiet warm hairline that actually registers.
+    "border-divider": "rgba(51,43,35,0.12)",
     "text-link": "#9B3F18",
     "text-placeholder": "rgba(46,38,32,0.55)",
     "overlay-hover": "rgba(51,43,35,0.075)",
@@ -120,7 +139,9 @@ export const theme: BuiltInThemeSource = {
     "category-rose": "oklch(0.61 0.14 14)",
     "category-teal": "oklch(0.60 0.12 178)",
     "category-violet": "oklch(0.59 0.13 295)",
-    "focus-ring": "rgba(178,80,36,0.32)",
+    // The one load-bearing focus signal — 0.32 read as a pale wash on the
+    // bright field; 0.45 is unmistakable while staying translucent.
+    "focus-ring": "rgba(178,80,36,0.45)",
     "pr-closed": "#C72B36",
     "pr-draft": "#646B75",
     // AA on atacama's near-white panel (#F8F3EB): the prior #8254DB/#1C823B were
@@ -145,8 +166,12 @@ export const theme: BuiltInThemeSource = {
     "panel-grid-bg": "#E3D8C6",
     "pulse-before-bg": "#E5DBCA",
     "pulse-card-bg": "#FEFCF8",
-    "pulse-card-header-bg": "#DDE8EE",
-    "pulse-card-shadow": "0 1px 3px rgba(51,43,35,0.11)",
+    // Warm sand header — the old #DDE8EE cool blue was the one off-biome
+    // surface in the workbench and broke the desert envelope.
+    "pulse-card-header-bg": "#EFE6D6",
+    // Contact + spread pair so the hero card visibly floats over the canvas
+    // instead of hanging on its border.
+    "pulse-card-shadow": "0 1px 2px rgba(51,43,35,0.10), 0 6px 18px rgba(51,43,35,0.12)",
     "pulse-control-hover-bg": "rgba(51,43,35,0.05)",
     "pulse-empty-bg": "#ECE3D5",
     "pulse-heat-color": "#2E8550",
@@ -160,14 +185,18 @@ export const theme: BuiltInThemeSource = {
     "settings-kbd-border": "#C5BDB2",
     "settings-nav-hover-bg": "rgba(178,80,36,0.08)",
     "sidebar-action-hover-bg": "rgba(178,80,36,0.08)",
-    // Issue 1: selection elevates, container recedes. Selected lifts to panel
-    // (L 0.966 vs sidebar 0.919), hover to canvas (L 0.945) — idle < hover < selected.
-    "sidebar-active-bg": "#F8F3EB",
+    // Issue 1: selection elevates, container recedes. Selected lifts between
+    // panel and elevated (L ~0.974 vs sidebar 0.919), hover to canvas
+    // (L 0.945) — idle < hover < selected, with the surface carrying more of
+    // the lift so the accent edge-bar isn't doing all the work.
+    "sidebar-active-bg": "#FBF7F0",
     "sidebar-hover-bg": "#F2ECE1",
     "toolbar-agent-hover-bg": "rgba(178,80,36,0.08)",
     "toolbar-control-hover-bg": "rgba(178,80,36,0.08)",
     "toolbar-control-hover-fg": "#9B3F18",
-    "toolbar-divider": "rgba(197,189,178,0.6)",
+    // 0.85 (was 0.6): the chrome/canvas seam needs a firmer line now that the
+    // toolbar shares the sidebar tone.
+    "toolbar-divider": "rgba(197,189,178,0.85)",
     "toolbar-project-bg":
       "linear-gradient(180deg, rgba(178,80,36,0.05), rgba(51,43,35,0.04)), linear-gradient(135deg, #EEE7DA, #E5DBCA)",
     "toolbar-project-border": "rgba(197,189,178,0.6)",
@@ -180,11 +209,12 @@ export const theme: BuiltInThemeSource = {
     "toolbar-stats-hover-bg": "rgba(178,80,36,0.08)",
     "worktree-section-hover-bg": "rgba(178,80,36,0.08)",
     // Recessed chrome strip for the worktree search/filter bars (#9712 infra:
-    // opt-in, unset themes keep the bars transparent). #DBCFBA sits ~0.07 L
-    // below the sidebar — deliberately below even the grid floor, so the
-    // chrome recedes and the worktree cards read as content on the brighter
-    // sidebar plane ("not everything the same shade of light").
-    "worktree-filter-bar-bg": "#DBCFBA",
+    // opt-in, unset themes keep the bars transparent). Sits ~0.07 L below the
+    // sidebar — deliberately below even the grid floor, so the chrome recedes
+    // and the worktree cards read as content on the brighter sidebar plane
+    // ("not everything the same shade of light"). Hue nudged toward rust
+    // (~70) so the strip reads salt-crust warm rather than plain dim beige.
+    "worktree-filter-bar-bg": "#DCCDB8",
     "dock-shadow":
       "inset 0 1px 0 rgba(255,252,248,0.5), 0 -2px 10px rgb(from var(--theme-shadow-color) r g b / 0.3)",
   },
