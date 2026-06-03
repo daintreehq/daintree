@@ -105,13 +105,30 @@ describe("PRBadge freshness glyphs", () => {
     expect(button.querySelector(".lucide-cloud-off")).toBeNull();
   });
 
-  it("never shows a Clock glyph — plain age is no longer surfaced", () => {
+  it("never shows a Clock glyph on the badge button — plain age is no longer surfaced", () => {
     for (const cause of [undefined, "rate-limit", "circuit-breaker"] as const) {
       mockFreshnessCause = cause;
-      const { container, unmount } = renderBadge();
-      expect(container.querySelector(".lucide-clock")).toBeNull();
+      const { unmount } = renderBadge();
+      const button = screen.getByRole("button");
+      expect(button.querySelector(".lucide-clock")).toBeNull();
       unmount();
     }
+  });
+
+  it("surfaces the rate-limit freshness as a Clock-iconed tooltip line", () => {
+    mockFreshnessCause = "rate-limit";
+    renderBadge();
+
+    expect(document.querySelector(".lucide-clock")).toBeTruthy();
+    expect(screen.getAllByText(/rate limited/).length).toBeGreaterThan(0);
+  });
+
+  it("surfaces the circuit-breaker freshness with a PauseCircle, not a Clock", () => {
+    mockFreshnessCause = "circuit-breaker";
+    renderBadge();
+
+    expect(document.querySelector(".lucide-circle-pause")).toBeTruthy();
+    expect(document.querySelector(".lucide-clock")).toBeNull();
   });
 
   it("shows CloudOff when freshnessCause is rate-limit", () => {

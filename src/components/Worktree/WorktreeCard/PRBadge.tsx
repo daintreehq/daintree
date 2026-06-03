@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { CloudOff, CornerDownRight, GitPullRequest } from "lucide-react";
 import type { CIStatus } from "@shared/types/forge";
@@ -8,8 +8,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { usePRTooltip } from "@/hooks/useGitHubTooltip";
 import { useGitHubBadgeTooltip } from "./hooks/useGitHubBadgeTooltip";
 import { useGitHubBadgeFreshness } from "./hooks/useGitHubBadgeFreshness";
-import { badgeFreshnessSuffix } from "@/components/Layout/FreshnessUtils";
-import { PRTooltipContent, TooltipLoading, TokenMissingTooltip } from "./GitHubTooltipContent";
+import {
+  PRTooltipContent,
+  TooltipLoading,
+  TokenMissingTooltip,
+  FreshnessMetaItem,
+  type TooltipFreshness,
+} from "./GitHubTooltipContent";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 
 interface PRBadgeProps {
@@ -108,10 +113,7 @@ export function PRBadge({
           ? " — PR detection paused"
           : "");
 
-  const freshnessSuffixStr = useMemo(
-    () => badgeFreshnessSuffix(freshnessCause, now, rateLimitResetAt),
-    [freshnessCause, rateLimitResetAt, now]
-  );
+  const freshness: TooltipFreshness = { cause: freshnessCause, now, rateLimitResetAt };
 
   return (
     <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300}>
@@ -199,14 +201,14 @@ export function PRBadge({
         ) : showTooltipLoading ? (
           <TooltipLoading />
         ) : data ? (
-          <PRTooltipContent data={data} />
+          <PRTooltipContent data={data} freshness={freshness} />
         ) : error ? (
           <span className="text-xs text-text-secondary">Failed to load PR details</span>
         ) : (
           <span className="text-xs text-text-secondary">PR #{prNumber}</span>
         )}
-        {freshnessSuffixStr && (
-          <span className="block text-[11px] text-text-muted mt-1">{freshnessSuffixStr}</span>
+        {!data && (
+          <FreshnessMetaItem freshness={freshness} className="text-[11px] text-text-muted mt-1" />
         )}
       </TooltipContent>
     </Tooltip>
