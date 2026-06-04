@@ -487,6 +487,7 @@ beforeEach(() => {
           onWake: mockSystemSleepOnWake,
         },
         mcpServer: {
+          getAuditRecords: vi.fn().mockResolvedValue([]),
           onTierNotPermitted: vi.fn(() => () => {}),
           onToolCallStarted: vi.fn(() => () => {}),
           onToolCallSettled: vi.fn(() => () => {}),
