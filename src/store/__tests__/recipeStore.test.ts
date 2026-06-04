@@ -356,6 +356,7 @@ describe("recipeStore", () => {
             env: {},
             agentModelId: "claude-opus-4-7",
             agentLaunchFlags: ["--resume", "old"],
+            location: "dock" as const,
           },
         ],
         createdAt: 1000,
@@ -369,6 +370,7 @@ describe("recipeStore", () => {
       const loaded = useRecipeStore.getState().inRepoRecipes[0];
       expect(loaded?.terminals[0]?.agentModelId).toBeUndefined();
       expect(loaded?.terminals[0]?.agentLaunchFlags).toBeUndefined();
+      expect(loaded?.terminals[0]?.location).toBeUndefined();
     });
   });
 
