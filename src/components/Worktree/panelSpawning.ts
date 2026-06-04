@@ -98,6 +98,7 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
               worktreeId,
               exitBehavior: t.exitBehavior,
               devCommand: t.devCommand?.trim() || undefined,
+              location: t.location,
               bypassLimits: true,
             });
           } else if (t.type !== "terminal") {
@@ -132,6 +133,7 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
               exitBehavior: t.exitBehavior,
               agentModelId: t.agentModelId,
               agentLaunchFlags,
+              location: t.location,
               bypassLimits: true,
             });
           } else {
@@ -142,6 +144,7 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
               worktreeId,
               exitBehavior: t.exitBehavior,
               command: t.command?.trim() || undefined,
+              location: t.location,
               bypassLimits: true,
             });
           }
@@ -171,7 +174,10 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
     }
 
     if (outcome.panelId != null) {
-      lastSpawnedId = outcome.panelId;
+      // Dock panels land silently — only grid panels are focus candidates.
+      if (terminals[outcome.index]?.location !== "dock") {
+        lastSpawnedId = outcome.panelId;
+      }
       try {
         onPanelSpawned?.(outcome.index, outcome.panelId);
       } catch {

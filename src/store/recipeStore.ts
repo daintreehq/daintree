@@ -95,6 +95,7 @@ function sanitizeRecipeTerminal(terminal: RecipeTerminal): RecipeTerminal {
     // Session-scoped overrides must never leak into disk-saved recipes.
     agentModelId: undefined,
     agentLaunchFlags: undefined,
+    location: undefined,
   };
 }
 
@@ -113,6 +114,7 @@ function terminalToRecipeTerminal(terminal: PtyPanelData | DevPreviewPanelData):
       exitBehavior: terminal.exitBehavior,
       agentModelId: undefined,
       agentLaunchFlags: undefined,
+      location: terminal.location === "dock" ? "dock" : undefined,
     };
   }
 
@@ -128,6 +130,7 @@ function terminalToRecipeTerminal(terminal: PtyPanelData | DevPreviewPanelData):
     exitBehavior: terminal.exitBehavior,
     agentModelId: isAgent ? terminal.agentModelId : undefined,
     agentLaunchFlags: isAgent ? terminal.agentLaunchFlags : undefined,
+    location: terminal.location === "dock" ? "dock" : undefined,
   };
 }
 

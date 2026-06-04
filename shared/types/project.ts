@@ -217,6 +217,8 @@ export interface RecipeTerminal {
   agentModelId?: string;
   /** Process-level launch flags captured at launch (agent types only). Transient — stripped before disk persistence. */
   agentLaunchFlags?: string[];
+  /** Clone-layout placement. Transient — stripped before disk persistence. Only "dock" is captured; absence means grid. */
+  location?: "dock";
 }
 
 /** A saved terminal recipe */

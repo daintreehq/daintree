@@ -189,6 +189,64 @@ describe("recipeStore", () => {
       expect(devEntry?.agentLaunchFlags).toBeUndefined();
     });
 
+    it("captures dock placement and omits location for grid-equivalent panels (#9764)", () => {
+      panelStoreState.panelIds = ["panel-dock", "panel-grid", "panel-overlay"];
+      panelStoreState.panelsById = {
+        "panel-dock": {
+          id: "panel-dock",
+          kind: "terminal",
+          title: "Docked",
+          worktreeId: "wt-1",
+          location: "dock",
+          command: "npm test",
+        },
+        "panel-grid": {
+          id: "panel-grid",
+          kind: "terminal",
+          title: "Grid",
+          worktreeId: "wt-1",
+          location: "grid",
+        },
+        "panel-overlay": {
+          id: "panel-overlay",
+          kind: "terminal",
+          title: "Overlay",
+          worktreeId: "wt-1",
+          location: "overlay",
+        },
+      };
+
+      const terminals = useRecipeStore.getState().generateRecipeFromActiveTerminals("wt-1");
+      expect(terminals).toHaveLength(3);
+      expect(terminals.find((t) => t.title === "Docked")?.location).toBe("dock");
+      expect(terminals.find((t) => t.title === "Grid")?.location).toBeUndefined();
+      // Transient system placements are not user layout choices — never cloned.
+      expect(terminals.find((t) => t.title === "Overlay")?.location).toBeUndefined();
+    });
+
+    it("strips location when persisting to disk via createRecipe (#9764)", async () => {
+      useRecipeStore.setState({ currentProjectId: "project-1" });
+      await useRecipeStore.getState().createRecipe(
+        "project-1",
+        "Layout",
+        undefined,
+        [
+          {
+            type: "terminal",
+            title: "Docked",
+            command: "npm test",
+            env: {},
+            location: "dock",
+          },
+        ],
+        false
+      );
+
+      expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
+      const persistedRecipe = updateInRepoRecipeMock.mock.calls[0]?.[1];
+      expect(persistedRecipe?.terminals?.[0]?.location).toBeUndefined();
+    });
+
     it("strips agentModelId and agentLaunchFlags when persisting to disk via createRecipe", async () => {
       useRecipeStore.setState({ currentProjectId: "project-1" });
       await useRecipeStore.getState().createRecipe(
