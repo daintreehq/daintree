@@ -694,8 +694,15 @@ export function WorktreeCard({
             variant === "sidebar" && !isActive && "bg-transparent",
             isFocused && !isActive && variant === "grid" && "bg-overlay-soft",
             isOver && !isActive && "ring-2 ring-inset ring-border-default",
+            // Sidebar selection carries the full-height right accent border in
+            // sidebar.css, so the cwd stripe is grid-only — stacking both on
+            // one right edge read as a broken double marker (#9711 round-3
+            // owner decision). Right edge: the side facing the panel grid the
+            // worktree controls, clear of the window edge where it vanished on
+            // light themes.
             worktree.isCurrent &&
-              "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']",
+              variant !== "sidebar" &&
+              "before:absolute before:right-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-l before:bg-daintree-accent before:content-['']",
             isBeingDeleted && !deleteError && "opacity-50 pointer-events-none"
           )}
           data-active={isActive && variant === "sidebar" ? "true" : undefined}
