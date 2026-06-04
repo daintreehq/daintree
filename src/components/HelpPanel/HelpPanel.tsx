@@ -25,6 +25,7 @@ import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpLaunchingState } from "./HelpLaunchingState";
 import { McpToolActivityStrip } from "./McpToolActivityStrip";
+import { McpActivityStrip } from "./McpActivityStrip";
 import {
   useHelpPanelStore,
   HELP_PANEL_MIN_WIDTH,
@@ -892,6 +893,7 @@ export function HelpPanel({
               Daintree.org
             </button>
           </div>
+          <McpActivityStrip sessionId={sessionId} onOpenSettings={handleOpenSettings} />
         </div>
       )}
       <ConfirmDialog
