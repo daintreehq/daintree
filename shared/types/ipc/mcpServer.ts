@@ -107,8 +107,25 @@ export interface McpAuditRecord {
   timestamp: number;
   toolId: string;
   sessionId: string;
+  /**
+   * Public help-session id (the one persisted in the renderer's
+   * `helpPanelStore`) when the dispatch came from an assistant bearer.
+   * `sessionId` above is the per-connection MCP transport id, which the
+   * renderer never sees — this field is the join the assistant panel's
+   * recent-calls view and turn-outcome diagnostics filter on. Absent for
+   * external/api-key sessions and for records written before the field
+   * existed.
+   */
+  helpSessionId?: string;
   tier: string;
   argsSummary: string;
+  /**
+   * Redacted, bounded (1500-char) pretty-printed JSON of what the call
+   * returned — or the error code + message for failed dispatches. Lets the
+   * recent-calls popover show each call's actual output. Absent for gate
+   * outcomes (unauthorized/dedup/collision/rate-limit) and old records.
+   */
+  resultSummary?: string;
   result: McpAuditResult;
   errorCode?: string;
   durationMs: number;

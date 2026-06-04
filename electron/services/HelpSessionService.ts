@@ -377,6 +377,21 @@ export class HelpSessionService {
   }
 
   /**
+   * Looks up the public help-session id minted at provision for a bearer
+   * token. The MCP server resolves this at handshake to join its own
+   * per-connection transport session id back to the help session the
+   * renderer knows about (`helpPanelStore.sessionId`), so audit records and
+   * turn-id lookups correlate with what the assistant panel displays.
+   * Returns null for unknown or revoked tokens.
+   */
+  getSessionIdForToken(token: string): string | null {
+    if (!token) return null;
+    const record = this.sessionsByToken.get(token);
+    if (!record || record.revoked) return null;
+    return record.sessionId;
+  }
+
+  /**
    * Renderer-safe sibling of `getActionContextForToken`, keyed on the public
    * `sessionId` (persisted in `helpPanelStore`) instead of the bearer token.
    * The HelpPanel footer uses this to surface the pinned worktree/terminal
@@ -1285,6 +1300,7 @@ export class HelpSessionService {
     mcpServerService.setHelpSessionActionContextResolver((token) =>
       this.getActionContextForToken(token)
     );
+    mcpServerService.setHelpSessionIdResolver((token) => this.getSessionIdForToken(token));
     mcpServerService.setSessionIdResolver((terminalId) => this.getSessionIdForTerminal(terminalId));
     // Eager MCP-session teardown on revoke (#9151). Idempotent re-set.
     this.setOnMcpSessionRevoked((token) => mcpServerService.disconnectHelpBearer(token));

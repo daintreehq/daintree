@@ -74,6 +74,8 @@ describe("SessionStore.sessionWebContentsMap (#7002)", () => {
     store.sessionTierMap.set("b", "action");
     store.sessionWebContentsMap.set("a", 100);
     store.sessionWebContentsMap.set("b", 200);
+    store.sessionHelpIdMap.set("a", "help-a");
+    store.sessionHelpIdMap.set("b", "help-b");
 
     store.drain();
 
@@ -81,6 +83,7 @@ describe("SessionStore.sessionWebContentsMap (#7002)", () => {
     expect(store.httpSessions.size).toBe(0);
     expect(store.sessionTierMap.size).toBe(0);
     expect(store.sessionWebContentsMap.size).toBe(0);
+    expect(store.sessionHelpIdMap.size).toBe(0);
   });
 
   it("SSE idle-timer expiry deletes the session's pin so an evicted session does not leak the WebContents id", () => {
@@ -90,6 +93,7 @@ describe("SessionStore.sessionWebContentsMap (#7002)", () => {
     store.sessions.set(sessionId, session);
     store.sessionTierMap.set(sessionId, "action");
     store.sessionWebContentsMap.set(sessionId, 42);
+    store.sessionHelpIdMap.set(sessionId, "help-1");
 
     clearTimeout(session.idleTimer);
     session.idleTimer = store.createIdleTimer(sessionId);
@@ -101,6 +105,7 @@ describe("SessionStore.sessionWebContentsMap (#7002)", () => {
     expect(store.sessions.has(sessionId)).toBe(false);
     expect(store.sessionTierMap.has(sessionId)).toBe(false);
     expect(store.sessionWebContentsMap.has(sessionId)).toBe(false);
+    expect(store.sessionHelpIdMap.has(sessionId)).toBe(false);
     expect(resourceCleanups).toContain(sessionId);
   });
 
@@ -111,6 +116,7 @@ describe("SessionStore.sessionWebContentsMap (#7002)", () => {
     store.httpSessions.set(sessionId, session);
     store.sessionTierMap.set(sessionId, "action");
     store.sessionWebContentsMap.set(sessionId, 99);
+    store.sessionHelpIdMap.set(sessionId, "help-1");
 
     clearTimeout(session.idleTimer);
     session.idleTimer = store.createHttpIdleTimer(sessionId);
@@ -122,6 +128,7 @@ describe("SessionStore.sessionWebContentsMap (#7002)", () => {
     expect(store.httpSessions.has(sessionId)).toBe(false);
     expect(store.sessionTierMap.has(sessionId)).toBe(false);
     expect(store.sessionWebContentsMap.has(sessionId)).toBe(false);
+    expect(store.sessionHelpIdMap.has(sessionId)).toBe(false);
     expect(resourceCleanups).toContain(sessionId);
   });
 
@@ -432,6 +439,7 @@ describe("SessionStore.revokeSession", () => {
     store.sessionTierMap.set("sse-1", "action");
     store.sessionWebContentsMap.set("sse-1", 42);
     store.sessionContextMap.set("sse-1", { worktreeId: "w1" } as never);
+    store.sessionHelpIdMap.set("sse-1", "help-1");
 
     const result = store.revokeSession("sse-1");
 
@@ -440,6 +448,7 @@ describe("SessionStore.revokeSession", () => {
     expect(store.sessionTierMap.has("sse-1")).toBe(false);
     expect(store.sessionWebContentsMap.has("sse-1")).toBe(false);
     expect(store.sessionContextMap.has("sse-1")).toBe(false);
+    expect(store.sessionHelpIdMap.has("sse-1")).toBe(false);
     expect(resourceCleanups).toContain("sse-1");
     expect(closeSpy).toHaveBeenCalled();
   });

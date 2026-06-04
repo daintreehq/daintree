@@ -1135,4 +1135,83 @@ describe("HelpSessionController — MCP tool activity strip (#9759)", () => {
     expect(ctrl.getSnapshot().mcpActivity).toBeNull();
     ctrl.stop();
   });
+
+  it("ignores a settle from a different turn (late cross-turn settle cannot regress the row)", () => {
+    const ctrl = startCtrl();
+    fireStarted({
+      sessionId: "s1",
+      toolId: "slow-old",
+      argsSummary: "{}",
+      startedAt: 1,
+      danger: false,
+      turnId: "T1",
+    });
+    fireStarted({
+      sessionId: "s1",
+      toolId: "fresh",
+      argsSummary: "{}",
+      startedAt: 2,
+      danger: false,
+      turnId: "T2",
+    });
+    fireSettled({
+      sessionId: "s1",
+      toolId: "slow-old",
+      durationMs: 9000,
+      result: "error",
+      severity: "error",
+      turnId: "T1",
+    });
+    const a = ctrl.getSnapshot().mcpActivity;
+    expect(a?.status).toBe("in-flight");
+    expect(a?.toolId).toBe("fresh");
+    expect(a?.isError).toBe(false);
+    ctrl.stop();
+  });
+
+  it("keeps a coalesced burst in-flight until every outstanding call settles", () => {
+    const ctrl = startCtrl();
+    fireStarted({
+      sessionId: "s1",
+      toolId: "a",
+      argsSummary: "{}",
+      startedAt: 1,
+      danger: false,
+      turnId: "T1",
+    });
+    fireStarted({
+      sessionId: "s1",
+      toolId: "b",
+      argsSummary: "{}",
+      startedAt: 2,
+      danger: false,
+      turnId: "T1",
+    });
+    // Call A settles while B is still running — the row must stay in-flight.
+    fireSettled({
+      sessionId: "s1",
+      toolId: "a",
+      durationMs: 10,
+      result: "success",
+      severity: "info",
+      turnId: "T1",
+    });
+    let a = ctrl.getSnapshot().mcpActivity;
+    expect(a?.status).toBe("in-flight");
+    expect(a?.callCount).toBe(2);
+    // The final settle completes the burst.
+    fireSettled({
+      sessionId: "s1",
+      toolId: "b",
+      durationMs: 25,
+      result: "success",
+      severity: "info",
+      turnId: "T1",
+    });
+    a = ctrl.getSnapshot().mcpActivity;
+    expect(a?.status).toBe("settled");
+    expect(a?.toolId).toBe("b");
+    expect(a?.durationMs).toBe(25);
+    ctrl.stop();
+  });
 });

@@ -59,6 +59,15 @@ export type HelpSessionWebContentsResolver = (token: string) => number | null;
  * tokens), which intentionally keep the live focused-window context.
  */
 export type HelpSessionActionContextResolver = (token: string) => ActionContext | null;
+/**
+ * Resolver used at MCP transport handshake to map a help-session bearer to
+ * the public help-session id (the one persisted in the renderer's
+ * `helpPanelStore`). The MCP transport mints its own per-connection session
+ * id, so without this join the audit log and turn-id lookups can't be
+ * correlated back to the help session the user sees. Returns null for
+ * non-help bearers (api-key / pane tokens).
+ */
+export type HelpSessionIdResolver = (token: string) => string | null;
 export type { HelpAssistantTier };
 
 export const MCP_SERVER_KEY = "daintree";

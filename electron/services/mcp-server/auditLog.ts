@@ -151,6 +151,8 @@ export class AuditService {
     argsSummary: string;
     bannerSuppressed?: boolean;
     turnId?: string;
+    helpSessionId?: string;
+    resultSummary?: string;
   }): void {
     if (this.readConfig().auditEnabled === false) return;
     this.hydrate();
@@ -186,6 +188,12 @@ export class AuditService {
     }
     if (input.turnId !== undefined) {
       record.turnId = input.turnId;
+    }
+    if (input.helpSessionId !== undefined) {
+      record.helpSessionId = input.helpSessionId;
+    }
+    if (input.resultSummary !== undefined) {
+      record.resultSummary = input.resultSummary;
     }
 
     this.enqueueAndTrim(record);

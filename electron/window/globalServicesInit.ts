@@ -769,6 +769,9 @@ export async function initGlobalServices(
           mcpServerService.setHelpSessionWebContentsResolver((token) =>
             helpSessionService.getWebContentsIdForToken(token)
           );
+          mcpServerService.setHelpSessionIdResolver((token) =>
+            helpSessionService.getSessionIdForToken(token)
+          );
           await mcpServerService.start(registryRef);
         } catch (err) {
           console.error("[MAIN] MCP server failed to start:", err);

@@ -105,6 +105,12 @@ export interface McpToolActivityState {
   danger: boolean;
   /** Number of calls coalesced within the current turn (1 for a single call). */
   callCount: number;
+  /**
+   * Calls in the coalesced burst that have started but not yet settled. The
+   * row only transitions to "settled" when this reaches zero — an early
+   * settle from call A must not mark the row settled while call B still runs.
+   */
+  pendingCalls: number;
   /** Turn the burst is coalesced under; absent for calls outside a turn boundary. */
   turnId?: string;
   /** Settled wall-clock duration in ms. Absent while in-flight. */
@@ -1017,6 +1023,9 @@ export class HelpSessionController {
       prev.turnId !== undefined &&
       prev.turnId === payload.turnId;
     const callCount = sameTurn && prev ? prev.callCount + 1 : 1;
+    // Outstanding-call tracking: a same-turn start joins the burst's pending
+    // pool (settled rows have drained to 0). A new turn starts a fresh pool.
+    const pendingCalls = sameTurn && prev ? prev.pendingCalls + 1 : 1;
     this._patch({
       mcpActivity: {
         status: "in-flight",
@@ -1025,6 +1034,7 @@ export class HelpSessionController {
         startedAt: payload.startedAt,
         danger: payload.danger,
         callCount,
+        pendingCalls,
         ...(payload.turnId !== undefined ? { turnId: payload.turnId } : {}),
         isError: false,
       },
@@ -1041,6 +1051,25 @@ export class HelpSessionController {
   ): void {
     const prev = this._snapshot.mcpActivity;
     if (prev === null) return;
+    // A settle from a different turn must not regress the current row — a
+    // slow call from the previous turn can land after the next turn's call
+    // already started. Settles with no turnId (turn boundary already passed,
+    // or no turn was active) still apply: they belong to the row last shown.
+    if (
+      prev.turnId !== undefined &&
+      payload.turnId !== undefined &&
+      payload.turnId !== prev.turnId
+    ) {
+      return;
+    }
+    // Drain one call from the burst's pending pool. While calls remain
+    // outstanding the row stays in-flight — an early settle from call A must
+    // not flip a coalesced row to "settled" while call B is still running.
+    const pendingCalls = Math.max(0, prev.pendingCalls - 1);
+    if (prev.status === "in-flight" && pendingCalls > 0) {
+      this._patch({ mcpActivity: { ...prev, pendingCalls } });
+      return;
+    }
     const isError = payload.severity === "error" || payload.severity === "critical";
     this._patch({
       mcpActivity: {
@@ -1054,6 +1083,7 @@ export class HelpSessionController {
         result: payload.result,
         severity: payload.severity,
         isError,
+        pendingCalls,
       },
     });
   }

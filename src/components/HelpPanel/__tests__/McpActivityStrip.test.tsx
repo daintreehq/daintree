@@ -36,13 +36,17 @@ vi.mock("@/components/ui/popover", async () => {
 
 import { McpActivityStrip } from "../McpActivityStrip";
 import { formatCallDuration, groupCallsByTurn } from "../RecentCallsPopover";
+import type { McpToolActivityState } from "@/controllers/HelpSessionController";
 
 function makeRecord(overrides: Partial<McpAuditRecord> = {}): McpAuditRecord {
   return {
     id: overrides.id ?? "rec-1",
     timestamp: overrides.timestamp ?? 0,
     toolId: overrides.toolId ?? "tool",
-    sessionId: overrides.sessionId ?? "session-a",
+    // The renderer filters on helpSessionId — sessionId is the MCP
+    // transport id and deliberately never matches the help session.
+    sessionId: overrides.sessionId ?? "mcp-transport-1",
+    helpSessionId: overrides.helpSessionId ?? "session-a",
     tier: overrides.tier ?? "workbench",
     argsSummary: overrides.argsSummary ?? "{}",
     result: overrides.result ?? "success",
@@ -51,6 +55,20 @@ function makeRecord(overrides: Partial<McpAuditRecord> = {}): McpAuditRecord {
     severity: overrides.severity ?? "info",
     ...overrides,
   };
+}
+
+function makeActivity(overrides: Partial<McpToolActivityState> = {}): McpToolActivityState {
+  return {
+    status: "in-flight",
+    toolId: "terminal.getStatus",
+    argsSummary: "{}",
+    startedAt: 0,
+    danger: false,
+    callCount: 1,
+    pendingCalls: 1,
+    isError: false,
+    ...overrides,
+  } as McpToolActivityState;
 }
 
 const getAuditRecords = vi.fn();
@@ -117,62 +135,62 @@ describe("groupCallsByTurn", () => {
 
 describe("McpActivityStrip", () => {
   it("renders nothing when the session is hibernated (empty sessionId)", () => {
-    const { container } = render(<McpActivityStrip sessionId="" onOpenSettings={vi.fn()} />);
+    const { container } = render(<McpActivityStrip sessionId="" activity={null} />);
     expect(container.firstChild).toBeNull();
   });
 
   it("renders a trigger button for an active session", () => {
-    render(<McpActivityStrip sessionId="session-a" onOpenSettings={vi.fn()} />);
-    expect(screen.getByRole("button", { name: /recent activity/i })).toBeTruthy();
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    expect(screen.getByRole("button", { name: /recent tool calls/i })).toBeTruthy();
     expect(getAuditRecords).not.toHaveBeenCalled();
   });
 
   it("fetches and renders the session's calls on open", async () => {
     getAuditRecords.mockResolvedValue([
-      makeRecord({ id: "1", toolId: "alpha-tool", sessionId: "session-a" }),
-      makeRecord({ id: "2", toolId: "beta-tool", sessionId: "session-a" }),
+      makeRecord({ id: "1", toolId: "alpha-tool", helpSessionId: "session-a" }),
+      makeRecord({ id: "2", toolId: "beta-tool", helpSessionId: "session-a" }),
     ]);
-    render(<McpActivityStrip sessionId="session-a" onOpenSettings={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: /recent activity/i }));
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
     expect(await screen.findByText("alpha-tool")).toBeTruthy();
     expect(screen.getByText("beta-tool")).toBeTruthy();
   });
 
   it("filters out records from other sessions", async () => {
     getAuditRecords.mockResolvedValue([
-      makeRecord({ id: "1", toolId: "mine", sessionId: "session-a" }),
-      makeRecord({ id: "2", toolId: "theirs", sessionId: "session-b" }),
+      makeRecord({ id: "1", toolId: "mine", helpSessionId: "session-a" }),
+      makeRecord({ id: "2", toolId: "theirs", helpSessionId: "session-b" }),
     ]);
-    render(<McpActivityStrip sessionId="session-a" onOpenSettings={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: /recent activity/i }));
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
     expect(await screen.findByText("mine")).toBeTruthy();
     expect(screen.queryByText("theirs")).toBeNull();
   });
 
-  it("keeps only the 20 newest calls", async () => {
-    const records = Array.from({ length: 21 }, (_, i) =>
-      makeRecord({ id: `r${i}`, toolId: `tool-${i}`, sessionId: "session-a" })
+  it("keeps only the 5 newest calls", async () => {
+    const records = Array.from({ length: 6 }, (_, i) =>
+      makeRecord({ id: `r${i}`, toolId: `tool-${i}`, helpSessionId: "session-a" })
     );
     getAuditRecords.mockResolvedValue(records);
-    render(<McpActivityStrip sessionId="session-a" onOpenSettings={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: /recent activity/i }));
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
     expect(await screen.findByText("tool-0")).toBeTruthy();
-    expect(screen.getByText("tool-19")).toBeTruthy();
-    // slice(0, 20) keeps the newest-first leading 20; the 21st is dropped.
-    expect(screen.queryByText("tool-20")).toBeNull();
+    expect(screen.getByText("tool-4")).toBeTruthy();
+    // slice keeps the newest-first leading 5; the 6th is dropped.
+    expect(screen.queryByText("tool-5")).toBeNull();
   });
 
   it("shows an error state when the fetch rejects", async () => {
     getAuditRecords.mockRejectedValue(new Error("boom"));
-    render(<McpActivityStrip sessionId="session-a" onOpenSettings={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: /recent activity/i }));
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
     expect(await screen.findByText(/couldn't load recent calls/i)).toBeTruthy();
   });
 
   it("renders the empty state when the session has no calls", async () => {
     getAuditRecords.mockResolvedValue([]);
-    render(<McpActivityStrip sessionId="session-a" onOpenSettings={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: /recent activity/i }));
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
     expect(await screen.findByText(/no calls yet this session/i)).toBeTruthy();
   });
 
@@ -183,34 +201,196 @@ describe("McpActivityStrip", () => {
     });
     getAuditRecords.mockReturnValueOnce(firstFetch);
 
-    const { rerender } = render(
-      <McpActivityStrip sessionId="session-a" onOpenSettings={vi.fn()} />
-    );
-    fireEvent.click(screen.getByRole("button", { name: /recent activity/i }));
+    const { rerender } = render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
 
     // Session changes before the in-flight session-a fetch resolves.
-    rerender(<McpActivityStrip sessionId="session-b" onOpenSettings={vi.fn()} />);
+    rerender(<McpActivityStrip sessionId="session-b" activity={null} />);
     await act(async () => {
-      resolveFirst([makeRecord({ id: "old", toolId: "stale-tool", sessionId: "session-a" })]);
+      resolveFirst([makeRecord({ id: "old", toolId: "stale-tool", helpSessionId: "session-a" })]);
       await firstFetch;
     });
 
     // Reopen under session-b — the stale session-a result must not appear.
-    fireEvent.click(screen.getByRole("button", { name: /recent activity/i }));
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
     expect(await screen.findByText(/no calls yet this session/i)).toBeTruthy();
     expect(screen.queryByText("stale-tool")).toBeNull();
   });
 
-  it("invokes onOpenSettings and closes when viewing the full audit log", async () => {
+  it("ignores records whose transport sessionId happens to equal the help session id", async () => {
+    // Regression: the popover used to filter on the MCP transport id, which
+    // never equals the help-session id — the list rendered empty forever.
     getAuditRecords.mockResolvedValue([
-      makeRecord({ id: "1", toolId: "alpha-tool", sessionId: "session-a" }),
+      makeRecord({
+        id: "1",
+        toolId: "transport-only",
+        sessionId: "session-a",
+        helpSessionId: undefined,
+      }),
+      makeRecord({
+        id: "2",
+        toolId: "help-joined",
+        sessionId: "mcp-transport-9",
+        helpSessionId: "session-a",
+      }),
     ]);
-    const onOpenSettings = vi.fn();
-    render(<McpActivityStrip sessionId="session-a" onOpenSettings={onOpenSettings} />);
-    fireEvent.click(screen.getByRole("button", { name: /recent activity/i }));
-    const footer = await screen.findByRole("button", { name: /view full audit log/i });
-    fireEvent.click(footer);
-    expect(onOpenSettings).toHaveBeenCalledTimes(1);
-    expect(screen.queryByTestId("popover-content")).toBeNull();
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    expect(await screen.findByText("help-joined")).toBeTruthy();
+    expect(screen.queryByText("transport-only")).toBeNull();
+  });
+
+  it("expands a call row to show its arguments and result output", async () => {
+    getAuditRecords.mockResolvedValue([
+      makeRecord({
+        id: "1",
+        toolId: "terminal.getStatus",
+        argsSummary: '{"terminalIds":"<object>"}',
+        resultSummary: '{\n  "terminals": []\n}',
+      }),
+    ]);
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    const row = await screen.findByRole("button", { name: /terminal\.getStatus/ });
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    // Collapsed: detail hidden.
+    expect(screen.queryByText(/"terminals": \[\]/)).toBeNull();
+    fireEvent.click(row);
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText(/"terminalIds":"<object>"/)).toBeTruthy();
+    expect(screen.getByText(/"terminals": \[\]/)).toBeTruthy();
+    expect(screen.getByText("Success")).toBeTruthy();
+    // Collapse again.
+    fireEvent.click(row);
+    expect(screen.queryByText(/"terminals": \[\]/)).toBeNull();
+  });
+
+  it("shows a no-output note when a call has no recorded result", async () => {
+    getAuditRecords.mockResolvedValue([
+      makeRecord({ id: "1", toolId: "legacy.call", resultSummary: undefined }),
+    ]);
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    const row = await screen.findByRole("button", { name: /legacy\.call/ });
+    fireEvent.click(row);
+    expect(screen.getByText(/no output recorded for this call/i)).toBeTruthy();
+  });
+});
+
+describe("McpActivityStrip live activity", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("withholds the in-flight row during the Doherty gate, then shows it", () => {
+    render(<McpActivityStrip sessionId="session-a" activity={makeActivity({ turnId: "t1" })} />);
+    // Inside the gate the resting label holds — no spinner flash.
+    expect(screen.getByText("Recent activity")).toBeTruthy();
+    expect(screen.queryByText("terminal.getStatus")).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(screen.getByText("terminal.getStatus")).toBeTruthy();
+    expect(screen.queryByText("Recent activity")).toBeNull();
+  });
+
+  it("labels a coalesced same-turn burst with its call count", () => {
+    render(
+      <McpActivityStrip
+        sessionId="session-a"
+        activity={makeActivity({ turnId: "t1", callCount: 2 })}
+      />
+    );
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(screen.getByText("2 calls · terminal.getStatus")).toBeTruthy();
+  });
+
+  it("shows a settled call immediately with its duration, then decays to rest", () => {
+    render(
+      <McpActivityStrip
+        sessionId="session-a"
+        activity={makeActivity({
+          status: "settled",
+          turnId: "t1",
+          durationMs: 21,
+          result: "success",
+          severity: "info",
+        })}
+      />
+    );
+    // Settled rows skip the gate — a sub-400ms call renders its result directly.
+    expect(screen.getByText("terminal.getStatus")).toBeTruthy();
+    expect(screen.getByText("<100ms")).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.getByText("Recent activity")).toBeTruthy();
+    expect(screen.queryByText("terminal.getStatus")).toBeNull();
+  });
+
+  it("keeps a settled error visible instead of decaying", () => {
+    render(
+      <McpActivityStrip
+        sessionId="session-a"
+        activity={makeActivity({
+          status: "settled",
+          turnId: "t1",
+          durationMs: 1200,
+          result: "error",
+          severity: "error",
+          isError: true,
+        })}
+      />
+    );
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(screen.getByText("terminal.getStatus")).toBeTruthy();
+    expect(screen.queryByText("Recent activity")).toBeNull();
+  });
+
+  it("keeps the button's accessible name stable while the live row morphs", () => {
+    const { rerender } = render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    expect(screen.getByRole("button", { name: /recent tool calls/i })).toBeTruthy();
+    rerender(<McpActivityStrip sessionId="session-a" activity={makeActivity({ turnId: "t1" })} />);
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(screen.getByRole("button", { name: /recent tool calls/i })).toBeTruthy();
+  });
+
+  it("does not re-arm the gate for a same-turn call after a sub-400ms settle", () => {
+    // Call 1 settles under the Doherty threshold: the settled row renders
+    // directly, marking the turn's key as shown.
+    const { rerender } = render(
+      <McpActivityStrip
+        sessionId="session-a"
+        activity={makeActivity({
+          status: "settled",
+          turnId: "t1",
+          durationMs: 80,
+          result: "success",
+          severity: "info",
+          pendingCalls: 0,
+        })}
+      />
+    );
+    expect(screen.getByText("terminal.getStatus")).toBeTruthy();
+    // Call 2 starts in the same turn — the live row must appear immediately,
+    // not flash back to "Recent activity" for another 400ms.
+    rerender(
+      <McpActivityStrip
+        sessionId="session-a"
+        activity={makeActivity({ turnId: "t1", toolId: "terminal.sendText", callCount: 2 })}
+      />
+    );
+    expect(screen.getByText("2 calls · terminal.sendText")).toBeTruthy();
+    expect(screen.queryByText("Recent activity")).toBeNull();
   });
 });

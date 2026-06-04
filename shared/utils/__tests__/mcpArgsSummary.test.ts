@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   MCP_ARGS_INLINE_STRING_LIMIT,
   MCP_ARGS_SUMMARY_LIMIT,
+  MCP_RESULT_SUMMARY_LIMIT,
   summarizeMcpArgs,
+  summarizeMcpResult,
 } from "../mcpArgsSummary.js";
 
 describe("summarizeMcpArgs", () => {
@@ -117,5 +119,54 @@ describe("summarizeMcpArgs postSerializeScrub", () => {
     // Either the bearer body was scrubbed before truncation, or the entire
     // tail was truncated. Neither leaves the partial body visible.
     expect(out).not.toMatch(/Bearer abcd/);
+  });
+});
+
+describe("summarizeMcpResult", () => {
+  it("keeps nested structure, unlike the args summary", () => {
+    const out = summarizeMcpResult({ terminals: [{ id: "t1", state: "waiting" }] });
+    expect(out).toContain('"id": "t1"');
+    expect(out).toContain('"state": "waiting"');
+  });
+
+  it("scrubs before truncating so a sliced secret body is not leaked", () => {
+    const scrub = (s: string) => s.replace(/Bearer [A-Za-z0-9]{8,}/g, "Bearer [REDACTED]");
+    const filler = "x".repeat(MCP_RESULT_SUMMARY_LIMIT);
+    const out = summarizeMcpResult({ filler, token: "Bearer abcdefghij" }, scrub);
+    expect(out).not.toMatch(/Bearer abcd/);
+  });
+
+  it("truncates past the limit with an omission note", () => {
+    const out = summarizeMcpResult({ big: "y".repeat(MCP_RESULT_SUMMARY_LIMIT * 2) });
+    expect(out.length).toBeLessThan(MCP_RESULT_SUMMARY_LIMIT + 64);
+    expect(out).toMatch(/more characters$/);
+  });
+
+  it("redacts sensitive keys at every depth", () => {
+    const out = summarizeMcpResult({
+      data: { nested: { apiKey: "sk-supersecret", note: "fine" } },
+    });
+    expect(out).not.toContain("sk-supersecret");
+    expect(out).toContain("<redacted>");
+    expect(out).toContain('"note": "fine"');
+  });
+
+  it("scrubs structural secrets inside long strings before the per-string cap", () => {
+    // The Bearer body straddles the cap boundary: a naive slice-then-scrub
+    // would leave a "Bearer abc" prefix too short for the scrubber to match.
+    const scrub = (s: string) => s.replace(/Bearer [A-Za-z0-9]{8,}/g, "Bearer [REDACTED]");
+    const long = "x".repeat(MCP_RESULT_SUMMARY_LIMIT - 10) + "Bearer abcdefghijklmnop";
+    const out = summarizeMcpResult({ log: long }, scrub);
+    expect(out).not.toMatch(/Bearer abc/);
+  });
+
+  it("survives unserializable values", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(summarizeMcpResult(cyclic)).toBe("<unserializable>");
+  });
+
+  it("stringifies bigints instead of throwing", () => {
+    expect(summarizeMcpResult({ n: 5n })).toContain('"5n"');
   });
 });
