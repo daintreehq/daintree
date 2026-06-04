@@ -35,17 +35,21 @@ export const theme: BuiltInThemeSource = {
     },
     border: "rgba(20,40,25,0.16)",
     accent: "#218546",
-    accentSecondary: "#3A7A4E",
+    // Round 2 (#9710): the living signals warm up toward the sunlit-paddy green
+    // of the hero photo — secondary accent, success, and the active/working
+    // dots were all the same cool forest green as the chrome, which made the
+    // workbench hum at one flat pitch. All keep ≥3:1 on every light surface.
+    accentSecondary: "#3E8049",
     status: {
-      success: "#188A40",
+      success: "#1E8C44",
       warning: "#946400",
       danger: "#C0453A",
       info: "#2E7E8A",
     },
     activity: {
-      active: "#0E7D33",
+      active: "#1A8A3A",
       idle: "#62786A",
-      working: "#0E7D33",
+      working: "#1A8A3A",
       waiting: "#8A6A0C",
     },
     overlayTint: "#142819",
@@ -55,7 +59,9 @@ export const theme: BuiltInThemeSource = {
       muted: "#5C8A65",
       cursor: "#C9A84C",
       selection: "rgba(34,130,67,0.30)",
-      red: "#E07870",
+      // Terracotta-clay red (volcanic earth) instead of the old dusty salmon —
+      // the photo's warm accents are golden sand and wet stone, not pastel.
+      red: "#D9685C",
       green: "#64B884",
       yellow: "#D4A840",
       blue: "#60AACC",
@@ -74,7 +80,9 @@ export const theme: BuiltInThemeSource = {
       punctuation: "#4C6E56",
       number: "#826010",
       string: "#287244",
-      operator: "#137258",
+      // Warm volcanic-earth operator (sibling of `number`) cuts the five-token
+      // green wash the old palette had — the terraces are cut by stone paths.
+      operator: "#7A5A12",
       keyword: "#854798",
       function: "#2A6BA2",
       link: "#0C763A",
@@ -107,7 +115,9 @@ export const theme: BuiltInThemeSource = {
     "border-interactive": "rgba(31,130,68,0.34)",
     "border-strong": "rgba(20,40,25,0.20)",
     "border-subtle": "rgba(20,40,25,0.075)",
-    "category-amber": "oklch(0.62 0.14 65)",
+    // Lifted/cooled toward clean honey — at 0.62/0.14 the amber badge read as
+    // dead-leaf brown against the sage ramp (round-2 screenshot audit).
+    "category-amber": "oklch(0.68 0.12 70)",
     "category-blue": "oklch(0.58 0.13 242)",
     "category-cyan": "oklch(0.6 0.11 198)",
     "category-green": "oklch(0.59 0.14 152)",
@@ -125,7 +135,7 @@ export const theme: BuiltInThemeSource = {
     // layer dissolves on the near-white ramp, so cards/popovers/dialogs lift
     // with a crisp contact line plus a soft ambient spread instead of relying
     // on hairlines alone.
-    "shadow-ambient": "0 1px 2px rgba(20,40,25,0.10), 0 4px 12px rgba(20,40,25,0.10)",
+    "shadow-ambient": "0 1px 2px rgba(20,40,25,0.12), 0 4px 12px rgba(20,40,25,0.10)",
     "shadow-floating": "0 2px 6px rgba(20,40,25,0.12), 0 14px 36px rgba(20,40,25,0.16)",
     "shadow-dialog": "0 4px 10px rgba(20,40,25,0.13), 0 26px 60px rgba(20,40,25,0.18)",
     // B1: pr-draft / pr-merged / pr-open / pr-closed re-darkened to clear AA
@@ -164,8 +174,9 @@ export const theme: BuiltInThemeSource = {
     "search-match-badge-text": "#0C763A",
     "search-selected-result-border": "#1F8244",
     "search-selected-result-icon": "#0C763A",
-    "surface-hover": "rgba(20,40,25,0.19)",
-    "surface-active": "rgba(20,40,25,0.28)",
+    // surface-hover / surface-active: NOT overridden (round 2) — the old
+    // 0.19/0.28 values were the same stale heavy ladder as the dropped
+    // overlay-* overrides; the engine's Weber-tuned 0.065/0.11 apply.
     // E8: input is a recessed inset well, not the brightest object on screen.
     // Sits a hair below the chrome rail (L≈0.912) so fields read recessed on the
     // lifted ramp. Tracks the redesign surfaces.
@@ -214,24 +225,26 @@ export const theme: BuiltInThemeSource = {
     // new panel level.
     "settings-nav-active-bg": "#F4F7EE",
     "settings-nav-hover-bg": "rgba(20,40,25,0.07)",
-    "sidebar-action-hover-bg": "rgba(20,40,25,0.07)",
-    // Issue 1 + #9710: the sidebar is now a clearly-tinted green chrome rail
+    "sidebar-action-hover-bg": "rgba(20,40,25,0.10)",
+    // Issue 1 + #9710: the sidebar is a clearly-tinted green chrome rail
     // (L 0.921) distinct from the airy canvas, so its states have room to step.
     // Selection ELEVATES to a near-elevated card plane (#FAFBF5, +0.065 L over
-    // the rail) and hover sits at the canvas level (+0.027), giving a clean
-    // idle < hover < selected stair. The sidebar.css left-marker is
-    // border-strong (containment edge); accent is never used for membership.
-    // NOTE: extensionRegistry SIDEBAR_ACTIVE/SIDEBAR_HOVER still enforce the OLD
-    // rgba(0,0,0,*) darken contract — these opaque lift values require the
-    // registry owner to update that governance (flagged, pre-existing).
+    // the rail); hover sits midway (+0.041, round 2 — the old canvas-level
+    // +0.027 hover was imperceptible in screenshot diffs), giving a real
+    // idle < hover < selected stair (gaps 0.041 / 0.024, both over JND). The
+    // sidebar.css left-marker is border-strong; accent is never used for
+    // membership. extensionRegistry governance now expects opaque hex lifts on
+    // light, matching these values.
     "sidebar-active-bg": "#FAFBF5",
-    "sidebar-hover-bg": "#ECF0E3",
+    "sidebar-hover-bg": "#F1F4EA",
     "toolbar-agent-hover-bg": "rgba(20,40,25,0.07)",
     "toolbar-control-hover-bg": "rgba(20,40,25,0.07)",
     "toolbar-control-hover-fg": "#1F8244",
     "toolbar-divider": "rgba(20,40,25,0.10)",
+    // Base stops nudged a touch warm (sand echo): ties the toolbar to the
+    // Pulse beach material so the warm counterpoint reads as intentional.
     "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(31,130,68,0.05), rgba(20,40,25,0.07)), linear-gradient(135deg, #DFE4D2, #D9E0CB)",
+      "linear-gradient(180deg, rgba(31,130,68,0.05), rgba(20,40,25,0.07)), linear-gradient(135deg, #E0E0CC, #D8DEC6)",
     "toolbar-project-border": "rgba(20,40,25,0.10)",
     "toolbar-project-chip-bg": "rgba(20,40,25,0.08)",
     "toolbar-project-chip-border": "rgba(20,40,25,0.10)",
@@ -240,6 +253,8 @@ export const theme: BuiltInThemeSource = {
     "toolbar-stats-border": "rgba(20,40,25,0.09)",
     "toolbar-stats-divider": "rgba(20,40,25,0.09)",
     "toolbar-stats-hover-bg": "rgba(20,40,25,0.07)",
-    "worktree-section-hover-bg": "rgba(20,40,25,0.07)",
+    // 0.07 → 0.10 (round 2): section-header hover was imperceptible on the
+    // lifted rail; 10% of the green-black ink is subtle but actually visible.
+    "worktree-section-hover-bg": "rgba(20,40,25,0.10)",
   },
 };
