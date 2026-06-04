@@ -354,7 +354,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
   const isWorktreeValid = activeWorktree != null && activeWorktree.path != null;
 
   return (
-    <div className="flex min-h-0 shrink-0 flex-col border-t border-border-divider bg-surface-sidebar/95 text-xs">
+    <div className="flex min-h-0 shrink-0 flex-col border-t border-border-divider bg-[var(--dock-bg,color-mix(in_srgb,var(--color-surface-sidebar)_95%,transparent))] text-xs">
       {/* Header */}
       <button
         type="button"

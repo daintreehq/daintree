@@ -115,9 +115,20 @@ export const EXTENSION_KEY_REGISTRY = {
   "dock-input-bg": OPTIONAL,
   "dock-shadow": DOCK_SHADOW,
 
+  // Panel title bars. Fallbacks are transparent (idle) and overlay-subtle
+  // (focused) — dark themes render unchanged without the keys.
+  "panel-header-bg": OPTIONAL,
+  "panel-header-focus-bg": OPTIONAL,
+
   // Panel grid
   "panel-grid-bg": OPTIONAL,
   "terminal-grid-bg": OPTIONAL,
+
+  // Project identity tiles. The CSS fallbacks are the original black-wash
+  // gradient + dark inset shadow (correct on dark); light themes flip the
+  // wash to a white-gloss lift so the emoji chips read bright, not murky.
+  "project-tile-shadow": OPTIONAL,
+  "project-tile-wash": OPTIONAL,
 
   // Pulse
   "pulse-before-bg": OPTIONAL,
@@ -150,6 +161,8 @@ export const EXTENSION_KEY_REGISTRY = {
   "settings-nav-active-bg": OPTIONAL,
   "settings-nav-active-shadow": OPTIONAL,
   "settings-nav-hover-bg": OPTIONAL,
+  // Scope (Global/Project) select trigger fill; transparent fallback.
+  "settings-scope-bg": OPTIONAL,
   "settings-search-bg": OPTIONAL,
   "settings-search-muted": OPTIONAL,
   "settings-section-header-bg": OPTIONAL,

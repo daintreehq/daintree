@@ -219,13 +219,14 @@ function ProjectListItem({
 
       <div
         className={cn(
-          "flex items-center justify-center rounded-[var(--radius-lg)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.3)] shrink-0 transition duration-150",
+          // Wash/shadow var fallbacks keep themes without the overrides byte-identical.
+          "flex items-center justify-center rounded-[var(--radius-lg)] shadow-[var(--project-tile-shadow,inset_0_1px_2px_rgba(0,0,0,0.3))] shrink-0 transition duration-150",
           "h-8 w-8 text-base"
         )}
         style={{
           background: project.color
-            ? `linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2)), ${getProjectGradient(project.color)}`
-            : "linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2)), var(--color-daintree-sidebar)",
+            ? `var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), ${getProjectGradient(project.color)}`
+            : "var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), var(--color-daintree-sidebar)",
         }}
       >
         <span className="leading-none select-none filter drop-shadow-sm">{project.emoji}</span>

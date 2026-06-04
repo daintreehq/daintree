@@ -123,8 +123,10 @@ export const theme: BuiltInThemeSource = {
     // recessed derivation; promote to the engine once the light family is
     // rebuilt from Bondi).
     "surface-input": "#F9FCFF",
-    // Neutral chrome strip — color lives in the field, not the header.
-    "surface-toolbar": "#ECEEF0",
+    // Sand chrome: the frame (toolbar/dock/panel caps/dialog headers) carries
+    // Bondi's warm note at whisper chroma (H~95); sky stays in the field and
+    // content. Same L as the prior neutral, so contrast is unchanged.
+    "surface-toolbar": "#EFEEE9",
     "terminal-bright-black": "#525D69",
     "terminal-white": "#C8D0D9",
     "text-link": "#0F5B41",
@@ -132,11 +134,19 @@ export const theme: BuiltInThemeSource = {
     "text-placeholder": "rgba(28,32,40,0.52)",
   },
   extensions: {
-    "dock-bg": "#ECEEF0",
-    "dock-input-bg": "#F9FCFF",
+    "dock-bg": "#EFEEE9",
+    "dock-input-bg": "#FCFBF7",
     // Registry format guard: shadow-color channels, alpha ≥ 0.25.
     "dock-shadow": "0 -2px 8px rgb(from var(--theme-shadow-color) r g b / 0.25)",
+    // Panel title bars join the sand chrome; the focused pane's cap brightens.
+    "panel-header-bg": "#F1F0EC",
+    "panel-header-focus-bg": "#F7F6F2",
     "panel-grid-bg": "#D9E5F0",
+    // Emoji tiles get a white-gloss lift instead of the dark-theme black wash
+    // (which rendered murky gray chips on the light field).
+    "project-tile-wash":
+      "linear-gradient(to bottom, rgba(255,255,255,0.40), rgba(255,255,255,0.10))",
+    "project-tile-shadow": "inset 0 1px 1px rgba(23,33,48,0.10), 0 0 0 1px rgba(28,38,50,0.10)",
     "pulse-before-bg": "#D9E5F0",
     "pulse-card-bg": "#FFFFFF",
     "pulse-card-header-bg": "#F7FBFF",
@@ -152,15 +162,19 @@ export const theme: BuiltInThemeSource = {
     "pulse-range-bg": "#EAF2FA",
     "pulse-ring-offset": "#FFFFFF",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #D9E5F0 25%, #EAF2FA 50%, #D9E5F0 75%)",
-    "dialog-header-bg": "#F7FBFF",
+    "dialog-header-bg": "#FAF9F5",
     "review-commit-input-bg": "#F9FCFF",
     "settings-kbd-bg": "#EAF2FA",
     "settings-kbd-border": "#CBD4DD",
     // Nav selection elevates to white + the 2px accent marker; the inherited
     // overlay-raised darker-lift is for menu rows on white popovers only.
     "settings-nav-active-bg": "#FFFFFF",
-    "settings-nav-active-shadow": "0 0 0 1px rgba(28,38,50,0.08), 0 1px 2px rgba(23,33,48,0.05)",
+    // Flat like the dark themes: the white fill + 2px accent marker carry
+    // selection, no ring or shadow.
+    "settings-nav-active-shadow": "none",
     "settings-nav-hover-bg": "rgba(22,52,71,0.05)",
+    // Scope pill elevates to white on the tinted settings sidebar.
+    "settings-scope-bg": "#FFFFFF",
     "settings-sidebar-bg": "rgba(243,249,255,0.60)",
     "sidebar-action-hover-bg": "rgba(22,52,71,0.05)",
     // Worktree cards are warm paper (sand against the sky field — H95 vs the
@@ -175,21 +189,21 @@ export const theme: BuiltInThemeSource = {
     // Accent restraint: hover affordance is the bg, not a green foreground.
     "toolbar-control-hover-fg": "#1C2028",
     "toolbar-control-hover-shadow": "none",
-    "toolbar-divider": "rgba(203,212,221,0.6)",
+    "toolbar-divider": "rgba(211,208,199,0.7)",
     "toolbar-pill-radius": "0.5rem",
     // One lifeguard-gold whisper on the project pill; everything else quiet ink.
     // Pills sit LIGHTER than the chrome strip (raised, like all content).
     "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(245,184,20,0.07), rgba(28,32,40,0.02)), #F6F8FA",
-    "toolbar-project-border": "rgba(203,212,221,0.7)",
+      "linear-gradient(180deg, rgba(245,184,20,0.07), rgba(28,32,40,0.02)), #F9F8F4",
+    "toolbar-project-border": "rgba(211,208,199,0.75)",
     "toolbar-project-chip-bg": "rgba(28,32,40,0.04)",
-    "toolbar-project-chip-border": "rgba(203,212,221,0.7)",
+    "toolbar-project-chip-border": "rgba(211,208,199,0.75)",
     "toolbar-project-shadow": "inset 0 1px 0 rgba(255,255,255,0.5)",
     "toolbar-shadow": "0 1px 2px rgba(23,33,48,0.06)",
-    "toolbar-stats-bg": "#F6F8FA",
-    "toolbar-stats-border": "rgba(203,212,221,0.6)",
-    "toolbar-stats-divider": "rgba(203,212,221,0.6)",
-    "toolbar-stats-hover-bg": "#FBFCFD",
+    "toolbar-stats-bg": "#F9F8F4",
+    "toolbar-stats-border": "rgba(211,208,199,0.7)",
+    "toolbar-stats-divider": "rgba(211,208,199,0.7)",
+    "toolbar-stats-hover-bg": "#FCFBF7",
     // Filter rail sits flush on the field; the raised search input carries it.
     "worktree-filter-bar-bg": "#DFECF8",
     // Active quick-state tab lifts to white under its inset underline.

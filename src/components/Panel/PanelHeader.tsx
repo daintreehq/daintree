@@ -586,13 +586,15 @@ function PanelHeaderComponent({
           : location === "dock"
             ? "bg-surface"
             : isFocused || isSelected
-              ? "bg-overlay-subtle"
+              ? // Var fallbacks keep themes without the panel-header hooks
+                // byte-identical.
+                "bg-[var(--panel-header-focus-bg,var(--color-overlay-subtle))]"
               : // Preview tint sits between transparent and bg-overlay-subtle so
                 // a previewed-but-unselected pane reads distinctly from both.
                 // Neutral surface, no accent — accent restraint per CLAUDE.md.
                 isFleetPreviewed
                 ? "bg-tint/[0.05]"
-                : "bg-transparent",
+                : "bg-[var(--panel-header-bg,transparent)]",
         // Mirror the fleet ribbon's 2px amber left stripe on follower panes.
         // Renders via `before:` so it stacks alongside the worktree-identity
         // `after:` stripe on the panel container without conflicting. The
