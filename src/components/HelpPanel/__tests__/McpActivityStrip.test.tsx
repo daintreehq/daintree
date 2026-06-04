@@ -20,7 +20,10 @@ vi.mock("@/components/ui/popover", async () => {
       React.createElement(Ctx.Provider, { value: { open, onOpenChange } }, children),
     PopoverTrigger: ({ children }: { children: React.ReactElement; asChild?: boolean }) => {
       const { open, onOpenChange } = React.useContext(Ctx);
-      return React.cloneElement(children, { onClick: () => onOpenChange?.(!open) });
+      return React.cloneElement(children, { onClick: () => onOpenChange?.(!open) } as Record<
+        string,
+        unknown
+      >);
     },
     PopoverContent: ({ children }: React.PropsWithChildren<unknown>) => {
       const { open } = React.useContext(Ctx);
