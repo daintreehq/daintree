@@ -13,6 +13,7 @@ import type {
 } from "../../../shared/types/ipc/api.js";
 import { logDebug } from "../../utils/logger.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { applyDictationCommands } from "../../services/voiceDictationCommands.js";
 import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
@@ -339,7 +340,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         });
       } catch (err) {
         logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
-          message: err instanceof Error ? err.message : String(err),
+          message: formatErrorMessage(err, "Unknown error during keyterm assembly"),
         });
       }
       // A newer start (or a stop) superseded this one while we awaited assembly
