@@ -90,6 +90,11 @@ export function UpstreamSyncBadge({
 
   const handleSignInClick = useCallback((event: React.MouseEvent) => {
     event.stopPropagation();
+    // Auth failures suspend background fetches indefinitely (#9736). Clearing the
+    // suspension and re-fetching only happens on an explicit user action, so kick
+    // it off here — fire-and-forget, the settings tab below is the recovery path
+    // if the token still needs fixing.
+    void window.electron.worktree.retryAuthFetch();
     void actionService.dispatch(
       "app.settings.openTab",
       { tab: "code-forge", subtab: "github", sectionId: "github-token" },

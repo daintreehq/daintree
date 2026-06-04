@@ -2745,6 +2745,24 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     }
   }
 
+  /**
+   * User-triggered retry of auth-suspended fetches. Auth failures suspend a
+   * repo's fetch cache indefinitely (AUTH_FAILURE_TTL_MS = POSITIVE_INFINITY) to
+   * avoid storming GitHub's secondary rate limits with repeated bad-token
+   * attempts. The only safe way out is an explicit user action — e.g. clicking
+   * the auth-failed sync badge — which clears the suspension and re-fetches.
+   * Mirrors the credential branch of updateForgeCredentials but without a
+   * credential update (the user may be retrying after fixing the token elsewhere).
+   */
+  retryAuthFetch(): void {
+    this.fetchCoordinator.clearAuthFailures();
+    for (const monitor of this.monitors.values()) {
+      if (monitor.isRunning) {
+        void monitor.triggerFetchNow();
+      }
+    }
+  }
+
   private initializePRService(): Promise<void> {
     if (!this.projectRootPath) {
       return Promise.resolve();

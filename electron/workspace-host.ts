@@ -666,6 +666,10 @@ port.on("message", async (rawMsg: any) => {
         workspaceService.updateForgeCredentials(request.providerId, request.credentials);
         break;
 
+      case "retry-auth-fetch":
+        workspaceService.retryAuthFetch();
+        break;
+
       case "get-file-tree": {
         const { requestId, worktreePath, dirPath } = request;
         try {

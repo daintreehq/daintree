@@ -791,6 +791,8 @@ const api: ElectronAPI = {
 
     retryProjectLoad: (): Promise<void> => _unwrappingInvoke(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD),
 
+    retryAuthFetch: (): Promise<void> => _unwrappingInvoke(CHANNELS.WORKTREE_RETRY_AUTH_FETCH),
+
     onUpdate: (callback: (state: WorktreeState) => void) =>
       _eventBusOn("worktree:update", (payload) => callback(payload.worktree)),
 

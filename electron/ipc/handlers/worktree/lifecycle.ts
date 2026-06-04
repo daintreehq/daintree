@@ -149,6 +149,14 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
     }
   };
 
+  // User-triggered retry of auth-suspended fetches (#9736). Auth failures
+  // suspend a repo's fetch cache indefinitely; clicking the auth-failed sync
+  // badge clears the suspension and re-fetches. Silent no-op when the service
+  // is absent — matches handleWorktreeRefresh (not a hard error).
+  const handleWorktreeRetryAuthFetch = async (): Promise<void> => {
+    deps.worktreeService?.retryAuthFetch();
+  };
+
   const handleWorktreeDelete = async (
     ctx: IpcContext,
     payload: WorktreeDeletePayload
@@ -221,6 +229,7 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       retryProjectLoad: op(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD, handleWorktreeRetryProjectLoad, {
         withContext: true,
       }),
+      retryAuthFetch: op(CHANNELS.WORKTREE_RETRY_AUTH_FETCH, handleWorktreeRetryAuthFetch),
       delete: op(CHANNELS.WORKTREE_DELETE, handleWorktreeDelete, { withContext: true }),
     },
   });
