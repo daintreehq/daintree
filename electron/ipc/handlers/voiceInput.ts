@@ -36,6 +36,10 @@ let voiceStartNonce = 0;
 
 const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = ["openai", "deepgram"];
 
+// Fields on VoiceInputSettings that are assembled at runtime and must never be
+// written to the persisted store.
+const RUNTIME_ONLY_VOICE_FIELDS = new Set<string>(["keyterms"]);
+
 const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   enabled: false,
   openaiApiKey: "",
@@ -66,8 +70,10 @@ export function getVoiceSettings(): VoiceInputSettings {
 
   // Pluck truly-legacy key fields so they don't leak into the merged object via
   // spread. `deepgramApiKey` is now a first-class field, so it flows through
-  // `rest` instead of being dropped.
-  const { apiKey, correctionApiKey, ...rest } = stored ?? {};
+  // `rest` instead of being dropped. `keyterms` is runtime-only — drop any value
+  // a stale store/migration left behind so it never seeds a session.
+  const { apiKey, correctionApiKey, keyterms, ...rest } = stored ?? {};
+  void keyterms;
   const merged: VoiceInputSettings = { ...VOICE_INPUT_DEFAULTS, ...rest };
 
   // Migrate prior OpenAI keys into the unified field.
@@ -286,6 +292,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     if (!patch || typeof patch !== "object") return;
     for (const [field, value] of Object.entries(patch)) {
       if (value === undefined) continue;
+      // `keyterms` is runtime-only — assembled per session, never persisted. Skip
+      // it so a renderer patch can't seed stored keyterms into future sessions.
+      if (RUNTIME_ONLY_VOICE_FIELDS.has(field)) continue;
       store.set(`voiceInput.${field}`, value);
     }
   };
@@ -310,32 +319,37 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Capture project info at session start.
     sessionProjectInfo = getProjectInfo();
 
+    // Bump the start nonce for EVERY start (not just Deepgram) so a later start
+    // of any provider supersedes a Deepgram start still awaiting assembly.
+    const myNonce = ++voiceStartNonce;
+
     // Assemble context keyterms and inject them into the session. Deepgram is the
     // only provider that consumes them (Nova-3 `keyterm=` params), so skip the
     // async work for OpenAI. Assembly is capped internally (~500ms); failures are
     // non-fatal — we just start without keyterms.
     let startSettings = settings;
     if (settings.transcriptionProvider === "deepgram") {
-      const myNonce = ++voiceStartNonce;
+      let keyterms: string[] = [];
       try {
-        const keyterms = await assembleKeyterms({
+        keyterms = await assembleKeyterms({
           customDictionary: settings.customDictionary,
           projectName: sessionProjectInfo.name,
           projectPath: sessionProjectInfo.path,
           ptyClient: deps.ptyClient,
         });
-        // A newer start (or a stop) superseded this one while we awaited
-        // assembly — bail before wiring up a session that's already stale.
-        if (voiceStartNonce !== myNonce) {
-          return { ok: false, error: "Voice session superseded" };
-        }
-        if (keyterms.length > 0) {
-          startSettings = { ...settings, keyterms };
-        }
       } catch (err) {
         logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
           message: err instanceof Error ? err.message : String(err),
         });
+      }
+      // A newer start (or a stop) superseded this one while we awaited assembly
+      // (checked on both the success and failure paths) — bail before wiring up a
+      // session that's already stale.
+      if (voiceStartNonce !== myNonce) {
+        return { ok: false, error: "Voice session superseded" };
+      }
+      if (keyterms.length > 0) {
+        startSettings = { ...settings, keyterms };
       }
     }
 

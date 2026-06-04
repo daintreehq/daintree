@@ -51,7 +51,8 @@ function truncateKeytermsForUrl(keyterms: string[]): string[] {
     const term = raw.trim();
     if (!term) continue;
     if (result.length >= MAX_DEEPGRAM_URL_KEYTERMS) break;
-    if (chars + term.length > MAX_DEEPGRAM_URL_KEYTERM_CHARS) break;
+    // Skip (don't stop on) an oversized term so smaller later terms still fit.
+    if (chars + term.length > MAX_DEEPGRAM_URL_KEYTERM_CHARS) continue;
     result.push(term);
     chars += term.length;
   }
@@ -259,8 +260,10 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       } catch {
         // Ignore teardown errors
       }
-      this.clearConnectTimeout();
+      // Clear AFTER the stale guard: a 400 retry installs a fresh connectTimeout
+      // for the new socket, so the failed socket must not clear it on the way out.
       if (this.sessionId !== mySessionId || this.connection !== connection) return;
+      this.clearConnectTimeout();
       const statusCode = res.statusCode;
       // Retry once with keyterms stripped: a 400 here most plausibly means the
       // assembled keyterms overflowed Deepgram's token budget. The new socket
@@ -337,8 +340,10 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     });
 
     connection.on("error", (err) => {
-      this.clearConnectTimeout();
+      // Clear AFTER the stale guard so a superseded socket (e.g. the failed
+      // first attempt of a keyterm retry) can't cancel the live socket's timers.
       if (this.sessionId !== mySessionId || this.connection !== connection) return;
+      this.clearConnectTimeout();
       const message = formatErrorMessage(err, "WebSocket error");
       logError(`${P} WebSocket error`, { message });
       // `ws` fires `close` right after `error`; a pre-ready transport error
@@ -353,9 +358,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     });
 
     connection.on("close", (code, reason) => {
+      // Clear AFTER the stale guard so a superseded socket's trailing close
+      // can't cancel the live socket's connect timeout / keep-alive.
+      if (this.sessionId !== mySessionId || this.connection !== connection) return;
       this.clearConnectTimeout();
       this.clearKeepAlive();
-      if (this.sessionId !== mySessionId || this.connection !== connection) return;
       const wasReady = this.isReady;
       logInfo(`${P} WebSocket closed`, {
         code,

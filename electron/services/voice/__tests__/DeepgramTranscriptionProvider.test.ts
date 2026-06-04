@@ -308,6 +308,20 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.stop();
   });
 
+  it("skips an oversized keyterm but keeps smaller later terms", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const huge = "z".repeat(4_000);
+    void provider.start({ ...BASE_SETTINGS, keyterms: [huge, "short1", "short2"] });
+    await Promise.resolve();
+    // The oversized leading term is skipped (continue, not break), so the small
+    // terms after it still make it into the URL.
+    expect(new URL(latestInstance().url).searchParams.getAll("keyterm")).toEqual([
+      "short1",
+      "short2",
+    ]);
+    provider.stop();
+  });
+
   it("logs the keyterm count, not the URL, when opening the socket", async () => {
     const provider = new DeepgramTranscriptionProvider();
     vi.mocked(logInfo).mockClear();
@@ -748,6 +762,25 @@ describe("DeepgramTranscriptionProvider", () => {
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.error).toContain("HTTP 400");
     expect(events.some((e) => e.type === "error" && /HTTP 400/.test(e.error.message))).toBe(true);
+  });
+
+  it("keeps the retry socket's connect timeout when the failed socket closes", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha"] });
+    await Promise.resolve();
+    const first = latestInstance();
+
+    first.simulateUnexpectedResponse(400);
+    expect(instances).toHaveLength(2);
+
+    // The failed first socket now fires its trailing close. It must NOT cancel
+    // the retry socket's connect timeout (regression: stale close cleared it).
+    first.simulateClose(1006);
+
+    // The retry socket never opens — its connect timeout should still fire and
+    // resolve the start instead of hanging forever.
+    vi.advanceTimersByTime(10_000);
+    await expect(startPromise).resolves.toEqual({ ok: false, error: "Connection timed out" });
   });
 
   it("ignores an unexpected-response for a superseded session", async () => {
