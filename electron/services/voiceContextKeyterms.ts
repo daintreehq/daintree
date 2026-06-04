@@ -243,6 +243,9 @@ export function extractTerminalIdentifiers(lines: string[]): string[] {
   const scores = new Map<string, TermScore>();
 
   lines.forEach((line, lineIndex) => {
+    // Guard against malformed IPC payloads delivering non-string lines, which
+    // would otherwise throw in stripAnsi and drop the entire terminal tier.
+    if (typeof line !== "string") return;
     const clean = stripAnsi(line);
     // Count each term at most once per line so same-line repeats don't inflate
     // frequency (e.g. a log line spamming one identifier).
@@ -273,7 +276,11 @@ export function extractTerminalIdentifiers(lines: string[]): string[] {
       const scoreA = a.lineCount * (a.lastLineIndex + 1);
       const scoreB = b.lineCount * (b.lastLineIndex + 1);
       if (scoreB !== scoreA) return scoreB - scoreA;
-      return a.canonical.localeCompare(b.canonical);
+      // Codepoint comparison (not localeCompare) keeps ties deterministic
+      // regardless of host locale.
+      if (a.canonical < b.canonical) return -1;
+      if (a.canonical > b.canonical) return 1;
+      return 0;
     })
     .map((entry) => entry.canonical);
 }

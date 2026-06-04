@@ -137,6 +137,26 @@ describe("extractTerminalIdentifiers", () => {
     expect(ids.indexOf("steady_term")).toBeLessThan(ids.indexOf("spammy_term"));
   });
 
+  it("lets a recent single occurrence outrank an older repeated one (composite score)", () => {
+    // Documents the intentional multiplicative design: frequency and recency
+    // combine, so a term seen once at the very end can outscore one seen a few
+    // times early. frequent_term: lines 0-2 → 3*3=9; latest_term: line 9 → 1*10=10.
+    const lines = [
+      "frequent_term",
+      "frequent_term",
+      "frequent_term",
+      "filler_three",
+      "filler_four",
+      "filler_five",
+      "filler_six",
+      "filler_seven",
+      "filler_eight",
+      "latest_term",
+    ];
+    const ids = extractTerminalIdentifiers(lines);
+    expect(ids.indexOf("latest_term")).toBeLessThan(ids.indexOf("frequent_term"));
+  });
+
   it("orders equal-score terms deterministically by canonical form", () => {
     // Two single-occurrence terms on the same line have identical scores;
     // the lexically lesser one comes first, deterministically.
@@ -261,6 +281,23 @@ describe("assembleKeyterms", () => {
     // The newest terminal identifier (highest recency) is kept; the oldest is dropped.
     expect(result).toContain("terminal_ident_59");
     expect(result).not.toContain("terminal_ident_0");
+  });
+
+  it("does not let a dict/terminal collision consume terminal tier capacity", async () => {
+    // The newest terminal identifier also sits in the dictionary, so the
+    // terminal-tier loop hits a dedup miss on it. The counter must only advance
+    // on a successful add — otherwise the duplicate would burn a tier slot and
+    // the tier would yield one fewer unique terminal term.
+    const lines = Array.from({ length: 60 }, (_, i) => `terminal_ident_${i}`);
+    const ptyClient = makePtyClient(lines) as PtyClient;
+    const result = await assembleKeyterms({
+      customDictionary: ["terminal_ident_59"],
+      ptyClient,
+    });
+    // Recency ranks 59→0; 59 is the dict dup. The tier should still fill with
+    // the next-newest unique terms down to terminal_ident_29 (30 unique slots).
+    expect(result).toContain("terminal_ident_29");
+    expect(result).not.toContain("terminal_ident_28");
   });
 
   it("falls back gracefully when git fails", async () => {
