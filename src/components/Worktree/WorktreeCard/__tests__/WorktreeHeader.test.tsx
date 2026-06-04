@@ -1160,7 +1160,7 @@ describe("WorktreeHeader collapsed alarm pill", () => {
   });
 });
 
-const mockRetryAuthFetch = vi.fn();
+const mockRetryAuthFetch = vi.fn().mockResolvedValue(undefined);
 
 describe("WorktreeHeader token-missing badge behavior", () => {
   beforeEach(() => {

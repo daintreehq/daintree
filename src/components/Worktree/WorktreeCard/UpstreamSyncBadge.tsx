@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { actionService } from "@/services/ActionService";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 interface UpstreamSyncBadgeProps {
   aheadCount: number | undefined;
@@ -94,7 +95,9 @@ export function UpstreamSyncBadge({
     // suspension and re-fetching only happens on an explicit user action, so kick
     // it off here — fire-and-forget, the settings tab below is the recovery path
     // if the token still needs fixing.
-    void window.electron.worktree.retryAuthFetch();
+    safeFireAndForget(window.electron.worktree.retryAuthFetch(), {
+      context: "Retry auth-suspended fetch from sync badge",
+    });
     void actionService.dispatch(
       "app.settings.openTab",
       { tab: "code-forge", subtab: "github", sectionId: "github-token" },
