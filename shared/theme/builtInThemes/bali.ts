@@ -9,207 +9,226 @@ export const theme: BuiltInThemeSource = {
   heroImage: "/themes/bali.webp",
   palette: {
     type: "light",
+    // Rice-terrace composition (#9710, Bondi-standard rebuild): ONE sunlit
+    // paddy-green family for the whole field (H~116-122) with white frangipani
+    // content on top. Gold appears only as detail — canang-sari search
+    // highlights, the cursor, warning/waiting status, one whisper on the
+    // project pill — never as a field surface. Everything that carries content
+    // lifts TOWARD white — never a darker fill on a light container.
+    // Ramp L 0.883/0.936/0.958/0.978/1.0: steps 0.0206-0.0526 (gate ≥ 0.02,
+    // runaway ratio 2.55 < 3), span 0.117, panel→elevated not the smallest
+    // step. The grid is the FLOODED PADDY — a full register deeper and richer
+    // than the dry-terrace sidebar, so chrome/field/well read as three planes
+    // and white panels get real figure-ground pop.
     surfaces: {
-      grid: "#D2DABE",
-      sidebar: "#DCE3C9",
-      canvas: "#E4EAD2",
-      panel: "#ECF1E0",
-      elevated: "#FBFCF6",
+      grid: "#D3DEBC",
+      sidebar: "#E7EDD8",
+      canvas: "#F0F3E4",
+      panel: "#F7F9F1",
+      elevated: "#FFFFFF",
     },
     text: {
-      primary: "#1D2B1E",
-      secondary: "#3F5240",
-      muted: "#5C7460",
-      inverse: "#FAFCF5",
+      primary: "#20241E",
+      // Near-neutral ink with a whisper of leaf — heavily-hued green text on
+      // the green field read dirty: secondary 6.0:1 on the grid, muted 4.8:1
+      // on the grid and 6.0:1 on canvas.
+      secondary: "#4B4E47",
+      muted: "#575D54",
+      inverse: "#FDFEFB",
     },
-    border: "rgba(20,40,25,0.16)",
+    border: "#CBD0C1",
     accent: "#218546",
     accentSecondary: "#3A7A4E",
+    // success/danger/warning render as TEXT (diff numerals, status labels) on
+    // the near-white chips — all hold ≥ 4.5:1 on every surface up to #FFFFFF.
     status: {
-      success: "#188A40",
+      success: "#208042",
       warning: "#946400",
       danger: "#C0453A",
-      info: "#2E7E8A",
+      info: "#2C7884",
     },
     activity: {
-      active: "#0E7D33",
+      active: "#208042",
       idle: "#62786A",
-      working: "#0E7D33",
+      working: "#208042",
       waiting: "#8A6A0C",
     },
-    overlayTint: "#142819",
+    // Field ink, not jungle-black: the overlay/wash ladder composites onto the
+    // paddy field, and an off-temperature tint there reads as grime even when
+    // every surface hex is right.
+    overlayTint: "#31342B",
     terminal: {
-      background: "#182B1B",
-      foreground: "#DCE6D9",
-      muted: "#5C8A65",
-      cursor: "#C9A84C",
-      selection: "rgba(34,130,67,0.30)",
-      red: "#E07870",
-      green: "#64B884",
-      yellow: "#D4A840",
-      blue: "#60AACC",
-      magenta: "#C080C0",
-      cyan: "#44C4AA",
-      brightRed: "#F09888",
-      brightGreen: "#80D49C",
-      brightYellow: "#F0C060",
-      brightBlue: "#84C8E4",
-      brightMagenta: "#D4A4D8",
-      brightCyan: "#68D4BC",
-      brightWhite: "#FAFCF5",
+      background: "#1A2620",
+      foreground: "#CDD6CD",
+      // 3.82:1 on the terminal background (the old #5C8A65 leaned chroma over
+      // luminance and fell away in muted output).
+      muted: "#6F8276",
+      cursor: "#E0B341",
+      selection: "#2C4136",
+      red: "#E06A5E",
+      green: "#43BD7F",
+      yellow: "#D9A832",
+      blue: "#46A8D9",
+      magenta: "#B47FE8",
+      cyan: "#2EB5A0",
+      brightRed: "#F0907F",
+      brightGreen: "#63D89C",
+      brightYellow: "#F2C45C",
+      brightBlue: "#7CC8EC",
+      brightMagenta: "#CDA3F2",
+      brightCyan: "#5FD9C2",
+      brightWhite: "#EDF5EC",
     },
     syntax: {
-      comment: "#4C6E58",
-      punctuation: "#4C6E56",
-      number: "#826010",
-      string: "#287244",
-      operator: "#137258",
-      keyword: "#854798",
-      function: "#2A6BA2",
-      link: "#0C763A",
-      quote: "#506E56",
-      chip: "#6CC8B0",
+      comment: "#586D5C",
+      punctuation: "#54675A",
+      number: "#7E5D08",
+      string: "#1E7048",
+      operator: "#0F7263",
+      keyword: "#7A3FA8",
+      function: "#1D67A8",
+      link: "#106B3C",
+      quote: "#56695C",
+      chip: "#3A7A4E",
     },
     strategy: {
+      shadowStyle: "light",
       materialBlur: 10,
       materialSaturation: 118,
     },
   },
   tokens: {
-    "accent-muted": "rgba(31,130,68,0.30)",
-    "accent-soft": "rgba(31,130,68,0.18)",
-    "accent-foreground": "#FFFFFF",
-    "text-link": "#0C763A",
-    "text-placeholder": "#728675",
-    "border-divider": "rgba(20,40,25,0.10)",
-    "border-interactive": "rgba(31,130,68,0.34)",
-    "border-strong": "rgba(20,40,25,0.20)",
-    "border-subtle": "rgba(20,40,25,0.09)",
-    "category-amber": "oklch(0.62 0.14 65)",
-    "category-blue": "oklch(0.58 0.13 242)",
-    "category-cyan": "oklch(0.6 0.11 198)",
-    "category-green": "oklch(0.59 0.14 152)",
-    "category-indigo": "oklch(0.57 0.13 264)",
-    "category-orange": "oklch(0.6 0.15 38)",
-    "category-pink": "oklch(0.59 0.13 340)",
-    "category-purple": "oklch(0.58 0.13 318)",
-    "category-rose": "oklch(0.6 0.14 14)",
-    "category-teal": "oklch(0.59 0.11 178)",
-    "category-violet": "oklch(0.57 0.13 295)",
-    "focus-ring": "rgba(31,130,68,0.40)",
-    "focus-ring-offset": "3px",
-    // B1: pr-draft / pr-merged / pr-open / pr-closed re-darkened to clear AA
-    // (4.5:1) on the panel surface where PR badges render. The GitHub-brand
-    // defaults (pr-draft #85909C = 2.82:1, pr-open #188537 = 4.10:1, pr-merged
-    // #864BE8 = 4.35:1) failed on bali's near-white panel; these keep the same
-    // hue family, lowered in L.
-    "pr-closed": "#C81824",
-    "pr-draft": "#5E6A77",
-    "pr-merged": "#6B3BC0",
-    "pr-open": "#137A30",
-    "overlay-emphasis": "rgba(20,40,25,0.20)",
-    "overlay-medium": "rgba(20,40,25,0.11)",
-    "overlay-soft": "rgba(20,40,25,0.07)",
-    "overlay-strong": "rgba(20,40,25,0.15)",
-    "overlay-subtle": "rgba(20,40,25,0.045)",
-    "overlay-hover": "rgba(20,40,25,0.19)",
-    "overlay-active": "rgba(20,40,25,0.28)",
-    "overlay-selected": "rgba(20,40,25,0.20)",
-    "overlay-elevated": "rgba(20,40,25,0.16)",
-    // E1 elevate-to-select: NOT overridden. The engine light default
-    // (color-mix elevated 92% + text-primary) sits a hair darker than the pure
-    // elevated surface, so a selected menu/tab item still steps visibly even
-    // when it sits ON an elevated floating plane. Pinning it to the raw
-    // elevated hex would collapse that step on floating surfaces.
-    // B1 filter-selected (membership, never accent): a lighter/elevated fill +
-    // border-strong containment edge, lifting just above the panel rather than
-    // the old overlayBase@0.08/0.12 darken.
-    "filter-selected-bg-soft": "#F3F7EA",
-    "filter-selected-bg-strong": "#FBFCF6",
-    // E7: cool-slate-hued, lowered scrims so the modal backdrop dims without a
-    // heavy black slab over a near-white workbench.
-    "scrim-medium": "rgba(20,40,25,0.36)",
-    "scrim-soft": "rgba(20,40,25,0.22)",
-    "scrim-strong": "rgba(20,40,25,0.55)",
-    "scrollbar-thumb": "#5C7460",
-    "scrollbar-thumb-hover": "color-mix(in oklab, #5C7460 80%, #1D2B1E)",
-    "search-highlight-background": "rgba(31,130,68,0.18)",
-    "search-highlight-text": "#0C763A",
-    "search-match-badge-background": "rgba(31,130,68,0.18)",
-    "search-match-badge-text": "#0C763A",
-    "search-selected-result-border": "#1F8244",
-    "search-selected-result-icon": "#0C763A",
-    "surface-hover": "rgba(20,40,25,0.19)",
-    "surface-active": "rgba(20,40,25,0.28)",
-    // E8: input is a recessed inset well, not the brightest object on screen.
-    // Dropped the old raised #F2F6E8 (elevated) override so the engine's
-    // recessed light default applies (canvas pulled a hair toward text).
-    "surface-inset": "#DBE2C7",
-    "surface-toolbar": "#DEE5CC",
-    "terminal-black": "#182B1B",
-    "terminal-white": "#DCE6D9",
+    "accent-muted": "rgba(33,133,70,0.30)",
+    "accent-soft": "rgba(33,133,70,0.18)",
+    "focus-ring": "rgba(33,133,70,0.35)",
+    "overlay-hover": "rgba(49,52,43,0.08)",
+    // Derived 3% is sub-threshold over near-white surfaces.
+    "overlay-soft": "rgba(49,52,43,0.055)",
+    // Opaque elevate-to-select for menu/palette rows on white popovers; field
+    // green so a selected row reads as the same material, not a gray slab.
+    // One register lighter than Bondi's depth: a hued fill at L 0.934 reads
+    // recessed on a pure-white popover where Bondi's neutral sand doesn't.
+    "overlay-raised": "#EBEEE3",
+    // Engine pr-* defaults clear AA here; pr-draft alone is re-inked to the
+    // field temperature (the engine slate reads cool against the green field).
+    "pr-draft": "#62695F",
+    "scrollbar-thumb": "#727D6E",
+    "scrollbar-thumb-hover": "color-mix(in oklab, #727D6E 85%, #20241E)",
+    // Engine light scrims (0.22/0.36/0.55) read as a storm front here.
+    "scrim-soft": "rgba(49,52,43,0.16)",
+    "scrim-medium": "rgba(49,52,43,0.28)",
+    "scrim-strong": "rgba(49,52,43,0.46)",
+    // Search is canang-sari gold — the detail temperature, kept off the green
+    // accent so a match never reads as selection.
+    "search-highlight-background": "rgba(176,128,16,0.16)",
+    "search-highlight-text": "#7A5800",
+    "search-match-badge-background": "rgba(176,128,16,0.16)",
+    "search-match-badge-text": "#7A5800",
+    "search-selected-result-border": "rgba(122,88,0,0.34)",
+    "search-selected-result-icon": "#7A5800",
+    // Two-layer contact+spread; the engine "light" single penumbra has no
+    // contact edge on a near-white field.
+    "shadow-ambient": "0 1px 2px rgba(44,47,38,0.10), 0 6px 16px rgba(44,47,38,0.10)",
+    // Dialogs sit a full z-tier above menus/popovers (the floating fallback
+    // would give a centered modal the same shadow as a context menu).
+    "shadow-dialog": "0 2px 6px rgba(44,47,38,0.10), 0 24px 60px rgba(44,47,38,0.18)",
+    "shadow-floating": "0 1px 3px rgba(44,47,38,0.12), 0 12px 32px rgba(44,47,38,0.14)",
+    // In-card chips: a pale terrace inset one quiet step below the white card,
+    // not a recessed slab.
+    "surface-inset": "#EEF2E6",
+    // Inputs are raised on light, never recessed (overrides the engine's
+    // recessed derivation; promote to the engine once the light family is
+    // rebuilt from Bondi).
+    "surface-input": "#FAFCF6",
+    // Stone chrome: the frame (toolbar/dock/panel caps/dialog headers) carries
+    // Bali's volcanic-stone note at whisper chroma (H~122), one register apart
+    // from the field surfaces rather than a different temperature.
+    "surface-toolbar": "#ECEFE6",
+    "terminal-bright-black": "#5A6B5E",
+    "terminal-white": "#CDD6CD",
+    "text-link": "#0E6434",
+    // 4.5:1 on the raised input (the derived 0.58 sat at ~4.1 and fell away).
+    "text-placeholder": "rgba(32,36,30,0.62)",
   },
   extensions: {
-    "panel-grid-bg": "#D7DEC4",
-    // S1: dialog body recedes to surface-panel; cards/list-items elevate above it.
-    // Body and card were both #FBFCF6 (collapsed, card inverted at/below body); body
-    // now sits at panel #ECF1E0 so the elevated card (#FBFCF6, +0.039 L) reads lifted.
-    "settings-dialog-bg": "#ECF1E0",
-    "settings-card-bg": "#FBFCF6",
-    "settings-list-item-bg": "#FBFCF6",
-    "pulse-before-bg": "#CBBF9A",
-    "pulse-card-bg": "#FBFCF6",
-    "pulse-card-shadow": "0 2px 6px rgba(23,33,48,0.10)",
-    "pulse-control-hover-bg": "rgba(20,40,25,0.06)",
-    // P-Heat: empty cell was #D2BD9E (L 0.808) — so dark it read as active and
-    // the missed-day danger fill only reached 2.77:1 over it. Lightened to
-    // #E6DCC4 (L 0.896), same warm-sand hue, so the opaque missed-day danger
-    // now clears 3.71:1.
-    "pulse-empty-bg": "#E6DCC4",
+    "dock-bg": "#ECEFE6",
+    "dock-input-bg": "#FAFCF6",
+    // Registry format guard: shadow-color channels, alpha ≥ 0.25.
+    "dock-shadow": "0 -2px 8px rgb(from var(--theme-shadow-color) r g b / 0.25)",
+    // Panel title bars join the stone chrome; the focused pane's cap brightens.
+    "panel-header-bg": "#EEF1E8",
+    "panel-header-focus-bg": "#F4F7EE",
+    // Emoji tiles get a white-gloss lift instead of the dark-theme black wash
+    // (which rendered murky gray chips on the light field).
+    "project-tile-wash":
+      "linear-gradient(to bottom, rgba(255,255,255,0.40), rgba(255,255,255,0.10))",
+    "project-tile-shadow": "inset 0 1px 1px rgba(44,47,38,0.10), 0 0 0 1px rgba(45,48,38,0.10)",
+    "pulse-before-bg": "#D3DEBC",
+    "pulse-card-bg": "#FFFFFF",
+    "pulse-card-header-bg": "#F7FAF0",
+    "pulse-card-shadow": "0 1px 2px rgba(44,47,38,0.10), 0 4px 10px rgba(44,47,38,0.08)",
+    "pulse-control-hover-bg": "rgba(49,52,43,0.05)",
+    "pulse-empty-bg": "#F0F3E4",
     "pulse-heat-high-opacity": "0.85",
     "pulse-heat-low-opacity": "0.38",
     "pulse-heat-medium-opacity": "0.62",
-    // P-Heat missed-day (streak break): was a ~14% transparent red film (~1.3:1
-    // over empty, invisible). Now an opaque brighter danger fill clearing 3:1;
-    // the shape-cue inset ring is added by the component on light.
+    "pulse-heat-color": "#3A7A4E",
+    // Opaque so the streak-break signal clears the 3:1 graphical floor.
     "pulse-missed-bg": "#C0453A",
-    "pulse-range-bg": "#E4EAD2",
-    "pulse-ring-offset": "#FBFCF6",
-    "pulse-skeleton-gradient": "linear-gradient(90deg, #CFC4A0 25%, #DAD0B8 50%, #CFC4A0 75%)",
-    "settings-kbd-bg": "#E4EAD2",
-    "settings-search-bg": "#E4EAD2",
-    // S1: single accent anchor is the 2px nav marker (SettingsDialog.tsx). The
-    // active-nav FILL is now a NEUTRAL elevated lift (no accent rgb) instead of
-    // the old accent-tinted darken rgba(31,130,68,0.18). The accent inset ring
-    // (settings-nav-active-shadow) is dropped — S1 removed its CSS consumer and
-    // is retiring the key; bali drops its value to support that retirement.
-    "settings-nav-active-bg": "#F4F7EA",
-    "settings-nav-hover-bg": "rgba(20,40,25,0.07)",
-    "sidebar-action-hover-bg": "rgba(20,40,25,0.07)",
-    // Issue 1: selection ELEVATES on light. The active row lifts to an opaque
-    // surface between panel and elevated (+0.067 OKLab L over surface-sidebar,
-    // clearing the JND audit); hover sits between sidebar and canvas (+0.029),
-    // so idle < hover < selected all clear JND. The sidebar.css left-marker is
-    // border-strong (containment edge). Dark is unchanged (white-alpha fallback
-    // in sidebar.css). NOTE: extensionRegistry SIDEBAR_ACTIVE/SIDEBAR_HOVER
-    // still enforce the OLD rgba(0,0,0,*) darken contract — these opaque values
-    // require the registry owner to update that governance (flagged).
-    "sidebar-active-bg": "#F4F7EA",
-    "sidebar-hover-bg": "#E6ECD6",
-    "toolbar-agent-hover-bg": "rgba(20,40,25,0.07)",
-    "toolbar-control-hover-bg": "rgba(20,40,25,0.07)",
-    "toolbar-control-hover-fg": "#1F8244",
-    "toolbar-divider": "rgba(20,40,25,0.10)",
+    "pulse-range-bg": "#F0F3E4",
+    "pulse-ring-offset": "#FFFFFF",
+    "pulse-skeleton-gradient": "linear-gradient(90deg, #D3DEBC 25%, #F0F3E4 50%, #D3DEBC 75%)",
+    "dialog-header-bg": "#F8FAF2",
+    "review-commit-input-bg": "#FAFCF6",
+    "settings-kbd-bg": "#EEF2E6",
+    "settings-kbd-border": "#CBD0C1",
+    // Nav selection elevates to white + the 2px accent marker; the inherited
+    // overlay-raised darker-lift is for menu rows on white popovers only.
+    "settings-nav-active-bg": "#FFFFFF",
+    // Flat like the dark themes: the white fill + 2px accent marker carry
+    // selection, no ring or shadow.
+    "settings-nav-active-shadow": "none",
+    "settings-nav-hover-bg": "rgba(46,58,36,0.05)",
+    // Scope pill elevates to white on the tinted settings sidebar.
+    "settings-scope-bg": "#FFFFFF",
+    "settings-sidebar-bg": "rgba(231,237,216,0.60)",
+    "sidebar-action-hover-bg": "rgba(46,58,36,0.05)",
+    // Worktree cards are paper highlights on the terrace field; hover brightens
+    // toward white; selected is pure white + the accent rail.
+    // idle < hover < selected is audit-enforced; the old ladder darkened to
+    // select, which reads as grime on a near-white field — these sit ~1.5
+    // OKLab points apart.
+    // Soft contact shadow only — no ring: the card must not read as bordered
+    // (#9711 round-3 owner decision; selection = bg + right accent border).
+    "sidebar-card-bg": "#F2F6EA",
+    "sidebar-card-shadow": "0 1px 2px rgba(40,48,30,0.05)",
+    "sidebar-active-bg": "#FFFFFF",
+    "sidebar-hover-bg": "#F8FAF4",
+    "toolbar-agent-hover-bg": "rgba(32,36,30,0.06)",
+    "toolbar-control-hover-bg": "rgba(32,36,30,0.06)",
+    // Accent restraint: hover affordance is the bg, not a green foreground.
+    "toolbar-control-hover-fg": "#20241E",
+    "toolbar-control-hover-shadow": "none",
+    "toolbar-divider": "rgba(203,208,193,0.7)",
+    "toolbar-pill-radius": "0.5rem",
+    // One canang-gold whisper on the project pill; everything else quiet ink.
+    // Pills sit LIGHTER than the chrome strip (raised, like all content).
     "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(31,130,68,0.05), rgba(20,40,25,0.07)), linear-gradient(135deg, #DEE5CC, #D2DABE)",
-    "toolbar-project-border": "rgba(20,40,25,0.10)",
-    "toolbar-project-chip-bg": "rgba(20,40,25,0.08)",
-    "toolbar-project-chip-border": "rgba(20,40,25,0.10)",
-    "toolbar-project-shadow": "inset 0 1px 0 rgba(255,255,255,0.30)",
-    "toolbar-stats-bg": "rgba(20,40,25,0.06)",
-    "toolbar-stats-border": "rgba(20,40,25,0.09)",
-    "toolbar-stats-divider": "rgba(20,40,25,0.09)",
-    "toolbar-stats-hover-bg": "rgba(20,40,25,0.07)",
-    "worktree-section-hover-bg": "rgba(20,40,25,0.07)",
+      "linear-gradient(180deg, rgba(224,179,65,0.08), rgba(32,36,30,0.02)), #F6F9F0",
+    "toolbar-project-border": "rgba(203,208,193,0.75)",
+    "toolbar-project-chip-bg": "rgba(32,36,30,0.04)",
+    "toolbar-project-chip-border": "rgba(203,208,193,0.75)",
+    "toolbar-project-shadow": "inset 0 1px 0 rgba(255,255,255,0.5)",
+    "toolbar-shadow": "0 1px 2px rgba(44,47,38,0.06)",
+    "toolbar-stats-bg": "#F6F9F0",
+    "toolbar-stats-border": "rgba(203,208,193,0.7)",
+    "toolbar-stats-divider": "rgba(203,208,193,0.7)",
+    "toolbar-stats-hover-bg": "#F8FAF4",
+    // Filter rail sits flush on the field; the raised search input carries it.
+    "worktree-filter-bar-bg": "#E7EDD8",
+    // Active quick-state tab lifts to white under its inset underline.
+    "worktree-quick-state-active-bg": "#FFFFFF",
+    "worktree-search-input-bg": "#FAFCF6",
+    "worktree-section-hover-bg": "rgba(46,58,36,0.05)",
   },
 };
