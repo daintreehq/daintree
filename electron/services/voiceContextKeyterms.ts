@@ -6,6 +6,9 @@ const P = "[VoiceKeyterms]";
 
 const MAX_KEYTERMS = 50;
 const TERMINAL_TIER_CAP = 30;
+// Deepgram nova-3 rejects any keyterm longer than 100 chars with an HTTP 400
+// that fails the WebSocket upgrade, so cap every term at the source.
+const MAX_KEYTERM_LENGTH = 100;
 const ASSEMBLY_TIMEOUT_MS = 500;
 const MIN_TERM_LENGTH = 4;
 const MAX_KEYTERM_LINES = 200;
@@ -318,10 +321,11 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
 
   function add(term: string): boolean {
     if (result.length >= MAX_KEYTERMS) return false;
-    const key = term.toLowerCase();
+    const capped = term.length > MAX_KEYTERM_LENGTH ? term.slice(0, MAX_KEYTERM_LENGTH) : term;
+    const key = capped.toLowerCase();
     if (seen.has(key)) return false;
     seen.add(key);
-    result.push(term);
+    result.push(capped);
     return true;
   }
 
@@ -344,50 +348,61 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
     }
   }
 
-  // Gather dynamic context in parallel with a timeout.
-  // Branch tokens run first (Priority 3), then terminal identifiers (Priority 4).
-  // We await sequentially to preserve priority ordering for the dedup/cap logic.
-  if (projectPath) {
-    let branchTimer: NodeJS.Timeout | undefined;
-    try {
-      const timeoutPromise = new Promise<null>((resolve) => {
-        branchTimer = setTimeout(() => resolve(null), ASSEMBLY_TIMEOUT_MS);
-        branchTimer.unref();
-      });
-      const branchName = await Promise.race([getBranchName(projectPath), timeoutPromise]);
-      if (branchName) {
-        for (const token of tokenizeBranchName(branchName)) {
-          add(token);
+  // Gather dynamic context concurrently, each read guarded by its own timeout.
+  // Both reads fire at once so leading speech isn't delayed; results are merged
+  // in priority order afterward (branch tokens = Priority 3, terminal = Priority 4).
+  const branchPromise = projectPath
+    ? (async (): Promise<string | null> => {
+        let branchTimer: NodeJS.Timeout | undefined;
+        try {
+          const timeoutPromise = new Promise<null>((resolve) => {
+            branchTimer = setTimeout(() => resolve(null), ASSEMBLY_TIMEOUT_MS);
+            branchTimer.unref();
+          });
+          return await Promise.race([getBranchName(projectPath), timeoutPromise]);
+        } catch {
+          logDebug(`${P} Branch name lookup failed`);
+          return null;
+        } finally {
+          if (branchTimer) clearTimeout(branchTimer);
         }
-      }
-    } catch {
-      logDebug(`${P} Branch name lookup failed`);
-    } finally {
-      if (branchTimer) clearTimeout(branchTimer);
+      })()
+    : Promise.resolve(null);
+
+  const linesPromise = ptyClient
+    ? (async (): Promise<string[]> => {
+        let linesTimer: NodeJS.Timeout | undefined;
+        try {
+          const timeoutPromise = new Promise<string[]>((resolve) => {
+            linesTimer = setTimeout(() => resolve([]), ASSEMBLY_TIMEOUT_MS);
+            linesTimer.unref();
+          });
+          return await Promise.race([getTerminalLines(ptyClient), timeoutPromise]);
+        } catch {
+          logDebug(`${P} Terminal identifier extraction failed`);
+          return [];
+        } finally {
+          if (linesTimer) clearTimeout(linesTimer);
+        }
+      })()
+    : Promise.resolve<string[]>([]);
+
+  const [branchName, lines] = await Promise.all([branchPromise, linesPromise]);
+
+  // Priority 3: Branch name tokens
+  if (branchName) {
+    for (const token of tokenizeBranchName(branchName)) {
+      add(token);
     }
   }
 
-  if (ptyClient) {
-    let linesTimer: NodeJS.Timeout | undefined;
-    try {
-      const timeoutPromise = new Promise<string[]>((resolve) => {
-        linesTimer = setTimeout(() => resolve([]), ASSEMBLY_TIMEOUT_MS);
-        linesTimer.unref();
-      });
-      const lines = await Promise.race([getTerminalLines(ptyClient), timeoutPromise]);
-      const identifiers = extractTerminalIdentifiers(lines);
-      // Terminal terms are ranked best-first; bound the tier independently so
-      // dictionary/project/branch terms always keep headroom under MAX_KEYTERMS.
-      let terminalAdded = 0;
-      for (const id of identifiers) {
-        if (terminalAdded >= TERMINAL_TIER_CAP) break;
-        if (add(id)) terminalAdded++;
-      }
-    } catch {
-      logDebug(`${P} Terminal identifier extraction failed`);
-    } finally {
-      if (linesTimer) clearTimeout(linesTimer);
-    }
+  // Priority 4: Terminal identifiers. Lines were fetched in parallel above.
+  // Terminal terms are ranked best-first; bound the tier independently so
+  // dictionary/project/branch terms always keep headroom under MAX_KEYTERMS.
+  let terminalAdded = 0;
+  for (const id of extractTerminalIdentifiers(lines)) {
+    if (terminalAdded >= TERMINAL_TIER_CAP) break;
+    if (add(id)) terminalAdded++;
   }
 
   logDebug(`${P} Assembled ${result.length} keyterms`, {

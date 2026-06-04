@@ -322,39 +322,23 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Capture project info at session start.
     sessionProjectInfo = getProjectInfo();
 
-    // Bump the start nonce for EVERY start (not just Deepgram) so a later start
-    // of any provider supersedes a Deepgram start still awaiting assembly.
+    // Bump the start nonce for EVERY start so a later start of any provider
+    // (and the stop handler) supersedes a start still awaiting keyterm assembly.
     const myNonce = ++voiceStartNonce;
 
-    // Assemble context keyterms and inject them into the session. Deepgram is the
-    // only provider that consumes them (Nova-3 `keyterm=` params), so skip the
-    // async work for OpenAI. Assembly is capped internally (~500ms); failures are
-    // non-fatal — we just start without keyterms.
-    let startSettings = settings;
-    if (settings.transcriptionProvider === "deepgram") {
-      let keyterms: string[] = [];
-      try {
-        keyterms = await assembleKeyterms({
-          customDictionary: settings.customDictionary,
-          projectName: sessionProjectInfo.name,
-          projectPath: sessionProjectInfo.path,
-          ptyClient: deps.ptyClient,
-        });
-      } catch (err) {
-        logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
-          message: formatErrorMessage(err, "Unknown error during keyterm assembly"),
-        });
-      }
-      // A newer start (or a stop) superseded this one while we awaited assembly
-      // (checked on both the success and failure paths) — bail before wiring up a
-      // session that's already stale.
-      if (voiceStartNonce !== myNonce) {
-        return { ok: false, error: "Voice session superseded" };
-      }
-      if (keyterms.length > 0) {
-        startSettings = { ...settings, keyterms };
-      }
-    }
+    // Kick off keyterm assembly concurrently with the subscription/provider
+    // setup below so leading speech isn't delayed waiting on git/terminal reads.
+    // Both providers consume the result: Deepgram via repeated `keyterm=` params,
+    // OpenAI via the transcription prompt. The frozen list is awaited just before
+    // svc.start() and travels inside the settings snapshot, so both providers'
+    // reconnect paths reuse it unchanged. Assembly is capped internally (~500ms)
+    // and failures are non-fatal — we just start without keyterms.
+    const keytermsPromise = assembleKeyterms({
+      customDictionary: settings.customDictionary,
+      projectName: sessionProjectInfo.name,
+      projectPath: sessionProjectInfo.path,
+      ptyClient: deps.ptyClient,
+    });
 
     const unsubscribe = svc.onEvent((voiceEvent) => {
       const win = deps.mainWindow;
@@ -475,7 +459,36 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     ctx.event.sender.once("destroyed", onDestroyed);
     activeDestroyListener = { sender: ctx.event.sender, fn: onDestroyed };
 
-    const result = await svc.start(startSettings);
+    // Freeze the assembled keyterms into the session settings snapshot. Assembly
+    // has its own internal timeouts, so this await is bounded and never blocks the
+    // session start indefinitely.
+    let keyterms: string[] = [];
+    try {
+      keyterms = await keytermsPromise;
+    } catch (err) {
+      logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
+        message: formatErrorMessage(err, "Unknown error during keyterm assembly"),
+      });
+    }
+    // A newer start (or a stop) superseded this one while we awaited assembly
+    // (checked on both the success and failure paths) — bail before wiring up a
+    // session that's already stale. A superseding start has already run
+    // cleanupActiveSubscription() (tearing down THIS start's subscription) and
+    // installed its own session controller/subscription, so we must not touch the
+    // shared globals here — only idempotently drop our own subscription handles
+    // and listener, identity-guarded so we never clobber the live session.
+    if (voiceStartNonce !== myNonce) {
+      if (activeEventUnsubscribe === unsubscribe) {
+        activeEventUnsubscribe = null;
+      }
+      unsubscribe();
+      ctx.event.sender.removeListener("destroyed", onDestroyed);
+      if (activeDestroyListener?.fn === onDestroyed) {
+        activeDestroyListener = null;
+      }
+      return { ok: false, error: "Voice session superseded" };
+    }
+    const result = await svc.start({ ...settings, keyterms });
     if (!result.ok) {
       // Failed to start — clean up subscription immediately
       if (activeEventUnsubscribe === unsubscribe) {

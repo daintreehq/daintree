@@ -329,6 +329,45 @@ describe("assembleKeyterms", () => {
     expect(result).not.toContain("12345");
   });
 
+  it("caps each term at 100 chars (Deepgram keyterm limit)", async () => {
+    const longTerm = "a".repeat(150);
+    const result = await assembleKeyterms({
+      customDictionary: [longTerm],
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0]).toHaveLength(100);
+    expect(result[0]).toBe("a".repeat(100));
+  });
+
+  it("dedupes terms that collide only after the 100-char cap", async () => {
+    // Two terms identical for the first 100 chars but differing past it cap to
+    // the same value and must collapse to one entry.
+    const base = "x".repeat(100);
+    const result = await assembleKeyterms({
+      customDictionary: [base + "AAAA", base + "BBBB"],
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe(base);
+  });
+
+  it("merges concurrently-read sources in priority order when branch fails", async () => {
+    // Branch read fails, terminal read succeeds — the surviving terminal
+    // identifiers still land after custom/project tokens, never lost to the
+    // concurrent failure.
+    gitListBranchesMock.mockRejectedValueOnce(new Error("git not found"));
+    const ptyClient = makePtyClient(["const terminalIdent = true;"]) as PtyClient;
+    const result = await assembleKeyterms({
+      customDictionary: ["CustomFirst"],
+      projectName: "ProjectSecond",
+      projectPath: "/some/path",
+      ptyClient,
+    });
+    expect(result).toContain("CustomFirst");
+    expect(result).toContain("terminalIdent");
+    expect(result).not.toContain("auth"); // branch tokens absent on failure
+    expect(result.indexOf("CustomFirst")).toBeLessThan(result.indexOf("terminalIdent"));
+  });
+
   it("preserves priority order: custom dict > project name > branch > terminal", async () => {
     const ptyClient = makePtyClient(["const terminalIdent = true;"]) as PtyClient;
     const result = await assembleKeyterms({

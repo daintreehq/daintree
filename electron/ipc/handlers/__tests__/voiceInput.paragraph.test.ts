@@ -89,6 +89,7 @@ vi.mock("../../../services/voiceContextKeyterms.js", () => ({
   assembleKeyterms: vi.fn(() =>
     shared.assembleKeyterms ? shared.assembleKeyterms() : Promise.resolve([])
   ),
+  formatKeytermPrompt: vi.fn(() => ""),
 }));
 
 vi.mock("../../../store.js", () => ({
@@ -190,6 +191,8 @@ describe("voiceInput — IPC handler surface", () => {
     shared.drainResolve = null;
     shared.useDeferredDrain = false;
     shared.correctionCalls = [];
+    shared.startCalls = [];
+    shared.assembleKeyterms = null;
 
     win = buildMainWindow();
     cleanup = registerVoiceInputHandlers({
@@ -210,6 +213,52 @@ describe("voiceInput — IPC handler surface", () => {
     const completeMsg = win.__sent.find((m) => m.channel === "voice-input:transcription-complete");
     expect(completeMsg).toBeDefined();
     expect(completeMsg?.payload).toEqual({ text: "Hello world", willCorrect: false });
+  });
+
+  it("does not start the provider when a stop lands during keyterm assembly", async () => {
+    // The beforeEach already opened a session; tear it down so this test owns
+    // a clean start whose assembly window we can control.
+    const handleStop = getHandler("voice-input:stop");
+    await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent);
+    shared.startCalls = [];
+
+    // Begin a new session whose keyterm assembly hangs until we resolve it.
+    let resolveAssembly!: (terms: string[]) => void;
+    const assemblyPromise = new Promise<string[]>((resolve) => {
+      resolveAssembly = resolve;
+    });
+    shared.assembleKeyterms = () => assemblyPromise;
+    const handleStart = getHandler("voice-input:start");
+    const startPromise = (handleStart as (e: unknown) => Promise<unknown>)(fakeEvent) as Promise<{
+      ok: boolean;
+      error?: string;
+    }>;
+
+    // Stop arrives mid-assembly, then assembly finishes.
+    await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent);
+    resolveAssembly(["Daintree"]);
+    const result = await startPromise;
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("Voice session superseded");
+    // The superseded start must never reach svc.start().
+    expect(shared.startCalls).toHaveLength(0);
+  });
+
+  it("passes the assembled keyterms to svc.start()", async () => {
+    const handleStop = getHandler("voice-input:stop");
+    await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent);
+    shared.startCalls = [];
+
+    shared.assembleKeyterms = () => Promise.resolve(["Daintree", "xterm"]);
+    const handleStart = getHandler("voice-input:start");
+    await (handleStart as (e: unknown) => Promise<unknown>)(fakeEvent);
+
+    expect(shared.startCalls).toHaveLength(1);
+    expect((shared.startCalls[0] as { keyterms?: string[] }).keyterms).toEqual([
+      "Daintree",
+      "xterm",
+    ]);
   });
 
   it("paragraph_boundary forwards a payload with only rawText", () => {
@@ -507,28 +556,39 @@ describe("voiceInput — context keyterms wiring", () => {
     });
   });
 
-  it("starts without keyterms for a non-Deepgram provider (no assembly)", async () => {
+  it("injects assembled keyterms into a non-Deepgram session (OpenAI prompt path)", async () => {
     const { store } = await import("../../../store.js");
     vi.mocked(store.get).mockReturnValue(providerSettings("openai"));
     const { assembleKeyterms } = await import("../../../services/voiceContextKeyterms.js");
+    shared.assembleKeyterms = () => Promise.resolve(["alpha", "beta"]);
 
     await startFn(fakeEvent);
 
-    expect(assembleKeyterms).not.toHaveBeenCalled();
+    // OpenAI consumes keyterms via transcription.prompt, so assembly runs for it too.
+    expect(assembleKeyterms).toHaveBeenCalled();
     expect(shared.startCalls).toHaveLength(1);
-    expect(shared.startCalls[0]).not.toHaveProperty("keyterms");
+    expect(shared.startCalls[0]).toMatchObject({
+      transcriptionProvider: "openai",
+      keyterms: ["alpha", "beta"],
+    });
   });
 
-  it("bails a Deepgram start superseded by a later start during assembly", async () => {
+  it("bails a start superseded by a later start during assembly", async () => {
     const { store } = await import("../../../store.js");
     const gate = deferred<string[]>();
-    shared.assembleKeyterms = () => gate.promise;
+    // Only the FIRST assembly (start A) parks on the gate; the later start (B)
+    // resolves immediately so it can supersede and proceed.
+    let assembleCount = 0;
+    shared.assembleKeyterms = () => {
+      assembleCount += 1;
+      return assembleCount === 1 ? gate.promise : Promise.resolve([]);
+    };
 
     // Start A (Deepgram) — parks on assembly.
     vi.mocked(store.get).mockReturnValue(providerSettings("deepgram"));
     const aPromise = startFn(fakeEvent);
 
-    // Start B (OpenAI) — no assembly, supersedes A and starts immediately.
+    // Start B (OpenAI) — supersedes A and starts immediately.
     vi.mocked(store.get).mockReturnValue(providerSettings("openai"));
     await startFn(fakeEvent);
 
@@ -536,7 +596,7 @@ describe("voiceInput — context keyterms wiring", () => {
     gate.resolve(["alpha"]);
     await expect(aPromise).resolves.toEqual({ ok: false, error: "Voice session superseded" });
 
-    // Only B reached svc.start; A never did (no second session, no keyterms).
+    // Only B reached svc.start; A never did (no second session).
     expect(shared.startCalls).toHaveLength(1);
     expect(shared.startCalls[0]).toMatchObject({ transcriptionProvider: "openai" });
   });

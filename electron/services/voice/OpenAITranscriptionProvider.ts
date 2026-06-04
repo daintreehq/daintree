@@ -13,6 +13,7 @@ import {
   type VoiceTranscriptionEvent,
 } from "./TranscriptionProvider.js";
 import type { VadWorkerInbound, VadWorkerOutbound } from "./openaiVadWorkerProtocol.js";
+import { formatKeytermPrompt } from "../voiceContextKeyterms.js";
 
 const P = "[VoiceTranscription:openai]";
 
@@ -393,7 +394,12 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       }
       this.startHeartbeat(connection, mySessionId);
       logInfo(`${P} WebSocket opened, sending session.update`);
-      // TODO: pass `transcription.prompt` from settings once #7832 lands.
+      // Keyterm biasing via `transcription.prompt`, assembled at session start
+      // and frozen on the settings snapshot, so reconnects reuse the same prompt.
+      // NOTE: `gpt-realtime-whisper` currently ignores `prompt` (only
+      // `gpt-4o-transcribe` / `gpt-4o-mini-transcribe` honor it), so wiring it has
+      // no effect today — it future-proofs the path for a model that supports it.
+      const keytermPrompt = formatKeytermPrompt([...(settings.keyterms ?? [])]);
       // `turn_detection` MUST be explicitly `null` for `gpt-realtime-whisper`
       // (VAD is not supported for this model). It is not enough to omit it:
       // when absent the server applies a default VAD that this model can't
@@ -412,6 +418,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
               transcription: {
                 model: OPENAI_TRANSCRIPTION_MODEL,
                 language: settings.language || "en",
+                ...(keytermPrompt ? { prompt: keytermPrompt } : {}),
               },
               turn_detection: null,
             },

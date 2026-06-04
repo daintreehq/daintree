@@ -344,6 +344,22 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.stop();
   });
 
+  it("URL-encodes multi-word and special-char keyterms correctly", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    void provider.start({
+      ...BASE_SETTINGS,
+      keyterms: ["node pty", "C++ & Rust"],
+    });
+    await Promise.resolve();
+    const socket = latestInstance();
+
+    // Raw query string keeps each term as a separate keyterm pair; URL parsing
+    // round-trips the original term values intact.
+    const url = new URL(socket.url);
+    expect(url.searchParams.getAll("keyterm")).toEqual(["node pty", "C++ & Rust"]);
+    provider.stop();
+  });
+
   it("becomes ready and emits recording on WebSocket open", async () => {
     const provider = new DeepgramTranscriptionProvider();
     const statuses: string[] = [];
