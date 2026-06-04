@@ -19,11 +19,17 @@ describe("DevPreviewLoadingState", () => {
     });
   }
 
-  it("uses the shared SkeletonBone (animate-pulse-delayed) in the full variant", () => {
+  it("shows a spinner and caption in the full variant once the Doherty gate clears", () => {
     const { container } = render(
       <DevPreviewLoadingState variant="full" isLoading phaseLabel="Installing dependencies" />
     );
-    expect(container.querySelectorAll(".animate-pulse-delayed").length).toBeGreaterThan(0);
+    // Sub-400ms: the status region exists for AT, but no visible spinner yet.
+    expect(container.querySelector('[role="status"]')).toBeTruthy();
+    expect(container.querySelector('[role="status"] svg')).toBeNull();
+    advance(400);
+    expect(container.querySelector('[role="status"] svg')).toBeTruthy();
+    const caption = container.querySelector("p[aria-hidden='true']");
+    expect(caption?.textContent).toBe("Installing dependencies");
   });
 
   it("renders the SkeletonHint live region as a sibling, not nested in role=status", () => {

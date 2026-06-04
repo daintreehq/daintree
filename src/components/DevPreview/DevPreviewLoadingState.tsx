@@ -1,5 +1,6 @@
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
-import { SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
+import { SkeletonHint } from "@/components/ui/Skeleton";
+import { Spinner } from "@/components/ui/Spinner";
 
 interface DevPreviewLoadingStateProps {
   variant: "full" | "overlay";
@@ -18,39 +19,29 @@ function FullSkeleton({
   isLoading: boolean;
   onCancel?: () => void;
 }) {
-  const showPhaseLabel = useDohertyGate(isLoading);
+  const showSpinner = useDohertyGate(isLoading);
 
   return (
     <div className="relative flex flex-col items-center justify-center h-full bg-daintree-bg px-6">
       <div
-        className="flex flex-col items-center w-full max-w-md"
+        className="flex max-w-[28ch] flex-col items-center gap-3 text-center"
         role="status"
         aria-busy="true"
         aria-label={phaseLabel}
       >
         <span className="sr-only">{phaseLabel}</span>
 
-        <div className="w-full flex flex-col gap-4" aria-hidden="true">
-          <SkeletonBone className="h-3.5 w-3/4" />
-          <div className="space-y-2">
-            <SkeletonBone className="h-3 w-full" />
-            <SkeletonBone className="h-3 w-5/6" />
-            <SkeletonBone className="h-3 w-2/3" />
-          </div>
-          <div className="space-y-2 mt-3">
-            <SkeletonBone className="h-2.5 w-full" />
-            <SkeletonBone className="h-2.5 w-4/5" />
-            <SkeletonBone className="h-2.5 w-3/5" />
-          </div>
-        </div>
-
-        {/* Visible caption only — the role=status wrapper above owns the AT
+        {/* Spinner + visible caption gated by the Doherty threshold. The
+            caption is aria-hidden — the role=status wrapper above owns the AT
             announcement, and an aria-live here would be silenced by its
             aria-busy="true" anyway. The phase also flows through the hint. */}
-        {showPhaseLabel && (
-          <p aria-hidden="true" className="mt-6 text-xs text-daintree-text/60">
-            {phaseLabel}
-          </p>
+        {showSpinner && (
+          <>
+            <Spinner size="xl" className="text-daintree-text/45" />
+            <p aria-hidden="true" className="text-sm text-daintree-text/60 break-words">
+              {phaseLabel}
+            </p>
+          </>
         )}
       </div>
 
@@ -79,7 +70,7 @@ function OverlaySkeleton({
   return (
     <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-daintree-bg">
       <div
-        className="flex flex-col items-center gap-3"
+        className="flex max-w-[28ch] flex-col items-center gap-3 text-center"
         role="status"
         aria-busy="true"
         aria-label={phaseLabel}
@@ -88,7 +79,8 @@ function OverlaySkeleton({
 
         {/* Visible caption only (aria-hidden) — the wrapper owns the AT
             announcement; the phase also flows through the hint. */}
-        <p aria-hidden="true" className="text-xs text-daintree-text/60">
+        <Spinner size="xl" className="text-daintree-text/45" />
+        <p aria-hidden="true" className="text-sm text-daintree-text/60 break-words">
           {phaseLabel}
         </p>
       </div>
