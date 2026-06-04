@@ -297,6 +297,8 @@ export function WorktreeOverviewModal({
       const isComplete =
         !!worktree.issueNumber &&
         !!worktree.linked?.pr &&
+        worktree.linked.pr.state !== "closed" &&
+        worktree.linked.pr.state !== "declined" &&
         !hasChanges &&
         worktree.worktreeChanges !== null;
       let lifecycleStage: "in-review" | "merged" | "ready-for-cleanup" | null = null;
