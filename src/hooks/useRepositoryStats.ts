@@ -104,6 +104,11 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   // closures (push subscribers). Used to skip stale stat pushes whose
   // `fetchedAt` is older than what we've already applied.
   const lastUpdatedRef = useRef<number | null>(null);
+  // Adaptive visible-poll cadence (ms) suggested by the main-process `/events`
+  // activity probe (issue #9741): ~60s while changes are landing, growing
+  // toward ~5min on an idle repo. Read synchronously by `calculateNextInterval`
+  // when the document is visible; `null` falls back to the fixed active poll.
+  const nextPollIntervalRef = useRef<number | null>(null);
 
   // Tracks whether any result (success, error, or stale) has already been
   // applied to state. Set to true by applyStatsResult on first write, reset
@@ -188,6 +193,13 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       lastUpdatedRef.current = nextLastUpdated;
       setLastUpdated(nextLastUpdated);
 
+      // Carry the probe-derived cadence forward only on successful reads — a
+      // stale/errored result has no fresh cadence to offer, so the existing
+      // value (or the fixed fallback) keeps driving the schedule.
+      if (!shouldPreserve && repoStats.nextPollIntervalMs != null) {
+        nextPollIntervalRef.current = repoStats.nextPollIntervalMs;
+      }
+
       const nextResetAt = repoStats.rateLimitResetAt ?? null;
       const nextKind = repoStats.rateLimitKind ?? null;
       rateLimitResetAtRef.current = nextResetAt;
@@ -269,7 +281,19 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         return resetAt - Date.now() + RATE_LIMIT_RESUME_BUFFER_MS;
       }
       if (lastErrorRef.current) return ERROR_BACKOFF_INTERVAL;
-      if (isVisible) return ACTIVE_POLL_INTERVAL;
+      if (isVisible) {
+        // Honor the main-process probe's adaptive cadence (issue #9741): poll
+        // ~every minute while changes are landing, backing off toward the idle
+        // ceiling on a quiet repo. Clamp to [ACTIVE_POLL_INTERVAL,
+        // IDLE_POLL_INTERVAL] so a malformed hint can't poll faster than 30s or
+        // stall longer than the idle cadence. Falls back to the fixed active
+        // interval until the first successful poll reports a cadence.
+        const adaptive = nextPollIntervalRef.current;
+        if (adaptive != null && Number.isFinite(adaptive) && adaptive > 0) {
+          return Math.min(Math.max(adaptive, ACTIVE_POLL_INTERVAL), IDLE_POLL_INTERVAL);
+        }
+        return ACTIVE_POLL_INTERVAL;
+      }
       const multiplier = useGitHubRateLimitStore.getState().throttleMultiplier ?? 1;
       return IDLE_POLL_INTERVAL * multiplier;
     },
@@ -283,6 +307,9 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       setIsStale(false);
       lastUpdatedRef.current = null;
       setLastUpdated(null);
+      // Drop the previous project's probe cadence so the new project starts at
+      // the fixed active interval until its first poll reports one (issue #9741).
+      nextPollIntervalRef.current = null;
       rateLimitResetAtRef.current = null;
       setRateLimitResetAt(null);
       setRateLimitKind(null);

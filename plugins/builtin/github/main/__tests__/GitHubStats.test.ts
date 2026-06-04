@@ -527,6 +527,67 @@ describe("getRepoStatsAndPage — REST events activity-probe gate (issues #8757,
     });
   });
 
+  describe("next-poll interval surface (issue #9741)", () => {
+    it("returns the floor cadence on a fresh fetch with changes landing", async () => {
+      mockClient.mockResolvedValue(statsResponse(5, 3));
+      mockFetch.mockResolvedValue(eventsResponse(200, { etag: '"e1"' }));
+
+      const result = await getRepoStatsAndPage("/test", false);
+
+      // No consecutive no-change polls yet → cadence pinned to the 60s floor.
+      expect(result.nextPollIntervalMs).toBe(60_000);
+    });
+
+    it("grows the cadence toward the 5-minute ceiling as no-change probes accrue", async () => {
+      mockClient.mockResolvedValue(statsResponse(5, 3));
+      mockFetch
+        .mockResolvedValueOnce(eventsResponse(200, { etag: '"e1"' }))
+        .mockResolvedValue(eventsResponse(304));
+
+      await getRepoStatsAndPage("/test", false); // seed (200)
+
+      const intervals: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        expireMemoryCaches();
+        expireBackoffWindow();
+        const r = await getRepoStatsAndPage("/test", false); // 304 short-circuit
+        expect(r.source).toBe("network");
+        intervals.push(r.nextPollIntervalMs ?? 0);
+      }
+
+      // Monotonic non-decreasing growth, floored at 60s and capped at 5× = 5min.
+      expect(intervals[0]).toBe(60_000); // noChange 1 (< engage threshold)
+      expect(intervals[intervals.length - 1]).toBe(300_000); // reached the ceiling
+      for (let i = 1; i < intervals.length; i++) {
+        expect(intervals[i]).toBeGreaterThanOrEqual(intervals[i - 1]);
+        expect(intervals[i]).toBeLessThanOrEqual(300_000);
+      }
+    });
+
+    it("snaps the cadence back to the floor once a change resets the backoff", async () => {
+      mockClient.mockResolvedValue(statsResponse(5, 3));
+      mockFetch
+        .mockResolvedValueOnce(eventsResponse(200, { etag: '"e1"' }))
+        .mockResolvedValueOnce(eventsResponse(304))
+        .mockResolvedValueOnce(eventsResponse(304))
+        .mockResolvedValueOnce(eventsResponse(304))
+        .mockResolvedValue(eventsResponse(200, { etag: '"e2"' }));
+
+      await getRepoStatsAndPage("/test", false); // seed
+      for (let i = 0; i < 3; i++) {
+        expireMemoryCaches();
+        expireBackoffWindow();
+        await getRepoStatsAndPage("/test", false); // 304s grow the cadence
+      }
+
+      expireMemoryCaches();
+      expireBackoffWindow();
+      const changed = await getRepoStatsAndPage("/test", false); // 200 resets cadence
+
+      expect(changed.nextPollIntervalMs).toBe(60_000);
+    });
+  });
+
   it("returns unknown and still runs the full query when the core bucket is blocked", async () => {
     mockClient.mockResolvedValue(statsResponse(5, 3));
     mockFetch.mockResolvedValue(eventsResponse(200, { etag: '"e1"' }));

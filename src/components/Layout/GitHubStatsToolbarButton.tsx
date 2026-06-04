@@ -42,6 +42,7 @@ import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore"
 import type { Project } from "@shared/types";
 import type { GitHubRateLimitDetails, RepositoryStats } from "@shared/types";
 import { freshnessSuffix } from "./FreshnessUtils";
+import { resolveGitHubDisplayCount } from "./githubStatsCountDisplay";
 import {
   formatRateLimitCountdown,
   msUntilNextLabelChange,
@@ -192,27 +193,49 @@ export const GitHubStatsToolbarButton = memo(
     const [prListCount, setPrListCount] = useState<number | null>(null);
     const [prListHasMore, setPrListHasMore] = useState(false);
 
+    // Epoch-ms timestamp of the most recent `onCountUpdate` for each kind, used
+    // to arbitrate recency against the stats poll's `lastUpdated` (issue #9741).
+    // A ref, not state — the timestamp only feeds the display derivation below,
+    // which already re-renders whenever the count state or `lastUpdated` change,
+    // so it needs no re-render of its own. Cleared on project switch alongside
+    // the count state so the previous project's timestamp can't suppress the
+    // new project's first list load.
+    const issueListTimestampRef = useRef<number | null>(null);
+    const prListTimestampRef = useRef<number | null>(null);
+
     const handleIssueListCountUpdate = useCallback((count: number, hasMore: boolean) => {
+      issueListTimestampRef.current = Date.now();
       setIssueListCount(count);
       setIssueListHasMore(hasMore);
     }, []);
     const handlePrListCountUpdate = useCallback((count: number, hasMore: boolean) => {
+      prListTimestampRef.current = Date.now();
       setPrListCount(count);
       setPrListHasMore(hasMore);
     }, []);
 
-    // Badge display value: the list-loaded count (suffixed with `+` when more
-    // pages exist, e.g. `20+`) once the dropdown has loaded, otherwise the
-    // stats `totalCount`. Stays separate from the numeric `issueCount` /
-    // `prCount` so the digit-pulse delta detection keeps comparing raw totals.
-    const issueDisplayCount: number | string | null =
-      issueListCount !== null
-        ? issueListHasMore
-          ? `${issueListCount}+`
-          : issueListCount
-        : issueCount;
-    const prDisplayCount: number | string | null =
-      prListCount !== null ? (prListHasMore ? `${prListCount}+` : prListCount) : prCount;
+    // Badge display value: whichever of the list-loaded count (suffixed with
+    // `+` when approximate, e.g. `20+`) and the stats `totalCount` was updated
+    // most recently (issue #9741). Before #9741 the list count won
+    // unconditionally once set, freezing the badge until the dropdown reopened
+    // even when a fresher poll had landed. Stays separate from the numeric
+    // `issueCount` / `prCount` so the digit-pulse delta detection keeps
+    // comparing raw totals. Reads the timestamp refs during render (a ref read
+    // in render is fine — they're only written from event callbacks).
+    const issueDisplayCount: number | string | null = resolveGitHubDisplayCount(
+      issueCount,
+      lastUpdated,
+      issueListCount,
+      issueListHasMore,
+      issueListTimestampRef.current
+    );
+    const prDisplayCount: number | string | null = resolveGitHubDisplayCount(
+      prCount,
+      lastUpdated,
+      prListCount,
+      prListHasMore,
+      prListTimestampRef.current
+    );
 
     // Eagerly resolve the dropdown body components so the click path renders
     // them concretely without going through Suspense. The toolbar is a
@@ -584,11 +607,16 @@ export const GitHubStatsToolbarButton = memo(
         setPrsPulseAt(null);
         // Clear the list-loaded counts so the badge falls back to the new
         // project's stats count (or "—") instead of showing the previous
-        // project's loaded-page count until its dropdown is opened.
+        // project's loaded-page count until its dropdown is opened. Also clear
+        // the recency timestamps (issue #9741) — a stale timestamp from project
+        // A would otherwise out-rank project B's first stats poll and suppress
+        // its fresh count.
         setIssueListCount(null);
         setIssueListHasMore(false);
         setPrListCount(null);
         setPrListHasMore(false);
+        issueListTimestampRef.current = null;
+        prListTimestampRef.current = null;
         return;
       }
       if (prevLastUpdatedRef.current != null && lastUpdated > prevLastUpdatedRef.current) {

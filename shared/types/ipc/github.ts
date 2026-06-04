@@ -21,6 +21,14 @@ export interface RepositoryStats {
   rateLimitResetAt?: number;
   /** Kind of active GitHub rate limit (primary quota vs secondary abuse) */
   rateLimitKind?: GitHubRateLimitKind;
+  /**
+   * Suggested delay (ms) until the next background stats poll, derived from the
+   * main-process `/events` activity probe's adaptive backoff (issue #9741):
+   * ~60s while changes are landing, growing toward ~5min on an idle repo. The
+   * renderer's visible-poll scheduler honors this so the badge stays fresh
+   * without polling excessively. Absent on error/disk-fallback results.
+   */
+  nextPollIntervalMs?: number;
 }
 
 /** Push payload describing the current GitHub rate-limit state */

@@ -249,16 +249,34 @@ describe("GitHubStatsToolbarButton list-count badge wiring", () => {
     expect(source).toMatch(/\[prListHasMore,\s*setPrListHasMore\]\s*=\s*useState\(false\)/);
   });
 
-  it("derives a truncated display count only when more pages exist", () => {
-    // issueDisplayCount: list count wins once loaded; suffixed with "+" when
-    // hasMore, otherwise the exact count; falls back to the stats total before
-    // the dropdown loads.
+  it("derives the display count via the recency resolver (issue #9741)", () => {
+    // The badge no longer prefers the list count unconditionally — it defers to
+    // `resolveGitHubDisplayCount`, which arbitrates the list count against the
+    // stats poll's `lastUpdated` so a fresher poll wins.
+    expect(source).toContain('from "./githubStatsCountDisplay"');
     expect(source).toMatch(
-      /issueDisplayCount[\s\S]{0,160}?issueListCount\s*!==\s*null[\s\S]{0,120}?issueListHasMore[\s\S]{0,60}?`\$\{issueListCount\}\+`[\s\S]{0,80}?:\s*issueCount/
+      /issueDisplayCount[\s\S]{0,80}?=\s*resolveGitHubDisplayCount\(\s*issueCount,\s*lastUpdated,\s*issueListCount,\s*issueListHasMore,\s*issueListTimestampRef\.current/
     );
     expect(source).toMatch(
-      /prDisplayCount[\s\S]{0,160}?prListCount\s*!==\s*null[\s\S]{0,120}?prListHasMore[\s\S]{0,60}?`\$\{prListCount\}\+`[\s\S]{0,80}?:\s*prCount/
+      /prDisplayCount[\s\S]{0,80}?=\s*resolveGitHubDisplayCount\(\s*prCount,\s*lastUpdated,\s*prListCount,\s*prListHasMore,\s*prListTimestampRef\.current/
     );
+  });
+
+  it("stamps a recency timestamp when each list count updates (issue #9741)", () => {
+    expect(source).toMatch(/issueListTimestampRef\s*=\s*useRef<number\s*\|\s*null>\(null\)/);
+    expect(source).toMatch(/prListTimestampRef\s*=\s*useRef<number\s*\|\s*null>\(null\)/);
+    // Each handler must record Date.now() so the resolver can compare it to the
+    // stats poll's lastUpdated.
+    const issueHandler = source.slice(
+      source.indexOf("handleIssueListCountUpdate = useCallback"),
+      source.indexOf("handlePrListCountUpdate = useCallback")
+    );
+    expect(issueHandler).toContain("issueListTimestampRef.current = Date.now()");
+    const prHandler = source.slice(
+      source.indexOf("handlePrListCountUpdate = useCallback"),
+      source.indexOf("handlePrListCountUpdate = useCallback") + 300
+    );
+    expect(prHandler).toContain("prListTimestampRef.current = Date.now()");
   });
 
   it("passes displayCount to the issue and PR pills", () => {
@@ -293,5 +311,9 @@ describe("GitHubStatsToolbarButton list-count badge wiring", () => {
     expect(slice).toContain("setIssueListHasMore(false)");
     expect(slice).toContain("setPrListCount(null)");
     expect(slice).toContain("setPrListHasMore(false)");
+    // Recency timestamps must clear too (issue #9741) or project A's timestamp
+    // would suppress project B's first stats poll.
+    expect(slice).toContain("issueListTimestampRef.current = null");
+    expect(slice).toContain("prListTimestampRef.current = null");
   });
 });
