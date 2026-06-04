@@ -74,10 +74,7 @@ export function QuickStateFilterBar({
                   option.value === "all" ? "flex-[2]" : "flex-1",
                   idx > 0 && "border-l border-border-default",
                   isActive
-                    ? // Themes may lift the active segment toward white (light
-                      // themes set --worktree-quick-state-active-bg); the
-                      // overlay-subtle fallback is the original darkening wash so
-                      // themes without the override render unchanged.
+                    ? // Fallback keeps themes without the var byte-identical.
                       "bg-[var(--worktree-quick-state-active-bg,var(--color-overlay-subtle))] shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
                     : "hover:bg-tint/[0.04]"
                 )}

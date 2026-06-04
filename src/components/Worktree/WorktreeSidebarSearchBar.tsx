@@ -171,9 +171,7 @@ export function WorktreeSidebarSearchBar({
         role="search"
         className={cn(
           "flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--radius-md)]",
-          // Themes may raise the field off the filter rail (light themes set
-          // --worktree-search-input-bg); the canvas fallback is the original
-          // value so themes without the override render unchanged.
+          // Fallback keeps themes without --worktree-search-input-bg byte-identical.
           "bg-[var(--worktree-search-input-bg,var(--color-daintree-bg))] border border-daintree-border",
           "focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
         )}
