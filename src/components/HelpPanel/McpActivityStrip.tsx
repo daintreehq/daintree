@@ -7,7 +7,7 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { logWarn } from "@/utils/logger";
 import type { McpAuditRecord } from "@shared/types";
 import type { McpToolActivityState } from "@/controllers/HelpSessionController";
-import { RecentCallsPopover, formatCallDuration } from "./RecentCallsPopover";
+import { RecentCallsPopover } from "./RecentCallsPopover";
 
 // Deliberately small — the popover is a quick glance at what the assistant
 // just did, not a full audit surface.
@@ -171,10 +171,10 @@ export function McpActivityStrip({ sessionId, activity }: McpActivityStripProps)
 }
 
 /**
- * The live/settled row content. Deliberately compact: tool id (with a
- * same-turn coalescing count) and, once settled, the duration. Raw args and
- * an elapsed ticker would just churn an 11px footer — both live in the
- * popover and the hover title instead.
+ * The live/settled row content. Deliberately compact: glyph + tool id (with
+ * a same-turn coalescing count). No duration or elapsed ticker — calls are
+ * almost always sub-100ms, so the metric is noise; args and per-call recency
+ * live in the popover and the hover title instead.
  */
 function LiveContent({
   activity,
@@ -190,9 +190,6 @@ function LiveContent({
       <ActivityGlyph activity={activity} inFlight={inFlight} />
       <span className="font-medium truncate">{label}</span>
       {activity.danger && inFlight && <span className="shrink-0">awaiting confirmation</span>}
-      {activity.status === "settled" && activity.durationMs !== undefined && (
-        <span className="shrink-0 tabular-nums">{formatCallDuration(activity.durationMs)}</span>
-      )}
     </span>
   );
 }

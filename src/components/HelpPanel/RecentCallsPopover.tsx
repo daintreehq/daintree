@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatTimeAgo } from "@/utils/timeAgo";
 import type { McpAuditRecord, McpAuditResult } from "@shared/types";
 
 // Local, deliberately-minimal mirror of the Settings audit viewer's styling.
@@ -25,15 +26,6 @@ const RESULT_LABEL: Record<McpAuditResult, string> = {
   collision: "Key collision",
   rate_limited: "Rate limited",
 };
-
-export function formatCallDuration(durationMs: number): string {
-  if (durationMs <= 0) return "0ms";
-  if (durationMs < 100) return "<100ms";
-  // Round before the threshold check so 999.5 reads as "1.0s", not "1000ms".
-  const ms = Math.round(durationMs);
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
 
 export interface RecentCallGroup {
   /** `turnId` for associated calls, or `null` for the unassociated bucket. */
@@ -143,8 +135,10 @@ function RecentCallRow({ record }: { record: McpAuditRecord }) {
           title={RESULT_LABEL[record.result]}
         />
         <span className="min-w-0 font-mono text-daintree-text/80 truncate">{record.toolId}</span>
+        {/* Recency, not duration — calls are almost always sub-100ms, so
+            "when did this run" is the metric worth a column. */}
         <span className="text-daintree-text/40 whitespace-nowrap tabular-nums">
-          {formatCallDuration(record.durationMs)}
+          {formatTimeAgo(record.timestamp)}
         </span>
       </button>
       {expanded && (
@@ -159,9 +153,6 @@ function RecentCallRow({ record }: { record: McpAuditRecord }) {
             >
               {RESULT_LABEL[record.result]}
               {record.errorCode ? ` · ${record.errorCode}` : ""}
-            </span>
-            <span className="ml-auto tabular-nums">
-              {new Date(record.timestamp).toLocaleTimeString()}
             </span>
           </div>
           {hasArgs && (

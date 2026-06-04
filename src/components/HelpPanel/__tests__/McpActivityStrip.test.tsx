@@ -35,7 +35,7 @@ vi.mock("@/components/ui/popover", async () => {
 });
 
 import { McpActivityStrip } from "../McpActivityStrip";
-import { formatCallDuration, groupCallsByTurn } from "../RecentCallsPopover";
+import { groupCallsByTurn } from "../RecentCallsPopover";
 import type { McpToolActivityState } from "@/controllers/HelpSessionController";
 
 function makeRecord(overrides: Partial<McpAuditRecord> = {}): McpAuditRecord {
@@ -85,22 +85,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
-});
-
-describe("formatCallDuration", () => {
-  it("renders boundary durations", () => {
-    expect(formatCallDuration(0)).toBe("0ms");
-    expect(formatCallDuration(-5)).toBe("0ms");
-    expect(formatCallDuration(50)).toBe("<100ms");
-    expect(formatCallDuration(99)).toBe("<100ms");
-    expect(formatCallDuration(100)).toBe("100ms");
-    expect(formatCallDuration(999)).toBe("999ms");
-    expect(formatCallDuration(1000)).toBe("1.0s");
-    expect(formatCallDuration(1500)).toBe("1.5s");
-    // Rounding happens before the threshold so 999.5 promotes to seconds.
-    expect(formatCallDuration(999.5)).toBe("1.0s");
-    expect(formatCallDuration(1000.4)).toBe("1.0s");
-  });
 });
 
 describe("groupCallsByTurn", () => {
@@ -240,6 +224,23 @@ describe("McpActivityStrip", () => {
     expect(screen.queryByText("transport-only")).toBeNull();
   });
 
+  it("shows recency on the row and keeps the precise duration in the expanded detail", async () => {
+    getAuditRecords.mockResolvedValue([
+      makeRecord({
+        id: "1",
+        toolId: "fresh.call",
+        timestamp: Date.now() - 5_000,
+        durationMs: 150,
+      }),
+    ]);
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    await screen.findByRole("button", { name: /fresh\.call/ });
+    // Recency, not duration — the duration is deliberately not displayed.
+    expect(screen.getByText("just now")).toBeTruthy();
+    expect(screen.queryByText("150ms")).toBeNull();
+  });
+
   it("expands a call row to show its arguments and result output", async () => {
     getAuditRecords.mockResolvedValue([
       makeRecord({
@@ -311,7 +312,7 @@ describe("McpActivityStrip live activity", () => {
     expect(screen.getByText("2 calls · terminal.getStatus")).toBeTruthy();
   });
 
-  it("shows a settled call immediately with its duration, then decays to rest", () => {
+  it("shows a settled call immediately, then decays to rest", () => {
     render(
       <McpActivityStrip
         sessionId="session-a"
@@ -326,7 +327,6 @@ describe("McpActivityStrip live activity", () => {
     );
     // Settled rows skip the gate — a sub-400ms call renders its result directly.
     expect(screen.getByText("terminal.getStatus")).toBeTruthy();
-    expect(screen.getByText("<100ms")).toBeTruthy();
     act(() => {
       vi.advanceTimersByTime(5000);
     });
