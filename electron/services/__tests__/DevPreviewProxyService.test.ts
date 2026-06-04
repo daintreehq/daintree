@@ -27,7 +27,9 @@ function listenIpv6Only(server: http.Server): Promise<number> {
 // passing on a dual-stack upstream.
 function expectIpv4Refused(port: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: "127.0.0.1", port, path: "/", agent: false }, () => {
+    const req = http.request({ host: "127.0.0.1", port, path: "/", agent: false }, (res) => {
+      res.destroy();
+      req.destroy();
       reject(new Error(`expected ECONNREFUSED on 127.0.0.1:${port} but the request connected`));
     });
     req.on("error", (err: NodeJS.ErrnoException) => {
