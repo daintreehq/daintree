@@ -20,6 +20,7 @@ export const CHANNELS = {
   WORKTREE_HOST_DISCONNECTED: "worktree:host-disconnected",
   WORKTREE_RESTART_SERVICE: "worktree:restart-service",
   WORKTREE_RETRY_PROJECT_LOAD: "worktree:retry-project-load",
+  WORKTREE_RETRY_AUTH_FETCH: "worktree:retry-auth-fetch",
   PROJECT_WORKTREE_LOAD_STATUS: "project:worktree-load-status",
 
   TERMINAL_SPAWN: "terminal:spawn",

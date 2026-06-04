@@ -304,6 +304,17 @@ export class WorkspaceClient extends EventEmitter {
     }
   }
 
+  /**
+   * User-triggered retry of auth-suspended fetches across every workspace-host.
+   * Clears the per-repo auth suspension and re-fetches — the only safe way out
+   * of indefinite auth suspension (see WorkspaceService.retryAuthFetch).
+   */
+  retryAuthFetch(): void {
+    for (const entry of this.pool.entries.values()) {
+      entry.host.send({ type: "retry-auth-fetch" });
+    }
+  }
+
   // ── Log overrides ──
 
   setLogLevelOverrides(overrides: Record<string, string>): void {
