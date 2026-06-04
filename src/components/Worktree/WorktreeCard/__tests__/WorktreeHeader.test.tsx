@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { WorktreeHeader, type WorktreeHeaderProps } from "../WorktreeHeader";
@@ -1160,6 +1160,8 @@ describe("WorktreeHeader collapsed alarm pill", () => {
   });
 });
 
+const mockRetryAuthFetch = vi.fn();
+
 describe("WorktreeHeader token-missing badge behavior", () => {
   beforeEach(() => {
     mockMissingToken = false;
@@ -1282,6 +1284,13 @@ describe("WorktreeHeader upstream sync indicator", () => {
   beforeEach(() => {
     mockMissingToken = false;
     vi.clearAllMocks();
+    // The auth-failed sync badge calls window.electron.worktree.retryAuthFetch();
+    // stub just that path so the click handler doesn't throw on the bare global.
+    vi.stubGlobal("electron", { worktree: { retryAuthFetch: mockRetryAuthFetch } });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("shows ahead/behind counts and renders the indicator", () => {
@@ -1399,6 +1408,9 @@ describe("WorktreeHeader upstream sync indicator", () => {
     });
     const indicator = screen.getByTestId("upstream-sync-indicator");
     fireEvent.click(indicator);
+    // Must retry the suspended fetch (the actual bug fix), not just open settings —
+    // without this the stripe stays stuck forever (#9736).
+    expect(mockRetryAuthFetch).toHaveBeenCalledTimes(1);
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "app.settings.openTab",
       { tab: "code-forge", subtab: "github", sectionId: "github-token" },

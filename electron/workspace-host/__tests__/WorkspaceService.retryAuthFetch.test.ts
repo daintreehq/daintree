@@ -205,6 +205,23 @@ describe("WorkspaceService.retryAuthFetch", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("clears the suspension BEFORE triggering fetches (else the fetch short-circuits on auth-suspended)", () => {
+    const monitor = createMonitor("/test/wt-order");
+    monitor.start();
+
+    const order: string[] = [];
+    vi.spyOn(service["fetchCoordinator"], "clearAuthFailures").mockImplementation(() => {
+      order.push("clear");
+    });
+    vi.spyOn(monitor, "triggerFetchNow").mockImplementation(async () => {
+      order.push("fetch");
+    });
+
+    service.retryAuthFetch();
+
+    expect(order).toEqual(["clear", "fetch"]);
+  });
+
   it("does not force-fetch stopped monitors while still fetching running ones", () => {
     const running = createMonitor("/test/wt-running");
     const stopped = createMonitor("/test/wt-stopped");
