@@ -163,12 +163,13 @@ export const theme: BuiltInThemeSource = {
     "settings-nav-hover-bg": "rgba(22,52,71,0.05)",
     "settings-sidebar-bg": "rgba(243,249,255,0.60)",
     "sidebar-action-hover-bg": "rgba(22,52,71,0.05)",
-    // Idle cards sit just below white; hover brightens; selected reaches pure
-    // white + the accent rail. idle < hover < selected is audit-enforced.
-    "sidebar-card-bg": "#F7FBFF",
+    // Worktree cards are warm paper (sand against the sky field — H95 vs the
+    // field's H248); hover brightens toward white; selected is pure white +
+    // the accent rail. idle < hover < selected is audit-enforced.
+    "sidebar-card-bg": "#FCFBF7",
     "sidebar-card-shadow": "0 0 0 1px rgba(28,38,50,0.08), 0 1px 2px rgba(23,33,48,0.05)",
     "sidebar-active-bg": "#FFFFFF",
-    "sidebar-hover-bg": "#FBFDFF",
+    "sidebar-hover-bg": "#FEFDFB",
     "toolbar-agent-hover-bg": "rgba(28,32,40,0.06)",
     "toolbar-control-hover-bg": "rgba(28,32,40,0.06)",
     // Accent restraint: hover affordance is the bg, not a green foreground.
