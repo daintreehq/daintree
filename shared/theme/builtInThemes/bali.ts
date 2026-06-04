@@ -148,12 +148,19 @@ export const theme: BuiltInThemeSource = {
     "pr-draft": "#5E6A77",
     "pr-merged": "#6B3BC0",
     "pr-open": "#137A30",
-    // Overlay ladder: NOT overridden (#9710). The old overrides ran every tier
-    // 2-3x over the engine's light defaults (hover 0.19 vs 0.065, active 0.28
-    // vs 0.11) — alphas raised to survive the old saturated mid-olive ramp.
-    // The engine's light ladder is already Weber-tuned (RC-2) and routes
-    // through overlayBase (Bali's green-black #142819 tint), so hover/active/
-    // selected keep the green identity without re-muddying the lifted ramp.
+    // Overlay ladder, round 2: the INTERACTION tiers (hover/active/selected/
+    // elevated/emphasis/strong) stay on the engine's Weber-tuned light defaults
+    // (the old 0.19/0.28 overrides were tuned for the muddy ramp and re-muddied
+    // the lift). But the LOW tiers get per-theme floors — the engine's 2%/3%/5%
+    // subtle/soft/medium are invisible on the near-white planes (the filter-bar
+    // active segment rides overlay-subtle, kbd chips and palette selected rows
+    // ride overlay-soft; all rendered as ghosts). Same finding and ladder shape
+    // as the Hokkaido/Serengeti redesigns; kept monotonic under the engine
+    // strong (0.08) and hover (0.065... medium 0.075 sits between soft and
+    // strong by design, matching the sibling ladders).
+    "overlay-subtle": "rgba(20,40,25,0.045)",
+    "overlay-soft": "rgba(20,40,25,0.06)",
+    "overlay-medium": "rgba(20,40,25,0.075)",
     // E1 elevate-to-select / overlay-raised: NOT overridden — the engine light
     // default (color-mix elevated 92% + text-primary) applies, same as Bondi.
     // B1 filter-selected: NOT overridden (matches Bondi). The old elevate-style
