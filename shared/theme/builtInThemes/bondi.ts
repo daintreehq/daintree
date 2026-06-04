@@ -48,7 +48,8 @@ export const theme: BuiltInThemeSource = {
     terminal: {
       background: "#1E252E",
       foreground: "#C8D0D9",
-      muted: "#5C6670",
+      // 3.38:1 on the terminal background (the old #5C6670 sat at 2.64:1).
+      muted: "#6B7783",
       cursor: "#F5B814",
       selection: "#2A3A4A",
       red: "#E05C5C",
@@ -111,6 +112,9 @@ export const theme: BuiltInThemeSource = {
     // Two-layer contact+spread; the engine "light" single penumbra has no
     // contact edge on a near-white field.
     "shadow-ambient": "0 1px 2px rgba(23,33,48,0.10), 0 6px 16px rgba(23,33,48,0.10)",
+    // Dialogs sit a full z-tier above menus/popovers (the floating fallback
+    // would give a centered modal the same shadow as a context menu).
+    "shadow-dialog": "0 2px 6px rgba(23,33,48,0.10), 0 24px 60px rgba(23,33,48,0.18)",
     "shadow-floating": "0 1px 3px rgba(23,33,48,0.12), 0 12px 32px rgba(23,33,48,0.14)",
     // In-card chips: a lifted sky inset one quiet step below the white card,
     // not a recessed slab.
@@ -174,7 +178,7 @@ export const theme: BuiltInThemeSource = {
     "toolbar-pill-radius": "0.5rem",
     // One lifeguard-gold whisper on the project pill; everything else quiet ink.
     "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(245,184,20,0.04), rgba(28,32,40,0.02)), #F2F4F6",
+      "linear-gradient(180deg, rgba(245,184,20,0.07), rgba(28,32,40,0.02)), #F2F4F6",
     "toolbar-project-border": "rgba(203,212,221,0.7)",
     "toolbar-project-chip-bg": "rgba(28,32,40,0.04)",
     "toolbar-project-chip-border": "rgba(203,212,221,0.7)",
