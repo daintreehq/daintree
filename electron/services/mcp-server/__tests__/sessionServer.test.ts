@@ -1181,6 +1181,41 @@ describe("CallTool live activity notifications (#9759)", () => {
     expect(started).toHaveBeenCalledWith(expect.objectContaining({ danger: true }));
   });
 
+  it("emits started (danger:false) + settled for the waitUntilIdle short-circuit", async () => {
+    const started = vi.fn();
+    const settled = vi.fn();
+    const handleWaitUntilIdle = vi.fn().mockResolvedValue({
+      idleReason: "idle" as const,
+      durationMs: 10,
+      finalState: "idle",
+    });
+    const deps = fakeDeps({
+      // waitUntilIdle is in ACTION_TIER_ADDONS — use an action-tier session so
+      // the call clears the tier floor and reaches the dispatch path.
+      sessionStore: fakeSessionStore("action"),
+      notifyToolCallStarted: started,
+      notifyToolCallSettled: settled,
+      handleWaitUntilIdle,
+    });
+    const server = createSessionServer("session-W", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, {
+      name: "terminal.waitUntilIdle",
+      arguments: { terminalId: "t1", timeoutMs: 10 },
+    });
+
+    expect(started).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "terminal.waitUntilIdle", danger: false })
+    );
+    expect(settled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolId: "terminal.waitUntilIdle",
+        outcome: expect.objectContaining({ kind: "result" }),
+      })
+    );
+  });
+
   it("survives a notifyToolCallStarted throw without failing the dispatch", async () => {
     const started = vi.fn(() => {
       throw new Error("boom");

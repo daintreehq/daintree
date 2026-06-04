@@ -247,10 +247,14 @@ describe("HelpSessionController — lifecycle", () => {
     const ctrl = new HelpSessionController();
     ctrl.start();
     expect(tierListeners).toHaveLength(1);
+    expect(toolStartedListeners).toHaveLength(1);
+    expect(toolSettledListeners).toHaveLength(1);
     expect(systemSleepListeners.suspend).toHaveLength(1);
     expect(systemSleepListeners.wake).toHaveLength(1);
     ctrl.stop();
     expect(tierListeners).toHaveLength(0);
+    expect(toolStartedListeners).toHaveLength(0);
+    expect(toolSettledListeners).toHaveLength(0);
     expect(systemSleepListeners.suspend).toHaveLength(0);
     expect(systemSleepListeners.wake).toHaveLength(0);
   });
@@ -1094,6 +1098,22 @@ describe("HelpSessionController — MCP tool activity strip (#9759)", () => {
 
   it("a settle with no current row is ignored", () => {
     const ctrl = startCtrl();
+    fireSettled({
+      sessionId: "s1",
+      toolId: "x",
+      durationMs: 5,
+      result: "success",
+      severity: "info",
+    });
+    expect(ctrl.getSnapshot().mcpActivity).toBeNull();
+    ctrl.stop();
+  });
+
+  it("a settle arriving after clearMcpActivity() does not resurrect a row", () => {
+    const ctrl = startCtrl();
+    fireStarted({ sessionId: "s1", toolId: "x", argsSummary: "{}", startedAt: 1, danger: false });
+    ctrl.clearMcpActivity();
+    expect(ctrl.getSnapshot().mcpActivity).toBeNull();
     fireSettled({
       sessionId: "s1",
       toolId: "x",

@@ -447,9 +447,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     let toolCallStartedEmitted = false;
     const emitToolCallStarted = (danger: boolean): void => {
       if (!notifyToolCallStarted) return;
-      toolCallStartedEmitted = true;
       try {
         notifyToolCallStarted({ sessionId, toolId: actionId, args, startedAt, danger });
+        toolCallStartedEmitted = true;
       } catch (err) {
         console.error("[MCP] Failed to notify tool-call-started:", err);
       }
@@ -608,13 +608,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         });
       } finally {
         const settledOutcome = outcome ?? { kind: "throw" as const, error: new Error("unknown") };
+        // Compute the duration once so the audit record and the live strip
+        // report the same wall-clock, not two reads a few µs apart (#9759).
+        const durationMs = Date.now() - startedAt;
         try {
           appendAuditRecord({
             toolId: actionId,
             sessionId,
             tier,
             args,
-            durationMs: Date.now() - startedAt,
+            durationMs,
             outcome: settledOutcome,
             confirmationDecision,
           });
@@ -622,14 +625,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           console.error("[MCP] Failed to append audit record:", err);
         }
         // Settle the live activity strip for the matching started push. Guarded
-        // so a dispatch that never announced (impossible today, but cheap
-        // insurance) can't emit a dangling settle (#9759).
+        // so a dispatch that never announced (pre-dispatch rejection, or a
+        // started-notify that threw) can't emit a dangling settle (#9759).
         if (toolCallStartedEmitted && notifyToolCallSettled) {
           try {
             notifyToolCallSettled({
               sessionId,
               toolId: actionId,
-              durationMs: Date.now() - startedAt,
+              durationMs,
               outcome: settledOutcome,
             });
           } catch (err) {
