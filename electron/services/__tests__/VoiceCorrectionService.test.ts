@@ -127,8 +127,13 @@ describe("VoiceCorrectionService", () => {
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(init.body as string);
-    expect(body.instructions).toContain("Daintree");
-    expect(body.instructions).toContain("Worktree");
+    // System prompt rides in the first developer message of `input`, not the
+    // top-level `instructions` field — required for prompt caching (issue #9746).
+    expect(body.instructions).toBeUndefined();
+    expect(body.input[0].role).toBe("developer");
+    expect(body.input[0].content).toContain("Daintree");
+    expect(body.input[0].content).toContain("Worktree");
+    expect(body.input[1].role).toBe("user");
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
@@ -151,7 +156,7 @@ describe("VoiceCorrectionService", () => {
     );
 
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
-    const userMessage = body.input as string;
+    const userMessage = body.input[1].content as string;
     expect(userMessage).toContain("<confirmed_history>");
     expect(userMessage).toContain("<job>");
     expect(userMessage).toContain("reason=stop");
@@ -173,7 +178,7 @@ describe("VoiceCorrectionService", () => {
     expect(body.reasoning).toBeUndefined();
     expect(body.max_output_tokens).toBe(1024);
     expect(body.text.format.type).toBe("json_schema");
-    expect(body.prompt_cache_key).toContain("voice-correction-v5");
+    expect(body.prompt_cache_key).toContain("voice-correction-v6");
   });
 
   it("skips LLM call when all words are high confidence", async () => {
@@ -247,7 +252,7 @@ describe("VoiceCorrectionService", () => {
     );
 
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
-    const userMessage = body.input as string;
+    const userMessage = body.input[1].content as string;
     expect(userMessage).toContain("<uncertain>racked</uncertain>");
     expect(userMessage).not.toContain("<uncertain>native</uncertain>");
   });
@@ -265,7 +270,7 @@ describe("VoiceCorrectionService", () => {
     );
 
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
-    const userMessage = body.input as string;
+    const userMessage = body.input[1].content as string;
     expect(userMessage).toContain(
       "<uncertain>test</uncertain> foo <uncertain>test</uncertain> bar"
     );

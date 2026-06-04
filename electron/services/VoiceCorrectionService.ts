@@ -15,7 +15,7 @@ const P = "[VoiceCorrection]";
 const CORRECTION_TIMEOUT_MS = 7000;
 const MAX_OUTPUT_TOKENS = 1024;
 const FILE_LINK_MAX_OUTPUT_TOKENS = 256;
-const PROMPT_CACHE_PREFIX = "voice-correction-v5";
+const PROMPT_CACHE_PREFIX = "voice-correction-v6";
 const FILE_LINK_DETECTION_MODEL = "gpt-5-nano";
 const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
 const FILE_LINK_CACHE_PREFIX = "voice-file-link-v1";
@@ -377,8 +377,13 @@ export class VoiceCorrectionService {
       signal: this.buildFetchSignal(CORRECTION_TIMEOUT_MS),
       body: JSON.stringify({
         model,
-        instructions: systemPrompt,
-        input: userMessage,
+        // Pass the system prompt as the first developer message in the `input`
+        // array (not the top-level `instructions` field) so its stable prefix is
+        // eligible for OpenAI prompt caching. See issue #9746.
+        input: [
+          { role: "developer", content: systemPrompt },
+          { role: "user", content: userMessage },
+        ],
         prompt_cache_key: this.buildPromptCacheKey(settings),
         service_tier: "auto",
         text: {
