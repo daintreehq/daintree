@@ -34,6 +34,8 @@ import {
 import { createSessionServer, cleanupResourceSubscriptions } from "./sessionServer.js";
 import type { SessionStore } from "./sessionStore.js";
 import type { AuditService } from "./auditLog.js";
+import { classifyMcpDispatchResult } from "./auditLog.js";
+import { computeMcpAuditSeverity } from "../../../shared/types/ipc/mcpServer.js";
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
 import type { AbusePolicy } from "./abusePolicy.js";
 import {
@@ -1176,6 +1178,58 @@ export class HttpLifecycle {
         }
       };
 
+    const notifyToolCallStarted: import("./sessionServer.js").SessionServerDeps["notifyToolCallStarted"] =
+      (payload) => {
+        // Help-session bearers only — targeted at the pinned WebContents so the
+        // assistant panel that triggered the call gets the live activity event,
+        // even if a different project view is focused. External/api-key sessions
+        // have no panel to show the strip, so the map lookup no-ops for them.
+        const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
+        if (id === undefined) return;
+        const wc = webContentsModule.fromId(id);
+        if (!wc || wc.isDestroyed()) return;
+        // Redact args with the same pipeline the audit record uses so the strip
+        // never shows raw bearer tokens or absolute paths (#9759).
+        const turnId = this.deps.turnOutcomeService.getCurrentTurnIdForSession(payload.sessionId);
+        try {
+          wc.send(CHANNELS.MCP_TOOL_CALL_STARTED, {
+            sessionId: payload.sessionId,
+            toolId: payload.toolId,
+            argsSummary: summarizeMcpArgs(payload.args, (s) => scrubSecrets(sanitizePath(s))),
+            startedAt: payload.startedAt,
+            danger: payload.danger,
+            ...(turnId !== null ? { turnId } : {}),
+          });
+        } catch (err) {
+          console.error("[MCP] tool-call-started send failed:", err);
+        }
+      };
+
+    const notifyToolCallSettled: import("./sessionServer.js").SessionServerDeps["notifyToolCallSettled"] =
+      (payload) => {
+        const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
+        if (id === undefined) return;
+        const wc = webContentsModule.fromId(id);
+        if (!wc || wc.isDestroyed()) return;
+        // Derive result/errorCode/severity from the same classifier the audit
+        // writer uses, so the strip's glyph and red-tint match the audit log.
+        const { result, errorCode } = classifyMcpDispatchResult(payload.outcome);
+        const turnId = this.deps.turnOutcomeService.getCurrentTurnIdForSession(payload.sessionId);
+        try {
+          wc.send(CHANNELS.MCP_TOOL_CALL_SETTLED, {
+            sessionId: payload.sessionId,
+            toolId: payload.toolId,
+            durationMs: Math.max(0, Math.round(payload.durationMs)),
+            result,
+            ...(errorCode !== undefined ? { errorCode } : {}),
+            severity: computeMcpAuditSeverity(result, errorCode),
+            ...(turnId !== null ? { turnId } : {}),
+          });
+        } catch (err) {
+          console.error("[MCP] tool-call-settled send failed:", err);
+        }
+      };
+
     return {
       sessionStore: this.deps.sessionStore,
       requestManifest,
@@ -1201,6 +1255,8 @@ export class HttpLifecycle {
       clearDenialState: (sessionId) => {
         this.deps.abusePolicy.dropSession(sessionId);
       },
+      notifyToolCallStarted,
+      notifyToolCallSettled,
     };
   }
 

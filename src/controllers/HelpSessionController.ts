@@ -85,6 +85,38 @@ export interface LaunchErrorState {
   kind: LaunchErrorKind;
 }
 
+/**
+ * Live MCP tool-call activity for the Assistant panel's ambient activity strip
+ * (#9759). One row at a time: an in-flight call (tool id + args + elapsed) that
+ * settles to a dimmed glyph + duration. Bursts within the same turn coalesce to
+ * `callCount` ("N calls · latest tool"). `null` when no call has happened yet
+ * (the strip is absent). An errored settle persists until the next call starts.
+ */
+export interface McpToolActivityState {
+  /** "in-flight" while the call runs; "settled" once it resolves. */
+  status: "in-flight" | "settled";
+  /** The latest tool in the (possibly coalesced) burst. */
+  toolId: string;
+  /** Redacted single-line args summary for the latest call. */
+  argsSummary: string;
+  /** Epoch ms the latest call started — drives the elapsed timer. */
+  startedAt: number;
+  /** True when the latest in-flight call is a `danger: "confirm"` dispatch awaiting the user. */
+  danger: boolean;
+  /** Number of calls coalesced within the current turn (1 for a single call). */
+  callCount: number;
+  /** Turn the burst is coalesced under; absent for calls outside a turn boundary. */
+  turnId?: string;
+  /** Settled wall-clock duration in ms. Absent while in-flight. */
+  durationMs?: number;
+  /** Audit-aligned result class. Absent while in-flight. */
+  result?: import("@shared/types/ipc/mcpServer").McpAuditResult;
+  /** Audit-aligned severity. Absent while in-flight. */
+  severity?: import("@shared/types/ipc/mcpServer").McpAuditSeverity;
+  /** True when the settled outcome is an error/critical severity (red tint, persists). */
+  isError: boolean;
+}
+
 export interface HelpSessionSnapshot {
   phase: HelpSessionPhase;
   showResumeBanner: boolean;
@@ -99,6 +131,8 @@ export interface HelpSessionSnapshot {
    */
   isCheckingVersion: boolean;
   launchError: LaunchErrorState | null;
+  /** Live MCP tool-call activity for the ambient strip (#9759); null when idle. */
+  mcpActivity: McpToolActivityState | null;
 }
 
 export interface HelpProjectRef {
@@ -378,6 +412,7 @@ const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
   isApprovingTier: false,
   isCheckingVersion: false,
   launchError: null,
+  mcpActivity: null,
 });
 
 /**
@@ -475,6 +510,14 @@ export class HelpSessionController {
     });
     this._disposers.push(disposeTier);
 
+    const disposeToolStarted = window.electron.mcpServer.onToolCallStarted((payload) => {
+      this._onToolCallStarted(payload);
+    });
+    const disposeToolSettled = window.electron.mcpServer.onToolCallSettled((payload) => {
+      this._onToolCallSettled(payload);
+    });
+    this._disposers.push(disposeToolStarted, disposeToolSettled);
+
     const offSuspend = window.electron.systemSleep.onSuspend(() => {
       this._isSystemSuspended = true;
     });
@@ -565,6 +608,9 @@ export class HelpSessionController {
     revokeHelpSession(store.sessionId);
     this._hasAutoLaunched = false;
     store.clearTerminal();
+    // The bound session is gone — drop any lingering activity row so the strip
+    // doesn't show stale tool calls for a dead session (#9759).
+    this.clearMcpActivity();
   }
 
   /**
@@ -705,6 +751,8 @@ export class HelpSessionController {
         revokeHelpSession(previousSessionId);
         if (reservedId) this._revokePendingSession();
         useHelpPanelStore.getState().clearTerminal();
+        // Replacing the session — clear the prior session's activity row (#9759).
+        this.clearMcpActivity();
       }
       // Discarding the current conversation invalidates any persisted
       // hibernate entry for this project — leaving it would resume the
@@ -951,6 +999,71 @@ export class HelpSessionController {
     }
   }
 
+  /**
+   * Handle a live `tool-call-started` push (#9759). Coalesces bursts within
+   * the same turn into a single row ("N calls · latest tool") and clears any
+   * lingering errored row — a new call always supersedes the previous result.
+   */
+  private _onToolCallStarted(
+    payload: import("@shared/types/ipc/mcpServer").McpToolCallStartedPayload
+  ): void {
+    const prev = this._snapshot.mcpActivity;
+    // Coalesce only within the same turn: a burst of calls the model fires in
+    // one turn collapses to a count, but a new turn starts a fresh row. Calls
+    // outside a turn boundary (`turnId` absent) never coalesce — last wins.
+    const sameTurn =
+      prev !== null &&
+      payload.turnId !== undefined &&
+      prev.turnId !== undefined &&
+      prev.turnId === payload.turnId;
+    const callCount = sameTurn && prev ? prev.callCount + 1 : 1;
+    this._patch({
+      mcpActivity: {
+        status: "in-flight",
+        toolId: payload.toolId,
+        argsSummary: payload.argsSummary,
+        startedAt: payload.startedAt,
+        danger: payload.danger,
+        callCount,
+        ...(payload.turnId !== undefined ? { turnId: payload.turnId } : {}),
+        isError: false,
+      },
+    });
+  }
+
+  /**
+   * Handle a live `tool-call-settled` push (#9759). Transitions the current
+   * in-flight row to its settled (dimmed glyph + duration) appearance. A push
+   * with no current row is ignored — there's nothing on screen to settle.
+   */
+  private _onToolCallSettled(
+    payload: import("@shared/types/ipc/mcpServer").McpToolCallSettledPayload
+  ): void {
+    const prev = this._snapshot.mcpActivity;
+    if (prev === null) return;
+    const isError = payload.severity === "error" || payload.severity === "critical";
+    this._patch({
+      mcpActivity: {
+        ...prev,
+        status: "settled",
+        // Reflect the settled call's tool so the glyph labels the right call
+        // even when a burst's latest started differs from what just settled.
+        toolId: payload.toolId,
+        danger: false,
+        durationMs: payload.durationMs,
+        result: payload.result,
+        severity: payload.severity,
+        isError,
+      },
+    });
+  }
+
+  /** Clear the live activity strip (e.g. on session teardown). */
+  clearMcpActivity(): void {
+    if (this._snapshot.mcpActivity === null) return;
+    this._patch({ mcpActivity: null });
+  }
+
   private _patch(partial: Partial<HelpSessionSnapshot>): void {
     // Spread-merge first, then structurally compare per-field. Reusing the
     // same snapshot reference when nothing changed keeps Object.is stable
@@ -964,7 +1077,8 @@ export class HelpSessionController {
       next.preflightSnapshot === this._snapshot.preflightSnapshot &&
       next.isApprovingTier === this._snapshot.isApprovingTier &&
       next.isCheckingVersion === this._snapshot.isCheckingVersion &&
-      next.launchError === this._snapshot.launchError
+      next.launchError === this._snapshot.launchError &&
+      next.mcpActivity === this._snapshot.mcpActivity
     ) {
       return;
     }

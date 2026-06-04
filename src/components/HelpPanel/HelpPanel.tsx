@@ -24,6 +24,7 @@ import { HelpPanelHeader } from "./HelpPanelHeader";
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpLaunchingState } from "./HelpLaunchingState";
+import { McpToolActivityStrip } from "./McpToolActivityStrip";
 import {
   useHelpPanelStore,
   HELP_PANEL_MIN_WIDTH,
@@ -840,6 +841,7 @@ export function HelpPanel({
       {/* Bottom info bar */}
       {showTerminal && agentConfig && !isMissingCli && (
         <div className="flex flex-col gap-1 border-t border-daintree-border shrink-0 px-3 py-1.5 text-[11px] text-daintree-text/40">
+          {session.mcpActivity && <McpToolActivityStrip activity={session.mcpActivity} />}
           {pinnedContext && (
             <span
               className="flex items-center gap-1.5 min-w-0"

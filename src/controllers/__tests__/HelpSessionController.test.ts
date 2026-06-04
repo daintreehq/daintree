@@ -3,17 +3,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   mockMcpOnTierNotPermitted,
+  mockMcpOnToolCallStarted,
+  mockMcpOnToolCallSettled,
   mockMcpSetSessionTier,
   mockMcpIssueGrant,
   mockSystemSleepOnSuspend,
   mockSystemSleepOnWake,
   systemSleepListeners,
   tierListeners,
+  toolStartedListeners,
+  toolSettledListeners,
   helpPanelState,
   panelStoreState,
   projectStoreState,
 } = vi.hoisted(() => ({
   mockMcpOnTierNotPermitted: vi.fn(),
+  mockMcpOnToolCallStarted: vi.fn(),
+  mockMcpOnToolCallSettled: vi.fn(),
   mockMcpSetSessionTier: vi.fn().mockResolvedValue(undefined),
   mockMcpIssueGrant: vi.fn().mockResolvedValue({
     sessionId: "",
@@ -28,6 +34,8 @@ const {
     wake: [] as Array<() => void>,
   },
   tierListeners: [] as Array<(payload: unknown) => void>,
+  toolStartedListeners: [] as Array<(payload: unknown) => void>,
+  toolSettledListeners: [] as Array<(payload: unknown) => void>,
   helpPanelState: {
     isOpen: false,
     terminalId: null as string | null,
@@ -120,6 +128,8 @@ beforeEach(() => {
   systemSleepListeners.suspend.length = 0;
   systemSleepListeners.wake.length = 0;
   tierListeners.length = 0;
+  toolStartedListeners.length = 0;
+  toolSettledListeners.length = 0;
 
   mockMcpOnTierNotPermitted.mockReset();
   mockMcpOnTierNotPermitted.mockImplementation((cb: (payload: unknown) => void) => {
@@ -127,6 +137,22 @@ beforeEach(() => {
     return () => {
       const idx = tierListeners.indexOf(cb);
       if (idx >= 0) tierListeners.splice(idx, 1);
+    };
+  });
+  mockMcpOnToolCallStarted.mockReset();
+  mockMcpOnToolCallStarted.mockImplementation((cb: (payload: unknown) => void) => {
+    toolStartedListeners.push(cb);
+    return () => {
+      const idx = toolStartedListeners.indexOf(cb);
+      if (idx >= 0) toolStartedListeners.splice(idx, 1);
+    };
+  });
+  mockMcpOnToolCallSettled.mockReset();
+  mockMcpOnToolCallSettled.mockImplementation((cb: (payload: unknown) => void) => {
+    toolSettledListeners.push(cb);
+    return () => {
+      const idx = toolSettledListeners.indexOf(cb);
+      if (idx >= 0) toolSettledListeners.splice(idx, 1);
     };
   });
   mockMcpSetSessionTier.mockReset();
@@ -179,6 +205,8 @@ beforeEach(() => {
         },
         mcpServer: {
           onTierNotPermitted: mockMcpOnTierNotPermitted,
+          onToolCallStarted: mockMcpOnToolCallStarted,
+          onToolCallSettled: mockMcpOnToolCallSettled,
           setSessionTier: mockMcpSetSessionTier,
           issueGrant: mockMcpIssueGrant,
         },
@@ -245,6 +273,7 @@ describe("HelpSessionController — subscribe / getSnapshot", () => {
     expect(snap.isApprovingTier).toBe(false);
     expect(snap.isCheckingVersion).toBe(false);
     expect(snap.launchError).toBeNull();
+    expect(snap.mcpActivity).toBeNull();
   });
 
   it("returns the same snapshot reference when no state changes (Object.is stable)", () => {
@@ -892,6 +921,198 @@ describe("HelpSessionController — launch error routing", () => {
 
     ctrl.syncInputs(inputs("codex"));
     expect(ctrl.getSnapshot().launchError).toBeNull();
+    ctrl.stop();
+  });
+});
+
+describe("HelpSessionController — MCP tool activity strip (#9759)", () => {
+  function startCtrl() {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    return ctrl;
+  }
+  const fireStarted = (payload: Record<string, unknown>) => toolStartedListeners[0]!(payload);
+  const fireSettled = (payload: Record<string, unknown>) => toolSettledListeners[0]!(payload);
+
+  it("start() arms the tool-call started/settled subscriptions", () => {
+    const ctrl = startCtrl();
+    expect(mockMcpOnToolCallStarted).toHaveBeenCalledTimes(1);
+    expect(mockMcpOnToolCallSettled).toHaveBeenCalledTimes(1);
+    ctrl.stop();
+  });
+
+  it("a started event populates an in-flight row", () => {
+    const ctrl = startCtrl();
+    fireStarted({
+      sessionId: "s1",
+      toolId: "terminal.list",
+      argsSummary: "{}",
+      startedAt: 1000,
+      danger: false,
+    });
+    const a = ctrl.getSnapshot().mcpActivity;
+    expect(a?.status).toBe("in-flight");
+    expect(a?.toolId).toBe("terminal.list");
+    expect(a?.callCount).toBe(1);
+    expect(a?.isError).toBe(false);
+    ctrl.stop();
+  });
+
+  it("a settled event transitions the row to settled with duration and result", () => {
+    const ctrl = startCtrl();
+    fireStarted({
+      sessionId: "s1",
+      toolId: "terminal.list",
+      argsSummary: "{}",
+      startedAt: 1000,
+      danger: false,
+    });
+    fireSettled({
+      sessionId: "s1",
+      toolId: "terminal.list",
+      durationMs: 1200,
+      result: "success",
+      severity: "info",
+    });
+    const a = ctrl.getSnapshot().mcpActivity;
+    expect(a?.status).toBe("settled");
+    expect(a?.durationMs).toBe(1200);
+    expect(a?.result).toBe("success");
+    expect(a?.isError).toBe(false);
+    ctrl.stop();
+  });
+
+  it("an error-severity settle marks the row as error (red, persists)", () => {
+    const ctrl = startCtrl();
+    fireStarted({ sessionId: "s1", toolId: "x", argsSummary: "{}", startedAt: 1, danger: false });
+    fireSettled({
+      sessionId: "s1",
+      toolId: "x",
+      durationMs: 50,
+      result: "error",
+      severity: "error",
+    });
+    expect(ctrl.getSnapshot().mcpActivity?.isError).toBe(true);
+    ctrl.stop();
+  });
+
+  it("coalesces bursts within the same turn into a single counted row", () => {
+    const ctrl = startCtrl();
+    fireStarted({
+      sessionId: "s1",
+      toolId: "a",
+      argsSummary: "{}",
+      startedAt: 1,
+      danger: false,
+      turnId: "T1",
+    });
+    fireStarted({
+      sessionId: "s1",
+      toolId: "b",
+      argsSummary: "{}",
+      startedAt: 2,
+      danger: false,
+      turnId: "T1",
+    });
+    fireStarted({
+      sessionId: "s1",
+      toolId: "c",
+      argsSummary: "{}",
+      startedAt: 3,
+      danger: false,
+      turnId: "T1",
+    });
+    const a = ctrl.getSnapshot().mcpActivity;
+    expect(a?.callCount).toBe(3);
+    expect(a?.toolId).toBe("c");
+    ctrl.stop();
+  });
+
+  it("a new turn starts a fresh row (no coalescing across turns)", () => {
+    const ctrl = startCtrl();
+    fireStarted({
+      sessionId: "s1",
+      toolId: "a",
+      argsSummary: "{}",
+      startedAt: 1,
+      danger: false,
+      turnId: "T1",
+    });
+    fireStarted({
+      sessionId: "s1",
+      toolId: "b",
+      argsSummary: "{}",
+      startedAt: 2,
+      danger: false,
+      turnId: "T2",
+    });
+    expect(ctrl.getSnapshot().mcpActivity?.callCount).toBe(1);
+    expect(ctrl.getSnapshot().mcpActivity?.toolId).toBe("b");
+    ctrl.stop();
+  });
+
+  it("calls without a turnId never coalesce (last wins)", () => {
+    const ctrl = startCtrl();
+    fireStarted({ sessionId: "s1", toolId: "a", argsSummary: "{}", startedAt: 1, danger: false });
+    fireStarted({ sessionId: "s1", toolId: "b", argsSummary: "{}", startedAt: 2, danger: false });
+    expect(ctrl.getSnapshot().mcpActivity?.callCount).toBe(1);
+    expect(ctrl.getSnapshot().mcpActivity?.toolId).toBe("b");
+    ctrl.stop();
+  });
+
+  it("a new call clears a lingering errored row", () => {
+    const ctrl = startCtrl();
+    fireStarted({ sessionId: "s1", toolId: "x", argsSummary: "{}", startedAt: 1, danger: false });
+    fireSettled({
+      sessionId: "s1",
+      toolId: "x",
+      durationMs: 5,
+      result: "error",
+      severity: "error",
+    });
+    expect(ctrl.getSnapshot().mcpActivity?.isError).toBe(true);
+    fireStarted({ sessionId: "s1", toolId: "y", argsSummary: "{}", startedAt: 2, danger: false });
+    const a = ctrl.getSnapshot().mcpActivity;
+    expect(a?.status).toBe("in-flight");
+    expect(a?.isError).toBe(false);
+    expect(a?.toolId).toBe("y");
+    ctrl.stop();
+  });
+
+  it("carries danger through for an awaiting-confirmation row", () => {
+    const ctrl = startCtrl();
+    fireStarted({
+      sessionId: "s1",
+      toolId: "git.push",
+      argsSummary: "{}",
+      startedAt: 1,
+      danger: true,
+    });
+    expect(ctrl.getSnapshot().mcpActivity?.danger).toBe(true);
+    ctrl.stop();
+  });
+
+  it("a settle with no current row is ignored", () => {
+    const ctrl = startCtrl();
+    fireSettled({
+      sessionId: "s1",
+      toolId: "x",
+      durationMs: 5,
+      result: "success",
+      severity: "info",
+    });
+    expect(ctrl.getSnapshot().mcpActivity).toBeNull();
+    ctrl.stop();
+  });
+
+  it("handleTerminalPanelMissing clears the activity row", () => {
+    const ctrl = startCtrl();
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.sessionId = "sess-1";
+    fireStarted({ sessionId: "s1", toolId: "x", argsSummary: "{}", startedAt: 1, danger: false });
+    expect(ctrl.getSnapshot().mcpActivity).not.toBeNull();
+    ctrl.handleTerminalPanelMissing({ terminalId: "term-1", terminalExists: false });
+    expect(ctrl.getSnapshot().mcpActivity).toBeNull();
     ctrl.stop();
   });
 });

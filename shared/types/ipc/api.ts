@@ -1422,6 +1422,20 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onGrantLifecycle(
       callback: (payload: import("./mcpServer.js").McpGrantLifecyclePayload) => void
     ): () => void;
+    /**
+     * Subscribe to live tool-call-started pushes for the pinned help-session
+     * in this WebContents. Drives the Assistant panel's activity strip (#9759).
+     */
+    onToolCallStarted(
+      callback: (payload: import("./mcpServer.js").McpToolCallStartedPayload) => void
+    ): () => void;
+    /**
+     * Subscribe to live tool-call-settled pushes that match a prior
+     * `onToolCallStarted` for this WebContents' pinned help-session (#9759).
+     */
+    onToolCallSettled(
+      callback: (payload: import("./mcpServer.js").McpToolCallSettledPayload) => void
+    ): () => void;
   };
   // helpAssistant is generated — see GeneratedElectronAPI.
   mcpBridge: {

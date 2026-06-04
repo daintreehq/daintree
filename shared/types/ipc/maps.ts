@@ -1672,6 +1672,17 @@ export interface IpcEventMap {
    */
   "mcp-server:grant-lifecycle": import("./mcpServer.js").McpGrantLifecyclePayload;
 
+  /**
+   * Targeted push: an MCP tool dispatch entered the call path for the pinned
+   * help-session. Drives the Assistant panel's live activity strip (#9759).
+   */
+  "mcp-server:tool-call-started": import("./mcpServer.js").McpToolCallStartedPayload;
+  /**
+   * Targeted push: an MCP tool dispatch announced via `tool-call-started`
+   * settled. Carries the audit-aligned outcome for the activity strip (#9759).
+   */
+  "mcp-server:tool-call-settled": import("./mcpServer.js").McpToolCallSettledPayload;
+
   // Error events
   "error:notify": ErrorRecord;
   "error:retry-progress": RetryProgressPayload;
