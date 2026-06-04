@@ -157,11 +157,13 @@ describe("buildCorrectionSystemPrompt", () => {
     expect(prompt).toContain("my-app");
   });
 
-  it("includes custom dictionary terms as preferred terms", () => {
+  it("includes custom dictionary terms as preferred (not forced) terms", () => {
     const prompt = buildCorrectionSystemPrompt({ customDictionary: ["Daintree", "Worktree"] });
     expect(prompt).toContain("Daintree");
     expect(prompt).toContain("Worktree");
+    // ASR biasing handles these terms, so the dynamic section must prefer — not force — them.
     expect(prompt).toContain("PREFERRED TERMS");
+    expect(prompt).not.toContain("correct phonetic matches to these exact forms");
   });
 
   it("omits project section when no project context provided", () => {
@@ -171,9 +173,10 @@ describe("buildCorrectionSystemPrompt", () => {
 
   it("omits dynamic preferred terms section when custom dictionary is empty", () => {
     const prompt = buildCorrectionSystemPrompt({ customDictionary: [] });
-    // The dynamic section header starts "PREFERRED TERMS (prefer these..." — distinct
-    // from the "REQUIRED TERMS / CUSTOM DICTIONARY" label in the priority list.
-    expect(prompt).not.toContain("PREFERRED TERMS (prefer these");
+    // The dynamic section header starts with "PREFERRED TERMS (prefer these exact forms..." —
+    // distinct from the "REQUIRED TERMS / CUSTOM DICTIONARY" label in the priority list, which
+    // is always present in the core prompt.
+    expect(prompt).not.toContain("PREFERRED TERMS (prefer these exact forms");
   });
 
   it("excludes project directory from prompt when it matches project name", () => {
