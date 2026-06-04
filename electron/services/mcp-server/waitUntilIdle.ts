@@ -9,9 +9,20 @@ import {
 } from "../../../shared/types/terminalWaitUntilIdle.js";
 import { mapAgentStateToBusyState, mapAgentStateToIdleReason } from "./shared.js";
 
+export interface WaitUntilIdleOptions {
+  /**
+   * Hard ceiling for the effective wait, applied to both the default and any
+   * explicit `timeoutMs`. The session server passes the interactive cap for
+   * help-session tiers so a long block can never freeze a conversation a
+   * human is sitting in; external (api-key) sessions get the global max.
+   */
+  maxTimeoutMs?: number;
+}
+
 export async function handleWaitUntilIdle(
   rawArgs: unknown,
-  signal: AbortSignal
+  signal: AbortSignal,
+  options?: WaitUntilIdleOptions
 ): Promise<WaitUntilIdleResult> {
   const argsObj =
     rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)
@@ -32,7 +43,11 @@ export async function handleWaitUntilIdle(
   }
   const terminalId = terminalIdRaw;
 
-  let timeoutMs = DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS;
+  const ceilingMs = Math.min(
+    options?.maxTimeoutMs ?? MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS,
+    MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS
+  );
+  let timeoutMs = Math.min(DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS, ceilingMs);
   const rawTimeout = argsObj["timeoutMs"];
   if (rawTimeout !== undefined) {
     if (
@@ -46,7 +61,7 @@ export async function handleWaitUntilIdle(
         "terminal.waitUntilIdle `timeoutMs` must be a non-negative integer."
       );
     }
-    timeoutMs = Math.min(rawTimeout, MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS);
+    timeoutMs = Math.min(rawTimeout, ceilingMs);
   }
 
   if (signal.aborted) {

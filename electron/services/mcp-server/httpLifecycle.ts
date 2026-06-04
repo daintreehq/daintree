@@ -76,7 +76,8 @@ export interface HttpLifecycleDeps {
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   handleWaitUntilIdle: (
     rawArgs: unknown,
-    signal: AbortSignal
+    signal: AbortSignal,
+    options?: { maxTimeoutMs?: number }
   ) => Promise<import("./shared.js").WaitUntilIdleResult>;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   clearCachedManifest: () => void;

@@ -29,7 +29,7 @@ This server is **security-load-bearing**: it accepts network connections (loopba
 | `rendererBridge.ts` | ~340 | IPC bridge to the renderer: requests the action manifest and dispatches actions, with per-session pinning (`SessionBindingError` when the pinned view is gone). |
 | `tierAuth.ts` | ~214 | Auth primitives: bearer extraction, timing-safe API-key compare, tier resolution, `shouldExposeTool`/`isTierPermitted`, tool schema/annotation builders, `requestKey` parsing. Re-exports `deriveBand`/`BAND_OVERRIDES`. |
 | `readinessProbe.ts` | ~522 | Active `initialize` round-trip probe (`/mcp` and `/sse`) proving the server actually answers, not just that the socket is bound. Used by `HelpSessionService` before launching the assistant. |
-| `waitUntilIdle.ts` | ~193 | The `terminal.waitUntilIdle` handshake — blocks until an agent FSM leaves `working`. Runs in main, not via renderer dispatch. |
+| `waitUntilIdle.ts` | ~193 | The `terminal.waitUntilIdle` handshake — bounded long-poll until an agent FSM leaves `working` (interactive sessions capped at 60s). Runs in main, not via renderer dispatch. |
 | `abusePolicy.ts` | ~67 | Per-session sliding-window denial counter (401 + tier-mismatch). Trips → revoke session. |
 | `sessionDedup.ts` | ~88 | Idempotency keys + canonical args hashing for the creation-tool dedup cache. |
 
@@ -177,13 +177,15 @@ Gate order is load-bearing: rate-limit is charged **after** the tier/grant check
 
 ## The `waitUntilIdle` handshake (`waitUntilIdle.ts`)
 
-`terminal.waitUntilIdle` is the agent-orchestration primitive: an orchestrator agent kicks off a task in another terminal, then **blocks** on `waitUntilIdle` until that agent's FSM leaves the `working` state, before issuing its next dispatch. It is the synchronization point between independent agents.
+`terminal.waitUntilIdle` is the agent-orchestration primitive: an orchestrator agent kicks off a task in another terminal, then waits on `waitUntilIdle` until that agent's FSM leaves the `working` state (or the wait times out — `timedOut: true` means "still working, re-poll"), before issuing its next dispatch. It is the synchronization point between independent agents.
 
-It is special-cased in the `CallTool` handler to run **in the main process** rather than through `rendererBridge`, because (a) the MCP `AbortSignal` can't cross IPC, and (b) renderer dispatch has a 30s wall — far too short for the default 30-minute wait. The implementation:
+A blocking MCP call holds the whole conversation hostage in an interactive session — the user can't talk to the assistant until the call returns, so the session looks frozen and escape-cancel is their only out. The wait is therefore a **bounded long-poll**, not an open-ended block: the default is `DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS` (60s), and the `CallTool` handler clamps the effective ceiling by session tier — interactive help sessions (workbench/action/system) are capped at `INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS` (60s) regardless of the requested `timeoutMs`, while headless `external` (api-key) sessions may block up to `MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS` (2h). Agents in interactive sessions are steered (via the help CLAUDE.md and the `triage_terminals` prompt) to `ScheduleWakeup`-paced non-blocking checks instead of back-to-back long-polls.
+
+It is special-cased in the `CallTool` handler to run **in the main process** rather than through `rendererBridge`, because (a) the MCP `AbortSignal` can't cross IPC, and (b) renderer dispatch has a 30s wall — too short for the multi-hour waits external sessions may request. The implementation:
 
 1. Resolves the terminal's agent id via `AgentAvailabilityStore.getAgentIdForTerminal`. No agent → immediate `idle`.
 2. If already non-`working`, returns immediately (`already-idle`).
-3. Otherwise subscribes to `events.on("agent:state-changed")` and settles on the first transition away from `working`, or on `timeoutMs` (default `DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS`, capped at `MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS`), or on abort.
+3. Otherwise subscribes to `events.on("agent:state-changed")` and settles on the first transition away from `working`, or on `timeoutMs` (default `DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS`, capped at the tier-resolved ceiling above), or on abort.
 
 The returned `busyState`/`idleReason`/`waitingReason` are mapped from the canonical `AgentState` FSM (`mapAgentStateToBusyState`, `mapAgentStateToIdleReason`). The FSM and the `agent:state-changed` event it consumes are owned by `AgentStateService` — see [`agent-activity-monitoring.md`](./agent-activity-monitoring.md). For polling _many_ terminals at once, the `triage_terminals` prompt steers agents to `terminal.getStatus` instead of fanning `waitUntilIdle` out N ways.
 

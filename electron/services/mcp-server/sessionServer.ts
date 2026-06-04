@@ -51,6 +51,10 @@ import {
   buildToolError,
   buildMcpErrorPayload,
 } from "./shared.js";
+import {
+  INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS,
+  MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS,
+} from "../../../shared/types/terminalWaitUntilIdle.js";
 import { SessionBindingError } from "./rendererBridge.js";
 import {
   buildDedupKey,
@@ -81,7 +85,8 @@ export interface SessionServerDeps {
   ) => Promise<DispatchEnvelope>;
   handleWaitUntilIdle: (
     rawArgs: unknown,
-    signal: AbortSignal
+    signal: AbortSignal,
+    options?: { maxTimeoutMs?: number }
   ) => Promise<import("./shared.js").WaitUntilIdleResult>;
   appendAuditRecord: (input: {
     toolId: string;
@@ -415,17 +420,27 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // action manifest entry handles schema, tier, and audit registration; the
         // execution must bypass renderer dispatch because (a) the MCP AbortSignal
         // can't cross IPC, and (b) renderer dispatch has a 30s wall — too short
-        // for the 30-minute default wait. Audit unifies via the shared finally.
+        // for the multi-hour waits external sessions may request. Audit unifies
+        // via the shared finally.
         if (actionId === TERMINAL_WAIT_UNTIL_IDLE_TOOL) {
           try {
-            const result = await waitUntilIdle(args, extra.signal);
+            // Interactive help sessions (workbench/action/system tiers) have a
+            // human waiting on the conversation — a tool call held open blocks
+            // the whole session, so the wait is clamped to the interactive cap
+            // and the agent re-polls on `timedOut: true`. External (api-key)
+            // sessions are headless scripts; they keep the full 2h ceiling.
+            const maxTimeoutMs =
+              tier === "external"
+                ? MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS
+                : INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS;
+            const result = await waitUntilIdle(args, extra.signal, { maxTimeoutMs });
             outcome = { kind: "result", value: { ok: true, result } };
             // Mirror the post-dispatch grant refresh in the main path:
             // when the call was authorized by a grant, extend the TTL
             // window and reset the idle timer on success. `waitUntilIdle`
-            // can run up to 30 minutes (longer than the 15-min grant
-            // window), so this is the only block that prevents the grant
-            // from silently aging out during a long wait (#8442).
+            // can run up to 2 hours on external sessions (longer than the
+            // 15-min grant window), so this is the only block that prevents
+            // the grant from silently aging out during a long wait (#8442).
             if (grantIssuedAt !== undefined) {
               sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
               if (sessionStore.sessions.has(sessionId)) {

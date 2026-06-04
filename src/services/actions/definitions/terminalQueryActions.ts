@@ -366,9 +366,9 @@ export function registerTerminalQueryActions(
   // schema, description, tier, and audit metadata. Execution is handled inline
   // in the MCP CallTool handler (electron/services/mcp-server/sessionServer.ts)
   // because the request must stay in the main process: the renderer-dispatch
-  // path has a 30s timeout (waitUntilIdle defaults to 30 minutes) and cannot
-  // serialize the AbortSignal that powers MCP request cancellation. `run()`
-  // throws if the renderer ever invokes it directly.
+  // path has a 30s timeout (external sessions may wait up to 2 hours) and
+  // cannot serialize the AbortSignal that powers MCP request cancellation.
+  // `run()` throws if the renderer ever invokes it directly.
   actions.set("terminal.waitUntilIdle", () => ({
     id: "terminal.waitUntilIdle",
     title: "Wait until terminal idle",
@@ -389,7 +389,7 @@ export function registerTerminalQueryActions(
         .max(MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS)
         .optional()
         .describe(
-          "Pass 0 for an immediate non-blocking snapshot. Otherwise, the maximum time to block in milliseconds; defaults to 30 minutes and clamped to 2 hours."
+          "Pass 0 for an immediate non-blocking snapshot — the recommended mode. Otherwise, the maximum time to long-poll in milliseconds; defaults to 60s. Interactive sessions are capped at 60s server-side; headless sessions may block up to 2 hours."
         ),
     }),
     rawOutputSchema: WAIT_UNTIL_IDLE_OUTPUT_SCHEMA,

@@ -51,7 +51,7 @@ describe("help prompt outputs", () => {
   describe("Claude-only content stays in CLAUDE.md", () => {
     it("CLAUDE.md contains the Tier Model and terminal.getStatus recipe", () => {
       expect(CLAUDE).toContain("## Tier Model");
-      expect(CLAUDE).toContain("## Watching Multiple Agent Terminals");
+      expect(CLAUDE).toContain("## Watching Agent Terminals");
       expect(CLAUDE).toContain("terminal.getStatus");
       expect(CLAUDE).toContain("ScheduleWakeup");
     });
@@ -82,7 +82,7 @@ describe("help prompt outputs", () => {
         expect(body).not.toContain("## Tier Model");
         expect(body).not.toContain("## Common Tasks");
         expect(body).not.toContain("## When to Use Which");
-        expect(body).not.toContain("## Watching Multiple Agent Terminals");
+        expect(body).not.toContain("## Watching Agent Terminals");
         expect(body).not.toContain("terminal.getStatus");
       }
     });
