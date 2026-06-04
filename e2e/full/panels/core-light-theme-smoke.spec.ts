@@ -41,7 +41,7 @@ test.describe.serial("Core: Light Theme Smoke", () => {
     const { window } = ctx;
 
     for (const schemeId of LIGHT_SCHEME_IDS) {
-      await setAppTheme(window, schemeId);
+      await setAppTheme(window, schemeId, "light");
 
       const metrics = await getThemeChromeMetrics(window, { projectName: PROJECT_NAME });
 
