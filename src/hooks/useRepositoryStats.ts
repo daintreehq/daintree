@@ -195,9 +195,12 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
 
       // Carry the probe-derived cadence forward only on successful reads — a
       // stale/errored result has no fresh cadence to offer, so the existing
-      // value (or the fixed fallback) keeps driving the schedule.
-      if (!shouldPreserve && repoStats.nextPollIntervalMs != null) {
-        nextPollIntervalRef.current = repoStats.nextPollIntervalMs;
+      // value keeps driving the schedule. On a success that reports no cadence
+      // (e.g. a future main-process path that omits it), fall back to null so
+      // `calculateNextInterval` reverts to the fixed active interval rather than
+      // sticking on a now-meaningless previous value.
+      if (!shouldPreserve) {
+        nextPollIntervalRef.current = repoStats.nextPollIntervalMs ?? null;
       }
 
       const nextResetAt = repoStats.rateLimitResetAt ?? null;

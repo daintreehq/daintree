@@ -304,15 +304,21 @@ describe("GitHubStatsToolbarButton list-count badge wiring", () => {
     expect(source).toContain('${prDisplayCount ?? "—"} open PRs');
   });
 
-  it("resets the list counts on project switch (lastUpdated → null)", () => {
-    const effectStart = source.indexOf("if (statsLoading || statsError)");
-    const slice = source.slice(effectStart, effectStart + 2000);
+  it("resets the list counts + timestamps via a project-path effect (issue #9741)", () => {
+    // The reset is keyed on currentProject?.path, not the stats `lastUpdated`
+    // reset effect — a fast project switch can leave statsLoading true while
+    // lastUpdated is null, masking that effect's guarded reset.
+    const depIdx = source.lastIndexOf("[currentProject?.path]");
+    expect(depIdx).toBeGreaterThan(-1);
+    // The effect body precedes its dependency array — scan the window just
+    // above the dep marker for the resets.
+    const slice = source.slice(Math.max(0, depIdx - 600), depIdx);
     expect(slice).toContain("setIssueListCount(null)");
     expect(slice).toContain("setIssueListHasMore(false)");
     expect(slice).toContain("setPrListCount(null)");
     expect(slice).toContain("setPrListHasMore(false)");
-    // Recency timestamps must clear too (issue #9741) or project A's timestamp
-    // would suppress project B's first stats poll.
+    // Recency timestamps must clear too or project A's timestamp would suppress
+    // project B's first stats poll.
     expect(slice).toContain("issueListTimestampRef.current = null");
     expect(slice).toContain("prListTimestampRef.current = null");
   });

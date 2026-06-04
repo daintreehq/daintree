@@ -214,6 +214,24 @@ export const GitHubStatsToolbarButton = memo(
       setPrListHasMore(hasMore);
     }, []);
 
+    // Clear the list-loaded counts and their recency timestamps whenever the
+    // project changes (issue #9741). Keyed directly on the project path rather
+    // than riding on the `lastUpdated == null` reset effect below: on a fast
+    // project switch the stats poll flips `statsLoading` true in the same batch
+    // that nulls `lastUpdated`, and that effect early-returns behind its
+    // `statsLoading` guard — leaving the previous project's counts to win the
+    // recency arbitration until the new project's first poll lands. A
+    // project-scoped effect clears them deterministically on every switch. Runs
+    // once on mount as a no-op (state already null).
+    useEffect(() => {
+      setIssueListCount(null);
+      setIssueListHasMore(false);
+      setPrListCount(null);
+      setPrListHasMore(false);
+      issueListTimestampRef.current = null;
+      prListTimestampRef.current = null;
+    }, [currentProject?.path]);
+
     // Badge display value: whichever of the list-loaded count (suffixed with
     // `+` when approximate, e.g. `20+`) and the stats `totalCount` was updated
     // most recently (issue #9741). Before #9741 the list count won
@@ -605,18 +623,11 @@ export const GitHubStatsToolbarButton = memo(
         prevLastUpdatedRef.current = null;
         setIssuesPulseAt(null);
         setPrsPulseAt(null);
-        // Clear the list-loaded counts so the badge falls back to the new
-        // project's stats count (or "—") instead of showing the previous
-        // project's loaded-page count until its dropdown is opened. Also clear
-        // the recency timestamps (issue #9741) — a stale timestamp from project
-        // A would otherwise out-rank project B's first stats poll and suppress
-        // its fresh count.
-        setIssueListCount(null);
-        setIssueListHasMore(false);
-        setPrListCount(null);
-        setPrListHasMore(false);
-        issueListTimestampRef.current = null;
-        prListTimestampRef.current = null;
+        // List-loaded counts and their recency timestamps are reset by the
+        // dedicated project-path effect below — not here — because a fast
+        // project switch can leave `statsLoading` true while `lastUpdated` is
+        // null, and this branch sits behind the `statsLoading` guard above
+        // (issue #9741).
         return;
       }
       if (prevLastUpdatedRef.current != null && lastUpdated > prevLastUpdatedRef.current) {
