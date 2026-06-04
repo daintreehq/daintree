@@ -51,6 +51,14 @@ interface VoiceTranscriptBuffer {
    * pass (null = none). Drives the `cm-voice-pending-ai` editor decoration.
    */
   correctionRange: { from: number; to: number } | null;
+  /**
+   * The dictated text as it settled after the post-stop processing pass (AI
+   * correction if enabled, else the raw transcription). Diffed against the
+   * user's final edits at send time to learn dictionary words. Runtime-only,
+   * ephemeral per session, never persisted — see [[#9514]] separate durable vs
+   * in-session state.
+   */
+  sessionCorrectedText: string | null;
 }
 
 interface VoiceAnnouncement {
@@ -67,6 +75,8 @@ interface VoiceRecordingState {
   isConfigured: boolean;
   /** Whether AI correction is enabled for the current session. */
   correctionEnabled: boolean;
+  /** Whether manual corrections to dictated text surface as suggested dictionary words. */
+  learnFromCorrections: boolean;
   status: VoiceInputStatus;
   lastError: VoiceInputError | null;
   activeTarget: VoiceRecordingTarget | null;
@@ -88,6 +98,8 @@ interface VoiceRecordingState {
   announcement: VoiceAnnouncement | null;
   setConfigured: (isConfigured: boolean) => void;
   setCorrectionEnabled: (enabled: boolean) => void;
+  setLearnFromCorrections: (enabled: boolean) => void;
+  setSessionCorrectedText: (panelId: string, text: string | null) => void;
   setAudioLevel: (level: number) => void;
   setArming: (target: VoiceRecordingTarget) => void;
   beginSession: (target: VoiceRecordingTarget) => void;
@@ -127,6 +139,7 @@ function getBuffer(
       activeParagraphStart: -1,
       transcriptPhase: "idle" as VoiceTranscriptPhase,
       correctionRange: null,
+      sessionCorrectedText: null,
     }
   );
 }
@@ -136,6 +149,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
     (set, get) => ({
       isConfigured: false,
       correctionEnabled: false,
+      learnFromCorrections: true,
       status: "idle",
       lastError: null,
       activeTarget: null,
@@ -149,6 +163,20 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       setConfigured: (isConfigured) => set({ isConfigured }),
 
       setCorrectionEnabled: (correctionEnabled) => set({ correctionEnabled }),
+
+      setLearnFromCorrections: (learnFromCorrections) => set({ learnFromCorrections }),
+
+      setSessionCorrectedText: (panelId, text) =>
+        set((state) => {
+          const buffer = getBuffer(state.panelBuffers, panelId);
+          if (buffer.sessionCorrectedText === text) return state;
+          return {
+            panelBuffers: {
+              ...state.panelBuffers,
+              [panelId]: { ...buffer, sessionCorrectedText: text },
+            },
+          };
+        }),
 
       setLastError: (error) => set({ lastError: error }),
 
@@ -182,6 +210,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               activeParagraphStart: -1,
               transcriptPhase: "idle" as VoiceTranscriptPhase,
               correctionRange: null,
+              sessionCorrectedText: null,
             },
           },
         })),

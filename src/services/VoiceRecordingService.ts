@@ -432,6 +432,9 @@ class VoiceRecordingService {
     useVoiceRecordingStore
       .getState()
       .setCorrectionEnabled(!!(settings.correctionEnabled && settings.openaiApiKey));
+    useVoiceRecordingStore
+      .getState()
+      .setLearnFromCorrections(settings.learnFromCorrections !== false);
     useVoiceRecordingStore.getState().setConfigured(isConfigured);
     return isConfigured;
   }
@@ -988,14 +991,27 @@ class VoiceRecordingService {
       // Whole-passage AI cleanup runs after a deliberate, graceful stop only —
       // not on error, cancel-to-restart, or backend-driven teardown. Fire and
       // forget: the decoration shows progress, and stop() returns immediately.
-      if (
-        !skipRemoteStop &&
-        nextStatus === "idle" &&
-        !options.skipCorrection &&
-        correctionEnabled &&
-        stoppedTarget
-      ) {
-        void this.runCorrection(stoppedTarget, stopGeneration);
+      if (!skipRemoteStop && nextStatus === "idle" && !options.skipCorrection && stoppedTarget) {
+        if (correctionEnabled) {
+          void this.runCorrection(stoppedTarget, stopGeneration);
+        } else {
+          // No AI correction pass will run, so capture the raw dictated text as
+          // the learning baseline directly. The draft retains the full dictated
+          // span (finishSession leaves sessionDraftStart intact) so manual
+          // corrections can still be detected at send time (#9749).
+          const { panelId, projectId } = stoppedTarget;
+          const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
+          const sessionStart = buffer?.sessionDraftStart ?? -1;
+          if (sessionStart >= 0) {
+            const raw = useTerminalInputStore
+              .getState()
+              .getDraftInput(panelId, projectId)
+              .slice(sessionStart);
+            useVoiceRecordingStore
+              .getState()
+              .setSessionCorrectedText(panelId, raw.trim() ? raw : null);
+          }
+        }
       }
     })();
 
@@ -1080,6 +1096,11 @@ class VoiceRecordingService {
         logDebug(`${LOG_PREFIX} Skipping correction — dictated text changed during cleanup`);
       }
     }
+
+    // Record the settled dictated text as the learning baseline. Manual edits
+    // the user makes before sending are diffed against this to detect words
+    // worth suggesting for the custom dictionary (#9749).
+    useVoiceRecordingStore.getState().setSessionCorrectedText(panelId, correctedText);
 
     inputStore.bumpVoiceDraftRevision();
   }
