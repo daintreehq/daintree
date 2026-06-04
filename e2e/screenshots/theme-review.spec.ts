@@ -302,7 +302,7 @@ test("theme review — chrome, overlays, states", async () => {
       await settle(page, 1200);
       await snap(page, "21-settings");
       // Appearance tab — theme preview cards are a major theme surface.
-      const appearanceNav = page.getByRole("button", { name: "Appearance" }).first();
+      const appearanceNav = page.getByRole("tab", { name: "Appearance" }).first();
       if (await appearanceNav.isVisible({ timeout: 2500 }).catch(() => false)) {
         await appearanceNav.click();
         await settle(page, 1200);

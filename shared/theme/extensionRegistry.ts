@@ -110,6 +110,9 @@ export const EXTENSION_KEY_REGISTRY = {
   // Dock
   "dock-bg": OPTIONAL,
   "dock-border": OPTIONAL,
+  // QuickRun command-input fill. The CSS fallback is the overlay-soft ink wash
+  // (correct on dark); light themes lift the field to a raised input plane.
+  "dock-input-bg": OPTIONAL,
   "dock-shadow": DOCK_SHADOW,
 
   // Panel grid
@@ -198,9 +201,17 @@ export const EXTENSION_KEY_REGISTRY = {
   "toolbar-stats-hover-bg": OPTIONAL,
   "toolbar-stats-shadow": OPTIONAL,
 
+  // Review hub — commit-message field fill. The CSS fallback is the canvas
+  // tone (correct on dark); light themes lift the field to a raised plane.
+  "review-commit-input-bg": OPTIONAL,
+
   // Worktree section
   "worktree-section-hover-bg": OPTIONAL,
   "worktree-filter-bar-bg": OPTIONAL,
+  // Active quick-state segment fill. The CSS fallback is the overlay-subtle
+  // darkening wash (correct on dark); light themes lift the active tab toward
+  // white so selection elevates instead of receding.
+  "worktree-quick-state-active-bg": OPTIONAL,
   "worktree-search-input-bg": OPTIONAL,
 } as const satisfies Record<ExtensionKey, ExtensionKeyMetadata>;
 

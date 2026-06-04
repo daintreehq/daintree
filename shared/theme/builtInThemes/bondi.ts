@@ -160,6 +160,9 @@ export const theme: BuiltInThemeSource = {
     // Dock tracks the neutral toolbar chrome; shadow softened from the 0.35
     // global fallback (registry format: shadow-color channels, alpha ≥ 0.25).
     "dock-bg": "#ECEEF0",
+    // The QuickRun command field joins the raised-input family (the
+    // overlay-soft fallback composites to a recessed ink well on light).
+    "dock-input-bg": "#F9FCFF",
     "dock-shadow": "0 -2px 8px rgb(from var(--theme-shadow-color) r g b / 0.25)",
     // Gutter sits exactly at the grid floor — one sky tone, no third band.
     "panel-grid-bg": "#D9E5F0",
@@ -225,10 +228,17 @@ export const theme: BuiltInThemeSource = {
     "toolbar-stats-border": "rgba(203,212,221,0.6)",
     "toolbar-stats-divider": "rgba(203,212,221,0.6)",
     "toolbar-stats-hover-bg": "rgba(28,32,40,0.065)",
+    // r4: the commit-message field joins the raised-input family (the canvas
+    // fallback left it byte-identical to the dialog body — zero lift).
+    "review-commit-input-bg": "#F9FCFF",
     // r3: the filter/search rail sits flush on the sky field (the r2 band
     // recessed BELOW the grid floor — the darkest region in the sidebar).
     // The raised white search input carries the rail now.
     "worktree-filter-bar-bg": "#DFECF8",
+    // r4: the active quick-state tab LIFTS to white + its inset underline
+    // (the overlay-subtle fallback darkened the selected segment below its
+    // own field — the proscribed darken-to-select).
+    "worktree-quick-state-active-bg": "#FFFFFF",
     "worktree-search-input-bg": "#F9FCFF",
     "worktree-section-hover-bg": "rgba(22,52,71,0.05)",
   },

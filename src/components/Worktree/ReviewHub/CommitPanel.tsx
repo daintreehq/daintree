@@ -361,7 +361,10 @@ export function CommitPanel({
           } as React.CSSProperties
         }
         className={cn(
-          "w-full resize-none rounded-md border border-divider bg-daintree-bg px-3 py-2 text-xs font-mono",
+          // Themes may lift the field to a raised input plane (light themes set
+          // --review-commit-input-bg); the canvas fallback is the original value
+          // so themes without the override render unchanged.
+          "w-full resize-none rounded-md border border-divider bg-[var(--review-commit-input-bg,var(--color-daintree-bg))] px-3 py-2 text-xs font-mono",
           "min-h-[calc(2lh+1rem)] max-h-[calc(6lh+1rem)] overflow-y-auto",
           "placeholder:text-daintree-text/30 text-daintree-text",
           "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent focus:border-transparent",

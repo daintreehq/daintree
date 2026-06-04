@@ -393,7 +393,10 @@ export function QuickRun({ projectId }: QuickRunProps) {
               {activeWorktreeId && <RunningTaskList worktreeId={activeWorktreeId} />}
               <div
                 className={cn(
-                  "relative flex items-center rounded-[var(--radius-md)] border border-border-subtle/50 bg-overlay-soft",
+                  // Themes may lift the field to a raised input plane (light themes
+                  // set --dock-input-bg); the overlay-soft fallback is the original
+                  // ink wash so themes without the override render unchanged.
+                  "relative flex items-center rounded-[var(--radius-md)] border border-border-subtle/50 bg-[var(--dock-input-bg,var(--color-overlay-soft))]",
                   "transition focus-within:border-daintree-accent/35 focus-within:ring-1 focus-within:ring-daintree-accent/12"
                 )}
               >

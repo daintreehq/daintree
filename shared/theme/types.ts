@@ -234,6 +234,7 @@ export const EXTENSION_KEYS = [
   // Dock (docked terminal/agent dock pill)
   "dock-bg",
   "dock-border",
+  "dock-input-bg",
   "dock-shadow",
 
   // Panel grid background
@@ -314,9 +315,13 @@ export const EXTENSION_KEYS = [
   "toolbar-stats-hover-bg",
   "toolbar-stats-shadow",
 
+  // Review hub
+  "review-commit-input-bg",
+
   // Worktree section
   "worktree-section-hover-bg",
   "worktree-filter-bar-bg",
+  "worktree-quick-state-active-bg",
   "worktree-search-input-bg",
 ] as const;
 
