@@ -677,13 +677,13 @@ function ProjectSwitcherFooter({ mode }: { mode?: ProjectSwitcherMode }) {
           <span className="ml-1.5">{hint.label}</span>
         </span>
         {mode !== "modal" && (
-          <span className="text-daintree-text/30">
+          <span className="text-daintree-text/50">
             <kbd className={KBD_CLASS}>⌘⌫</kbd>
             <span className="ml-1.5">Remove</span>
           </span>
         )}
       </div>
-      <span className="text-daintree-text/30">
+      <span className="text-daintree-text/50">
         <span>Right-click for more</span>
       </span>
     </div>
