@@ -9,19 +9,21 @@ export const theme: BuiltInThemeSource = {
   heroImage: "/themes/bondi.webp",
   palette: {
     type: "light",
-    // Redesign (#9711): chroma hold at constant L. The old ramp decayed to
-    // near-zero chroma as surfaces lightened (grid C 0.013 -> elevated C 0.001),
-    // so most of the window read as indeterminate cold gray instead of pale
-    // Bondi blue. Each surface keeps its L (ramp steps 0.020-0.021, max/min
-    // 1.05x — audit gates clear) but holds C ~0.017 -> 0.009 into the lighter
-    // bands on a unified ~248 hue. Depth is carried by the darker hairline
-    // border and the recessed inset/filter-bar wells, not by bigger L jumps.
+    // Redesign r3 (#9711): white cards on pale sky. The r2 ramp held one hue but
+    // translated the dark theme's "chips recede" idiom as darker-than-surface
+    // gray slabs — on light that reads as mud. r3 inverts the on-surface
+    // language: the field (grid/sidebar) is a genuinely chromatic Bondi sky
+    // (C 0.020-0.021), and everything that carries content (cards, chips,
+    // inputs, selection) lifts TOWARD white instead of receding into gray.
+    // Ramp L 0.916 / 0.937 / 0.957 / 0.979 / 1.0 — steps 0.0205-0.0219 (all
+    // ≥ 0.02), span 0.084, panel→elevated not the smallest step. Elevated is
+    // pure white (C = 0, achromatic — sea foam) so the hue family stays clean.
     surfaces: {
-      grid: "#DAE5EE",
-      sidebar: "#E3EBF4",
-      canvas: "#EAF2F9",
-      panel: "#F4F8FE",
-      elevated: "#FEFFFF",
+      grid: "#D9E5F0",
+      sidebar: "#DFECF8",
+      canvas: "#EAF2FA",
+      panel: "#F3F9FF",
+      elevated: "#FFFFFF",
     },
     text: {
       primary: "#1C2028",
@@ -29,28 +31,28 @@ export const theme: BuiltInThemeSource = {
       muted: "#5F6A76",
       inverse: "#FDFDFE",
     },
-    // Border darkened one step (L 0.885 -> 0.866, same slate-blue hue): with
-    // every surface step at the ~0.02 floor, the 1px hairlines are what carry
-    // figure-ground on light, and the old border barely registered.
-    border: "#CCD4DD",
+    // Hairline re-pinned to the unified H248 sky hue (the r2 border drifted to
+    // H251). With cards carrying figure-ground, the border is a quiet seam.
+    border: "#CBD4DD",
     accent: "#178463",
     accentSecondary: "#0A7E8C",
-    // #9711 r2: success/danger darkened in L (hue held) — the diff-stat +N/-N
-    // numerals render as TEXT on the recessed chip wells and sat at 3.3-3.8:1;
-    // both now clear 4.5:1 on every surface incl. the deepest band (#D5DDE7).
-    // activity.active/working track success so the dot and the numeral beside
-    // it stay one green.
+    // r3: success freshened from the r2 forest #216E3E — that darkening was
+    // tuned for numerals on the old recessed #D5DDE7 wells. On the lifted
+    // near-white chips a lighter eucalyptus reads sunny and still clears AA
+    // everywhere it renders as text (4.77:1 on the deepest chip #EFF5FB,
+    // 4.94:1 on cards, 5.24:1 on white). warning darkened one notch so the
+    // amber numeral clears 4.5:1 on cards (was 4.19).
     status: {
-      success: "#216E3E",
-      warning: "#A86A0C",
+      success: "#1C7B54",
+      warning: "#9D6309",
       danger: "#A83C34",
       info: "#1E6FA0",
     },
     activity: {
-      active: "#216E3E",
+      active: "#1C7B54",
       idle: "#5F6A76",
-      working: "#216E3E",
-      waiting: "#A0700E",
+      working: "#1C7B54",
+      waiting: "#97680D",
     },
     overlayTint: "#163447",
     terminal: {
@@ -62,8 +64,8 @@ export const theme: BuiltInThemeSource = {
       red: "#E05C5C",
       green: "#2EBD88",
       yellow: "#F5B814",
-      // #9711 r2: shifted toward Bondi's shallow-water cyan-blue so the dark
-      // terminal's ANSI ramp reads gold/cyan/green — sun, water, eucalyptus.
+      // Bondi shallow-water cyan-blue: the dark terminal's ANSI ramp reads
+      // gold/cyan/green — sun, water, eucalyptus.
       blue: "#37A6D9",
       magenta: "#9D45F0",
       cyan: "#0FA8C0",
@@ -81,8 +83,8 @@ export const theme: BuiltInThemeSource = {
       number: "#895E00",
       string: "#1C7350",
       operator: "#0B7184",
-      // #9711 r2: pulled off neon violet toward a deeper orchid so the keyword
-      // sits inside the marine family instead of fighting it (AA improves).
+      // Deeper orchid keyword sits inside the marine family instead of
+      // fighting it (AA-clear on the light panel).
       keyword: "#6A3FB0",
       function: "#1C68A8",
       link: "#10704F",
@@ -100,131 +102,134 @@ export const theme: BuiltInThemeSource = {
     "accent-soft": "rgba(23,132,99,0.18)",
     "focus-ring": "rgba(23,132,99,0.35)",
     "overlay-hover": "rgba(22,52,71,0.08)",
-    // #9711 r2: the derived 3% soft fill is sub-threshold over the near-white
-    // palette/list surfaces — the selected action-palette row was carried by
-    // its 2px accent rail alone. 5.5% keeps the same ink, just visible.
+    // The derived 3% soft fill is sub-threshold over the near-white
+    // palette/list surfaces; 5.5% keeps the same ink, just visible.
     "overlay-soft": "rgba(22,52,71,0.055)",
-    // #9711 r2: the derived elevate-to-select lift (~92% mix) sits in the band
-    // where near-white luminance discrimination is most compressed — the active
-    // palette/menu row was effectively invisible. 86% doubles the lift while
-    // staying a neutral cool-gray (no accent).
-    "overlay-raised": "color-mix(in oklab, #FEFFFF 86%, #1C2028)",
-    // E7: drop the pure-black scrim overrides so the lowered, hued engine defaults
-    // apply on light (withAlpha(overlayBase #163447, 0.22/0.36/0.55)) — a near-black
-    // 0.50 slab over a near-white workbench read as a heavy flat wash.
-    // pr-merged/pr-draft: GitHub-brand defaults fail AA on bondi's near-white panel
-    // (#8250DF 4.48:1, #8B949E 2.73:1). Darken in L only (hue preserved) so both
-    // clear AA on surface-panel AND surface-panel-elevated. E6.
+    // r3: hue-true elevate-to-select. The r2 value mixed elevated toward
+    // text-primary and composited to a dead neutral gray (~#DBDCDD, C 0.003)
+    // — a gray patch on the chroma-held sky reads as grime. Same lift,
+    // pinned to the sky family instead (L 0.945, C 0.014, H 248).
+    "overlay-raised": "#E6EEF6",
+    // pr-merged/pr-draft: GitHub-brand defaults fail AA on bondi's near-white
+    // panel; darkened in L only (hue preserved).
     "pr-merged": "#7644CC",
     "pr-draft": "#646B73",
-    // scrollbar-thumb (RC-6/E6): same slate hue, low enough L to clear the 3:1
-    // graphical floor against the lifted surfaces.
-    "scrollbar-thumb": "#6F757E",
-    "scrollbar-thumb-hover": "color-mix(in oklab, #6F757E 85%, #1C2028)",
+    // r3: scrollbar re-pinned from the neutral gray #6F757E onto the sky hue
+    // (H 248, same L band) — clears the 3:1 graphical floor on every surface.
+    "scrollbar-thumb": "#6A7787",
+    "scrollbar-thumb-hover": "color-mix(in oklab, #6A7787 85%, #1C2028)",
+    // r3: sunnier scrims. The engine's hued defaults (overlayBase at
+    // 0.22/0.36/0.55) read as a storm front over a near-white workbench;
+    // same slate ink, lighter hand.
+    "scrim-soft": "rgba(22,52,71,0.16)",
+    "scrim-medium": "rgba(22,52,71,0.28)",
+    "scrim-strong": "rgba(22,52,71,0.46)",
     "search-highlight-background": "rgba(35,94,150,0.14)",
     "search-highlight-text": "#235E96",
     "search-match-badge-background": "rgba(35,94,150,0.14)",
     "search-match-badge-text": "#235E96",
     "search-selected-result-border": "rgba(35,94,150,0.34)",
     "search-selected-result-icon": "#235E96",
-    // #9711 r2: the engine "light" shadows are a single soft penumbra — over a
-    // near-white field that reads as a halo with no contact edge (the same
-    // taped-on symptom the pulse card had). Two-layer contact+spread stacks in
-    // the theme's own ink give menus/popovers a defined edge.
+    // Two-layer contact+spread stacks in the theme's own ink give
+    // menus/popovers a defined edge over the near-white field.
     "shadow-ambient": "0 1px 2px rgba(23,33,48,0.10), 0 6px 16px rgba(23,33,48,0.10)",
     "shadow-floating": "0 1px 3px rgba(23,33,48,0.12), 0 12px 32px rgba(23,33,48,0.14)",
-    // E8: surface-input is derived RECESSED by the engine (just below canvas).
-    // #9711: surface-inset decoupled from the grid floor — a real recessed well
-    // so the diff/command chips read as inset rather than painted on. r2: unified
-    // with the filter-bar band (#D5DDE7, L 0.894) so the top search rail and the
-    // bottom command-input well are one recessed material.
-    "surface-inset": "#D5DDE7",
-    "surface-toolbar": "#E3EBF4",
+    // r3: surface-inset flipped from the recessed #D5DDE7 slab (L 0.894 —
+    // BELOW the grid floor, the single muddiest value in r2) to a lifted
+    // sky-tinted inset (L 0.967). In-card chips now read as quiet frosted
+    // wells one step below their white card, not gray boxes painted on it.
+    "surface-inset": "#EFF5FB",
+    // r3: inputs are raised, not recessed — the brief explicitly rejects the
+    // darker-text-input idiom. Near-white with a sky whisper; the hairline
+    // border carries the field boundary. (Engine still derives light inputs
+    // recessed; Bondi overrides at the theme layer as the gold standard —
+    // promote to the engine once the light family is rebuilt from Bondi.)
+    "surface-input": "#F9FCFF",
+    // r3: neutral chrome strip — the header read "too blue" with the sidebar
+    // tone; the toolbar drops to a whisper of the sky hue (C 0.003) so the
+    // color lives in the field and content, not the chrome.
+    "surface-toolbar": "#ECEEF0",
     "terminal-bright-black": "#525D69",
     "terminal-white": "#C8D0D9",
     "text-link": "#0F5B41",
-    "text-placeholder": "rgba(28,32,40,0.55)",
+    // r3: softened for the raised near-white input (composites to exactly
+    // 3.1:1 — the engine's 0.58 was tuned for the old recessed well).
+    "text-placeholder": "rgba(28,32,40,0.52)",
   },
   extensions: {
-    "dock-bg": "#E3EBF4",
-    // G1: keep the gutter at/just-below surface-grid (#DAE5EE) so it recedes and
-    // the panel tiles read as figure (no figure-ground inversion).
-    "panel-grid-bg": "#D8E2EC",
-    "pulse-before-bg": "#DAE5EE",
-    "pulse-card-bg": "#FEFFFF",
-    // #9711: second, wider shadow layer — the single hairline shadow was
-    // invisible over the near-white canvas, so the elevated card read as a
-    // flat rectangle taped onto the grid.
+    // Dock tracks the neutral toolbar chrome; shadow softened from the 0.35
+    // global fallback (registry format: shadow-color channels, alpha ≥ 0.25).
+    "dock-bg": "#ECEEF0",
+    "dock-shadow": "0 -2px 8px rgb(from var(--theme-shadow-color) r g b / 0.25)",
+    // Gutter sits exactly at the grid floor — one sky tone, no third band.
+    "panel-grid-bg": "#D9E5F0",
+    "pulse-before-bg": "#D9E5F0",
+    "pulse-card-bg": "#FFFFFF",
+    // Deliberate quiet sky header band on the white card (the fallback is
+    // transparent; an explicit in-family band keeps the card structured).
+    "pulse-card-header-bg": "#F7FBFF",
     "pulse-card-shadow": "0 1px 2px rgba(23,33,48,0.10), 0 4px 10px rgba(23,33,48,0.08)",
     "pulse-control-hover-bg": "rgba(22,52,71,0.05)",
-    "pulse-empty-bg": "#EAF2F9",
+    "pulse-empty-bg": "#EAF2FA",
     "pulse-heat-high-opacity": "0.85",
     "pulse-heat-low-opacity": "0.38",
     "pulse-heat-medium-opacity": "0.62",
     "pulse-heat-color": "#0A7E8C",
-    // P-Heat: opaque status-danger so the streak-break signal clears the 3:1
-    // floor vs the empty cell and stays destructive-tier (consumer adds an inset
-    // danger ring).
+    // Opaque status-danger so the streak-break signal clears the 3:1 floor.
     "pulse-missed-bg": "#A83C34",
-    "pulse-range-bg": "#EAF2F9",
-    "pulse-ring-offset": "#FEFFFF",
-    "pulse-skeleton-gradient": "linear-gradient(90deg, #DAE5EE 25%, #EAF2F9 50%, #DAE5EE 75%)",
-    // S1: settings card/list/dialog/nav-active overrides dropped so the engine +
-    // CSS defaults apply — dialog body inherits surface-panel, cards/list inherit
-    // surface-panel-elevated (a clean lift above the body), and nav-active
-    // inherits overlay-raised (the neutral elevate-to-select lift). The 2px accent
-    // marker in SettingsDialog.tsx is the single accent anchor.
-    // #9711 r2: solid header a hair above surface-panel — the old 0.70 alpha
-    // composited to nearly the body value (light forces material opacity 1),
-    // so the header/body boundary leaned entirely on the hairline.
-    "dialog-header-bg": "#F8FBFF",
-    "settings-kbd-bg": "#EAF2F9",
-    "settings-kbd-border": "#CCD4DD",
+    "pulse-range-bg": "#EAF2FA",
+    "pulse-ring-offset": "#FFFFFF",
+    "pulse-skeleton-gradient": "linear-gradient(90deg, #D9E5F0 25%, #EAF2FA 50%, #D9E5F0 75%)",
+    // Solid header a hair above the dialog body; settings cards/list inherit
+    // the engine defaults (body = panel, cards = elevated white).
+    "dialog-header-bg": "#F7FBFF",
+    "settings-kbd-bg": "#EAF2FA",
+    "settings-kbd-border": "#CBD4DD",
+    // r3: selected settings-nav row elevates to white + the 2px accent
+    // marker (the inherited overlay-raised fill is a darker lift — correct
+    // for menu rows on white popovers, wrong for nav selection on the tinted
+    // settings sidebar).
+    "settings-nav-active-bg": "#FFFFFF",
+    "settings-nav-active-shadow": "0 0 0 1px rgba(28,38,50,0.08), 0 1px 2px rgba(23,33,48,0.05)",
     "settings-nav-hover-bg": "rgba(22,52,71,0.05)",
-    // #9711 r2: recessed (canvas) instead of raised white — dialog-family text
-    // inputs share one elevation language with the palette/commit inputs.
-    "settings-search-bg": "#EAF2F9",
-    "settings-sidebar-bg": "rgba(244,248,254,0.60)",
-    "sidebar-action-hover-bg": "rgba(0,0,0,0.05)",
-    // Issue 1 / #9711: selection elevates, container recedes. The selected card
-    // lifts to pure white (L 1.0, a 0.063 jump over the sidebar) so the single
-    // active worktree reads as crisp paper against the blue field; hover tracks
-    // canvas (L 0.957) — idle < hover < selected.
+    "settings-sidebar-bg": "rgba(243,249,255,0.60)",
+    "sidebar-action-hover-bg": "rgba(22,52,71,0.05)",
+    // r3: white cards on pale sky. Idle worktree cards lift to the panel
+    // plane with a hairline ring + contact shadow; hover brightens; the
+    // selected card reaches pure white. The sidebar field shows through the
+    // gaps as genuine Bondi sky, and status colors finally pop on white.
+    "sidebar-card-bg": "#F3F9FF",
+    "sidebar-card-shadow": "0 0 0 1px rgba(28,38,50,0.08), 0 1px 2px rgba(23,33,48,0.05)",
     "sidebar-active-bg": "#FFFFFF",
-    "sidebar-hover-bg": "#EAF2F9",
-    "toolbar-agent-hover-bg": "rgba(22,52,71,0.06)",
-    "toolbar-control-hover-bg": "rgba(22,52,71,0.07)",
-    // #9711: neutral hover foreground (was accent green) — accent restraint;
-    // the hover affordance is carried by toolbar-control-hover-bg.
+    "sidebar-hover-bg": "#FAFBFC",
+    "toolbar-agent-hover-bg": "rgba(28,32,40,0.06)",
+    "toolbar-control-hover-bg": "rgba(28,32,40,0.06)",
+    // Neutral hover foreground (accent restraint); the hover affordance is
+    // carried by toolbar-control-hover-bg.
     "toolbar-control-hover-fg": "#1C2028",
     "toolbar-control-hover-shadow": "none",
-    "toolbar-divider": "rgba(204,212,221,0.6)",
+    "toolbar-divider": "rgba(203,212,221,0.6)",
     "toolbar-pill-radius": "0.5rem",
-    // #9711 r2: top wash swapped from a stray 6% accent-green (restraint win) to
-    // a 5% lifeguard-tower gold — the one whisper of Bondi sun in the light
-    // chrome; the cool gradient beneath is unchanged.
+    // r3: neutral chrome pills — the r2 info-blue washes plus the sky
+    // gradient made the whole header read blue. One whisper of lifeguard
+    // gold survives on the project pill; everything else is quiet ink.
     "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(245,184,20,0.05), rgba(22,52,71,0.04)), linear-gradient(135deg, #EAF2F9, #E3EBF4)",
-    "toolbar-project-border": "rgba(204,212,221,0.7)",
-    // #9711 r2: pill fills moved off the near-neutral ink overlay onto an
-    // info-blue tint at the same weight — at 5-6% alpha the old gray wash had
-    // zero chroma and read as pre-redesign gray against the chroma-held
-    // surfaces.
-    "toolbar-project-chip-bg": "rgba(30,111,160,0.06)",
-    "toolbar-project-chip-border": "rgba(204,212,221,0.7)",
+      "linear-gradient(180deg, rgba(245,184,20,0.04), rgba(28,32,40,0.02)), #F2F4F6",
+    "toolbar-project-border": "rgba(203,212,221,0.7)",
+    "toolbar-project-chip-bg": "rgba(28,32,40,0.04)",
+    "toolbar-project-chip-border": "rgba(203,212,221,0.7)",
     "toolbar-project-shadow": "inset 0 1px 0 rgba(255,255,255,0.5)",
-    // #9711: hairline drop so the chrome strip separates from the canvas —
-    // depth via the shadow budget, not a darker surface.
+    // Hairline drop so the chrome strip separates from the canvas.
     "toolbar-shadow": "0 1px 2px rgba(23,33,48,0.06)",
-    "toolbar-stats-bg": "rgba(30,111,160,0.06)",
-    "toolbar-stats-border": "rgba(204,212,221,0.6)",
-    "toolbar-stats-divider": "rgba(204,212,221,0.6)",
-    "toolbar-stats-hover-bg": "rgba(30,111,160,0.09)",
-    "toolbar-stats-shadow": "none",
-    // #9711: the filter/search bar sits on its own recessed band — the deepest
-    // surface in the sidebar (L 0.894, below inset) — so the control rail reads
-    // as seated chrome instead of dissolving into the wash.
-    "worktree-filter-bar-bg": "#D5DDE7",
+    "toolbar-stats-bg": "rgba(28,32,40,0.04)",
+    "toolbar-stats-border": "rgba(203,212,221,0.6)",
+    "toolbar-stats-divider": "rgba(203,212,221,0.6)",
+    "toolbar-stats-hover-bg": "rgba(28,32,40,0.065)",
+    // r3: the filter/search rail sits flush on the sky field (the r2 band
+    // recessed BELOW the grid floor — the darkest region in the sidebar).
+    // The raised white search input carries the rail now.
+    "worktree-filter-bar-bg": "#DFECF8",
+    "worktree-search-input-bg": "#F9FCFF",
     "worktree-section-hover-bg": "rgba(22,52,71,0.05)",
   },
 };

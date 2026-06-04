@@ -1,4 +1,13 @@
+/* Card plane (r3 white-cards-on-sky): light themes opt the idle card into an
+   opaque lifted plane via --sidebar-card-bg + a hairline ring/contact shadow
+   via --sidebar-card-shadow, so the sidebar field shows through the gaps and
+   card content reads on near-white. Dark themes leave both unset: the card
+   stays transparent and the additive hover/active ladder below is unchanged.
+   The fallback shadow is the zero shadow `0 0 #0000` (NOT `none`) so it can
+   participate in comma-joined shadow lists in the selected rules below. */
 .sidebar-worktree-card {
+  background: var(--sidebar-card-bg, transparent);
+  box-shadow: var(--sidebar-card-shadow, 0 0 #0000);
   transition:
     background-color var(--duration-150) var(--ease-out-expo),
     box-shadow var(--duration-150) var(--ease-out-expo);
@@ -19,7 +28,9 @@
 .sidebar-worktree-card[data-active="true"] {
   --sidebar-active-marker: var(--theme-border-strong);
   background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.05));
-  box-shadow: inset 2px 0 0 var(--sidebar-active-marker);
+  box-shadow:
+    inset 2px 0 0 var(--sidebar-active-marker),
+    var(--sidebar-card-shadow, 0 0 #0000);
 }
 
 .dark .sidebar-worktree-card[data-active="true"] {
@@ -35,7 +46,9 @@
    marker token (light: border-strong; dark: overlay-selected, byte-for-byte). */
 .sidebar-root:not(:focus-within) .sidebar-worktree-card[data-active="true"] {
   background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.05));
-  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--sidebar-active-marker) 45%, transparent);
+  box-shadow:
+    inset 2px 0 0 color-mix(in srgb, var(--sidebar-active-marker) 45%, transparent),
+    var(--sidebar-card-shadow, 0 0 #0000);
 }
 
 .sidebar-worktree-card[data-hoverable="true"]:hover,

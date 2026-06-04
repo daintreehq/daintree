@@ -157,6 +157,11 @@ export const EXTENSION_KEY_REGISTRY = {
   // light themes. See #8175 lineage.
   "sidebar-action-hover-bg": OPTIONAL,
   "sidebar-active-bg": SIDEBAR_ACTIVE,
+  // r3 white-cards-on-sky primitives: the idle worktree card lifts to an
+  // opaque near-white plane (light themes opt in; dark themes leave the card
+  // transparent and keep the additive hover/active ladder).
+  "sidebar-card-bg": OPTIONAL,
+  "sidebar-card-shadow": OPTIONAL,
   "sidebar-hover-bg": SIDEBAR_HOVER,
 
   // Toolbar — toolbar-control-armed-shadow is polarity-conditional. The CSS
@@ -196,6 +201,7 @@ export const EXTENSION_KEY_REGISTRY = {
   // Worktree section
   "worktree-section-hover-bg": OPTIONAL,
   "worktree-filter-bar-bg": OPTIONAL,
+  "worktree-search-input-bg": OPTIONAL,
 } as const satisfies Record<ExtensionKey, ExtensionKeyMetadata>;
 
 export function isExtensionKeyRequired(key: ExtensionKey, mode: ColorMode): boolean {

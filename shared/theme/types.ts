@@ -280,6 +280,8 @@ export const EXTENSION_KEYS = [
   // Sidebar interaction
   "sidebar-action-hover-bg",
   "sidebar-active-bg",
+  "sidebar-card-bg",
+  "sidebar-card-shadow",
   "sidebar-hover-bg",
 
   // Toolbar
@@ -315,6 +317,7 @@ export const EXTENSION_KEYS = [
   // Worktree section
   "worktree-section-hover-bg",
   "worktree-filter-bar-bg",
+  "worktree-search-input-bg",
 ] as const;
 
 export type ExtensionKey = (typeof EXTENSION_KEYS)[number];
