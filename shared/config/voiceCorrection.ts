@@ -12,8 +12,10 @@ nuxed/nucks/nuts: Nuxt
 remixed/re mix: Remix
 svelt/s felt: Svelte
 solid jess: SolidJS
-veet/veat/fight: Vite
+veet/veat: Vite
 view jess/voo jay ess: Vue.js
+story book: Storybook
+tan stack: TanStack
 get hub: GitHub
 get lab: GitLab
 cube netties/cube nettis: Kubernetes
@@ -42,7 +44,6 @@ play right: Playwright
 see eye/see eye see dee: CI/CD
 node jess: Node.js
 deno/dino: Deno
-bun/bon: Bun
 npm/m pm: npm
 p n p m/pin pin: pnpm
 tail wind: Tailwind

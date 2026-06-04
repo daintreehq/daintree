@@ -137,6 +137,48 @@ describe("VoiceCorrectionService", () => {
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
+  it("sends the cacheable system prompt as the first developer message", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(makeFetchResponse({ corrected_text: "Corrected." }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct({ rawText: "react is great" }, BASE_SETTINGS);
+
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    expect(body.input).toHaveLength(2);
+    expect(body.input[0].role).toBe("developer");
+    expect(body.input[0].content).toContain("speech-to-text correction engine");
+    // The static prefix must not be split into the short-lived `instructions` field,
+    // and we intentionally omit prompt_cache_retention (issue #9746).
+    expect(body.instructions).toBeUndefined();
+    expect(body.prompt_cache_retention).toBeUndefined();
+  });
+
+  it("keeps the cacheable prefix identical across utterances while the user turn varies", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(makeFetchResponse({ corrected_text: "Corrected." }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct(
+      { rawText: "react is great", reason: "stop", segmentCount: 1 },
+      BASE_SETTINGS
+    );
+    await svc.correct(
+      { rawText: "type script rules", recentContext: ["earlier text"], segmentCount: 3 },
+      BASE_SETTINGS
+    );
+
+    const first = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    const second = JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string);
+    expect(first.input[0].content).toBe(second.input[0].content);
+    expect(first.prompt_cache_key).toBe(second.prompt_cache_key);
+    expect(first.input[1].content).not.toBe(second.input[1].content);
+  });
+
   it("formats explicit correction context in the user message", async () => {
     const fetchMock = vi
       .fn()
@@ -178,7 +220,7 @@ describe("VoiceCorrectionService", () => {
     expect(body.reasoning).toBeUndefined();
     expect(body.max_output_tokens).toBe(1024);
     expect(body.text.format.type).toBe("json_schema");
-    expect(body.prompt_cache_key).toContain("voice-correction-v6");
+    expect(body.prompt_cache_key).toMatch(/^voice-correction-v6:/);
   });
 
   it("skips LLM call when all words are high confidence", async () => {
