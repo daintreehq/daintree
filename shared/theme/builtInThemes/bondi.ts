@@ -163,12 +163,12 @@ export const theme: BuiltInThemeSource = {
     "settings-nav-hover-bg": "rgba(22,52,71,0.05)",
     "settings-sidebar-bg": "rgba(243,249,255,0.60)",
     "sidebar-action-hover-bg": "rgba(22,52,71,0.05)",
-    // Idle cards lift to the panel plane; hover brightens; selected reaches
-    // pure white. idle < hover < selected is audit-enforced.
-    "sidebar-card-bg": "#F3F9FF",
+    // Idle cards sit just below white; hover brightens; selected reaches pure
+    // white + the accent rail. idle < hover < selected is audit-enforced.
+    "sidebar-card-bg": "#F7FBFF",
     "sidebar-card-shadow": "0 0 0 1px rgba(28,38,50,0.08), 0 1px 2px rgba(23,33,48,0.05)",
     "sidebar-active-bg": "#FFFFFF",
-    "sidebar-hover-bg": "#FAFBFC",
+    "sidebar-hover-bg": "#FBFDFF",
     "toolbar-agent-hover-bg": "rgba(28,32,40,0.06)",
     "toolbar-control-hover-bg": "rgba(28,32,40,0.06)",
     // Accent restraint: hover affordance is the bg, not a green foreground.
@@ -177,17 +177,18 @@ export const theme: BuiltInThemeSource = {
     "toolbar-divider": "rgba(203,212,221,0.6)",
     "toolbar-pill-radius": "0.5rem",
     // One lifeguard-gold whisper on the project pill; everything else quiet ink.
+    // Pills sit LIGHTER than the chrome strip (raised, like all content).
     "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(245,184,20,0.07), rgba(28,32,40,0.02)), #F2F4F6",
+      "linear-gradient(180deg, rgba(245,184,20,0.07), rgba(28,32,40,0.02)), #F6F8FA",
     "toolbar-project-border": "rgba(203,212,221,0.7)",
     "toolbar-project-chip-bg": "rgba(28,32,40,0.04)",
     "toolbar-project-chip-border": "rgba(203,212,221,0.7)",
     "toolbar-project-shadow": "inset 0 1px 0 rgba(255,255,255,0.5)",
     "toolbar-shadow": "0 1px 2px rgba(23,33,48,0.06)",
-    "toolbar-stats-bg": "rgba(28,32,40,0.04)",
+    "toolbar-stats-bg": "#F6F8FA",
     "toolbar-stats-border": "rgba(203,212,221,0.6)",
     "toolbar-stats-divider": "rgba(203,212,221,0.6)",
-    "toolbar-stats-hover-bg": "rgba(28,32,40,0.065)",
+    "toolbar-stats-hover-bg": "#FBFCFD",
     // Filter rail sits flush on the field; the raised search input carries it.
     "worktree-filter-bar-bg": "#DFECF8",
     // Active quick-state tab lifts to white under its inset underline.
