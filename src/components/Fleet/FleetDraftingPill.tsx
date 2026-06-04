@@ -3,7 +3,6 @@ import { RadioTower, ChevronDown, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
-import { useFleetBroadcastConfirmStore } from "@/store/fleetBroadcastConfirmStore";
 import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewStore";
 import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
@@ -33,16 +32,11 @@ export function FleetDraftingPill(): ReactElement | null {
   // pipeline (fleetEnterBroadcast.doSend) reads the snapshot taken at
   // Enter-press time and clears in its `finally`, so this effect only
   // covers the "user opened, edited, then dismissed without sending" case.
-  // Gated on `pending === null` defensively: while a confirm is in flight
-  // the snapshot is what matters, but keeping the live store in sync with
-  // the snapshot avoids surprising the user with stale state if they then
-  // cancel the dialog and reopen the popover.
-  const pendingBroadcast = useFleetBroadcastConfirmStore((s) => s.pending);
   useEffect(() => {
-    if (!open && pendingBroadcast === null) {
+    if (!open) {
       useFleetTargetOverridesStore.getState().clear();
     }
-  }, [open, pendingBroadcast]);
+  }, [open]);
 
   if (peerCount < 1) return null;
 

@@ -3,15 +3,10 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { createStore } from "zustand/vanilla";
 import {
   FLEET_BROADCAST_HISTORY_KEY,
-  FLEET_CONFIRM_BYTE_THRESHOLD,
-  FLEET_DESTRUCTIVE_RE,
   FLEET_LARGE_PASTE_BATCH_SIZE,
   FLEET_LARGE_PASTE_BYTE_THRESHOLD,
   buildFleetBroadcastRecipeContext,
   getFleetBroadcastByteLength,
-  getFleetBroadcastDestructiveMatch,
-  getFleetBroadcastWarnings,
-  needsFleetBroadcastConfirmation,
   resolveFleetBroadcastTargetIds,
 } from "../fleetBroadcast";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -129,54 +124,12 @@ describe("fleetBroadcast constants", () => {
   it("history key is stable", () => {
     expect(FLEET_BROADCAST_HISTORY_KEY).toBe("fleet-broadcast");
   });
-  it("confirmation threshold matches spec (512 bytes)", () => {
-    expect(FLEET_CONFIRM_BYTE_THRESHOLD).toBe(512);
-  });
   it("large-paste byte threshold matches spec (100 KB)", () => {
     expect(FLEET_LARGE_PASTE_BYTE_THRESHOLD).toBe(102_400);
   });
   it("large-paste batch size is a conservative IPC fan-out", () => {
     expect(FLEET_LARGE_PASTE_BATCH_SIZE).toBe(5);
   });
-});
-
-describe("FLEET_DESTRUCTIVE_RE", () => {
-  const positives = [
-    "rm -rf /tmp/foo",
-    "rm -r ./build",
-    "rm -f something",
-    "rm -rfv node_modules",
-    "rm -Rf /tmp/foo",
-    "git clean -fd",
-    "git clean -fdx",
-    "sudo apt install",
-    "drop table users",
-    "DROP TABLE USERS",
-    "truncate table sessions",
-    "chmod -R 777 /",
-    "mkfs.ext4 /dev/sda1",
-    "dd if=/dev/zero of=/dev/sda",
-    ":(){ :|:& };:",
-  ];
-  for (const cmd of positives) {
-    it(`flags: ${cmd}`, () => {
-      expect(FLEET_DESTRUCTIVE_RE.test(cmd)).toBe(true);
-    });
-  }
-
-  const negatives = [
-    "echo hello",
-    "git status",
-    "npm test",
-    "ls -la",
-    "echo 'drop it'",
-    "please rm the unused code",
-  ];
-  for (const cmd of negatives) {
-    it(`does not flag: ${cmd}`, () => {
-      expect(FLEET_DESTRUCTIVE_RE.test(cmd)).toBe(false);
-    });
-  }
 });
 
 describe("getFleetBroadcastByteLength", () => {
@@ -186,107 +139,6 @@ describe("getFleetBroadcastByteLength", () => {
   it("counts multi-byte UTF-8 characters (emoji = 4 bytes)", () => {
     expect(getFleetBroadcastByteLength("✓")).toBe(3);
     expect(getFleetBroadcastByteLength("🚀")).toBe(4);
-  });
-});
-
-describe("getFleetBroadcastWarnings", () => {
-  it("detects multi-line payloads", () => {
-    expect(getFleetBroadcastWarnings("one\ntwo").multiline).toBe(true);
-    expect(getFleetBroadcastWarnings("one two").multiline).toBe(false);
-  });
-
-  it("detects byte-length overflow", () => {
-    const small = "a".repeat(FLEET_CONFIRM_BYTE_THRESHOLD);
-    const large = "a".repeat(FLEET_CONFIRM_BYTE_THRESHOLD + 1);
-    expect(getFleetBroadcastWarnings(small).overByteLimit).toBe(false);
-    expect(getFleetBroadcastWarnings(large).overByteLimit).toBe(true);
-  });
-
-  it("counts UTF-8 bytes — 509 ASCII + rocket (4 bytes) crosses to 513", () => {
-    const borderline = "a".repeat(FLEET_CONFIRM_BYTE_THRESHOLD - 3) + "🚀";
-    expect(getFleetBroadcastByteLength(borderline)).toBe(FLEET_CONFIRM_BYTE_THRESHOLD + 1);
-    expect(getFleetBroadcastWarnings(borderline).overByteLimit).toBe(true);
-  });
-
-  it("treats exactly 512 UTF-8 bytes as within limit", () => {
-    const exact = "a".repeat(FLEET_CONFIRM_BYTE_THRESHOLD - 4) + "🚀";
-    expect(getFleetBroadcastByteLength(exact)).toBe(FLEET_CONFIRM_BYTE_THRESHOLD);
-    expect(getFleetBroadcastWarnings(exact).overByteLimit).toBe(false);
-  });
-
-  it("detects destructive commands", () => {
-    expect(getFleetBroadcastWarnings("rm -rf node_modules").destructive).toBe(true);
-    expect(getFleetBroadcastWarnings("echo 'hi'").destructive).toBe(false);
-  });
-});
-
-describe("needsFleetBroadcastConfirmation", () => {
-  it("returns true when any warning fires", () => {
-    expect(needsFleetBroadcastConfirmation("multi\nline")).toBe(true);
-    expect(needsFleetBroadcastConfirmation("rm -rf .")).toBe(true);
-    expect(needsFleetBroadcastConfirmation("x".repeat(700))).toBe(true);
-  });
-  it("returns false for short, single-line, safe text", () => {
-    expect(needsFleetBroadcastConfirmation("run the test")).toBe(false);
-  });
-
-  describe("resolved-payload variant", () => {
-    it("confirms when any resolved payload exceeds the byte threshold even if the source draft is safe", () => {
-      const safeDraft = "cd {{worktree_path}}";
-      const longResolved = `cd ${"/very/long/path/".repeat(40)}`;
-      expect(getFleetBroadcastByteLength(longResolved)).toBeGreaterThan(
-        FLEET_CONFIRM_BYTE_THRESHOLD
-      );
-      expect(needsFleetBroadcastConfirmation(safeDraft, [longResolved])).toBe(true);
-      expect(needsFleetBroadcastConfirmation(safeDraft, ["safe"])).toBe(false);
-    });
-
-    it("confirms when any resolved payload contains a destructive pattern surfaced by substitution", () => {
-      const safeDraft = "cleanup {{worktree_path}}";
-      // Variable expansion could introduce `rm -rf` not present in the draft.
-      expect(needsFleetBroadcastConfirmation(safeDraft, ["cleanup", "rm -rf /tmp/scratch"])).toBe(
-        true
-      );
-    });
-
-    it("returns false when source draft is safe and all resolved payloads are safe", () => {
-      expect(
-        needsFleetBroadcastConfirmation("status {{branch_name}}", ["status main", "status develop"])
-      ).toBe(false);
-    });
-
-    it("source-level warnings still take precedence over an empty resolved list", () => {
-      expect(needsFleetBroadcastConfirmation("rm -rf .", [])).toBe(true);
-    });
-  });
-});
-
-describe("getFleetBroadcastDestructiveMatch", () => {
-  it("returns substring and index for a destructive draft", () => {
-    const match = getFleetBroadcastDestructiveMatch("rm -rf node_modules");
-    expect(match).not.toBeNull();
-    expect(match!.index).toBe(0);
-    expect(match!.substring.toLowerCase()).toContain("rm -rf");
-  });
-
-  it("returns the offset for a destructive command embedded in the draft", () => {
-    const draft = "echo 'cleanup' && rm -rf /tmp/scratch";
-    const match = getFleetBroadcastDestructiveMatch(draft);
-    expect(match).not.toBeNull();
-    expect(match!.index).toBe(draft.indexOf("rm -rf"));
-    expect(match!.substring.toLowerCase()).toContain("rm");
-  });
-
-  it("returns null for safe text", () => {
-    expect(getFleetBroadcastDestructiveMatch("echo hello")).toBeNull();
-    expect(getFleetBroadcastDestructiveMatch("npm test")).toBeNull();
-  });
-
-  it("does not depend on regex lastIndex — repeated calls are stable", () => {
-    const draft = "rm -rf node_modules";
-    const first = getFleetBroadcastDestructiveMatch(draft);
-    const second = getFleetBroadcastDestructiveMatch(draft);
-    expect(first).toEqual(second);
   });
 });
 

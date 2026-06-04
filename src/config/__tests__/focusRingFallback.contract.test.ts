@@ -317,7 +317,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     file: "src/components/Fleet/FleetArmingRibbon.tsx",
     fragment: "relative flex items-center gap-3 overflow-hidden border-b border-daintree-border",
     reason:
-      "Status/alertdialog ribbon — focus delegated to the inner broadcast confirm controls; ribbon itself uses tabIndex=-1 to receive programmatic focus only",
+      "Status ribbon — focus delegated to child controls (Exit button, count chip, selection-menu trigger); ribbon container uses tabIndex=-1 to receive programmatic focus only",
   },
   {
     file: "src/components/Notifications/NotificationCenter.tsx",
