@@ -35,6 +35,30 @@ function createSnapshot(overrides: Partial<WorktreeSnapshot> = {}): WorktreeSnap
   };
 }
 
+function prLinkedSnapshot(
+  state: "open" | "merged" | "closed" | "declined"
+): Pick<WorktreeSnapshot, "linked"> {
+  return {
+    linked: {
+      providerId: "github",
+      pr: {
+        ref: { providerId: "github", owner: "test", repo: "test", number: 7, rawData: {} },
+        state,
+        url: "https://github.com/test/test/pull/7",
+      },
+    },
+  } as unknown as Pick<WorktreeSnapshot, "linked">;
+}
+
+function cleanChanges(id: string): WorktreeSnapshot["worktreeChanges"] {
+  return {
+    worktreeId: id,
+    rootPath: `/repo/${id}`,
+    changes: [],
+    changedFileCount: 0,
+  } as unknown as WorktreeSnapshot["worktreeChanges"];
+}
+
 function setWorktrees(snaps: WorktreeSnapshot[]): void {
   mocks.worktreeViewStore.setState({
     worktrees: new Map(snaps.map((s) => [s.id, s])),
@@ -329,6 +353,44 @@ describe("getVisibleWorktreesForCycling", () => {
     } as never);
     const ids = getVisibleWorktreesForCycling().map((w) => w.id);
     expect(ids).not.toContain("wt-eph");
+  });
+
+  it("excludes a worktree whose only PR is closed from the finished filter (issue #9731)", () => {
+    useWorktreeFilterStore.setState({ quickStateFilter: "finished" });
+    setWorktrees([
+      createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
+      createSnapshot({
+        id: "wt-open",
+        name: "open",
+        branch: "feature/open",
+        issueNumber: 1,
+        ...prLinkedSnapshot("open"),
+        worktreeChanges: cleanChanges("wt-open"),
+      }),
+      createSnapshot({
+        id: "wt-closed",
+        name: "closed",
+        branch: "feature/closed",
+        issueNumber: 2,
+        ...prLinkedSnapshot("closed"),
+        worktreeChanges: cleanChanges("wt-closed"),
+      }),
+      createSnapshot({
+        id: "wt-declined",
+        name: "declined",
+        branch: "feature/declined",
+        issueNumber: 3,
+        ...prLinkedSnapshot("declined"),
+        worktreeChanges: cleanChanges("wt-declined"),
+      }),
+    ]);
+
+    const ids = getVisibleWorktreesForCycling().map((w) => w.id);
+    // Open PR with no local changes still counts as finished (positive control).
+    expect(ids).toContain("wt-open");
+    // Closed/declined PRs must NOT count as finished — that's the bug.
+    expect(ids).not.toContain("wt-closed");
+    expect(ids).not.toContain("wt-declined");
   });
 
   it("excludes non-agent terminals from quickStateFilter matching", () => {

@@ -740,6 +740,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       const isComplete =
         !!worktree.issueNumber &&
         !!worktree.linked?.pr &&
+        worktree.linked.pr.state !== "closed" &&
+        worktree.linked.pr.state !== "declined" &&
         !hasChanges &&
         worktree.worktreeChanges !== null;
 

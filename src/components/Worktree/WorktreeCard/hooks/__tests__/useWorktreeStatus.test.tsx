@@ -201,6 +201,69 @@ describe("useWorktreeStatus — lifecycleStage", () => {
   });
 });
 
+describe("useWorktreeStatus — isComplete", () => {
+  function getIsComplete(overrides: Partial<WorktreeState> = {}): boolean {
+    const { result } = renderHook(() => useWorktreeStatus({ worktree: makeWorktree(overrides) }));
+    return result.current.isComplete;
+  }
+
+  it("is true when issue linked, open PR, and no local changes", () => {
+    expect(
+      getIsComplete({
+        issueNumber: 42,
+        prState: "open",
+        prNumber: 10,
+        ...prLinked({ prState: "open" }),
+        worktreeChanges: makeChanges({ changedFileCount: 0 }),
+      })
+    ).toBe(true);
+  });
+
+  it("is true when issue linked, merged PR, and no local changes", () => {
+    expect(
+      getIsComplete({
+        issueNumber: 42,
+        prState: "merged",
+        prNumber: 10,
+        ...prLinked({ prState: "merged" }),
+        worktreeChanges: makeChanges({ changedFileCount: 0 }),
+      })
+    ).toBe(true);
+  });
+
+  it("is false when the linked PR is closed without merging (issue #9731)", () => {
+    expect(
+      getIsComplete({
+        issueNumber: 42,
+        prState: "closed",
+        prNumber: 10,
+        ...prLinked({ prState: "closed" }),
+        worktreeChanges: makeChanges({ changedFileCount: 0 }),
+      })
+    ).toBe(false);
+  });
+
+  it("is false when the linked PR is declined (issue #9731)", () => {
+    expect(
+      getIsComplete({
+        issueNumber: 42,
+        prNumber: 10,
+        ...prLinked({ prState: "declined" }),
+        worktreeChanges: makeChanges({ changedFileCount: 0 }),
+      })
+    ).toBe(false);
+  });
+
+  it("is false when there is no linked PR at all", () => {
+    expect(
+      getIsComplete({
+        issueNumber: 42,
+        worktreeChanges: makeChanges({ changedFileCount: 0 }),
+      })
+    ).toBe(false);
+  });
+});
+
 describe("useWorktreeStatus — branchLabel", () => {
   function getStatus(overrides: Partial<WorktreeState> = {}) {
     const { result } = renderHook(() => useWorktreeStatus({ worktree: makeWorktree(overrides) }));
