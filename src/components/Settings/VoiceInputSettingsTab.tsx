@@ -127,7 +127,9 @@ export function VoiceInputSettingsTab() {
 
   const loadSettings = useCallback(async () => {
     const s = await window.electron?.voiceInput?.getSettings();
-    if (s) setSettings(s);
+    // Merge over defaults so fields added after a settings blob was written
+    // (e.g. suggestedDictionary, learnFromCorrections) are never undefined.
+    if (s) setSettings({ ...DEFAULT_SETTINGS, ...s });
   }, []);
 
   const { isLoading, loadError, retryAction } = useTabLoad({

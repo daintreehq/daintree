@@ -20,6 +20,8 @@ vi.mock("@/store/voiceRecordingStore", () => {
     setStatus: vi.fn(),
     setConfigured: vi.fn(),
     setCorrectionEnabled: vi.fn(),
+    setLearnFromCorrections: vi.fn(),
+    setSessionCorrectedText: vi.fn(),
     setArming: vi.fn(),
     beginSession: vi.fn(),
     finishSession: vi.fn(),
