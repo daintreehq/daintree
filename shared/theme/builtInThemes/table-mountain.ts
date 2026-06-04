@@ -9,57 +9,85 @@ export const theme: BuiltInThemeSource = {
   heroImage: "/themes/table-mountain.webp",
   palette: {
     type: "light",
+    // Sandstone composition (#9715, Bondi-derived): ONE golden-sandstone family
+    // for the whole field (H~73-85) with white content on top. The fynbos
+    // colours appear only as detail — protea-pink accent, fynbos-green
+    // secondary, slate-Atlantic search/info, and the mountain-shadow terminal —
+    // never as a field surface. Everything that carries content lifts TOWARD
+    // white — never a darker fill on a light container.
+    // Ramp L 0.882/0.937/0.958/0.978/1.0: steps 0.0203-0.0553 (gate ≥ 0.02,
+    // runaway 2.72 < 3), span 0.118, panel→elevated not the smallest step. The
+    // grid is WET SANDSTONE — a full register deeper and richer than the
+    // dry-stone sidebar, so chrome/field/well read as three planes and white
+    // panels get real figure-ground pop.
     surfaces: {
-      grid: "#DBD2C4",
-      sidebar: "#E3DBCF",
-      canvas: "#EBE4DA",
-      panel: "#F2EDE5",
-      elevated: "#FCFAF6",
+      grid: "#E3D6C5",
+      sidebar: "#F1E9DE",
+      canvas: "#F6F0E8",
+      panel: "#FCF7F1",
+      elevated: "#FFFFFF",
     },
     text: {
-      primary: "#2C2622",
-      secondary: "#574E47",
-      muted: "#6F665C",
-      inverse: "#FCFAF6",
+      primary: "#231F1A",
+      // Near-neutral warm ink (C ≤ 0.014), floored: muted holds 5.0:1 on the
+      // grid and 6.3:1 on canvas; secondary ≥ 6:1 everywhere it sits.
+      secondary: "#514B44",
+      muted: "#5C5750",
+      inverse: "#FDFCF9",
     },
-    border: "#C2B9AC",
+    border: "#D5CBBD",
     accent: "#B0466F",
     accentSecondary: "#3C7A4C",
+    // success/danger/warning render as TEXT (diff numerals, status labels) on
+    // the near-white chips — all hold ≥ 4.5:1 on every surface up to #FFFFFF.
     status: {
-      success: "#357E4A",
+      success: "#2E7B45",
       warning: "#9C6210",
-      danger: "#BC4339",
-      info: "#3A6F90",
+      danger: "#AE3D33",
+      info: "#2D6E94",
     },
     activity: {
       active: "#1E8A42",
-      idle: "#857B6F",
+      // The old #857B6F idle dot sat under 3:1 on white; floored to a warm
+      // stone-gray that clears the graphical minimum on every chrome surface.
+      idle: "#696259",
       working: "#1E8A42",
       waiting: "#9C6E0C",
     },
-    overlayTint: "#3C3026",
+    // Warm stone ink: the overlay/wash ladder composites onto the sandstone
+    // field; a cool tint there reads as grime, not depth.
+    overlayTint: "#342C23",
     terminal: {
+      // The mountain face in shadow — warm near-black, its own environment
+      // below the sunlit field.
       background: "#261F1B",
       foreground: "#E0D8D0",
+      // 3.27:1 on the terminal background.
+      muted: "#796E64",
       cursor: "#CFA848",
-      selection: "rgba(176,70,111,0.30)",
-      red: "#D87878",
-      green: "#7DA88A",
-      yellow: "#CFA848",
-      blue: "#7ab3c8",
-      magenta: "#B888B8",
-      cyan: "#5bbdbd",
-      brightRed: "#E49898",
-      brightGreen: "#9dc9a6",
-      brightYellow: "#E0C060",
-      brightBlue: "#9dcde0",
-      brightMagenta: "#CCA4C4",
-      brightCyan: "#7dd4d4",
-      brightWhite: "#fdfbf8",
+      // Opaque warm lift, not an accent wash — selection must read as the same
+      // dark material.
+      selection: "#3A3129",
+      // Re-inked from the old washed-out pastels: every base colour clears
+      // 4.5:1 on the terminal background (red was the floor case at 4.8:1).
+      red: "#E4635B",
+      green: "#41B06E",
+      yellow: "#DFA63B",
+      blue: "#58A8DC",
+      // Protea pink carried into the terminal at 5.3:1.
+      magenta: "#D873A3",
+      cyan: "#2FAE9F",
+      brightRed: "#F28B7D",
+      brightGreen: "#6FCE91",
+      brightYellow: "#F0C75E",
+      brightBlue: "#8CC7EE",
+      brightMagenta: "#EC9EC0",
+      brightCyan: "#5BD6C6",
+      brightWhite: "#FBF7F1",
     },
     syntax: {
-      comment: "#6B7A6B",
-      punctuation: "#525B67",
+      comment: "#5D6B5D",
+      punctuation: "#5C564C",
       number: "#855615",
       string: "#2C7234",
       operator: "#1C6D78",
@@ -67,7 +95,9 @@ export const theme: BuiltInThemeSource = {
       function: "#2C5DAD",
       link: "#1C6D78",
       quote: "#5A6854",
-      chip: "#7ecfca",
+      // Was a light teal (#7ecfca) that vanished on the light field; chips
+      // carry the fynbos-green secondary instead.
+      chip: "#3C7A4C",
     },
     strategy: {
       shadowStyle: "light",
@@ -76,103 +106,131 @@ export const theme: BuiltInThemeSource = {
     },
   },
   tokens: {
-    "accent-soft": "rgba(176,70,111,0.18)",
     "accent-muted": "rgba(176,70,111,0.30)",
-    "accent-secondary-soft": "rgba(60,122,76,0.18)",
-    "accent-secondary-muted": "rgba(60,122,76,0.30)",
-    "focus-ring": "rgba(176,70,111,0.45)",
-    "text-link": "#A03A64",
-    "overlay-hover": "rgba(60,48,38,0.08)",
-    // scrollbar-thumb must clear 3:1 vs panel & canvas (E6): #9B8E7E was 2.75/2.54.
-    "scrollbar-thumb": "#7E7363",
-    "scrollbar-thumb-hover": "color-mix(in oklab, #7E7363 80%, #2C2622)",
-    "search-highlight-background": "rgba(58,111,144,0.18)",
-    "search-highlight-text": "#2F5A77",
-    "search-match-badge-background": "rgba(58,111,144,0.14)",
-    "search-match-badge-text": "#2F5A77",
-    "search-selected-result-border": "rgba(58,111,144,0.40)",
-    "search-selected-result-icon": "#2F5A77",
-    // E8: drop the raised surface-input override (was #F6F1EA, brighter than
-    // canvas) so it inherits the engine's RECESSED default mix(canvas 96%, text)
-    // ≈ #E2DBD2 (L 0.894, just below canvas L 0.922) — the inset-well idiom.
-    // filter-selected (membership, never accent): elevate on light, don't darken.
-    // soft sits at ~panel level, strong toward elevated; both opaque lifts.
-    "filter-selected-bg-soft": "#EDE6DA",
-    "filter-selected-bg-strong": "#F7F2EA",
-    "surface-inset": "#E2DACE",
-    "surface-toolbar": "#E6DED2",
-    "terminal-black": "#261F1B",
-    "terminal-bright-black": "#968C84",
+    "accent-soft": "rgba(176,70,111,0.18)",
+    "focus-ring": "rgba(176,70,111,0.30)",
+    "overlay-hover": "rgba(52,44,35,0.08)",
+    // Derived 3% is sub-threshold over near-white surfaces.
+    "overlay-soft": "rgba(52,44,35,0.055)",
+    // Opaque elevate-to-select for menu/palette rows on white popovers; warm
+    // so a selected row reads as the same material, not a cool slab.
+    "overlay-raised": "#EFE9E1",
+    // GitHub-brand defaults fail AA on the near-white panel.
+    "pr-merged": "#7644CC",
+    "pr-draft": "#6A655C",
+    "scrollbar-thumb": "#767169",
+    "scrollbar-thumb-hover": "color-mix(in oklab, #767169 85%, #231F1A)",
+    // Engine light scrims (0.22/0.36/0.55) read as a storm front here.
+    "scrim-soft": "rgba(52,44,35,0.16)",
+    "scrim-medium": "rgba(52,44,35,0.28)",
+    "scrim-strong": "rgba(52,44,35,0.46)",
+    // Search keeps the cold-Atlantic slate as a small-detail temperature note.
+    "search-highlight-background": "rgba(40,97,138,0.14)",
+    "search-highlight-text": "#28618A",
+    "search-match-badge-background": "rgba(40,97,138,0.14)",
+    "search-match-badge-text": "#28618A",
+    "search-selected-result-border": "rgba(40,97,138,0.34)",
+    "search-selected-result-icon": "#28618A",
+    // Two-layer contact+spread; the engine "light" single penumbra has no
+    // contact edge on a near-white field. Warm shadow ink, not cool.
+    "shadow-ambient": "0 1px 2px rgba(40,34,26,0.10), 0 6px 16px rgba(40,34,26,0.10)",
+    // Dialogs sit a full z-tier above menus/popovers (the floating fallback
+    // would give a centered modal the same shadow as a context menu).
+    "shadow-dialog": "0 2px 6px rgba(40,34,26,0.10), 0 24px 60px rgba(40,34,26,0.18)",
+    "shadow-floating": "0 1px 3px rgba(40,34,26,0.12), 0 12px 32px rgba(40,34,26,0.14)",
+    // In-card chips: a warm stone inset one quiet step below the white card,
+    // not a recessed slab.
+    "surface-inset": "#F4EEE6",
+    // Inputs are raised on light, never recessed (overrides the engine's
+    // recessed derivation, matching Bondi).
+    "surface-input": "#FFFCF8",
+    // Stone chrome: the frame (toolbar/dock/panel caps/dialog headers) carries
+    // the sandstone note at whisper chroma, one register apart from the field
+    // surfaces rather than a different temperature.
+    "surface-toolbar": "#F2EDE6",
+    "terminal-bright-black": "#5D534B",
     "terminal-white": "#E0D8D0",
-    "text-placeholder": "#827869",
+    "text-link": "#94335B",
+    // 4.3:1 on the raised input.
+    "text-placeholder": "rgba(35,31,26,0.60)",
   },
   extensions: {
-    // G1: the gutter must recede BELOW the panel tiles it frames. Pull
-    // panel-grid-bg down to surface-grid (L 0.867, well below panel L 0.948) so
-    // panels read as raised figures, not wells. Was #ECE6DC (L 0.927, barely below
-    // panel — gutter and tiles nearly merged).
-    "panel-grid-bg": "#DBD2C4",
-    "settings-dialog-bg": "#F2EDE5",
-    "settings-card-bg": "#FCFAF6",
-    "settings-list-item-bg": "#FCFAF6",
-    "pulse-card-bg": "#FCFAF6",
-    "pulse-card-shadow": "0 1px 3px rgba(60,48,38,0.12)",
-    "pulse-control-hover-bg": "rgba(60,48,38,0.05)",
-    "pulse-empty-bg": "#EDE7DD",
-    // P-Heat: the legacy single-hue alpha ramp lifts this base color at 4 alphas.
-    // The old #C49A6C is so light the top stop only reached ~2.1:1 vs empty.
-    // Re-author to the saturated activity-working green (L 0.558, C 0.143) so the
-    // high-opacity stops clear contrast. Opaque per-theme pulse-heat-1..4 stops
-    // (GitHub light L+C ramp) are blocked on the registry owner registering those
-    // EXTENSION_KEYs; flagged for that owner.
-    "pulse-heat-color": "#1E8A42",
-    "pulse-heat-high-opacity": "0.92",
+    "dock-bg": "#F2EDE6",
+    "dock-input-bg": "#FFFCF8",
+    // Registry format guard: shadow-color channels, alpha ≥ 0.25.
+    "dock-shadow": "0 -2px 8px rgb(from var(--theme-shadow-color) r g b / 0.25)",
+    // Panel title bars join the stone chrome; the focused pane's cap brightens.
+    "panel-header-bg": "#F3EFE9",
+    "panel-header-focus-bg": "#F9F5F0",
+    // Emoji tiles get a white-gloss lift instead of the dark-theme black wash
+    // (which rendered murky gray chips on the light field).
+    "project-tile-wash":
+      "linear-gradient(to bottom, rgba(255,255,255,0.40), rgba(255,255,255,0.10))",
+    "project-tile-shadow": "inset 0 1px 1px rgba(40,34,26,0.10), 0 0 0 1px rgba(40,34,26,0.10)",
+    "pulse-before-bg": "#E3D6C5",
+    "pulse-card-bg": "#FFFFFF",
+    "pulse-card-header-bg": "#FBF7F2",
+    "pulse-card-shadow": "0 1px 2px rgba(40,34,26,0.10), 0 4px 10px rgba(40,34,26,0.08)",
+    "pulse-control-hover-bg": "rgba(52,44,35,0.05)",
+    "pulse-empty-bg": "#F6F0E8",
+    "pulse-heat-high-opacity": "0.85",
     "pulse-heat-low-opacity": "0.38",
     "pulse-heat-medium-opacity": "0.62",
-    // P-Heat missed-day: opaque brighter danger (4.27:1 vs empty), not a ~10% film
-    // (was 1.17:1, invisible). The component pairs it with a light-only inset
-    // danger ring as a redundant shape cue. Kept destructive-tier (status-danger).
-    "pulse-missed-bg": "#BC4339",
-    "pulse-range-bg": "#EAE3D9",
-    "pulse-ring-offset": "#FCFAF6",
-    "pulse-skeleton-gradient": "linear-gradient(90deg, #DBD2C4 25%, #E6DFD4 50%, #DBD2C4 75%)",
-    "dialog-header-bg": "rgba(219,210,196,0.55)",
-    "settings-kbd-bg": "#ECE6DC",
-    // S1: the single load-bearing accent in the settings region is the 2px nav
-    // marker (SettingsDialog.tsx). The nav-active FILL must be NEUTRAL + elevated
-    // (a lift, not an accent-tinted darken). Was rgba(accent,0.20). #F0EAE2 is a
-    // neutral warm lift above the recessed settings sidebar. The accent inset ring
-    // (settings-nav-active-shadow) is retired — its CSS consumer was removed; the
-    // EXTENSION_KEY retirement is the registry owner's job (flagged).
-    "settings-nav-active-bg": "#F0EAE2",
-    "settings-nav-hover-bg": "rgba(60,48,38,0.06)",
-    "settings-search-bg": "#ECE6DC",
-    "settings-sidebar-bg": "rgba(219,210,196,0.55)",
-    "sidebar-action-hover-bg": "rgba(60,48,38,0.08)",
-    // Issue 1: selection LIFTS on light — the row elevates toward an opaque
-    // brighter surface, it does not darken. Was rgba(0,0,0,0.06) (a -0.04 dL sink
-    // below its own sidebar container). idle (sidebar L 0.894) < hover (#EAE3D9
-    // L 0.919, +0.024) < selected (#F0EAE0 L 0.939, +0.045), each step clearing
-    // the JND. sidebar.css supplies the border-strong containment edge.
-    // NOTE: blocks on the registry owner relaxing SIDEBAR_ACTIVE/SIDEBAR_HOVER
-    // perceptibility (currently still enforces the old rgba(0,0,0,*) darken tint),
-    // mirroring the TOOLBAR_ARMED rewrite — flagged.
-    "sidebar-active-bg": "#F0EAE0",
-    "sidebar-hover-bg": "#EAE3D9",
-    "toolbar-agent-hover-bg": "rgba(60,48,38,0.08)",
-    "toolbar-control-hover-bg": "rgba(60,48,38,0.08)",
-    "toolbar-control-hover-fg": "#A03A64",
-    "toolbar-divider": "rgba(194,185,172,0.6)",
+    "pulse-heat-color": "#3C7A4C",
+    // Opaque so the streak-break signal clears the 3:1 graphical floor.
+    "pulse-missed-bg": "#AE3D33",
+    "pulse-range-bg": "#F6F0E8",
+    "pulse-ring-offset": "#FFFFFF",
+    "pulse-skeleton-gradient": "linear-gradient(90deg, #E0D7C9 25%, #F5F0E9 50%, #E0D7C9 75%)",
+    "dialog-header-bg": "#FCF9F4",
+    "review-commit-input-bg": "#FFFCF8",
+    "settings-kbd-bg": "#F4EEE6",
+    "settings-kbd-border": "#D5CBBD",
+    // Nav selection elevates to white + the 2px accent marker; the inherited
+    // overlay-raised darker-lift is for menu rows on white popovers only.
+    "settings-nav-active-bg": "#FFFFFF",
+    // Flat like the dark themes: the white fill + 2px accent marker carry
+    // selection, no ring or shadow.
+    "settings-nav-active-shadow": "none",
+    "settings-nav-hover-bg": "rgba(52,44,35,0.05)",
+    // Scope pill elevates to white on the tinted settings sidebar.
+    "settings-scope-bg": "#FFFFFF",
+    "settings-sidebar-bg": "rgba(241,233,222,0.60)",
+    "sidebar-action-hover-bg": "rgba(52,44,35,0.05)",
+    // Worktree cards are paper highlights on the sandstone field; hover
+    // brightens toward white; selected is pure white + the accent rail.
+    // idle < hover < selected is audit-enforced, each step ~1.5 OKLab points.
+    // Soft contact shadow only — no ring: the card must not read as bordered
+    // (selection = bg + right accent border, per the Bondi owner decision).
+    "sidebar-card-bg": "#FBF5EE",
+    "sidebar-card-shadow": "0 1px 2px rgba(40,34,26,0.05)",
+    "sidebar-active-bg": "#FFFFFF",
+    "sidebar-hover-bg": "#FEFBF7",
+    "toolbar-agent-hover-bg": "rgba(35,31,26,0.06)",
+    "toolbar-control-hover-bg": "rgba(35,31,26,0.06)",
+    // Accent restraint: hover affordance is the bg, not a protea foreground.
+    "toolbar-control-hover-fg": "#231F1A",
+    "toolbar-control-hover-shadow": "none",
+    "toolbar-divider": "rgba(213,203,189,0.7)",
+    "toolbar-pill-radius": "0.5rem",
+    // One protea whisper on the project pill; everything else quiet ink.
+    // Pills sit LIGHTER than the chrome strip (raised, like all content).
     "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(176,70,111,0.05), rgba(60,48,38,0.06)), linear-gradient(135deg, #E6DFD4, #DCD3C5)",
-    "toolbar-project-border": "rgba(194,185,172,0.7)",
-    "toolbar-project-chip-bg": "rgba(60,48,38,0.05)",
-    "toolbar-project-chip-border": "rgba(194,185,172,0.7)",
-    "toolbar-project-shadow": "inset 0 1px 0 rgba(60,48,38,0.07)",
-    "toolbar-stats-bg": "rgba(60,48,38,0.05)",
-    "toolbar-stats-border": "rgba(194,185,172,0.6)",
-    "toolbar-stats-divider": "rgba(194,185,172,0.6)",
-    "toolbar-stats-hover-bg": "rgba(60,48,38,0.08)",
-    "worktree-section-hover-bg": "rgba(60,48,38,0.06)",
+      "linear-gradient(180deg, rgba(176,70,111,0.085), rgba(35,31,26,0.02)), #FBF7F2",
+    "toolbar-project-border": "rgba(213,203,189,0.75)",
+    "toolbar-project-chip-bg": "rgba(35,31,26,0.04)",
+    "toolbar-project-chip-border": "rgba(213,203,189,0.75)",
+    "toolbar-project-shadow": "inset 0 1px 0 rgba(255,255,255,0.5)",
+    "toolbar-shadow": "0 1px 2px rgba(40,34,26,0.06)",
+    "toolbar-stats-bg": "#FBF7F2",
+    "toolbar-stats-border": "rgba(213,203,189,0.7)",
+    "toolbar-stats-divider": "rgba(213,203,189,0.7)",
+    "toolbar-stats-hover-bg": "#FEFBF7",
+    // Filter rail sits flush on the field; the raised search input carries it.
+    "worktree-filter-bar-bg": "#F1E9DE",
+    // Active quick-state tab lifts to white under its inset underline.
+    "worktree-quick-state-active-bg": "#FFFFFF",
+    "worktree-search-input-bg": "#FFFCF8",
+    "worktree-section-hover-bg": "rgba(52,44,35,0.05)",
   },
 };
