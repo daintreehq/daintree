@@ -656,6 +656,18 @@ export const CHANNELS = {
    * grant state is session-scoped and never broadcast.
    */
   MCP_GRANT_LIFECYCLE: "mcp-server:grant-lifecycle",
+  /**
+   * Push channel: an MCP tool dispatch entered the call path for the
+   * help-session pinned to this renderer. Drives the Assistant panel's live
+   * activity strip (#9759). Targeted send — never broadcast.
+   */
+  MCP_TOOL_CALL_STARTED: "mcp-server:tool-call-started",
+  /**
+   * Push channel: an MCP tool dispatch announced via `MCP_TOOL_CALL_STARTED`
+   * settled. Carries the audit-aligned outcome (duration, result, severity)
+   * so the activity strip can dim to a glyph. Targeted send — never broadcast.
+   */
+  MCP_TOOL_CALL_SETTLED: "mcp-server:tool-call-settled",
 
   // Voice Input channels
   VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",

@@ -242,6 +242,45 @@ export interface McpGrantLifecyclePayload {
 }
 
 /**
+ * Live event marking the start of an MCP tool dispatch, pushed to the pinned
+ * help-session renderer so the Assistant panel can show an in-flight activity
+ * strip (#9759). Emitted once per dispatch that actually enters the call path,
+ * after the manifest entry is resolved (so `danger` is known) and before any
+ * elicitation await. Pre-dispatch rejections (unauthorized, rate-limited,
+ * dedup) do not emit — they settle in microseconds and would only flicker the
+ * strip. Send is targeted to the minting WebContents, never broadcast.
+ *
+ * `argsSummary` is the same redacted single-level view persisted on
+ * {@link McpAuditRecord} — raw argument values never cross the bridge.
+ * `danger` is true when the resolved manifest entry is `danger: "confirm"`,
+ * letting the strip show "awaiting confirmation" while the user decides.
+ */
+export interface McpToolCallStartedPayload {
+  sessionId: string;
+  toolId: string;
+  argsSummary: string;
+  startedAt: number;
+  turnId?: string;
+  danger: boolean;
+}
+
+/**
+ * Live event marking the settlement of an MCP tool dispatch previously
+ * announced by {@link McpToolCallStartedPayload}. Carries the audit-aligned
+ * outcome fields so the activity strip can dim to a result glyph, show the
+ * duration, and tint red on error. Send is targeted, never broadcast.
+ */
+export interface McpToolCallSettledPayload {
+  sessionId: string;
+  toolId: string;
+  durationMs: number;
+  result: McpAuditResult;
+  errorCode?: string;
+  severity: McpAuditSeverity;
+  turnId?: string;
+}
+
+/**
  * Result of a renderer-driven `revokeSessionGrants` IPC. The handler
  * deletes every grant for the named session and reports how many entries
  * were affected — useful for UI confirmation copy ("Revoked N grants").

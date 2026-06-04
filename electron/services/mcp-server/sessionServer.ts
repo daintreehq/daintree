@@ -143,6 +143,34 @@ export interface SessionServerDeps {
    * doesn't inherit stale counters. Called after revokeSession and drain().
    */
   clearDenialState?: (sessionId: string) => void;
+  /**
+   * Optional renderer notifier fired when an MCP tool dispatch enters the call
+   * path (after tier/rate/dedup guards pass and the manifest entry resolves).
+   * Drives the Assistant panel's live activity strip (#9759). Implemented by
+   * httpLifecycle for help-session bearers (pinned WebContents) — it computes
+   * the redacted `argsSummary` and resolves the `turnId` before the targeted
+   * send. Absent for external/api-key sessions, which have no associated UI.
+   */
+  notifyToolCallStarted?: (payload: {
+    sessionId: string;
+    toolId: string;
+    args: unknown;
+    startedAt: number;
+    /** True when the resolved manifest entry is `danger: "confirm"`. */
+    danger: boolean;
+  }) => void;
+  /**
+   * Optional renderer notifier fired when a dispatch announced via
+   * {@link SessionServerDeps.notifyToolCallStarted} settles. Receives the same
+   * `AuditOutcome` the audit record is written from so the strip's result glyph
+   * and severity match the audit log exactly (#9759).
+   */
+  notifyToolCallSettled?: (payload: {
+    sessionId: string;
+    toolId: string;
+    durationMs: number;
+    outcome: AuditOutcome;
+  }) => void;
 }
 
 export function createSessionServer(sessionId: string, deps: SessionServerDeps): Server {
@@ -158,6 +186,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     recordDenial,
     notifySessionRevoked,
     clearDenialState,
+    notifyToolCallStarted,
+    notifyToolCallSettled,
   } = deps;
 
   const server = new Server(
@@ -410,6 +440,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       | import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision
       | undefined;
     let dispatchConfirmed = false;
+    // Tracks whether a live "tool-call-started" push fired for this dispatch so
+    // the shared `finally` only emits the matching "settled" push for calls the
+    // activity strip is actually showing (#9759). Pre-dispatch rejections never
+    // reach the IIFE, so they never set this — and never settle the strip.
+    let toolCallStartedEmitted = false;
+    const emitToolCallStarted = (danger: boolean): void => {
+      if (!notifyToolCallStarted) return;
+      try {
+        notifyToolCallStarted({ sessionId, toolId: actionId, args, startedAt, danger });
+        toolCallStartedEmitted = true;
+      } catch (err) {
+        console.error("[MCP] Failed to notify tool-call-started:", err);
+      }
+    };
 
     // Wrapped in an inner IIFE so the dedup guard below can register this
     // Promise in `dedupInFlight` (singleflight) and attach a `.then()` cache
@@ -423,6 +467,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // for the multi-hour waits external sessions may request. Audit unifies
         // via the shared finally.
         if (actionId === TERMINAL_WAIT_UNTIL_IDLE_TOOL) {
+          // waitUntilIdle is never `danger: "confirm"` — it's a passive wait,
+          // so the strip shows a plain in-flight row (no "awaiting confirmation").
+          emitToolCallStarted(false);
           try {
             // Interactive help sessions (workbench/action/system tiers) have a
             // human waiting on the conversation — a tool call held open blocks
@@ -466,6 +513,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         }
 
         const entry = await lookupManifestEntry(actionId, getCachedManifest, requestManifest);
+        // Announce the in-flight call now that `danger` is known — before any
+        // elicitation await, so the strip can show "awaiting confirmation"
+        // while the user decides on a `danger: "confirm"` dispatch (#9759).
+        emitToolCallStarted(entry?.danger === "confirm");
         if (!dispatchConfirmed && entry?.danger === "confirm") {
           const supportsForm = server.getClientCapabilities()?.elicitation?.form !== undefined;
           if (supportsForm) {
@@ -556,18 +607,37 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           details: outcome.value.error.details,
         });
       } finally {
+        const settledOutcome = outcome ?? { kind: "throw" as const, error: new Error("unknown") };
+        // Compute the duration once so the audit record and the live strip
+        // report the same wall-clock, not two reads a few µs apart (#9759).
+        const durationMs = Date.now() - startedAt;
         try {
           appendAuditRecord({
             toolId: actionId,
             sessionId,
             tier,
             args,
-            durationMs: Date.now() - startedAt,
-            outcome: outcome ?? { kind: "throw", error: new Error("unknown") },
+            durationMs,
+            outcome: settledOutcome,
             confirmationDecision,
           });
         } catch (err) {
           console.error("[MCP] Failed to append audit record:", err);
+        }
+        // Settle the live activity strip for the matching started push. Guarded
+        // so a dispatch that never announced (pre-dispatch rejection, or a
+        // started-notify that threw) can't emit a dangling settle (#9759).
+        if (toolCallStartedEmitted && notifyToolCallSettled) {
+          try {
+            notifyToolCallSettled({
+              sessionId,
+              toolId: actionId,
+              durationMs,
+              outcome: settledOutcome,
+            });
+          } catch (err) {
+            console.error("[MCP] Failed to notify tool-call-settled:", err);
+          }
         }
       }
     })();

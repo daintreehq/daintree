@@ -488,6 +488,8 @@ beforeEach(() => {
         },
         mcpServer: {
           onTierNotPermitted: vi.fn(() => () => {}),
+          onToolCallStarted: vi.fn(() => () => {}),
+          onToolCallSettled: vi.fn(() => () => {}),
           setSessionTier: vi.fn().mockResolvedValue({ sessionId: "", tier: "workbench" }),
           issueGrant: vi.fn().mockResolvedValue({
             sessionId: "",
