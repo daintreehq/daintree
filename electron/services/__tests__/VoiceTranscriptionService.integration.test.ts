@@ -40,6 +40,8 @@ describe("VoiceTranscriptionService integration", () => {
         organizationId: "",
         projectId: "",
         recordingMode: "toggle",
+        suggestedDictionary: [],
+        learnFromCorrections: true,
       });
 
       expect(result).toEqual({ ok: true });

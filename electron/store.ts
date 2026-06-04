@@ -22,6 +22,7 @@ import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/plugin
 import type { PluginMcpConsentRecord } from "../shared/types/pluginMcpConsent.js";
 import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pluginMcp.js";
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
+import type { SuggestedDictionaryEntry } from "../shared/types/ipc/api.js";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/forge.js";
 import type { BuiltInAgentId } from "../shared/config/agentIds.js";
 import type { AgentId } from "../shared/types/agent.js";
@@ -213,6 +214,9 @@ export interface StoreSchema {
     deviceId: string;
     organizationId: string;
     projectId: string;
+    recordingMode: string;
+    suggestedDictionary: SuggestedDictionaryEntry[];
+    learnFromCorrections: boolean;
   };
   mcpServer: {
     enabled: boolean;
@@ -503,6 +507,9 @@ const storeOptions = {
       deviceId: "",
       organizationId: "",
       projectId: "",
+      recordingMode: "toggle",
+      suggestedDictionary: [],
+      learnFromCorrections: true,
     },
     mcpServer: {
       enabled: false,

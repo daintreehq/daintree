@@ -1702,6 +1702,25 @@ export interface VoiceInputSettings {
    * renderer. Ignored by non-Deepgram providers.
    */
   keyterms?: string[];
+  /**
+   * Words learned from the user's manual corrections to dictated text, pending
+   * explicit accept/dismiss. Never added to `customDictionary` silently.
+   */
+  suggestedDictionary: SuggestedDictionaryEntry[];
+  /** When enabled, manual corrections to dictated text surface as suggested dictionary words. Defaults to true. */
+  learnFromCorrections: boolean;
+}
+
+/** A dictionary word suggested from a user's manual correction, with provenance. */
+export interface SuggestedDictionaryEntry {
+  /** The corrected term, in the casing the user typed (e.g. "Zustand"). */
+  word: string;
+  /** The misheard phrase it replaced, shown as provenance (e.g. "zoo stand"). */
+  utterance: string;
+  /** Epoch ms when the suggestion was last observed. */
+  suggestedAt: number;
+  /** How many times this substitution has been seen. */
+  frequency: number;
 }
 
 export type HelpAssistantAuditRetention = 7 | 30 | 0;

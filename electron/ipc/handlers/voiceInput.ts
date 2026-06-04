@@ -58,6 +58,8 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   organizationId: "",
   projectId: "",
   recordingMode: "toggle",
+  suggestedDictionary: [],
+  learnFromCorrections: true,
 };
 
 /** Read voiceInput settings with defaults for fields added after initial store creation. */

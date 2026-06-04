@@ -96,6 +96,8 @@ const runtime = vi.hoisted(() => ({
     setStatus: vi.fn<(status: string) => void>(),
     setConfigured: vi.fn<(configured: boolean) => void>(),
     setCorrectionEnabled: vi.fn<(enabled: boolean) => void>(),
+    setLearnFromCorrections: vi.fn<(enabled: boolean) => void>(),
+    setSessionCorrectedText: vi.fn<(panelId: string, text: string | null) => void>(),
     beginSession: vi.fn<(target: VoiceRecordingTarget) => void>(),
     finishSession:
       vi.fn<(options?: { nextStatus?: "idle" | "error"; preserveLiveText?: boolean }) => void>(),

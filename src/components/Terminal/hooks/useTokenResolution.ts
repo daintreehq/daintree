@@ -4,6 +4,12 @@ import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import {
+  findCorrectionCandidates,
+  type CorrectionCandidate,
+} from "@shared/utils/phoneticSimilarity";
+import type { SuggestedDictionaryEntry } from "@shared/types";
 import {
   getAllAtTerminalTokens,
   getAllAtSelectionTokens,
@@ -18,6 +24,95 @@ import type {
   AtSelectionContext,
 } from "../hybridInputParsing";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+
+/** Cap on the pending-suggestions queue — confirmed words live in customDictionary. */
+const MAX_SUGGESTED_WORDS = 50;
+
+/**
+ * Merge freshly-detected correction candidates into the persisted suggestion
+ * queue: skip words already in the confirmed dictionary, bump frequency on a
+ * repeat, and cap the queue. Returns null when nothing changed.
+ */
+function mergeSuggestions(
+  candidates: CorrectionCandidate[],
+  customDictionary: string[],
+  suggested: SuggestedDictionaryEntry[],
+  now: number
+): SuggestedDictionaryEntry[] | null {
+  const confirmed = new Set(customDictionary.map((w) => w.toLowerCase()));
+  const next = [...suggested];
+  let changed = false;
+
+  for (const { word, original } of candidates) {
+    const lower = word.toLowerCase();
+    if (confirmed.has(lower)) continue;
+    const idx = next.findIndex((e) => e.word.toLowerCase() === lower);
+    if (idx >= 0) {
+      const entry = next[idx]!;
+      next[idx] = {
+        ...entry,
+        frequency: entry.frequency + 1,
+        suggestedAt: now,
+        utterance: original,
+      };
+    } else {
+      next.unshift({ word, utterance: original, suggestedAt: now, frequency: 1 });
+    }
+    changed = true;
+  }
+
+  return changed ? next.slice(0, MAX_SUGGESTED_WORDS) : null;
+}
+
+/**
+ * Learn custom-dictionary words from a user's manual corrections to dictated
+ * text. Compares the settled transcription baseline (captured after dictation
+ * stops) against the final text the user is sending; phonetically-similar
+ * substitutions are persisted as suggestions in Voice settings, pending
+ * explicit accept/dismiss (#9749).
+ *
+ * Synchronous store read at the send site (no React subscription — see [[#9441]]).
+ * Fully swallows errors: learning must never block or alter the send.
+ */
+function detectDictionaryCorrections(panelId: string, finalText: string): void {
+  try {
+    const voiceState = useVoiceRecordingStore.getState();
+    if (!voiceState.learnFromCorrections) return;
+    const buffer = voiceState.panelBuffers[panelId];
+    const baseline = buffer?.sessionCorrectedText;
+    const sessionStart = buffer?.sessionDraftStart ?? -1;
+    if (!baseline || sessionStart < 0) return;
+
+    // Consume the baseline so a later send of unrelated text can't re-trigger.
+    voiceState.setSessionCorrectedText(panelId, null);
+
+    const candidates = findCorrectionCandidates(baseline, finalText.slice(sessionStart));
+    if (candidates.length === 0) return;
+
+    // Read-modify-write the suggestion queue via the existing settings channel.
+    // The dictate→correct→send flow is human-paced, so concurrent writes to
+    // suggestedDictionary don't happen in practice.
+    void (async () => {
+      try {
+        const settings = await window.electron.voiceInput.getSettings();
+        if (!settings.learnFromCorrections) return;
+        const next = mergeSuggestions(
+          candidates,
+          settings.customDictionary,
+          settings.suggestedDictionary,
+          Date.now()
+        );
+        if (next) {
+          await window.electron.voiceInput.setSettings({ suggestedDictionary: next });
+        }
+      } catch {
+        // Best-effort; never surface a learning failure to the user.
+      }
+    })();
+  } catch {
+    // Never let learning interfere with sending.
+  }
+}
 
 interface LatestRefShape {
   terminalId: string;
@@ -136,6 +231,11 @@ export function useTokenResolution({
           resolvedText = resolvedText.slice(0, r.start) + r.replacement + resolvedText.slice(r.end);
         }
       }
+
+      // Learn dictionary words from manual corrections to dictated text. Uses
+      // the original `text` (the human-authored content), not `resolvedText`
+      // (which has @-token expansions spliced in).
+      detectDictionaryCorrections(terminalId, text);
 
       const payload = buildTerminalSendPayload(resolvedText);
       latest.onSend({ data: payload.data, trackerData: payload.trackerData, text: resolvedText });
