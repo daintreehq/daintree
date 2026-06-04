@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveNextMajorVersion } from "../utils/resolveNextVersion.js";
+import { scriptFlagSeparator } from "../../shared/utils/devCommandValidation.js";
 export { getInvalidCommandMessage } from "../../shared/utils/devCommandValidation.js";
 
 export const NEXT_DEV_DIRECT_RE = /\bnext\s+dev\b/;
@@ -113,8 +114,7 @@ export async function normalizeNextjsDevCommand(
     const scriptBody = pkg?.scripts?.[scriptName];
     if (typeof scriptBody === "string" && NEXT_DEV_DIRECT_RE.test(scriptBody)) {
       if (TURBOPACK_FLAG_RE.test(scriptBody)) return command;
-      const sep = command.trimStart().startsWith("bun ") ? " " : " -- ";
-      return `${command}${sep}--turbopack`;
+      return `${command}${scriptFlagSeparator(command)}--turbopack`;
     }
   } catch {
     // No package.json or invalid — leave command unchanged
@@ -157,11 +157,8 @@ export async function normalizeViteDevCommand(
   if (!isStrict && !isSoft) return command;
 
   const flags = isStrict ? `--port ${port} --strictPort` : `--port ${port}`;
-  // npm/pnpm/yarn require `--` to forward flags through `run <script>`; bun
-  // forwards extra args directly. Direct CLI invocations (no pkg manager
-  // wrapping) take flags inline.
-  const isPkgScript = scriptMatch !== null;
-  const isBun = command.trimStart().startsWith("bun ");
-  const sep = isPkgScript && !isBun ? " -- " : " ";
+  // Only npm needs a `--` separator to forward flags through `run <script>`
+  // (see scriptFlagSeparator). Direct CLI invocations take flags inline.
+  const sep = scriptMatch !== null ? scriptFlagSeparator(command) : " ";
   return `${command}${sep}${flags}`;
 }

@@ -87,24 +87,26 @@ describe("normalizeViteDevCommand", () => {
       );
     });
 
-    it("appends ` -- --port N --strictPort` for pnpm dev", async () => {
+    it("appends ` --port N --strictPort` (no -- separator) for pnpm dev", async () => {
+      // pnpm forwards an explicit `--` verbatim to the script, where Vite
+      // treats everything after it as positional and drops the flags.
       mockPkg({ dev: "vite" });
       expect(await normalizeViteDevCommand("pnpm dev", CWD, PORT)).toBe(
-        `pnpm dev -- --port ${PORT} --strictPort`
+        `pnpm dev --port ${PORT} --strictPort`
       );
     });
 
-    it("appends ` -- --port N --strictPort` for pnpm run dev", async () => {
+    it("appends ` --port N --strictPort` (no -- separator) for pnpm run dev", async () => {
       mockPkg({ dev: "vite" });
       expect(await normalizeViteDevCommand("pnpm run dev", CWD, PORT)).toBe(
-        `pnpm run dev -- --port ${PORT} --strictPort`
+        `pnpm run dev --port ${PORT} --strictPort`
       );
     });
 
-    it("appends ` -- --port N --strictPort` for yarn dev", async () => {
+    it("appends ` --port N --strictPort` (no -- separator) for yarn dev", async () => {
       mockPkg({ dev: "vite" });
       expect(await normalizeViteDevCommand("yarn dev", CWD, PORT)).toBe(
-        `yarn dev -- --port ${PORT} --strictPort`
+        `yarn dev --port ${PORT} --strictPort`
       );
     });
 
@@ -245,6 +247,14 @@ describe("normalizeViteDevCommand", () => {
     it("calling twice on a pkg-manager script does not double-append", async () => {
       mockPkg({ dev: "vite" });
       const once = await normalizeViteDevCommand("npm run dev", CWD, PORT);
+      mockPkg({ dev: "vite" });
+      const twice = await normalizeViteDevCommand(once, CWD, PORT);
+      expect(twice).toBe(once);
+    });
+
+    it("calling twice on a pnpm script does not double-append", async () => {
+      mockPkg({ dev: "vite" });
+      const once = await normalizeViteDevCommand("pnpm run dev", CWD, PORT);
       mockPkg({ dev: "vite" });
       const twice = await normalizeViteDevCommand(once, CWD, PORT);
       expect(twice).toBe(once);
