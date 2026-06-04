@@ -14,6 +14,7 @@ import type {
 import { logDebug } from "../../utils/logger.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { applyDictationCommands } from "../../services/voiceDictationCommands.js";
+import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
 import { typedHandle, typedHandleValidated, typedHandleWithContext } from "../utils.js";
@@ -29,6 +30,9 @@ let activeDestroyListener: { sender: Electron.WebContents; fn: () => void } | nu
 let correctionService: VoiceCorrectionService | null = null;
 let sessionController: AbortController | null = null;
 let sessionProjectInfo: { name?: string; path?: string } = {};
+// Bumped on every start so a slow keyterm-assembly await can detect that a
+// newer start (or a stop) has superseded it and bail before calling svc.start.
+let voiceStartNonce = 0;
 
 const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = ["openai", "deepgram"];
 
@@ -306,6 +310,35 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Capture project info at session start.
     sessionProjectInfo = getProjectInfo();
 
+    // Assemble context keyterms and inject them into the session. Deepgram is the
+    // only provider that consumes them (Nova-3 `keyterm=` params), so skip the
+    // async work for OpenAI. Assembly is capped internally (~500ms); failures are
+    // non-fatal — we just start without keyterms.
+    let startSettings = settings;
+    if (settings.transcriptionProvider === "deepgram") {
+      const myNonce = ++voiceStartNonce;
+      try {
+        const keyterms = await assembleKeyterms({
+          customDictionary: settings.customDictionary,
+          projectName: sessionProjectInfo.name,
+          projectPath: sessionProjectInfo.path,
+          ptyClient: deps.ptyClient,
+        });
+        // A newer start (or a stop) superseded this one while we awaited
+        // assembly — bail before wiring up a session that's already stale.
+        if (voiceStartNonce !== myNonce) {
+          return { ok: false, error: "Voice session superseded" };
+        }
+        if (keyterms.length > 0) {
+          startSettings = { ...settings, keyterms };
+        }
+      } catch (err) {
+        logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     const unsubscribe = svc.onEvent((voiceEvent) => {
       const win = deps.mainWindow;
       if (!win || win.isDestroyed()) return;
@@ -425,7 +458,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     ctx.event.sender.once("destroyed", onDestroyed);
     activeDestroyListener = { sender: ctx.event.sender, fn: onDestroyed };
 
-    const result = await svc.start(settings);
+    const result = await svc.start(startSettings);
     if (!result.ok) {
       // Failed to start — clean up subscription immediately
       if (activeEventUnsubscribe === unsubscribe) {
@@ -444,6 +477,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   };
 
   const handleStop = async (): Promise<{ rawText: string | null }> => {
+    // Supersede any start still awaiting keyterm assembly so it bails instead of
+    // bringing up a session we're trying to stop.
+    voiceStartNonce++;
     // Snapshot the session controller so concurrent start/stop cannot cross-abort.
     const controller = sessionController;
 
