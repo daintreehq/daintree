@@ -129,6 +129,17 @@ describe("findCorrectionCandidates", () => {
     expect(result.map((c) => c.word)).toEqual(["Zustand"]);
   });
 
+  it("strips leading and trailing punctuation from the suggested word", () => {
+    const result = findCorrectionCandidates("use zoo stand.", "use Zustand.");
+    expect(result.map((c) => c.word)).toEqual(["Zustand"]);
+  });
+
+  it("does not learn words the user typed after the dictated term", () => {
+    // "and"/"tests" were appended, not dictated — must not leak in as terms.
+    const result = findCorrectionCandidates("zoo stand", "Zustand and tests");
+    expect(result.map((c) => c.word)).not.toContain("tests");
+  });
+
   it("handles empty input without throwing", () => {
     expect(findCorrectionCandidates("", "")).toEqual([]);
     expect(findCorrectionCandidates("hello", "")).toEqual([]);

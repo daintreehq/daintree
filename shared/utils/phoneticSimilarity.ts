@@ -186,6 +186,11 @@ function normalizeToken(token: string): string {
   return token.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+/** Strip leading/trailing punctuation while preserving internal casing and dots (e.g. "Vue.js"). */
+function stripEdgePunctuation(token: string): string {
+  return token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+}
+
 /** Whether a normalized token is worth suggesting as a dictionary term. */
 export function isLearnableTerm(normalized: string): boolean {
   if (normalized.length < MIN_TERM_LENGTH) return false;
@@ -368,19 +373,20 @@ export function findCorrectionCandidates(baseline: string, edited: string): Corr
     // Only substitutions (both sides non-empty) are corrections; pure
     // insertions or deletions carry no misheard→fixed pairing.
     if (run.before.length === 0 || run.after.length === 0) continue;
+    // Only clean consolidating substitutions (1:1 or many:1). A multi-token
+    // corrected run is ambiguous — it usually means the user appended unrelated
+    // words after the dictated term — so skip it rather than suggest noise.
+    if (run.after.length !== 1) continue;
 
+    const token = run.after[0]!;
     const beforeJoined = run.before.map(normalizeToken).join("");
-    const afterJoined = run.after.map(normalizeToken).join("");
-    if (!isPhoneticallySimilar(beforeJoined, afterJoined)) continue;
+    const normalized = normalizeToken(token);
+    if (!isPhoneticallySimilar(beforeJoined, normalized)) continue;
+    if (!isLearnableTerm(normalized)) continue;
+    if (seen.has(normalized)) continue;
 
-    const original = run.before.join(" ");
-    for (const token of run.after) {
-      const normalized = normalizeToken(token);
-      if (!isLearnableTerm(normalized)) continue;
-      if (seen.has(normalized)) continue;
-      seen.add(normalized);
-      out.push({ word: token, original });
-    }
+    seen.add(normalized);
+    out.push({ word: stripEdgePunctuation(token), original: run.before.join(" ") });
   }
 
   return out;

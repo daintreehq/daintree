@@ -1039,6 +1039,12 @@ class VoiceRecordingService {
     const rawText = draftBefore.slice(sessionStart);
     if (!rawText.trim()) return;
 
+    // Seed the learning baseline with the raw transcription synchronously, before
+    // the async correction call. If a new session starts on a DIFFERENT panel
+    // while this runs, the end-of-function stale check skips the corrected
+    // overwrite — but this panel still keeps a usable baseline (#9749).
+    useVoiceRecordingStore.getState().setSessionCorrectedText(panelId, rawText);
+
     logDebug(`${LOG_PREFIX} Running whole-passage correction`, {
       panelId,
       rawLength: rawText.length,
