@@ -4,7 +4,8 @@ import { logDebug } from "../utils/logger.js";
 
 const P = "[VoiceKeyterms]";
 
-const MAX_KEYTERMS = 96;
+const MAX_KEYTERMS = 50;
+const TERMINAL_TIER_CAP = 30;
 const ASSEMBLY_TIMEOUT_MS = 500;
 const MIN_TERM_LENGTH = 4;
 const MAX_KEYTERM_LINES = 200;
@@ -223,33 +224,58 @@ export function tokenizeProjectName(name: string): string[] {
   return expanded.filter(isValidTerm);
 }
 
-export function extractTerminalIdentifiers(lines: string[]): string[] {
-  const seen = new Set<string>();
-  const results: string[] = [];
+interface TermScore {
+  canonical: string;
+  // Number of distinct lines the term appears on (frequency signal).
+  lineCount: number;
+  // Index of the most recent line the term appeared on (recency signal).
+  lastLineIndex: number;
+}
 
-  for (const line of lines) {
+// Ranks terminal-derived identifiers by a deterministic composite score so the
+// strongest candidates are emitted first. The score is a pure function of the
+// input lines: `lineCount * (lastLineIndex + 1)`, combining how often a term
+// recurs (distinct-line frequency) with how recently it appeared (line index as
+// the recency proxy). Rarity is handled by the existing blocklist + length
+// filter in `isValidTerm`. Ties break on canonical form ascending for stable,
+// cross-platform ordering. No clocks, no floats, no external state.
+export function extractTerminalIdentifiers(lines: string[]): string[] {
+  const scores = new Map<string, TermScore>();
+
+  lines.forEach((line, lineIndex) => {
     const clean = stripAnsi(line);
+    // Count each term at most once per line so same-line repeats don't inflate
+    // frequency (e.g. a log line spamming one identifier).
+    const seenThisLine = new Set<string>();
+
+    const record = (term: string): void => {
+      if (!isValidTerm(term)) return;
+      const key = term.toLowerCase();
+      if (seenThisLine.has(key)) return;
+      seenThisLine.add(key);
+      const existing = scores.get(key);
+      if (existing) {
+        existing.lineCount += 1;
+        existing.lastLineIndex = lineIndex;
+      } else {
+        scores.set(key, { canonical: term, lineCount: 1, lastLineIndex: lineIndex });
+      }
+    };
 
     // Extract compound identifiers (snake_case, kebab-case)
-    for (const match of clean.matchAll(IDENTIFIER_RE)) {
-      const term = match[0];
-      if (isValidTerm(term) && !seen.has(term.toLowerCase())) {
-        seen.add(term.toLowerCase());
-        results.push(term);
-      }
-    }
-
+    for (const match of clean.matchAll(IDENTIFIER_RE)) record(match[0]);
     // Extract camelCase/PascalCase identifiers
-    for (const match of clean.matchAll(CAMEL_RE)) {
-      const term = match[0];
-      if (isValidTerm(term) && !seen.has(term.toLowerCase())) {
-        seen.add(term.toLowerCase());
-        results.push(term);
-      }
-    }
-  }
+    for (const match of clean.matchAll(CAMEL_RE)) record(match[0]);
+  });
 
-  return results;
+  return Array.from(scores.values())
+    .sort((a, b) => {
+      const scoreA = a.lineCount * (a.lastLineIndex + 1);
+      const scoreB = b.lineCount * (b.lastLineIndex + 1);
+      if (scoreB !== scoreA) return scoreB - scoreA;
+      return a.canonical.localeCompare(b.canonical);
+    })
+    .map((entry) => entry.canonical);
 }
 
 async function getBranchName(projectPath: string): Promise<string | null> {
@@ -343,8 +369,12 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
       });
       const lines = await Promise.race([getTerminalLines(ptyClient), timeoutPromise]);
       const identifiers = extractTerminalIdentifiers(lines);
+      // Terminal terms are ranked best-first; bound the tier independently so
+      // dictionary/project/branch terms always keep headroom under MAX_KEYTERMS.
+      let terminalAdded = 0;
       for (const id of identifiers) {
-        add(id);
+        if (terminalAdded >= TERMINAL_TIER_CAP) break;
+        if (add(id)) terminalAdded++;
       }
     } catch {
       logDebug(`${P} Terminal identifier extraction failed`);

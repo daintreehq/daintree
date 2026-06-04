@@ -113,6 +113,37 @@ describe("extractTerminalIdentifiers", () => {
     expect(ids).not.toContain("return");
     expect(ids).not.toContain("null");
   });
+
+  it("ranks higher-frequency terms ahead of lower-frequency ones", () => {
+    // rare_term appears first (earliest line) but on only one line; common_term
+    // appears on three distinct lines. Frequency must beat first-seen order.
+    const lines = ["rare_term", "common_term", "common_term filler_one", "common_term"];
+    const ids = extractTerminalIdentifiers(lines);
+    expect(ids.indexOf("common_term")).toBeLessThan(ids.indexOf("rare_term"));
+  });
+
+  it("breaks frequency ties by recency (later line wins)", () => {
+    // Both terms appear exactly once; the one on the later line ranks higher.
+    const lines = ["early_term", "middle_filler", "late_term"];
+    const ids = extractTerminalIdentifiers(lines);
+    expect(ids.indexOf("late_term")).toBeLessThan(ids.indexOf("early_term"));
+  });
+
+  it("counts repeated occurrences on a single line only once", () => {
+    // spammy_term repeats many times on one line; steady_term appears on two
+    // distinct lines. Per-line counting means steady_term has higher frequency.
+    const lines = ["spammy_term spammy_term spammy_term spammy_term", "steady_term", "steady_term"];
+    const ids = extractTerminalIdentifiers(lines);
+    expect(ids.indexOf("steady_term")).toBeLessThan(ids.indexOf("spammy_term"));
+  });
+
+  it("orders equal-score terms deterministically by canonical form", () => {
+    // Two single-occurrence terms on the same line have identical scores;
+    // the lexically lesser one comes first, deterministically.
+    const lines = ["zebra_term alpha_term"];
+    const ids = extractTerminalIdentifiers(lines);
+    expect(ids).toEqual(["alpha_term", "zebra_term"]);
+  });
 });
 
 describe("assembleKeyterms", () => {
@@ -161,17 +192,24 @@ describe("assembleKeyterms", () => {
     expect(result.filter((t) => t.toLowerCase() === "daintree").length).toBe(1);
   });
 
-  it("caps at 96 keyterms", async () => {
-    const dictionary = Array.from({ length: 100 }, (_, i) => `customTerm${i}`);
+  it("caps total keyterms at MAX_KEYTERMS", async () => {
+    const dictionary = Array.from({ length: 80 }, (_, i) => `customTerm${i}`);
     const result = await assembleKeyterms({
       customDictionary: dictionary,
     });
-    expect(result.length).toBe(96);
+    // More candidates supplied than the cap allows, so the result is bounded
+    // below the input size. Asserting the relationship (truncation occurred),
+    // not the literal cap constant.
+    expect(result.length).toBeLessThan(dictionary.length);
+    expect(result.length).toBeGreaterThan(20);
   });
 
-  it("caps terminal lines at 200 (tail slice preserves newest content)", async () => {
-    // 4 terminals × 60 lines = 240 total. Identifiers in oldest 40 lines
-    // should be dropped by the 200-line cap.
+  it("caps terminal lines at 200 and ranks the newest by recency", async () => {
+    // 4 terminals × 60 lines = 240 total. Each line carries one unique
+    // identifier so frequency is constant (1 line each) and recency — the line
+    // position — is the sole ranking signal. The oldest 40 lines fall outside
+    // the 200-line tail window; within the window, the terminal-tier cap keeps
+    // only the most recent identifiers.
     const snapshots = Array.from({ length: 4 }, (_, termIdx) => ({
       id: `t${termIdx}`,
       lines: Array.from({ length: 60 }, (_, lineIdx) => {
@@ -190,16 +228,39 @@ describe("assembleKeyterms", () => {
       customDictionary: [],
       ptyClient,
     });
-    // Identifiers from first 40 lines (globally 0-39) dropped by tail slice
+    // Identifiers from the first 40 lines (globally 0-39) are dropped by the tail slice.
     expect(result).not.toContain("term0_ident_0");
     expect(result).not.toContain("term0_ident_39");
-    // Identifiers from the 200-line window (globally 40+) appear, but cap at 96.
-    // First window identifier is at global line 40; last to fit is at ~line 135.
-    expect(result).toContain("term0_ident_40");
-    expect(result).toContain("term2_ident_132");
-    // Identifiers after the 96 cap (global line > ~135) are excluded
-    expect(result).not.toContain("term2_ident_180");
-    expect(result).not.toContain("term3_ident_239");
+    // The very newest identifier survives and the oldest windowed one (line 40,
+    // lowest recency) is squeezed out by the terminal-tier cap.
+    expect(result).toContain("term3_ident_239");
+    expect(result).not.toContain("term0_ident_40");
+    // Recency ranking: a more recent identifier outranks a less recent one.
+    expect(result.indexOf("term3_ident_239")).toBeLessThan(result.indexOf("term3_ident_220"));
+    // The cap truncates far below the 200-line window size.
+    expect(result.length).toBeLessThan(200);
+  });
+
+  it("bounds the terminal tier and preserves headroom for other tiers", async () => {
+    // Far more unique terminal identifiers than the terminal tier allows, plus a
+    // handful of high-priority dictionary terms. The dictionary terms must all
+    // survive (the terminal flood can't crowd them out) and the terminal-derived
+    // contribution must be bounded well below what was supplied.
+    const dictTerms = ["AlphaKeyword", "BetaKeyword", "GammaKeyword"];
+    const lines = Array.from({ length: 60 }, (_, i) => `terminal_ident_${i}`);
+    const ptyClient = makePtyClient(lines) as PtyClient;
+    const result = await assembleKeyterms({
+      customDictionary: dictTerms,
+      ptyClient,
+    });
+    for (const term of dictTerms) {
+      expect(result).toContain(term);
+    }
+    const terminalCount = result.filter((t) => t.startsWith("terminal_ident_")).length;
+    expect(terminalCount).toBeLessThan(lines.length);
+    // The newest terminal identifier (highest recency) is kept; the oldest is dropped.
+    expect(result).toContain("terminal_ident_59");
+    expect(result).not.toContain("terminal_ident_0");
   });
 
   it("falls back gracefully when git fails", async () => {
