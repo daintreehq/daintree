@@ -28,6 +28,37 @@ const PRE_CONNECT_BUFFER_MAX = 100;
 // context is lost anyway. Matches the OpenAI provider's ceiling.
 const PRE_CONNECT_BUFFER_MAX_BYTES = 150_000;
 
+// Deepgram caps Nova-3 keyterms at 100 terms and 500 aggregate tokens. The
+// tokenizer is syllable-based (~5 tokens per single-word term), so the term
+// count alone doesn't bound tokens. We cap the URL injection well below both
+// ceilings — 50 terms is a 2x margin on the count, and a ~3000-char aggregate
+// guard backstops pathologically long terms before they blow the token budget.
+// This is deliberately tighter than the assembly-side MAX_KEYTERMS (96): that
+// constant governs how many terms to gather, this one governs how many survive
+// into the wire request.
+const MAX_DEEPGRAM_URL_KEYTERMS = 50;
+const MAX_DEEPGRAM_URL_KEYTERM_CHARS = 3_000;
+
+/**
+ * Conservatively trim assembled keyterms before they go on the streaming URL.
+ * Drops empty/whitespace-only terms, then accepts terms in priority order until
+ * either the term-count or aggregate-char budget is reached.
+ */
+function truncateKeytermsForUrl(keyterms: string[]): string[] {
+  const result: string[] = [];
+  let chars = 0;
+  for (const raw of keyterms) {
+    const term = raw.trim();
+    if (!term) continue;
+    if (result.length >= MAX_DEEPGRAM_URL_KEYTERMS) break;
+    // Skip (don't stop on) an oversized term so smaller later terms still fit.
+    if (chars + term.length > MAX_DEEPGRAM_URL_KEYTERM_CHARS) continue;
+    result.push(term);
+    chars += term.length;
+  }
+  return result;
+}
+
 // Like the OpenAI provider we use the `ws` package rather than Node's global
 // WebSocket so the `Authorization` upgrade header can be sent. Deepgram differs
 // from OpenAI in two ways: audio is streamed as raw binary frames (not base64
@@ -46,6 +77,13 @@ function buildUrl(settings: VoiceInputSettings): string {
   });
   if (settings.language) {
     params.set("language", settings.language);
+  }
+  // Nova-3 keyterms are repeated `keyterm=` params — one per term. A comma-
+  // joined value would be treated as a single literal phrase, not a list.
+  if (settings.keyterms && settings.keyterms.length > 0) {
+    for (const term of truncateKeytermsForUrl(settings.keyterms)) {
+      params.append("keyterm", term);
+    }
   }
   return `${DEEPGRAM_BASE_URL}?${params.toString()}`;
 }
@@ -152,8 +190,17 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     });
   }
 
-  private connect(mySessionId: number, settings: VoiceInputSettings): void {
-    const url = buildUrl(settings);
+  private connect(
+    mySessionId: number,
+    settings: VoiceInputSettings,
+    retryWithoutKeyterms = false
+  ): void {
+    // On a keyterm-overflow retry, strip keyterms from the URL but keep every
+    // other setting identical.
+    const effectiveSettings = retryWithoutKeyterms
+      ? { ...settings, keyterms: undefined }
+      : settings;
+    const url = buildUrl(effectiveSettings);
     let connection: WebSocket;
     try {
       connection = new WebSocket(url, {
@@ -174,7 +221,13 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     }
 
     this.connection = connection;
-    logInfo(`${P} Opening Deepgram WebSocket`, { url, language: settings.language || "en" });
+    // Don't log the full URL — it carries the assembled keyterms (project/branch/
+    // terminal identifiers). The term count is enough to debug keyterm wiring.
+    logInfo(`${P} Opening Deepgram WebSocket`, {
+      keytermCount: effectiveSettings.keyterms?.length ?? 0,
+      language: settings.language || "en",
+      retryWithoutKeyterms,
+    });
 
     this.connectTimeout = setTimeout(() => {
       this.connectTimeout = null;
@@ -194,6 +247,44 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       this.emit({ type: "status", status: "error" });
       this.settlePendingStart(mySessionId, { ok: false, error: "Connection timed out" });
     }, CONNECT_TIMEOUT_MS);
+
+    // A non-101 HTTP response to the WebSocket upgrade surfaces here (not via
+    // `error`), and only when we register this listener — which also disables
+    // ws's built-in abort, so we MUST drain and destroy the socket ourselves or
+    // it leaks. `res.statusCode` is the only reliable way to tell a 400 (likely
+    // keyterm overflow) from a 401 (bad API key).
+    connection.on("unexpected-response", (req, res) => {
+      try {
+        res.resume();
+        req.socket?.destroy();
+      } catch {
+        // Ignore teardown errors
+      }
+      // Clear AFTER the stale guard: a 400 retry installs a fresh connectTimeout
+      // for the new socket, so the failed socket must not clear it on the way out.
+      if (this.sessionId !== mySessionId || this.connection !== connection) return;
+      this.clearConnectTimeout();
+      const statusCode = res.statusCode;
+      // Retry once with keyterms stripped: a 400 here most plausibly means the
+      // assembled keyterms overflowed Deepgram's token budget. The new socket
+      // becomes `this.connection`, so this old socket's trailing close is
+      // ignored by the `this.connection !== connection` guards.
+      if (statusCode === 400 && !retryWithoutKeyterms) {
+        logWarn(`${P} Deepgram rejected upgrade with HTTP 400 — retrying without keyterms`);
+        this.cleanupConnection();
+        this.connect(mySessionId, settings, true);
+        return;
+      }
+      // Any other status (401 auth, 403, 429, 5xx) — or a second 400 after the
+      // keyterm-free retry — is fatal.
+      const message = `Deepgram rejected the connection (HTTP ${statusCode ?? "unknown"})`;
+      logError(`${P} ${message}`);
+      this.handleFatalError(mySessionId, {
+        severity: "fatal",
+        code: "ws_http_error",
+        message,
+      });
+    });
 
     connection.on("open", () => {
       if (this.sessionId !== mySessionId) {
@@ -249,8 +340,10 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     });
 
     connection.on("error", (err) => {
-      this.clearConnectTimeout();
+      // Clear AFTER the stale guard so a superseded socket (e.g. the failed
+      // first attempt of a keyterm retry) can't cancel the live socket's timers.
       if (this.sessionId !== mySessionId || this.connection !== connection) return;
+      this.clearConnectTimeout();
       const message = formatErrorMessage(err, "WebSocket error");
       logError(`${P} WebSocket error`, { message });
       // `ws` fires `close` right after `error`; a pre-ready transport error
@@ -265,9 +358,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     });
 
     connection.on("close", (code, reason) => {
+      // Clear AFTER the stale guard so a superseded socket's trailing close
+      // can't cancel the live socket's connect timeout / keep-alive.
+      if (this.sessionId !== mySessionId || this.connection !== connection) return;
       this.clearConnectTimeout();
       this.clearKeepAlive();
-      if (this.sessionId !== mySessionId || this.connection !== connection) return;
       const wasReady = this.isReady;
       logInfo(`${P} WebSocket closed`, {
         code,

@@ -93,6 +93,19 @@ class MockWebSocket {
     this.fire("error", err);
   }
 
+  // Mirrors ws's `unexpected-response` event: a non-101 HTTP upgrade response.
+  // Exposes the mock req/res so tests can assert the socket was drained/destroyed.
+  unexpectedReq?: { socket: { destroy: ReturnType<typeof vi.fn> } };
+  unexpectedRes?: { statusCode: number; resume: ReturnType<typeof vi.fn> };
+
+  simulateUnexpectedResponse(statusCode: number): void {
+    const req = { socket: { destroy: vi.fn() } };
+    const res = { statusCode, resume: vi.fn() };
+    this.unexpectedReq = req;
+    this.unexpectedRes = res;
+    this.fire("unexpected-response", req, res);
+  }
+
   simulateClose(code?: number, reason?: Buffer | string): void {
     this.readyState = MockWebSocket.CLOSED;
     this.fire("close", code, reason);
@@ -125,8 +138,17 @@ vi.mock("ws", () => {
   return { default: ctor };
 });
 
+// Mock the logger so the connect-log test can assert the URL is no longer logged.
+vi.mock("../../../utils/logger.js", () => ({
+  logDebug: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  logError: vi.fn(),
+}));
+
 // Import AFTER vi.mock so the mocked `ws` is used.
 const { DeepgramTranscriptionProvider } = await import("../DeepgramTranscriptionProvider.js");
+const { logInfo } = await import("../../../utils/logger.js");
 type DeepgramTranscriptionProviderInstance = InstanceType<typeof DeepgramTranscriptionProvider>;
 type VoiceTranscriptionEvent = import("../TranscriptionProvider.js").VoiceTranscriptionEvent;
 
@@ -219,6 +241,104 @@ describe("DeepgramTranscriptionProvider", () => {
     expect(url.searchParams.get("endpointing")).toBe("300");
     expect(url.searchParams.get("language")).toBe("en");
     expect(socket.options.headers.Authorization).toBe("Token dg-abc");
+    provider.stop();
+  });
+
+  // ── Keyterm URL injection ─────────────────────────────────────────────────
+
+  it("appends one repeated keyterm= param per term (not comma-joined)", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    void provider.start({ ...BASE_SETTINGS, keyterms: ["alpha", "betaTerm", "gamma"] });
+    await Promise.resolve();
+    const url = new URL(latestInstance().url);
+
+    expect(url.searchParams.getAll("keyterm")).toEqual(["alpha", "betaTerm", "gamma"]);
+    // Nova-3 uses `keyterm`, not the legacy `keywords` parameter.
+    expect(url.searchParams.has("keywords")).toBe(false);
+    provider.stop();
+  });
+
+  it("omits the keyterm param when no keyterms are supplied", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    void provider.start({ ...BASE_SETTINGS, keyterms: [] });
+    await Promise.resolve();
+    expect(new URL(latestInstance().url).searchParams.has("keyterm")).toBe(false);
+
+    void provider.start({ ...BASE_SETTINGS, keyterms: undefined });
+    await Promise.resolve();
+    expect(new URL(latestInstance().url).searchParams.has("keyterm")).toBe(false);
+    provider.stop();
+  });
+
+  it("caps the injected keyterms at the URL term limit", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const many = Array.from({ length: 96 }, (_, i) => `term${i}`);
+    void provider.start({ ...BASE_SETTINGS, keyterms: many });
+    await Promise.resolve();
+    const injected = new URL(latestInstance().url).searchParams.getAll("keyterm");
+
+    // Fewer than supplied, and a prefix of the priority-ordered input.
+    expect(injected.length).toBeLessThan(many.length);
+    expect(injected.length).toBeGreaterThan(0);
+    expect(injected).toEqual(many.slice(0, injected.length));
+    provider.stop();
+  });
+
+  it("drops empty/whitespace keyterms before injecting", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    void provider.start({ ...BASE_SETTINGS, keyterms: ["  ", "real", "", "  spaced  "] });
+    await Promise.resolve();
+    expect(new URL(latestInstance().url).searchParams.getAll("keyterm")).toEqual([
+      "real",
+      "spaced",
+    ]);
+    provider.stop();
+  });
+
+  it("enforces the aggregate-char budget on long keyterms", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    // Each term is 1000 chars; the ~3000-char aggregate guard admits only 3.
+    const long = Array.from({ length: 10 }, (_, i) => `${"x".repeat(999)}${i}`);
+    void provider.start({ ...BASE_SETTINGS, keyterms: long });
+    await Promise.resolve();
+    const injected = new URL(latestInstance().url).searchParams.getAll("keyterm");
+
+    expect(injected.length).toBe(3);
+    expect(injected.reduce((n, t) => n + t.length, 0)).toBeLessThanOrEqual(3_000);
+    provider.stop();
+  });
+
+  it("skips an oversized keyterm but keeps smaller later terms", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const huge = "z".repeat(4_000);
+    void provider.start({ ...BASE_SETTINGS, keyterms: [huge, "short1", "short2"] });
+    await Promise.resolve();
+    // The oversized leading term is skipped (continue, not break), so the small
+    // terms after it still make it into the URL.
+    expect(new URL(latestInstance().url).searchParams.getAll("keyterm")).toEqual([
+      "short1",
+      "short2",
+    ]);
+    provider.stop();
+  });
+
+  it("logs the keyterm count, not the URL, when opening the socket", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    vi.mocked(logInfo).mockClear();
+    void provider.start({ ...BASE_SETTINGS, keyterms: ["alpha", "beta"] });
+    await Promise.resolve();
+
+    const openCall = vi
+      .mocked(logInfo)
+      .mock.calls.find(([msg]) => typeof msg === "string" && msg.includes("Opening Deepgram"));
+    expect(openCall).toBeDefined();
+    const meta = openCall?.[1] as Record<string, unknown>;
+    expect(meta.keytermCount).toBe(2);
+    expect(meta).not.toHaveProperty("url");
+    // Belt and braces: no logged argument should contain the streaming host.
+    for (const call of vi.mocked(logInfo).mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("api.deepgram.com/v1/listen?");
+    }
     provider.stop();
   });
 
@@ -575,6 +695,111 @@ describe("DeepgramTranscriptionProvider", () => {
 
     expect(statuses).toContain("error");
     expect(statuses).not.toContain("idle");
+  });
+
+  // ── Keyterm-overflow retry (HTTP 400) ─────────────────────────────────────
+
+  it("retries once without keyterms on an HTTP 400 upgrade rejection", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha", "beta"] });
+    await Promise.resolve();
+    const first = latestInstance();
+    expect(new URL(first.url).searchParams.getAll("keyterm")).toEqual(["alpha", "beta"]);
+
+    first.simulateUnexpectedResponse(400);
+
+    // The failed socket must be drained and destroyed (ws leaks it otherwise).
+    expect(first.unexpectedRes?.resume).toHaveBeenCalled();
+    expect(first.unexpectedReq?.socket.destroy).toHaveBeenCalled();
+
+    // A second socket is opened with no keyterms; everything else is unchanged.
+    expect(instances).toHaveLength(2);
+    const second = latestInstance();
+    expect(new URL(second.url).searchParams.has("keyterm")).toBe(false);
+    expect(new URL(second.url).searchParams.get("model")).toBe("nova-3");
+
+    second.simulateOpen();
+    await expect(startPromise).resolves.toEqual({ ok: true });
+    provider.stop();
+  });
+
+  it("does not retry on a non-400 upgrade rejection (401)", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    provider.onEvent((e) => events.push(e));
+
+    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha"] });
+    await Promise.resolve();
+    const first = latestInstance();
+    first.simulateUnexpectedResponse(401);
+
+    expect(first.unexpectedRes?.resume).toHaveBeenCalled();
+    expect(first.unexpectedReq?.socket.destroy).toHaveBeenCalled();
+    expect(instances).toHaveLength(1);
+
+    const result = await startPromise;
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toContain("HTTP 401");
+    expect(events.some((e) => e.type === "error" && /HTTP 401/.test(e.error.message))).toBe(true);
+    expect(events.some((e) => e.type === "status" && e.status === "error")).toBe(true);
+  });
+
+  it("does not retry a second time if the keyterm-free retry also gets 400", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    provider.onEvent((e) => events.push(e));
+
+    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha"] });
+    await Promise.resolve();
+    latestInstance().simulateUnexpectedResponse(400);
+    expect(instances).toHaveLength(2);
+
+    latestInstance().simulateUnexpectedResponse(400);
+    // No third socket — the one-shot retry is exhausted.
+    expect(instances).toHaveLength(2);
+
+    const result = await startPromise;
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toContain("HTTP 400");
+    expect(events.some((e) => e.type === "error" && /HTTP 400/.test(e.error.message))).toBe(true);
+  });
+
+  it("keeps the retry socket's connect timeout when the failed socket closes", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha"] });
+    await Promise.resolve();
+    const first = latestInstance();
+
+    first.simulateUnexpectedResponse(400);
+    expect(instances).toHaveLength(2);
+
+    // The failed first socket now fires its trailing close. It must NOT cancel
+    // the retry socket's connect timeout (regression: stale close cleared it).
+    first.simulateClose(1006);
+
+    // The retry socket never opens — its connect timeout should still fire and
+    // resolve the start instead of hanging forever.
+    vi.advanceTimersByTime(10_000);
+    await expect(startPromise).resolves.toEqual({ ok: false, error: "Connection timed out" });
+  });
+
+  it("ignores an unexpected-response for a superseded session", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha"] });
+    await Promise.resolve();
+    const first = latestInstance();
+
+    // Stop the session — the first socket is now stale.
+    provider.stop();
+    first.simulateUnexpectedResponse(400);
+
+    // The socket is still drained/destroyed defensively...
+    expect(first.unexpectedRes?.resume).toHaveBeenCalled();
+    expect(first.unexpectedReq?.socket.destroy).toHaveBeenCalled();
+    // ...but no retry socket is created for the dead session.
+    expect(instances).toHaveLength(1);
+
+    await expect(startPromise).resolves.toEqual({ ok: false, error: "Voice session stopped" });
   });
 
   // ── Stale-session guard ──────────────────────────────────────────────────

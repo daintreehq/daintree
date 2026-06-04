@@ -13,7 +13,9 @@ import type {
 } from "../../../shared/types/ipc/api.js";
 import { logDebug } from "../../utils/logger.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { applyDictationCommands } from "../../services/voiceDictationCommands.js";
+import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
 import { typedHandle, typedHandleValidated, typedHandleWithContext } from "../utils.js";
@@ -29,8 +31,15 @@ let activeDestroyListener: { sender: Electron.WebContents; fn: () => void } | nu
 let correctionService: VoiceCorrectionService | null = null;
 let sessionController: AbortController | null = null;
 let sessionProjectInfo: { name?: string; path?: string } = {};
+// Bumped on every start so a slow keyterm-assembly await can detect that a
+// newer start (or a stop) has superseded it and bail before calling svc.start.
+let voiceStartNonce = 0;
 
 const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = ["openai", "deepgram"];
+
+// Fields on VoiceInputSettings that are assembled at runtime and must never be
+// written to the persisted store.
+const RUNTIME_ONLY_VOICE_FIELDS = new Set<string>(["keyterms"]);
 
 const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   enabled: false,
@@ -62,8 +71,10 @@ export function getVoiceSettings(): VoiceInputSettings {
 
   // Pluck truly-legacy key fields so they don't leak into the merged object via
   // spread. `deepgramApiKey` is now a first-class field, so it flows through
-  // `rest` instead of being dropped.
-  const { apiKey, correctionApiKey, ...rest } = stored ?? {};
+  // `rest` instead of being dropped. `keyterms` is runtime-only — drop any value
+  // a stale store/migration left behind so it never seeds a session.
+  const { apiKey, correctionApiKey, keyterms, ...rest } = stored ?? {};
+  void keyterms;
   const merged: VoiceInputSettings = { ...VOICE_INPUT_DEFAULTS, ...rest };
 
   // Migrate prior OpenAI keys into the unified field.
@@ -282,6 +293,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     if (!patch || typeof patch !== "object") return;
     for (const [field, value] of Object.entries(patch)) {
       if (value === undefined) continue;
+      // `keyterms` is runtime-only — assembled per session, never persisted. Skip
+      // it so a renderer patch can't seed stored keyterms into future sessions.
+      if (RUNTIME_ONLY_VOICE_FIELDS.has(field)) continue;
       store.set(`voiceInput.${field}`, value);
     }
   };
@@ -305,6 +319,40 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
     // Capture project info at session start.
     sessionProjectInfo = getProjectInfo();
+
+    // Bump the start nonce for EVERY start (not just Deepgram) so a later start
+    // of any provider supersedes a Deepgram start still awaiting assembly.
+    const myNonce = ++voiceStartNonce;
+
+    // Assemble context keyterms and inject them into the session. Deepgram is the
+    // only provider that consumes them (Nova-3 `keyterm=` params), so skip the
+    // async work for OpenAI. Assembly is capped internally (~500ms); failures are
+    // non-fatal — we just start without keyterms.
+    let startSettings = settings;
+    if (settings.transcriptionProvider === "deepgram") {
+      let keyterms: string[] = [];
+      try {
+        keyterms = await assembleKeyterms({
+          customDictionary: settings.customDictionary,
+          projectName: sessionProjectInfo.name,
+          projectPath: sessionProjectInfo.path,
+          ptyClient: deps.ptyClient,
+        });
+      } catch (err) {
+        logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
+          message: formatErrorMessage(err, "Unknown error during keyterm assembly"),
+        });
+      }
+      // A newer start (or a stop) superseded this one while we awaited assembly
+      // (checked on both the success and failure paths) — bail before wiring up a
+      // session that's already stale.
+      if (voiceStartNonce !== myNonce) {
+        return { ok: false, error: "Voice session superseded" };
+      }
+      if (keyterms.length > 0) {
+        startSettings = { ...settings, keyterms };
+      }
+    }
 
     const unsubscribe = svc.onEvent((voiceEvent) => {
       const win = deps.mainWindow;
@@ -425,7 +473,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     ctx.event.sender.once("destroyed", onDestroyed);
     activeDestroyListener = { sender: ctx.event.sender, fn: onDestroyed };
 
-    const result = await svc.start(settings);
+    const result = await svc.start(startSettings);
     if (!result.ok) {
       // Failed to start — clean up subscription immediately
       if (activeEventUnsubscribe === unsubscribe) {
@@ -444,6 +492,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   };
 
   const handleStop = async (): Promise<{ rawText: string | null }> => {
+    // Supersede any start still awaiting keyterm assembly so it bails instead of
+    // bringing up a session we're trying to stop.
+    voiceStartNonce++;
     // Snapshot the session controller so concurrent start/stop cannot cross-abort.
     const controller = sessionController;
 

@@ -1695,6 +1695,13 @@ export interface VoiceInputSettings {
   projectId: string;
   /** Controls whether recording is held (push-to-talk) or toggled. Defaults to "toggle". */
   recordingMode: VoiceRecordingMode;
+  /**
+   * Runtime-only. Context keyterms assembled at session start and injected into
+   * the Deepgram streaming URL as repeated `keyterm=` params. Populated by the
+   * voice-input start handler — never persisted to the store or supplied by the
+   * renderer. Ignored by non-Deepgram providers.
+   */
+  keyterms?: string[];
 }
 
 export type HelpAssistantAuditRetention = 7 | 30 | 0;
