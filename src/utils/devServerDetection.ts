@@ -1,4 +1,5 @@
 import type { RunCommand } from "@shared/types";
+import { scriptFlagSeparator } from "@shared/utils/devCommandValidation";
 
 const DEV_SCRIPT_PRIORITY = ["dev", "start", "serve"];
 
@@ -12,8 +13,10 @@ function applyNextjsTurbopack(runner: RunCommand, turbopackEnabled = true): RunC
   if (!NEXT_DEV_RE.test(desc) || TURBOPACK_FLAG_RE.test(desc) || SHELL_CONTROL_RE.test(desc)) {
     return runner;
   }
-  const sep = runner.command.trimStart().startsWith("bun ") ? " " : " -- ";
-  return { ...runner, command: `${runner.command}${sep}--turbopack` };
+  return {
+    ...runner,
+    command: `${runner.command}${scriptFlagSeparator(runner.command)}--turbopack`,
+  };
 }
 
 export function findAllDevServerCandidates(

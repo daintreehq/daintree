@@ -33,10 +33,12 @@ describe("findDevServerCandidate", () => {
       expect(candidate?.command).toBe("npm run dev -- --turbopack");
     });
 
-    it("appends -- --turbopack when script is 'next dev -p 3000'", () => {
+    it("appends --turbopack (no separator) when pnpm script is 'next dev -p 3000'", () => {
+      // pnpm forwards an explicit `--` verbatim to the script, where Next
+      // treats everything after it as positional and drops the flag.
       const runners = [runner("dev", "pnpm dev", "next dev -p 3000")];
       const candidate = findDevServerCandidate(runners);
-      expect(candidate?.command).toBe("pnpm dev -- --turbopack");
+      expect(candidate?.command).toBe("pnpm dev --turbopack");
     });
 
     it("does NOT append when script already has --turbopack", () => {

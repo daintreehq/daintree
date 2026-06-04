@@ -646,7 +646,7 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
   {
     name: "triage_terminals",
     description:
-      "Fleet-polling recipe: how to watch multiple agent terminals efficiently using terminal.getStatus, skip working agents, cross-check stuck state with includeOutput, and pace with ScheduleWakeup.",
+      "Agent-watching recipe: how to watch one or many agent terminals without blocking the session — terminal.getStatus polling, skip working agents, cross-check stuck state with includeOutput, and pace with ScheduleWakeup.",
     arguments: [],
     render() {
       return [
@@ -723,7 +723,7 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
         "// then: ScheduleWakeup({ delaySeconds: 30, ... });",
         "```",
         "",
-        "For a single terminal a normal blocking `terminal.waitUntilIdle` call is still the right tool — kick off one task, wait for it to finish.",
+        "**Single terminals pace the same way.** Don't hold a blocking `terminal.waitUntilIdle` open to wait out a task — while the call is in flight the user can't talk to you, so an interactive session looks frozen until they cancel it (the server caps interactive waits at 60s for this reason). Kick off the task, then `ScheduleWakeup` → non-blocking check (`terminal.getStatus` or `waitUntilIdle({ timeoutMs: 0 })`) → repeat. A short bounded `waitUntilIdle` long-poll is fine when completion is expected within the minute; on `timedOut: true`, fall back to wakeup pacing instead of re-blocking back-to-back.",
       ].join("\n");
     },
   },

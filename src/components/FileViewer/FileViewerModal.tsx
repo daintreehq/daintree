@@ -244,14 +244,6 @@ export function FileViewerModal({
 
   const fileName = filePath.split(/[/\\]/).filter(Boolean).pop() || filePath;
 
-  // Compute relative path by stripping rootPath prefix; guard against empty root
-  const displayRoot = rootPath ? (rootPath.endsWith("/") ? rootPath : rootPath + "/") : null;
-  const relativePath =
-    displayRoot && filePath.startsWith(displayRoot) ? filePath.slice(displayRoot.length) : fileName;
-  const relativeDir = relativePath.includes("/")
-    ? relativePath.slice(0, relativePath.lastIndexOf("/") + 1)
-    : "";
-
   const canShowView = loadState === "loaded" && content !== null;
   const isImageMode = loadState === "image" || loadState === "svg";
 
@@ -488,15 +480,11 @@ export function FileViewerModal({
           <Tooltip>
             <AppDialog.Title className="text-sm font-medium min-w-0">
               <TooltipTrigger asChild>
-                <span className="truncate cursor-default">
-                  {branch && <span className="text-muted-foreground/70 mr-1.5">{branch}</span>}
-                  {relativeDir && <span className="text-muted-foreground">{relativeDir}</span>}
-                  <span className="text-daintree-text">{fileName}</span>
-                </span>
+                <span className="truncate cursor-default text-daintree-text">{fileName}</span>
               </TooltipTrigger>
             </AppDialog.Title>
             <TooltipContent side="bottom" className="max-w-lg break-all">
-              {filePath}
+              {branch ? `${branch} — ${filePath}` : filePath}
             </TooltipContent>
           </Tooltip>
 
@@ -532,7 +520,7 @@ export function FileViewerModal({
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0 whitespace-nowrap">
           {/* File stepping — previous/next across the worktree change set */}
           {canStepFiles && (
             <div className="flex items-center gap-1 shrink-0">
@@ -631,25 +619,33 @@ export function FileViewerModal({
           )}
 
           {imageFile ? (
-            <button
-              type="button"
-              onClick={handleOpenInImageViewer}
-              className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-muted-foreground hover:text-daintree-text hover:bg-daintree-border rounded transition-colors"
-              title="Open in image viewer"
-            >
-              <ImageIcon className="w-3.5 h-3.5" />
-              Open in Image Viewer
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleOpenInImageViewer}
+                  aria-label="Open in image viewer"
+                  className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
+                >
+                  <ImageIcon className="w-4 h-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Open in image viewer</TooltipContent>
+            </Tooltip>
           ) : (
-            <button
-              type="button"
-              onClick={handleOpenInEditor}
-              className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-muted-foreground hover:text-daintree-text hover:bg-daintree-border rounded transition-colors"
-              title="Open in editor"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              Open in Editor
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleOpenInEditor}
+                  aria-label="Open in editor"
+                  className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Open in editor</TooltipContent>
+            </Tooltip>
           )}
           <AppDialog.CloseButton />
         </div>

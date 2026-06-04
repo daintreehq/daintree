@@ -90,28 +90,26 @@ describe("normalizeNextjsDevCommand", () => {
       );
     });
 
-    it("appends -- --turbopack for pnpm dev", async () => {
+    it("appends --turbopack (no separator) for pnpm dev", async () => {
+      // pnpm forwards an explicit `--` verbatim to the script, where Next
+      // treats everything after it as positional and drops the flag.
       mockPkg({ dev: "next dev" });
-      expect(await normalizeNextjsDevCommand("pnpm dev", CWD)).toBe("pnpm dev -- --turbopack");
+      expect(await normalizeNextjsDevCommand("pnpm dev", CWD)).toBe("pnpm dev --turbopack");
     });
 
-    it("appends -- --turbopack for pnpm run dev", async () => {
+    it("appends --turbopack (no separator) for pnpm run dev", async () => {
       mockPkg({ dev: "next dev" });
-      expect(await normalizeNextjsDevCommand("pnpm run dev", CWD)).toBe(
-        "pnpm run dev -- --turbopack"
-      );
+      expect(await normalizeNextjsDevCommand("pnpm run dev", CWD)).toBe("pnpm run dev --turbopack");
     });
 
-    it("appends -- --turbopack for yarn dev", async () => {
+    it("appends --turbopack (no separator) for yarn dev", async () => {
       mockPkg({ dev: "next dev" });
-      expect(await normalizeNextjsDevCommand("yarn dev", CWD)).toBe("yarn dev -- --turbopack");
+      expect(await normalizeNextjsDevCommand("yarn dev", CWD)).toBe("yarn dev --turbopack");
     });
 
-    it("appends -- --turbopack for yarn run dev", async () => {
+    it("appends --turbopack (no separator) for yarn run dev", async () => {
       mockPkg({ dev: "next dev" });
-      expect(await normalizeNextjsDevCommand("yarn run dev", CWD)).toBe(
-        "yarn run dev -- --turbopack"
-      );
+      expect(await normalizeNextjsDevCommand("yarn run dev", CWD)).toBe("yarn run dev --turbopack");
     });
 
     it("appends --turbopack (no separator) for bun run dev", async () => {

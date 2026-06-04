@@ -191,7 +191,8 @@ export class McpServerService {
       requestManifestForWebContents: (id) => this.bridge.requestManifestForWebContents(id),
       dispatchActionForWebContents: (id, actionId, args, confirmed, contextOverride) =>
         this.bridge.dispatchActionForWebContents(id, actionId, args, confirmed, contextOverride),
-      handleWaitUntilIdle: (rawArgs, signal) => handleWaitUntilIdle(rawArgs, signal),
+      handleWaitUntilIdle: (rawArgs, signal, options) =>
+        handleWaitUntilIdle(rawArgs, signal, options),
       getCachedManifest: () => this.bridge.getCachedManifest(),
       clearCachedManifest: () => this.bridge.clearCache(),
       cleanupListeners: this.cleanupListeners,
