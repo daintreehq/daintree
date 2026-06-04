@@ -1,5 +1,5 @@
 import { Suspense, useState, useCallback, useEffect, useRef } from "react";
-import { ChevronUp, ChevronDown, RotateCw, CircleStop } from "lucide-react";
+import { ChevronUp, MoreHorizontal, RotateCw, CircleStop } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -334,7 +334,7 @@ export function ConsoleDrawer({
                           if (chevronDisabled) e.preventDefault();
                         }}
                       >
-                        <ChevronDown className="h-3.5 w-3.5" />
+                        <MoreHorizontal className="h-3.5 w-3.5" />
                       </button>
                     </span>
                   </DropdownMenuTrigger>
