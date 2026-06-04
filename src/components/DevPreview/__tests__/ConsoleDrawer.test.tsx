@@ -256,10 +256,27 @@ describe("ConsoleDrawer", () => {
       expect(screen.queryByRole("button", { name: "More restart options" })).toBeNull();
     });
 
-    it("renders primary restart button and chevron when handler is provided", () => {
+    it("renders primary restart button and overflow trigger when handler is provided", () => {
       renderDrawer({ defaultOpen: false, onRestartDevServer: vi.fn(), status: "running" });
       expect(screen.getByRole("button", { name: "Restart dev server" })).toBeTruthy();
       expect(screen.getByRole("button", { name: "More restart options" })).toBeTruthy();
+    });
+
+    it("uses a non-chevron glyph for the overflow trigger so it is distinct from the drawer toggle", () => {
+      renderDrawer({ defaultOpen: true, onRestartDevServer: vi.fn(), status: "running" });
+      const toggleIconClass = getToggleButton().querySelector("svg")?.getAttribute("class") ?? "";
+      const overflowIconClass =
+        screen
+          .getByRole("button", { name: "More restart options" })
+          .querySelector("svg")
+          ?.getAttribute("class") ?? "";
+
+      // The collapse toggle is a chevron; the overflow trigger must not be — otherwise
+      // both header controls render the same down-chevron and read as duplicate collapse
+      // actions (issue #9748).
+      expect(toggleIconClass).toContain("chevron");
+      expect(overflowIconClass).not.toContain("chevron");
+      expect(overflowIconClass).not.toBe(toggleIconClass);
     });
 
     it("renders all four tier options in dropdown", () => {
