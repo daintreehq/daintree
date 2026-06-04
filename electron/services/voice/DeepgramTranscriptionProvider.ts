@@ -80,6 +80,7 @@ function buildUrl(settings: VoiceInputSettings): string {
   }
   // Nova-3 keyterms are repeated `keyterm=` params — one per term. A comma-
   // joined value would be treated as a single literal phrase, not a list.
+  // (NOT the legacy `keywords` param, which 400s the upgrade on nova-3.)
   if (settings.keyterms && settings.keyterms.length > 0) {
     for (const term of truncateKeytermsForUrl(settings.keyterms)) {
       params.append("keyterm", term);

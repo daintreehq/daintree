@@ -507,28 +507,39 @@ describe("voiceInput — context keyterms wiring", () => {
     });
   });
 
-  it("starts without keyterms for a non-Deepgram provider (no assembly)", async () => {
+  it("injects assembled keyterms into a non-Deepgram session (OpenAI prompt path)", async () => {
     const { store } = await import("../../../store.js");
     vi.mocked(store.get).mockReturnValue(providerSettings("openai"));
     const { assembleKeyterms } = await import("../../../services/voiceContextKeyterms.js");
+    shared.assembleKeyterms = () => Promise.resolve(["alpha", "beta"]);
 
     await startFn(fakeEvent);
 
-    expect(assembleKeyterms).not.toHaveBeenCalled();
+    // OpenAI consumes keyterms via transcription.prompt, so assembly runs for it too.
+    expect(assembleKeyterms).toHaveBeenCalled();
     expect(shared.startCalls).toHaveLength(1);
-    expect(shared.startCalls[0]).not.toHaveProperty("keyterms");
+    expect(shared.startCalls[0]).toMatchObject({
+      transcriptionProvider: "openai",
+      keyterms: ["alpha", "beta"],
+    });
   });
 
-  it("bails a Deepgram start superseded by a later start during assembly", async () => {
+  it("bails a start superseded by a later start during assembly", async () => {
     const { store } = await import("../../../store.js");
     const gate = deferred<string[]>();
-    shared.assembleKeyterms = () => gate.promise;
+    // Only the FIRST assembly (start A) parks on the gate; the later start (B)
+    // resolves immediately so it can supersede and proceed.
+    let assembleCount = 0;
+    shared.assembleKeyterms = () => {
+      assembleCount += 1;
+      return assembleCount === 1 ? gate.promise : Promise.resolve([]);
+    };
 
     // Start A (Deepgram) — parks on assembly.
     vi.mocked(store.get).mockReturnValue(providerSettings("deepgram"));
     const aPromise = startFn(fakeEvent);
 
-    // Start B (OpenAI) — no assembly, supersedes A and starts immediately.
+    // Start B (OpenAI) — supersedes A and starts immediately.
     vi.mocked(store.get).mockReturnValue(providerSettings("openai"));
     await startFn(fakeEvent);
 
@@ -536,7 +547,7 @@ describe("voiceInput — context keyterms wiring", () => {
     gate.resolve(["alpha"]);
     await expect(aPromise).resolves.toEqual({ ok: false, error: "Voice session superseded" });
 
-    // Only B reached svc.start; A never did (no second session, no keyterms).
+    // Only B reached svc.start; A never did (no second session).
     expect(shared.startCalls).toHaveLength(1);
     expect(shared.startCalls[0]).toMatchObject({ transcriptionProvider: "openai" });
   });

@@ -1696,10 +1696,12 @@ export interface VoiceInputSettings {
   /** Controls whether recording is held (push-to-talk) or toggled. Defaults to "toggle". */
   recordingMode: VoiceRecordingMode;
   /**
-   * Runtime-only. Context keyterms assembled at session start and injected into
-   * the Deepgram streaming URL as repeated `keyterm=` params. Populated by the
+   * Runtime-only. Context keyterms (custom dictionary + project/branch/terminal
+   * context) assembled at session start and frozen for the session's lifetime.
+   * Deepgram injects them into the streaming URL as repeated `keyterm=` params;
+   * OpenAI passes them through the transcription prompt. Populated by the
    * voice-input start handler — never persisted to the store or supplied by the
-   * renderer. Ignored by non-Deepgram providers.
+   * renderer. Reconnects reuse this snapshot.
    */
   keyterms?: string[];
   /**
