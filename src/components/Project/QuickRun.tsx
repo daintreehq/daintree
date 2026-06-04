@@ -354,7 +354,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
   const isWorktreeValid = activeWorktree != null && activeWorktree.path != null;
 
   return (
-    <div className="flex min-h-0 shrink-0 flex-col border-t border-border-divider bg-surface-sidebar/95 text-xs">
+    <div className="flex min-h-0 shrink-0 flex-col border-t border-border-divider bg-[var(--dock-bg,color-mix(in_srgb,var(--color-surface-sidebar)_95%,transparent))] text-xs">
       {/* Header */}
       <button
         type="button"
@@ -393,7 +393,8 @@ export function QuickRun({ projectId }: QuickRunProps) {
               {activeWorktreeId && <RunningTaskList worktreeId={activeWorktreeId} />}
               <div
                 className={cn(
-                  "relative flex items-center rounded-[var(--radius-md)] border border-border-subtle/50 bg-overlay-soft",
+                  // Fallback keeps themes without --dock-input-bg byte-identical.
+                  "relative flex items-center rounded-[var(--radius-md)] border border-border-subtle/50 bg-[var(--dock-input-bg,var(--color-overlay-soft))]",
                   "transition focus-within:border-daintree-accent/35 focus-within:ring-1 focus-within:ring-daintree-accent/12"
                 )}
               >

@@ -30,6 +30,10 @@ on:
         options:
           - "2"
           - "3"
+      theme:
+        description: "Theme id for a theme-review capture (e.g. bondi). When set, runs ONLY e2e/screenshots/theme-review.spec.ts instead of the marketing reel; PNGs land in the workflow artifact under theme-shots/."
+        type: string
+        default: ""
       upload_to_r2:
         description: "Upload PNGs to R2 (uses DAINTREE_R2_BUCKET + R2 secrets)"
         type: boolean
@@ -111,6 +115,7 @@ jobs:
           DAINTREE_SCREENSHOT_SCALE: ${{ inputs.scale || '2' }}
           DAINTREE_SCREENSHOT_WIDTH: "1920"
           DAINTREE_SCREENSHOT_HEIGHT: "1080"
+          DAINTREE_SHOT_THEME: ${{ inputs.theme || '' }}
         run: |
           set -euo pipefail
           mkdir -p artifacts/screenshots
@@ -124,7 +129,14 @@ jobs:
           heartbeat_pid=$!
           trap 'kill "$heartbeat_pid" 2>/dev/null || true' EXIT
 
-          npx playwright test --project=screenshots
+          # Theme-review mode: capture one theme's chrome shots instead of the
+          # marketing reel (theme-review.spec.ts self-skips unless
+          # DAINTREE_SHOT_THEME is set, so the reel path is unchanged).
+          if [ -n "$DAINTREE_SHOT_THEME" ]; then
+            npx playwright test --project=screenshots theme-review
+          else
+            npx playwright test --project=screenshots
+          fi
 
       - name: List captured screenshots
         if: always()
@@ -145,6 +157,7 @@ jobs:
           name: marketing-screenshots-${{ github.sha }}
           path: |
             artifacts/screenshots/
+            artifacts/theme-shots/
             test-results/
           retention-days: 90
           if-no-files-found: warn

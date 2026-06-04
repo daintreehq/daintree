@@ -1,4 +1,10 @@
+/* Light themes opt the idle card into an opaque lifted plane via
+   --sidebar-card-bg/--sidebar-card-shadow; unset (dark) keeps the transparent
+   card unchanged. Shadow fallback must stay `0 0 #0000`, never `none` — it
+   joins comma-joined shadow lists in the selected rules below. */
 .sidebar-worktree-card {
+  background: var(--sidebar-card-bg, transparent);
+  box-shadow: var(--sidebar-card-shadow, 0 0 #0000);
   transition:
     background-color var(--duration-150) var(--ease-out-expo),
     box-shadow var(--duration-150) var(--ease-out-expo);
@@ -9,33 +15,31 @@
    steps brighter than `surface-sidebar` on light (set by the palettes); the
    white-alpha fallback is the dark additive lift.
 
-   The left marker is the `--sidebar-active-marker` containment edge. On light it
-   is `border-strong` (the cool borderInk slate, contrast-floored, composites
-   near-neutral) instead of a near-black `overlay-selected` hairline — it is what
-   makes the row read as selected even where the luminance lift is marginal on
-   thin ramps. Dark is unchanged: the `.dark` override below restores the exact
-   `overlay-selected` marker the row shipped with (selection on dark is additive,
-   so the white-alpha marker is already polarity-correct there). */
+   Selection is signalled by exactly two things (#9711 round-3 owner decision,
+   all themes): the background change and a full-height accent border on the
+   RIGHT edge — the side facing the panel grid the worktree controls, not the
+   window edge where it disappeared against the screen bezel on light themes.
+   No containment hairline, no card ring; the inset box-shadow form keeps the
+   border out of layout so rows don't shift on selection. The card-shadow term
+   is the card's resting material (idle rows carry it too), not a selection
+   signal. */
 .sidebar-worktree-card[data-active="true"] {
-  --sidebar-active-marker: var(--theme-border-strong);
   background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.05));
-  box-shadow: inset 2px 0 0 var(--sidebar-active-marker);
-}
-
-.dark .sidebar-worktree-card[data-active="true"] {
-  --sidebar-active-marker: var(--theme-overlay-selected);
+  box-shadow:
+    inset -2px 0 0 var(--theme-accent-primary),
+    var(--sidebar-card-shadow, 0 0 #0000);
 }
 
 /* Inactive selection: when the sidebar loses focus the selected row must stay
    visibly selected, not blank. Selection is distinct from focus and persists
    when focus leaves the list (WAI-ARIA APG tree view; macOS HIG secondary
    highlight; VS Code `list.inactiveSelectionBackground`). Keep the neutral fill
-   and a dimmed left-edge marker rather than zeroing the box-shadow. Drives off
-   the same `--sidebar-active-marker` so the 45% dim follows the polarity-correct
-   marker token (light: border-strong; dark: overlay-selected, byte-for-byte). */
+   and a dimmed right-edge accent border rather than zeroing the box-shadow. */
 .sidebar-root:not(:focus-within) .sidebar-worktree-card[data-active="true"] {
   background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.05));
-  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--sidebar-active-marker) 45%, transparent);
+  box-shadow:
+    inset -2px 0 0 color-mix(in srgb, var(--theme-accent-primary) 45%, transparent),
+    var(--sidebar-card-shadow, 0 0 #0000);
 }
 
 .sidebar-worktree-card[data-hoverable="true"]:hover,
@@ -110,6 +114,15 @@ html[data-dragging="true"] .sidebar-worktree-card[data-hovered="true"] {
 
 .worktree-section-button:hover {
   background: var(--worktree-section-hover-bg, var(--theme-overlay-hover));
+}
+
+/* Optional distinct surface for the worktree filter/search/sort bar. A theme
+   that sets the `worktree-filter-bar-bg` extension gives the bar its own
+   tinted or recessed surface so the sidebar isn't a single flat shade; themes
+   that leave it unset fall through to `transparent` and the bar keeps
+   inheriting the sidebar surface exactly as before. */
+.worktree-filter-bar {
+  background: var(--worktree-filter-bar-bg, transparent);
 }
 
 @variant reduce-motion {

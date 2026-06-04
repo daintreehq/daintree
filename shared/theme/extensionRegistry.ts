@@ -110,11 +110,25 @@ export const EXTENSION_KEY_REGISTRY = {
   // Dock
   "dock-bg": OPTIONAL,
   "dock-border": OPTIONAL,
+  // QuickRun command-input fill. The CSS fallback is the overlay-soft ink wash
+  // (correct on dark); light themes lift the field to a raised input plane.
+  "dock-input-bg": OPTIONAL,
   "dock-shadow": DOCK_SHADOW,
+
+  // Panel title bars. Fallbacks are transparent (idle) and overlay-subtle
+  // (focused) — dark themes render unchanged without the keys.
+  "panel-header-bg": OPTIONAL,
+  "panel-header-focus-bg": OPTIONAL,
 
   // Panel grid
   "panel-grid-bg": OPTIONAL,
   "terminal-grid-bg": OPTIONAL,
+
+  // Project identity tiles. The CSS fallbacks are the original black-wash
+  // gradient + dark inset shadow (correct on dark); light themes flip the
+  // wash to a white-gloss lift so the emoji chips read bright, not murky.
+  "project-tile-shadow": OPTIONAL,
+  "project-tile-wash": OPTIONAL,
 
   // Pulse
   "pulse-before-bg": OPTIONAL,
@@ -147,6 +161,8 @@ export const EXTENSION_KEY_REGISTRY = {
   "settings-nav-active-bg": OPTIONAL,
   "settings-nav-active-shadow": OPTIONAL,
   "settings-nav-hover-bg": OPTIONAL,
+  // Scope (Global/Project) select trigger fill; transparent fallback.
+  "settings-scope-bg": OPTIONAL,
   "settings-search-bg": OPTIONAL,
   "settings-search-muted": OPTIONAL,
   "settings-section-header-bg": OPTIONAL,
@@ -157,6 +173,11 @@ export const EXTENSION_KEY_REGISTRY = {
   // light themes. See #8175 lineage.
   "sidebar-action-hover-bg": OPTIONAL,
   "sidebar-active-bg": SIDEBAR_ACTIVE,
+  // r3 white-cards-on-sky primitives: the idle worktree card lifts to an
+  // opaque near-white plane (light themes opt in; dark themes leave the card
+  // transparent and keep the additive hover/active ladder).
+  "sidebar-card-bg": OPTIONAL,
+  "sidebar-card-shadow": OPTIONAL,
   "sidebar-hover-bg": SIDEBAR_HOVER,
 
   // Toolbar — toolbar-control-armed-shadow is polarity-conditional. The CSS
@@ -193,8 +214,18 @@ export const EXTENSION_KEY_REGISTRY = {
   "toolbar-stats-hover-bg": OPTIONAL,
   "toolbar-stats-shadow": OPTIONAL,
 
+  // Review hub — commit-message field fill. The CSS fallback is the canvas
+  // tone (correct on dark); light themes lift the field to a raised plane.
+  "review-commit-input-bg": OPTIONAL,
+
   // Worktree section
   "worktree-section-hover-bg": OPTIONAL,
+  "worktree-filter-bar-bg": OPTIONAL,
+  // Active quick-state segment fill. The CSS fallback is the overlay-subtle
+  // darkening wash (correct on dark); light themes lift the active tab toward
+  // white so selection elevates instead of receding.
+  "worktree-quick-state-active-bg": OPTIONAL,
+  "worktree-search-input-bg": OPTIONAL,
 } as const satisfies Record<ExtensionKey, ExtensionKeyMetadata>;
 
 export function isExtensionKeyRequired(key: ExtensionKey, mode: ColorMode): boolean {

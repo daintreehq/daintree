@@ -16,13 +16,14 @@ import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 const renderIcon = (emoji: string, color?: string, sizeClass = "h-9 w-9 text-lg") => (
   <div
     className={cn(
-      "flex items-center justify-center rounded-[var(--radius-xl)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)] shrink-0 transition duration-150",
+      // Wash/shadow var fallbacks keep themes without the overrides byte-identical.
+      "flex items-center justify-center rounded-[var(--radius-xl)] shadow-[var(--project-tile-shadow,inset_0_1px_2px_rgba(0,0,0,0.18))] shrink-0 transition duration-150",
       sizeClass
     )}
     style={{
       background: color
-        ? `linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2)), ${getProjectGradient(color)}`
-        : "linear-gradient(to bottom, rgba(0,0,0,0.08), rgba(0,0,0,0.16)), var(--color-surface-panel)",
+        ? `var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), ${getProjectGradient(color)}`
+        : "var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.08), rgba(0,0,0,0.16))), var(--color-surface-panel)",
     }}
   >
     <span className="leading-none select-none filter drop-shadow-sm">{emoji}</span>

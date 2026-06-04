@@ -9,7 +9,11 @@ export interface ThemeChromeMetrics {
   panelVsGridContrast: number;
 }
 
-export async function setAppTheme(page: Page, schemeId: string): Promise<void> {
+export async function setAppTheme(
+  page: Page,
+  schemeId: string,
+  expectedMode?: "dark" | "light"
+): Promise<void> {
   await page.evaluate(async (id) => {
     await window.electron.appTheme.setColorScheme(id);
   }, schemeId);
@@ -33,7 +37,9 @@ export async function setAppTheme(page: Page, schemeId: string): Promise<void> {
         message: `Theme ${schemeId} should be applied to the document root`,
       }
     )
-    .toMatchObject({ theme: schemeId, colorMode: "light" });
+    .toMatchObject(
+      expectedMode ? { theme: schemeId, colorMode: expectedMode } : { theme: schemeId }
+    );
 }
 
 export async function getThemeChromeMetrics(

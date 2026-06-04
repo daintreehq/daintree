@@ -32,7 +32,7 @@ import {
 } from "@/lib/animationUtils";
 
 export const KBD_CLASS =
-  "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/60";
+  "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/75";
 
 export interface AppPaletteDialogProps {
   isOpen: boolean;
@@ -326,7 +326,7 @@ AppPaletteDialog.Footer = function AppPaletteFooter({
   return (
     <div
       className={cn(
-        "px-3 py-2 border-t border-daintree-border bg-surface-panel text-xs text-daintree-text/50 flex items-center gap-4",
+        "px-3 py-2 border-t border-daintree-border bg-surface-panel text-xs text-daintree-text/65 flex items-center gap-4",
         className
       )}
     >

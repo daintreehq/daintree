@@ -7,27 +7,31 @@ interface BrandMarkProps {
   brandColor?: string;
   size?: number;
   className?: string;
-  children: ReactElement<{ className?: string }>;
+  children: ReactElement<{ className?: string; brandColor?: string }>;
 }
 
 const SIZE_CLASS_REGEX = /\b(?:size-|w-|h-)/;
 
-// Wraps a brand icon in a contrasting chip when the brand color falls below
-// WCAG 1.4.11 (3:1) against the active theme's panel surface. Chromatic
-// brands (Claude orange, Codex green, etc.) are returned untouched. Mono
+// Resolves a brand mark that falls below WCAG 1.4.11 (3:1) against the active
+// theme's panel surface. Chromatic brands (Claude orange, Codex green, etc.)
+// that already clear the floor are returned untouched. On DARK themes, mono
 // brands like Goose and Open Interpreter render their official silhouette
-// against a near-white tile on dark themes — preserving brand fidelity
-// rather than recoloring the mark.
+// against a near-white tile — preserving brand fidelity rather than
+// recoloring the mark. On LIGHT themes the mark itself is darkened to a
+// contrast-clearing tint of the same hue — a dark tile on pale chrome reads
+// as a black box, not a brand.
 export function BrandMark({ brandColor, size, className, children }: BrandMarkProps) {
   const scheme = useActiveAppScheme();
   const chip = resolveBrandChip(brandColor, scheme);
 
-  if (!chip) {
-    if (!className) {
+  if (!chip || chip.tint) {
+    const tintProps = chip?.tint ? { brandColor: chip.tint } : null;
+    if (!className && !tintProps) {
       return children;
     }
     return cloneElement(children, {
-      className: cn(children.props.className, className),
+      ...(className ? { className: cn(children.props.className, className) } : null),
+      ...tintProps,
     });
   }
 

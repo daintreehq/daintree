@@ -795,6 +795,14 @@ code.hljs {
     @apply border-border;
   }
 
+  /* Native checkboxes/radios tint to the theme accent instead of the OS
+     cobalt — the only non-theme hue otherwise rendered in the app. The
+     AccentColor keyword keeps any context without the var on OS behavior. */
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: var(--theme-accent-primary, AccentColor);
+  }
+
   *:focus-visible {
     transition:
       outline-color var(--focus-transition-duration) var(--focus-transition-easing),

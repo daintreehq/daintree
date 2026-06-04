@@ -559,7 +559,8 @@ function SettingsDialogInner({
               >
                 <SelectTrigger
                   aria-label="Settings scope"
-                  className="text-xs py-1 pl-2 pr-2 h-auto w-auto gap-1 bg-transparent text-text-secondary hover:text-daintree-text hover:border-daintree-text/30"
+                  // Fallback keeps themes without --settings-scope-bg byte-identical.
+                  className="text-xs py-1 pl-2 pr-2 h-auto w-auto gap-1 bg-[var(--settings-scope-bg,transparent)] text-text-secondary hover:text-daintree-text hover:border-daintree-text/30"
                 >
                   <SelectValue />
                 </SelectTrigger>

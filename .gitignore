@@ -11,6 +11,9 @@ release/
 *.asar
 stats.html
 
+# Screenshot capture output (marketing reel + theme-review harness)
+artifacts/
+
 # Build resources - keep icons but ignore iconset
 build/icon.iconset/
 
