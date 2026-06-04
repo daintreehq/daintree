@@ -41,6 +41,13 @@ describe("CORE_CORRECTION_PROMPT", () => {
     expect(CORE_CORRECTION_PROMPT).toContain("Zustand");
   });
 
+  it("gates custom-dictionary correction on context instead of forcing every phonetic match", () => {
+    // ASR-level biasing now handles the terms, so the prompt must NOT force an
+    // unconditional remap of every phonetically similar word.
+    expect(CORE_CORRECTION_PROMPT).not.toContain("Always map phonetically similar words");
+    expect(CORE_CORRECTION_PROMPT).toMatch(/only when the existing word does not fit the context/i);
+  });
+
   it("is identified as a speech-to-text correction engine", () => {
     expect(CORE_CORRECTION_PROMPT).toContain("speech-to-text correction engine");
   });
@@ -150,11 +157,11 @@ describe("buildCorrectionSystemPrompt", () => {
     expect(prompt).toContain("my-app");
   });
 
-  it("includes custom dictionary terms as required terms", () => {
+  it("includes custom dictionary terms as preferred terms", () => {
     const prompt = buildCorrectionSystemPrompt({ customDictionary: ["Daintree", "Worktree"] });
     expect(prompt).toContain("Daintree");
     expect(prompt).toContain("Worktree");
-    expect(prompt).toContain("REQUIRED TERMS");
+    expect(prompt).toContain("PREFERRED TERMS");
   });
 
   it("omits project section when no project context provided", () => {
@@ -162,11 +169,11 @@ describe("buildCorrectionSystemPrompt", () => {
     expect(prompt).not.toContain("CURRENT PROJECT");
   });
 
-  it("omits dynamic required terms section when custom dictionary is empty", () => {
+  it("omits dynamic preferred terms section when custom dictionary is empty", () => {
     const prompt = buildCorrectionSystemPrompt({ customDictionary: [] });
-    // The dynamic section header includes "(correct phonetic matches..." — distinct from
-    // the "REQUIRED TERMS / CUSTOM DICTIONARY" label in the priority list
-    expect(prompt).not.toContain("REQUIRED TERMS (correct phonetic matches");
+    // The dynamic section header starts "PREFERRED TERMS (prefer these..." — distinct
+    // from the "REQUIRED TERMS / CUSTOM DICTIONARY" label in the priority list.
+    expect(prompt).not.toContain("PREFERRED TERMS (prefer these");
   });
 
   it("excludes project directory from prompt when it matches project name", () => {

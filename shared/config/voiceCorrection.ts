@@ -96,7 +96,7 @@ Use history and metadata only as bounded context. Correct only the content of <t
 CONFIDENCE TAGS: Words wrapped in <uncertain>word</uncertain> inside <target> were transcribed with low confidence and are likely misheard. Focus your corrections on these regions. Text outside <uncertain> tags was transcribed with high confidence — preserve it verbatim unless a correction is clearly necessary for grammar or term matching.
 
 CORRECTION PRIORITY:
-1. REQUIRED TERMS / CUSTOM DICTIONARY — Always map phonetically similar words to their exact canonical form.
+1. REQUIRED TERMS / CUSTOM DICTIONARY — The transcriber is already biased toward these terms, so do not force them in. Map a word to its custom-dictionary canonical form only when the existing word does not fit the context and the audio plausibly matches that term. When both the transcribed word and a dictionary term are plausible, keep the transcribed wording.
 2. TECHNICAL TERMS — Correct misheard programming terms using the <terms> dictionary below.
 3. PARAGRAPHS & PUNCTUATION — Add natural paragraph breaks, sentence punctuation, and casing. When the speaker uses a standalone voice formatting command (a phrase whose sole purpose is to insert a break, not part of a grammatical sentence), remove the command text and insert the corresponding characters:
    - Paragraph break (\\n\\n): "new paragraph", "next paragraph", "start a new paragraph", "start new paragraph"
@@ -181,13 +181,13 @@ export function buildCorrectionSystemPrompt(context: CorrectionPromptContext): s
       }
     }
     parts.push(
-      `CURRENT PROJECT:\n${projectParts.join(", ")}\nCorrect any word that sounds like the project name or related terms to their proper form.`
+      `CURRENT PROJECT:\n${projectParts.join(", ")}\nPrefer these forms when a word plausibly matches the project name or related terms, but keep the transcribed wording when it already fits the context.`
     );
   }
 
   if (context.customDictionary && context.customDictionary.length > 0) {
     parts.push(
-      `REQUIRED TERMS (correct phonetic matches to these exact forms):\n${context.customDictionary.map((term) => `"${term}"`).join(" | ")}`
+      `PREFERRED TERMS (prefer these exact forms when the audio plausibly matches, but do not force them over a transcribed word that already fits the context):\n${context.customDictionary.map((term) => `"${term}"`).join(" | ")}`
     );
   }
 

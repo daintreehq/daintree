@@ -220,7 +220,7 @@ describe("VoiceCorrectionService", () => {
     expect(body.reasoning).toBeUndefined();
     expect(body.max_output_tokens).toBe(1024);
     expect(body.text.format.type).toBe("json_schema");
-    expect(body.prompt_cache_key).toMatch(/^voice-correction-v6:/);
+    expect(body.prompt_cache_key).toMatch(/^voice-correction-v7:/);
   });
 
   it("skips LLM call when all words are high confidence", async () => {
