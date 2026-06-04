@@ -89,6 +89,7 @@ vi.mock("../../../services/voiceContextKeyterms.js", () => ({
   assembleKeyterms: vi.fn(() =>
     shared.assembleKeyterms ? shared.assembleKeyterms() : Promise.resolve([])
   ),
+  formatKeytermPrompt: vi.fn(() => ""),
 }));
 
 vi.mock("../../../store.js", () => ({
@@ -190,6 +191,8 @@ describe("voiceInput — IPC handler surface", () => {
     shared.drainResolve = null;
     shared.useDeferredDrain = false;
     shared.correctionCalls = [];
+    shared.startCalls = [];
+    shared.assembleKeyterms = null;
 
     win = buildMainWindow();
     cleanup = registerVoiceInputHandlers({
@@ -210,6 +213,52 @@ describe("voiceInput — IPC handler surface", () => {
     const completeMsg = win.__sent.find((m) => m.channel === "voice-input:transcription-complete");
     expect(completeMsg).toBeDefined();
     expect(completeMsg?.payload).toEqual({ text: "Hello world", willCorrect: false });
+  });
+
+  it("does not start the provider when a stop lands during keyterm assembly", async () => {
+    // The beforeEach already opened a session; tear it down so this test owns
+    // a clean start whose assembly window we can control.
+    const handleStop = getHandler("voice-input:stop");
+    await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent);
+    shared.startCalls = [];
+
+    // Begin a new session whose keyterm assembly hangs until we resolve it.
+    let resolveAssembly!: (terms: string[]) => void;
+    const assemblyPromise = new Promise<string[]>((resolve) => {
+      resolveAssembly = resolve;
+    });
+    shared.assembleKeyterms = () => assemblyPromise;
+    const handleStart = getHandler("voice-input:start");
+    const startPromise = (handleStart as (e: unknown) => Promise<unknown>)(fakeEvent) as Promise<{
+      ok: boolean;
+      error?: string;
+    }>;
+
+    // Stop arrives mid-assembly, then assembly finishes.
+    await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent);
+    resolveAssembly(["Daintree"]);
+    const result = await startPromise;
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("Voice session superseded");
+    // The superseded start must never reach svc.start().
+    expect(shared.startCalls).toHaveLength(0);
+  });
+
+  it("passes the assembled keyterms to svc.start()", async () => {
+    const handleStop = getHandler("voice-input:stop");
+    await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent);
+    shared.startCalls = [];
+
+    shared.assembleKeyterms = () => Promise.resolve(["Daintree", "xterm"]);
+    const handleStart = getHandler("voice-input:start");
+    await (handleStart as (e: unknown) => Promise<unknown>)(fakeEvent);
+
+    expect(shared.startCalls).toHaveLength(1);
+    expect((shared.startCalls[0] as { keyterms?: string[] }).keyterms).toEqual([
+      "Daintree",
+      "xterm",
+    ]);
   });
 
   it("paragraph_boundary forwards a payload with only rawText", () => {
