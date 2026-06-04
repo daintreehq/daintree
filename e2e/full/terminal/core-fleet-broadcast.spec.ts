@@ -617,7 +617,7 @@ test.describe.serial("Core: Fleet terminal broadcast", () => {
     });
   });
 
-  test("destructive broadcast via hybrid input gates on confirm — cancel then send", async () => {
+  test("destructive broadcast via hybrid input sends immediately to the armed fleet", async () => {
     test.setTimeout(120_000);
     const { window } = ctx;
 
@@ -657,62 +657,27 @@ test.describe.serial("Core: Fleet terminal broadcast", () => {
       );
     });
 
-    // Distinct per-phase run logs prove actual execution, not just terminal echo
-    // of a typed-but-cancelled destructive command.
-    const cancelTarget = `fleet-e2e-cancel-${Date.now()}`;
     const sendTarget = `fleet-e2e-send-${Date.now()}`;
-    const cancelRunLog = `${cancelTarget}.ran`;
     const sendRunLog = `${sendTarget}.ran`;
-    const cancelRunLogPath = path.join(fixtureDir, cancelRunLog);
     const sendRunLogPath = path.join(fixtureDir, sendRunLog);
-    const cancelCommand = destructiveAppendCommand(cancelTarget, cancelRunLog);
     const sendCommand = destructiveAppendCommand(sendTarget, sendRunLog);
 
-    await test.step("Typing a destructive command and pressing Enter surfaces the confirm strip", async () => {
+    await test.step("Typing a destructive command and pressing Enter broadcasts immediately", async () => {
       const editor = await focusPanelHybridInput(
         window,
         getPanelById(window, gridIds[0]!),
         gridIds[0]!
       );
-      await replaceHybridInput(window, editor, cancelCommand);
-      await window.keyboard.press("Enter");
-
-      await expect(window.locator(SEL.fleet.pasteConfirm)).toBeVisible({ timeout: T_MEDIUM });
-      await expect(window.locator(SEL.fleet.pasteConfirmSend)).toBeVisible({ timeout: T_MEDIUM });
-      await expect(window.locator(SEL.fleet.pasteConfirmCancel)).toBeVisible({ timeout: T_MEDIUM });
-    });
-
-    await test.step("Cancelling the confirm aborts the broadcast — no target receives the command", async () => {
-      await window.locator(SEL.fleet.pasteConfirmCancel).click();
-      await expect(window.locator(SEL.fleet.pasteConfirm)).toBeHidden({ timeout: T_MEDIUM });
-      // Give the PTY a beat to execute before asserting the cancellation did not
-      // create a run log.
-      await window.waitForTimeout(750);
-      expect(readRunCount(cancelRunLogPath)).toBe(0);
-    });
-
-    await test.step("Re-typing and confirming sends the command to every armed pane", async () => {
-      const editor = await focusPanelHybridInput(
-        window,
-        getPanelById(window, gridIds[0]!),
-        gridIds[0]!
-      );
-      // Clear any residual draft from the cancelled attempt so the second
-      // submission contains exactly the send command, not a doubled string.
       await replaceHybridInput(window, editor, sendCommand);
       await window.keyboard.press("Enter");
 
-      await expect(window.locator(SEL.fleet.pasteConfirmSend)).toBeVisible({ timeout: T_MEDIUM });
-      await window.locator(SEL.fleet.pasteConfirmSend).click();
       await expect(window.locator(SEL.fleet.pasteConfirm)).toBeHidden({ timeout: T_MEDIUM });
-
       await expect
         .poll(() => readRunCount(sendRunLogPath), {
           timeout: T_LONG,
           intervals: [250, 500, 1000],
         })
         .toBeGreaterThanOrEqual(2);
-      expect(readRunCount(cancelRunLogPath)).toBe(0);
     });
   });
 });
