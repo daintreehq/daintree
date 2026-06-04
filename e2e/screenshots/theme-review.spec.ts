@@ -334,6 +334,18 @@ test("theme review — chrome, overlays, states", async () => {
         .first()
         .waitFor({ state: "visible", timeout: 30_000 });
       await settle(page, 2000);
+      // Seed ANSI-colored output so the terminal palette is reviewable —
+      // failures here must not sink the rest of the step.
+      try {
+        await page.locator(SEL.panel.gridPanel).first().click();
+        await page.keyboard.type(
+          "printf '\\e[31mred \\e[32mgreen \\e[33myellow \\e[34mblue \\e[35mmagenta \\e[36mcyan \\e[90mbright-black\\e[0m\\n'; git log --oneline --color=always | head -3; ls"
+        );
+        await page.keyboard.press("Enter");
+        await settle(page, 1500);
+      } catch {
+        // plain prompt is still a usable capture
+      }
       await snap(page, "22-terminal");
       // Terminal search bar (find-in-terminal chrome).
       await page.keyboard.press(process.platform === "darwin" ? "Meta+F" : "Control+F");
