@@ -661,7 +661,7 @@ describe("PanelHeader", () => {
       const { container } = render(<PanelHeader {...makeProps({ isFocused: false })} />);
       const header = container.firstElementChild as HTMLElement;
       expect(header.getAttribute("data-selected")).toBeNull();
-      expect(header.className).toContain("bg-transparent");
+      expect(header.className).toContain("bg-[var(--panel-header-bg,transparent)]");
     });
 
     it("tags selected panes with data-selected and lifts the header bg", () => {
@@ -672,8 +672,10 @@ describe("PanelHeader", () => {
       expect(header.getAttribute("data-selected")).toBe("true");
       // Selected header matches the focused overlay tint — one unified
       // "active" title bar treatment for both focus and selection.
-      expect(header.className).toContain("bg-overlay-subtle");
-      expect(header.className).not.toContain("bg-transparent");
+      expect(header.className).toContain(
+        "bg-[var(--panel-header-focus-bg,var(--color-overlay-subtle))]"
+      );
+      expect(header.className).not.toContain("bg-[var(--panel-header-bg,transparent)]");
     });
 
     it("does not add an accent border or accent title on selected panes", () => {
@@ -694,7 +696,9 @@ describe("PanelHeader", () => {
         <PanelHeader {...makeProps({ isSelected: true, isMaximized: true })} />
       );
       const header = container.firstElementChild as HTMLElement;
-      expect(header.className).not.toContain("bg-overlay-subtle");
+      expect(header.className).not.toContain(
+        "bg-[var(--panel-header-focus-bg,var(--color-overlay-subtle))]"
+      );
     });
   });
 
@@ -848,7 +852,7 @@ describe("PanelHeader", () => {
 
     it("coexists with the selected state without replacing the selected background", () => {
       // isFocused: false isolates the bg cascade so isSelected wins the class
-      // (bg-overlay-subtle) — the kinetic overlay is additive, not a replacement.
+      // (the focus-bg hook) — the kinetic overlay is additive, not a replacement.
       const { container } = render(
         <PanelHeader
           {...makeProps({ isFleetPreviewed: true, isSelected: true, isFocused: false })}
@@ -858,11 +862,13 @@ describe("PanelHeader", () => {
       expect(overlay).not.toBeNull();
       const header = container.querySelector("[data-pane-chrome]");
       expect(header?.getAttribute("data-selected")).toBe("true");
-      expect(header?.className).toContain("bg-overlay-subtle");
+      expect(header?.className).toContain(
+        "bg-[var(--panel-header-focus-bg,var(--color-overlay-subtle))]"
+      );
     });
 
     it("still renders the overlay when the pane is focused", () => {
-      // A focused, previewed pane gets bg-overlay-subtle via the isFocused
+      // A focused, previewed pane gets the focus-bg hook via the isFocused
       // branch — the overlay must not be gated on focus/selection state.
       const { container } = render(
         <PanelHeader {...makeProps({ isFleetPreviewed: true, isFocused: true })} />

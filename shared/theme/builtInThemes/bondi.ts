@@ -9,14 +9,16 @@ export const theme: BuiltInThemeSource = {
   heroImage: "/themes/bondi.webp",
   palette: {
     type: "light",
-    // White cards on pale sky (#9711): the field stays genuinely chromatic
-    // (one ~H248 hue, C 0.021 -> 0 toward white) and everything that carries
-    // content lifts TOWARD white — never a darker fill on a light container.
+    // Shoreline composition (#9711): SAND sidebar (H~93) against WATER
+    // grid/canvas/panel (H~248), white foam on top — beach on the left,
+    // ocean on the right. Everything that carries content lifts TOWARD
+    // white — never a darker fill on a light container.
     // Ramp L 0.916/0.937/0.957/0.979/1.0: steps 0.0205-0.0219 (gate ≥ 0.02),
-    // span 0.084, panel→elevated not the smallest step.
+    // span 0.084, panel→elevated not the smallest step (the audit gates check
+    // L only, so the sidebar's sand hue rides the same ramp).
     surfaces: {
       grid: "#D9E5F0",
-      sidebar: "#DFECF8",
+      sidebar: "#EDEAE0",
       canvas: "#EAF2FA",
       panel: "#F3F9FF",
       elevated: "#FFFFFF",
@@ -176,12 +178,12 @@ export const theme: BuiltInThemeSource = {
     // Scope pill elevates to white on the tinted settings sidebar.
     "settings-scope-bg": "#FFFFFF",
     "settings-sidebar-bg": "rgba(243,249,255,0.60)",
-    "sidebar-action-hover-bg": "rgba(22,52,71,0.05)",
-    // Worktree cards are warm paper (sand against the sky field — H95 vs the
-    // field's H248); hover brightens toward white; selected is pure white +
-    // the accent rail. idle < hover < selected is audit-enforced.
+    "sidebar-action-hover-bg": "rgba(58,48,30,0.05)",
+    // Worktree cards are paper highlights on the sand field; hover brightens
+    // toward white; selected is pure white + the accent rail.
+    // idle < hover < selected is audit-enforced.
     "sidebar-card-bg": "#FCFBF7",
-    "sidebar-card-shadow": "0 0 0 1px rgba(28,38,50,0.08), 0 1px 2px rgba(23,33,48,0.05)",
+    "sidebar-card-shadow": "0 0 0 1px rgba(54,46,32,0.08), 0 1px 2px rgba(48,40,28,0.05)",
     "sidebar-active-bg": "#FFFFFF",
     "sidebar-hover-bg": "#FEFDFB",
     "toolbar-agent-hover-bg": "rgba(28,32,40,0.06)",
@@ -205,10 +207,10 @@ export const theme: BuiltInThemeSource = {
     "toolbar-stats-divider": "rgba(211,208,199,0.7)",
     "toolbar-stats-hover-bg": "#FCFBF7",
     // Filter rail sits flush on the field; the raised search input carries it.
-    "worktree-filter-bar-bg": "#DFECF8",
+    "worktree-filter-bar-bg": "#EDEAE0",
     // Active quick-state tab lifts to white under its inset underline.
     "worktree-quick-state-active-bg": "#FFFFFF",
-    "worktree-search-input-bg": "#F9FCFF",
-    "worktree-section-hover-bg": "rgba(22,52,71,0.05)",
+    "worktree-search-input-bg": "#FCFBF7",
+    "worktree-section-hover-bg": "rgba(58,48,30,0.05)",
   },
 };
