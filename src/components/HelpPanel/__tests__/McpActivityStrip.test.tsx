@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpAuditRecord } from "@shared/types";
 
@@ -76,6 +76,9 @@ describe("formatCallDuration", () => {
     expect(formatCallDuration(999)).toBe("999ms");
     expect(formatCallDuration(1000)).toBe("1.0s");
     expect(formatCallDuration(1500)).toBe("1.5s");
+    // Rounding happens before the threshold so 999.5 promotes to seconds.
+    expect(formatCallDuration(999.5)).toBe("1.0s");
+    expect(formatCallDuration(1000.4)).toBe("1.0s");
   });
 });
 
@@ -168,6 +171,31 @@ describe("McpActivityStrip", () => {
     render(<McpActivityStrip sessionId="session-a" onOpenSettings={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /recent activity/i }));
     expect(await screen.findByText(/no calls yet this session/i)).toBeTruthy();
+  });
+
+  it("does not flash old-session records after the session changes mid-fetch", async () => {
+    let resolveFirst: (v: McpAuditRecord[]) => void = () => {};
+    const firstFetch = new Promise<McpAuditRecord[]>((res) => {
+      resolveFirst = res;
+    });
+    getAuditRecords.mockReturnValueOnce(firstFetch);
+
+    const { rerender } = render(
+      <McpActivityStrip sessionId="session-a" onOpenSettings={vi.fn()} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /recent activity/i }));
+
+    // Session changes before the in-flight session-a fetch resolves.
+    rerender(<McpActivityStrip sessionId="session-b" onOpenSettings={vi.fn()} />);
+    await act(async () => {
+      resolveFirst([makeRecord({ id: "old", toolId: "stale-tool", sessionId: "session-a" })]);
+      await firstFetch;
+    });
+
+    // Reopen under session-b — the stale session-a result must not appear.
+    fireEvent.click(screen.getByRole("button", { name: /recent activity/i }));
+    expect(await screen.findByText(/no calls yet this session/i)).toBeTruthy();
+    expect(screen.queryByText("stale-tool")).toBeNull();
   });
 
   it("invokes onOpenSettings and closes when viewing the full audit log", async () => {

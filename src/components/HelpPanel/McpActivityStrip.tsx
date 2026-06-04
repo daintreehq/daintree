@@ -8,8 +8,8 @@ import { RecentCallsPopover } from "./RecentCallsPopover";
 const MAX_RECENT_CALLS = 20;
 
 interface McpActivityStripProps {
-  /** Current assistant session. Empty string means hibernated — strip is hidden. */
-  sessionId: string;
+  /** Current assistant session. Empty/null means hibernated — strip is hidden. */
+  sessionId: string | null;
   onOpenSettings: () => void;
 }
 
@@ -24,10 +24,14 @@ export function McpActivityStrip({ sessionId, onOpenSettings }: McpActivityStrip
   const fetchSeq = useRef(0);
 
   // A session change invalidates the open popover — its calls belong to the old
-  // session. Close it and drop the stale list.
+  // session. Close it, drop the stale list, and bump the fetch token so any
+  // in-flight request from the previous session can't land its results.
   useEffect(() => {
+    fetchSeq.current++;
     setOpen(false);
     setRecords([]);
+    setLoading(false);
+    setError(false);
   }, [sessionId]);
 
   useEffect(() => {
@@ -46,7 +50,7 @@ export function McpActivityStrip({ sessionId, onOpenSettings }: McpActivityStrip
         setLoading(false);
       } catch (err) {
         if (fetchSeq.current !== seq) return;
-        logWarn("[McpActivityStrip] Failed to load audit records", err);
+        logWarn("[McpActivityStrip] Failed to load audit records", { error: err });
         setError(true);
         setLoading(false);
       }

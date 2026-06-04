@@ -29,8 +29,10 @@ const RESULT_LABEL: Record<McpAuditResult, string> = {
 export function formatCallDuration(durationMs: number): string {
   if (durationMs <= 0) return "0ms";
   if (durationMs < 100) return "<100ms";
-  if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
-  return `${(durationMs / 1000).toFixed(1)}s`;
+  // Round before the threshold check so 999.5 reads as "1.0s", not "1000ms".
+  const ms = Math.round(durationMs);
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 export interface RecentCallGroup {
