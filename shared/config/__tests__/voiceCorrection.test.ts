@@ -45,6 +45,38 @@ describe("CORE_CORRECTION_PROMPT", () => {
     expect(CORE_CORRECTION_PROMPT).toContain("speech-to-text correction engine");
   });
 
+  it("keeps the static prefix long enough to clear OpenAI's prompt-cache floor", () => {
+    // OpenAI's Responses API only caches a prefix of at least 1,024 tokens. This
+    // floor is a character proxy for that token threshold: at a conservative ~4.4
+    // chars/token for dense technical English, 4,800 chars maps to ~1,090 tokens,
+    // keeping headroom above 1,024 even if a future edit compacts the prose. Guards
+    // against accidental truncation that would silently drop the prefix below the
+    // cache threshold (issue #9746).
+    expect(CORE_CORRECTION_PROMPT.length).toBeGreaterThan(4800);
+  });
+
+  it("includes expanded domain-grouped phonetic mappings", () => {
+    expect(CORE_CORRECTION_PROMPT).toContain("npm");
+    expect(CORE_CORRECTION_PROMPT).toContain("pnpm");
+    expect(CORE_CORRECTION_PROMPT).toContain("Storybook");
+    expect(CORE_CORRECTION_PROMPT).toContain("Vite");
+    expect(CORE_CORRECTION_PROMPT).toContain("kubectl");
+    expect(CORE_CORRECTION_PROMPT).toContain("Terraform");
+    expect(CORE_CORRECTION_PROMPT).toContain("OAuth");
+    expect(CORE_CORRECTION_PROMPT).toContain("gRPC");
+    expect(CORE_CORRECTION_PROMPT).toContain("PyTorch");
+    expect(CORE_CORRECTION_PROMPT).toContain("Anthropic");
+    expect(CORE_CORRECTION_PROMPT).toContain("idempotent");
+    expect(CORE_CORRECTION_PROMPT).toContain("regex");
+  });
+
+  it("includes few-shot correction examples that defer output format to the JSON schema", () => {
+    expect(CORE_CORRECTION_PROMPT).toContain("EXAMPLES");
+    expect(CORE_CORRECTION_PROMPT).toContain("Corrected:");
+    // Examples must not instruct the model to emit plain text — the schema wins.
+    expect(CORE_CORRECTION_PROMPT).toMatch(/always return the JSON object/i);
+  });
+
   it("instructs LLM to convert standalone paragraph voice commands to newlines", () => {
     expect(CORE_CORRECTION_PROMPT).toContain("new paragraph");
     expect(CORE_CORRECTION_PROMPT).toContain("next paragraph");
