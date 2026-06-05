@@ -8,11 +8,13 @@ vi.mock("@/utils/logger", () => ({
 
 const fetchAndRestoreMock = vi.fn();
 const getMock = vi.fn();
+const notifyRestoreSettledWaitersMock = vi.fn();
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     get: (id: string) => getMock(id),
     fetchAndRestore: (id: string) => fetchAndRestoreMock(id),
+    notifyRestoreSettledWaiters: (id: string) => notifyRestoreSettledWaitersMock(id),
   },
 }));
 
@@ -68,6 +70,7 @@ beforeEach(() => {
   scheduleBackgroundFetchAndRestoreMock.mockReset();
   registerLazyScrollRestoreMock.mockReset();
   setScrollbackRestoreErrorMock.mockReset();
+  notifyRestoreSettledWaitersMock.mockReset();
 });
 
 afterEach(() => {
@@ -290,6 +293,73 @@ describe("scheduleScrollbackRestore — background mode", () => {
     expect(setScrollbackRestoreErrorMock).not.toHaveBeenCalled();
     // State still resets so a future restore can retry.
     expect(managed.scrollbackRestoreState).toBe("none");
+  });
+});
+
+describe("scheduleScrollbackRestore — fully-settled notification", () => {
+  it("notifies settled waiters after a clean restore (success path)", async () => {
+    const managed = fakeManaged("none");
+    getMock.mockReturnValue(managed);
+    fetchAndRestoreMock.mockResolvedValue(undefined);
+
+    scheduleScrollbackRestore(
+      [{ terminalId: "t1", label: "x", location: "grid" }],
+      () => true,
+      "background"
+    );
+    await getScheduledDoRestore()();
+
+    expect(managed.scrollbackRestoreState).toBe("done");
+    expect(notifyRestoreSettledWaitersMock).toHaveBeenCalledWith("t1");
+  });
+
+  it("notifies settled waiters after a swallowed replay failure", async () => {
+    const managed = fakeManaged("none");
+    getMock.mockReturnValue(managed);
+    fetchAndRestoreMock.mockImplementation(async () => {
+      managed.lastScrollbackRestoreError = { type: "timeout", message: "boom", timestamp: 1 };
+      return false;
+    });
+
+    scheduleScrollbackRestore(
+      [{ terminalId: "t1", label: "x", location: "grid" }],
+      () => true,
+      "background"
+    );
+    await getScheduledDoRestore()();
+
+    expect(managed.scrollbackRestoreState).toBe("none");
+    expect(notifyRestoreSettledWaitersMock).toHaveBeenCalledWith("t1");
+  });
+
+  it("notifies settled waiters after an IPC-level rejection", async () => {
+    const managed = fakeManaged("none");
+    getMock.mockReturnValue(managed);
+    fetchAndRestoreMock.mockRejectedValue(new Error("nope"));
+
+    scheduleScrollbackRestore(
+      [{ terminalId: "t1", label: "x", location: "grid" }],
+      () => true,
+      "background"
+    );
+    await getScheduledDoRestore()();
+
+    expect(notifyRestoreSettledWaitersMock).toHaveBeenCalledWith("t1");
+  });
+
+  it("notifies settled waiters when restore bails before starting (isCurrent → false)", async () => {
+    const managed = fakeManaged("none");
+    getMock.mockReturnValue(managed);
+
+    scheduleScrollbackRestore(
+      [{ terminalId: "t1", label: "x", location: "grid" }],
+      () => false,
+      "background"
+    );
+    await getScheduledDoRestore()();
+
+    expect(managed.scrollbackRestoreState).toBe("none");
+    expect(notifyRestoreSettledWaitersMock).toHaveBeenCalledWith("t1");
   });
 });
 

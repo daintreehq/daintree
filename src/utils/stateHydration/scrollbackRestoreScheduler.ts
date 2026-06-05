@@ -38,6 +38,10 @@ export function scheduleScrollbackRestore(
       const resetIfStillPending = () => {
         if (managed.scrollbackRestoreState === "pending") {
           managed.scrollbackRestoreState = "none";
+          // Bailed before starting (project switch mid-flight). The restore
+          // outcome is no longer relevant to this terminal in the new context,
+          // so unblock any fully-settle waiters that gated on it.
+          terminalInstanceService.notifyRestoreSettledWaiters(task.terminalId);
         }
       };
 
@@ -72,6 +76,7 @@ export function scheduleScrollbackRestore(
         } else {
           managed.scrollbackRestoreState = "done";
         }
+        terminalInstanceService.notifyRestoreSettledWaiters(task.terminalId);
       } catch (error) {
         // IPC-level failure from terminalClient.getSerializedState (the
         // controller's own catch returns false rather than rethrowing for
@@ -84,6 +89,7 @@ export function scheduleScrollbackRestore(
             .setScrollbackRestoreError(task.terminalId, classifySchedulerError(error));
         }
         logWarn(`Scrollback restore failed for ${task.label}`, { error });
+        terminalInstanceService.notifyRestoreSettledWaiters(task.terminalId);
       }
     };
 
