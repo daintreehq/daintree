@@ -391,7 +391,7 @@ describe("TerminalRendererPolicy", () => {
 
     beforeEach(async () => {
       onResumeFlush = vi.fn();
-      mockDeps.onResumeFlush = onResumeFlush;
+      mockDeps.onResumeFlush = onResumeFlush as unknown as ((id: string) => void) | undefined;
       // The active-tier-supersede branch re-arms a downgrade timer via
       // window.setTimeout; the node test env has no window, so stub it.
       vi.stubGlobal("window", { setTimeout: vi.fn(() => 999), clearTimeout: vi.fn() });
@@ -503,7 +503,7 @@ describe("TerminalRendererPolicy", () => {
     beforeEach(async () => {
       vi.useFakeTimers();
       onResumeFlush = vi.fn();
-      mockDeps.onResumeFlush = onResumeFlush;
+      mockDeps.onResumeFlush = onResumeFlush as unknown as ((id: string) => void) | undefined;
       // The implementation arms timers via window.setTimeout; point window at
       // the faked global timers so setTimeout/clearTimeout stay consistent.
       vi.stubGlobal("window", globalThis);
