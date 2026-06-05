@@ -957,7 +957,7 @@ describe("AgentButton preset UX", () => {
       mockDominantState = "waiting";
       mockDotColor = "bg-state-waiting";
 
-      const { container, getAllByRole, getAllByTestId } = render(
+      const { container, getAllByRole, getAllByTestId, getByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
 
@@ -965,7 +965,7 @@ describe("AgentButton preset UX", () => {
       const launchTooltip = tooltipTexts.find((t) => t.startsWith("Start "));
       expect(launchTooltip).toContain("— waiting");
 
-      const chevronIcon = getAllByTestId("chevron-icon")[0];
+      const chevronIcon = getByTestId("chevron-icon");
       const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
       expect(primary?.getAttribute("aria-label")).toBe("Start Claude — waiting");
 
@@ -987,7 +987,7 @@ describe("AgentButton preset UX", () => {
       mockDominantState = "directing";
       mockDotColor = "bg-state-working";
 
-      const { getAllByRole, getAllByTestId } = render(
+      const { getAllByRole, getAllByTestId, getByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
 
@@ -995,7 +995,7 @@ describe("AgentButton preset UX", () => {
       const launchTooltip = tooltipTexts.find((t) => t.startsWith("Start "));
       expect(launchTooltip).toContain("— directing");
 
-      const chevronIcon = getAllByTestId("chevron-icon")[0];
+      const chevronIcon = getByTestId("chevron-icon");
       const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
       expect(primary?.getAttribute("aria-label")).toBe("Start Claude — directing");
     });
@@ -1042,7 +1042,7 @@ describe("AgentButton preset UX", () => {
       mockDominantState = "working";
       mockDotColor = null;
 
-      const { getAllByRole, getAllByTestId } = render(
+      const { getAllByRole, getAllByTestId, getByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
 
@@ -1053,7 +1053,7 @@ describe("AgentButton preset UX", () => {
       expect(launchTooltip).not.toContain("— directing");
       expect(launchTooltip).not.toContain("— waiting");
 
-      const chevronIcon = getAllByTestId("chevron-icon")[0];
+      const chevronIcon = getByTestId("chevron-icon");
       const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
       expect(primary?.getAttribute("aria-label")).toBe("Start Claude");
     });
@@ -1064,7 +1064,7 @@ describe("AgentButton preset UX", () => {
       mockDominantState = null;
       mockDotColor = "bg-state-waiting";
 
-      const { getAllByRole, getAllByTestId } = render(
+      const { getAllByRole, getAllByTestId, getByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
 
@@ -1072,7 +1072,7 @@ describe("AgentButton preset UX", () => {
       const launchTooltip = tooltipTexts.find((t) => t.startsWith("Start "));
       expect(launchTooltip).toBe("Start Claude · Blue");
 
-      const chevronIcon = getAllByTestId("chevron-icon")[0];
+      const chevronIcon = getByTestId("chevron-icon");
       const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
       expect(primary?.getAttribute("aria-label")).toBe("Start Claude");
     });
@@ -1089,11 +1089,11 @@ describe("AgentButton preset UX", () => {
       mockSettings = settingsWith({ claude: {} });
       mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
 
-      const { getAllByTestId, getAllByRole } = render(
+      const { getAllByRole, getByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
 
-      const chevronIcon = getAllByTestId("chevron-icon")[0];
+      const chevronIcon = getByTestId("chevron-icon");
       const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
       const chevron = getAllByRole("button").find((b) => b.contains(chevronIcon));
       expect(primary).toBeTruthy();
@@ -1113,11 +1113,11 @@ describe("AgentButton preset UX", () => {
         { id: "user-red", name: "Red" },
       ];
 
-      const { getAllByTestId, getAllByRole } = render(
+      const { getAllByRole, getByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
 
-      const chevronIcon = getAllByTestId("chevron-icon")[0];
+      const chevronIcon = getByTestId("chevron-icon");
       const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
       const chevron = getAllByRole("button").find((b) => b.contains(chevronIcon));
       expect(primary!.className).toContain("toolbar-agent-split-seam");
@@ -1129,11 +1129,11 @@ describe("AgentButton preset UX", () => {
       // claim a usable chevron when neither half is clickable.
       mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
 
-      const { getAllByTestId, getAllByRole } = render(
+      const { getAllByRole, getByTestId } = render(
         <AgentButton type="claude" availability={undefined} />
       );
 
-      const chevronIcon = getAllByTestId("chevron-icon")[0];
+      const chevronIcon = getByTestId("chevron-icon");
       const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
       expect(primary).toBeTruthy();
       expect(primary!.className).not.toContain("toolbar-agent-split-seam");
@@ -1142,11 +1142,11 @@ describe("AgentButton preset UX", () => {
     it("omits the seam class when the CLI is missing", () => {
       mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
 
-      const { getAllByTestId, getAllByRole } = render(
+      const { getAllByRole, getByTestId } = render(
         <AgentButton type="claude" availability={"missing" as unknown as CliAvailability[string]} />
       );
 
-      const chevronIcon = getAllByTestId("chevron-icon")[0];
+      const chevronIcon = getByTestId("chevron-icon");
       const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
       expect(primary!.className).not.toContain("toolbar-agent-split-seam");
     });
@@ -1154,14 +1154,14 @@ describe("AgentButton preset UX", () => {
     it("omits the seam class when the CLI is installed but not launchable (needs setup)", () => {
       mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
 
-      const { getAllByTestId, getAllByRole } = render(
+      const { getAllByRole, getByTestId } = render(
         <AgentButton
           type="claude"
           availability={"installed" as unknown as CliAvailability[string]}
         />
       );
 
-      const chevronIcon = getAllByTestId("chevron-icon")[0];
+      const chevronIcon = getByTestId("chevron-icon");
       const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
       expect(primary!.className).not.toContain("toolbar-agent-split-seam");
     });
@@ -1188,11 +1188,11 @@ describe("AgentButton preset UX", () => {
       mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
       mockSettings = settingsWith({ claude: {} });
 
-      const { getAllByTestId, getAllByRole } = render(
+      const { getAllByRole, getByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
 
-      const chevronIcon = getAllByTestId("chevron-icon")[0];
+      const chevronIcon = getByTestId("chevron-icon");
       const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
       expect(primary!.className).toContain("border-r");
       expect(primary!.className).toContain("border-transparent");
