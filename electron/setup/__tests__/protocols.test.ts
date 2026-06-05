@@ -69,6 +69,7 @@ vi.mock("../../utils/appProtocol.js", () => ({
   getMimeType: vi.fn(),
   buildHeaders: vi.fn(),
   isImmutableAppAsset: vi.fn(() => false),
+  isNotModified: vi.fn(() => false),
 }));
 
 // Real-ish flag values matter: the protocol handler passes
@@ -1747,5 +1748,252 @@ describe("createPluginProtocolHandler", () => {
     } finally {
       relativeSpy.mockRestore();
     }
+  });
+});
+
+describe("createAppProtocolHandler — direct disk read", () => {
+  type ProtocolHandler = (request: GlobalRequest) => Promise<Response>;
+
+  async function captureHandler(): Promise<ProtocolHandler> {
+    const handle = vi.fn();
+    const mockSession = { protocol: { handle } } as unknown as Electron.Session;
+    registerProtocolsForSession(mockSession, "/tmp/dist");
+    const call = handle.mock.calls.find((c) => c[0] === "app");
+    if (!call) throw new Error("handler for app not registered");
+    return call[1] as ProtocolHandler;
+  }
+
+  function makeRequest(
+    pathname = "/assets/index-abc123.js",
+    init?: { method?: string; headers?: Record<string, string> }
+  ): GlobalRequest {
+    return new Request(`app://daintree${pathname}`, init) as GlobalRequest;
+  }
+
+  function makeFileHandle(content: string | Buffer = "bytes") {
+    const buffer = typeof content === "string" ? Buffer.from(content) : content;
+    return {
+      readFile: vi.fn().mockResolvedValue(buffer),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const fs = await import("fs/promises");
+    vi.mocked(fs.stat).mockResolvedValue({
+      mtime: new Date(0),
+      isFile: () => true,
+    } as Awaited<ReturnType<typeof fs.stat>>);
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle() as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.resolveAppUrlToDistPath).mockReturnValue({
+      filePath: "/tmp/dist/assets/index-abc123.js",
+    } as ReturnType<typeof appProtocol.resolveAppUrlToDistPath>);
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("text/javascript");
+    vi.mocked(appProtocol.buildHeaders).mockReturnValue({
+      "Content-Type": "text/javascript",
+    } as ReturnType<typeof appProtocol.buildHeaders>);
+    vi.mocked(appProtocol.isNotModified).mockReturnValue(false);
+  });
+
+  it("serves the file straight off disk with fs.open(O_RDONLY) and never touches net.fetch", async () => {
+    const { net } = await import("electron");
+    const fs = await import("fs/promises");
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("bytes");
+    // The whole point of #9768: read directly, no Chromium network-stack hop.
+    expect(vi.mocked(net.fetch)).not.toHaveBeenCalled();
+    expect(fs.open).toHaveBeenCalledTimes(1);
+    const openArgs = vi.mocked(fs.open).mock.calls[0];
+    expect(openArgs[0]).toBe("/tmp/dist/assets/index-abc123.js");
+    // No O_NOFOLLOW — app:// uses lexical containment with no realpath, so there
+    // is no TOCTOU window for the flag to close.
+    expect(openArgs[1]).toBe(fs.constants.O_RDONLY);
+  });
+
+  it("builds the 200 response headers from the validator stats (Last-Modified / Cache-Control)", async () => {
+    const fs = await import("fs/promises");
+    const appProtocol = await import("../../utils/appProtocol.js");
+    const stats = { mtime: new Date(1000), isFile: () => true } as Awaited<
+      ReturnType<typeof fs.stat>
+    >;
+    vi.mocked(fs.stat).mockResolvedValue(stats);
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(200);
+    expect(appProtocol.buildHeaders).toHaveBeenCalledWith("text/javascript", {
+      stats,
+      filePath: "/tmp/dist/assets/index-abc123.js",
+    });
+  });
+
+  it("returns 404 for a directory URL even when the validator matches (no spurious 304)", async () => {
+    const fs = await import("fs/promises");
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(fs.stat).mockResolvedValue({
+      mtime: new Date(0),
+      isFile: () => false,
+    } as Awaited<ReturnType<typeof fs.stat>>);
+    vi.mocked(appProtocol.isNotModified).mockReturnValue(true);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeRequest("/assets/", {
+        headers: { "If-Modified-Since": new Date(0).toUTCString() },
+      })
+    );
+
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("short-circuits to 304 without opening the file when the validator matches", async () => {
+    const fs = await import("fs/promises");
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.isNotModified).mockReturnValue(true);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeRequest("/assets/index-abc123.js", {
+        headers: { "If-Modified-Since": new Date(0).toUTCString() },
+      })
+    );
+
+    expect(response.status).toBe(304);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("returns 405 for non-GET/HEAD methods without resolving a path", async () => {
+    const appProtocol = await import("../../utils/appProtocol.js");
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/assets/index-abc123.js", { method: "POST" }));
+
+    expect(response.status).toBe(405);
+    expect(appProtocol.resolveAppUrlToDistPath).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when the URL resolves outside the dist root", async () => {
+    const fs = await import("fs/promises");
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.resolveAppUrlToDistPath).mockReturnValue({
+      filePath: "",
+      error: "path traversal",
+    } as ReturnType<typeof appProtocol.resolveAppUrlToDistPath>);
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/../../etc/passwd"));
+
+    expect(response.status).toBe(404);
+    expect(fs.stat).not.toHaveBeenCalled();
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when stat fails (missing file)", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.stat).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when fs.open rejects with ENOENT", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.open).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(404);
+  });
+
+  it("returns 404 when fs.open rejects with EISDIR (directory URL on Windows)", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.open).mockRejectedValue(Object.assign(new Error("EISDIR"), { code: "EISDIR" }));
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(404);
+  });
+
+  it("returns 404 when readFile rejects with EISDIR (directory open succeeds on macOS/Linux)", async () => {
+    const fs = await import("fs/promises");
+    const handle = {
+      readFile: vi.fn().mockRejectedValue(Object.assign(new Error("EISDIR"), { code: "EISDIR" })),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(404);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 500 and closes the handle when readFile fails unexpectedly", async () => {
+    const fs = await import("fs/promises");
+    const handle = {
+      readFile: vi.fn().mockRejectedValue(Object.assign(new Error("EIO"), { code: "EIO" })),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(500);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 500 when fs.open rejects with an unexpected error", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.open).mockRejectedValue(Object.assign(new Error("EACCES"), { code: "EACCES" }));
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(500);
+  });
+
+  it("closes the file handle on the success path", async () => {
+    const fs = await import("fs/promises");
+    const handle = makeFileHandle("bytes");
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(200);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 200 when close() rejects after a successful read (close errors are swallowed)", async () => {
+    const fs = await import("fs/promises");
+    const handle = {
+      readFile: vi.fn().mockResolvedValue(Buffer.from("ok")),
+      close: vi.fn().mockRejectedValue(new Error("EBADF")),
+    };
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("ok");
+    expect(handle.close).toHaveBeenCalledTimes(1);
   });
 });
