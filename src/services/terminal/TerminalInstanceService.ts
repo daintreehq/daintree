@@ -13,6 +13,7 @@ import {
   HIBERNATION_DELAY_PRESSURE_TIER1_MS,
   HIBERNATION_DELAY_PRESSURE_TIER2_MS,
 } from "./types";
+import { tallyScrollbackRestoreStates } from "./scrollbackRestoreAggregate";
 import {
   setupTerminalAddons,
   createImageAddon,
@@ -111,6 +112,7 @@ class TerminalInstanceService {
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
   private hibernationListeners = new Map<string, Set<() => void>>();
+  private scrollbackRestoreListeners = new Set<() => void>();
   private cwdProviders = new Map<string, () => string>();
   private readinessWaiters = new Map<string, Waiter[]>();
   private attachSettledWaiters = new Map<string, Waiter[]>();
@@ -2083,6 +2085,55 @@ class TerminalInstanceService {
     }
   }
 
+  /**
+   * Subscribe to batch scrollback-restore state changes. The scheduler
+   * (`scrollbackRestoreScheduler`) drives every `scrollbackRestoreState`
+   * transition and calls `notifyScrollbackRestoreListeners` after each, so
+   * the grid-level `BatchScrollbackRestoreBar` can reflect progress without
+   * polling. Listeners are batch-scoped (no per-id keying) — the aggregate
+   * counts span every managed terminal. Returns an unsubscribe cleanup.
+   */
+  subscribeScrollbackRestoreState(listener: () => void): () => void {
+    this.scrollbackRestoreListeners.add(listener);
+    return () => {
+      this.scrollbackRestoreListeners.delete(listener);
+    };
+  }
+
+  notifyScrollbackRestoreListeners(): void {
+    for (const listener of this.scrollbackRestoreListeners) {
+      try {
+        listener();
+      } catch (error) {
+        logWarn("Scrollback restore listener error", { error });
+      }
+    }
+  }
+
+  // Three primitive accessors rather than one object snapshot: useSyncExternalStore
+  // re-renders whenever getSnapshot returns a new reference, so each subscriber
+  // reads a stable `number`. The instance map is small, so re-tallying per
+  // accessor is cheap and avoids snapshot-caching invalidation bugs.
+  getScrollbackRestorePendingCount(): number {
+    return this.tallyScrollbackRestore().pendingCount;
+  }
+
+  getScrollbackRestoreInProgressCount(): number {
+    return this.tallyScrollbackRestore().inProgressCount;
+  }
+
+  getScrollbackRestoreTotalCount(): number {
+    return this.tallyScrollbackRestore().totalCount;
+  }
+
+  private tallyScrollbackRestore() {
+    const states: ManagedTerminal["scrollbackRestoreState"][] = [];
+    for (const managed of this.instances.values()) {
+      states.push(managed.scrollbackRestoreState);
+    }
+    return tallyScrollbackRestoreStates(states);
+  }
+
   getUnseenOutputSnapshot(id: string): UnseenOutputSnapshot {
     return this.unseenTracker.getSnapshot(id);
   }
@@ -2725,6 +2776,9 @@ class TerminalInstanceService {
     managed.scrollbackRestoreState = "none";
 
     this.instances.delete(id);
+    // Keep the batch aggregate honest when a terminal is torn down mid-restore
+    // (e.g. the user closes a pane while it is still pending/in-progress).
+    this.notifyScrollbackRestoreListeners();
 
     for (const unsub of managed.listeners) {
       try {
