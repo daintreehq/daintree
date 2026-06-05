@@ -49,10 +49,13 @@ export function XtermAdapter({
   hasBottomBar = false,
 }: XtermAdapterProps) {
   // Gate xterm's grid measurement (which happens at `terminal.open()` inside
-  // `terminalInstanceService.attach`) on the JetBrains Mono font being ready.
-  // xterm does not re-measure after open, so measuring with the fallback stack
-  // would leave a permanently mis-sized grid. The promise is a module-level
-  // singleton so `use()` sees a stable reference across re-renders.
+  // `terminalInstanceService.attach`) on the JetBrains Mono font being ready, so
+  // the common case opens against the real font and never shows a fallback->JBM
+  // reflow. The gate gives up after a 3s timeout (see `terminalFont.ts`); if the
+  // font then arrives late, `TerminalInstanceService` repairs the mis-sized grid
+  // out-of-band via `repairFontGrid()` (wired once to `onTerminalFontArrivedLate`
+  // in its constructor). The promise is a module-level singleton so `use()` sees
+  // a stable reference across re-renders.
   use(terminalFontReady);
 
   const containerRef = useRef<HTMLDivElement>(null);

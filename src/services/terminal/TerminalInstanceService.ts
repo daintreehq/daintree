@@ -38,6 +38,7 @@ import {
   type TerminalListenerInstallDeps,
 } from "./TerminalListenerInstaller";
 import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackController";
+import { DEFAULT_TERMINAL_FONT_FAMILY, onTerminalFontArrivedLate } from "@/config/terminalFont";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { usePanelStore } from "@/store/panelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
@@ -310,6 +311,10 @@ class TerminalInstanceService {
         this.applyCursorBlinkPolicy(managed);
       },
     });
+
+    // If JetBrains Mono loads after the startup timeout already opened terminals
+    // against the fallback stack, repair every live grid once it arrives (#9776).
+    onTerminalFontArrivedLate(() => this.repairFontGrid());
   }
 
   setGPUHardwareAvailable(available: boolean): void {
@@ -2214,6 +2219,39 @@ class TerminalInstanceService {
         if ("theme" in options) {
           managed.terminal.refresh(0, managed.terminal.rows - 1);
         }
+      }
+    });
+  }
+
+  /**
+   * Re-measure character cell metrics for every live terminal and refit.
+   *
+   * Called when JetBrains Mono finishes loading *after* the startup font timeout
+   * already unblocked `terminal.open()` (#9776). Those terminals measured their
+   * cell size against the fallback monospace stack, so the grid is sized wrong
+   * for the rest of the session. xterm's CharSizeService only re-measures on a
+   * genuine `fontFamily`/`fontSize` change — `OptionsService` dedups same-value
+   * sets — so we briefly poke `fontFamily` to a distinct (but visually
+   * identical, trailing-space) string and restore it, firing the re-measure,
+   * then refit so cols/rows recompute against the corrected cell metrics.
+   */
+  repairFontGrid(): void {
+    this.instances.forEach((managed, id) => {
+      if (managed.isHibernated) return;
+      try {
+        const current = managed.terminal.options.fontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY;
+        // A trailing space parses identically in CSS (no visible flicker) but is
+        // a distinct string, so it defeats OptionsService's same-value dedup and
+        // fires onMultipleOptionChange -> CharSizeService.measure() twice.
+        managed.terminal.options.fontFamily = `${current} `;
+        managed.terminal.options.fontFamily = current;
+        // fit() doesn't read these, but the ResizeObserver-driven resize() path
+        // dedups by pixel size — reset so the next observation isn't suppressed.
+        managed.lastWidth = 0;
+        managed.lastHeight = 0;
+        this.resizeController.fit(id);
+      } catch (error) {
+        logError("Failed to repair terminal font grid", error, { id });
       }
     });
   }
