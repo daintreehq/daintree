@@ -540,6 +540,7 @@ vi.mock("../pty-host/index.js", async () => {
       this.events.push("dispose");
       this.pausedIds.clear();
     });
+    getPausedTerminalIds = vi.fn(() => this.pausedIds.values());
 
     markPaused(id: string): void {
       this.pausedIds.add(id);
@@ -738,7 +739,11 @@ describe("pty-host adversarial", () => {
         terminalId: "t1",
         metricType: "suspend",
         bufferUtilization: 100,
-      })
+      }),
+      // Second arg is the `forceEmit` flag on `BackpressureManager.emitReliabilityMetric`.
+      // The funnel passes its own `forceEmit` through (default `false` for
+      // non-pulse events); the test asserts the payload shape, not the flag.
+      expect.any(Boolean)
     );
 
     // Drop path returns early, so addBytes and the data event are never sent.
