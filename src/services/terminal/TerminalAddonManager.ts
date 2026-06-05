@@ -25,15 +25,15 @@ export interface WebLinksHoverHandlers {
   leave: () => void;
 }
 
-export function setupTerminalAddons(
-  terminal: Terminal,
-  getCwd: () => string,
-  onLinkActivate?: (event: MouseEvent, uri: string) => void,
-  onFileLinkHover?: HoverCallback,
-  webLinksHover?: WebLinksHoverHandlers
-): TerminalAddons {
-  // Base addons loaded for all terminals. WebGL is managed separately
-  // by TerminalWebGLManager (attached only to the focused terminal).
+export function setupTerminalAddons(terminal: Terminal): TerminalAddons {
+  // Eager core set — only the addons whose absence would corrupt the very first
+  // frame or break restore. FitAddon (sizing) and SerializeAddon (snapshot
+  // save/restore) are always needed; Unicode11 must be active before any data
+  // is written so cell widths are recorded correctly. The heavier, tier-managed
+  // addons (Image DCS handlers, file/web link providers) are deferred to
+  // `ensureDeferredAddons()` once a terminal is actually opened, so bulk session
+  // restore doesn't build them for terminals that may never be shown (#9809).
+  // WebGL is managed separately by TerminalWebGLManager (focused terminal only).
 
   const fitAddon = new FitAddon();
   const serializeAddon = new SerializeAddon();
@@ -47,31 +47,19 @@ export function setupTerminalAddons(
   terminal.loadAddon(unicode11Addon);
   terminal.unicode.activeVersion = "11";
 
-  const imageAddon = new ImageAddon(IMAGE_ADDON_OPTIONS);
-  terminal.loadAddon(imageAddon);
-
+  // SearchAddon registers no parser hooks and does nothing until a search is
+  // invoked, so it stays in the eager set — keeping it non-null avoids a
+  // nullable-search blast radius across TerminalSearchBar and the wake path.
   const searchAddon = new SearchAddon({ highlightLimit: SEARCH_HIGHLIGHT_LIMIT });
   terminal.loadAddon(searchAddon);
-
-  const fileLinksAddon = new FileLinksAddon(terminal, getCwd, onFileLinkHover);
-  const fileLinksDisposable = terminal.registerLinkProvider(fileLinksAddon);
-
-  let webLinksAddon: WebLinksAddon | null = null;
-  if (onLinkActivate) {
-    webLinksAddon = new WebLinksAddon(onLinkActivate, {
-      hover: webLinksHover ? (event, text) => webLinksHover.hover(event, text) : undefined,
-      leave: webLinksHover ? () => webLinksHover.leave() : undefined,
-    });
-    terminal.loadAddon(webLinksAddon);
-  }
 
   return {
     fitAddon,
     serializeAddon,
-    imageAddon,
+    imageAddon: null,
     searchAddon,
-    fileLinksDisposable,
-    webLinksAddon,
+    fileLinksDisposable: null,
+    webLinksAddon: null,
   };
 }
 

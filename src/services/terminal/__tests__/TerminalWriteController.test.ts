@@ -11,6 +11,7 @@ vi.mock("@shared/perf/marks", () => ({
   PERF_MARKS: {
     TERMINAL_DATA_PARSED: "terminal_data_parsed",
     TERMINAL_DATA_RENDERED: "terminal_data_rendered",
+    TERMINAL_FIRST_WRITE: "terminal_first_write",
   },
 }));
 
@@ -219,7 +220,13 @@ describe("TerminalWriteController.write", () => {
     markMock.mockClear();
 
     for (let i = 0; i < 63; i++) controller.write("t1", "x");
-    expect(markMock).not.toHaveBeenCalled();
+    // Only the one-time first-write mark fires across the first 63 writes; the
+    // 1-in-64 sampling marks have not fired yet.
+    expect(markMock).toHaveBeenCalledTimes(1);
+    expect(markMock).toHaveBeenCalledWith(
+      "terminal_first_write",
+      expect.objectContaining({ terminalId: "t1" })
+    );
 
     controller.write("t1", "x");
     // 64th write fires three perf marks: parsed, write_duration_sample, rendered.
@@ -231,6 +238,24 @@ describe("TerminalWriteController.write", () => {
       "terminal_data_rendered",
       expect.objectContaining({ terminalId: "t1", bytes: 1 })
     );
+  });
+
+  it("emits the first-write mark once per terminal with the open→first-byte delta (#9809)", async () => {
+    const { markRendererPerformance } = await import("@/utils/performance");
+    const markMock = markRendererPerformance as unknown as ReturnType<typeof vi.fn>;
+    markMock.mockClear();
+
+    managed.terminalOpenStartedAt = 100;
+    controller.write("t1", "first");
+    controller.write("t1", "second");
+
+    const firstWriteCalls = markMock.mock.calls.filter(
+      (call: unknown[]) => call[0] === "terminal_first_write"
+    );
+    expect(firstWriteCalls).toHaveLength(1);
+    expect(firstWriteCalls[0]?.[1]).toMatchObject({ terminalId: "t1" });
+    expect(firstWriteCalls[0]?.[1].elapsedSinceOpenMs).toBeTypeOf("number");
+    expect(managed.hasEmittedFirstWriteMark).toBe(true);
   });
 
   it("decrements pendingWrites when the callback fires", () => {

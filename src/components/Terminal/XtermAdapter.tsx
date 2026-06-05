@@ -1,4 +1,4 @@
-import { use, useCallback, useLayoutEffect, useMemo, useRef, useEffect, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useEffect, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { cn } from "@/lib/utils";
 import { TerminalRefreshTier } from "@/types";
@@ -8,7 +8,6 @@ import { isOptimisticallyClosing } from "@/services/terminal/optimisticPanelClos
 import { useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
-import { terminalFontReady } from "@/config/terminalFont";
 import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
@@ -48,16 +47,13 @@ export function XtermAdapter({
   restoreOnAttach = false,
   hasBottomBar = false,
 }: XtermAdapterProps) {
-  // Gate xterm's grid measurement (which happens at `terminal.open()` inside
-  // `terminalInstanceService.attach`) on the JetBrains Mono font being ready, so
-  // the common case opens against the real font and never shows a fallback->JBM
-  // reflow. The gate gives up after a 3s timeout (see `terminalFont.ts`); if the
-  // font then arrives late, `TerminalInstanceService` repairs the mis-sized grid
-  // out-of-band via `repairFontGrid()` (wired once to `onTerminalFontArrivedLate`
-  // in its constructor). The promise is a module-level singleton so `use()` sees
-  // a stable reference across re-renders.
-  use(terminalFontReady);
-
+  // No font-ready Suspense gate: `terminalFontReady` is an unannotated native
+  // promise, so `use()` suspended for at least one React cycle on every cold
+  // open even when JetBrains Mono was already cached — blanking the pane via the
+  // `<Suspense fallback={null}>` in TerminalPane for no benefit. We open against
+  // whatever font is resolved; if JBM arrives late, `TerminalInstanceService`
+  // repairs the mis-sized grid out-of-band via `repairFontGrid()` (wired once to
+  // `onTerminalFontArrivedLate` in its constructor) (#9809).
   const containerRef = useRef<HTMLDivElement>(null);
   const prevDimensionsRef = useRef<{ cols: number; rows: number } | null>(null);
   const exitUnsubRef = useRef<(() => void) | null>(null);

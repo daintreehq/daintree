@@ -85,6 +85,25 @@ export const PERF_MARKS = {
   TERMINAL_DATA_RENDERED: "terminal_data_rendered",
 
   /**
+   * Bracket the synchronous `terminal.open(hostElement)` call in
+   * `TerminalInstanceService.attach()` — the cold-path first-paint step that
+   * builds xterm's DOM, forces a reflow to measure the cell grid, and inits
+   * the active renderer. Paired so the cold-start harness can attribute how
+   * much of the new-terminal latency is `open()` itself vs. font/addon work
+   * around it (#9809).
+   */
+  TERMINAL_OPEN_START: "terminal_open_start",
+  TERMINAL_OPEN_END: "terminal_open_end",
+  /**
+   * First real PTY write to reach `terminal.write()` for a given terminal —
+   * fired once per terminal after the hibernation/serialized-restore early
+   * exits. Carries `elapsedSinceOpenMs` (time from `open()` to first visible
+   * byte) so the gap between an opened-but-empty grid and first content is
+   * measurable in `perf:cold-start` (#9809).
+   */
+  TERMINAL_FIRST_WRITE: "terminal_first_write",
+
+  /**
    * Emitted per spawn from the pty-host when `acquireByKey` finds (HIT) or
    * misses (MISS) a pre-warmed entry for the requested (cwd, envHash). Lets
    * `perf:cold-start` measure pool hit rate on session restore instead of the

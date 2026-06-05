@@ -102,6 +102,13 @@ export interface ManagedTerminal {
   pendingWrites?: number;
   needsWake?: boolean;
 
+  // First-paint perf instrumentation (#9809). terminalOpenStartedAt is stamped
+  // (performance.now()) just before terminal.open() in attach(); the first real
+  // write reads it to emit TERMINAL_FIRST_WRITE with an open→first-byte delta.
+  // hasEmittedFirstWriteMark gates that mark to once per terminal.
+  terminalOpenStartedAt?: number;
+  hasEmittedFirstWriteMark?: boolean;
+
   // One-shot flag (#9702): a fullWakeForVisibilityRestore was requested while
   // this terminal was mid-attach (isAttaching) and skipped to avoid racing the
   // attach. Consumed by notifyAttachSettledWaiters, which re-runs the wake once

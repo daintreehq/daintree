@@ -15,9 +15,10 @@ import "@fontsource/jetbrains-mono/latin-700.css";
 import "./index.css";
 import { applyDefaultAppTheme } from "./theme/applyAppTheme";
 // Importing this module has the side effect of starting the font load (via
-// the eagerly-initialised `terminalFontReady` singleton). `XtermAdapter`
-// suspends locally on that same promise so the grid measurement waits while
-// the rest of the app shell mounts immediately.
+// the eagerly-initialised `terminalFontReady` singleton). Terminals open
+// immediately against whatever font is resolved; if JetBrains Mono arrives
+// late, `TerminalInstanceService.repairFontGrid()` re-measures the grid
+// out-of-band via `onTerminalFontArrivedLate` (#9809).
 import "./config/terminalFont";
 import { initStoreOrchestrator } from "./store/rendererStoreOrchestrator";
 import { useAgentSettingsStore } from "./store/agentSettingsStore";

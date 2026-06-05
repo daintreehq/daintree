@@ -18,9 +18,15 @@ export interface HibernationManagerDeps extends TerminalListenerInstallDeps {
   clearResizeJob: (managed: ManagedTerminal) => void;
   clearSettledTimer: (id: string) => void;
   applyDeferredResize: (id: string) => void;
-  openLink: (url: string, id: string, event?: MouseEvent) => void;
-  getCwdProvider: (id: string) => (() => string) | undefined;
   onHibernationChanged: (id: string) => void;
+  /**
+   * Builds the deferred Image/file-link/web-link addons on the fresh post-wake
+   * Terminal — routing cwd/link wiring through the service. The wake path
+   * re-creates these eagerly (a woken terminal is about to be shown), keeping
+   * behaviour identical to pre-#9809 when `setupTerminalAddons` built the full
+   * set. Idempotent.
+   */
+  ensureDeferredAddons: (id: string) => void;
   /**
    * Live lookup for "has the user explicitly backgrounded this panel?" —
    * reads the renderer-side `backgroundedTerminals` map. Evaluated at every
@@ -153,21 +159,17 @@ export class TerminalHibernationManager {
     const terminal = new Terminal(managed.terminal.options);
     managed.terminal = terminal;
 
-    // Create fresh addons
-    const openLink = (url: string, event?: MouseEvent) => {
-      this.deps.openLink(url, id, event);
-    };
-    const addons = setupTerminalAddons(
-      terminal,
-      () => (this.deps.getCwdProvider(id) ?? (() => ""))(),
-      (event, uri) => openLink(uri, event)
-    );
+    // Create fresh eager-core addons, then rebuild the deferred Image/link set
+    // via the same path the cold-open uses — a woken terminal is about to be
+    // shown, so it needs the full addon set immediately (#9809).
+    const addons = setupTerminalAddons(terminal);
     managed.fitAddon = addons.fitAddon;
     managed.serializeAddon = addons.serializeAddon;
     managed.searchAddon = addons.searchAddon;
     managed.imageAddon = addons.imageAddon;
     managed.fileLinksDisposable = addons.fileLinksDisposable;
     managed.webLinksAddon = addons.webLinksAddon;
+    this.deps.ensureDeferredAddons(id);
 
     // Reuse existing hostElement — clear old xterm DOM nodes to prevent ghosting
     const hostElement = managed.hostElement;
