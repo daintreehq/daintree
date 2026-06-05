@@ -864,4 +864,59 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
     expect(className).toContain("rounded-full");
     expect(className).toContain("border-dashed");
   });
+
+  it("flow pills lack the hibernated silhouette (exclusivity)", () => {
+    mockTerminal = { id: "t1" };
+    const { container } = render(
+      <TerminalHeaderContent id="t1" flowStatus="paused-backpressure" />
+    );
+    const badge = container.querySelector<HTMLElement>('[role="status"][aria-live="off"]');
+    expect(badge).toBeTruthy();
+    const className = badge!.getAttribute("class") ?? "";
+    expect(className).not.toContain("border-dashed");
+    expect(className).not.toContain("rounded-full");
+  });
+
+  it("combined render: agent leads, sparkline does not lead, hibernated renders after paused-backpressure", () => {
+    mockTerminal = { id: "t1", isInputLocked: true };
+    mockResourceEnabled = true;
+    mockResourceState = {
+      cpuPercent: 12,
+      memoryKb: 2048,
+      cpuHistory: [1, 2, 3],
+      breakdown: [],
+    };
+    const { container } = render(
+      <TerminalHeaderContent
+        id="t1"
+        kind="terminal"
+        agentState="working"
+        isExited={true}
+        exitCode={1}
+        flowStatus="paused-backpressure"
+        isHibernated={true}
+        queueCount={2}
+      />
+    );
+    const allStatuses = Array.from(container.querySelectorAll<HTMLElement>('[role="status"]'));
+    const agentIndex = allStatuses.findIndex((el) =>
+      (el.getAttribute("aria-label") ?? "").startsWith("Agent state:")
+    );
+    // Agent chip is the first status in DOM order.
+    expect(agentIndex).toBe(0);
+    // The resource sparkline (text contains CPU%/memory signature) is NOT the
+    // first status — it has been demoted behind the macro pane-state chip.
+    const firstStatus = allStatuses[0]!;
+    expect(firstStatus.textContent ?? "").not.toMatch(/%/);
+    // Hibernated (by data-testid) renders after paused-backpressure in DOM order.
+    const hibernated = screen.getByTestId("terminal-hibernated-badge");
+    const pausedBadge = Array.from(
+      container.querySelectorAll<HTMLElement>('[role="status"][aria-live="off"]')
+    ).find((el) => (el.textContent ?? "").includes("Paused"));
+    expect(pausedBadge).toBeTruthy();
+    // pausedBadge precedes hibernated; check via direct DOM-tree comparison.
+    expect(
+      pausedBadge!.compareDocumentPosition(hibernated) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
 });
