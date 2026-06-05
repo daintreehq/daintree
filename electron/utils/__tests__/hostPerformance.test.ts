@@ -246,4 +246,66 @@ describe("getCompileCacheMeta", () => {
     expect(meta.compileCacheEnabled).toBe(false);
     expect(meta.cacheFileCount).toBeUndefined();
   });
+
+  it("reports compileCacheEnabled=false when getCompileCacheDir throws", async () => {
+    const mod = await loadModule({
+      DAINTREE_PERF_CAPTURE: "1",
+      DAINTREE_PERF_METRICS_FILE: "/tmp/marks.ndjson",
+    });
+    state.getCompileCacheDirImpl = () => {
+      throw new Error("boom");
+    };
+
+    const meta = mod.getCompileCacheMeta();
+    expect(meta.compileCacheEnabled).toBe(false);
+    expect(meta.cacheFileCount).toBeUndefined();
+  });
+
+  it("omits status fields until setCompileCacheEnableStatus is called", async () => {
+    const mod = await loadModule({
+      DAINTREE_PERF_CAPTURE: "1",
+      DAINTREE_PERF_METRICS_FILE: "/tmp/marks.ndjson",
+    });
+
+    const meta = mod.getCompileCacheMeta();
+    expect(meta.compileCacheStatus).toBeUndefined();
+    expect(meta.compileCacheStatusName).toBeUndefined();
+  });
+
+  it("maps the captured enableCompileCache status to its human-readable name", async () => {
+    const mod = await loadModule({
+      DAINTREE_PERF_CAPTURE: "1",
+      DAINTREE_PERF_METRICS_FILE: "/tmp/marks.ndjson",
+    });
+
+    // ALREADY_ENABLED (2) is the normal production path (API dir arg was used).
+    mod.setCompileCacheEnableStatus(2);
+    const enabled = mod.getCompileCacheMeta();
+    expect(enabled.compileCacheStatus).toBe(2);
+    expect(enabled.compileCacheStatusName).toBe("ALREADY_ENABLED");
+  });
+
+  it("surfaces FAILED status so a silently-disabled cache is detectable", async () => {
+    const mod = await loadModule({
+      DAINTREE_PERF_CAPTURE: "1",
+      DAINTREE_PERF_METRICS_FILE: "/tmp/marks.ndjson",
+    });
+
+    mod.setCompileCacheEnableStatus(0);
+    const meta = mod.getCompileCacheMeta();
+    expect(meta.compileCacheStatus).toBe(0);
+    expect(meta.compileCacheStatusName).toBe("FAILED");
+  });
+
+  it("labels an out-of-range status as UNKNOWN rather than dropping it", async () => {
+    const mod = await loadModule({
+      DAINTREE_PERF_CAPTURE: "1",
+      DAINTREE_PERF_METRICS_FILE: "/tmp/marks.ndjson",
+    });
+
+    mod.setCompileCacheEnableStatus(99);
+    const meta = mod.getCompileCacheMeta();
+    expect(meta.compileCacheStatus).toBe(99);
+    expect(meta.compileCacheStatusName).toBe("UNKNOWN");
+  });
 });

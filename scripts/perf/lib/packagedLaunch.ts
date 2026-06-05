@@ -15,6 +15,13 @@ export interface PackagedLaunchResult {
   // RR present) is annotated via `notes` but the marks are still aggregatable
   // and `degraded` stays false.
   degraded?: boolean;
+  // "cold" (fresh profile, the default) or "warm" (caller supplied a persisted
+  // userDataDir that was pre-populated, so the compile cache should hit).
+  cacheKind: "cold" | "warm";
+  // Number of files in the compile-cache dir at the end of this launch. >0 on a
+  // warm run confirms enableCompileCache() populated the dir; the cold/warm
+  // bucketing in the aggregator uses cacheKind, this is a corroborating signal.
+  cacheFileCount?: number;
 }
 
 interface MarkRecord {
@@ -226,6 +233,34 @@ export function parseBootDuration(ndjsonPath: string): {
   return { durationMs: -1, metrics };
 }
 
+// Count V8 cache files under a userData dir's compile-cache. The dir is created
+// lazily by enableCompileCache(), so a missing dir is a legitimate 0 count.
+// Node nests the actual cache files one level down in a versioned subdirectory
+// (e.g. `compile-cache/v22.x.x-arch-<hash>/`), so we sum the entries inside each
+// subdir rather than counting the base dir — which would only ever be 0 or 1.
+// The files use opaque content-hash names, so a count is all we can get; there's
+// no programmatic cache hit/miss API in Node 22+.
+export function countCompileCacheFiles(userDataDir: string): number {
+  const base = path.join(userDataDir, "compile-cache");
+  let total = 0;
+  try {
+    for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        total += 1;
+        continue;
+      }
+      try {
+        total += fs.readdirSync(path.join(base, entry.name)).length;
+      } catch {
+        // Subdir vanished mid-read — skip it.
+      }
+    }
+  } catch {
+    return 0;
+  }
+  return total;
+}
+
 export async function launchPackagedAndMeasure(
   executablePath: string,
   iteration: number,
@@ -233,11 +268,30 @@ export async function launchPackagedAndMeasure(
     projectRoot?: string;
     timeoutMs?: number;
     captureCdpMetrics?: boolean;
+    // When provided, reuse this directory instead of a fresh mkdtemp profile and
+    // skip the post-run cleanup (the caller owns the dir's lifecycle). This is
+    // how warm-cache runs reuse a populated compile cache across launches.
+    userDataDir?: string;
   } = {}
 ): Promise<PackagedLaunchResult> {
   const timeoutMs = options.timeoutMs ?? 30_000;
-  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), `daintree-perf-${iteration}-`));
+  const isWarm = Boolean(options.userDataDir);
+  const cacheKind: "cold" | "warm" = isWarm ? "warm" : "cold";
+  const userDataDir =
+    options.userDataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), `daintree-perf-${iteration}-`));
   const ndjsonPath = path.join(userDataDir, "perf-metrics.ndjson");
+
+  // Marks are append-only. When reusing a warm userDataDir across launches the
+  // NDJSON would accumulate, and parseBootDuration's first-wins policy would
+  // read the warmup boot's marks instead of this run's. Clear it so each launch
+  // produces a clean timeline. Harmless on cold runs (file doesn't exist yet).
+  if (isWarm) {
+    try {
+      fs.rmSync(ndjsonPath, { force: true });
+    } catch {
+      // Best effort — a stale file just means parseBootDuration sees old marks.
+    }
+  }
 
   // Wall-clock anchor captured immediately before electron.launch() so the
   // Electron main process can compute `os_to_app_boot_ms` against a Unix-epoch
@@ -267,6 +321,16 @@ export async function launchPackagedAndMeasure(
     }
   }
 
+  // Build the child env from the parent, then strip Node's compile-cache env
+  // vars. If NODE_COMPILE_CACHE is inherited (the agent shell / a dev machine
+  // may set it), Node enables the cache against that shared directory before the
+  // app's own enableCompileCache(userDataDir/compile-cache) runs — so a "cold"
+  // run would silently hit the inherited warm cache and report bogus baselines.
+  // Deleting both keys forces the app to own its compile cache inside userDataDir.
+  const launchEnv: Record<string, string | undefined> = { ...process.env, ...env };
+  delete launchEnv.NODE_COMPILE_CACHE;
+  delete launchEnv.NODE_DISABLE_COMPILE_CACHE;
+
   let app: ElectronApplication | null = null;
   const startMs = performance.now();
 
@@ -274,7 +338,7 @@ export async function launchPackagedAndMeasure(
     app = await electron.launch({
       executablePath,
       args,
-      env: { ...process.env, ...env },
+      env: launchEnv,
       timeout: timeoutMs,
     });
 
@@ -292,6 +356,7 @@ export async function launchPackagedAndMeasure(
 
     const { durationMs, metrics, degraded } = parseBootDuration(ndjsonPath);
     const wallClockMs = performance.now() - startMs;
+    const cacheFileCount = countCompileCacheFiles(userDataDir);
 
     if (durationMs < 0) {
       metrics.wallClockMs = wallClockMs;
@@ -301,10 +366,12 @@ export async function launchPackagedAndMeasure(
         ndjsonPath,
         notes: "RENDERER_READY mark not captured — using wall-clock fallback",
         degraded: true,
+        cacheKind,
+        cacheFileCount,
       };
     }
 
-    return { durationMs, metrics, ndjsonPath, notes: degraded };
+    return { durationMs, metrics, ndjsonPath, notes: degraded, cacheKind, cacheFileCount };
   } finally {
     if (app) {
       try {
@@ -330,13 +397,17 @@ export async function launchPackagedAndMeasure(
       // Directory may not exist
     }
 
-    // Clean up userDataDir after a brief delay (allow process shutdown)
-    setTimeout(() => {
-      try {
-        fs.rmSync(userDataDir, { recursive: true, force: true });
-      } catch {
-        // Best effort
-      }
-    }, 1000);
+    // Clean up userDataDir after a brief delay (allow process shutdown). Skip
+    // for caller-supplied warm dirs — the caller owns that dir's lifecycle and
+    // needs it to persist across the run loop to keep the compile cache warm.
+    if (!isWarm) {
+      setTimeout(() => {
+        try {
+          fs.rmSync(userDataDir, { recursive: true, force: true });
+        } catch {
+          // Best effort
+        }
+      }, 1000);
+    }
   }
 }

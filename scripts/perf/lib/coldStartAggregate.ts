@@ -16,6 +16,11 @@ export interface RunData {
   failed?: boolean;
   error?: string;
   degraded?: boolean;
+  // "cold" (fresh profile) or "warm" (persisted, pre-populated compile cache).
+  // Absent runs default to "cold" for backward compatibility.
+  cacheKind?: "cold" | "warm";
+  // Files in the compile-cache dir at the end of the run — corroborates warmth.
+  cacheFileCount?: number;
 }
 
 export interface MarkStats {
@@ -64,6 +69,16 @@ export interface EventLoopLagStats {
   totalAccumulatedMs: number;
 }
 
+export interface CacheKindBucketStats {
+  runs: number;
+  p50Ms: number;
+  p95Ms: number;
+  meanMs: number;
+  // Median compile-cache file count across the bucket's runs. 0 for a true
+  // cold bucket; >0 for a warm bucket confirms the cache populated.
+  medianCacheFileCount: number;
+}
+
 export interface Aggregate {
   marks: Record<string, MarkStats>;
   phaseDurations: Record<string, MarkStats>;
@@ -72,6 +87,10 @@ export interface Aggregate {
   cls: ClsStats | null;
   osToAppBoot: OsToAppBootStats | null;
   eventLoopLag: EventLoopLagStats | null;
+  // Headline boot-duration split by compile-cache state. Each bucket is null
+  // when no successful runs of that kind are present. The other aggregates pool
+  // all runs; this is the cache-cold vs cache-warm comparison (#9772).
+  byCacheKind: { cold: CacheKindBucketStats | null; warm: CacheKindBucketStats | null };
 }
 
 // Vite/Rolldown default chunkFileNames is `[name]-[hash].js`. The hash is 8
@@ -329,5 +348,35 @@ export function aggregate(runs: RunData[]): Aggregate {
         }
       : null;
 
-  return { marks, phaseDurations, ipc, loaf, cls, osToAppBoot, eventLoopLag };
+  const byCacheKind = {
+    cold: bucketByCacheKind(successful, "cold"),
+    warm: bucketByCacheKind(successful, "warm"),
+  };
+
+  return { marks, phaseDurations, ipc, loaf, cls, osToAppBoot, eventLoopLag, byCacheKind };
+}
+
+// Build headline boot-duration stats for one cache kind. Runs without an
+// explicit cacheKind default to "cold" so pre-#9772 data still buckets. Degraded
+// runs are excluded — their wall-clock fallback durationMs is systematically
+// higher than the mark-based duration, matching the phase-duration table's
+// policy. Returns null when the bucket has no qualifying runs.
+function bucketByCacheKind(runs: RunData[], kind: "cold" | "warm"): CacheKindBucketStats | null {
+  const bucket = runs.filter((r) => !r.degraded && (r.cacheKind ?? "cold") === kind);
+  if (bucket.length === 0) return null;
+
+  // Guard percentile/mean against malformed durations (NaN/Infinity/negative).
+  const durations = bucket.map((r) => r.durationMs).filter((d) => Number.isFinite(d) && d >= 0);
+  if (durations.length === 0) return null;
+  const cacheCounts = bucket
+    .map((r) => r.cacheFileCount)
+    .filter((c): c is number => typeof c === "number" && Number.isFinite(c));
+
+  return {
+    runs: durations.length,
+    p50Ms: round(percentile(durations, 50)),
+    p95Ms: round(percentile(durations, 95)),
+    meanMs: round(mean(durations)),
+    medianCacheFileCount: cacheCounts.length > 0 ? round(percentile(cacheCounts, 50)) : 0,
+  };
 }

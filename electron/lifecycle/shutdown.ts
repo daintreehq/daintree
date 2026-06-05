@@ -1,3 +1,4 @@
+import { flushCompileCache } from "node:module";
 import { app, dialog } from "electron";
 import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
@@ -127,6 +128,18 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
       getCrashRecoveryService().takeBackup();
     } catch (err) {
       console.warn("[MAIN] Eager takeBackup at quit-intent failed:", err);
+    }
+
+    // Persist compile-cache entries on clean quit. Synchronous and cheap (one
+    // fs write), placed here before the async graceful-shutdown chain so it
+    // can't race the cleanup timeout. We've already committed to quitting
+    // (isQuitting = true), so this never fires on a cancelled quit dialog.
+    try {
+      if (typeof flushCompileCache === "function") {
+        flushCompileCache();
+      }
+    } catch (err) {
+      console.warn("[MAIN] flushCompileCache at quit failed:", err);
     }
 
     console.log("[MAIN] Starting graceful shutdown...");
