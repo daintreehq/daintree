@@ -814,3 +814,54 @@ describe("TerminalHeaderContent — per-pane badges silence implicit live region
     expect(container.querySelectorAll('[aria-live="polite"]').length).toBe(0);
   });
 });
+
+// #9814 — chip row vocabulary calibration. The agent-state chip leads, the
+// three flow pills are demoted off `status-warning/15` to neutral overlay
+// (per docs/architecture/resource-governance.md#173), the hibernated pill is
+// `rounded-full` + `border-dashed` to separate its silhouette from the three
+// flow pills, and the resource sparkline trails as ambient telemetry.
+describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
+  it("agent-state chip is the first role=status badge in DOM order", () => {
+    mockTerminal = { id: "t1" };
+    const { container } = render(
+      <TerminalHeaderContent
+        id="t1"
+        agentState="working"
+        isExited={true}
+        exitCode={1}
+        flowStatus="paused-backpressure"
+        queueCount={2}
+      />
+    );
+    const badges = Array.from(container.querySelectorAll<HTMLElement>('[role="status"]'));
+    expect(badges.length).toBeGreaterThan(0);
+    const first = badges[0]!;
+    expect(first.getAttribute("aria-label")).toMatch(/^Agent state:/);
+  });
+
+  it.each(["paused-backpressure", "paused-resource-governor", "suspended"] as const)(
+    "%s flow pill is rendered with neutral overlay, not status-warning",
+    (status) => {
+      mockTerminal = { id: "t1" };
+      const { container } = render(<TerminalHeaderContent id="t1" flowStatus={status} />);
+      const badge = container.querySelector<HTMLElement>('[role="status"][aria-live="off"]');
+      expect(badge).toBeTruthy();
+      const className = badge!.getAttribute("class") ?? "";
+      expect(className).not.toContain("status-warning");
+      expect(className).not.toContain("status-error");
+      expect(className).toContain("bg-overlay-soft");
+      expect(className).toContain("border-divider");
+    }
+  );
+
+  it("hibernated badge keeps its testid and aria semantics, with rounded-full + dashed border", () => {
+    mockTerminal = { id: "t1" };
+    render(<TerminalHeaderContent id="t1" isHibernated={true} />);
+    const badge = screen.getByTestId("terminal-hibernated-badge");
+    expect(badge.getAttribute("role")).toBe("status");
+    expect(badge.getAttribute("aria-live")).toBe("off");
+    const className = badge.getAttribute("class") ?? "";
+    expect(className).toContain("rounded-full");
+    expect(className).toContain("border-dashed");
+  });
+});
