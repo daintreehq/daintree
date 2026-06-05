@@ -52,20 +52,23 @@ describe("Toolbar responsive design — issue #4133", () => {
       expect(source).toContain("toolbar-project-chip-label");
     });
 
-    it("CSS has container query to hide branch label at narrow widths", () => {
-      expect(css).toContain("@container toolbar");
-      expect(css).toContain("toolbar-project-chip-label");
-      expect(css).toContain("display: none");
+    it("CSS hides the whole branch chip in one step at 700px — issue #9824", () => {
+      // Single-step collapse: label + icon drop together at 700px. The earlier
+      // two-stage degradation hid the label at 700px and the chip at 560px,
+      // leaving a lone GitBranch icon between the two; that vestigial icon-only
+      // stage is gone. The tooltip remains the recovery surface for the branch.
+      expect(css).toMatch(
+        /@container toolbar \(max-width:\s*700px\)[\s\S]*?\.toolbar-project-chip[^-][\s\S]*?display:\s*none/
+      );
     });
 
-    it("CSS has a second container-query tier that hides the entire chip at narrower widths — issue #8174", () => {
-      // Below the second breakpoint the vestigial GitBranch icon shifts visual
-      // weight without conveying anything (the branch label has already
-      // dropped); hide the whole chip so the pill stays clean. The tooltip
-      // remains the recovery surface for the branch name.
-      expect(css).toMatch(
-        /@container toolbar \(max-width:\s*560px\)[\s\S]*?\.toolbar-project-chip[^-][\s\S]*?display:\s*none/
-      );
+    it("has no standalone label-only hide rule — the icon-only intermediate stage is gone (issue #9824)", () => {
+      // Guard against a regression that re-splits the collapse into two steps:
+      // there must be no container query that hides toolbar-project-chip-label
+      // on its own (which would resurrect the lone-icon stage).
+      expect(css).not.toMatch(/\.toolbar-project-chip-label\s*\{[\s\S]*?display:\s*none/);
+      // And no 560px breakpoint remains for the chip.
+      expect(css).not.toContain("max-width: 560px");
     });
   });
 

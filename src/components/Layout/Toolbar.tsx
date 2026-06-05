@@ -1232,7 +1232,7 @@ export function Toolbar({
                   <TooltipTrigger asChild>
                     <button
                       data-toolbar-item=""
-                      className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-hidden"
+                      className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-hidden focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                       data-testid="project-switcher-trigger"
                       aria-label={
                         currentProject
@@ -1276,7 +1276,7 @@ export function Toolbar({
                           {truncatedBranchName ?? "main"}
                         </span>
                       </span>
-                      <ChevronsUpDown className="toolbar-project-meta ml-0.5 h-3 w-3 shrink-0" />
+                      <ChevronsUpDown className="toolbar-project-meta h-3 w-3 shrink-0" />
                     </button>
                   </TooltipTrigger>
                 </ContextMenuTrigger>

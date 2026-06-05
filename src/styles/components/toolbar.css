@@ -191,6 +191,46 @@
   border-color: var(--_border);
   box-shadow: var(--_shadow);
   border-radius: var(--_radius);
+  /* Mirrors the icon-button ladder: press-scale is owned by the base Button cva,
+   * so transform is intentionally absent. The pill carries an ambient base shadow
+   * (the capsule lift), so the armed state is background-only — no inset ring to
+   * overwrite it; the capsule border already supplies the containment edge. */
+  transition:
+    color 150ms ease,
+    background-color 150ms ease;
+}
+
+.toolbar-project-pill:hover {
+  background: var(--toolbar-control-hover-bg, var(--theme-overlay-elevated));
+}
+
+/* Keyboard focus is delivered by the focus-visible:outline-* utilities on the
+ * button element in Toolbar.tsx (same 2px accent ring as .toolbar-icon-button).
+ * It is authored in JSX, not here, so the focusRingFallback contract test scans
+ * the className and no toolbar.css allowlist exemption is needed. */
+
+/* Armed state (dropdown open). aria-expanded is hand-authored only when a project
+ * is selected; data-state="open" is injected by the Radix trigger and covers the
+ * no-project case. Background-only lift — see the base rule's transition comment. */
+.toolbar-project-pill[aria-expanded="true"],
+.toolbar-project-pill[data-state="open"] {
+  background: var(--toolbar-control-armed-bg, var(--theme-overlay-emphasis));
+}
+
+.toolbar-project-pill:active {
+  background: var(--toolbar-control-active-bg, var(--theme-overlay-emphasis));
+}
+
+/* LIGHT-only: flip the armed/active fill to the elevate-to-select overlay-raised
+ * lift, mirroring the icon-button block above — overlay-emphasis subtracts
+ * luminance and reads as a smudge on near-white light themes. Dark never matches. */
+:where(.light, [data-color-mode="light"]) .toolbar-project-pill[aria-expanded="true"],
+:where(.light, [data-color-mode="light"]) .toolbar-project-pill[data-state="open"] {
+  background: var(--toolbar-control-armed-bg, var(--theme-overlay-raised));
+}
+
+:where(.light, [data-color-mode="light"]) .toolbar-project-pill:active {
+  background: var(--toolbar-control-active-bg, var(--theme-overlay-raised));
 }
 
 .toolbar-project-chip {
@@ -208,17 +248,13 @@
   color: var(--toolbar-project-meta-fg, var(--theme-text-secondary));
 }
 
+/* The chip drops as a single step at 700px. The previous two-stage degradation
+ * hid the branch label at 700px and the chip at 560px, leaving a lone GitBranch
+ * icon between the two — an icon-only chip that shifts visual weight without
+ * conveying anything. Dropping label + icon together skips that vestigial stage;
+ * the full project + branch stays available in the pill tooltip, which is the
+ * recovery surface once the chip is gone. */
 @container toolbar (max-width: 700px) {
-  .toolbar-project-chip-label {
-    display: none;
-  }
-}
-
-/* Below 560px the chip itself becomes noise — keeping the vestigial GitBranch
- * icon while hiding the branch name shifts visual weight without conveying
- * anything. The full project + branch is still available in the pill tooltip,
- * which is the recovery surface once the chip drops out. */
-@container toolbar (max-width: 560px) {
   .toolbar-project-chip {
     display: none;
   }
