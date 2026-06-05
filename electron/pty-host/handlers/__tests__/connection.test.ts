@@ -127,3 +127,130 @@ describe("init-buffers handler", () => {
     expect(ctx.recomputeActivityTiers).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("set-active-project pool warming (#9774)", () => {
+  interface FakePool {
+    drainAndRefill: ReturnType<typeof vi.fn>;
+    warmForKey: ReturnType<typeof vi.fn>;
+    getMaxEntries: () => number;
+    getMaxPoolSize: () => number;
+  }
+
+  function makePoolCtx(pool: FakePool) {
+    const stateRef = {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+    const ctx = makeCtx(stateRef);
+    ctx.ptyPool = pool as unknown as HostContext["ptyPool"];
+    return ctx;
+  }
+
+  function makeFakePool(
+    overrides: Partial<FakePool> = {},
+    drainResult: Promise<void> = Promise.resolve()
+  ): FakePool {
+    return {
+      drainAndRefill: vi.fn(() => drainResult),
+      warmForKey: vi.fn(),
+      getMaxEntries: () => 8,
+      getMaxPoolSize: () => 2,
+      ...overrides,
+    };
+  }
+
+  it("warms each restored panel cwd with the env-empty hash after drain resolves", async () => {
+    const pool = makeFakePool();
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/repo/wt-a", "/repo/wt-b"],
+    });
+
+    expect(pool.drainAndRefill).toHaveBeenCalledWith("/repo");
+    // Warms fire only after the drain promise resolves.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(pool.warmForKey).toHaveBeenCalledTimes(2);
+    expect(pool.warmForKey.mock.calls[0]?.[0]).toBe("/repo/wt-a");
+    expect(pool.warmForKey.mock.calls[1]?.[0]).toBe("/repo/wt-b");
+    // Each warm uses the env-empty hash (3rd arg) matching plain-shell acquires.
+    for (const call of pool.warmForKey.mock.calls) {
+      expect(call[1]).toBeUndefined();
+      expect(typeof call[2]).toBe("string");
+      expect(call[2]).toBe(pool.warmForKey.mock.calls[0]?.[2]);
+    }
+  });
+
+  it("does not warm panel cwds before the root drain resolves", async () => {
+    let resolveDrain!: () => void;
+    const deferred = new Promise<void>((resolve) => {
+      resolveDrain = resolve;
+    });
+    const pool = makeFakePool({}, deferred);
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/repo/wt-a"],
+    });
+
+    // Drain is in flight — no warms yet.
+    await Promise.resolve();
+    expect(pool.warmForKey).not.toHaveBeenCalled();
+
+    resolveDrain();
+    await deferred;
+    await Promise.resolve();
+    expect(pool.warmForKey).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps warmed panel cwds so high-priority entries aren't evicted (#9774)", async () => {
+    // maxEntries=8, poolSize=2 → root takes 2, leaving room for 3 panel keys.
+    const pool = makeFakePool();
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/wt/a", "/wt/b", "/wt/c", "/wt/d", "/wt/e"],
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Only the first 3 (highest priority) cwds are warmed; lower-priority
+    // ones are dropped rather than evicting the earlier warms.
+    expect(pool.warmForKey).toHaveBeenCalledTimes(3);
+    expect(pool.warmForKey.mock.calls.map((c) => c[0])).toEqual(["/wt/a", "/wt/b", "/wt/c"]);
+  });
+
+  it("skips warming when no pool is present (e.g. Windows)", () => {
+    const stateRef = {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+    const ctx = makeCtx(stateRef);
+    // ctx.ptyPool stays null (default) — mirrors the Windows pool-disabled path.
+    const handlers = createConnectionHandlers(ctx);
+
+    expect(() =>
+      handlers["set-active-project"]({
+        windowId: 1,
+        projectId: "proj-a",
+        projectPath: "/repo",
+        panelCwds: ["/repo/wt-a"],
+      })
+    ).not.toThrow();
+    expect(ctx.windowProjectMap.get(1)).toBe("proj-a");
+  });
+});

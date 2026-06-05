@@ -67,6 +67,15 @@ export const PERF_MARKS = {
   TERMINAL_DATA_PARSED: "terminal_data_parsed",
   TERMINAL_DATA_RENDERED: "terminal_data_rendered",
 
+  /**
+   * Emitted per spawn from the pty-host when `acquireByKey` finds (HIT) or
+   * misses (MISS) a pre-warmed entry for the requested (cwd, envHash). Lets
+   * `perf:cold-start` measure pool hit rate on session restore instead of the
+   * DAINTREE_VERBOSE-only log line (#9774).
+   */
+  POOL_HIT: "pty_pool_hit",
+  POOL_MISS: "pty_pool_miss",
+
   IPC_REQUEST_START: "ipc_request_start",
   IPC_REQUEST_END: "ipc_request_end",
 

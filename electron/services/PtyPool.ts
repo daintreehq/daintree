@@ -8,6 +8,8 @@ import {
   ensureUtf8Locale,
 } from "./pty/EnvironmentFilter.js";
 import { POOL_ENV_EMPTY_HASH } from "./pty/ptyPoolEnvHash.js";
+import { isHostPerformanceCaptureEnabled, markHostPerformance } from "../utils/hostPerformance.js";
+import { PERF_MARKS } from "../../shared/perf/marks.js";
 
 export interface PtyPoolConfig {
   poolSize?: number;
@@ -431,6 +433,9 @@ export class PtyPool {
       if (process.env.DAINTREE_VERBOSE) {
         console.log(`[PtyPool] Miss on key ${wantedKey}; pool size: ${this.pool.size}`);
       }
+      if (isHostPerformanceCaptureEnabled()) {
+        markHostPerformance(PERF_MARKS.POOL_MISS, { cwd, envHash });
+      }
       return null;
     }
 
@@ -461,6 +466,9 @@ export class PtyPool {
       entry.dataDisposable.dispose();
       destroyPty(entry.process);
       this.warmForKey(cwd, entry.env, envHash);
+      if (isHostPerformanceCaptureEnabled()) {
+        markHostPerformance(PERF_MARKS.POOL_MISS, { cwd, envHash });
+      }
       return null;
     }
 
@@ -472,6 +480,14 @@ export class PtyPool {
       console.log(
         `[PtyPool] Acquired PTY ${id} for key ${wantedKey} (prelude=${prelude.length}B), ${this.pool.size} remaining`
       );
+    }
+
+    if (isHostPerformanceCaptureEnabled()) {
+      markHostPerformance(PERF_MARKS.POOL_HIT, {
+        cwd,
+        envHash,
+        preludeBytes: prelude.length,
+      });
     }
 
     // Refill the same key so the next acquire is also instant. Fire-and-

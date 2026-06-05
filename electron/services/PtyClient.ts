@@ -823,8 +823,17 @@ export class PtyClient extends EventEmitter {
     }
   }
 
-  setActiveProject(windowId: number, projectId: string | null, projectPath?: string): void {
+  setActiveProject(
+    windowId: number,
+    projectId: string | null,
+    projectPath?: string,
+    panelCwds?: string[]
+  ): void {
     this.activeProjectId = projectId;
+    // panelCwds is a transient warm hint for the first send only — it is NOT
+    // stored in windowProjectContexts. A host restart replays via
+    // syncProjectContext against a freshly-empty pool with no pending restore
+    // spawns, so re-warming saved panel cwds would be wasted work.
     this.windowProjectContexts.set(windowId, { projectId, projectPath, mode: "active" });
 
     if (!this.lifecycle.child) {
@@ -837,6 +846,7 @@ export class PtyClient extends EventEmitter {
       windowId,
       projectId,
       ...(projectPath ? { projectPath } : {}),
+      ...(panelCwds && panelCwds.length > 0 ? { panelCwds } : {}),
     });
   }
 
