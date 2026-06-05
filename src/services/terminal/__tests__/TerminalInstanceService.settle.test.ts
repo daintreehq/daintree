@@ -55,6 +55,8 @@ type SettleTestService = {
   waitForFullySettled: (id: string, options?: { timeoutMs?: number }) => Promise<void>;
   waitForAllFullySettled: (ids: string[], options?: { timeoutMs?: number }) => Promise<void>;
   notifyRestoreSettledWaiters: (id: string) => void;
+  notifyAttachSettledWaiters: (id: string) => void;
+  fullySettledWaiters: Map<string, unknown[]>;
   destroy: (id: string) => void;
   resizeController: Record<string, (...args: unknown[]) => unknown>;
   webGLManager: Record<string, (...args: unknown[]) => unknown>;
@@ -141,21 +143,68 @@ describe("TerminalInstanceService fully-settled waits", () => {
     await expect(service.waitForFullySettled("t1")).resolves.toBeUndefined();
   });
 
-  it("does not settle while restore is pending or in-progress", async () => {
-    makeManaged("t1", { scrollbackRestoreState: "in-progress" });
+  it.each(["pending", "in-progress"] as const)(
+    "does not settle while restore is %s",
+    async (state) => {
+      makeManaged("t1", { scrollbackRestoreState: state });
+      let settled = false;
+      const promise = service.waitForFullySettled("t1", { timeoutMs: 50 }).then(
+        () => {
+          settled = true;
+        },
+        () => {
+          // timeout rejection — expected
+        }
+      );
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      await promise;
+      expect(settled).toBe(false);
+    }
+  );
+
+  it("notify is a no-op while restore is in-progress; resolves only once done", async () => {
+    const managed = makeManaged("t1", { scrollbackRestoreState: "in-progress" });
     let settled = false;
-    const promise = service.waitForFullySettled("t1", { timeoutMs: 50 }).then(
-      () => {
-        settled = true;
-      },
-      () => {
-        // timeout rejection — expected
-      }
-    );
+    const promise = service.waitForFullySettled("t1").then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+
+    // Spurious notify while still in-progress must not drain the waiter.
+    service.notifyRestoreSettledWaiters("t1");
     await Promise.resolve();
     expect(settled).toBe(false);
+    expect(service.fullySettledWaiters.has("t1")).toBe(true);
+
+    managed.scrollbackRestoreState = "done";
+    service.notifyRestoreSettledWaiters("t1");
     await promise;
+    expect(settled).toBe(true);
+  });
+
+  it("waits for visual attach even when restore finished first (attach-after-restore race)", async () => {
+    // Restore is already done, but the terminal is still mid-attach.
+    const managed = makeManaged("t1", {
+      scrollbackRestoreState: "done",
+      isAttaching: true,
+    });
+    let settled = false;
+    const promise = service.waitForFullySettled("t1").then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+
+    // Restore notification arrives while still attaching — must not settle.
+    service.notifyRestoreSettledWaiters("t1");
+    await Promise.resolve();
     expect(settled).toBe(false);
+
+    // Attach completes — the attach notifier must also drain fully-settled.
+    managed.isAttaching = false;
+    service.notifyAttachSettledWaiters("t1");
+    await promise;
+    expect(settled).toBe(true);
   });
 
   it("settles when restore transitions to 'done' and is notified", async () => {
@@ -272,6 +321,22 @@ describe("TerminalInstanceService fully-settled waits", () => {
       expect(pendingList).toContain("stuck-inprogress");
       expect(pendingList).toContain("stuck-pending");
       expect(pendingList).not.toContain("settled-1");
+    });
+
+    it("leaves no ghost waiters after a batch timeout", async () => {
+      makeManaged("p1", { scrollbackRestoreState: "in-progress" });
+      const managed = makeManaged("p2", { scrollbackRestoreState: "in-progress" });
+      await expect(
+        service.waitForAllFullySettled(["p1", "p2"], { timeoutMs: 20 })
+      ).rejects.toThrow(/not fully settled/);
+
+      // The shared timeout must have detached every per-panel waiter.
+      expect(service.fullySettledWaiters.has("p1")).toBe(false);
+      expect(service.fullySettledWaiters.has("p2")).toBe(false);
+
+      // A late notify on a now-detached panel is a harmless no-op.
+      managed.scrollbackRestoreState = "done";
+      expect(() => service.notifyRestoreSettledWaiters("p2")).not.toThrow();
     });
 
     it("fails the whole batch when a panel is destroyed mid-wait", async () => {
