@@ -40,7 +40,7 @@ const AGENT_METADATA: Partial<Record<AnyToolbarButtonId, ToolbarButtonMetadata>>
       return [
         id,
         {
-          label: `${name} Agent`,
+          label: `${name} agent`,
           icon: Icon,
           description: `Launch ${name} AI agent`,
         },
@@ -50,7 +50,7 @@ const AGENT_METADATA: Partial<Record<AnyToolbarButtonId, ToolbarButtonMetadata>>
 
 export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, ToolbarButtonMetadata>> = {
   "agent-tray": {
-    label: "Agent Tray",
+    label: "Agent tray",
     icon: Plug,
     description: "Dropdown for launching any agent and jumping into setup",
   },
@@ -66,7 +66,7 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
     description: "Open browser panel",
   },
   "dev-server": {
-    label: "Dev Preview",
+    label: "Dev preview",
     icon: MonitorPlay,
     description: "Open dev preview panel",
   },
@@ -76,7 +76,7 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
     description: "Persistent dictation indicator shown while recording is active",
   },
   "github-stats": {
-    label: "GitHub Stats",
+    label: "GitHub stats",
     icon: GitPullRequest,
     description: "GitHub issues, PRs, and commits",
   },
@@ -86,7 +86,7 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
     description: "Notification history dropdown",
   },
   "copy-tree": {
-    label: "Copy Context",
+    label: "Copy context",
     icon: Folders,
     description: "Copy project context to clipboard",
   },
