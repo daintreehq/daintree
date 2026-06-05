@@ -281,6 +281,47 @@ describe("TerminalRendererPolicy adversarial", () => {
     expect(deps.onResumeFlush).not.toHaveBeenCalled();
   });
 
+  it("HOST_PUSHED_BACKGROUND_REARMS_DEDUPE_SO_NEXT_ACTIVE_RESENDS", async () => {
+    // Issue #9778 / lesson #8998 (same-tier no-op trap): when the PTY host
+    // silently demotes a terminal to "background" via recomputeActivityTiers,
+    // it pushes a tier-changed message that the renderer applies through
+    // initializeBackendTier. That MUST re-arm the outbound dedupe baseline so a
+    // subsequent "active" is actually resent to the host instead of being
+    // dropped as a redundant same-tier call — which is exactly what left the
+    // producer gate suppressing bytes while the pane looked active.
+    const managed = createManagedTerminal();
+    const deps: RendererPolicyDeps = {
+      getInstance: vi.fn(() => managed),
+      wakeAndRestore: vi.fn(async () => true),
+    };
+
+    const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+    const { terminalClient } = await import("@/clients");
+    const policy = new TerminalRendererPolicy(deps);
+
+    // Renderer's last outbound tier is "active".
+    policy.setBackendTier("terminal-1", "active");
+    expect(terminalClient.setActivityTier).toHaveBeenCalledTimes(1);
+
+    // Re-sending "active" without any intervening change dedupes (proves the
+    // trap exists — this is the no-op that would strand a host-demoted terminal).
+    policy.setBackendTier("terminal-1", "active");
+    expect(terminalClient.setActivityTier).toHaveBeenCalledTimes(1);
+
+    // Host-pushed demotion arrives over the MessagePort and re-arms the baseline.
+    policy.initializeBackendTier("terminal-1", "background");
+    expect(managed.needsWake).toBe(true);
+
+    // Now the renderer reactivating sends a real "active" to the host again.
+    policy.setBackendTier("terminal-1", "active");
+    expect(terminalClient.setActivityTier).toHaveBeenCalledTimes(2);
+    expect(terminalClient.setActivityTier).toHaveBeenLastCalledWith(
+      "terminal-1",
+      "active",
+      undefined
+    );
+  });
+
   it("CLEAR_TIER_STATE_CANCELS_PENDING_WAKE_AND_RELEASES_GENERATION", async () => {
     const wake = deferred<boolean>();
     const managed = createManagedTerminal({

@@ -2,9 +2,17 @@
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { TerminalRefreshTier } from "../../../../shared/types/panel";
 
+// Captured at service construction so tests can drive the host→renderer tier
+// reconciliation path even after vi.clearAllMocks() wipes spy call history.
+let capturedTierChangedCb: ((id: string, tier: "active" | "background") => void) | null = null;
+
 const mockTerminalClient = {
   onData: vi.fn(() => vi.fn()),
   onExit: vi.fn(() => vi.fn()),
+  onTierChanged: vi.fn((cb: (id: string, tier: "active" | "background") => void) => {
+    capturedTierChangedCb = cb;
+    return vi.fn();
+  }),
   setActivityTier: vi.fn(),
   wake: vi.fn(),
   getSerializedState: vi.fn(),
@@ -288,6 +296,49 @@ describe("TerminalInstanceService - Activity Tier", () => {
     it("should be documented as part of the hydration flow", () => {
       // Unit tests for the actual logic are in TerminalRendererPolicy.test.ts
       expect(true).toBe(true);
+    });
+  });
+
+  describe("host-pushed tier reconciliation (issue #9778)", () => {
+    it("subscribes to terminalClient.onTierChanged on first terminal creation", () => {
+      // The subscription is installed lazily (alongside onData/onExit) so that
+      // merely constructing the singleton never reaches into terminalClient —
+      // keeping it out of unrelated component tests' import graph.
+      service.prewarmTerminal("warm", "terminal", {});
+      expect(capturedTierChangedCb).toBeTypeOf("function");
+    });
+
+    it("re-arms needsWake when the host pushes a background demotion", () => {
+      // Create a terminal so the lazy onTierChanged subscription is installed.
+      service.prewarmTerminal("warm", "terminal", {});
+
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        needsWake: false,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      // Simulate the host's recomputeActivityTiers demoting this terminal and
+      // pushing the tier-changed control message over the MessagePort. The
+      // wiring must funnel it into rendererPolicy.initializeBackendTier, which
+      // for a background tier sets needsWake so the next activation wakes/flushes.
+      capturedTierChangedCb?.("t1", "background");
+
+      expect(managed.needsWake).toBe(true);
+    });
+
+    it("does not force a wake when the host pushes an active tier", () => {
+      service.prewarmTerminal("warm", "terminal", {});
+
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        needsWake: false,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      capturedTierChangedCb?.("t1", "active");
+
+      expect(managed.needsWake).toBe(false);
     });
   });
 

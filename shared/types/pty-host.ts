@@ -567,13 +567,26 @@ export type RendererToPtyHostMessage =
 /**
  * Messages sent from Pty Host → Renderer via MessagePort (direct channel).
  * These bypass the Main process for low-latency terminal output.
+ *
+ * `tier-changed` reconciles the renderer's dedupe baseline when the host
+ * rewrites a terminal's activity tier on its own (window connect/disconnect/
+ * project switch via `recomputeActivityTiers`). It rides the same per-window
+ * MessagePort as `data`, so it is FIFO-ordered ahead of any subsequently
+ * suppressed/emitted chunk — routing it through the Main process instead would
+ * race the direct data path and lose that ordering guarantee.
  */
-export type PtyHostToRendererMessage = {
-  type: "data";
-  id: string;
-  data: Uint8Array;
-  bytes: number;
-};
+export type PtyHostToRendererMessage =
+  | {
+      type: "data";
+      id: string;
+      data: Uint8Array;
+      bytes: number;
+    }
+  | {
+      type: "tier-changed";
+      id: string;
+      tier: "active" | "background";
+    };
 
 /** Per-process resource breakdown entry */
 export interface TerminalResourceProcess {

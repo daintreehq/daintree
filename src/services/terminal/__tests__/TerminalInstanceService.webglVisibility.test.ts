@@ -6,6 +6,7 @@ import { preloadMockWebglAddon } from "./_preloadWebglAddon";
 const mockTerminalClient = {
   onData: vi.fn(() => vi.fn()),
   onExit: vi.fn(() => vi.fn()),
+  onTierChanged: vi.fn(() => vi.fn()),
   setActivityTier: vi.fn(),
   wake: vi.fn().mockResolvedValue({ state: null }),
   write: vi.fn(),

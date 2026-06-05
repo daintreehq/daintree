@@ -966,4 +966,143 @@ describe("pty-host adversarial", () => {
     expect(queueManager.events).toEqual(["resumeAll", "dispose"]);
     expect(terminal.ptyProcess.resume).toHaveBeenCalledTimes(1);
   });
+
+  it("TIER_CHANGED_BROADCAST_RESPECTS_PROJECT_FILTER", async () => {
+    // recomputeActivityTiers must push a tier-changed reconciliation message to
+    // exactly the renderer ports that also receive the terminal's data — i.e.
+    // the same per-window project filter as the data path. Otherwise the
+    // renderer's dedupe baseline goes stale and output freezes (issue #9778).
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const portA = createRendererPort();
+    const portB = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    await flushMicrotasks();
+
+    // Window 2 owns project-2 first so the later window-1 recompute is the one
+    // under assertion; clear both ports of the intermediate broadcast.
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-2" });
+    await flushMicrotasks();
+    portA.postMessage.mockClear();
+    portB.postMessage.mockClear();
+
+    // Window 1 activates project-1 (t1's project) → recompute → broadcast.
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    await flushMicrotasks();
+
+    const tierA = portA.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown): m is { type: string } =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as Record<string, unknown>).type === "tier-changed"
+      );
+    const tierB = portB.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown): m is { type: string } =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as Record<string, unknown>).type === "tier-changed"
+      );
+
+    // Window 1 (project-1) is the consumer of t1 — it gets the reconciliation.
+    expect(tierA).toContainEqual({ type: "tier-changed", id: "t1", tier: "active" });
+    // Window 2 (project-2) is project-filtered away from t1 — nothing leaks to it.
+    expect(
+      tierB.some(
+        (m: unknown) =>
+          typeof m === "object" && m !== null && (m as Record<string, unknown>).id === "t1"
+      )
+    ).toBe(false);
+  });
+
+  it("UNDEFINED_PROJECT_TERMINAL_STAYS_ACTIVE_WHEN_PROJECTS_ACTIVE", async () => {
+    // Aggravating #9778 detail: a terminal with no project association is
+    // global/shared, not orphaned. It must stay active whenever any project is
+    // active, while a terminal genuinely belonging to an inactive project is
+    // correctly backgrounded.
+    const parentPort = await loadHost();
+    const backpressure = hostState.backpressureManagers[0];
+    hostState.terminals.set("t-global", createTerminal("t-global")); // undefined projectId
+    hostState.terminals.set("t-other", createTerminal("t-other", "project-2"));
+
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    await flushMicrotasks();
+
+    expect(backpressure.getActivityTier("t-global")).toBe("active");
+    expect(backpressure.getActivityTier("t-other")).toBe("background");
+  });
+
+  it("TIER_CHANGED_BROADCAST_TOLERATES_A_CLOSING_PORT", async () => {
+    // A port that throws on postMessage (closing mid-iteration) must not block
+    // the reconciliation from reaching the other still-open ports. Window 1 is
+    // connected first, so it is iterated first and exercises the try/catch.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const portThrowing = createRendererPort();
+    const portHealthy = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1 },
+      ports: [portThrowing],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2 },
+      ports: [portHealthy],
+    });
+    await flushMicrotasks();
+
+    // Both windows own t1's project, so both are broadcast targets.
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-1" });
+    await flushMicrotasks();
+    portThrowing.postMessage.mockClear();
+    portHealthy.postMessage.mockClear();
+    portThrowing.postMessage.mockImplementation(() => {
+      throw new Error("port closing");
+    });
+
+    // Re-applying window 2's project triggers a fresh recompute + broadcast.
+    expect(() =>
+      parentPort.emit("message", {
+        type: "set-active-project",
+        windowId: 2,
+        projectId: "project-1",
+      })
+    ).not.toThrow();
+    await flushMicrotasks();
+
+    const tierHealthy = portHealthy.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown): m is { type: string } =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as Record<string, unknown>).type === "tier-changed"
+      );
+    expect(tierHealthy).toContainEqual({ type: "tier-changed", id: "t1", tier: "active" });
+  });
+
+  it("RECOMPUTE_WITH_NO_RENDERER_CONNECTIONS_IS_SAFE", async () => {
+    // With no connected ports the broadcast loop must no-op without throwing,
+    // while tiers are still applied to the backpressure manager.
+    const parentPort = await loadHost();
+    const backpressure = hostState.backpressureManagers[0];
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    expect(() =>
+      parentPort.emit("message", {
+        type: "set-active-project",
+        windowId: 1,
+        projectId: "project-1",
+      })
+    ).not.toThrow();
+    await flushMicrotasks();
+
+    expect(backpressure.getActivityTier("t1")).toBe("active");
+  });
 });
