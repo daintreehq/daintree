@@ -37,13 +37,16 @@ export async function startPerformanceTraceIfEnabled(): Promise<void> {
   if (state !== "idle") return;
   if (!isTraceEnabled()) return;
 
+  // Flip to "recording" before the await so a second concurrent caller can't
+  // pass the idle guard and double-start. Reset to "stopped" if start fails so
+  // a later stop call doesn't try to flush a recording that never began.
+  state = "recording";
   try {
     await contentTracing.startRecording({
       recording_mode: "record-until-full",
       included_categories: TRACE_CATEGORIES,
       excluded_categories: ["*"],
     });
-    state = "recording";
   } catch (error) {
     state = "stopped";
     console.warn("[perf-trace] startRecording failed:", error);

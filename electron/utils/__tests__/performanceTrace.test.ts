@@ -53,14 +53,14 @@ describe("performanceTrace", () => {
 
     expect(tracing.startRecording).toHaveBeenCalledTimes(1);
     const config = tracing.startRecording.mock.calls[0][0] as {
+      recording_mode: string;
       included_categories: string[];
       excluded_categories: string[];
     };
-    // Behavioral invariant: every category needed for first-frame timing is
-    // present, and nothing else is included.
-    for (const cat of ["viz", "gpu", "cc", "blink", "toplevel", "startup"]) {
-      expect(config.included_categories).toContain(cat);
-    }
+    // Lock the config shape: exactly the first-frame categories, nothing else,
+    // and the deny-everything-else wildcard so no noisy category leaks in.
+    expect(config.recording_mode).toBe("record-until-full");
+    expect(config.included_categories).toEqual(["viz", "gpu", "cc", "blink", "toplevel", "startup"]);
     expect(config.excluded_categories).toEqual(["*"]);
   });
 
@@ -103,5 +103,9 @@ describe("performanceTrace", () => {
     const mod = await loadModule();
     await mod.startPerformanceTraceIfEnabled();
     await expect(mod.stopPerformanceTraceIfActive()).resolves.toBeUndefined();
+    // Prove the swallowed-error path actually attempted the stop, not that it
+    // short-circuited before calling stopRecording.
+    expect(tracing.stopRecording).toHaveBeenCalledTimes(1);
+    expect(tracing.stopRecording).toHaveBeenCalledWith("/tmp/trace-run-1.json");
   });
 });

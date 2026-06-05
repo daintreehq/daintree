@@ -18,10 +18,7 @@ import { fileURLToPath } from "url";
 import { PERF_MARKS } from "../shared/perf/marks.js";
 import { getOsToAppBootMs, markPerformance } from "./utils/performance.js";
 import { getCompileCacheMeta } from "./utils/hostPerformance.js";
-import {
-  startPerformanceTraceIfEnabled,
-  stopPerformanceTraceIfActive,
-} from "./utils/performanceTrace.js";
+import { startPerformanceTraceIfEnabled } from "./utils/performanceTrace.js";
 import { enforceIpcSenderValidation, setupPermissionLockdown } from "./setup/security.js";
 import {
   registerAppProtocol,
@@ -474,24 +471,6 @@ if (!gotTheLock) {
     setStopDiskSpaceMonitor,
     windowRegistry,
   });
-
-  // Flush the GPU/compositor trace before exit when tracing is active. Gated so
-  // normal runs pay nothing. `will-quit` fires once the quit decision is
-  // committed (after every `before-quit` handler, including the shutdown
-  // dialog), so it never interferes with that flow. `stopRecording` is async
-  // and the trace file truncates if the process exits first — preventDefault
-  // and re-quit once the flush resolves. `traceFlushed` guards the re-quit loop.
-  if (process.env.DAINTREE_PERF_TRACE === "1") {
-    let traceFlushed = false;
-    app.on("will-quit", (event) => {
-      if (traceFlushed) return;
-      event.preventDefault();
-      void stopPerformanceTraceIfActive().finally(() => {
-        traceFlushed = true;
-        app.quit();
-      });
-    });
-  }
 
   app.whenReady().then(async () => {
     try {
