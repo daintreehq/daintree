@@ -132,6 +132,41 @@ test.describe.serial("Core: Terminal & Panels", () => {
       await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(1);
     });
 
+    // Regression: xterm #5893 / #9812. The DOM renderer emits negative inline
+    // letter-spacing on emoji spans (OffscreenCanvas mismeasures them); our
+    // src/index.css override clamps only those to 0 while sparing positive
+    // corrections and spans outside .xterm-rows. Inject probe spans and read the
+    // computed cascade synchronously so re-renders can't race the assertion.
+    test("clamps negative letter-spacing only inside xterm rows", async () => {
+      const { window } = ctx;
+      const rows = window.locator(".xterm-rows").first();
+      await expect(rows).toBeVisible({ timeout: T_MEDIUM });
+
+      const computed = await rows.evaluate((rowsEl) => {
+        const make = (parent: Element, value: string) => {
+          const span = document.createElement("span");
+          span.style.letterSpacing = value;
+          span.textContent = "x";
+          parent.appendChild(span);
+          const result = getComputedStyle(span).letterSpacing;
+          parent.removeChild(span);
+          return result;
+        };
+        return {
+          negativeInside: make(rowsEl, "-5.5px"),
+          positiveInside: make(rowsEl, "0.5px"),
+          negativeOutside: make(document.body, "-5.5px"),
+        };
+      });
+
+      // Broken emoji spans get clamped to the container baseline (0).
+      expect(computed.negativeInside).toBe("0px");
+      // Legitimate positive corrections (e.g. wide CJK) are untouched.
+      expect(computed.positiveInside).toBe("0.5px");
+      // The override is scoped to .xterm-rows and leaves the rest of the app alone.
+      expect(computed.negativeOutside).toBe("-5.5px");
+    });
+
     test("rename terminal by editing title", async () => {
       const { window } = ctx;
 
