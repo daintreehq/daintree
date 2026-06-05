@@ -191,8 +191,8 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
 
-    const claudeCheckbox = getByLabelText("Toggle Claude Agent visibility") as HTMLInputElement;
-    const geminiCheckbox = getByLabelText("Toggle Gemini Agent visibility") as HTMLInputElement;
+    const claudeCheckbox = getByLabelText("Toggle Claude agent visibility") as HTMLInputElement;
+    const geminiCheckbox = getByLabelText("Toggle Gemini agent visibility") as HTMLInputElement;
     expect(claudeCheckbox.checked).toBe(true);
     expect(geminiCheckbox.checked).toBe(false);
   });
@@ -207,7 +207,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     });
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
-    const claudeCheckbox = getByLabelText("Toggle Claude Agent visibility") as HTMLInputElement;
+    const claudeCheckbox = getByLabelText("Toggle Claude agent visibility") as HTMLInputElement;
     expect(claudeCheckbox.checked).toBe(true);
   });
 
@@ -217,7 +217,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     });
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
-    fireEvent.click(getByLabelText("Toggle Claude Agent visibility"));
+    fireEvent.click(getByLabelText("Toggle Claude agent visibility"));
 
     expect(setAgentPinnedMock).toHaveBeenCalledTimes(1);
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
@@ -230,7 +230,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     });
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
-    fireEvent.click(getByLabelText("Toggle Gemini Agent visibility"));
+    fireEvent.click(getByLabelText("Toggle Gemini agent visibility"));
 
     expect(setAgentPinnedMock).toHaveBeenCalledWith("gemini", true);
     expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
@@ -250,7 +250,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     // silently swallow the right-side branch — both handlers (left, right)
     // are nominally identical today but each is independently wired.
     const { getByLabelText } = render(<ToolbarSettingsTab />);
-    fireEvent.click(getByLabelText("Toggle Copy Context visibility"));
+    fireEvent.click(getByLabelText("Toggle Copy context visibility"));
 
     expect(toggleButtonVisibilityMock).toHaveBeenCalledTimes(1);
     expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("copy-tree", "right");
@@ -273,7 +273,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     mockAgentSettings = null;
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
-    const claudeCheckbox = getByLabelText("Toggle Claude Agent visibility") as HTMLInputElement;
+    const claudeCheckbox = getByLabelText("Toggle Claude agent visibility") as HTMLInputElement;
     expect(claudeCheckbox.checked).toBe(false);
   });
 
@@ -289,7 +289,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     });
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
-    fireEvent.click(getByLabelText("Toggle Codex Agent visibility"));
+    fireEvent.click(getByLabelText("Toggle Codex agent visibility"));
 
     expect(setAgentPinnedMock).toHaveBeenCalledWith("codex", false);
     expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();

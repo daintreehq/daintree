@@ -164,6 +164,41 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       {children}
     </div>
   ),
+  DropdownMenuActionItem: ({
+    actionId,
+    args,
+    children,
+    onSelect,
+    ...props
+  }: {
+    actionId: string;
+    args?: unknown;
+    children: React.ReactNode;
+    onSelect?: (e: Event) => void;
+  } & React.HTMLAttributes<HTMLDivElement>) => (
+    <div
+      role="menuitem"
+      data-action-id={actionId}
+      data-args={JSON.stringify(args)}
+      onClick={() => {
+        const fakeEvent = {
+          defaultPrevented: false,
+          preventDefault: () => {
+            (fakeEvent as { defaultPrevented: boolean }).defaultPrevented = true;
+          },
+        };
+        onSelect?.(fakeEvent as unknown as Event);
+        if (!fakeEvent.defaultPrevented) {
+          // Tests don't introspect the dispatch — they only need this row to
+          // exist so the ToolbarContextMenuItems wrapper renders.
+        }
+      }}
+      tabIndex={0}
+      {...props}
+    >
+      {children}
+    </div>
+  ),
   DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="menu-label">{children}</div>
   ),
@@ -304,7 +339,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
 
     const settings = render(<ToolbarSettingsTab />);
     const claudeCheckbox = settings.getByLabelText(
-      "Toggle Claude Agent visibility"
+      "Toggle Claude agent visibility"
     ) as HTMLInputElement;
     expect(claudeCheckbox.checked).toBe(true);
     fireEvent.click(claudeCheckbox);
@@ -332,7 +367,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     // Initial Settings render: gemini unchecked.
     const settings = render(<ToolbarSettingsTab />);
     const geminiCheckboxA = settings.getByLabelText(
-      "Toggle Gemini Agent visibility"
+      "Toggle Gemini agent visibility"
     ) as HTMLInputElement;
     expect(geminiCheckboxA.checked).toBe(false);
     settings.unmount();
@@ -347,7 +382,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     // picked up the tray's write.
     const settings2 = render(<ToolbarSettingsTab />);
     const geminiCheckboxB = settings2.getByLabelText(
-      "Toggle Gemini Agent visibility"
+      "Toggle Gemini agent visibility"
     ) as HTMLInputElement;
     expect(geminiCheckboxB.checked).toBe(true);
   });
@@ -359,7 +394,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
 
     const settings = render(<ToolbarSettingsTab />);
     const claudeCheckbox = settings.getByLabelText(
-      "Toggle Claude Agent visibility"
+      "Toggle Claude agent visibility"
     ) as HTMLInputElement;
     expect(claudeCheckbox.checked).toBe(true);
     fireEvent.click(claudeCheckbox);
@@ -372,7 +407,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
 
     const settings = render(<ToolbarSettingsTab />);
     const geminiCheckbox = settings.getByLabelText(
-      "Toggle Gemini Agent visibility"
+      "Toggle Gemini agent visibility"
     ) as HTMLInputElement;
     expect(geminiCheckbox.checked).toBe(false);
     fireEvent.click(geminiCheckbox);
@@ -381,7 +416,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
 
   it("Settings checkbox toggles for agent IDs never touch toolbarPreferencesStore.pinnedButtons", () => {
     const settings = render(<ToolbarSettingsTab />);
-    fireEvent.click(settings.getByLabelText("Toggle Claude Agent visibility"));
+    fireEvent.click(settings.getByLabelText("Toggle Claude agent visibility"));
     fireEvent.click(settings.getByLabelText("Toggle Terminal visibility"));
 
     // Agent -> setAgentPinned; non-agent -> toggleButtonVisibility.
