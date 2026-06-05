@@ -384,7 +384,7 @@ function disconnectWindow(windowId: number, reason: string): void {
   // disconnects — `removePauseSource` keeps the entry alive while the
   // IPC path still holds. The renderer is informed via the queue
   // manager's own resume flow + tier-changed message.
-  for (const terminalId of conn.portQueueManager.pausedTerminalsMap.keys()) {
+  for (const terminalId of conn.portQueueManager.getPausedTerminalIds()) {
     removePauseSource(terminalId, `port-${windowId}` as PauseSource);
   }
   conn.portQueueManager.dispose();
