@@ -187,11 +187,32 @@ describe("GitHubStatsToolbarButton corner activity chip wiring", () => {
     // expire unseen if the user hides for longer than the remaining TTL.
     expect(source).toContain("issuesHiddenAtRef");
     expect(source).toContain("prsHiddenAtRef");
-    expect(source).toMatch(/setIssuesPulseAt\(\(prev\)\s*=>\s*\(prev\s*===\s*null/);
-    expect(source).toMatch(/setPrsPulseAt\(\(prev\)\s*=>\s*\(prev\s*===\s*null/);
+    // The shift must be `prev + hiddenMs` (anchor moves forward in time), not
+    // a subtract, no-op, or null/clear. Tightened to catch the exact shape.
+    expect(source).toMatch(
+      /setIssuesPulseAt\(\(prev\)\s*=>\s*\(prev\s*===\s*null\s*\?\s*null\s*:\s*prev\s*\+\s*hiddenMs\)/
+    );
+    expect(source).toMatch(
+      /setPrsPulseAt\(\(prev\)\s*=>\s*\(prev\s*===\s*null\s*\?\s*null\s*:\s*prev\s*\+\s*hiddenMs\)/
+    );
+    // Subscribe-before-sample: the effect must call addEventListener before
+    // the first tick() so a hide between sample and schedule is caught.
+    // Easier to check as a positional invariant: addEventListener appears
+    // earlier in the effect body than the bare `tick();` call.
+    const issuesEffect = source.match(
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?issuesPulseAt[\s\S]*?addEventListener\("visibilitychange"[\s\S]*?tick\(\);[\s\S]*?\},\s*\[issuesPulseAt\]\)/
+    );
+    expect(issuesEffect).not.toBeNull();
+    const prsEffect = source.match(
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?prsPulseAt[\s\S]*?addEventListener\("visibilitychange"[\s\S]*?tick\(\);[\s\S]*?\},\s*\[prsPulseAt\]\)/
+    );
+    expect(prsEffect).not.toBeNull();
     // tick() must early-return while the document is hidden to avoid a
     // race between a scheduled timer firing and the visibility event.
-    expect(source).toMatch(/if\s*\(\s*document\.hidden\s*\)\s*\{[\s\S]{0,200}?return;/);
+    const tickGuardCount = (
+      source.match(/if\s*\(\s*document\.hidden\s*\)\s*\{[\s\S]{0,200}?return;/g) ?? []
+    ).length;
+    expect(tickGuardCount).toBeGreaterThanOrEqual(2);
   });
 
   it("derives showIssuesChip / showPrsChip with open-state and count guards", () => {

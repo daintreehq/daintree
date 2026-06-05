@@ -411,12 +411,27 @@ export const GitHubStatsToolbarButton = memo(
     // user switches away shouldn't burn its TTL unseen. On hide, we record
     // the wall-clock anchor; on restore, we shift `pulseAt` forward by the
     // hidden duration so the next `remaining` math reflects elapsed visible
-    // time only. The timer is paused while hidden and re-armed by the
-    // visibilitychange handler; `tick()` early-returns if it ever fires
-    // during a hidden window (race against the visibility event).
+    // time only. The listener is subscribed before sampling `document.hidden`
+    // so a hide that lands between effect-run and first tick is caught, and
+    // the effect pauses synchronously when it commits during a hidden window
+    // (e.g. a `setIssuesPulseAt` shift's re-render landing while hidden).
     useEffect(() => {
-      if (issuesPulseAt === null) return;
+      if (issuesPulseAt === null) {
+        // Clear the ref defensively so a future pulse that arrives while
+        // hidden starts from a clean anchor, not a leftover from a prior
+        // chip's hide cycle.
+        issuesHiddenAtRef.current = null;
+        return;
+      }
       let timeoutId: number | null = null;
+
+      const pauseForHidden = () => {
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        issuesHiddenAtRef.current = Date.now();
+      };
 
       const tick = () => {
         timeoutId = null;
@@ -436,13 +451,7 @@ export const GitHubStatsToolbarButton = memo(
 
       const onVisibility = () => {
         if (document.hidden) {
-          // Document went hidden — clear any pending timer and stamp the
-          // wall-clock anchor so the restore handler can shift pulseAt.
-          if (timeoutId !== null) {
-            window.clearTimeout(timeoutId);
-            timeoutId = null;
-          }
-          issuesHiddenAtRef.current = Date.now();
+          pauseForHidden();
           return;
         }
         // Document went visible. If we have a hidden anchor, shift pulseAt
@@ -463,8 +472,16 @@ export const GitHubStatsToolbarButton = memo(
         tick();
       };
 
-      tick();
+      // Subscribe first, then sample. A hide that lands between
+      // addEventListener and the first tick() will be caught by the
+      // listener; if the document is already hidden when the effect runs,
+      // pause immediately so the restore handler has an anchor to shift.
       document.addEventListener("visibilitychange", onVisibility);
+      if (document.hidden) {
+        pauseForHidden();
+        return;
+      }
+      tick();
 
       return () => {
         if (timeoutId !== null) {
@@ -476,8 +493,19 @@ export const GitHubStatsToolbarButton = memo(
     }, [issuesPulseAt]);
 
     useEffect(() => {
-      if (prsPulseAt === null) return;
+      if (prsPulseAt === null) {
+        prsHiddenAtRef.current = null;
+        return;
+      }
       let timeoutId: number | null = null;
+
+      const pauseForHidden = () => {
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        prsHiddenAtRef.current = Date.now();
+      };
 
       const tick = () => {
         timeoutId = null;
@@ -494,11 +522,7 @@ export const GitHubStatsToolbarButton = memo(
 
       const onVisibility = () => {
         if (document.hidden) {
-          if (timeoutId !== null) {
-            window.clearTimeout(timeoutId);
-            timeoutId = null;
-          }
-          prsHiddenAtRef.current = Date.now();
+          pauseForHidden();
           return;
         }
         if (timeoutId !== null) {
@@ -516,8 +540,12 @@ export const GitHubStatsToolbarButton = memo(
         tick();
       };
 
-      tick();
       document.addEventListener("visibilitychange", onVisibility);
+      if (document.hidden) {
+        pauseForHidden();
+        return;
+      }
+      tick();
 
       return () => {
         if (timeoutId !== null) {
