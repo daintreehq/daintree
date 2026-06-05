@@ -28,6 +28,7 @@ const {
     setHelpTokenValidator: vi.fn(),
     setHelpSessionWebContentsResolver: vi.fn(),
     setHelpSessionActionContextResolver: vi.fn(),
+    setHelpSessionIdResolver: vi.fn(),
     setSessionIdResolver: vi.fn(),
     disconnectHelpBearer: vi.fn(),
     recordTurnOutcome: vi.fn(),
