@@ -371,7 +371,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                     <TooltipTrigger asChild>
                       <div
                         className={cn(
-                          "ml-auto flex items-center shrink-0",
+                          "ml-1.5 flex items-center shrink-0",
                           getEffectiveStateColor(displayAgentState)
                         )}
                       >

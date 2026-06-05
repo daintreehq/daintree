@@ -5,7 +5,6 @@ import {
   useDockBlockedState,
   getGroupBlockedAgentState,
   getGroupAmbientAgentState,
-  getDockDisplayAgentState,
   isDockAgentStateDeprioritized,
   isGroupDeprioritized,
 } from "../useDockBlockedState";
@@ -209,18 +208,19 @@ describe("isDockAgentStateDeprioritized", () => {
     }
   );
 
-  // The shared predicate is the single source of truth for both pill types:
-  // a single-panel group must recede exactly when the underlying state does,
-  // so DockedTerminalItem and DockedTabGroup can never drift apart.
-  it.each(["idle", "completed", "exited", "working", "waiting", "directing"] as const)(
-    "agrees with isGroupDeprioritized for a single panel in state %s",
-    (state) => {
-      const panel = { agentState: state };
-      expect(isGroupDeprioritized([panel])).toBe(
-        isDockAgentStateDeprioritized(getDockDisplayAgentState(panel))
-      );
-    }
-  );
+  // The shared predicate is the single source of truth for both pill types, so a
+  // single-panel group must recede under the same conditions as a lone pill. Assert
+  // the group helper's observable output for each state (not a copy of its body).
+  it.each([
+    ["idle", true],
+    ["completed", true],
+    ["exited", true],
+    ["working", false],
+    ["waiting", false],
+    ["directing", false],
+  ] as const)("isGroupDeprioritized for a single %s panel is %s", (state, expected) => {
+    expect(isGroupDeprioritized([{ agentState: state }])).toBe(expected);
+  });
 });
 
 describe("isGroupDeprioritized", () => {

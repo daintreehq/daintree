@@ -572,7 +572,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   <TooltipTrigger asChild>
                     <div
                       className={cn(
-                        "ml-auto flex items-center shrink-0",
+                        "ml-1.5 flex items-center shrink-0",
                         getEffectiveStateColor(displayAgentState)
                       )}
                     >

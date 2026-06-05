@@ -74,6 +74,7 @@ vi.mock("../dockPanelPortalContext", () => ({
 vi.mock("../useDockBlockedState", () => ({
   useDockBlockedState: () => null,
   getDockDisplayAgentState: () => undefined,
+  isDockAgentStateDeprioritized: () => false,
 }));
 
 vi.mock("../dockPopoverGuard", () => ({
