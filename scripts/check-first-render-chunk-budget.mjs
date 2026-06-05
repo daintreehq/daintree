@@ -23,6 +23,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { formatBudgetSummary, writeSummary } from "./budget-summary-lib.mjs";
+import { collectClosure as collectClosureGeneric } from "./first-render-closure-lib.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
@@ -146,33 +147,19 @@ function readFirstRenderSeeds() {
 // always enqueued explicitly regardless of `followDynamic` — they're first-paint
 // paths by definition (a persisted browser/dev-preview/review panel restores
 // synchronously), not edges discovered by walking `dynamicImports[]`.
+//
+// Thin manifest adapter over the shared first-render-closure-lib traversal: the
+// firstRenderModulePreloadPlugin in vite.config.ts walks the same graph through
+// the OutputBundle (keyed by file name), so the gated closure measured here and
+// the preload set injected there share one BFS and can't drift (#9771). Default
+// `followDynamic: true` (the total walk) is preserved for the existing callers.
 export function collectClosure(manifest, seedKeys, { followDynamic = true } = {}) {
-  const visited = new Set();
-  const queue = [];
-
-  for (const seed of seedKeys) {
-    if (manifest[seed]) {
-      queue.push(seed);
-    }
-  }
-
-  while (queue.length > 0) {
-    const key = queue.shift();
-    if (visited.has(key)) continue;
-
-    const chunk = manifest[key];
-    // Skip keys not present in the manifest — the closure measures real
-    // chunks only, so a dangling import reference must not enter the set.
-    if (!chunk) continue;
-    visited.add(key);
-
-    for (const dep of chunk.imports ?? []) queue.push(dep);
-    if (followDynamic) {
-      for (const dep of chunk.dynamicImports ?? []) queue.push(dep);
-    }
-  }
-
-  return visited;
+  return collectClosureGeneric(seedKeys, {
+    getNode: (key) => manifest[key],
+    getStaticImports: (chunk) => chunk.imports,
+    getDynamicImports: (chunk) => chunk.dynamicImports,
+    followDynamic,
+  });
 }
 
 function findEntryKey(manifest) {
