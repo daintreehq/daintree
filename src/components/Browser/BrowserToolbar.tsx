@@ -729,7 +729,15 @@ export function BrowserToolbar({
                     aria-checked={isSelected}
                     aria-label={preset.label}
                     data-viewport-preset-id={preset.id}
-                    tabIndex={isSelected || chipFocusedIndex === index ? 0 : -1}
+                    tabIndex={
+                      chipFocusedIndex >= 0
+                        ? chipFocusedIndex === index
+                          ? 0
+                          : -1
+                        : isSelected
+                          ? 0
+                          : -1
+                    }
                     onClick={() => {
                       if (!isSelected) onViewportPresetChange(preset.id);
                     }}
@@ -748,7 +756,7 @@ export function BrowserToolbar({
           )}
           {viewportPreset && (
             <>
-              <div aria-hidden="true" className="toolbar-divider w-px h-5" />
+              <div aria-hidden="true" className="toolbar-divider w-px h-5 shrink-0" />
               <div className="flex items-center gap-1">
                 {onViewportRotateToggle && (
                   <Tooltip>
@@ -965,7 +973,7 @@ export function BrowserToolbar({
       </div>
 
       {/* Action buttons */}
-      <div aria-hidden="true" className="toolbar-divider w-px h-5" />
+      <div aria-hidden="true" className="toolbar-divider w-px h-5 shrink-0" />
       <Tooltip>
         <TooltipTrigger asChild>
           <button type="button" onClick={handleCopy} className={buttonClass} aria-label="Copy URL">
@@ -986,7 +994,10 @@ export function BrowserToolbar({
               type="button"
               onClick={onCaptureScreenshot}
               disabled={!isWebviewReady}
-              className={cn(buttonClass, "disabled:hover:bg-transparent")}
+              className={cn(
+                buttonClass,
+                "disabled:hover:bg-transparent disabled:hover:shadow-none"
+              )}
               aria-label="Capture screenshot"
             >
               <Camera className="w-4 h-4" />
@@ -1022,7 +1033,10 @@ export function BrowserToolbar({
               type="button"
               onClick={onToggleDevTools}
               disabled={!isWebviewReady}
-              className={cn(buttonClass, "disabled:hover:bg-transparent")}
+              className={cn(
+                buttonClass,
+                "disabled:hover:bg-transparent disabled:hover:shadow-none"
+              )}
               aria-label="Toggle DevTools"
             >
               <Code className="w-4 h-4" />
@@ -1051,7 +1065,12 @@ export function BrowserToolbar({
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <button type="button" onClick={onOpenExternal} className={buttonClass}>
+          <button
+            type="button"
+            onClick={onOpenExternal}
+            className={buttonClass}
+            aria-label="Open in browser"
+          >
             <ExternalLink className="w-4 h-4" />
           </button>
         </TooltipTrigger>

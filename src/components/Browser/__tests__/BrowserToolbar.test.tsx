@@ -259,6 +259,14 @@ describe("BrowserToolbar ARIA semantics", () => {
     expect(button).toBeTruthy();
   });
 
+  it("Open in browser button is exposed by accessible name", () => {
+    const { getByRole } = renderToolbar();
+    const button = getByRole("button", { name: "Open in browser" });
+    expect(button).toBeTruthy();
+    fireEvent.click(button);
+    expect(defaultProps.onOpenExternal).toHaveBeenCalledOnce();
+  });
+
   it("copy success announces in a polite live region", async () => {
     const { container, getByRole } = renderToolbar();
 
@@ -763,6 +771,25 @@ describe("BrowserToolbar viewport presets", () => {
       expect(pixelRadio.getAttribute("tabindex")).toBe("0");
     });
 
+    it("keeps exactly one radio tabbable after ArrowRight (no transient dual tab stop)", () => {
+      // The roving-tabindex contract requires a single tab stop. Before the fix,
+      // the freshly focused chip AND the still-selected chip both reported
+      // tabIndex=0 until the parent rerendered with the new preset, briefly
+      // exposing two tab stops to keyboard/AT users.
+      renderWithViewport();
+      const iphoneRadio = document.querySelector(
+        '[data-viewport-preset-id="iphone"]'
+      )! as HTMLElement;
+
+      iphoneRadio.focus();
+      fireEvent.keyDown(iphoneRadio, { key: "ArrowRight" });
+
+      const tabbable = Array.from(document.querySelectorAll('[role="radio"]')).filter(
+        (r) => r.getAttribute("tabindex") === "0"
+      );
+      expect(tabbable.length).toBe(1);
+    });
+
     it("ArrowRight on the focused radio activates the next preset immediately (APG automatic activation)", () => {
       renderWithViewport();
       const iphoneRadio = document.querySelector(
@@ -837,6 +864,57 @@ describe("BrowserToolbar viewport presets", () => {
       fireEvent.keyDown(iphoneRadio, { key: "ArrowRight" });
 
       expect(document.activeElement).toBe(pixelRadio);
+    });
+  });
+
+  describe("DPR radiogroup keyboard navigation", () => {
+    function renderWithDpr(overrides = {}) {
+      return renderWithViewport({ onViewportDprChange: vi.fn(), viewportDpr: 1, ...overrides });
+    }
+
+    function dprRadios() {
+      const group = document.querySelector('[aria-label="Device pixel ratio"]')!;
+      return Array.from(group.querySelectorAll('[role="radio"]')) as HTMLElement[];
+    }
+
+    it("renders a DPR radiogroup with one radio per ratio", () => {
+      renderWithDpr();
+      const radios = dprRadios();
+      expect(radios.map((r) => r.getAttribute("data-dpr"))).toEqual(["1", "2", "3"]);
+    });
+
+    it("ArrowRight moves focus to the next ratio and selection follows focus", () => {
+      const onViewportDprChange = vi.fn();
+      renderWithDpr({ onViewportDprChange });
+      const radios = dprRadios();
+
+      radios[0]!.focus();
+      fireEvent.keyDown(radios[0]!, { key: "ArrowRight" });
+
+      expect(document.activeElement).toBe(radios[1]);
+      expect(onViewportDprChange).toHaveBeenCalledWith(2);
+    });
+
+    it("ArrowRight wraps from the last ratio back to the first", () => {
+      renderWithDpr({ viewportDpr: 3 });
+      const radios = dprRadios();
+
+      radios[2]!.focus();
+      fireEvent.keyDown(radios[2]!, { key: "ArrowRight" });
+
+      expect(document.activeElement).toBe(radios[0]);
+    });
+
+    it("Home/End jump to the first and last ratios", () => {
+      renderWithDpr({ viewportDpr: 2 });
+      const radios = dprRadios();
+
+      radios[1]!.focus();
+      fireEvent.keyDown(radios[1]!, { key: "Home" });
+      expect(document.activeElement).toBe(radios[0]);
+
+      fireEvent.keyDown(radios[0]!, { key: "End" });
+      expect(document.activeElement).toBe(radios[2]);
     });
   });
 });
