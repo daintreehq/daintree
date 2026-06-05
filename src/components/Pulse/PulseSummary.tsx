@@ -23,9 +23,12 @@ interface StatProps {
   label: string;
   highlight?: boolean;
   className?: string;
+  // StreakFlame carries its own tier color; defaulting to true keeps neutral
+  // icons dim while the flame renders at full strength.
+  dim?: boolean;
 }
 
-function Stat({ icon, value, label, highlight, className }: StatProps) {
+function Stat({ icon, value, label, highlight, className, dim = true }: StatProps) {
   return (
     <div
       className={cn(
@@ -34,7 +37,7 @@ function Stat({ icon, value, label, highlight, className }: StatProps) {
         className
       )}
     >
-      <span className="shrink-0 opacity-70">{icon}</span>
+      <span className={cn("shrink-0", dim && "opacity-70")}>{icon}</span>
       <span className="font-mono font-medium">{value}</span>
       <span className="hidden sm:inline text-daintree-text/55">{label}</span>
     </div>
@@ -66,6 +69,7 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
             value={pulse.currentStreakDays!}
             label="streak"
             highlight
+            dim={false}
           />
         )}
         {hasUncommitted && (
@@ -99,6 +103,7 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
             value={pulse.currentStreakDays!}
             label="day streak"
             highlight
+            dim={false}
           />
         )}
         {hasUncommitted && (
