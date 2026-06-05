@@ -957,7 +957,7 @@ describe("AgentButton preset UX", () => {
       mockDominantState = "waiting";
       mockDotColor = "bg-state-waiting";
 
-      const { getAllByRole, getAllByTestId } = render(
+      const { container, getAllByRole, getAllByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
 
@@ -968,6 +968,13 @@ describe("AgentButton preset UX", () => {
       const chevronIcon = getAllByTestId("chevron-icon")[0];
       const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
       expect(primary?.getAttribute("aria-label")).toBe("Start Claude — waiting");
+
+      // Combined dot+suffix invariant — the suffix is only meaningful when
+      // the dot is also painting. A regression that decouples the two (e.g.
+      // dot removed, suffix kept) would mislead screen readers into thinking
+      // a state is actionable when it isn't visible to the user.
+      const badge = container.querySelector('.relative span[aria-hidden="true"]');
+      expect(badge).not.toBeNull();
     });
 
     it("propagates the 'directing' state word to the launch tooltip and aria-label (issue #9823)", () => {
@@ -991,6 +998,35 @@ describe("AgentButton preset UX", () => {
       const chevronIcon = getAllByTestId("chevron-icon")[0];
       const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
       expect(primary?.getAttribute("aria-label")).toBe("Start Claude — directing");
+    });
+
+    it("orders state suffix before sign-in suffix when both apply (issue #9823 + #8173)", () => {
+      // The sign-in-not-detected and state suffixes are independent cues
+      // that can co-occur (a launchable agent with a session in `waiting`
+      // and a passive auth probe that came back empty). The issue contract
+      // locks the order: state first, sign-in caveat second. The two
+      // em-dashes are the densest form the project uses, but the order is
+      // a regression target — a swap would read as the sign-in being a
+      // sub-cause of the state instead of a parallel caveat.
+      mockSettings = settingsWith({ claude: { presetId: "user-blue" } });
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+      mockPanelsById = { "panel-1": activePanel("waiting") };
+      mockPanelIds = ["panel-1"];
+      mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
+      mockActiveWorktreeId = "wt-1";
+      mockDominantState = "waiting";
+      mockDotColor = "bg-state-waiting";
+
+      const { getAllByTestId } = render(
+        <AgentButton
+          type="claude"
+          availability={"unauthenticated" as unknown as CliAvailability[string]}
+        />
+      );
+
+      const tooltipTexts = getAllByTestId("tooltip-content").map((el) => el.textContent ?? "");
+      const launchTooltip = tooltipTexts.find((t) => t.startsWith("Start "));
+      expect(launchTooltip).toBe("Start Claude · Blue — waiting — sign-in not detected");
     });
 
     it("omits the state suffix in passive states (no dot → no verbal state)", () => {
@@ -1059,8 +1095,15 @@ describe("AgentButton preset UX", () => {
 
       const chevronIcon = getAllByTestId("chevron-icon")[0];
       const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
+      const chevron = getAllByRole("button").find((b) => b.contains(chevronIcon));
       expect(primary).toBeTruthy();
       expect(primary!.className).toContain("toolbar-agent-split-seam");
+      // The seam paints the right border of the primary half; the chevron
+      // would never carry the class because the divider would be on the
+      // wrong side and would clash with the chevron's own armed-state
+      // ring. Pin this so a future refactor that propagates the class via
+      // a shared string doesn't silently double-paint.
+      expect(chevron!.className).not.toContain("toolbar-agent-split-seam");
     });
 
     it("applies toolbar-agent-split-seam when ready + multiple presets", () => {
@@ -1076,7 +1119,9 @@ describe("AgentButton preset UX", () => {
 
       const chevronIcon = getAllByTestId("chevron-icon")[0];
       const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
+      const chevron = getAllByRole("button").find((b) => b.contains(chevronIcon));
       expect(primary!.className).toContain("toolbar-agent-split-seam");
+      expect(chevron!.className).not.toContain("toolbar-agent-split-seam");
     });
 
     it("omits the seam class while the agent is loading (availability === undefined)", () => {
