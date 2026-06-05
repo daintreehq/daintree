@@ -136,7 +136,10 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
 
     it("chevron icons have shrink-0", () => {
-      const chevronMatches = source.match(/ml-0\.5 h-3 w-3 shrink-0/g);
+      // The chevron carries shrink-0 so it stays visible during truncation. It
+      // no longer carries an ml-0.5 nudge — the pill's uniform gap-2 owns the
+      // spacing (issue #9824), so match the chevron by its meta class instead.
+      const chevronMatches = source.match(/toolbar-project-meta h-3 w-3 shrink-0/g);
       expect(chevronMatches).not.toBeNull();
     });
 
