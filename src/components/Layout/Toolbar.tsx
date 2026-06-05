@@ -954,9 +954,7 @@ export function Toolbar({
                     aria-disabled={isCopyingTree || !activeWorktree || undefined}
                     className={cn(
                       "toolbar-icon-button relative",
-                      treeCopied
-                        ? "text-status-success bg-status-success/10"
-                        : "text-daintree-text",
+                      treeCopied ? "text-status-success" : "text-daintree-text",
                       isCopyingTree && "cursor-wait opacity-70",
                       "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                     )}

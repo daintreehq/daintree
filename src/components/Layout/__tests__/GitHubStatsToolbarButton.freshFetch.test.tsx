@@ -172,10 +172,10 @@ describe("GitHubStatsToolbarButton corner activity chip wiring", () => {
 
   it("schedules an auto-clear timer per pulseAt with ACTIVITY_CHIP_TTL_MS", () => {
     expect(source).toMatch(
-      /useEffect\(\(\)\s*=>\s*\{[\s\S]{0,400}?issuesPulseAt[\s\S]{0,400}?ACTIVITY_CHIP_TTL_MS[\s\S]{0,400}?setIssuesPulseAt\(null\)/
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]{0,1500}?issuesPulseAt[\s\S]{0,1500}?ACTIVITY_CHIP_TTL_MS[\s\S]{0,1500}?setIssuesPulseAt\(null\)/
     );
     expect(source).toMatch(
-      /useEffect\(\(\)\s*=>\s*\{[\s\S]{0,400}?prsPulseAt[\s\S]{0,400}?ACTIVITY_CHIP_TTL_MS[\s\S]{0,400}?setPrsPulseAt\(null\)/
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]{0,1500}?prsPulseAt[\s\S]{0,1500}?ACTIVITY_CHIP_TTL_MS[\s\S]{0,1500}?setPrsPulseAt\(null\)/
     );
   });
 

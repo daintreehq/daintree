@@ -62,10 +62,13 @@ const PREFETCH_FRESHNESS_MS = 10_000;
 // the cache and let the existing 30s poll keep things fresh in background.
 const OPEN_FORCE_REFRESH_STALENESS_MS = 2 * 60 * 1000;
 
-// Lifetime of the corner activity chip after the most recent count increase.
-// The chip is a glanceable "something new arrived" cue, not a persistent
-// unread-state badge — three minutes is long enough for a user to notice it
-// during normal task flow without lingering past the moment of relevance.
+// Lifetime of the corner activity chip after the most recent count increase,
+// measured in visible time. The chip is a glanceable "something new arrived"
+// cue, not a persistent unread-state badge — three minutes is long enough for
+// a user to notice it during normal task flow without lingering past the
+// moment of relevance. The chip's auto-clear pauses while the page is hidden
+// (see the useEffect below) so a chip earned just before a tab/window switch
+// doesn't burn its TTL unseen.
 const ACTIVITY_CHIP_TTL_MS = 3 * 60 * 1000;
 
 // Re-exported for external consumers (tests, rate-limit math)
@@ -397,30 +400,85 @@ export const GitHubStatsToolbarButton = memo(
     const showPrsChip = !isTokenError && prsPulseAt !== null && !prsOpen && (prCount ?? 0) > 0;
 
     // Auto-clear each chip ACTIVITY_CHIP_TTL_MS after the most recent count
-    // increase. The dependency on `*PulseAt` re-arms the timer whenever a
-    // newer increase resets the timestamp; the cleanup cancels any pending
-    // timer if the user opens the dropdown (which sets pulseAt → null) or
-    // a fresher pulse takes its place.
+    // increase, but only while the page is visible — a chip earned just before
+    // the user switches away shouldn't burn its TTL unseen. Mirrors the
+    // rate-limit countdown's pattern above: closure-scoped timeout, a
+    // `visibilitychange` handler that recomputes `remaining` against wall-clock
+    // on restore, and a cleanup that pairs the listener with the timer.
     useEffect(() => {
       if (issuesPulseAt === null) return;
-      const remaining = ACTIVITY_CHIP_TTL_MS - (Date.now() - issuesPulseAt);
-      if (remaining <= 0) {
-        setIssuesPulseAt(null);
-        return;
-      }
-      const id = window.setTimeout(() => setIssuesPulseAt(null), remaining);
-      return () => window.clearTimeout(id);
+      let timeoutId: number | null = null;
+
+      const tick = () => {
+        timeoutId = null;
+        const remaining = ACTIVITY_CHIP_TTL_MS - (Date.now() - issuesPulseAt);
+        if (remaining <= 0) {
+          setIssuesPulseAt(null);
+          return;
+        }
+        if (!document.hidden) {
+          timeoutId = window.setTimeout(tick, remaining);
+        }
+      };
+
+      const onVisibility = () => {
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        if (!document.hidden) {
+          tick();
+        }
+      };
+
+      tick();
+      document.addEventListener("visibilitychange", onVisibility);
+
+      return () => {
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        document.removeEventListener("visibilitychange", onVisibility);
+      };
     }, [issuesPulseAt]);
 
     useEffect(() => {
       if (prsPulseAt === null) return;
-      const remaining = ACTIVITY_CHIP_TTL_MS - (Date.now() - prsPulseAt);
-      if (remaining <= 0) {
-        setPrsPulseAt(null);
-        return;
-      }
-      const id = window.setTimeout(() => setPrsPulseAt(null), remaining);
-      return () => window.clearTimeout(id);
+      let timeoutId: number | null = null;
+
+      const tick = () => {
+        timeoutId = null;
+        const remaining = ACTIVITY_CHIP_TTL_MS - (Date.now() - prsPulseAt);
+        if (remaining <= 0) {
+          setPrsPulseAt(null);
+          return;
+        }
+        if (!document.hidden) {
+          timeoutId = window.setTimeout(tick, remaining);
+        }
+      };
+
+      const onVisibility = () => {
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        if (!document.hidden) {
+          tick();
+        }
+      };
+
+      tick();
+      document.addEventListener("visibilitychange", onVisibility);
+
+      return () => {
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        document.removeEventListener("visibilitychange", onVisibility);
+      };
     }, [prsPulseAt]);
 
     useEffect(() => {
