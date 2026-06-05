@@ -3,6 +3,7 @@ import { useEffectEvent } from "react";
 import type { TerminalReliabilityMetricPayload } from "@shared/types/pty-host";
 import { terminalClient } from "@/clients";
 import { notify } from "@/lib/notify";
+import { logWarn } from "@/utils/logger";
 
 /**
  * A `pause-end` reliability metric whose `durationMs` reaches this threshold was
@@ -44,18 +45,23 @@ export interface ForceResumeCycleWatchdog {
  * grid-bar warning. A single confirmed natural drain re-arms the watchdog.
  */
 export function useForceResumeCycleWatchdog(id: string): ForceResumeCycleWatchdog {
+  // Counter is hook-instance-local by design: if the pane unmounts/remounts for
+  // the same id (LRU eviction → re-activation) the streak restarts from zero.
+  // That's the intended trade-off — a stall that survives a remount re-proves
+  // itself over three fresh cycles rather than persisting state in a store.
   const consecutiveRef = useRef(0);
   const notifyFiredRef = useRef(false);
   const [showBanner, setShowBanner] = useState(false);
 
   const onMetric = useEffectEvent((payload: TerminalReliabilityMetricPayload) => {
     if (payload.terminalId !== id || payload.metricType !== "pause-end") return;
-    // Ambiguous metric (pause-start time was lost upstream): don't count it as a
-    // force-resume, but don't reset either — resetting on an unknown outcome
-    // would mask a genuine stall loop (lesson #8558).
-    if (payload.durationMs === undefined) return;
+    const { durationMs } = payload;
+    // Ambiguous metric (pause-start time was lost upstream, or a non-finite
+    // delta): don't count it as a force-resume, but don't reset either —
+    // resetting on an unknown outcome would mask a genuine stall loop (lesson #8558).
+    if (durationMs === undefined || !Number.isFinite(durationMs)) return;
 
-    if (payload.durationMs >= FORCE_RESUME_THRESHOLD_MS) {
+    if (durationMs >= FORCE_RESUME_THRESHOLD_MS) {
       consecutiveRef.current += 1;
       if (consecutiveRef.current < FORCE_RESUME_TIER_3_COUNT) return;
       setShowBanner(true);
@@ -91,7 +97,9 @@ export function useForceResumeCycleWatchdog(id: string): ForceResumeCycleWatchdo
     consecutiveRef.current = 0;
     notifyFiredRef.current = false;
     setShowBanner(false);
-    void terminalClient.forceResume(id);
+    void terminalClient.forceResume(id).catch((err: unknown) => {
+      logWarn("Force-resume from stall banner failed", { terminalId: id, error: String(err) });
+    });
   }, [id]);
 
   return { showBanner, resetQueue };

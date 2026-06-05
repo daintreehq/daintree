@@ -81,6 +81,33 @@ describe("useForceResumeCycleWatchdog", () => {
     expect(result.current.showBanner).toBe(true);
   });
 
+  it("does not fire the warning before the third consecutive force-resume", () => {
+    renderHook(() => useForceResumeCycleWatchdog("t1"));
+
+    emitMetric({ durationMs: 9950 });
+    expect(notifyMock).toHaveBeenCalledTimes(0);
+    emitMetric({ durationMs: 9950 });
+    expect(notifyMock).toHaveBeenCalledTimes(0);
+    emitMetric({ durationMs: 9950 });
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats the threshold as inclusive (>= 9900) and 9899 as a natural drain", () => {
+    const { result } = renderHook(() => useForceResumeCycleWatchdog("t1"));
+
+    // 9899 is below the bound: a natural drain, must not count.
+    emitMetric({ durationMs: 9899 });
+    emitMetric({ durationMs: 9899 });
+    emitMetric({ durationMs: 9899 });
+    expect(result.current.showBanner).toBe(false);
+
+    // Exactly 9900 is a force-resume — three of them promote.
+    emitMetric({ durationMs: 9900 });
+    emitMetric({ durationMs: 9900 });
+    emitMetric({ durationMs: 9900 });
+    expect(result.current.showBanner).toBe(true);
+  });
+
   it("emits the grid-bar warning exactly once when the threshold is crossed", () => {
     renderHook(() => useForceResumeCycleWatchdog("t1"));
 
@@ -164,6 +191,35 @@ describe("useForceResumeCycleWatchdog", () => {
     expect(result.current.showBanner).toBe(true);
   });
 
+  it("an ignored metric mid-streak does not reset the counter", () => {
+    const { result } = renderHook(() => useForceResumeCycleWatchdog("t1"));
+
+    emitMetric({ durationMs: 9950 });
+    emitMetric({ durationMs: 9950 });
+    // Unrelated terminal force-resumes between cycles 2 and 3 — must be inert.
+    emitMetric({ terminalId: "other", durationMs: 9950 });
+    emitMetric({ metricType: "suspend", durationMs: 9950 });
+    emitMetric({ durationMs: 9950 });
+    expect(result.current.showBanner).toBe(true);
+  });
+
+  it("resetQueue re-arms the notify for the next stall cycle", () => {
+    const { result } = renderHook(() => useForceResumeCycleWatchdog("t1"));
+
+    emitMetric({ durationMs: 9950 });
+    emitMetric({ durationMs: 9950 });
+    emitMetric({ durationMs: 9950 });
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+
+    act(() => result.current.resetQueue());
+
+    emitMetric({ durationMs: 9950 });
+    emitMetric({ durationMs: 9950 });
+    emitMetric({ durationMs: 9950 });
+    expect(notifyMock).toHaveBeenCalledTimes(2);
+    expect(result.current.showBanner).toBe(true);
+  });
+
   it("resetQueue force-resumes the terminal and clears the banner", () => {
     const { result } = renderHook(() => useForceResumeCycleWatchdog("t1"));
 
@@ -191,5 +247,16 @@ describe("useForceResumeCycleWatchdog", () => {
     expect(unsubSpy).toHaveBeenCalled();
     expect(result.current.showBanner).toBe(false);
     expect(eventsOn).toHaveBeenLastCalledWith("terminal:reliability-metric", expect.any(Function));
+
+    // Metrics for the old id are now inert; t2 needs three fresh cycles.
+    emitMetric({ terminalId: "t1", durationMs: 9950 });
+    emitMetric({ terminalId: "t1", durationMs: 9950 });
+    emitMetric({ terminalId: "t1", durationMs: 9950 });
+    expect(result.current.showBanner).toBe(false);
+
+    emitMetric({ terminalId: "t2", durationMs: 9950 });
+    emitMetric({ terminalId: "t2", durationMs: 9950 });
+    emitMetric({ terminalId: "t2", durationMs: 9950 });
+    expect(result.current.showBanner).toBe(true);
   });
 });
