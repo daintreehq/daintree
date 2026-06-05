@@ -34,7 +34,7 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
 
     "set-activity-tier": (msg) => {
       const tier = msg.tier === "background" ? "background" : "active";
-      backpressureManager.setActivityTier(msg.id, tier);
+      backpressureManager.setActivityTier(msg.id, tier, "set-activity-tier");
 
       // Clear any stall suspension and unblock the PTY
       backpressureManager.clearSuspended(msg.id);
@@ -92,7 +92,7 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
       const wakeStartTime = Date.now();
 
       // Wake implies we want a faithful snapshot + resume streaming.
-      backpressureManager.setActivityTier(msg.id, "active");
+      backpressureManager.setActivityTier(msg.id, "active", "wake-terminal");
       backpressureManager.clearSuspended(msg.id);
       backpressureManager.clearPendingVisual(msg.id);
 

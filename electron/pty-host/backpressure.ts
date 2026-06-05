@@ -130,8 +130,22 @@ export class BackpressureManager {
     return this.terminalActivityTiers.get(id) ?? "active";
   }
 
-  setActivityTier(id: string, tier: PtyHostActivityTier): void {
+  setActivityTier(id: string, tier: PtyHostActivityTier, reason?: string): void {
+    const from = this.getActivityTier(id);
+    if (from === tier) return;
     this.terminalActivityTiers.set(id, tier);
+
+    if (!this.deps.metricsEnabled()) return;
+    const heldTokens = Array.from(this.deps.getPauseCoordinator(id)?.heldTokens ?? []).sort();
+    this.emitReliabilityMetric({
+      terminalId: id,
+      metricType: "tier-transition",
+      timestamp: Date.now(),
+      tierTransitionFrom: from,
+      tierTransitionTo: tier,
+      tierTransitionReason: reason,
+      tierTransitionHeldTokens: heldTokens,
+    });
   }
 
   pendingBytesRemaining(segment: PendingVisualSegment): number {
