@@ -67,8 +67,61 @@ describe("Toolbar responsive design — issue #4133", () => {
       // there must be no container query that hides toolbar-project-chip-label
       // on its own (which would resurrect the lone-icon stage).
       expect(css).not.toMatch(/\.toolbar-project-chip-label\s*\{[\s\S]*?display:\s*none/);
+      // Also guard the non-display hide forms that would resurrect it.
+      expect(css).not.toMatch(/\.toolbar-project-chip-label\s*\{[\s\S]*?visibility:\s*hidden/);
+      expect(css).not.toMatch(/\.toolbar-project-chip-label\s*\{[\s\S]*?opacity:\s*0\b/);
       // And no 560px breakpoint remains for the chip.
       expect(css).not.toContain("max-width: 560px");
+    });
+  });
+
+  describe("project pill interaction ladder — issue #9824", () => {
+    it("lifts hover/armed/active via a ::before overlay, not by replacing the pill background", () => {
+      // The pill's own background is the capsule fill (opaque near-white on light
+      // themes). Replacing it on hover erased that fill; the lift must layer on a
+      // ::before overlay instead so the capsule is preserved.
+      expect(css).toMatch(/\.toolbar-project-pill::before\s*\{[\s\S]*?opacity:\s*0/);
+      expect(css).toContain(".toolbar-project-pill:hover::before");
+      expect(css).toContain('.toolbar-project-pill[aria-expanded="true"]::before');
+      expect(css).toContain('.toolbar-project-pill[data-state="open"]::before');
+      expect(css).toContain(".toolbar-project-pill:active::before");
+    });
+
+    it("overlay fades via opacity only — no transform/box-shadow/all in its transition", () => {
+      // Tier 1 constraint: the lift animates opacity (the background-image layer
+      // can't be transitioned). transform is owned by the base Button cva; the
+      // pill must not slow or widen the transition list.
+      const overlayBlock = css.match(/\.toolbar-project-pill::before\s*\{[\s\S]*?\}/)?.[0];
+      expect(overlayBlock).toBeDefined();
+      const transition = overlayBlock!.match(/transition:[\s\S]*?;/)?.[0];
+      expect(transition).toBeDefined();
+      expect(transition).toContain("opacity");
+      expect(transition).not.toContain("transform");
+      expect(transition).not.toContain("box-shadow");
+      expect(transition).not.toContain("all");
+    });
+
+    it("armed/active overlay escalates after :hover in source order so armed survives hover-over-armed", () => {
+      // Equal-specificity rules: later-in-source wins. A refactor that moves the
+      // armed block above hover would erase the armed fill while hovering.
+      const hoverIndex = css.search(/\.toolbar-project-pill:hover::before/);
+      const armedIndex = css.search(/\.toolbar-project-pill\[aria-expanded="true"\]::before/);
+      const activeIndex = css.search(/\.toolbar-project-pill:active::before/);
+      expect(hoverIndex).toBeGreaterThan(-1);
+      expect(armedIndex).toBeGreaterThan(hoverIndex);
+      expect(activeIndex).toBeGreaterThan(armedIndex);
+    });
+
+    it("provides a forced-colors fallback for the armed pill — High Contrast strips the overlay tint", () => {
+      // The armed lift is background-only (no inset ring), so Windows High
+      // Contrast forces it to Canvas and the open pill reads as idle. A
+      // ButtonText border restores the state edge, mirroring the icon-button.
+      const forcedColorsBlock = css.match(
+        /@media \(forced-colors: active\)\s*\{[\s\S]*?border:\s*2px solid ButtonText[\s\S]*?\}/
+      )?.[0];
+      expect(forcedColorsBlock).toBeDefined();
+      expect(forcedColorsBlock).toContain('.toolbar-project-pill[aria-expanded="true"]');
+      expect(forcedColorsBlock).toContain('.toolbar-project-pill[data-state="open"]');
     });
   });
 
