@@ -410,6 +410,66 @@ describe("scheduleScrollbackRestore — lazy mode", () => {
     expect(registerLazyScrollRestoreMock).not.toHaveBeenCalled();
   });
 
+  it("marks a lazy-registered terminal as 'lazy-pending' (excluded from the progress aggregate)", () => {
+    registerLazyScrollRestoreMock.mockReturnValue({ dispose: vi.fn() });
+    const managed = fakeManaged("none");
+    managed.hostElement = document.createElement("div");
+    getMock.mockReturnValue(managed);
+
+    scheduleScrollbackRestore(
+      [{ terminalId: "t1", label: "x", location: "grid" }],
+      () => true,
+      "lazy"
+    );
+
+    expect(managed.scrollbackRestoreState).toBe("lazy-pending");
+  });
+
+  it("a lazy doRestore transitions lazy-pending → in-progress → done when its trigger fires", async () => {
+    let lazyDoRestore: () => Promise<void> = async () => {};
+    registerLazyScrollRestoreMock.mockImplementation((_managed, fn: () => Promise<void>) => {
+      lazyDoRestore = fn;
+      return { dispose: vi.fn() };
+    });
+    const managed = fakeManaged("none");
+    managed.hostElement = document.createElement("div");
+    getMock.mockReturnValue(managed);
+    fetchAndRestoreMock.mockResolvedValue(undefined);
+
+    scheduleScrollbackRestore(
+      [{ terminalId: "t1", label: "x", location: "grid" }],
+      () => true,
+      "lazy"
+    );
+    expect(managed.scrollbackRestoreState).toBe("lazy-pending");
+
+    await lazyDoRestore();
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("t1");
+    expect(managed.scrollbackRestoreState).toBe("done");
+  });
+
+  it("a lazy-pending terminal that bails (stale) resets to 'none'", async () => {
+    let lazyDoRestore: () => Promise<void> = async () => {};
+    registerLazyScrollRestoreMock.mockImplementation((_managed, fn: () => Promise<void>) => {
+      lazyDoRestore = fn;
+      return { dispose: vi.fn() };
+    });
+    const managed = fakeManaged("none");
+    managed.hostElement = document.createElement("div");
+    getMock.mockReturnValue(managed);
+
+    scheduleScrollbackRestore(
+      [{ terminalId: "t1", label: "x", location: "grid" }],
+      () => false, // stale: project switched before the user scrolled
+      "lazy"
+    );
+    expect(managed.scrollbackRestoreState).toBe("lazy-pending");
+
+    await lazyDoRestore();
+    expect(fetchAndRestoreMock).not.toHaveBeenCalled();
+    expect(managed.scrollbackRestoreState).toBe("none");
+  });
+
   it("registered listener cleanup invokes the disposable.dispose()", () => {
     const dispose = vi.fn();
     registerLazyScrollRestoreMock.mockReturnValue({ dispose });
@@ -533,9 +593,11 @@ describe("retryFailedScrollbackRestoreBatch", () => {
     expect(managed.scrollbackRestoreState).toBe("done");
   });
 
-  it("clears the error but schedules nothing when no captured task matches", () => {
+  it("does not clear the error or schedule when no captured task matches", () => {
+    // The failure banner is the only recovery affordance — never dismiss it
+    // without queuing an actual retry.
     retryFailedScrollbackRestoreBatch(["unknown"]);
-    expect(clearScrollbackRestoreErrorMock).toHaveBeenCalledWith("unknown");
+    expect(clearScrollbackRestoreErrorMock).not.toHaveBeenCalled();
     expect(scheduleBackgroundFetchAndRestoreMock).not.toHaveBeenCalled();
   });
 

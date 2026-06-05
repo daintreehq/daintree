@@ -91,7 +91,15 @@ export function registerLazyScrollRestore(
     if (disposed) return;
     disposed = true;
     cleanup();
-    if (managed.scrollbackRestoreState !== "pending") return;
+    // Lazy restores are registered in the "lazy-pending" state; "pending" is
+    // tolerated too in case a background re-schedule promoted the terminal
+    // between registration and the trigger firing.
+    if (
+      managed.scrollbackRestoreState !== "lazy-pending" &&
+      managed.scrollbackRestoreState !== "pending"
+    ) {
+      return;
+    }
     void restoreFn().catch((error) => {
       logWarn("Lazy scroll restore failed", { error });
     });
