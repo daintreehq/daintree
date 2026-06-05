@@ -61,9 +61,9 @@ describe("ContentGrid EmptyState — quiet no-worktree variants (issue #6935)", 
   it("branches empty state on hasWorktrees: select-worktree vs open-directory with button", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
     expect(content).toContain("Select a worktree");
-    expect(content).toContain("Choose a worktree from the sidebar to open it in the canvas.");
-    expect(content).toContain("Open a Git repository to get started");
-    expect(content).toContain("Worktrees let you work on multiple tasks in isolated environments.");
+    expect(content).toContain("Choose a worktree from the sidebar to open it in the canvas");
+    expect(content).toContain("Open a Git repository");
+    expect(content).toContain("Worktrees let you work on multiple tasks in isolated environments");
     expect(content).toContain("Open directory...");
     expect(content).toContain('"project.add"');
   });

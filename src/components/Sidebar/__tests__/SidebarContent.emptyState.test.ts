@@ -326,7 +326,7 @@ describe("SidebarContent zero-worktrees taxonomy alignment — issue #6934", () 
     const branchStart = source.indexOf("if (worktrees.length === 0) {");
     const branchEnd = source.indexOf("const hasNonMainWorktrees", branchStart);
     const branch = source.slice(branchStart, branchEnd);
-    expect(branch).toContain('title="Open a Git repository to get started"');
+    expect(branch).toContain('title="Open a Git repository"');
     expect(branch).not.toContain("No worktrees yet");
   });
 

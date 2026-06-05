@@ -511,10 +511,13 @@ describe("EmptyState", () => {
       // 200px minimum sidebar floor without affecting the 350px default.
       // Container queries can only style *descendants* of the container, so
       // density variants live on the icon wrapper, not on the container itself.
+      // Uses scale="sidebar" so the pre-#9813 narrow-collapse tokens (h-4)
+      // are still tested; canvas scale has its own collapse to h-6, covered
+      // by the dedicated "scale sizing" suite below.
       const { container } = render(
         <EmptyState
           variant="zero-data"
-          scale="canvas"
+          scale="sidebar"
           title="No items"
           icon={<svg data-testid="icon" />}
         />
@@ -526,6 +529,138 @@ describe("EmptyState", () => {
       const iconWrap = container.querySelector('[aria-hidden="true"]');
       expect(iconWrap?.className).toContain("@max-[280px]/empty-state:[&_svg]:h-4");
       expect(iconWrap?.className).toContain("@max-[280px]/empty-state:[&_svg]:w-4");
+    });
+  });
+
+  describe("scale sizing (issue #9813)", () => {
+    // Canvas scale must carry extra visual weight so a single empty state
+    // can hold its own on a full panel-grid canvas. Popover and sidebar
+    // scales must remain byte-identical to their pre-#9813 classes — the
+    // differential is the test, not the absolute values.
+
+    function getIconWrap(container: HTMLElement) {
+      return container.querySelector<HTMLElement>('[aria-hidden="true"]');
+    }
+    function getTitle(container: HTMLElement) {
+      // The title is the first non-description paragraph in the current cell.
+      const current = container.querySelector('[class*="motion-safe\\:animate-in"]');
+      return current?.querySelector("p") as HTMLElement | null;
+    }
+    function getDescription(container: HTMLElement) {
+      const current = container.querySelector('[class*="motion-safe\\:animate-in"]');
+      const paragraphs = current?.querySelectorAll("p") ?? [];
+      // The description is the second paragraph (title is the first).
+      return (paragraphs[1] ?? null) as HTMLElement | null;
+    }
+
+    it("canvas icon wrapper uses a larger size than sidebar", () => {
+      const { container: sidebarContainer } = render(
+        <EmptyState
+          variant="zero-data"
+          scale="sidebar"
+          title="No items"
+          icon={<svg data-testid="icon" />}
+        />
+      );
+      const { container: canvasContainer } = render(
+        <EmptyState
+          variant="zero-data"
+          scale="canvas"
+          title="No items"
+          icon={<svg data-testid="icon" />}
+        />
+      );
+      const sidebarWrap = getIconWrap(sidebarContainer);
+      const canvasWrap = getIconWrap(canvasContainer);
+      expect(sidebarWrap).toBeTruthy();
+      expect(canvasWrap).toBeTruthy();
+      // Canvas icon class is heavier than sidebar; sidebar must NOT carry the
+      // canvas-only size token.
+      expect(canvasWrap!.className).toContain("[&_svg]:h-10");
+      expect(canvasWrap!.className).toContain("[&_svg]:w-10");
+      expect(sidebarWrap!.className).not.toContain("[&_svg]:h-10");
+      expect(sidebarWrap!.className).not.toContain("[&_svg]:w-10");
+    });
+
+    it("canvas title uses a larger, bolder type than sidebar", () => {
+      const { container: sidebarContainer } = render(
+        <EmptyState variant="zero-data" scale="sidebar" title="No items" />
+      );
+      const { container: canvasContainer } = render(
+        <EmptyState variant="zero-data" scale="canvas" title="No items" />
+      );
+      const sidebarTitle = getTitle(sidebarContainer);
+      const canvasTitle = getTitle(canvasContainer);
+      expect(canvasTitle?.className).toContain("text-lg");
+      expect(canvasTitle?.className).toContain("font-semibold");
+      // Sidebar stays at the pre-#9813 size/weight — assert the differential
+      // tokens are absent on the sidebar title.
+      expect(sidebarTitle?.className).not.toContain("text-lg");
+      expect(sidebarTitle?.className).not.toContain("font-semibold");
+    });
+
+    it("canvas description uses a larger default size than the narrow-collapse fallback", () => {
+      // The discriminated union forbids description on popover/sidebar
+      // (text-xs), so we assert the canvas default directly: the rendered
+      // class must carry `text-sm` (the heavier default) and the only place
+      // `text-xs` can appear is in the `@max-[280px]/empty-state:` narrow
+      // collapse prefix.
+      const { container } = render(
+        <EmptyState
+          variant="zero-data"
+          scale="canvas"
+          title="No items"
+          description="desc"
+        />
+      );
+      const canvasDesc = getDescription(container);
+      expect(canvasDesc?.className).toContain("text-sm");
+      expect(canvasDesc?.className).toContain(
+        "@max-[280px]/empty-state:text-xs"
+      );
+      // The bare `text-xs` token (without a Tailwind v4 modifier prefix)
+      // must NOT be the default — that would be a regression to the
+      // pre-#9813 sidebar/popover size.
+      const classes = canvasDesc?.className.split(/\s+/) ?? [];
+      const bareTextXs = classes.filter((c) => c === "text-xs");
+      expect(bareTextXs).toEqual([]);
+    });
+
+    it("canvas cell uses a larger gap than sidebar", () => {
+      const { container: sidebarContainer } = render(
+        <EmptyState variant="zero-data" scale="sidebar" title="No items" />
+      );
+      const { container: canvasContainer } = render(
+        <EmptyState variant="zero-data" scale="canvas" title="No items" />
+      );
+      const sidebarCell = sidebarContainer.querySelector<HTMLElement>(
+        '[class*="motion-safe\\:animate-in"]'
+      );
+      const canvasCell = canvasContainer.querySelector<HTMLElement>(
+        '[class*="motion-safe\\:animate-in"]'
+      );
+      expect(canvasCell?.className).toContain("gap-3");
+      // Sidebar cell keeps the pre-#9813 gap-2 (no gap-3 token).
+      expect(sidebarCell?.className).not.toContain("gap-3");
+    });
+
+    it("canvas container-query collapse still brings the icon back to the popover size in narrow containers", () => {
+      // The narrow-container collapse uses Tailwind v4 named-container
+      // queries: `@max-[280px]/empty-state:` brings the canvas h-10 back
+      // down to h-6 in a ≤280px container. The collapse class must always
+      // be present on the canvas icon wrap so the JIT can compile it; the
+      // runtime behavior is the browser's job.
+      const { container } = render(
+        <EmptyState
+          variant="zero-data"
+          scale="canvas"
+          title="No items"
+          icon={<svg data-testid="icon" />}
+        />
+      );
+      const iconWrap = getIconWrap(container);
+      expect(iconWrap?.className).toContain("@max-[280px]/empty-state:[&_svg]:h-6");
+      expect(iconWrap?.className).toContain("@max-[280px]/empty-state:[&_svg]:w-6");
     });
   });
 
