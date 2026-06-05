@@ -636,8 +636,17 @@ function TerminalPaneComponent({
         if (isDraggingRef.current || !entry) return;
 
         // Suppress stale `false` readings that would freeze a visible terminal
-        // at the BACKGROUND tier (#9780). Read geometry before any write.
-        if (isStaleHiddenReading(entry, () => containerRef.current?.getBoundingClientRect()))
+        // at the BACKGROUND tier (#9780). Confirm against fresh element and root
+        // geometry, read before any write to avoid a redundant layout reflow.
+        if (
+          isStaleHiddenReading(
+            entry,
+            () => containerRef.current?.getBoundingClientRect(),
+            () =>
+              gridScrollRoot?.getBoundingClientRect() ??
+              new DOMRect(0, 0, window.innerWidth, window.innerHeight)
+          )
+        )
           return;
 
         updateVisibility(id, entry.isIntersecting);
