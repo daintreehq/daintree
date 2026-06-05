@@ -61,9 +61,10 @@ describe("ACTION_CATEGORY_COLORS", () => {
   it("only references hues with engineered tokens", () => {
     for (const [category, classes] of entries) {
       for (const [, hue] of classes.matchAll(/-category-([a-z]+)-(?:subtle|text|border)\b/g)) {
-        expect(VALID_HUES.has(hue), `${category} references unknown hue '${hue}': ${classes}`).toBe(
-          true
-        );
+        expect(
+          VALID_HUES.has(hue!),
+          `${category} references unknown hue '${hue}': ${classes}`
+        ).toBe(true);
       }
     }
   });
