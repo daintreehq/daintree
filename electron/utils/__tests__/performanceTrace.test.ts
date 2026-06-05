@@ -52,16 +52,11 @@ describe("performanceTrace", () => {
     await mod.startPerformanceTraceIfEnabled();
 
     expect(tracing.startRecording).toHaveBeenCalledTimes(1);
-    const config = tracing.startRecording.mock.calls[0][0] as {
-      recording_mode: string;
-      included_categories: string[];
-      excluded_categories: string[];
-    };
-    // Lock the config shape: exactly the first-frame categories, nothing else,
-    // and the deny-everything-else wildcard so no noisy category leaks in.
-    expect(config.recording_mode).toBe("record-until-full");
-    expect(config.included_categories).toEqual(["viz", "gpu", "cc", "blink", "toplevel", "startup"]);
-    expect(config.excluded_categories).toEqual(["*"]);
+    expect(tracing.startRecording).toHaveBeenCalledWith({
+      recording_mode: "record-until-full",
+      included_categories: ["viz", "gpu", "cc", "blink", "toplevel", "startup"],
+      excluded_categories: ["*"],
+    });
   });
 
   it("stops recording to the configured file and is idempotent", async () => {

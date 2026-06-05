@@ -365,10 +365,7 @@ export function setupBrowserWindow(
         fallbackTimer = null;
       }
       if (!win.isDestroyed()) {
-        markPerformance(
-          PERF_MARKS.MAIN_WINDOW_SHOWN,
-          viaFallback ? { fallback: true } : undefined
-        );
+        markPerformance(PERF_MARKS.MAIN_WINDOW_SHOWN, viaFallback ? { fallback: true } : undefined);
         win.show();
       }
     };
