@@ -6,6 +6,7 @@ import { AGENT_IDLE_SILENCE_MS, HIBERNATION_DELAY_MS } from "../types";
 const mockTerminalClient = {
   onData: vi.fn(() => vi.fn()),
   onExit: vi.fn(() => vi.fn()),
+  onTierChanged: vi.fn(() => vi.fn()),
   setActivityTier: vi.fn(),
   wake: vi.fn().mockResolvedValue({ state: null }),
   write: vi.fn(),
