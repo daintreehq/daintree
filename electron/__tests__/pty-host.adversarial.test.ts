@@ -1114,7 +1114,12 @@ describe("pty-host adversarial", () => {
   // test author's independent prediction of behavior, not a copy of the source
   // constant. A regression in any branch of the rule flips exactly one cell.
   const TIER_MATRIX: ReadonlyArray<
-    readonly [label: string, activeProjectId: string | null, termProjectId: string | undefined, expected: "active" | "background"]
+    readonly [
+      label: string,
+      activeProjectId: string | null,
+      termProjectId: string | undefined,
+      expected: "active" | "background",
+    ]
   > = [
     ["no_active_project__global_terminal", null, undefined, "active"],
     ["no_active_project__owned_terminal", null, "project-1", "active"],
