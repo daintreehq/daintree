@@ -1,6 +1,6 @@
 {
   "entryName": "index",
-  "eagerChunkCount": 68,
+  "eagerChunkCount": 69,
   "eagerChunks": [
     "AccessibilityAnnouncer",
     "ActionService",
@@ -28,6 +28,7 @@
     "filesClient",
     "forgeProviderIds",
     "globalEnvClient",
+    "helpPanelStore",
     "index",
     "kbdShortcut",
     "logger",
@@ -71,12 +72,12 @@
     "vendor-xterm",
     "vendor-zod"
   ],
-  "eagerRaw": 2768652,
-  "eagerGzip": 832130,
+  "eagerRaw": 2795866,
+  "eagerGzip": 836731,
   "chunkGzip": {
     "vendor-radix-utils": 3261,
     "vendor-react": 56453,
-    "vendor-xterm": 127759
+    "vendor-xterm": 116331
   },
   "chunkModules": {
     "vendor-radix-utils": [

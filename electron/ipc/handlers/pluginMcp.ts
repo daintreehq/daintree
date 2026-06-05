@@ -1,3 +1,4 @@
+// eager-import-allow: wires plugin-MCP method channels and supervisor initialization on startup
 import { defineIpcNamespace, op } from "../define.js";
 import { PLUGIN_MCP_METHOD_CHANNELS } from "./pluginMcp.preload.js";
 import { getPluginMcpSupervisor } from "../../services/PluginMcpSupervisor.js";

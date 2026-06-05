@@ -1,3 +1,4 @@
+// eager-import-allow: sets up custom protocols (daintree, plugin) and security headers (CSP) eagerly on startup
 import { app, protocol, net, session } from "electron";
 import { getWindowForWebContents, getAppWebContents } from "../window/webContentsRegistry.js";
 import path from "path";
