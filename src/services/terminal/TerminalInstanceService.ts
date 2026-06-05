@@ -1578,6 +1578,7 @@ class TerminalInstanceService {
       // renderer. terminalOpenStartedAt anchors the first-write delta (#9809).
       managed.terminalOpenStartedAt =
         typeof performance !== "undefined" ? performance.now() : Date.now();
+      managed.hasEmittedFirstWriteMark = false;
       markRendererPerformance(PERF_MARKS.TERMINAL_OPEN_START, { terminalId: id });
       try {
         managed.terminal.open(managed.hostElement);

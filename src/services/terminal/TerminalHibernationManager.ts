@@ -204,6 +204,12 @@ export class TerminalHibernationManager {
       try {
         terminal.open(hostElement);
         managed.isOpened = true;
+        // Re-anchor the first-write perf delta to this wake's open() — a
+        // terminal hibernated before its first byte would otherwise measure
+        // TERMINAL_FIRST_WRITE from the stale pre-hibernation open (#9809).
+        managed.terminalOpenStartedAt =
+          typeof performance !== "undefined" ? performance.now() : Date.now();
+        managed.hasEmittedFirstWriteMark = false;
       } catch (err) {
         logError(`[TIS.unhibernate] terminal.open failed for ${id}`, err);
       }
