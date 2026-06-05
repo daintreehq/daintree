@@ -2699,17 +2699,23 @@ const api: ElectronAPI = {
 // same-origin route (index.html, and any future route) gets the full surface — using
 // isRecoveryPageUrl as the discriminator keeps the full surface as the safe default.
 const rendererUrl = window.location.href;
-// Sub-span around the contextBridge handoff (#9770). Both the recovery-page and
-// full-bridge branches are mutually exclusive, so bracketing the whole
-// conditional captures whichever exposure actually ran.
-const exposeStartMs = perfNowMs();
+// Sub-span around the `window.electron` contextBridge handoff (#9770). Bracketed
+// tightly around the exposeInMainWorld("electron", …) call in whichever branch
+// runs, so the Sentry bridge exposure and origin-rejection logging are excluded.
+// Defaults to a zero-width span for the untrusted path (no exposure happens).
+let exposeStartMs = perfNowMs();
+let exposeEndMs = exposeStartMs;
 if (window.top === window && isTrustedRendererUrl(rendererUrl)) {
   if (isRecoveryPageUrl(rendererUrl)) {
+    exposeStartMs = perfNowMs();
     contextBridge.exposeInMainWorld("electron", { recovery: api.recovery });
+    exposeEndMs = perfNowMs();
     // __SENTRY_IPC__ is intentionally withheld here: recovery.html has no Sentry
     // renderer SDK and exposing the transport would needlessly widen its surface.
   } else {
+    exposeStartMs = perfNowMs();
     contextBridge.exposeInMainWorld("electron", api);
+    exposeEndMs = perfNowMs();
     // Bridge for @sentry/electron/renderer's IPC transport. The renderer SDK
     // looks up window.__SENTRY_IPC__["sentry-ipc"] and uses these methods to
     // forward envelopes to the main process (which owns the real DSN and HTTP
@@ -2741,7 +2747,6 @@ if (window.top === window && isTrustedRendererUrl(rendererUrl)) {
     );
   }
 }
-const exposeEndMs = perfNowMs();
 
 /// Private listener: reclaim renderer memory when notified by the main process.
 // Not exposed through window.electron — this is an internal optimization.

@@ -102,6 +102,15 @@ export const PHASE_PAIRS: Array<[string, string, string]> = [
     PERF_MARKS.HYDRATE_RESTORE_PANELS_END,
     "hydrate_restore_panels",
   ],
+  // Per-view preload evaluation cost (#9770). firstByMark pairs the initial
+  // (cold-start) view's spans, so this surfaces the headline preload-eval and
+  // contextBridge-exposure durations for the first project view.
+  [PERF_MARKS.PRELOAD_EVAL_START, PERF_MARKS.PRELOAD_EVAL_END, "preload.eval"],
+  [
+    PERF_MARKS.PRELOAD_EXPOSE_IN_MAIN_WORLD_START,
+    PERF_MARKS.PRELOAD_EXPOSE_IN_MAIN_WORLD_END,
+    "preload.exposeInMainWorld",
+  ],
 ];
 
 // Warn-only thresholds for the new first-launch quality signals introduced

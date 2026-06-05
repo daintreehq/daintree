@@ -143,6 +143,76 @@ describe("registerPerfHandlers", () => {
     expect(recordPreloadDuration).toHaveBeenCalledWith(99, 12);
   });
 
+  it("routes the preload duration to the per-window ProjectViewManager via the registry", () => {
+    const recordA = vi.fn();
+    const recordB = vi.fn();
+    const contexts: Record<
+      number,
+      { services: { projectViewManager: { recordPreloadDuration: typeof recordA } } }
+    > = {
+      11: { services: { projectViewManager: { recordPreloadDuration: recordA } } },
+      22: { services: { projectViewManager: { recordPreloadDuration: recordB } } },
+    };
+    const deps = {
+      // Static dep points at window A; the registry must override it for B.
+      projectViewManager: { recordPreloadDuration: recordA },
+      windowRegistry: {
+        getByWebContentsId: (id: number) => contexts[id],
+      },
+    } as unknown as HandlerDependencies;
+
+    registerPerfHandlers(deps);
+    const handler = getHandler();
+
+    handler(makeEvent(22), {
+      marks: [
+        {
+          mark: "preload.eval:end",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          elapsedMs: 9,
+          meta: { durationMs: 9 },
+        },
+      ],
+      rendererTimeOrigin: 1_000_100,
+      rendererT0: 5,
+    });
+
+    expect(recordB).toHaveBeenCalledWith(22, 9);
+    expect(recordA).not.toHaveBeenCalled();
+  });
+
+  it("forwards the preload duration only once when a flush carries duplicate eval:end marks", () => {
+    const recordPreloadDuration = vi.fn();
+    const deps = {
+      projectViewManager: { recordPreloadDuration },
+    } as unknown as HandlerDependencies;
+
+    registerPerfHandlers(deps);
+    const handler = getHandler();
+
+    handler(makeEvent(99), {
+      marks: [
+        {
+          mark: "preload.eval:end",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          elapsedMs: 12,
+          meta: { durationMs: 12 },
+        },
+        {
+          mark: "preload.eval:end",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          elapsedMs: 13,
+          meta: { durationMs: 13 },
+        },
+      ],
+      rendererTimeOrigin: 1_000_100,
+      rendererT0: 5,
+    });
+
+    expect(recordPreloadDuration).toHaveBeenCalledTimes(1);
+    expect(recordPreloadDuration).toHaveBeenCalledWith(99, 12);
+  });
+
   it("does not forward a preload duration when the eval:end mark lacks a numeric durationMs", () => {
     const recordPreloadDuration = vi.fn();
     const deps = {

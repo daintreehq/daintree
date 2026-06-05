@@ -230,6 +230,27 @@ describe("ProjectViewManager — preload eval cost (#9770)", () => {
     expect(preloadDurationFor(manager, "proj-a")).toBeUndefined();
   });
 
+  it("no-ops for a flush that races in after the view was evicted", async () => {
+    const evictingManager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 2,
+    });
+    const viewA = { webContents: createMockWebContents(), setBounds: vi.fn() };
+    evictingManager.registerInitialView(viewA as never, "proj-a", "/path/a");
+    const staleWcId = webContentsIdFor(evictingManager, "proj-a");
+
+    // Evict proj-a (its webContents → project mapping is torn down).
+    await evictingManager.switchTo("proj-b", "/path/b");
+    await evictingManager.switchTo("proj-c", "/path/c");
+
+    expect(() => evictingManager.recordPreloadDuration(staleWcId, 42)).not.toThrow();
+    expect(evictingManager.getProjectIdForWebContents(staleWcId)).toBeNull();
+  });
+
   // A cache limit of 2 forces proj-a to be evicted (and carry an eviction
   // timestamp), then re-cached, so a later cache hit fires the revival log.
   function makeRevivalManager(): ProjectViewManager {
@@ -258,12 +279,12 @@ describe("ProjectViewManager — preload eval cost (#9770)", () => {
     await revivalManager.switchTo("proj-c", "/path/c");
     await revivalManager.switchTo("proj-a", "/path/a");
 
-    const revival = (logInfo as ReturnType<typeof vi.fn>).mock.calls.find(
+    const revivals = (logInfo as ReturnType<typeof vi.fn>).mock.calls.filter(
       ([event, ctx]) =>
         event === "projectview.revival" && (ctx as { projectId?: string }).projectId === "proj-a"
     );
-    expect(revival).toBeDefined();
-    expect((revival?.[1] as Record<string, unknown>).preloadEvalDurationMs).toBe(27.5);
+    expect(revivals).toHaveLength(1);
+    expect((revivals[0][1] as Record<string, unknown>).preloadEvalDurationMs).toBe(27.5);
   });
 
   it("omits preloadEvalDurationMs from the revival log when none was recorded", async () => {

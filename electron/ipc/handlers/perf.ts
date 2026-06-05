@@ -16,6 +16,9 @@ export function registerPerfHandlers(deps?: HandlerDependencies): () => void {
 
     const { marks, rendererTimeOrigin, rendererT0 } = payload;
     const webContentsId = event.sender.isDestroyed() ? undefined : event.sender.id;
+    // A preload reports exactly one eval:end mark per flush; guard so a
+    // malformed payload with duplicates forwards the cost only once (#9770).
+    let preloadRecorded = false;
 
     for (const record of marks) {
       if (typeof record.elapsedMs !== "number") continue;
@@ -37,10 +40,22 @@ export function registerPerfHandlers(deps?: HandlerDependencies): () => void {
       // Correlate the per-view preload eval cost (#9770) with the originating
       // WebContentsView so ProjectViewManager can surface it alongside the
       // projectview.revival log. The duration is carried on the eval:end mark.
-      if (record.mark === PERF_MARKS.PRELOAD_EVAL_END && webContentsId !== undefined) {
+      // IPC handlers are registered once globally with the first window's deps,
+      // so resolve the per-window ProjectViewManager via the registry (keyed by
+      // the sender's webContents id) before falling back to the static dep —
+      // otherwise a second window's preload flush would silently no-op.
+      if (
+        record.mark === PERF_MARKS.PRELOAD_EVAL_END &&
+        webContentsId !== undefined &&
+        !preloadRecorded
+      ) {
         const durationMs = (record.meta as { durationMs?: unknown } | undefined)?.durationMs;
         if (typeof durationMs === "number" && Number.isFinite(durationMs)) {
-          deps?.projectViewManager?.recordPreloadDuration(webContentsId, durationMs);
+          const projectViewManager =
+            deps?.windowRegistry?.getByWebContentsId(webContentsId)?.services.projectViewManager ??
+            deps?.projectViewManager;
+          projectViewManager?.recordPreloadDuration(webContentsId, durationMs);
+          preloadRecorded = true;
         }
       }
     }
