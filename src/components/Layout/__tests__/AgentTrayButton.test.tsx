@@ -1400,19 +1400,16 @@ describe("AgentTrayButton", () => {
         const availability = arrangeClaudePanel(state);
         const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
         const row = getByTestId("agent-tray-row-claude");
-        expect(badgeIn(row)).not.toBeNull();
+        expect(badgeIn(row)?.getAttribute("data-visible")).toBe("true");
       }
     );
 
-    it.each([["working"], ["idle"]] as const)(
-      "does not render the badge for passive state %s",
-      (state) => {
-        const availability = arrangeClaudePanel(state);
-        const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-        const row = getByTestId("agent-tray-row-claude");
-        expect(badgeIn(row)).toBeNull();
-      }
-    );
+    it.each([["working"], ["idle"]] as const)("hides the badge for passive state %s", (state) => {
+      const availability = arrangeClaudePanel(state);
+      const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      const row = getByTestId("agent-tray-row-claude");
+      expect(badgeIn(row)?.getAttribute("data-visible")).toBe("false");
+    });
 
     // `completed` and `exited` are excluded from ACTIVE_AGENT_STATES, so the
     // panel never enters the dominant-state aggregation in the first place;
@@ -1420,22 +1417,22 @@ describe("AgentTrayButton", () => {
     // here so the consumer-level contract ("no badge for passive states") is
     // tested end-to-end regardless of which guard fires.
     it.each([["completed"], ["exited"]] as const)(
-      "does not render the badge for terminal state %s",
+      "hides the badge for terminal state %s",
       (state) => {
         const availability = arrangeClaudePanel(state);
         const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
         const row = getByTestId("agent-tray-row-claude");
-        expect(badgeIn(row)).toBeNull();
+        expect(badgeIn(row)?.getAttribute("data-visible")).toBe("false");
       }
     );
 
-    it("does not render the badge when there is no active session", () => {
+    it("hides the badge when there is no active session", () => {
       const availability = { claude: "ready" } as unknown as CliAvailability;
       mockSettings = settingsWith({ claude: { pinned: false } });
 
       const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
       const row = getByTestId("agent-tray-row-claude");
-      expect(badgeIn(row)).toBeNull();
+      expect(badgeIn(row)?.getAttribute("data-visible")).toBe("false");
     });
   });
 

@@ -910,10 +910,11 @@ describe("AgentButton preset UX", () => {
       );
 
       const badge = container.querySelector('.relative span[aria-hidden="true"]');
-      expect(badge).not.toBeNull();
+      expect(badge?.getAttribute("data-visible")).toBe("true");
+      expect(badge!.className).toMatch(/bg-state-waiting/);
     });
 
-    it("does not render the badge span when the helper returns null (passive state)", () => {
+    it("hides the badge span when the helper returns null (passive state)", () => {
       mockSettings = settingsWith({ claude: {} });
       mockPanelsById = { "panel-1": activePanel("working") };
       mockPanelIds = ["panel-1"];
@@ -927,10 +928,10 @@ describe("AgentButton preset UX", () => {
       );
 
       const badge = container.querySelector('.relative span[aria-hidden="true"]');
-      expect(badge).toBeNull();
+      expect(badge?.getAttribute("data-visible")).toBe("false");
     });
 
-    it("does not render the badge span when there is no active session", () => {
+    it("hides the badge span when there is no active session", () => {
       mockSettings = settingsWith({ claude: {} });
       mockDominantState = null;
       mockDotColor = "bg-state-waiting";
@@ -940,7 +941,7 @@ describe("AgentButton preset UX", () => {
       );
 
       const badge = container.querySelector('.relative span[aria-hidden="true"]');
-      expect(badge).toBeNull();
+      expect(badge?.getAttribute("data-visible")).toBe("false");
     });
 
     it("propagates the 'waiting' state word to the launch tooltip and aria-label (issue #9823)", () => {

@@ -362,15 +362,11 @@ export function AgentButton({
       <BrandMark brandColor={toolbarBrandColor}>
         <config.icon brandColor={toolbarBrandColor} />
       </BrandMark>
-      {isSessionActive && dotColor && (
-        <span
-          className={cn(
-            "absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-daintree-sidebar",
-            dotColor
-          )}
-          aria-hidden="true"
-        />
-      )}
+      <span
+        className={cn("toolbar-pip toolbar-badge", dotColor)}
+        data-visible={!!(isSessionActive && dotColor)}
+        aria-hidden="true"
+      />
     </div>
   );
 

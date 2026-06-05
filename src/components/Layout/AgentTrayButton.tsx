@@ -139,13 +139,10 @@ function buildAgentRow(
 
 function RunningDot({ state }: { state: AgentState | null }) {
   const color = state ? agentStateDotColor(state) : null;
-  if (!color) return null;
   return (
     <span
-      className={cn(
-        "absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-daintree-sidebar",
-        color
-      )}
+      className={cn("toolbar-pip toolbar-badge", color)}
+      data-visible={!!color}
       aria-hidden="true"
     />
   );

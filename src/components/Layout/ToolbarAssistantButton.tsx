@@ -164,28 +164,21 @@ export function ToolbarAssistantButton({
         >
           <div className="relative">
             <DaintreeIcon />
-            {pip ? (
-              <span
-                aria-hidden="true"
-                className={cn(
-                  "absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-daintree-sidebar",
-                  pip.className,
-                  pip.delayed && "animate-pulse-delayed"
-                )}
-              />
-            ) : (
-              showAgentPip && (
-                <span
-                  aria-hidden="true"
-                  data-testid="assistant-working-pip"
-                  data-agent-state={agentState ?? ""}
-                  className={cn(
-                    "absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-daintree-sidebar",
-                    agentPip!.className
-                  )}
-                />
-              )
-            )}
+            {/* One always-in-DOM pip; data-visible drives the @starting-style
+                enter/exit on .toolbar-badge. Precedence (MCP pip > agent pip)
+                stays in component logic — the className resolves to the winning
+                pip's color, with the pulse only on the delayed MCP state. */}
+            <span
+              aria-hidden="true"
+              data-testid="assistant-working-pip"
+              data-agent-state={agentState ?? ""}
+              data-visible={pip !== null || showAgentPip}
+              className={cn(
+                "toolbar-pip toolbar-badge",
+                pip?.className ?? agentPip?.className,
+                pip?.delayed && "animate-pulse-delayed"
+              )}
+            />
           </div>
         </Button>
       </TooltipTrigger>
