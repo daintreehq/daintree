@@ -136,16 +136,24 @@ export class BackpressureManager {
     this.terminalActivityTiers.set(id, tier);
 
     if (!this.deps.metricsEnabled()) return;
-    const heldTokens = Array.from(this.deps.getPauseCoordinator(id)?.heldTokens ?? []).sort();
-    this.emitReliabilityMetric({
-      terminalId: id,
-      metricType: "tier-transition",
-      timestamp: Date.now(),
-      tierTransitionFrom: from,
-      tierTransitionTo: tier,
-      tierTransitionReason: reason,
-      tierTransitionHeldTokens: heldTokens,
-    });
+    // Best-effort observability: a throwing sendEvent (detached MessagePort
+    // during a shutdown race) must never abort functional tier application in
+    // the callers (clearSuspended/clearPendingVisual/setActivityMonitorTier/
+    // tier-changed broadcast all run after this method returns).
+    try {
+      const heldTokens = Array.from(this.deps.getPauseCoordinator(id)?.heldTokens ?? []).sort();
+      this.emitReliabilityMetric({
+        terminalId: id,
+        metricType: "tier-transition",
+        timestamp: Date.now(),
+        tierTransitionFrom: from,
+        tierTransitionTo: tier,
+        tierTransitionReason: reason,
+        tierTransitionHeldTokens: heldTokens,
+      });
+    } catch {
+      // Metric emission is non-critical — the tier map is already updated.
+    }
   }
 
   pendingBytesRemaining(segment: PendingVisualSegment): number {
