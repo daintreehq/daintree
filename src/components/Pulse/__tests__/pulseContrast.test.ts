@@ -5,6 +5,27 @@ import { resolve } from "path";
 const CARD_PATH = resolve(__dirname, "../ProjectPulseCard.tsx");
 const SUMMARY_PATH = resolve(__dirname, "../PulseSummary.tsx");
 const HEATMAP_PATH = resolve(__dirname, "../PulseHeatmap.tsx");
+const INDEX_CSS_PATH = resolve(__dirname, "../../../index.css");
+const PULSE_CSS_PATH = resolve(__dirname, "../../../styles/components/pulse.css");
+
+// Find a `@media (X)` opening brace and return the slice up to the matching
+// closing brace (or until the next top-level @media / @layer / @theme opens).
+// Forbids rules being placed in the wrong block — the dual-block guard.
+function mediaBlockSlice(content: string, mediaSelector: string): string {
+  const start = content.indexOf(mediaSelector);
+  if (start === -1) return "";
+  const openBrace = content.indexOf("{", start);
+  if (openBrace === -1) return "";
+  let depth = 1;
+  let i = openBrace + 1;
+  while (i < content.length && depth > 0) {
+    const ch = content[i];
+    if (ch === "{") depth += 1;
+    else if (ch === "}") depth -= 1;
+    i += 1;
+  }
+  return content.slice(openBrace, i);
+}
 
 describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
   it("card shell uses pulse component vars for per-theme shell styling", async () => {
@@ -197,5 +218,112 @@ describe("ProjectPulseCard — accessibility (issue #7229)", () => {
   it("refresh spinner respects motion-reduce", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
     expect(content).toContain("motion-reduce:animate-none");
+  });
+});
+
+describe("PulseHeatmap — legend (issue #9819)", () => {
+  it("ProjectPulseCard renders the legend testid", async () => {
+    const content = await readFile(CARD_PATH, "utf-8");
+    expect(content).toContain('data-testid="pulse-heatmap-legend"');
+  });
+
+  it("legend swatches are keyed by data-heat-level 1..4", async () => {
+    const content = await readFile(CARD_PATH, "utf-8");
+    expect(content).toContain("data-heat-level={level}");
+    expect(content).toContain("var(--pulse-heat-${level}");
+    // The template iterates [1,2,3,4]; verify the array is present so the
+    // literal substring check is anchored to the right loop.
+    expect(content).toContain("[1, 2, 3, 4]");
+  });
+
+  it("legend uses Less and More labels", async () => {
+    const content = await readFile(CARD_PATH, "utf-8");
+    expect(content).toContain(">Less<");
+    expect(content).toContain(">More<");
+  });
+
+  it("legend is decorative (aria-hidden) and ships an sr-only description for aria-describedby", async () => {
+    const content = await readFile(CARD_PATH, "utf-8");
+    expect(content).toContain('aria-hidden="true"');
+    expect(content).toContain("Heat intensity from few to many commits");
+    expect(content).toContain("useId()");
+    expect(content).toContain("describedBy=");
+  });
+
+  it("legend does NOT use the accent color (CLAUDE.md accent restraint)", async () => {
+    const content = await readFile(CARD_PATH, "utf-8");
+    // Strip the health-chip palette entry — it's a `tone: "accent"` chip on a
+    // separate surface, not part of the legend chrome.
+    const legendBlock = content.match(/function PulseHeatmapLegend[\s\S]*?^}/m);
+    expect(legendBlock).toBeTruthy();
+    expect(legendBlock![0]).not.toContain("text-accent-primary");
+    expect(legendBlock![0]).not.toContain("var(--color-accent-primary)");
+    expect(legendBlock![0]).not.toContain("ring-daintree-accent");
+  });
+
+  it("legend shares the heatmap row width via getPulseHeatmapRowWidth", async () => {
+    const content = await readFile(CARD_PATH, "utf-8");
+    expect(content).toContain("getPulseHeatmapRowWidth");
+  });
+});
+
+describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
+  it("PulseHeatmap tags non-empty cells with data-heat-level and a shape span", async () => {
+    const content = await readFile(HEATMAP_PATH, "utf-8");
+    expect(content).toContain("data-heat-level={cell.count > 0 ? cell.level : undefined}");
+    expect(content).toContain("pulse-heat-cell-shape");
+    expect(content).toContain('"pulse-heat-cell');
+  });
+
+  it("PulseHeatmap accepts a describedBy prop and applies aria-describedby", async () => {
+    const content = await readFile(HEATMAP_PATH, "utf-8");
+    expect(content).toContain("describedBy?: string");
+    expect(content).toContain("aria-describedby={describedBy}");
+  });
+
+  it("pulse.css defines a hidden base rule for the shape (default off, forced-colors flips on)", async () => {
+    const content = await readFile(PULSE_CSS_PATH, "utf-8");
+    expect(content).toContain(".pulse-heat-cell-shape");
+    expect(content).toMatch(/\.pulse-heat-cell-shape\s*{[^}]*display:\s*none/);
+    expect(content).toMatch(/\.pulse-heat-cell-shape\s*{[^}]*position:\s*absolute/);
+  });
+
+  it("forced-colors block paints the shape with CanvasText and sizes it per level", async () => {
+    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const block = mediaBlockSlice(content, "@media (forced-colors: active)");
+    expect(block).toContain(".pulse-heat-cell-shape");
+    expect(block).toContain("CanvasText");
+    expect(block).toContain('.pulse-heat-cell[data-heat-level="1"] .pulse-heat-cell-shape');
+    expect(block).toContain('.pulse-heat-cell[data-heat-level="2"] .pulse-heat-cell-shape');
+    expect(block).toContain('.pulse-heat-cell[data-heat-level="3"] .pulse-heat-cell-shape');
+    expect(block).toContain('.pulse-heat-cell[data-heat-level="4"] .pulse-heat-cell-shape');
+  });
+
+  it("forced-colors block distinguishes missed-day via a solid CanvasText fill", async () => {
+    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const block = mediaBlockSlice(content, "@media (forced-colors: active)");
+    expect(block).toContain(".pulse-heat-cell-missed");
+    // Missed cell must be the more salient signal (filled, not empty).
+    expect(block).toMatch(/\.pulse-heat-cell-missed\s*{[^}]*background:\s*CanvasText/);
+  });
+
+  it("prefers-contrast block bumps heat-cell border to 1px theme-text", async () => {
+    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const block = mediaBlockSlice(content, "@media (prefers-contrast: more)");
+    expect(block).toContain(".pulse-heat-cell");
+    expect(block).toMatch(/\.pulse-heat-cell\s*{[^}]*border-width:\s*1px/);
+    expect(block).toContain("border-color: var(--color-daintree-text)");
+  });
+
+  it("the two contrast blocks stay separate (CLAUDE.md dual-block guard)", async () => {
+    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const forcedStart = content.indexOf("@media (forced-colors: active)");
+    const contrastStart = content.indexOf("@media (prefers-contrast: more)");
+    expect(forcedStart).toBeGreaterThan(-1);
+    expect(contrastStart).toBeGreaterThan(forcedStart);
+    // The forced-colors block must close before the prefers-contrast block opens.
+    const forcedBlock = mediaBlockSlice(content, "@media (forced-colors: active)");
+    const forcedEnd = content.indexOf(forcedBlock) + forcedBlock.length;
+    expect(forcedEnd).toBeLessThanOrEqual(contrastStart);
   });
 });
