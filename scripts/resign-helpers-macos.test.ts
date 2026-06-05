@@ -24,7 +24,7 @@ function setPlatform(platform: string) {
 
 function createContext(overrides: Record<string, any> = {}) {
   return {
-    appOutDir: "/build/mac-arm64",
+    appOutDir: APP_OUT_DIR,
     packager: { appInfo: { productFilename: "Daintree" } },
     ...overrides,
   };
@@ -34,11 +34,30 @@ function mockFs() {
   return { existsSync: mockExistsSync };
 }
 
-const SPAWN_HELPER =
-  "/build/mac-arm64/Daintree.app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper";
-const SUPERVISOR =
-  "/build/mac-arm64/Daintree.app/Contents/Resources/app.asar.unpacked/node_modules/posix-pty-reaper/build/Release/daintree_pty_supervisor";
-const APP_PATH = "/build/mac-arm64/Daintree.app";
+const APP_OUT_DIR = join("/build", "mac-arm64");
+const APP_PATH = join(APP_OUT_DIR, "Daintree.app");
+const SPAWN_HELPER = join(
+  APP_PATH,
+  "Contents",
+  "Resources",
+  "app.asar.unpacked",
+  "node_modules",
+  "node-pty",
+  "build",
+  "Release",
+  "spawn-helper"
+);
+const SUPERVISOR = join(
+  APP_PATH,
+  "Contents",
+  "Resources",
+  "app.asar.unpacked",
+  "node_modules",
+  "posix-pty-reaper",
+  "build",
+  "Release",
+  "daintree_pty_supervisor"
+);
 
 const IDENTITY = "Developer ID Application: Greg Priday (ABCDE12345)";
 
@@ -160,7 +179,7 @@ describe("resign-helpers-macos", () => {
       expect(args[args.indexOf("--options") + 1]).toBe("runtime");
       expect(args).toContain("--entitlements");
       expect(args[args.indexOf("--entitlements") + 1]).toMatch(
-        /build\/entitlements\.helpers\.plist$/
+        /build[/\\]entitlements\.helpers\.plist$/
       );
       expect(args).toContain("--sign");
       expect(args[args.indexOf("--sign") + 1]).toBe(IDENTITY);
@@ -189,5 +208,17 @@ describe("resign-helpers-macos", () => {
       "utf-8"
     );
     expect(plist).not.toMatch(/<key>/);
+  });
+
+  it("keeps helper entitlements comments XML-compatible for codesign", () => {
+    const plist = readFileSync(
+      join(__dirname, "..", "build", "entitlements.helpers.plist"),
+      "utf-8"
+    );
+    const comments = plist.match(/<!--[\s\S]*?-->/g) ?? [];
+    expect(comments.length).toBeGreaterThan(0);
+    for (const comment of comments) {
+      expect(comment.slice(4, -3)).not.toContain("--");
+    }
   });
 });

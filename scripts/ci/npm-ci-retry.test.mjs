@@ -93,6 +93,21 @@ describe("npm-ci-retry", () => {
       expect(classifyFailure("EHOSTUNREACH\n")).toBe("transient");
     });
 
+    it("matches ENETUNREACH", () => {
+      expect(classifyFailure("ENETUNREACH\n")).toBe("transient");
+    });
+
+    it("matches onnxruntime NuGet timeout output", () => {
+      const stderr = `
+npm error path /home/runner/work/daintree/daintree/node_modules/onnxruntime-node
+npm error command sh -c node ./script/install
+npm error Downloading https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.gpu.linux/1.26.0/microsoft.ml.onnxruntime.gpu.linux.1.26.0.nupkg
+npm error AggregateError [ETIMEDOUT]:
+npm error Error: connect ENETUNREACH 2603:1061:14:e3::1:443 - Local (:::0)
+`;
+      expect(classifyFailure(stderr)).toBe("transient");
+    });
+
     it("matches socket hang up", () => {
       expect(classifyFailure("socket hang up\n")).toBe("transient");
     });
@@ -175,7 +190,7 @@ Rebuild failures (1/5):
     });
 
     it("covers every transient pattern", () => {
-      expect(TRANSIENT_PATTERNS).toHaveLength(12);
+      expect(TRANSIENT_PATTERNS).toHaveLength(13);
     });
 
     it("covers every transient override pattern", () => {

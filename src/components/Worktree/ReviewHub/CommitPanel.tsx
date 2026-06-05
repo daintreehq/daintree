@@ -136,6 +136,13 @@ export function CommitPanel({
     }
   }, [worktreePath]);
 
+  const applyHistoryMessage = useCallback(
+    (message: string) => {
+      onCommitMessageChange(message);
+    },
+    [onCommitMessageChange]
+  );
+
   const handleCommit = useCallback(async () => {
     if (!canCommit || isBusy) return;
     if (actionInFlightRef.current) return;
@@ -224,9 +231,16 @@ export function CommitPanel({
         e.preventDefault();
 
         if (e.key === "ArrowUp") {
+          const visibleMessage = e.currentTarget.value;
           if (historyIndexRef.current < 0) {
-            draftBeforeHistoryRef.current = commitMessage;
-            pendingFirstApplyRef.current = true;
+            const cachedIndex = historyMessagesRef.current?.indexOf(visibleMessage) ?? -1;
+            if (cachedIndex >= 0) {
+              historyIndexRef.current = cachedIndex;
+              pendingFirstApplyRef.current = false;
+            } else {
+              draftBeforeHistoryRef.current = visibleMessage;
+              pendingFirstApplyRef.current = true;
+            }
           }
 
           const messages = historyMessagesRef.current;
@@ -236,10 +250,10 @@ export function CommitPanel({
             if (pendingFirstApplyRef.current) {
               pendingFirstApplyRef.current = false;
               historyIndexRef.current = 0;
-              onCommitMessageChange(messages[0]!);
+              applyHistoryMessage(messages[0]!);
             } else if (historyIndexRef.current < messages.length - 1) {
               historyIndexRef.current++;
-              onCommitMessageChange(messages[historyIndexRef.current]!);
+              applyHistoryMessage(messages[historyIndexRef.current]!);
             }
 
             requestAnimationFrame(() => {
@@ -250,9 +264,19 @@ export function CommitPanel({
               if (msgs.length === 0) return;
 
               if (pendingFirstApplyRef.current) {
-                pendingFirstApplyRef.current = false;
-                historyIndexRef.current = 0;
-                onCommitMessageChange(msgs[0]!);
+                const visibleIndex = msgs.indexOf(visibleMessage);
+                if (visibleIndex >= 0) {
+                  pendingFirstApplyRef.current = false;
+                  historyIndexRef.current = visibleIndex;
+                  if (historyIndexRef.current < msgs.length - 1) {
+                    historyIndexRef.current++;
+                    applyHistoryMessage(msgs[historyIndexRef.current]!);
+                  }
+                } else {
+                  pendingFirstApplyRef.current = false;
+                  historyIndexRef.current = 0;
+                  applyHistoryMessage(msgs[0]!);
+                }
               }
 
               requestAnimationFrame(() => {
@@ -265,10 +289,10 @@ export function CommitPanel({
           historyIndexRef.current--;
           if (historyIndexRef.current < 0) {
             pendingFirstApplyRef.current = false;
-            onCommitMessageChange(draftBeforeHistoryRef.current);
+            applyHistoryMessage(draftBeforeHistoryRef.current);
           } else {
             const messages = historyMessagesRef.current!;
-            onCommitMessageChange(messages[historyIndexRef.current]!);
+            applyHistoryMessage(messages[historyIndexRef.current]!);
           }
 
           requestAnimationFrame(() => {
@@ -297,9 +321,8 @@ export function CommitPanel({
       hasRemote,
       isBlocked,
       focusBlocker,
-      commitMessage,
       fetchHistoryMessages,
-      onCommitMessageChange,
+      applyHistoryMessage,
     ]
   );
 

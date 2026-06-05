@@ -8,6 +8,6 @@
      On macOS 26 (Tahoe) amfid kills any spawned executable claiming a
      restricted entitlement without an embedded provisioning profile, so the
      helpers must be re-signed with no entitlements (#9775). Hardened runtime is
-     conveyed via `codesign --options runtime`, not via this plist. -->
+     conveyed by the codesign runtime option, not via this plist. -->
 <dict/>
 </plist>

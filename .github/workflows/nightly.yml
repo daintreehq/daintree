@@ -74,13 +74,13 @@ jobs:
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
         env:
           npm_config_msvs_version: "2022"
 
       - name: Install dependencies
         if: matrix.os != 'windows-latest'
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
 
       - name: Check (typecheck + lint + format)
         run: npm run check
@@ -112,13 +112,13 @@ jobs:
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
         env:
           npm_config_msvs_version: "2022"
 
       - name: Install dependencies
         if: matrix.os != 'windows-latest'
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
 
       - name: Test
         run: npm run test
@@ -179,13 +179,13 @@ jobs:
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
         env:
           npm_config_msvs_version: "2022"
 
       - name: Install dependencies
         if: matrix.os != 'windows-latest'
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
 
       - name: Stamp nightly version
         shell: bash
@@ -376,7 +376,7 @@ jobs:
           sudo apt-get install -y libarchive-tools
 
       - name: Install dependencies
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
 
       - name: Run integration tests
         run: npm run test:integration
@@ -404,7 +404,7 @@ jobs:
           sudo apt-get install -y libarchive-tools
 
       - name: Install dependencies
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
 
       - name: Knip (static dead-code report)
         run: npm run knip
@@ -502,7 +502,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci --ignore-scripts
+        run: node scripts/ci/npm-ci-retry.mjs --ignore-scripts
 
       - name: Download blob reports
         continue-on-error: true
@@ -542,7 +542,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci --ignore-scripts
+        run: node scripts/ci/npm-ci-retry.mjs --ignore-scripts
 
       - name: Download macOS artifacts
         uses: actions/download-artifact@v8

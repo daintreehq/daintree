@@ -143,6 +143,9 @@ const config: KnipConfig = {
     "conf",
     "glob",
     "@types/trusted-types",
+    // Invoked by scripts/postinstall.cjs through node_modules/patch-package/index.js
+    // so Knip does not see a package import or binary invocation.
+    "patch-package",
     "@octokit/request-error",
     "@octokit/types",
     // CJS-only runtime dependencies loaded through createRequire so the ESM

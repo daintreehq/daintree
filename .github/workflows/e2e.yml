@@ -350,11 +350,10 @@ jobs:
 
       - name: Install dependencies
         shell: bash
-        run: |
-          ELECTRON_VERSION=$(node scripts/ci/resolve-electron-version.mjs) || exit 1
-          export npm_config_runtime=electron
-          export npm_config_target=$ELECTRON_VERSION
-          node scripts/ci/npm-ci-retry.mjs
+        run: node scripts/ci/npm-ci-retry.mjs
+
+      - name: Verify Electron install
+        run: node scripts/ci/verify-electron-install.mjs
 
       - name: Build app
         run: npm run build:e2e
