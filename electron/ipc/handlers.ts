@@ -171,7 +171,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerWatchdogHandlers(deps));
     register(() => registerPluginHandlers());
     register(() => registerPluginMcpHandlers());
-    register(() => registerPerfHandlers());
+    register(() => registerPerfHandlers(deps));
     register(() => registerConnectivityHandlers());
     register(() => registerScratchHandlers(deps));
   } catch (error) {

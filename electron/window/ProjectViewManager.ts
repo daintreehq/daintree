@@ -149,6 +149,13 @@ interface ViewEntry {
   state: ViewState;
   crashTimestamps: number[];
   cleanupHandlers: () => void;
+  /**
+   * Cold-start preload (`preload.cts`) evaluation cost in ms, self-reported by
+   * the view's preload via PERF_FLUSH_RENDERER_MARKS (#9770). Set once per view
+   * (first-write); surfaced in the `projectview.revival` log so cache-pressure
+   * signals carry the preload cost that was paid when the view cold-started.
+   */
+  preloadEvalDurationMs?: number;
 }
 
 export interface ProjectViewManagerOptions {
@@ -440,6 +447,9 @@ export class ProjectViewManager {
           projectId,
           timeSinceEvictionMs: Date.now() - evictedAt,
           visibleMs,
+          ...(cached.preloadEvalDurationMs !== undefined
+            ? { preloadEvalDurationMs: cached.preloadEvalDurationMs }
+            : {}),
         });
         this.evictionTimestamps.delete(projectId);
       }
@@ -782,6 +792,23 @@ export class ProjectViewManager {
 
   getProjectIdForWebContents(webContentsId: number): string | null {
     return this.webContentsToProject.get(webContentsId) ?? null;
+  }
+
+  /**
+   * Record the cold-start preload evaluation cost for a view, keyed by its
+   * webContents id (#9770). Called from the perf IPC handler when a view's
+   * preload flushes its `preload.eval` span. First-write semantics: the cost is
+   * paid once per cold-started view, so a duplicate flush (e.g. a retried IPC)
+   * must not clobber the original measurement. No-ops silently when the id is
+   * unknown (the flush can race ahead of view registration, or arrive for a
+   * non-project webContents).
+   */
+  recordPreloadDuration(webContentsId: number, durationMs: number): void {
+    const projectId = this.webContentsToProject.get(webContentsId);
+    if (projectId === undefined) return;
+    const entry = this.views.get(projectId);
+    if (!entry || entry.preloadEvalDurationMs !== undefined) return;
+    entry.preloadEvalDurationMs = durationMs;
   }
 
   getAllViews(): ViewEntry[] {

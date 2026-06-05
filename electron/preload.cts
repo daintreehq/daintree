@@ -24,6 +24,7 @@ import type {
 import type { ActionContext, ActionDispatchResult } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import { CHANNELS } from "./ipc/channels.js";
+import { PERF_MARKS } from "../shared/perf/marks.js";
 import {
   BrokerError,
   RequestResponseBroker,
@@ -147,6 +148,24 @@ import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
 import type { ToolbarButtonConfig } from "../shared/config/toolbarButtonRegistry.js";
 
 export type { ElectronAPI };
+
+// Anchor for the per-view preload evaluation span (#9770). This is the first
+// executable statement in the bundled preload entry (esbuild hoists the import
+// `require()`s above it, so module-resolution cost is excluded by construction);
+// everything below — building the API surface and the contextBridge exposure —
+// is measured against it and flushed at preload bottom. Guarded so it is inert
+// in runtimes without the Web Performance API (none in Electron, but cheap).
+const preloadEvalStartMs =
+  typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : 0;
+
+// Monotonic clock reader shared by the preload-eval instrumentation below
+// (#9770). Falls back to 0 where the Web Performance API is unavailable.
+const perfNowMs = (): number =>
+  typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : 0;
 
 // True for packaged production builds. `process.resourcesPath` is undefined in
 // sandboxed preloads (sandbox: true), so the only reliable signal here is the
@@ -2680,6 +2699,10 @@ const api: ElectronAPI = {
 // same-origin route (index.html, and any future route) gets the full surface — using
 // isRecoveryPageUrl as the discriminator keeps the full surface as the safe default.
 const rendererUrl = window.location.href;
+// Sub-span around the contextBridge handoff (#9770). Both the recovery-page and
+// full-bridge branches are mutually exclusive, so bracketing the whole
+// conditional captures whichever exposure actually ran.
+const exposeStartMs = perfNowMs();
 if (window.top === window && isTrustedRendererUrl(rendererUrl)) {
   if (isRecoveryPageUrl(rendererUrl)) {
     contextBridge.exposeInMainWorld("electron", { recovery: api.recovery });
@@ -2718,6 +2741,7 @@ if (window.top === window && isTrustedRendererUrl(rendererUrl)) {
     );
   }
 }
+const exposeEndMs = perfNowMs();
 
 /// Private listener: reclaim renderer memory when notified by the main process.
 // Not exposed through window.electron — this is an internal optimization.
@@ -2856,5 +2880,49 @@ if (initialColorSchemeId) {
 if (initialProjectId) {
   contextBridge.exposeInMainWorld("__DAINTREE_INITIAL_PROJECT__", {
     id: initialProjectId,
+  });
+}
+
+// Flush the per-view preload evaluation cost (#9770). Runs at preload bottom —
+// before any renderer page script — so the main process can attribute the
+// `preload.eval` and `preload.exposeInMainWorld` spans to this WebContentsView
+// (via the IPC sender's id). Reuses the existing renderer-marks channel and its
+// rebasing math: the preload shares the renderer frame's `performance.timeOrigin`,
+// so each mark's elapsed value is relative to `preloadEvalStartMs`. Gated on the
+// same runtime flag as the rest of the perf pipeline; `process.env` is polyfilled
+// in the sandboxed preload, and the flag is intentionally NOT esbuild-stripped.
+if (process.env.DAINTREE_PERF_CAPTURE === "1") {
+  const preloadEvalEndMs = perfNowMs();
+  const timestamp = new Date().toISOString();
+  ipcRenderer.send(CHANNELS.PERF_FLUSH_RENDERER_MARKS, {
+    marks: [
+      {
+        mark: PERF_MARKS.PRELOAD_EVAL_START,
+        timestamp,
+        elapsedMs: 0,
+      },
+      {
+        mark: PERF_MARKS.PRELOAD_EXPOSE_IN_MAIN_WORLD_START,
+        timestamp,
+        elapsedMs: exposeStartMs - preloadEvalStartMs,
+      },
+      {
+        mark: PERF_MARKS.PRELOAD_EXPOSE_IN_MAIN_WORLD_END,
+        timestamp,
+        elapsedMs: exposeEndMs - preloadEvalStartMs,
+        meta: { durationMs: exposeEndMs - exposeStartMs },
+      },
+      {
+        mark: PERF_MARKS.PRELOAD_EVAL_END,
+        timestamp,
+        elapsedMs: preloadEvalEndMs - preloadEvalStartMs,
+        meta: { durationMs: preloadEvalEndMs - preloadEvalStartMs },
+      },
+    ],
+    rendererTimeOrigin:
+      typeof performance !== "undefined" && typeof performance.timeOrigin === "number"
+        ? performance.timeOrigin
+        : 0,
+    rendererT0: preloadEvalStartMs,
   });
 }
