@@ -141,4 +141,28 @@ describe("force-resume handler", () => {
     expect(ctx.ipcQueueManager.clearQueue).not.toHaveBeenCalled();
     expect(conn.portQueueManager.clearQueue).not.toHaveBeenCalled();
   });
+
+  it("never mutates the activity-tier map — force-resume releases pause holds, not tier state (#9800)", () => {
+    // force-resume is a user-driven "unblock this terminal now" escape hatch:
+    // it forceReleaseAll()s the coordinator and drains queue state, but the
+    // activity tier (active/background) is owned exclusively by set-active-tier
+    // / set-active-project recompute. A regression that folded a setActivityTier
+    // call into force-resume would silently flip a backgrounded terminal to
+    // active, desyncing it from the host's authoritative tier map (the #9778
+    // failure class). Assert the tier map is left untouched.
+    const coord = makeCoordinator();
+    const conn = makeRendererConnection();
+    const ctx = makeCtx({
+      rendererConnections: new Map([[1, conn]]),
+      getPauseCoordinator: vi.fn(() => coord as never),
+    });
+
+    const handlers = createBackpressureHandlers(ctx);
+    handlers["force-resume"]({ type: "force-resume", id: "term-1" });
+
+    // The pause path ran (proving the handler executed past the early return)...
+    expect(coord.forceReleaseAll).toHaveBeenCalledTimes(1);
+    // ...but the tier map was never written.
+    expect(ctx.backpressureManager.setActivityTier).not.toHaveBeenCalled();
+  });
 });
