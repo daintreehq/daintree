@@ -102,6 +102,26 @@ export class TerminalOutputIngestService {
     this.tryDrain(id, queue);
   }
 
+  /** Held ingest bytes for a terminal — diagnostic accessor for the watchdog. */
+  public getQueuedBytes(id: string): number {
+    return this.queues.get(id)?.queuedBytes ?? 0;
+  }
+
+  /**
+   * Bytes stranded in the queue with nothing left to rescue them: chunks are
+   * held, no drain is scheduled, and no write is in flight (so no
+   * notifyWriteComplete will ever fire). Normal backpressure keeps
+   * inFlightBytes non-zero while chunks wait; a zero-in-flight hold is the
+   * background-gate / hysteresis-strand signature the watchdog repairs.
+   */
+  public getStalledBytes(id: string): number {
+    const queue = this.queues.get(id);
+    if (!queue || queue.chunks.length === 0) return 0;
+    if (queue.drainScheduled) return 0;
+    if (queue.inFlightBytes > 0) return 0;
+    return queue.queuedBytes;
+  }
+
   public resetForTerminal(id: string): void {
     this.clearQueue(id);
     if (!this.pollingActive || !this.worker) return;

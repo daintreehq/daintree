@@ -346,4 +346,39 @@ describe("TerminalWakeManager", () => {
       }
     });
   });
+
+  describe("hasInFlightWake", () => {
+    it("is true only while a wakeAndRestore is in flight", async () => {
+      let resolveWake!: (value: { state: string }) => void;
+      wakeMock.mockReturnValue(
+        new Promise<{ state: string }>((resolve) => {
+          resolveWake = resolve;
+        })
+      );
+      const managed: MockManagedTerminal = {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+        terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+      };
+      const deps: WakeManagerDeps = {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
+        hasInstance: vi.fn(() => true),
+        restoreFromSerialized: vi.fn(() => true),
+        restoreFromSerializedIncremental: vi.fn(async () => true),
+      };
+      const manager = new TerminalWakeManager(deps);
+
+      expect(manager.hasInFlightWake("term-if")).toBe(false);
+
+      const wake = manager.wakeAndRestore("term-if");
+      expect(manager.hasInFlightWake("term-if")).toBe(true);
+
+      resolveWake({ state: "serialized-state" });
+      await wake;
+      // The in-flight entry is removed in a finally on the wake promise —
+      // give that continuation one microtask turn.
+      await Promise.resolve();
+      expect(manager.hasInFlightWake("term-if")).toBe(false);
+    });
+  });
 });

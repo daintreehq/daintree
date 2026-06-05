@@ -228,6 +228,25 @@ export class TerminalRendererPolicy {
     this.deps.onTierApplied?.(id, tier, managed);
   }
 
+  /**
+   * Watchdog repair path: the backend tier diverged to "background" while the
+   * applied renderer tier is active (a host-side rewrite recorded by
+   * initializeBackendTier, or a lost setActivityTier). The public
+   * applyRendererPolicy early-returns on tier equality, so re-applying the
+   * same active tier through it can never re-send the backend tier — run the
+   * immediate apply directly so the backend re-receives "active" and the
+   * background→active wake/flush path runs (initializeBackendTier set
+   * needsWake when it recorded the background tier).
+   */
+  reassertActiveTier(id: string): void {
+    const managed = this.deps.getInstance(id);
+    if (!managed) return;
+    const tier = managed.lastAppliedTier ?? managed.getRefreshTier();
+    if (tier === TerminalRefreshTier.BACKGROUND) return;
+    if (this.lastBackendTier.get(id) !== "background") return;
+    this.applyRendererPolicyImmediate(id, managed, tier);
+  }
+
   clearTierState(id: string): void {
     this.clearManagedTierState(id);
     this.lastBackendTier.delete(id);

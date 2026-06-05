@@ -32,6 +32,7 @@ import { TerminalAgentStateController } from "./TerminalAgentStateController";
 import { TerminalRestoreController } from "./TerminalRestoreController";
 import { TerminalHibernationManager } from "./TerminalHibernationManager";
 import { TerminalReflowController, forceXtermReflow } from "./TerminalReflowController";
+import { TerminalReconciliationWatchdog } from "./TerminalReconciliationWatchdog";
 import { TerminalWriteController } from "./TerminalWriteController";
 import {
   installTerminalBoundListeners,
@@ -111,6 +112,7 @@ class TerminalInstanceService {
   private restoreController: TerminalRestoreController;
   private hibernationManager: TerminalHibernationManager;
   private reflowController: TerminalReflowController;
+  private reconciliationWatchdog: TerminalReconciliationWatchdog;
   private writeController: TerminalWriteController;
   private unsubTierChanged: (() => void) | null = null;
 
@@ -311,6 +313,27 @@ class TerminalInstanceService {
         // reach the same answer.
         this.applyCursorBlinkPolicy(managed);
       },
+    });
+
+    // Constructed last — its deps reach every other controller. The watchdog
+    // self-starts (interval + visibilitychange + pointerdown diagnostic) and
+    // is torn down in dispose().
+    this.reconciliationWatchdog = new TerminalReconciliationWatchdog({
+      getInstances: () => this.instances.entries(),
+      setVisible: (id) => this.setVisible(id, true),
+      applyRendererPolicy: (id, tier) => this.rendererPolicy.applyRendererPolicy(id, tier),
+      reassertActiveBackendTier: (id) => this.rendererPolicy.reassertActiveTier(id),
+      getBackendTier: (id) => this.rendererPolicy.getLastBackendTier(id),
+      getStalledBytes: (id) => this.dataBuffer.getStalledBytes(id),
+      getQueuedBytes: (id) => this.dataBuffer.getQueuedBytes(id),
+      resumeFlush: (id) => this.dataBuffer.resumeFlush(id),
+      hasInFlightWake: (id) => this.wakeManager.hasInFlightWake(id),
+      isWebGLActive: (id) => this.webGLManager.isActive(id),
+      shouldHaveWebGL: (managed) => this.shouldRestoreWebGL(managed),
+      ensureWebGL: (id, managed) => this.webGLManager.ensureContext(id, managed),
+      unhibernate: (id) => this.unhibernate(id),
+      forceReflow: (element) => forceXtermReflow(element),
+      isStoreBackgrounded: (id) => usePanelStore.getState().backgroundedTerminals.has(id),
     });
 
     // If JetBrains Mono loads after the startup timeout already opened terminals
@@ -2593,6 +2616,7 @@ class TerminalInstanceService {
     this.resizePassAbort?.abort();
     this.resizePassAbort = undefined;
     this.reflowController.dispose();
+    this.reconciliationWatchdog.dispose();
     this.instances.forEach((_, id) => this.destroy(id));
     this.offscreenManager.dispose();
     this.wakeManager.dispose();

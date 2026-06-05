@@ -632,4 +632,50 @@ describe("TerminalOutputIngestService", () => {
       expect(writeToTerminal).toHaveBeenCalledWith("fg", "live");
     });
   });
+
+  describe("watchdog accessors", () => {
+    it("getQueuedBytes tracks held bytes and returns 0 for unknown ids", () => {
+      let tier = TerminalRefreshTier.BACKGROUND;
+      const writeToTerminal = vi.fn();
+      const service = new TerminalOutputIngestService(writeToTerminal, () => tier);
+
+      expect(service.getQueuedBytes("term-1")).toBe(0);
+
+      service.bufferData("term-1", "held-bytes");
+      expect(service.getQueuedBytes("term-1")).toBe(10);
+
+      tier = TerminalRefreshTier.FOCUSED;
+      service.resumeFlush("term-1");
+      expect(service.getQueuedBytes("term-1")).toBe(0);
+    });
+
+    it("getStalledBytes reports a zero-in-flight hold after the tier goes active", () => {
+      let tier = TerminalRefreshTier.BACKGROUND;
+      const writeToTerminal = vi.fn();
+      const service = new TerminalOutputIngestService(writeToTerminal, () => tier);
+
+      service.bufferData("term-1", "held-bytes");
+      // Tier flips active without a resumeFlush — the strand signature the
+      // watchdog repairs (#9779-style hysteresis cancellation miss).
+      tier = TerminalRefreshTier.FOCUSED;
+      expect(service.getStalledBytes("term-1")).toBe(10);
+
+      service.resumeFlush("term-1");
+      expect(service.getStalledBytes("term-1")).toBe(0);
+      expect(writeToTerminal).toHaveBeenCalledWith("term-1", "held-bytes");
+    });
+
+    it("getStalledBytes returns 0 under normal backpressure with writes in flight", () => {
+      const writeToTerminal = vi.fn();
+      const service = new TerminalOutputIngestService(writeToTerminal);
+
+      // First chunk drains immediately and pushes inFlightBytes past the high
+      // watermark; the second is queued behind legitimate backpressure.
+      service.bufferData("term-1", "x".repeat(140_000));
+      service.bufferData("term-1", "queued");
+
+      expect(service.getQueuedBytes("term-1")).toBe(6);
+      expect(service.getStalledBytes("term-1")).toBe(0);
+    });
+  });
 });

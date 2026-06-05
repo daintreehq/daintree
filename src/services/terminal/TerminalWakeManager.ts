@@ -24,6 +24,10 @@ export class TerminalWakeManager {
     this.deps = deps;
   }
 
+  hasInFlightWake(id: string): boolean {
+    return this.inFlightWakes.has(id);
+  }
+
   async wakeAndRestore(id: string): Promise<boolean> {
     const inFlight = this.inFlightWakes.get(id);
     if (inFlight) {
