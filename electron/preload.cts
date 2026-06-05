@@ -696,10 +696,19 @@ let _eventBusWired = false;
 // from the Suspense *parent* before `AppInner` (the component that owns the
 // subscription) has mounted past its `app:boot` gate. Without a replay buffer
 // the intent would land with no subscriber and be dropped on a slow cold
-// launch. Only latest-wins, single-shot, low-frequency signals belong here —
-// replaying a high-frequency or stale state event to a late subscriber would be
-// wrong.
-const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set(["plugin:deep-link"]);
+// launch. `window:disk-space-status` is replayed for the same reason (#9769):
+// main pushes the current non-normal status once at `did-finish-load`, and the
+// `useDiskSpaceWarnings` subscriber now mounts behind the `isStateLoaded` gate
+// (after the full hydration round-trip), so without buffering the one-shot
+// warning would be dropped on a slow startup and only resurface on the next
+// status *change*. Only latest-wins, single-shot, low-frequency signals belong
+// here — replaying a high-frequency or stale state event to a late subscriber
+// would be wrong. Disk status qualifies: latest-wins and emitted on change
+// (~5-min poll), so the buffered payload always reflects the current state.
+const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
+  "plugin:deep-link",
+  "window:disk-space-status",
+]);
 const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown>();
 
 function _ensureEventBusWired(): void {

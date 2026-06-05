@@ -80,14 +80,26 @@ describe("PostHydrationListeners", () => {
     expect(mark).toHaveBeenCalledWith(PERF_MARKS.POST_HYDRATION_LISTENERS_MOUNT);
   });
 
-  it("does not run any deferred hook when it is never rendered (the gate)", () => {
-    const isStateLoaded = false;
-    render(<>{isStateLoaded && <PostHydrationListeners />}</>);
+  it("runs no deferred hook until the gate flips true, then runs each once", () => {
+    // Mirrors AppInner's `{isStateLoaded && <PostHydrationListeners />}` across a
+    // real React re-render: nothing runs while the gate is closed, everything
+    // runs exactly once on the transition.
+    function Gate({ isStateLoaded }: { isStateLoaded: boolean }) {
+      return <>{isStateLoaded && <PostHydrationListeners />}</>;
+    }
 
+    const { rerender } = render(<Gate isStateLoaded={false} />);
     for (const hook of allHooks) {
       expect(hook).not.toHaveBeenCalled();
     }
     expect(mark).not.toHaveBeenCalled();
+
+    rerender(<Gate isStateLoaded={true} />);
+    for (const hook of allHooks) {
+      expect(hook).toHaveBeenCalledTimes(1);
+    }
+    expect(mark).toHaveBeenCalledTimes(1);
+    expect(mark).toHaveBeenCalledWith(PERF_MARKS.POST_HYDRATION_LISTENERS_MOUNT);
   });
 
   it("renders nothing visible", () => {
