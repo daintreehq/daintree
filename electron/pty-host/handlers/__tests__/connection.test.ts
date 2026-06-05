@@ -254,3 +254,131 @@ describe("set-active-project pool warming (#9774)", () => {
     expect(ctx.windowProjectMap.get(1)).toBe("proj-a");
   });
 });
+
+describe("set-active-project non-empty envHash warming (#9810)", () => {
+  interface FakePool {
+    drainAndRefill: ReturnType<typeof vi.fn>;
+    warmForKey: ReturnType<typeof vi.fn>;
+    getMaxEntries: () => number;
+    getMaxPoolSize: () => number;
+  }
+
+  function makePoolCtx(pool: FakePool) {
+    const stateRef = {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+    const ctx = makeCtx(stateRef);
+    ctx.ptyPool = pool as unknown as HostContext["ptyPool"];
+    return ctx;
+  }
+
+  function makeFakePool(
+    overrides: Partial<FakePool> = {},
+    drainResult: Promise<void> = Promise.resolve()
+  ): FakePool {
+    return {
+      drainAndRefill: vi.fn(() => drainResult),
+      warmForKey: vi.fn(),
+      getMaxEntries: () => 8,
+      getMaxPoolSize: () => 2,
+      ...overrides,
+    };
+  }
+
+  it("warms each restored panel cwd with the project env hash when projectEnv is non-empty", async () => {
+    const pool = makeFakePool();
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    const projectEnv = { MY_API_KEY: "x", NODE_ENV: "production" };
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/repo/wt-a", "/repo/wt-b"],
+      projectEnv,
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(pool.warmForKey).toHaveBeenCalledTimes(2);
+    // The non-empty env is passed as callerEnv so the warmed slot can serve
+    // acquires that carry the same merged env.
+    expect(pool.warmForKey.mock.calls[0]?.[0]).toBe("/repo/wt-a");
+    expect(pool.warmForKey.mock.calls[0]?.[1]).toEqual(projectEnv);
+    expect(pool.warmForKey.mock.calls[1]?.[0]).toBe("/repo/wt-b");
+    expect(pool.warmForKey.mock.calls[1]?.[1]).toEqual(projectEnv);
+    // Both warms use the SAME envHash — it was computed once from projectEnv
+    // and is reused for every panel cwd (one envHash, many cwds).
+    const envHashA = pool.warmForKey.mock.calls[0]?.[2];
+    const envHashB = pool.warmForKey.mock.calls[1]?.[2];
+    expect(typeof envHashA).toBe("string");
+    expect(envHashA).not.toBe("env-empty");
+    expect(envHashA).toBe(envHashB);
+  });
+
+  it("falls back to env-empty warm (callerEnv undefined) when projectEnv is null", async () => {
+    const pool = makeFakePool();
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/repo/wt-a"],
+      projectEnv: null,
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(pool.warmForKey).toHaveBeenCalledTimes(1);
+    expect(pool.warmForKey.mock.calls[0]?.[1]).toBeUndefined();
+    expect(pool.warmForKey.mock.calls[0]?.[2]).toBe("env-empty");
+  });
+
+  it("falls back to env-empty warm when projectEnv is undefined (back-compat with #9774 callers)", async () => {
+    const pool = makeFakePool();
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/repo/wt-a"],
+      // projectEnv omitted — must match pre-#9810 behaviour
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(pool.warmForKey).toHaveBeenCalledTimes(1);
+    expect(pool.warmForKey.mock.calls[0]?.[1]).toBeUndefined();
+    expect(pool.warmForKey.mock.calls[0]?.[2]).toBe("env-empty");
+  });
+
+  it("falls back to env-empty warm when projectEnv is an empty object (matches acquirePtyProcess contract)", async () => {
+    const pool = makeFakePool();
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/repo/wt-a"],
+      projectEnv: {},
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // `{}` is filtered to nothing by computePoolEnvHash, so the warm collapses
+    // to the env-empty path — no point burning a slot on a hash that
+    // `acquireByKey` would also produce for the no-caller-env case.
+    expect(pool.warmForKey).toHaveBeenCalledTimes(1);
+    expect(pool.warmForKey.mock.calls[0]?.[1]).toBeUndefined();
+    expect(pool.warmForKey.mock.calls[0]?.[2]).toBe("env-empty");
+  });
+});
