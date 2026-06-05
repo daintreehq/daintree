@@ -407,6 +407,40 @@
   }
 }
 
+/* ── Overflow `…` trigger entry / exit ──
+ * The trigger appears only while items are evicted into it. Without an
+ * animation it pops in/out instantly, unlike every other toolbar badge
+ * (issue #9821). Opacity-only (no scale) — the trigger is a full-size button,
+ * not a pip, so scaling would read as a glitch. @starting-style + allow-discrete
+ * drive entry/exit in pure CSS; the button stays mounted and toggles
+ * data-visible (going display:none when empty so it reclaims its layout slot
+ * and drops out of roving focus). color/background-color stay at 150ms so the
+ * hover tint still animates at its normal cadence.
+ */
+[data-toolbar-overflow-trigger] {
+  display: none;
+  opacity: 0;
+  transition:
+    display 120ms allow-discrete,
+    opacity 120ms ease,
+    color 150ms ease,
+    background-color 150ms ease;
+}
+
+[data-toolbar-overflow-trigger][data-visible="true"] {
+  display: inline-flex;
+  opacity: 1;
+  transition:
+    display 200ms allow-discrete,
+    opacity 200ms ease,
+    color 150ms ease,
+    background-color 150ms ease;
+
+  @starting-style {
+    opacity: 0;
+  }
+}
+
 /* ── Overflow severity dot ──
  * @property --overflow-badge-color (registered above) interpolates in OKLab
  * so severity class-swaps produce a smooth hue transition instead of a snap.
@@ -496,6 +530,16 @@
     transition:
       display 0s,
       opacity 200ms ease;
+  }
+
+  /* Keep a timed (not `none`) display swap so the discrete show/hide still
+   * completes (lesson #6182); the fade collapses to opacity-only. */
+  [data-toolbar-overflow-trigger] {
+    transition:
+      display 0s,
+      opacity 200ms ease,
+      color 150ms ease,
+      background-color 150ms ease;
   }
 }
 
