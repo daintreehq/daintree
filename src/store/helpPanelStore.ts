@@ -30,6 +30,20 @@ export interface HelpHibernateSession {
   agentId: string;
 }
 
+/**
+ * A documentation image the assistant surfaced via the `help.displayImage` MCP
+ * tool (#9828). The main process validates the URL and assigns `figureNumber`
+ * sequentially per session, so the model references it inline as `[image #N]`.
+ */
+export interface HelpFigure {
+  imageId: string;
+  figureNumber: number;
+  figureLabel: string;
+  url: string;
+  caption?: string;
+  altText?: string;
+}
+
 interface HelpPanelState {
   isOpen: boolean;
   width: number;
@@ -54,6 +68,12 @@ interface HelpPanelState {
   hibernateSessions: Record<string, HelpHibernateSession>;
   /** Monotonic counter bumped by requestFocus() so repeated Cmd+L presses re-trigger the focus effect. */
   focusRequest: number;
+  /**
+   * Figures the assistant surfaced via `help.displayImage`, in arrival order
+   * (#9828). Session-scoped and never persisted — a new conversation starts
+   * empty, so stale image references can't survive an app restart.
+   */
+  figures: HelpFigure[];
 }
 
 interface HelpPanelActions {
@@ -72,6 +92,10 @@ interface HelpPanelActions {
     entry: { sessionId: string; cwd: string; agentId: string }
   ) => void;
   clearHibernateSession: (projectId: string) => void;
+  /** Append (or replace by imageId) a figure surfaced by `help.displayImage`. */
+  addFigure: (figure: HelpFigure) => void;
+  /** Drop all figures — called when the conversation/terminal resets. */
+  clearFigures: () => void;
 }
 
 const initialState: HelpPanelState = {
@@ -86,6 +110,7 @@ const initialState: HelpPanelState = {
   conversationTouched: false,
   hibernateSessions: {},
   focusRequest: 0,
+  figures: [],
 };
 
 function isRecordOfUnknown(value: unknown): value is Record<string, unknown> {
@@ -169,6 +194,21 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
           delete next[projectId];
           return { hibernateSessions: next };
         }),
+
+      addFigure: (figure) =>
+        set((s) => {
+          const existing = s.figures.findIndex((f) => f.imageId === figure.imageId);
+          if (existing === -1) {
+            return { figures: [...s.figures, figure] };
+          }
+          // Idempotent upsert: a duplicate push (e.g. StrictMode double-mount
+          // replaying the listener) replaces rather than appends.
+          const next = s.figures.slice();
+          next[existing] = figure;
+          return { figures: next };
+        }),
+
+      clearFigures: () => set((s) => (s.figures.length === 0 ? s : { figures: [] })),
     }),
     {
       name: "help-panel-storage",

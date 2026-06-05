@@ -8,7 +8,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { createSessionServer } from "../sessionServer.js";
+import { createSessionServer, validateDisplayImageUrl } from "../sessionServer.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import type { SessionStore } from "../sessionStore.js";
 import { SessionStore as RealSessionStore, consumeToken } from "../sessionStore.js";
@@ -2091,4 +2091,148 @@ describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
       expect(second).toEqual(first);
     }
   );
+});
+
+describe("validateDisplayImageUrl (#9828)", () => {
+  it("accepts an https://daintree.org apex image URL", () => {
+    expect(validateDisplayImageUrl("https://daintree.org/docs/img/panel.png")).toEqual({
+      valid: true,
+    });
+  });
+
+  it("accepts an https subdomain of daintree.org", () => {
+    expect(validateDisplayImageUrl("https://docs.daintree.org/img/panel.png")).toEqual({
+      valid: true,
+    });
+  });
+
+  it("rejects data: URIs", () => {
+    const result = validateDisplayImageUrl("data:image/png;base64,iVBORw0KGgo=");
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects blob: URIs", () => {
+    const result = validateDisplayImageUrl("blob:https://daintree.org/abcd");
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects http: (non-TLS) URLs", () => {
+    const result = validateDisplayImageUrl("http://daintree.org/img.png");
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects a look-alike host that merely ends with the brand string", () => {
+    // `attackerdaintree.org` does NOT end with `.daintree.org` (no leading
+    // dot), so the suffix check correctly refuses it.
+    const result = validateDisplayImageUrl("https://attackerdaintree.org/img.png");
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects an unrelated host", () => {
+    expect(validateDisplayImageUrl("https://evil.example.com/img.png").valid).toBe(false);
+  });
+
+  it("rejects a malformed URL", () => {
+    expect(validateDisplayImageUrl("not a url").valid).toBe(false);
+  });
+
+  it("is case-insensitive on the host", () => {
+    expect(validateDisplayImageUrl("https://DainTree.ORG/img.png")).toEqual({ valid: true });
+  });
+});
+
+describe("help.displayImage short-circuit (#9828)", () => {
+  function helpSessionStore(sessionId: string, helpSessionId: string | null): SessionStore {
+    const store = fakeSessionStore("workbench");
+    const mutable = store as unknown as {
+      sessionHelpIdMap: Map<string, string>;
+      figureCounters: Map<string, number>;
+      nextFigureNumber: (id: string) => number;
+    };
+    mutable.sessionHelpIdMap = new Map(helpSessionId !== null ? [[sessionId, helpSessionId]] : []);
+    mutable.figureCounters = new Map();
+    mutable.nextFigureNumber = (id: string) => {
+      const next = (mutable.figureCounters.get(id) ?? 0) + 1;
+      mutable.figureCounters.set(id, next);
+      return next;
+    };
+    return store;
+  }
+
+  function parseStructured(result: unknown): Record<string, unknown> | undefined {
+    return (result as { structuredContent?: Record<string, unknown> }).structuredContent;
+  }
+
+  it("assigns a sequential figure number and pushes the figure to the renderer", async () => {
+    const notifyDisplayImage = vi.fn();
+    const deps = fakeDeps({
+      sessionStore: helpSessionStore("sess-1", "help-1"),
+      notifyDisplayImage,
+    });
+    const server = createSessionServer("sess-1", deps);
+    await server.connect(makeMockTransport());
+
+    const first = await callTool(server, {
+      name: "help.displayImage",
+      arguments: { url: "https://daintree.org/a.png", caption: "First" },
+    });
+    const second = await callTool(server, {
+      name: "help.displayImage",
+      arguments: { url: "https://daintree.org/b.png" },
+    });
+
+    expect(parseStructured(first)).toMatchObject({ figureNumber: 1, figureLabel: "image #1" });
+    expect(parseStructured(second)).toMatchObject({ figureNumber: 2, figureLabel: "image #2" });
+    expect(notifyDisplayImage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        figureNumber: 1,
+        url: "https://daintree.org/a.png",
+        caption: "First",
+      })
+    );
+    // The imageId is a freshly minted UUID, distinct per call.
+    const id1 = parseStructured(first)?.imageId;
+    const id2 = parseStructured(second)?.imageId;
+    expect(typeof id1).toBe("string");
+    expect(id1).not.toBe(id2);
+  });
+
+  it("rejects a non-daintree URL with INVALID_URL and does not notify", async () => {
+    const notifyDisplayImage = vi.fn();
+    const deps = fakeDeps({
+      sessionStore: helpSessionStore("sess-2", "help-2"),
+      notifyDisplayImage,
+    });
+    const server = createSessionServer("sess-2", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "help.displayImage",
+      arguments: { url: "data:image/png;base64,AAAA" },
+    })) as { isError?: boolean; content: { text: string }[] };
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text).code).toBe("INVALID_URL");
+    expect(notifyDisplayImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects a session with no help-session id (e.g. pane token) as not permitted", async () => {
+    const notifyDisplayImage = vi.fn();
+    const deps = fakeDeps({
+      sessionStore: helpSessionStore("sess-3", null),
+      notifyDisplayImage,
+    });
+    const server = createSessionServer("sess-3", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "help.displayImage",
+      arguments: { url: "https://daintree.org/a.png" },
+    })) as { isError?: boolean; content: { text: string }[] };
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text).code).toBe("TIER_NOT_PERMITTED");
+    expect(notifyDisplayImage).not.toHaveBeenCalled();
+  });
 });

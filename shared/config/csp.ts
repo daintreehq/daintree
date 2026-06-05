@@ -28,6 +28,14 @@ const GITHUB_AVATARS = "https://avatars.githubusercontent.com";
 // redirect to *.wp.com on a miss, so only this origin needs allowing.
 const GRAVATAR = "https://www.gravatar.com";
 
+// Daintree documentation images surfaced inline by the assistant via the
+// `help.displayImage` MCP tool (#9828). The tool validates each URL against
+// the same daintree.org allowlist before dispatch; this directive lets the
+// renderer actually load the figure. Chromium 148 does NOT match the apex
+// (`https://daintree.org`) against a wildcard, so both the apex and the
+// `*.daintree.org` subdomain form must be listed explicitly.
+const DAINTREE_DOCS = "https://daintree.org https://*.daintree.org";
+
 // Named Trusted Types policy backing all DOM HTML-sink writes in the renderer.
 // 'allow-duplicates' is required so Vite HMR can re-evaluate the policy module
 // on hot reload without throwing 'Policy with name "<x>" already exists'.
@@ -89,7 +97,7 @@ export function getDaintreeAppProdCSP(options?: DaintreeCspOptions): string {
     ),
     "style-src 'self' 'unsafe-inline'",
     `connect-src 'self' ${FILE_SCHEMES} ${PLUGIN_SCHEME}`,
-    `img-src 'self' ${GITHUB_AVATARS} ${GRAVATAR} ${FILE_SCHEMES} data: blob:`,
+    `img-src 'self' ${GITHUB_AVATARS} ${GRAVATAR} ${DAINTREE_DOCS} ${FILE_SCHEMES} data: blob:`,
     "font-src 'self' data:",
     "media-src 'self'",
     "worker-src 'self' blob:",
@@ -123,7 +131,7 @@ export function getDaintreeAppDevCSP(): string {
     `script-src 'self' ${origins} 'unsafe-inline' 'unsafe-eval' ${PLUGIN_SCHEME}`,
     `style-src 'self' ${origins} 'unsafe-inline'`,
     `connect-src 'self' ${origins} ${wsOrigins} ${FILE_SCHEMES} ${PLUGIN_SCHEME}`,
-    `img-src 'self' ${origins} ${GITHUB_AVATARS} ${GRAVATAR} ${FILE_SCHEMES} data: blob:`,
+    `img-src 'self' ${origins} ${GITHUB_AVATARS} ${GRAVATAR} ${DAINTREE_DOCS} ${FILE_SCHEMES} data: blob:`,
     `font-src 'self' ${origins} data:`,
     "media-src 'self'",
     "worker-src 'self' blob:",

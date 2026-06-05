@@ -1300,6 +1300,31 @@ export class HttpLifecycle {
         }
       };
 
+    const notifyDisplayImage: import("./sessionServer.js").SessionServerDeps["notifyDisplayImage"] =
+      (payload) => {
+        // Help-session bearers only — targeted at the pinned WebContents so the
+        // figure renders in the assistant panel that triggered the call, even
+        // if a different project view is focused. The tool is outside the
+        // external/api-key allowlist, so this never fires for those sessions.
+        const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
+        if (id === undefined) return;
+        const wc = webContentsModule.fromId(id);
+        if (!wc || wc.isDestroyed()) return;
+        try {
+          wc.send(CHANNELS.MCP_HELP_DISPLAY_IMAGE, {
+            sessionId: payload.sessionId,
+            imageId: payload.imageId,
+            figureNumber: payload.figureNumber,
+            figureLabel: payload.figureLabel,
+            url: payload.url,
+            ...(payload.caption !== undefined ? { caption: payload.caption } : {}),
+            ...(payload.altText !== undefined ? { altText: payload.altText } : {}),
+          });
+        } catch (err) {
+          console.error("[MCP] help-display-image send failed:", err);
+        }
+      };
+
     return {
       sessionStore: this.deps.sessionStore,
       requestManifest,
@@ -1335,6 +1360,7 @@ export class HttpLifecycle {
       },
       notifyToolCallStarted,
       notifyToolCallSettled,
+      notifyDisplayImage,
     };
   }
 

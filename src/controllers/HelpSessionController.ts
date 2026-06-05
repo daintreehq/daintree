@@ -524,6 +524,20 @@ export class HelpSessionController {
     });
     this._disposers.push(disposeToolStarted, disposeToolSettled);
 
+    const disposeDisplayImage = window.electron.mcpServer.onDisplayImage((payload) => {
+      // The main process already validated the URL and assigned the figure
+      // number (#9828); the renderer just records the figure for inline display.
+      useHelpPanelStore.getState().addFigure({
+        imageId: payload.imageId,
+        figureNumber: payload.figureNumber,
+        figureLabel: payload.figureLabel,
+        url: payload.url,
+        ...(payload.caption !== undefined ? { caption: payload.caption } : {}),
+        ...(payload.altText !== undefined ? { altText: payload.altText } : {}),
+      });
+    });
+    this._disposers.push(disposeDisplayImage);
+
     const offSuspend = window.electron.systemSleep.onSuspend(() => {
       this._isSystemSuspended = true;
     });
@@ -757,7 +771,10 @@ export class HelpSessionController {
         revokeHelpSession(previousSessionId);
         if (reservedId) this._revokePendingSession();
         useHelpPanelStore.getState().clearTerminal();
-        // Replacing the session — clear the prior session's activity row (#9759).
+        // Replacing the session — clear the prior session's activity row (#9759)
+        // and its figures, since the new help session restarts the figure
+        // counter at 1 in the main process (#9828).
+        useHelpPanelStore.getState().clearFigures();
         this.clearMcpActivity();
       }
       // Discarding the current conversation invalidates any persisted

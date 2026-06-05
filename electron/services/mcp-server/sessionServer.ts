@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { app } from "electron";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
@@ -48,6 +49,7 @@ import {
   minimumPermittingTier,
   EXECUTION_ERROR_CODE,
   SESSION_BINDING_GONE,
+  INVALID_URL_CODE,
   buildToolError,
   buildMcpErrorPayload,
 } from "./shared.js";
@@ -73,7 +75,46 @@ import {
 } from "./tierAuth.js";
 
 const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
+const HELP_DISPLAY_IMAGE_TOOL = "help.displayImage";
 import type { SessionStore } from "./sessionStore.js";
+
+/**
+ * Validate a `help.displayImage` URL (#9828). Only `https://daintree.org` and
+ * its subdomains are accepted; `data:`/`blob:`/other-host URLs are rejected so
+ * the assistant can't smuggle arbitrary content into the panel. The explicit
+ * `data:`/`blob:` pre-check gives a clearer message than the generic
+ * protocol failure (`new URL("data:...")` parses with `protocol === "data:"`).
+ */
+export function validateDisplayImageUrl(
+  url: string
+): { valid: true } | { valid: false; message: string } {
+  if (url.startsWith("data:") || url.startsWith("blob:")) {
+    return {
+      valid: false,
+      message: "data: and blob: URIs are not permitted; provide an https://daintree.org URL.",
+    };
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { valid: false, message: `Invalid URL: ${url}` };
+  }
+  if (parsed.protocol !== "https:") {
+    return {
+      valid: false,
+      message: `Only https: URLs are accepted; got '${parsed.protocol}'.`,
+    };
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  if (hostname !== "daintree.org" && !hostname.endsWith(".daintree.org")) {
+    return {
+      valid: false,
+      message: `URL host must be daintree.org (or a subdomain); got '${parsed.hostname}'.`,
+    };
+  }
+  return { valid: true };
+}
 
 export interface SessionServerDeps {
   sessionStore: SessionStore;
@@ -171,6 +212,23 @@ export interface SessionServerDeps {
     durationMs: number;
     outcome: AuditOutcome;
   }) => void;
+  /**
+   * Optional renderer notifier fired when the assistant invokes
+   * `help.displayImage` (#9828). Pushes the validated image URL and the
+   * session-assigned figure number to the pinned WebContents so the Assistant
+   * panel can render the figure inline. Implemented by httpLifecycle for
+   * help-session bearers; absent for external/api-key sessions (which can't
+   * call the tool — it's outside their allowlist — so it never fires for them).
+   */
+  notifyDisplayImage?: (payload: {
+    sessionId: string;
+    imageId: string;
+    figureNumber: number;
+    figureLabel: string;
+    url: string;
+    caption?: string;
+    altText?: string;
+  }) => void;
 }
 
 export function createSessionServer(sessionId: string, deps: SessionServerDeps): Server {
@@ -188,6 +246,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     clearDenialState,
     notifyToolCallStarted,
     notifyToolCallSettled,
+    notifyDisplayImage,
   } = deps;
 
   const server = new Server(
@@ -508,6 +567,86 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({
               code: EXECUTION_ERROR_CODE,
               message: formatErrorMessage(err, "waitUntilIdle failed"),
+            });
+          }
+        }
+
+        // Short-circuit: help.displayImage runs entirely in the main process
+        // (#9828). The action manifest entry handles schema/tier/audit; the URL
+        // allowlist check, the per-session figure-number assignment, and the
+        // imageId mint are authoritative state that must live here, not in the
+        // renderer. The figure is pushed to the pinned WebContents via
+        // `notifyDisplayImage`. Audit + strip-settle unify via the shared
+        // `finally`. Never `danger: "confirm"` — it's a passive display.
+        if (actionId === HELP_DISPLAY_IMAGE_TOOL) {
+          emitToolCallStarted(false);
+          try {
+            // Help-session bearers only. A pane-token session can also resolve
+            // to the workbench tier and clear the static allowlist gate above,
+            // but it has no pinned panel to render the figure and no public
+            // help-session id to key the counter, so reject it here.
+            const helpSessionId = sessionStore.sessionHelpIdMap.get(sessionId);
+            if (helpSessionId === undefined) {
+              const message = "help.displayImage is only available to help sessions.";
+              outcome = {
+                kind: "result",
+                value: { ok: false, error: { code: TIER_NOT_PERMITTED_CODE, message } },
+              };
+              return buildToolError({ code: TIER_NOT_PERMITTED_CODE, message });
+            }
+            const params = (args ?? {}) as {
+              url?: unknown;
+              caption?: unknown;
+              altText?: unknown;
+            };
+            const url = typeof params.url === "string" ? params.url : "";
+            const validation = url
+              ? validateDisplayImageUrl(url)
+              : { valid: false as const, message: "A non-empty `url` string is required." };
+            if (!validation.valid) {
+              outcome = {
+                kind: "result",
+                value: {
+                  ok: false,
+                  error: { code: INVALID_URL_CODE, message: validation.message },
+                },
+              };
+              return buildToolError({ code: INVALID_URL_CODE, message: validation.message });
+            }
+            const caption = typeof params.caption === "string" ? params.caption : undefined;
+            const altText = typeof params.altText === "string" ? params.altText : undefined;
+            const figureNumber = sessionStore.nextFigureNumber(helpSessionId);
+            const figureLabel = `image #${figureNumber}`;
+            const imageId = randomUUID();
+            if (notifyDisplayImage) {
+              try {
+                notifyDisplayImage({
+                  sessionId,
+                  imageId,
+                  figureNumber,
+                  figureLabel,
+                  url,
+                  ...(caption !== undefined ? { caption } : {}),
+                  ...(altText !== undefined ? { altText } : {}),
+                });
+              } catch (err) {
+                console.error("[MCP] Failed to notify display-image:", err);
+              }
+            }
+            const result = { imageId, figureNumber, figureLabel };
+            outcome = { kind: "result", value: { ok: true, result } };
+            return {
+              content: [{ type: "text" as const, text: safeSerializeToolResult(result) }],
+              structuredContent: result as unknown as Record<string, unknown>,
+            };
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) {
+              throw err;
+            }
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, "help.displayImage failed"),
             });
           }
         }

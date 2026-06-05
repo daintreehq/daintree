@@ -966,3 +966,68 @@ describe("SessionStore.listExternalActiveClients (#8779)", () => {
     expect(store.listExternalActiveClients()).toEqual([]);
   });
 });
+
+describe("SessionStore.nextFigureNumber (#9828)", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+    vi.useRealTimers();
+  });
+
+  it("assigns sequential figure numbers starting from 1 within a help session", () => {
+    expect(store.nextFigureNumber("help-1")).toBe(1);
+    expect(store.nextFigureNumber("help-1")).toBe(2);
+    expect(store.nextFigureNumber("help-1")).toBe(3);
+  });
+
+  it("keeps independent counters per help session", () => {
+    expect(store.nextFigureNumber("help-a")).toBe(1);
+    expect(store.nextFigureNumber("help-b")).toBe(1);
+    expect(store.nextFigureNumber("help-a")).toBe(2);
+    expect(store.nextFigureNumber("help-b")).toBe(2);
+  });
+
+  it("clears the counter on revokeSession, keyed by the public help-session id", () => {
+    store.httpSessions.set("transport-1", fakeHttpSession());
+    store.sessionHelpIdMap.set("transport-1", "help-1");
+    store.nextFigureNumber("help-1");
+    store.nextFigureNumber("help-1");
+    expect(store.figureCounters.get("help-1")).toBe(2);
+
+    store.revokeSession("transport-1");
+
+    expect(store.figureCounters.has("help-1")).toBe(false);
+    // A fresh session under the same public id restarts at 1.
+    expect(store.nextFigureNumber("help-1")).toBe(1);
+  });
+
+  it("clears the counter on SSE idle expiry", () => {
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
+    const session = fakeSseSession();
+    store.sessions.set("transport-2", session);
+    store.sessionHelpIdMap.set("transport-2", "help-2");
+    store.nextFigureNumber("help-2");
+
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createIdleTimer("transport-2");
+    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+
+    expect(store.figureCounters.has("help-2")).toBe(false);
+  });
+
+  it("clears all counters on drain()", () => {
+    store.nextFigureNumber("help-1");
+    store.nextFigureNumber("help-2");
+    expect(store.figureCounters.size).toBe(2);
+
+    store.drain();
+
+    expect(store.figureCounters.size).toBe(0);
+  });
+});

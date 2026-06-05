@@ -1438,6 +1438,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onToolCallSettled(
       callback: (payload: import("./mcpServer.js").McpToolCallSettledPayload) => void
     ): () => void;
+    /**
+     * Subscribe to `help.displayImage` pushes for the pinned help-session in
+     * this WebContents. Each push carries a validated daintree.org image URL
+     * and its session-assigned figure number for inline rendering (#9828).
+     */
+    onDisplayImage(
+      callback: (payload: import("./mcpServer.js").McpHelpDisplayImagePayload) => void
+    ): () => void;
   };
   // helpAssistant is generated — see GeneratedElectronAPI.
   mcpBridge: {

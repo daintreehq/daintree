@@ -42,6 +42,53 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     },
   }));
 
+  // help.displayImage is registered here purely for manifest registration —
+  // schema, description, tier, and audit metadata (#9828). Execution is handled
+  // inline in the MCP CallTool handler (electron/services/mcp-server/
+  // sessionServer.ts): the URL is validated against the daintree.org allowlist,
+  // a figure number is assigned sequentially per help session, and the figure
+  // is pushed to the pinned renderer. The tool lives only in WORKBENCH_TIER_TOOLS
+  // (never the external/api-key allowlist), so only help sessions can call it.
+  // `run()` throws if the renderer ever invokes it directly.
+  actions.set("help.displayImage", () => ({
+    id: "help.displayImage",
+    title: "Display documentation image",
+    description:
+      "Display a Daintree documentation image inline in the assistant panel so it can be referenced as `[image #N]`. Args: `url` is an `https://daintree.org` image URL (data:/blob:/non-daintree URLs are rejected); `caption` and `altText` are optional. Returns { imageId, figureNumber, figureLabel } — the figure number is assigned by the app sequentially per session; never pick your own.",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    mcpVisibility: "core",
+    argsSchema: z.object({
+      url: z
+        .string()
+        .min(1)
+        .describe("An https://daintree.org image URL. data:, blob:, and other hosts are rejected."),
+      caption: z.string().optional().describe("Optional caption shown beneath the figure."),
+      altText: z.string().optional().describe("Optional alternative text for accessibility."),
+    }),
+    rawOutputSchema: {
+      type: "object",
+      properties: {
+        imageId: { type: "string" },
+        figureNumber: { type: "number" },
+        figureLabel: { type: "string" },
+      },
+      required: ["imageId", "figureNumber", "figureLabel"],
+    },
+    mcpAnnotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+      destructiveHint: false,
+    },
+    run: async () => {
+      throw new Error(
+        "help.displayImage must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
   actions.set("help.launchAgent", () => ({
     id: "help.launchAgent",
     title: "Launch Help Agent",
