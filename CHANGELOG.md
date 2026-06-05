@@ -1,5 +1,88 @@
 # Changelog
 
+## [0.17.0] - 2026-06-05
+
+Light mode looks designed. The light-theme token engine was rebuilt for perceptual contrast, Bondi Beach became the gold-standard template, and the six remaining light themes were redesigned on it. Alongside: a live MCP tool-call activity strip in the Daintree Assistant, context-aware keyterm biasing for voice dictation, and a deep round of terminal project-switch and GitHub-count fixes.
+
+### Features
+
+**Light themes**
+
+- Light-mode token engine reworked for perceptual contrast, with status-surface tokens and per-theme design knobs (#9708)
+- Depth-budget and border-separation audits plus a second-round contrast audit across all light palettes
+- Bondi Beach redesigned as the gold-standard light theme (#9711)
+- Svalbard, Atacama, Bali, Table Mountain, Serengeti, and Hokkaido rebuilt on the Bondi template (#9714, #9709, #9710, #9715, #9713, #9712)
+
+**Daintree Assistant**
+
+- Live MCP tool-call activity strip with result summaries (#9759)
+- Expandable recent-call history popover (#9760)
+
+**Voice dictation**
+
+- Context keyterms wired into transcription session start and the Deepgram connection (#9743, #9744)
+- Keyterm biasing with terminal-derived terms ranked by frequency and recency (#9745, #9750)
+- Dictionary words learned from transcript corrections (#9749)
+
+**Dock & sidebar**
+
+- Insertion indicator when reordering Content Dock chips (#9685)
+- Recency band and recipe first-run cue in the Dock launch menu (#9682)
+- Clearer move-to-grid affordance on dock chips (#9683); tightened waiting-agents popover (#9658)
+- Visible keyboard cursor on worktree sidebar rows (#9667); per-section active-filter state in the filter popover (#9661)
+- GitHub avatars in PR/issue tooltips, with creator distinguished from assignee (#9695)
+
+**Other features**
+
+- Broadcasting from the fleet hybrid input no longer requires a confirm step (#9722)
+- Toolbar badge shows real open issue/PR totals instead of capping at 20+ (#9717)
+- Dev preview uses the agent-terminal spinner for loading and restart states (#9763)
+- Tooltips auto-dismiss after a hold window, with a per-tooltip opt-out
+
+### Bug Fixes
+
+**Terminals & project switching**
+
+- Terminals no longer show stale or blank content on project switch-back until clicked (#9702)
+- Redraw on one agent terminal no longer blanks a sibling pane (#9701); stale WebGL flashes on reactivation fixed (#9679)
+- Daintree Assistant no longer leaks into the panel grid as a second agent (#9699), resumes instead of restarting on project switch-back (#9639), and wakes properly on project return (#9637)
+- Cmd+W closes the clicked docked terminal instead of the Assistant (#9659)
+
+**Recipes**
+
+- Recipe-launched agent terminals paint on first mount instead of staying blank (#9649)
+- Agent launch flags persist across recipe spawn and resume (#9650); model id passed into recipe initial commands
+- Clone layout preserves docked panel placement (#9764)
+
+**GitHub & worktrees**
+
+- Toolbar issue/PR counts stay fresh via recency arbitration and adaptive polling (#9741); count badge matches what the dropdown lists (#9693)
+- Worktrees with only a closed or declined PR count as waiting, not finished (#9731)
+- Stuck "GitHub authentication failed" stripe retries on sync-badge click (#9736)
+
+**Themes & settings**
+
+- Live theme switches re-apply every token without a restart (#9716)
+- Settings dialog color components respect the active theme (#9707)
+- Skeleton CSS no longer leaks stale optional tokens after a theme switch; theme browser panel occlusion fixed
+
+**Dev preview**
+
+- Proxy supports IPv6-only Vite dev servers instead of 502ing (#9747)
+- Restart options use an overflow glyph instead of a duplicate chevron (#9748); loading state fills the panel height
+
+**Other fixes**
+
+- Auto-update relaunch no longer treated as a crash (#9638)
+- Crash fixed in a CDP debugger teardown race (#9647); orphaned hibernate sessions cleaned up on project delete or relocate (#9642)
+- Focus-mode gesture and toolbar toggle no longer fight over Assistant visibility (#9641)
+- Worktree sidebar: instant search filtering (#9663), accurate offscreen-count pills (#9666), screen-reader announcement fixes (#9662, #9665)
+- Shortcut hints name the action instead of a bare "Tip:" (#9648); panel context menu uses sentence case with destructive items isolated (#9680)
+
+### Performance
+
+- Voice correction prompt restructured to be prompt-cache-eligible (#9746)
+
 ## [0.16.0] - 2026-06-02
 
 The plugin manager grows up. Per-plugin configuration, capabilities, and permissions move out of the settings tab into a dedicated first-class view with a master-detail layout, source/state grouping, and filter-operator search, and a `daintree://` deep-link scheme can install or open plugins from outside the app. Alongside it: a round of memory-leak and long-session fixes (xterm dispose, PTY fd, disk-state growth), tightened destructive-action gates, and a large internal E2E-coverage expansion.
