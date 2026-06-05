@@ -55,6 +55,7 @@ import {
   getDominantAgentState,
   agentStateDotColor,
 } from "@/components/Worktree/AgentStatusIndicator";
+import { STATE_LABELS } from "@/components/Worktree/terminalStateConfig";
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
 import { isPtyPanel } from "@shared/types/panel";
 
@@ -275,13 +276,24 @@ export function AgentButton({
   // because the CLI itself will prompt for sign-in on first run.
   const signInUnconfirmed = isAgentUnauthenticated(availability);
 
+  // Same gate the corner dot uses (issue #9823, #5900). When a dot renders,
+  // dominantState is one of {waiting, directing} — STATE_LABELS has a human
+  // word for every dot-bearing state, so the suffix is always meaningful.
+  // Moved above the tooltip/aria ternaries so they can consume it.
+  const dotColor = dominantState ? agentStateDotColor(dominantState) : null;
+  const visibleStateSuffix = dotColor ? ` — ${STATE_LABELS[dominantState!]}` : "";
+  // Suppress the at-rest split-button seam when the chevron is gated — the
+  // chevron blocks clicks in these states anyway (issue #8131), so a seam
+  // would advertise a control that isn't usable.
+  const showSeam = !isLoading && isLaunchable;
+
   const presetSegment = activePresetName ? ` · ${activePresetName}` : "";
   const tooltipLabel = isLoading
     ? `Checking ${config.name} CLI…`
     : isLaunchable
       ? signInUnconfirmed
-        ? `Start ${config.name}${presetSegment} — sign-in not detected`
-        : `Start ${config.name}${presetSegment}${tooltipDetails}`
+        ? `Start ${config.name}${presetSegment}${visibleStateSuffix} — sign-in not detected`
+        : `Start ${config.name}${presetSegment}${visibleStateSuffix}${tooltipDetails}`
       : needsSetup
         ? `Configure ${config.name}`
         : `Install ${config.name} CLI`;
@@ -301,7 +313,7 @@ export function AgentButton({
   const ariaLabel = isLoading
     ? `Checking ${config.name} CLI`
     : isLaunchable
-      ? `Start ${config.name}`
+      ? `Start ${config.name}${visibleStateSuffix}`
       : needsSetup
         ? `Configure ${config.name}`
         : `Install ${config.name} CLI`;
@@ -344,7 +356,6 @@ export function AgentButton({
     void useAgentSettingsStore.getState().updateWorktreePreset(type, activeWorktreeId, presetId);
   };
 
-  const dotColor = dominantState ? agentStateDotColor(dominantState) : null;
   const toolbarBrandColor = getBrandColorHex(type);
   const iconElement = (
     <div className="relative">
@@ -448,7 +459,7 @@ export function AgentButton({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <span className="inline-flex">
+        <span className="inline-flex group/agent-split">
           <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
             <TooltipTrigger asChild>
               <Button
@@ -467,6 +478,7 @@ export function AgentButton({
                 onBlur={hover.onBlur}
                 className={cn(
                   "toolbar-agent-button text-daintree-text rounded-r-none border-r border-transparent relative",
+                  showSeam && "toolbar-agent-split-seam",
                   needsSetup && "opacity-70",
                   "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                 )}
