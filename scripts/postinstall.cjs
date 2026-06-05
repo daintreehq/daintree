@@ -1,5 +1,5 @@
 const path = require("path");
-const { execSync, spawnSync } = require("child_process");
+const { execSync } = require("child_process");
 const { rebuild } = require("@electron/rebuild");
 const { version: electronVersion } = require("electron/package.json");
 
@@ -10,7 +10,35 @@ const buildPath = path.resolve(__dirname, "..");
 async function runPostinstall() {
   const failures = [];
 
-  for (const mod of NATIVE_MODULES) {
+  // Apply package patches before any native rebuild. better-sqlite3 needs
+  // patches/better-sqlite3+12.10.0.patch (upstream WiseLibs/better-sqlite3#1475)
+  // to compile against Electron 42's V8 14.8 — the patch is NODE_MODULE_VERSION
+  // gated, so it's a no-op on the Node ABI and only changes the Electron build.
+  // It MUST run before @electron/rebuild compiles better-sqlite3 from source, or
+  // the V8 14.8 build fails with an opaque compile error. Invoked via node (not
+  // npx) for determinism and to match the node-pty post-install pattern below.
+  let patchFailed = false;
+  try {
+    execSync("node node_modules/patch-package/index.js", {
+      stdio: "inherit",
+      cwd: buildPath,
+    });
+  } catch (err) {
+    patchFailed = true;
+    failures.push({ module: "patch-package", error: err });
+  }
+
+  // better-sqlite3 is rebuilt from source against the Electron ABI alongside the
+  // other native modules. It used to skip the rebuild via a dlopen ABI probe,
+  // but Node 24 and Electron 42 share NODE_MODULE_VERSION 146, which breaks the
+  // probe's Node-vs-Electron polarity — a Node-ABI binary loads cleanly under
+  // Node 24, so the probe could wrongly skip the Electron rebuild. Always
+  // rebuilding from source (post-patch) is simpler and correct. It's gated on
+  // the patch succeeding — without the patch, the V8 14.8 build fails with an
+  // opaque compile error that would mask the real cause.
+  const rebuildModules = patchFailed ? NATIVE_MODULES : [...NATIVE_MODULES, "better-sqlite3"];
+
+  for (const mod of rebuildModules) {
     try {
       await rebuild({
         buildPath,
@@ -36,55 +64,8 @@ async function runPostinstall() {
     failures.push({ module: "node-pty post-install", error: err });
   }
 
-  // better-sqlite3 is not in NATIVE_MODULES — it ships prebuilt binaries via
-  // prebuild-install. When npm_config_runtime=electron + npm_config_target are
-  // set (CI e2e/release), prebuild-install downloads the correct Electron-ABI
-  // binary and the probe below exits 1 (NODE_MODULE_VERSION mismatch under
-  // Node), so we skip the rebuild. Without those env vars (local dev, CI
-  // check/test), prebuild-install defaults to Node ABI, the probe exits 0, and
-  // we rebuild here.
-  const betterSqliteBinary = path.join(
-    buildPath,
-    "node_modules",
-    "better-sqlite3",
-    "build",
-    "Release",
-    "better_sqlite3.node"
-  );
-  try {
-    const probe = spawnSync(
-      process.execPath,
-      [
-        "-e",
-        "const m={exports:{}};try{process.dlopen(m,process.argv[1]);process.exit(0)}catch(e){if(e.message.includes('NODE_MODULE_VERSION')||e.message.includes('was compiled against'))process.exit(1);throw e}",
-        betterSqliteBinary,
-      ],
-      { encoding: "utf8", timeout: 5000 }
-    );
-
-    if (probe.status === 0) {
-      console.log("[postinstall] better-sqlite3 has Node ABI, rebuilding for Electron...");
-      await rebuild({
-        buildPath,
-        electronVersion,
-        onlyModules: ["better-sqlite3"],
-        force: true,
-      });
-      console.log("[postinstall] better-sqlite3 rebuilt for Electron ABI");
-    } else if (probe.status === 1) {
-      console.log("[postinstall] better-sqlite3 already has Electron ABI, skipping rebuild");
-    } else {
-      failures.push({
-        module: "better-sqlite3",
-        error: new Error(`ABI probe failed: ${probe.stderr || probe.stdout || "unknown error"}`),
-      });
-    }
-  } catch (err) {
-    failures.push({ module: "better-sqlite3", error: err });
-  }
-
   if (failures.length > 0) {
-    console.error(`\nRebuild failures (${failures.length}/${NATIVE_MODULES.length + 2}):`);
+    console.error(`\nPostinstall failures (${failures.length}):`);
     for (const { module: mod, error } of failures) {
       console.error(`  ${mod}: ${error?.message ?? String(error)}`);
     }

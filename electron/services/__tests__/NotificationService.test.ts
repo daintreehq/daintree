@@ -1,10 +1,40 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const electronMock = vi.hoisted(() => ({
-  app: {
-    setBadgeCount: vi.fn(),
-  },
-}));
+const electronMock = vi.hoisted(() => {
+  const notificationInstances: NotificationMockInstance[] = [];
+
+  interface NotificationMockInstance {
+    options: { title: string; body: string; silent?: boolean };
+    handlers: Record<string, (...args: unknown[]) => void>;
+    show: ReturnType<typeof vi.fn>;
+    once(event: string, handler: (...args: unknown[]) => void): NotificationMockInstance;
+    trigger(event: string, ...args: unknown[]): void;
+  }
+
+  class NotificationMock implements NotificationMockInstance {
+    static isSupported = vi.fn(() => true);
+    handlers: Record<string, (...args: unknown[]) => void> = {};
+    show = vi.fn();
+    constructor(public options: { title: string; body: string; silent?: boolean }) {
+      notificationInstances.push(this);
+    }
+    once(event: string, handler: (...args: unknown[]) => void) {
+      this.handlers[event] = handler;
+      return this;
+    }
+    trigger(event: string, ...args: unknown[]) {
+      this.handlers[event]?.(...args);
+    }
+  }
+
+  return {
+    app: {
+      setBadgeCount: vi.fn(),
+    },
+    Notification: NotificationMock,
+    notificationInstances,
+  };
+});
 
 vi.mock("electron", () => ({
   ...electronMock,
@@ -226,5 +256,41 @@ describe("NotificationService", () => {
 
     win2.trigger("blur");
     expect(notificationService.isWindowFocused()).toBe(false);
+  });
+
+  it("warns and cleans up when a native notification fails (Electron 42 UNNotification)", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    notificationService.showNativeNotification("Agent waiting", "Needs your input");
+    const instance = electronMock.notificationInstances.at(-1)!;
+    expect(instance.show).toHaveBeenCalled();
+
+    const error = "notification not allowed";
+    expect(() => instance.trigger("failed", {}, error)).not.toThrow();
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("native notification failed"),
+      error
+    );
+  });
+
+  it("warns when a watch notification fails", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    notificationService.showWatchNotification(
+      "Watch hit",
+      "Pattern matched",
+      { foo: "bar" } as never,
+      "navigate:channel"
+    );
+    const instance = electronMock.notificationInstances.at(-1)!;
+    expect(instance.show).toHaveBeenCalled();
+
+    instance.trigger("failed", {}, "unsigned dev build");
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("native notification failed"),
+      "unsigned dev build"
+    );
   });
 });
