@@ -57,6 +57,8 @@ export interface ReconciliationWatchdogDeps {
   getQueuedBytes: (id: string) => number;
   resumeFlush: (id: string) => void;
   hasInFlightWake: (id: string) => boolean;
+  /** Wake requested but not started yet (retry-scheduled or rate-limit coalesced). */
+  hasPendingWake: (id: string) => boolean;
   isWebGLActive: (id: string) => boolean;
   shouldHaveWebGL: (managed: ManagedTerminal) => boolean;
   ensureWebGL: (id: string, managed: ManagedTerminal) => void;
@@ -150,6 +152,11 @@ export class TerminalReconciliationWatchdog {
       // reconciliation paths that the watchdog must not race.
       if (managed.isAttaching || managed.isDetached || managed.isResizeSuppressed) continue;
       if (managed.isSerializedRestoreInProgress) continue;
+      // Explicitly user-backgrounded terminals (dock close) live in an
+      // offscreen container whose `content-visibility: hidden` host still has
+      // viewport-passing rect geometry — DOM geometry lies there, and their
+      // BACKGROUND tier is intentional policy, not divergence.
+      if (this.deps.isStoreBackgrounded(id)) continue;
       const host = managed.hostElement;
       if (!host.isConnected) continue;
       const rect = host.getBoundingClientRect();
@@ -248,11 +255,16 @@ export class TerminalReconciliationWatchdog {
     }
 
     // Bytes stranded in the ingest queue with no drain in flight. Never flush
-    // while a wake is pending or in flight — wakeAndRestore resets the buffer
-    // during replay and flushing first would write held bytes into a
-    // pre-reset terminal (#8371); the wake path flushes itself on completion.
+    // while a wake is needed, pending, or in flight — wakeAndRestore resets
+    // the buffer during replay and flushing first would write held bytes into
+    // a pre-reset terminal (#8371); the wake path flushes itself on completion.
     const stalledBytes = this.deps.getStalledBytes(id);
-    if (stalledBytes > 0 && managed.needsWake !== true && !this.deps.hasInFlightWake(id)) {
+    if (
+      stalledBytes > 0 &&
+      managed.needsWake !== true &&
+      !this.deps.hasInFlightWake(id) &&
+      !this.deps.hasPendingWake(id)
+    ) {
       managed.lastWatchdogRepairAt = now;
       logWarn(
         "[TerminalReconciliationWatchdog] stalled ingest bytes for on-screen terminal — flushing",
@@ -265,8 +277,18 @@ export class TerminalReconciliationWatchdog {
       return 0;
     }
 
+    // Mirror TerminalReflowController.maybeReflow's eligibility guards:
+    // alt-buffer TUIs repaint from live PTY data, and a reflow mid
+    // DEC 2026 synchronized-output block would interleave a paint with the
+    // buffered range.
     const element = managed.terminal.element;
-    if (element && element.isConnected && isXtermRenderPaused(managed.terminal)) {
+    if (
+      element &&
+      element.isConnected &&
+      !managed.isAltBuffer &&
+      managed.terminal.modes?.synchronizedOutputMode !== true &&
+      isXtermRenderPaused(managed.terminal)
+    ) {
       managed.lastWatchdogRepairAt = now;
       logWarn(
         "[TerminalReconciliationWatchdog] xterm render service paused for on-screen terminal — reflowing",
@@ -311,6 +333,7 @@ export class TerminalReconciliationWatchdog {
       pendingWrites: managed.pendingWrites,
       needsWake: managed.needsWake,
       inFlightWake: this.deps.hasInFlightWake(id),
+      pendingWake: this.deps.hasPendingWake(id),
       webglActive: this.deps.isWebGLActive(id),
       isHibernated: managed.isHibernated === true,
       xtermPaused: managed.isHibernated ? undefined : isXtermRenderPaused(managed.terminal),

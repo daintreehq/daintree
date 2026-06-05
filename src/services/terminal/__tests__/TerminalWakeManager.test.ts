@@ -381,4 +381,62 @@ describe("TerminalWakeManager", () => {
       expect(manager.hasInFlightWake("term-if")).toBe(false);
     });
   });
+
+  describe("hasPendingWake", () => {
+    function makePendingDeps(hasInstance: boolean): WakeManagerDeps {
+      const managed: MockManagedTerminal = {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+        terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+      };
+      return {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        getInstance: vi.fn(() =>
+          hasInstance ? (managed as unknown as ManagedTerminal) : undefined
+        ),
+        hasInstance: vi.fn(() => hasInstance),
+        restoreFromSerialized: vi.fn(() => true),
+        restoreFromSerializedIncremental: vi.fn(async () => true),
+      };
+    }
+
+    it("reflects a rate-limit-coalesced wake until it fires", async () => {
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValue({ state: "serialized-state" });
+        const manager = new TerminalWakeManager(makePendingDeps(true));
+
+        manager.wake("term-pw");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(manager.hasPendingWake("term-pw")).toBe(false);
+
+        // Second wake inside the 1s rate-limit window is coalesced.
+        manager.wake("term-pw");
+        expect(manager.hasPendingWake("term-pw")).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(manager.hasPendingWake("term-pw")).toBe(false);
+
+        manager.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("reflects an instance-retry wake", () => {
+      vi.useFakeTimers();
+      try {
+        const manager = new TerminalWakeManager(makePendingDeps(false));
+
+        manager.wake("term-pr");
+        expect(manager.hasPendingWake("term-pr")).toBe(true);
+
+        manager.clearWakeState("term-pr");
+        expect(manager.hasPendingWake("term-pr")).toBe(false);
+
+        manager.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });

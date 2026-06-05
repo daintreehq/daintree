@@ -328,6 +328,7 @@ class TerminalInstanceService {
       getQueuedBytes: (id) => this.dataBuffer.getQueuedBytes(id),
       resumeFlush: (id) => this.dataBuffer.resumeFlush(id),
       hasInFlightWake: (id) => this.wakeManager.hasInFlightWake(id),
+      hasPendingWake: (id) => this.wakeManager.hasPendingWake(id),
       isWebGLActive: (id) => this.webGLManager.isActive(id),
       shouldHaveWebGL: (managed) => this.shouldRestoreWebGL(managed),
       ensureWebGL: (id, managed) => this.webGLManager.ensureContext(id, managed),

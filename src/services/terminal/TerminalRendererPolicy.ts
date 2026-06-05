@@ -244,6 +244,14 @@ export class TerminalRendererPolicy {
     const tier = managed.lastAppliedTier ?? managed.getRefreshTier();
     if (tier === TerminalRefreshTier.BACKGROUND) return;
     if (this.lastBackendTier.get(id) !== "background") return;
+    // Cancel any pending hysteresis downgrade (mirrors the isUpgrade path in
+    // applyRendererPolicy) — a stale BACKGROUND timer firing right after this
+    // repair would re-background the terminal and undo it.
+    if (managed.tierChangeTimer !== undefined) {
+      clearTimeout(managed.tierChangeTimer);
+      managed.tierChangeTimer = undefined;
+    }
+    managed.pendingTier = undefined;
     this.applyRendererPolicyImmediate(id, managed, tier);
   }
 

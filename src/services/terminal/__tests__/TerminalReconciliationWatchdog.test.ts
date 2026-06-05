@@ -109,6 +109,7 @@ function makeDeps(
     getQueuedBytes: vi.fn(() => 0),
     resumeFlush: vi.fn(),
     hasInFlightWake: vi.fn(() => false),
+    hasPendingWake: vi.fn(() => false),
     isWebGLActive: vi.fn(() => true),
     shouldHaveWebGL: vi.fn(() => false),
     ensureWebGL: vi.fn(),
@@ -224,6 +225,23 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deps.setVisible).not.toHaveBeenCalled();
     });
 
+    it("leaves explicitly store-backgrounded terminals alone even when their rect passes", () => {
+      // Docked-offscreen terminals live in a content-visibility:hidden fixed
+      // container whose rect geometry still passes the viewport test — the
+      // store-backgrounded gate is what keeps the watchdog from fighting the
+      // dock's intentional BACKGROUND policy.
+      instances.set(
+        "t1",
+        makeManaged({ isVisible: true, lastAppliedTier: TerminalRefreshTier.BACKGROUND })
+      );
+      const deps = makeDeps(instances, { isStoreBackgrounded: vi.fn(() => true) });
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.applyRendererPolicy).not.toHaveBeenCalled();
+      expect(deps.setVisible).not.toHaveBeenCalled();
+    });
+
     it("skips terminals whose host element is detached from the DOM", () => {
       const managed = makeManaged({ isVisible: false });
       managed.hostElement.remove();
@@ -311,12 +329,14 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deps.resumeFlush).toHaveBeenCalledWith("t1");
     });
 
-    it("never flushes while a wake is needed or in flight", () => {
+    it("never flushes while a wake is needed, pending, or in flight", () => {
       instances.set("t1", makeManaged({ needsWake: true }));
       instances.set("t2", makeManaged());
+      instances.set("t3", makeManaged());
       const deps = makeDeps(instances, {
         getStalledBytes: vi.fn(() => 4096),
         hasInFlightWake: vi.fn((id: string) => id === "t2"),
+        hasPendingWake: vi.fn((id: string) => id === "t3"),
       });
       watchdog = new TerminalReconciliationWatchdog(deps);
 
@@ -333,6 +353,31 @@ describe("TerminalReconciliationWatchdog", () => {
 
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
       expect(deps.forceReflow).toHaveBeenCalledWith(managed.terminal.element);
+    });
+
+    it("does not reflow a paused alt-buffer (TUI) terminal", () => {
+      const managed = makeManaged({ isAltBuffer: true });
+      setRenderPaused(managed, true);
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.forceReflow).not.toHaveBeenCalled();
+    });
+
+    it("does not reflow while DEC 2026 synchronized output is active", () => {
+      const managed = makeManaged();
+      (
+        managed.terminal as unknown as { modes: { synchronizedOutputMode: boolean } }
+      ).modes.synchronizedOutputMode = true;
+      setRenderPaused(managed, true);
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.forceReflow).not.toHaveBeenCalled();
     });
 
     it("reattaches a missing WebGL context for an eligible terminal", () => {
