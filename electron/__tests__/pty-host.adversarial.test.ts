@@ -1154,6 +1154,17 @@ describe("pty-host adversarial", () => {
       await flushMicrotasks();
 
       expect(backpressure.getActivityTier("t1")).toBe(expected);
+
+      // The ActivityMonitor polling cadence must move in lockstep with the tier:
+      // 50ms when active, 500ms when background. A drift here is the producer
+      // gate and the poll rate disagreeing — exactly the desync class #9800 guards.
+      const ptyManager = hostState.currentPtyManager as MiniEmitter & {
+        setActivityMonitorTier: TestMock;
+      };
+      expect(ptyManager.setActivityMonitorTier).toHaveBeenCalledWith(
+        "t1",
+        expected === "active" ? 50 : 500
+      );
     }
   );
 
@@ -1203,14 +1214,56 @@ describe("pty-host adversarial", () => {
     expect(tierSequence).toEqual(["background", "active", "background"]);
   });
 
+  it("MULTI_WINDOW_UNION_DRIVES_TIERS_AND_DISCONNECT_RECONTRACTS_IT", async () => {
+    // recomputeActivityTiers computes activeProjects as the UNION over every
+    // connected window's project, then tiers each terminal against that union.
+    // Two windows owning two different projects must keep both their terminals
+    // active while a third-project terminal is backgrounded — a regression that
+    // only honored the last windowProjectMap entry (instead of iterating all)
+    // would background one of the two. Disconnecting one window must then
+    // contract the union and re-background its now-inactive terminal.
+    const parentPort = await loadHost();
+    const backpressure = hostState.backpressureManagers[0];
+    hostState.terminals.set("t-a", createTerminal("t-a", "project-a"));
+    hostState.terminals.set("t-b", createTerminal("t-b", "project-b"));
+    hostState.terminals.set("t-c", createTerminal("t-c", "project-c"));
+
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1 },
+      ports: [createRendererPort()],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2 },
+      ports: [createRendererPort()],
+    });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-a" });
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-b" });
+    await flushMicrotasks();
+
+    // Union = {project-a, project-b}: both owned terminals active, the foreign one background.
+    expect(backpressure.getActivityTier("t-a")).toBe("active");
+    expect(backpressure.getActivityTier("t-b")).toBe("active");
+    expect(backpressure.getActivityTier("t-c")).toBe("background");
+
+    // Drop window 1 → union contracts to {project-b}: t-a re-backgrounds, t-b stays active.
+    parentPort.emit("message", { type: "disconnect-port", windowId: 1 });
+    await flushMicrotasks();
+
+    expect(backpressure.getActivityTier("t-a")).toBe("background");
+    expect(backpressure.getActivityTier("t-b")).toBe("active");
+    expect(backpressure.getActivityTier("t-c")).toBe("background");
+  });
+
   it("RACE_FUZZER_TIER_QUIESCENCE_INVARIANT", async () => {
     // Fuzz the interleaving of connect-port and set-active-project across
     // macrotasks. connect-port never triggers a recompute while set-active-project
-    // always does, so the two orders exercise different paths; the invariant is
-    // that after every interleaving settles, each terminal's tier reflects the
-    // FINAL active-project union — order-independent quiescence. A regression
-    // that recomputed off stale window state, or left a tier stranded when the
-    // port arrived after the project switch, breaks this for some interleaving.
+    // always does, so the two orders exercise different paths. Each iteration
+    // drives a single window (set, assert, disconnect) — the multi-window union
+    // is covered separately above; here the invariant is that after every
+    // interleaving settles, each terminal's tier reflects the FINAL active
+    // project, order-independent. A regression that recomputed off stale window
+    // state, or left a tier stranded when the port arrived after the project
+    // switch, breaks this for some interleaving.
     const parentPort = await loadHost();
     const backpressure = hostState.backpressureManagers[0];
     hostState.terminals.set("t-a", createTerminal("t-a", "project-a"));

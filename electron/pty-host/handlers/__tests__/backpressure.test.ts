@@ -162,7 +162,9 @@ describe("force-resume handler", () => {
 
     // The pause path ran (proving the handler executed past the early return)...
     expect(coord.forceReleaseAll).toHaveBeenCalledTimes(1);
-    // ...but the tier map was never written.
+    // ...but the tier map was never written — neither directly via setActivityTier
+    // nor indirectly via a recompute, both of which would desync the tier state.
     expect(ctx.backpressureManager.setActivityTier).not.toHaveBeenCalled();
+    expect(ctx.recomputeActivityTiers).not.toHaveBeenCalled();
   });
 });
