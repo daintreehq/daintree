@@ -577,7 +577,7 @@ export default defineConfig(({ command, mode }) => {
     ],
     base: "./",
     build: {
-      target: "chrome146",
+      target: "chrome148",
       modulePreload: { polyfill: false },
       outDir: "dist",
       emptyOutDir: true,
