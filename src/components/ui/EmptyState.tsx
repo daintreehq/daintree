@@ -194,9 +194,7 @@ export function EmptyState(props: EmptyStateProps) {
           key={`current-${generation}`}
           className={cn(
             "[grid-area:1/1] flex flex-col items-center motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150",
-            props.scale === "canvas"
-              ? "gap-3 @max-[280px]/empty-state:gap-2"
-              : "gap-2"
+            props.scale === "canvas" ? "gap-3 @max-[280px]/empty-state:gap-2" : "gap-2"
           )}
         >
           {renderInner(props, descriptionId, hasDescription, rawDescription)}
@@ -212,9 +210,7 @@ export function EmptyState(props: EmptyStateProps) {
             inert
             className={cn(
               "[grid-area:1/1] flex flex-col items-center pointer-events-none motion-safe:animate-out motion-safe:fade-out motion-safe:duration-[100ms]",
-              outgoing.scale === "canvas"
-                ? "gap-3 @max-[280px]/empty-state:gap-2"
-                : "gap-2"
+              outgoing.scale === "canvas" ? "gap-3 @max-[280px]/empty-state:gap-2" : "gap-2"
             )}
             onAnimationEnd={handleExitEnd}
           >

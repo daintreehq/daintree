@@ -606,18 +606,11 @@ describe("EmptyState", () => {
       // `text-xs` can appear is in the `@max-[280px]/empty-state:` narrow
       // collapse prefix.
       const { container } = render(
-        <EmptyState
-          variant="zero-data"
-          scale="canvas"
-          title="No items"
-          description="desc"
-        />
+        <EmptyState variant="zero-data" scale="canvas" title="No items" description="desc" />
       );
       const canvasDesc = getDescription(container);
       expect(canvasDesc?.className).toContain("text-sm");
-      expect(canvasDesc?.className).toContain(
-        "@max-[280px]/empty-state:text-xs"
-      );
+      expect(canvasDesc?.className).toContain("@max-[280px]/empty-state:text-xs");
       // The bare `text-xs` token (without a Tailwind v4 modifier prefix)
       // must NOT be the default — that would be a regression to the
       // pre-#9813 sidebar/popover size.
@@ -673,12 +666,8 @@ describe("EmptyState", () => {
         <EmptyState variant="zero-data" scale="sidebar" title="A" />
       );
       rerender(<EmptyState variant="zero-data" scale="canvas" title="B" />);
-      const outgoing = container.querySelector<HTMLElement>(
-        ".motion-safe\\:animate-out"
-      );
-      const incoming = container.querySelector<HTMLElement>(
-        ".motion-safe\\:animate-in"
-      );
+      const outgoing = container.querySelector<HTMLElement>(".motion-safe\\:animate-out");
+      const incoming = container.querySelector<HTMLElement>(".motion-safe\\:animate-in");
       // Outgoing is the previous (sidebar) state — no canvas gap-3.
       expect(outgoing?.className).not.toContain("gap-3");
       // Incoming is the new (canvas) state — carries the canvas gap-3.
