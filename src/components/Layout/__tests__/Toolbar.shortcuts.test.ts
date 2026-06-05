@@ -196,6 +196,19 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(source).toContain('"Context copied"');
       expect(source).not.toContain('"Context Copied"');
     });
+
+    it("keeps text-status-success in the treeCopied branch but drops the bg tint — issue #9822", () => {
+      // Scoped to the copy-tree render block so unrelated `bg-status-success/10`
+      // uses (e.g. ghost-success hover) don't false-positive the negative.
+      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
+      expect(copyTreeBlock).not.toBeNull();
+      const treeCopiedBranch = copyTreeBlock![0].match(
+        /treeCopied[\s\S]{0,200}?"text-daintree-text"/
+      );
+      expect(treeCopiedBranch).not.toBeNull();
+      expect(treeCopiedBranch![0]).toContain("text-status-success");
+      expect(treeCopiedBranch![0]).not.toContain("bg-status-success/10");
+    });
   });
 
   describe("sidebar toggle drops always-on armed highlight — issue #8357", () => {

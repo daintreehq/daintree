@@ -179,6 +179,21 @@ describe("GitHubStatsToolbarButton corner activity chip wiring", () => {
     );
   });
 
+  it("anchors the chip TTL to visible time via a per-chip hiddenAtRef + pulseAt shift — issue #9822", () => {
+    // The visibility handler must (a) record the wall-clock anchor when the
+    // document goes hidden, and (b) shift `pulseAt` forward by the hidden
+    // duration on restore so the next `remaining` math reflects elapsed
+    // visible time only. A bare wall-clock subtraction would let a chip
+    // expire unseen if the user hides for longer than the remaining TTL.
+    expect(source).toContain("issuesHiddenAtRef");
+    expect(source).toContain("prsHiddenAtRef");
+    expect(source).toMatch(/setIssuesPulseAt\(\(prev\)\s*=>\s*\(prev\s*===\s*null/);
+    expect(source).toMatch(/setPrsPulseAt\(\(prev\)\s*=>\s*\(prev\s*===\s*null/);
+    // tick() must early-return while the document is hidden to avoid a
+    // race between a scheduled timer firing and the visibility event.
+    expect(source).toMatch(/if\s*\(\s*document\.hidden\s*\)\s*\{[\s\S]{0,200}?return;/);
+  });
+
   it("derives showIssuesChip / showPrsChip with open-state and count guards", () => {
     expect(source).toMatch(
       /showIssuesChip\s*=[\s\S]{0,200}?issuesPulseAt\s*!==\s*null[\s\S]{0,200}?!issuesOpen[\s\S]{0,200}?\(issueCount\s*\?\?\s*0\)\s*>\s*0/

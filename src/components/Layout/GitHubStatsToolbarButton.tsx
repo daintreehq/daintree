@@ -366,6 +366,13 @@ export const GitHubStatsToolbarButton = memo(
     const issuesPrefetchInFlightRef = useRef(false);
     const prsPrefetchInFlightRef = useRef(false);
 
+    // Wall-clock anchor for the moment the document went hidden, per chip.
+    // Used by the auto-clear effects below to shift the chip's `pulseAt`
+    // forward by the hidden duration on restore, so the TTL measures
+    // *visible* time rather than wall-clock time.
+    const issuesHiddenAtRef = useRef<number | null>(null);
+    const prsHiddenAtRef = useRef<number | null>(null);
+
     // Mirror open state into refs so the trailing-edge timer can re-check at
     // fire time. The guard inside `handlePrefetchPointerEnter` is evaluated at
     // schedule time; if the user clicks during the 150ms debounce window the
@@ -400,35 +407,60 @@ export const GitHubStatsToolbarButton = memo(
     const showPrsChip = !isTokenError && prsPulseAt !== null && !prsOpen && (prCount ?? 0) > 0;
 
     // Auto-clear each chip ACTIVITY_CHIP_TTL_MS after the most recent count
-    // increase, but only while the page is visible — a chip earned just before
-    // the user switches away shouldn't burn its TTL unseen. Mirrors the
-    // rate-limit countdown's pattern above: closure-scoped timeout, a
-    // `visibilitychange` handler that recomputes `remaining` against wall-clock
-    // on restore, and a cleanup that pairs the listener with the timer.
+    // increase, measured in *visible* time — a chip earned just before the
+    // user switches away shouldn't burn its TTL unseen. On hide, we record
+    // the wall-clock anchor; on restore, we shift `pulseAt` forward by the
+    // hidden duration so the next `remaining` math reflects elapsed visible
+    // time only. The timer is paused while hidden and re-armed by the
+    // visibilitychange handler; `tick()` early-returns if it ever fires
+    // during a hidden window (race against the visibility event).
     useEffect(() => {
       if (issuesPulseAt === null) return;
       let timeoutId: number | null = null;
 
       const tick = () => {
         timeoutId = null;
+        if (document.hidden) {
+          // Race guard: a timer that fires while the document is in the
+          // middle of going hidden shouldn't make a state decision — the
+          // visibilitychange handler owns that path.
+          return;
+        }
         const remaining = ACTIVITY_CHIP_TTL_MS - (Date.now() - issuesPulseAt);
         if (remaining <= 0) {
           setIssuesPulseAt(null);
           return;
         }
-        if (!document.hidden) {
-          timeoutId = window.setTimeout(tick, remaining);
-        }
+        timeoutId = window.setTimeout(tick, remaining);
       };
 
       const onVisibility = () => {
+        if (document.hidden) {
+          // Document went hidden — clear any pending timer and stamp the
+          // wall-clock anchor so the restore handler can shift pulseAt.
+          if (timeoutId !== null) {
+            window.clearTimeout(timeoutId);
+            timeoutId = null;
+          }
+          issuesHiddenAtRef.current = Date.now();
+          return;
+        }
+        // Document went visible. If we have a hidden anchor, shift pulseAt
+        // forward by the hidden duration; the resulting state change will
+        // re-run this effect with a fresh tick. Otherwise just re-arm.
         if (timeoutId !== null) {
           window.clearTimeout(timeoutId);
           timeoutId = null;
         }
-        if (!document.hidden) {
-          tick();
+        if (issuesHiddenAtRef.current !== null) {
+          const hiddenMs = Date.now() - issuesHiddenAtRef.current;
+          issuesHiddenAtRef.current = null;
+          if (hiddenMs > 0) {
+            setIssuesPulseAt((prev) => (prev === null ? null : prev + hiddenMs));
+            return;
+          }
         }
+        tick();
       };
 
       tick();
@@ -449,24 +481,39 @@ export const GitHubStatsToolbarButton = memo(
 
       const tick = () => {
         timeoutId = null;
+        if (document.hidden) {
+          return;
+        }
         const remaining = ACTIVITY_CHIP_TTL_MS - (Date.now() - prsPulseAt);
         if (remaining <= 0) {
           setPrsPulseAt(null);
           return;
         }
-        if (!document.hidden) {
-          timeoutId = window.setTimeout(tick, remaining);
-        }
+        timeoutId = window.setTimeout(tick, remaining);
       };
 
       const onVisibility = () => {
+        if (document.hidden) {
+          if (timeoutId !== null) {
+            window.clearTimeout(timeoutId);
+            timeoutId = null;
+          }
+          prsHiddenAtRef.current = Date.now();
+          return;
+        }
         if (timeoutId !== null) {
           window.clearTimeout(timeoutId);
           timeoutId = null;
         }
-        if (!document.hidden) {
-          tick();
+        if (prsHiddenAtRef.current !== null) {
+          const hiddenMs = Date.now() - prsHiddenAtRef.current;
+          prsHiddenAtRef.current = null;
+          if (hiddenMs > 0) {
+            setPrsPulseAt((prev) => (prev === null ? null : prev + hiddenMs));
+            return;
+          }
         }
+        tick();
       };
 
       tick();
