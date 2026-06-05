@@ -389,7 +389,6 @@ describe("TerminalWakeManager", () => {
         terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
       };
       return {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         getInstance: vi.fn(() =>
           hasInstance ? (managed as unknown as ManagedTerminal) : undefined
         ),
