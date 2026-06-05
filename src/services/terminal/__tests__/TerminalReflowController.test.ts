@@ -140,11 +140,14 @@ describe("TerminalReflowController.maybeReflow", () => {
     expect(paddingHistory(managed).length).toBeGreaterThan(before);
   });
 
-  it("skips agent terminals (WebGL — immune)", () => {
+  it("reflows agent terminals — the xterm pause gate is renderer-agnostic", () => {
     const managed = makeManaged({ launchAgentId: "claude" });
+    expect(managed.runtimeAgentId).toBe("claude");
+
     controller.maybeReflow(managed);
-    expect(paddingHistory(managed).length).toBe(0);
-    expect(managed.lastReflowAt).toBe(0);
+
+    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(managed.lastReflowAt).toBeGreaterThan(0);
   });
 
   it("skips hibernated terminals", () => {
@@ -251,6 +254,22 @@ describe("TerminalReflowController dispose / listener cleanup", () => {
     vi.useRealTimers();
   });
 
+  it("heartbeat reflows agent terminals too", () => {
+    vi.useFakeTimers();
+
+    const managed = makeManaged({ launchAgentId: "claude" });
+    instances = [managed];
+    controller = new TerminalReflowController({ getInstances: () => instances });
+
+    expect(paddingHistory(managed).length).toBe(0);
+
+    vi.advanceTimersByTime(3000);
+    expect(paddingHistory(managed)).toContain("0.01px");
+
+    controller.dispose();
+    vi.useRealTimers();
+  });
+
   it("heartbeat stops firing after dispose", () => {
     vi.useFakeTimers();
 
@@ -310,6 +329,18 @@ describe("TerminalReflowController dispose / listener cleanup", () => {
 
     expect(paddingHistory(a)).toContain("0.01px");
     expect(paddingHistory(b)).toContain("0.01px");
+
+    controller.dispose();
+  });
+
+  it("focus listener reflows agent terminals too", () => {
+    const managed = makeManaged({ launchAgentId: "claude" });
+    instances = [managed];
+
+    controller = new TerminalReflowController({ getInstances: () => instances });
+    window.dispatchEvent(new FocusEvent("focus"));
+
+    expect(paddingHistory(managed)).toContain("0.01px");
 
     controller.dispose();
   });

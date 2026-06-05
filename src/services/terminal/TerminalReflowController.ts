@@ -32,8 +32,7 @@ export interface ReflowControllerDeps {
 }
 
 /**
- * Owns the three layered IO-unpause recovery paths for standard (DOM-renderer)
- * terminals:
+ * Owns the three layered IO-unpause recovery paths for visible terminals:
  *  1. Per-write reflow via `maybeReflow()` (called from `onWriteParsedReflow`)
  *  2. 3 s heartbeat sweep — recovers a paused renderer with no writes
  *  3. Window focus / document visibilitychange — the moments a user is most
@@ -60,10 +59,11 @@ export class TerminalReflowController {
   constructor(deps: ReflowControllerDeps) {
     this.deps = deps;
 
-    // Periodic heartbeat: recovers a DOM-renderer terminal whose
-    // IntersectionObserver has paused rendering, even while no new writes are
-    // arriving. Cheap (~1–5ms per visible non-agent terminal). Skipped while
-    // the document is hidden — _onVisibilityChange triggers a sweep on regain.
+    // Periodic heartbeat: recovers a terminal whose IntersectionObserver has
+    // paused rendering, even while no new writes are arriving. The pause gate
+    // lives in xterm's core RenderService, so WebGL and DOM renderers alike
+    // are affected. Cheap (~1–5ms per visible terminal). Skipped while the
+    // document is hidden — _onVisibilityChange triggers a sweep on regain.
     if (typeof setInterval === "function") {
       this.heartbeatTimer = setInterval(() => {
         if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
@@ -85,17 +85,18 @@ export class TerminalReflowController {
   }
 
   /**
-   * Force an IntersectionObserver reflow on a standard terminal if it's
-   * eligible — used by onWriteParsed, the periodic heartbeat, and
-   * visibility/focus recovery paths. All guards live here so every caller
-   * stays consistent.
+   * Force an IntersectionObserver reflow on a terminal if it's eligible —
+   * used by onWriteParsed, the periodic heartbeat, and visibility/focus
+   * recovery paths. All guards live here so every caller stays consistent.
    *
-   * Skips: agent terminals (WebGL, immune), hibernated/invisible/attaching
-   * terminals, alt-buffer (TUI) sessions, and terminals without a rendered
-   * element. Throttled per terminal.
+   * Applies to agent terminals too: xterm 6's pause gate lives in the core
+   * RenderService, so a WebGL-rendered terminal is just as susceptible as a
+   * DOM one (and after a webglcontextlost it falls back to the DOM renderer
+   * with no requeue). Skips: hibernated/invisible/attaching terminals,
+   * alt-buffer (TUI) sessions, and terminals without a rendered element.
+   * Throttled per terminal.
    */
   maybeReflow(managed: ManagedTerminal): void {
-    if (managed.runtimeAgentId) return;
     if (managed.isHibernated) return;
     if (!managed.isVisible) return;
     if (managed.isAttaching) return;
