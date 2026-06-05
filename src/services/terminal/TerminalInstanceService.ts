@@ -314,6 +314,8 @@ class TerminalInstanceService {
 
     // If JetBrains Mono loads after the startup timeout already opened terminals
     // against the fallback stack, repair every live grid once it arrives (#9776).
+    // The service is a page-lifetime singleton, so the unsubscribe is intentionally
+    // discarded — the subscription is one-shot and never needs teardown.
     onTerminalFontArrivedLate(() => this.repairFontGrid());
   }
 

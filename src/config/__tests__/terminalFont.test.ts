@@ -161,6 +161,52 @@ describe("onTerminalFontArrivedLate", () => {
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).toHaveBeenCalledTimes(1);
   });
+
+  it("fires when one weight arrives late even if the other fails", async () => {
+    // Regular weight loads late; bold rejects. The regular JetBrains Mono face
+    // still changes cell metrics, so the grid must be repaired (allSettled).
+    let resolveRegular!: (value: unknown) => void;
+    let rejectBold!: (reason: unknown) => void;
+    const regular = new Promise((resolve) => {
+      resolveRegular = resolve;
+    });
+    const bold = new Promise((_resolve, reject) => {
+      rejectBold = reject;
+    });
+    // Avoid an unhandled-rejection warning for the deliberately-rejected weight.
+    bold.catch(() => {});
+    loadMock.mockImplementation((spec: string) => (spec.startsWith("bold") ? bold : regular));
+
+    const mod = await import("../terminalFont");
+    mod.ensureTerminalFontLoaded();
+    const callback = vi.fn();
+    mod.onTerminalFontArrivedLate(callback);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    rejectBold(new Error("bold failed"));
+    resolveRegular([{ family: "JetBrains Mono" }]);
+    await vi.runAllTimersAsync();
+
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("isolates a throwing callback so the others still fire", async () => {
+    const mod = await import("../terminalFont");
+    mod.ensureTerminalFontLoaded();
+    const throwing = vi.fn(() => {
+      throw new Error("boom");
+    });
+    const second = vi.fn();
+    mod.onTerminalFontArrivedLate(throwing);
+    mod.onTerminalFontArrivedLate(second);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    resolveLoad([{ family: "JetBrains Mono" }]);
+    await vi.runAllTimersAsync();
+
+    expect(throwing).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("terminalFontReady", () => {

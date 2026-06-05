@@ -48,16 +48,21 @@ export function ensureTerminalFontLoaded(): Promise<void> {
   const size = `${DEFAULT_TERMINAL_FONT_SIZE}px 'JetBrains Mono'`;
   // The race times out terminal creation, but the underlying font fetch keeps
   // running — `document.fonts.load` is not cancelled. Hold a reference to the
-  // real load so we can tell when JetBrains Mono actually arrived.
-  const realLoad = Promise.all([document.fonts.load(size), document.fonts.load(`bold ${size}`)]);
+  // real load so we can tell when JetBrains Mono actually arrived. `allSettled`
+  // (not `all`) so one weight failing — e.g. bold erroring after regular already
+  // loaded — doesn't mask that the other weight arrived and changed cell metrics.
+  const realLoad = Promise.allSettled([
+    document.fonts.load(size),
+    document.fonts.load(`bold ${size}`),
+  ]);
 
   let timedOut = false;
   fontLoadPromise = Promise.race([
     realLoad,
-    new Promise<FontFace[]>((resolve) =>
+    new Promise<void>((resolve) =>
       setTimeout(() => {
         timedOut = true;
-        resolve([]);
+        resolve();
       }, FONT_LOAD_TIMEOUT_MS)
     ),
   ]).then(
@@ -65,19 +70,16 @@ export function ensureTerminalFontLoaded(): Promise<void> {
     () => undefined
   );
 
-  // If the real load only settles after the timeout already unblocked the gate,
-  // the font arrived late and any terminal opened in the meantime is mis-sized.
-  // Chaining off `realLoad` (rather than a `document.fonts` `loadingdone`
-  // listener) keys the signal to JetBrains Mono specifically, so an unrelated
-  // late font load can't trigger a spurious repair.
-  void realLoad.then(
-    () => {
-      if (timedOut) notifyTerminalFontArrivedLate();
-    },
-    () => {
-      // Genuine load failure: nothing arrived, so there is nothing to repair.
-    }
-  );
+  // If the real load only settles after the timeout already unblocked the gate
+  // and at least one weight actually loaded, the font arrived late and any
+  // terminal opened in the meantime is mis-sized. Chaining off `realLoad`
+  // (rather than a `document.fonts` `loadingdone` listener) keys the signal to
+  // JetBrains Mono specifically, so an unrelated late font load can't trigger a
+  // spurious repair.
+  void realLoad.then((results) => {
+    const anyLoaded = results.some((result) => result.status === "fulfilled");
+    if (timedOut && anyLoaded) notifyTerminalFontArrivedLate();
+  });
 
   return fontLoadPromise;
 }
