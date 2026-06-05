@@ -144,40 +144,107 @@ const textDecoder = new TextDecoder();
 // iterator invalidation during Map iteration.
 let throughputAccumulator = new Map<string, { totalBytes: number; packetCount: number }>();
 
-// Pause-duration gauge: closure-scoped map of `terminalId → pause-start time`
-// aggregated across SAB, IPC, and per-window MessagePort pause sources. Each
-// entry is added when a `pause-start` reliability metric flows through the
-// canonical `backpressureManager.emitReliabilityMetric` funnel and removed
-// when the matching `pause-end` (or suspend) flows through. The map lives
-// here (not in any single queue manager) because each queue manager only
-// sees its own path; aggregating at the funnel keeps a single source of
-// truth for the renderer-facing `heldDurationMs` value.
-const pausedTerminals = new Map<string, number>();
+// Pause-duration gauge: closure-scoped map of `terminalId → set of pause
+// sources currently holding the terminal`. Aggregated across SAB, IPC, and
+// per-window MessagePort pause sources. The `Set` is keyed by source id
+// (`"sab"`, `"ipc"`, `"port-{windowId}"`) so a `pause-end` from one path
+// only clears that path's hold — a terminal paused by both IPC and a port
+// window stays in the map until BOTH paths resume. Each pause source
+// also records its own start time so the renderer-facing `heldDurationMs`
+// reflects the oldest still-held start (the user-meaningful "how long has
+// this been paused?" answer).
+type PauseSource = "sab" | "ipc" | `port-${number}`;
+interface PauseSourceEntry {
+  startTime: number;
+}
+const pausedTerminals = new Map<string, Map<PauseSource, PauseSourceEntry>>();
+
+/**
+ * Add a pause source to the per-terminal tracking set. Records the
+ * pause-start time for the source (later start times are ignored —
+ * the first source to pause owns the held-duration clock).
+ */
+function addPauseSource(terminalId: string, source: PauseSource, startTime: number): void {
+  let sources = pausedTerminals.get(terminalId);
+  if (!sources) {
+    sources = new Map();
+    pausedTerminals.set(terminalId, sources);
+  }
+  if (!sources.has(source)) {
+    sources.set(source, { startTime });
+  }
+}
+
+/**
+ * Remove a pause source from the per-terminal tracking set. Returns
+ * `true` if the terminal still has other sources holding (kept in the
+ * map), `false` if all sources cleared (terminal removed from map).
+ */
+function removePauseSource(terminalId: string, source: PauseSource): boolean {
+  const sources = pausedTerminals.get(terminalId);
+  if (!sources) return false;
+  sources.delete(source);
+  if (sources.size === 0) {
+    pausedTerminals.delete(terminalId);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Remove all pause sources for a terminal (used by terminal-exit
+ * cleanup, where any pending sources are stale and the panel is gone).
+ */
+function clearAllPauseSources(terminalId: string): void {
+  pausedTerminals.delete(terminalId);
+}
 
 // Data-loss counter: closure-scoped accumulator of dropped-bytes and
 // drop-event counts since the last snapshot. The counter is incremented
 // unconditionally at the drop site so regression detection is observable
 // even when metrics are gated off; the wire emission itself is gated by
-// `metricsEnabled()` in `emitDataLossCount`. Reset semantics mirror
-// `throughputAccumulator` (snapshot-and-reset at tick boundary).
+// `metricsEnabled()` in `emitDataLossCount`. Reset semantics: the counter
+// is reset on EVERY tick (not just on the gated emit path) so toggling
+// metrics on doesn't dump the entire historical backlog as a single
+// false "regression" on the first emit after the gate opens.
 let dropAccumulator = { droppedBytes: 0, dataLossCount: 0 };
 
 /**
  * Canonical funnel for terminal reliability-metric events. Wraps the
  * `backpressureManager.emitReliabilityMetric` call (which is wired into
- * every queue manager and the inline SAB-path emits) so we can observe
+ * every queue manager, the inline SAB-path emits, and now the
+ * `BackpressureManager` itself via a constructor dep) so we can observe
  * `pause-start` / `pause-end` pairs to maintain the `pausedTerminals`
  * map. The `forceEmit` escape hatch on the underlying call still works
  * (passthrough) for the data-loss pulse that bypasses the metric gate.
+ *
+ * `source` identifies the pause source so multi-source attribution
+ * works (e.g., a port-window disconnect only removes the
+ * `port-{windowId}` source — if IPC is also pausing the same terminal,
+ * the terminal stays in the map).
  */
 function emitReliabilityMetricWithTracking(
   payload: import("../shared/types/pty-host.js").TerminalReliabilityMetricPayload,
+  source: PauseSource | null,
   forceEmit = false
 ): void {
-  if (payload.metricType === "pause-start") {
-    pausedTerminals.set(payload.terminalId, payload.timestamp);
-  } else if (payload.metricType === "pause-end" || payload.metricType === "suspend") {
-    pausedTerminals.delete(payload.terminalId);
+  if (source !== null) {
+    if (payload.metricType === "pause-start") {
+      addPauseSource(payload.terminalId, source, payload.timestamp);
+    } else if (payload.metricType === "pause-end" || payload.metricType === "suspend") {
+      removePauseSource(payload.terminalId, source);
+    }
+  } else if (
+    // `null` source + `pause-end`/`suspend` = user/system force-resume
+    // (e.g., the `pause-end` emitted by the force-resume handler at
+    // `electron/pty-host/handlers/backpressure.ts:215` after `clearQueue`
+    // tore down the queue managers' internal pause maps). Clear ALL
+    // sources for the terminal — attribution is moot when the user has
+    // explicitly asked for a full resume.
+    payload.metricType === "pause-end" ||
+    payload.metricType === "suspend"
+  ) {
+    clearAllPauseSources(payload.terminalId);
   }
   backpressureManager.emitReliabilityMetric(payload, forceEmit);
 }
@@ -216,11 +283,21 @@ function sendEvent(event: PtyHostEvent): void {
 }
 
 // Instantiate managers with dependency injection
+// `backpressureManager.emitReliabilityMetric` is the canonical funnel
+// for SAB-path emissions. Routing through it (via the `emitReliabilityMetric`
+// dep) means the closure-scoped per-source pause-tracking map stays in
+// sync with every reliability-metric event the manager emits — including
+// the internal `suspend` from `suspendVisualStream`'s safety-timeout
+// path. Source is `null` for these internal calls (we don't attribute
+// SAB-path sources to a specific window) — only the IPC and port queue
+// paths carry real source ids.
 const backpressureManager = new BackpressureManager({
   getTerminal: (id) => ptyManager.getTerminal(id),
   getPauseCoordinator,
   sendEvent,
   metricsEnabled,
+  emitReliabilityMetric: (payload, forceEmit) =>
+    emitReliabilityMetricWithTracking(payload, null, forceEmit),
 });
 
 const ipcQueueManager = new IpcQueueManager({
@@ -229,7 +306,7 @@ const ipcQueueManager = new IpcQueueManager({
   sendEvent,
   metricsEnabled,
   emitTerminalStatus: (...args) => backpressureManager.emitTerminalStatus(...args),
-  emitReliabilityMetric: (payload) => emitReliabilityMetricWithTracking(payload),
+  emitReliabilityMetric: (payload) => emitReliabilityMetricWithTracking(payload, "ipc"),
 });
 
 // PortQueueManager deps factory — creates per-window instances with unique pause tokens
@@ -240,7 +317,8 @@ function createPortQueueManager(windowId: number): PortQueueManager {
     sendEvent,
     metricsEnabled,
     emitTerminalStatus: (...args) => backpressureManager.emitTerminalStatus(...args),
-    emitReliabilityMetric: (payload) => emitReliabilityMetricWithTracking(payload),
+    emitReliabilityMetric: (payload) =>
+      emitReliabilityMetricWithTracking(payload, `port-${windowId}` as PauseSource),
     pauseToken: `port-queue-${windowId}`,
   });
 }
@@ -300,6 +378,15 @@ function disconnectWindow(windowId: number, reason: string): void {
   conn.batcher.dispose();
   // Release port-queue pause holds before disposing
   conn.portQueueManager.resumeAll();
+  // Clear this window's per-source pause-tracking entries. Multi-source
+  // attribution: a terminal paused by BOTH the port window and the IPC
+  // queue must NOT lose its held-duration tracking when just the window
+  // disconnects — `removePauseSource` keeps the entry alive while the
+  // IPC path still holds. The renderer is informed via the queue
+  // manager's own resume flow + tier-changed message.
+  for (const terminalId of conn.portQueueManager.pausedTerminalsMap.keys()) {
+    removePauseSource(terminalId, `port-${windowId}` as PauseSource);
+  }
   conn.portQueueManager.dispose();
   try {
     conn.port.close();
@@ -386,13 +473,21 @@ const resourceGovernor = new ResourceGovernor({
   getPausedDurationsSnapshot: () => {
     // Read from the closure-scoped `pausedTerminals` map. The map is
     // maintained by `emitReliabilityMetricWithTracking` so every pause
-    // source (SAB, IPC, per-window port) contributes. Empty-array fast
-    // path matches the `pending-bytes-gauge` skip-when-empty contract.
+    // source (SAB, IPC, per-window port) contributes. A terminal is
+    // included as long as ANY source is still holding — multi-source
+    // attribution via the per-source `Set` means a `pause-end` from
+    // one path only clears that path's hold. The held duration uses
+    // the OLDEST start time across all sources, so the renderer sees
+    // the user-meaningful "how long has this been paused?" answer.
     if (pausedTerminals.size === 0) return [];
     const now = Date.now();
     const out: Array<{ terminalId: string; heldDurationMs: number }> = [];
-    for (const [terminalId, startTime] of pausedTerminals) {
-      out.push({ terminalId, heldDurationMs: Math.max(0, now - startTime) });
+    for (const [terminalId, sources] of pausedTerminals) {
+      let oldestStart = Number.POSITIVE_INFINITY;
+      for (const { startTime } of sources.values()) {
+        if (startTime < oldestStart) oldestStart = startTime;
+      }
+      out.push({ terminalId, heldDurationMs: Math.max(0, now - oldestStart) });
     }
     return out;
   },
@@ -594,13 +689,16 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
             backpressureManager.emitTerminalStatus(id, "paused-backpressure", utilization);
 
             // Emit metrics for pause-start
-            emitReliabilityMetricWithTracking({
-              terminalId: id,
-              metricType: "pause-start",
-              timestamp: pauseStartTime,
-              bufferUtilization: utilization,
-              shardIndex,
-            });
+            emitReliabilityMetricWithTracking(
+              {
+                terminalId: id,
+                metricType: "pause-start",
+                timestamp: pauseStartTime,
+                bufferUtilization: utilization,
+                shardIndex,
+              },
+              "sab"
+            );
 
             // Safety timeout: if ack-driven resume doesn't clear backpressure in time,
             // suspend the stream and rely on wake to restore state.
@@ -622,13 +720,16 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
                 if (!timeoutCoord?.isPaused) {
                   backpressureManager.emitTerminalStatus(id, "running", util, dur);
                 }
-                emitReliabilityMetricWithTracking({
-                  terminalId: id,
-                  metricType: "pause-end",
-                  timestamp: Date.now(),
-                  durationMs: dur,
-                  bufferUtilization: util,
-                });
+                emitReliabilityMetricWithTracking(
+                  {
+                    terminalId: id,
+                    metricType: "pause-end",
+                    timestamp: Date.now(),
+                    durationMs: dur,
+                    bufferUtilization: util,
+                  },
+                  "sab"
+                );
               }
             }, BACKPRESSURE_SAFETY_TIMEOUT_MS);
 
@@ -689,12 +790,20 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
       // gated separately in ResourceGovernor.emitDataLossCount.
       dropAccumulator.droppedBytes += dataBytes;
       dropAccumulator.dataLossCount += 1;
-      emitReliabilityMetricWithTracking({
-        terminalId: id,
-        metricType: "suspend",
-        timestamp: Date.now(),
-        bufferUtilization: utilization,
-      });
+      // `null` source: the suspend pulse is a data-path signal, not a
+      // pause-source attribution. The funnel still forwards to the wire
+      // emission; it just doesn't touch the per-source tracking map.
+      // (The map entry is removed by the corresponding `pause-end` from
+      // the IPC queue's own backpressure path.)
+      emitReliabilityMetricWithTracking(
+        {
+          terminalId: id,
+          metricType: "suspend",
+          timestamp: Date.now(),
+          bufferUtilization: utilization,
+        },
+        null
+      );
       // Surface the drop to the renderer so a discontinuity marker is shown.
       // Bypasses BackpressureManager.emitTerminalStatus() because each drop
       // is a distinct pulse — the dedup guard there would silently swallow
@@ -744,10 +853,15 @@ ptyManager.on("exit", (id: string, exitCode: number, signal?: number) => {
     pauseCoordinators.delete(id);
   }
 
-  // Drop any tracked pause-duration entry for this terminal so the next
+  // Drop any tracked pause-duration sources for this terminal so the next
   // `pause-duration-gauge` tick doesn't emit a stale `heldDurationMs`
-  // for a terminal that no longer exists.
-  pausedTerminals.delete(id);
+  // for a terminal that no longer exists. Cleanup paths (this one,
+  // `disconnectWindow`, `clearQueue`, `dispose`) bypass the funnel
+  // because they don't carry a wire emission — a disconnected window
+  // or torn-down queue manager shouldn't trigger a "pause-end" wire
+  // event. The renderer is informed separately via terminal-exit /
+  // disconnect flows.
+  clearAllPauseSources(id);
 
   // Clean up any active backpressure monitoring for this terminal
   backpressureManager.cleanupTerminal(id);
@@ -969,13 +1083,16 @@ function resumePausedTerminal(id: string): void {
   if (!coordinator?.isPaused) {
     backpressureManager.emitTerminalStatus(id, "running", utilization, pauseDuration);
   }
-  emitReliabilityMetricWithTracking({
-    terminalId: id,
-    metricType: "pause-end",
-    timestamp: Date.now(),
-    durationMs: pauseDuration,
-    bufferUtilization: utilization,
-  });
+  emitReliabilityMetricWithTracking(
+    {
+      terminalId: id,
+      metricType: "pause-end",
+      timestamp: Date.now(),
+      durationMs: pauseDuration,
+      bufferUtilization: utilization,
+    },
+    "sab"
+  );
 
   backpressureManager.stats.resumeCount++;
 }

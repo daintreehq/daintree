@@ -384,7 +384,15 @@ export function setupLifecycleListeners(): DisposableStore {
           // stream and ignored here.
           if (payload.metricType === "pause-end" || payload.metricType === "suspend") {
             const terminal = usePanelStore.getState().panelsById[payload.terminalId];
-            if (terminal && isPtyPanel(terminal) && terminal.heldDurationMs !== undefined) {
+            if (terminal && isPtyPanel(terminal)) {
+              // Always enqueue the clear — the buffer's null-wins
+              // semantics correctly handle the cross-frame race where a
+              // non-null `pause-duration-gauge` patch was enqueued but
+              // hasn't been flushed yet. Skipping the enqueue based on
+              // the committed (post-flush) `heldDurationMs` would let
+              // the buffered non-null value resurrect after the
+              // terminal resumed. The fold's same-value skip makes a
+              // redundant enqueue cheap when nothing is buffered.
               clearHeldDuration(payload.terminalId);
             }
             return;

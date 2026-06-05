@@ -396,11 +396,11 @@ export function TerminalHeaderContent({
             <div className="flex flex-col gap-0.5">
               <span className="font-medium">System memory pressure</span>
               <span>Paused to reduce memory pressure. Recovers automatically.</span>
-              {heldDurationMs != null && heldDurationMs > 0 && (
-                <span className="text-daintree-text/60 tabular-nums">
-                  Paused for {formatElapsedDuration(heldDurationMs)}
-                </span>
-              )}
+              {/* Held-duration gauge intentionally omitted: ResourceGovernor
+                  pauses via the coordinator but does not emit `pause-start`
+                  / `pause-end` reliability metrics, so the
+                  `pause-duration-gauge` funnel never tracks it. Showing
+                  a frozen "Paused for Xs" line would be a lie. */}
             </div>
           </TooltipContent>
         </Tooltip>

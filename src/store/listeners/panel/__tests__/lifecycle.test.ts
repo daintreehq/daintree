@@ -436,4 +436,30 @@ describe("onReliabilityMetric — pause-duration-gauge routing", () => {
     expect(getPtyHeldDuration("term-1")).toBeUndefined();
     expect(usePanelStore.getState().panelsById["ghost-terminal"]).toBeUndefined();
   });
+
+  it("pause-end clears a buffered (but unflushed) heldDurationMs patch", () => {
+    // Locks in the cross-frame race fix: a `pause-duration-gauge`
+    // patch enqueues a value into the RAF buffer; a `pause-end` arrives
+    // before the RAF flushes; the committed (post-flush) value is still
+    // `undefined` so an old guard would skip the clear. With the guard
+    // removed, the buffer's null-wins semantics correctly clear the
+    // buffered non-null patch before flush.
+    setupPanel();
+    const handler = getReliabilityHandler();
+
+    // Frame 1: gauge arrives, enqueues non-null into buffer (no flush).
+    handler({
+      metricType: "pause-duration-gauge",
+      perTerminalHeld: [{ terminalId: "term-1", heldDurationMs: 2000 }],
+    });
+    // Do NOT flush — simulate the in-flight RAF.
+
+    // Frame 1 continued: pause-end arrives synchronously, enqueues null.
+    handler({ metricType: "pause-end", terminalId: "term-1" });
+
+    // Now flush — the null-wins behavior must clobber the buffered 2000.
+    flushPanelStatusBuffer();
+
+    expect(getPtyHeldDuration("term-1")).toBeUndefined();
+  });
 });

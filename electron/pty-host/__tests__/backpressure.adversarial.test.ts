@@ -361,4 +361,83 @@ describe("BackpressureManager adversarial", () => {
   it.todo(
     "safety-timeout force-resume behavior is orchestrated in electron/pty-host.ts rather than BackpressureManager"
   );
+
+  describe("emitReliabilityMetric dep funnel", () => {
+    // When the host wires `emitReliabilityMetric` as a dep, every
+    // internal reliability-metric emission must route through it
+    // (so the closure-scoped pause-tracking map in pty-host.ts can
+    // observe pause-start / pause-end / suspend). Without the dep,
+    // the manager falls back to the legacy inline wire emission.
+    it("routes internal emissions through the dep when provided", () => {
+      const dep = vi.fn();
+      const backpressure = new BackpressureManager({
+        getTerminal: vi.fn(),
+        getPauseCoordinator: (id) =>
+          coordinators.get(id) as unknown as PtyPauseCoordinator | undefined,
+        sendEvent,
+        metricsEnabled: () => true,
+        emitReliabilityMetric: dep,
+      });
+
+      backpressure.emitReliabilityMetric({
+        terminalId: "term-1",
+        metricType: "pause-start",
+        timestamp: 1000,
+      });
+
+      expect(dep).toHaveBeenCalledWith(
+        expect.objectContaining({ metricType: "pause-start", terminalId: "term-1" }),
+        false
+      );
+      // sendEvent must NOT be called when the dep is provided — the
+      // dep owns the wire emission.
+      expect(sendEvent).not.toHaveBeenCalled();
+    });
+
+    it("suspendVisualStream's internal suspend emission routes through the dep", () => {
+      const dep = vi.fn();
+      const backpressure = new BackpressureManager({
+        getTerminal: vi.fn(),
+        getPauseCoordinator: (id) =>
+          coordinators.get(id) as unknown as PtyPauseCoordinator | undefined,
+        sendEvent,
+        metricsEnabled: () => true,
+        emitReliabilityMetric: dep,
+      });
+
+      backpressure.suspendVisualStream("term-1", "stall", 85.0, 500, 1);
+
+      // The internal `suspend` emission from suspendVisualStream must
+      // also route through the dep (with forceEmit=true so the data-loss
+      // pulse still fires when metrics are off).
+      const suspendCalls = dep.mock.calls.filter(
+        (c) => (c[0] as { metricType: string }).metricType === "suspend"
+      );
+      expect(suspendCalls).toHaveLength(1);
+      expect(suspendCalls[0][1]).toBe(true);
+    });
+
+    it("falls back to inline wire emission when no dep is provided (legacy behavior)", () => {
+      const backpressure = new BackpressureManager({
+        getTerminal: vi.fn(),
+        getPauseCoordinator: (id) =>
+          coordinators.get(id) as unknown as PtyPauseCoordinator | undefined,
+        sendEvent,
+        metricsEnabled: () => true,
+      });
+
+      backpressure.emitReliabilityMetric({
+        terminalId: "term-1",
+        metricType: "pause-start",
+        timestamp: 1000,
+      });
+
+      expect(sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "terminal-reliability-metric",
+          payload: expect.objectContaining({ metricType: "pause-start" }),
+        })
+      );
+    });
+  });
 });

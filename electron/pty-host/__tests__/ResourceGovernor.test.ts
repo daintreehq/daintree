@@ -1045,6 +1045,99 @@ describe("ResourceGovernor", () => {
 
       governor.dispose();
     });
+
+    it("always resets the drop counter on each tick, even when metrics are disabled", () => {
+      // Locks in the regression-detection contract: the counter must NOT
+      // accumulate indefinitely while metrics are gated off, otherwise the
+      // first emit after toggling metrics on would dump the entire
+      // historical backlog as a false "regression" — defeating the
+      // purpose of the gauge.
+      vi.mocked(metricsEnabled).mockReturnValue(false);
+
+      let snapshotCount = 0;
+      const deps = createMockDeps({
+        getDropSnapshot: vi.fn().mockImplementation(() => {
+          snapshotCount++;
+          // Each tick the mock reports 100 new bytes / 1 new drop.
+          return { droppedBytesDelta: 100, dataLossCountDelta: 1 };
+        }),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // Three ticks with metrics off. Snapshot must be called on every
+      // tick (gated emission is what was failing here).
+      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(2000);
+
+      expect(snapshotCount).toBe(3);
+      // No wire emissions because metrics are gated.
+      const calls = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls;
+      const gaugeCalls = calls.filter(
+        (c: unknown[]) =>
+          (c[0] as Record<string, unknown>)?.type === "terminal-reliability-metric" &&
+          ((c[0] as Record<string, unknown>)?.payload as Record<string, unknown>)?.metricType ===
+            "data-loss-count"
+      );
+      expect(gaugeCalls).toHaveLength(0);
+
+      governor.dispose();
+    });
+
+    it("emits a bounded delta after toggling metrics on (not the historical backlog)", () => {
+      // Continuation of the previous test: after a metrics-off period,
+      // the first emit after the gate opens must report only the drops
+      // accumulated since the gate opened — not the historical total.
+      vi.mocked(metricsEnabled).mockReturnValue(false);
+
+      // Track call index so the mock can simulate "drops only after
+      // metrics flip on" — the counter reset on every tick means the
+      // gauge never accumulates a backlog.
+      let callIdx = 0;
+      const dropsByTick = [0, 0, 0, 5]; // 3 off-ticks with 0 drops, then 1 drop after flip
+
+      const deps = createMockDeps({
+        getDropSnapshot: vi.fn().mockImplementation(() => {
+          const drops = dropsByTick[callIdx] ?? 0;
+          callIdx++;
+          return { droppedBytesDelta: drops * 1024, dataLossCountDelta: drops };
+        }),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // 3 ticks with metrics off.
+      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(2000);
+
+      // Flip metrics on.
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+
+      vi.advanceTimersByTime(2000);
+
+      // The post-flip emit must reflect ONLY the post-flip drop, not
+      // the historical 0+0+0+5 = 5 backlog. The counter is reset on
+      // every tick (the off-ticks reset to 0, the post-flip tick
+      // captured the fresh 5).
+      const calls = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls;
+      const gaugeCalls = calls.filter(
+        (c: unknown[]) =>
+          (c[0] as Record<string, unknown>)?.type === "terminal-reliability-metric" &&
+          ((c[0] as Record<string, unknown>)?.payload as Record<string, unknown>)?.metricType ===
+            "data-loss-count"
+      );
+      expect(gaugeCalls).toHaveLength(1);
+      expect((gaugeCalls[0][0] as Record<string, unknown>).payload).toMatchObject({
+        droppedBytesDelta: 5 * 1024,
+        dataLossCountDelta: 5,
+      });
+
+      governor.dispose();
+    });
   });
 
   describe("host-memory-warning", () => {

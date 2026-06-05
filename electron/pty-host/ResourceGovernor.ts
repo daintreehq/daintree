@@ -434,14 +434,18 @@ export class ResourceGovernor {
   }
 
   private emitDataLossCount(): void {
-    if (!metricsEnabled()) return;
     if (!this.deps.getDropSnapshot) return;
 
+    // Always call the snapshotter so the counter resets on every tick
+    // regardless of the metrics gate. Without this, the counter would
+    // accumulate indefinitely while `DAINTREE_TERMINAL_METRICS=0`, then
+    // dump the entire historical backlog as a single "regression" on the
+    // first emit after the gate opens. Counter is therefore bounded to
+    // "since last tick" regardless of gate state.
     const snapshot = this.deps.getDropSnapshot();
+    if (!metricsEnabled()) return;
     // Skip-when-zero matches the throughput-rate gauge contract: a tick
-    // with no drops produces no wire event. Counter is reset on every
-    // snapshot-and-reset, so re-entry on the same tick would see zero
-    // deltas and skip — this is intentional, not a bug.
+    // with no drops produces no wire event.
     if (snapshot.dataLossCountDelta === 0 && snapshot.droppedBytesDelta === 0) return;
 
     this.deps.sendEvent({
