@@ -662,6 +662,28 @@ describe("EmptyState", () => {
       expect(iconWrap?.className).toContain("@max-[280px]/empty-state:[&_svg]:h-6");
       expect(iconWrap?.className).toContain("@max-[280px]/empty-state:[&_svg]:w-6");
     });
+
+    it("fade-through outgoing cell preserves the previous scale's gap (sidebar→canvas flip)", () => {
+      // The outgoing cell in the fade-through transition uses the previous
+      // props' scale, not the new one — otherwise the outgoing cell jumps
+      // to the heavier canvas gap before the 100ms exit completes. The
+      // outgoing scale must be threaded through (`outgoing.scale`), which
+      // is the behavior the new cn() on the outgoing cell guards.
+      const { rerender, container } = render(
+        <EmptyState variant="zero-data" scale="sidebar" title="A" />
+      );
+      rerender(<EmptyState variant="zero-data" scale="canvas" title="B" />);
+      const outgoing = container.querySelector<HTMLElement>(
+        ".motion-safe\\:animate-out"
+      );
+      const incoming = container.querySelector<HTMLElement>(
+        ".motion-safe\\:animate-in"
+      );
+      // Outgoing is the previous (sidebar) state — no canvas gap-3.
+      expect(outgoing?.className).not.toContain("gap-3");
+      // Incoming is the new (canvas) state — carries the canvas gap-3.
+      expect(incoming?.className).toContain("gap-3");
+    });
   });
 
   describe("className passthrough", () => {
