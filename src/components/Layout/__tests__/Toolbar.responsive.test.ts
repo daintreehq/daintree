@@ -245,6 +245,25 @@ describe("Toolbar responsive design — issue #4133", () => {
       expect(armedBlock).toContain('.toolbar-agent-button[aria-pressed="true"]');
     });
 
+    it("radio chips (aria-checked) share the armed-state recipe across base, light, and forced-colors blocks", () => {
+      // Segmented radio chips (viewport preset / DPR) carry role=radio + aria-checked
+      // rather than aria-pressed. For them to read with the same theme-aware armed
+      // styling — and not fall back to a hardcoded fill that smudges on light themes —
+      // every armed block must enumerate aria-checked alongside aria-pressed.
+      const armedSelectorIndex = css.indexOf('.toolbar-icon-button[aria-checked="true"]');
+      const lightFlipIndex = css.indexOf(
+        ':where(.light, [data-color-mode="light"]) .toolbar-icon-button[aria-checked="true"]'
+      );
+      const forcedColorsBlock = css.match(
+        /@media \(forced-colors: active\)\s*\{[\s\S]*?aria-pressed[\s\S]*?\}\s*\}/
+      )?.[0];
+
+      expect(armedSelectorIndex).toBeGreaterThan(-1);
+      expect(lightFlipIndex).toBeGreaterThan(-1);
+      expect(forcedColorsBlock).toBeDefined();
+      expect(forcedColorsBlock).toContain('.toolbar-icon-button[aria-checked="true"]');
+    });
+
     it("armed selectors appear after :hover in source order so armed survives hover-over-armed", () => {
       // Hover and armed have equal specificity, so later-in-source wins. If a
       // refactor moves the armed block above hover, hovering an armed button

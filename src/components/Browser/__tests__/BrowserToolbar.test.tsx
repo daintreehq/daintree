@@ -421,6 +421,29 @@ describe("BrowserToolbar address-bar scheme icon and input", () => {
     const reload = getByTestId("browser-reload");
     expect(reload.className).not.toContain("animate-spin");
   });
+
+  it("scheme icon is decorative and hidden from the accessibility tree", () => {
+    const lock = renderToolbar({ url: "https://example.com/" }).getByTestId(
+      "browser-url-scheme-lock"
+    );
+    expect(lock.getAttribute("aria-hidden")).toBe("true");
+
+    const globe = renderToolbar({ url: "http://localhost:3000/" }).getByTestId(
+      "browser-url-scheme-globe"
+    );
+    expect(globe.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("address bar exposes a focus-visible ring without suppressing the forced-colors outline", () => {
+    const { getByTestId } = renderToolbar();
+    const input = getByTestId("browser-address-bar");
+    // A focus-visible indicator must be present (the accent ring is the address bar's
+    // sole accent signal per CLAUDE.md) and outline-hidden must be preserved so the
+    // transparent forced-colors outline survives (lesson #6185 — never outline-none).
+    expect(input.className).toContain("focus-visible:outline-daintree-accent");
+    expect(input.className).toContain("focus:outline-hidden");
+    expect(input.className).not.toContain("outline-none");
+  });
 });
 
 describe("BrowserToolbar viewport presets", () => {
@@ -480,6 +503,31 @@ describe("BrowserToolbar viewport presets", () => {
 
       const galaxyRadio = document.querySelector('[data-viewport-preset-id="galaxy"]');
       expect(galaxyRadio!.getAttribute("aria-label")).toBe("Galaxy S25");
+    });
+  });
+
+  describe("armed-state styling", () => {
+    it("selected preset chip drives state via toolbar-icon-button + aria-checked, not a hardcoded fill", () => {
+      renderWithViewport();
+      const selected = document.querySelector('[data-viewport-preset-id="iphone"]')! as HTMLElement;
+      // The selected chip must participate in the theme-aware armed-state recipe
+      // (toolbar.css keys off .toolbar-icon-button[aria-checked="true"]) rather than
+      // hardcoding bg-overlay-emphasis, which reads as a dark smudge on light themes.
+      expect(selected.getAttribute("aria-checked")).toBe("true");
+      expect(selected.className).toContain("toolbar-icon-button");
+      expect(selected.className).not.toContain("bg-overlay-emphasis");
+    });
+
+    it("selected DPR chip uses the same armed-state contract", () => {
+      renderWithViewport({ onViewportDprChange: vi.fn(), viewportDpr: 2 });
+      const dprGroup = document.querySelector('[aria-label="Device pixel ratio"]')!;
+      const selected = Array.from(dprGroup.querySelectorAll('[role="radio"]')).find(
+        (r) => r.getAttribute("aria-checked") === "true"
+      ) as HTMLElement;
+      expect(selected).toBeTruthy();
+      expect(selected.getAttribute("data-dpr")).toBe("2");
+      expect(selected.className).toContain("toolbar-icon-button");
+      expect(selected.className).not.toContain("bg-overlay-emphasis");
     });
   });
 
