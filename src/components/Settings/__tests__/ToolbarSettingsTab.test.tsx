@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, act } from "@testing-library/react";
 import type { AgentSettings } from "@shared/types";
 
 const setLeftButtonsMock = vi.fn();
 const setRightButtonsMock = vi.fn();
+const moveButtonMock = vi.fn();
 const toggleButtonVisibilityMock = vi.fn();
 const setAlwaysShowDevServerMock = vi.fn();
 const setDefaultSelectionMock = vi.fn();
@@ -23,24 +24,47 @@ interface ToolbarState {
   };
   setLeftButtons: typeof setLeftButtonsMock;
   setRightButtons: typeof setRightButtonsMock;
+  moveButton: typeof moveButtonMock;
   toggleButtonVisibility: typeof toggleButtonVisibilityMock;
   setAlwaysShowDevServer: typeof setAlwaysShowDevServerMock;
   setDefaultSelection: typeof setDefaultSelectionMock;
   reset: typeof resetMock;
 }
 
-let mockToolbarState: ToolbarState = {
-  layout: { leftButtons: [], rightButtons: [], pinnedButtons: {} },
-  launcher: { alwaysShowDevServer: false, defaultSelection: undefined },
-  setLeftButtons: setLeftButtonsMock,
-  setRightButtons: setRightButtonsMock,
-  toggleButtonVisibility: toggleButtonVisibilityMock,
-  setAlwaysShowDevServer: setAlwaysShowDevServerMock,
-  setDefaultSelection: setDefaultSelectionMock,
-  reset: resetMock,
-};
+function makeToolbarState(
+  layout: ToolbarState["layout"] = {
+    // Mix of agent IDs and non-agent IDs so we can test both branches.
+    leftButtons: ["agent-tray", "claude", "gemini", "terminal"],
+    rightButtons: ["copy-tree", "settings"],
+    pinnedButtons: {},
+  }
+): ToolbarState {
+  return {
+    layout,
+    launcher: { alwaysShowDevServer: false, defaultSelection: undefined },
+    setLeftButtons: setLeftButtonsMock,
+    setRightButtons: setRightButtonsMock,
+    moveButton: moveButtonMock,
+    toggleButtonVisibility: toggleButtonVisibilityMock,
+    setAlwaysShowDevServer: setAlwaysShowDevServerMock,
+    setDefaultSelection: setDefaultSelectionMock,
+    reset: resetMock,
+  };
+}
 
+let mockToolbarState: ToolbarState = makeToolbarState();
 let mockAgentSettings: AgentSettings | null = null;
+
+function clearStoreMocks() {
+  setLeftButtonsMock.mockClear();
+  setRightButtonsMock.mockClear();
+  moveButtonMock.mockClear();
+  toggleButtonVisibilityMock.mockClear();
+  setAlwaysShowDevServerMock.mockClear();
+  setDefaultSelectionMock.mockClear();
+  resetMock.mockClear();
+  setAgentPinnedMock.mockClear();
+}
 
 vi.mock("@/store", () => ({
   useToolbarPreferencesStore: (selector: (s: ToolbarState) => unknown) =>
@@ -82,14 +106,23 @@ vi.mock("@/hooks/usePluginToolbarButtons", () => ({
   usePluginToolbarButtons: () => ({ buttonIds: [], configs: new Map() }),
 }));
 
-// @dnd-kit renders a sortable context plus listeners for each row. For unit
-// tests we only care about the rendered rows and the checkbox toggle paths —
-// stub the context and sortable hook so drag behavior doesn't need a real DOM.
+// Capture the single DndContext's props so tests can drive the drag handlers
+// directly — the mock renders children but never wires real pointer events.
+const dnd = vi.hoisted(() => ({
+  props: null as Record<string, (event: unknown) => void> | null,
+}));
+
 vi.mock("@dnd-kit/core", () => ({
-  DndContext: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  closestCenter: vi.fn(),
+  DndContext: (props: { children: React.ReactNode } & Record<string, unknown>) => {
+    dnd.props = props as unknown as Record<string, (event: unknown) => void>;
+    return <>{props.children}</>;
+  },
+  DragOverlay: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  closestCorners: vi.fn(),
+  pointerWithin: vi.fn(),
   KeyboardSensor: vi.fn(),
   PointerSensor: vi.fn(),
+  useDroppable: () => ({ setNodeRef: vi.fn(), isOver: false }),
   useSensor: vi.fn(),
   useSensors: () => [],
 }));
@@ -105,14 +138,17 @@ vi.mock("@dnd-kit/sortable", () => ({
     transition: null,
     isDragging: false,
   })),
-  verticalListSortingStrategy: vi.fn(),
+  rectSortingStrategy: vi.fn(),
+  arrayMove: <T,>(arr: T[], from: number, to: number): T[] => {
+    const next = arr.slice();
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item as T);
+    return next;
+  },
 }));
 
 // Test-time helper for restoring the default useSortable return between
 // cases (the mock factory above is hoisted, so it can't reference this).
-// The component only reads transform/transition/isDragging/listeners/
-// attributes/setNodeRef; the cast keeps the partial shape without
-// reconstructing dnd-kit's full ~20-field return type.
 const defaultSortable = (): ReturnType<typeof useSortable> =>
   ({
     attributes: {},
@@ -147,6 +183,34 @@ vi.mock("../SettingsSwitchCard", () => ({
   SettingsSwitchCard: () => null,
 }));
 
+// Render the switch as a plain role="switch" button so tests stay decoupled
+// from Radix's pointer-event internals while preserving the aria contract.
+vi.mock("../SettingsSwitch", () => ({
+  SettingsSwitch: ({
+    checked,
+    onCheckedChange,
+    "aria-label": ariaLabel,
+    className,
+  }: {
+    checked: boolean;
+    onCheckedChange: (next: boolean) => void;
+    "aria-label"?: string;
+    className?: string;
+  }) => (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      data-state={checked ? "checked" : "unchecked"}
+      className={className}
+      onClick={() => onCheckedChange(!checked)}
+    >
+      {ariaLabel}
+    </button>
+  ),
+}));
+
 import { useSortable } from "@dnd-kit/sortable";
 import { DRAG_GHOST_OPACITY } from "@/lib/animationUtils";
 import { ToolbarSettingsTab } from "../ToolbarSettingsTab";
@@ -157,29 +221,9 @@ function agentSettings(overrides: Record<string, { pinned?: boolean }>): AgentSe
 
 describe("ToolbarSettingsTab — agent visibility routing", () => {
   beforeEach(() => {
-    setLeftButtonsMock.mockClear();
-    setRightButtonsMock.mockClear();
-    toggleButtonVisibilityMock.mockClear();
-    setAlwaysShowDevServerMock.mockClear();
-    setDefaultSelectionMock.mockClear();
-    resetMock.mockClear();
-    setAgentPinnedMock.mockClear();
-
-    mockToolbarState = {
-      layout: {
-        // Mix of agent IDs and non-agent IDs so we can test both branches.
-        leftButtons: ["agent-tray", "claude", "gemini", "terminal"],
-        rightButtons: ["copy-tree", "settings"],
-        pinnedButtons: {},
-      },
-      launcher: { alwaysShowDevServer: false, defaultSelection: undefined },
-      setLeftButtons: setLeftButtonsMock,
-      setRightButtons: setRightButtonsMock,
-      toggleButtonVisibility: toggleButtonVisibilityMock,
-      setAlwaysShowDevServer: setAlwaysShowDevServerMock,
-      setDefaultSelection: setDefaultSelectionMock,
-      reset: resetMock,
-    };
+    clearStoreMocks();
+    vi.mocked(useSortable).mockImplementation(defaultSortable);
+    mockToolbarState = makeToolbarState();
     mockAgentSettings = null;
   });
 
@@ -191,10 +235,12 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
 
-    const claudeCheckbox = getByLabelText("Toggle Claude agent visibility") as HTMLInputElement;
-    const geminiCheckbox = getByLabelText("Toggle Gemini agent visibility") as HTMLInputElement;
-    expect(claudeCheckbox.checked).toBe(true);
-    expect(geminiCheckbox.checked).toBe(false);
+    expect(getByLabelText("Toggle Claude agent visibility").getAttribute("aria-checked")).toBe(
+      "true"
+    );
+    expect(getByLabelText("Toggle Gemini agent visibility").getAttribute("aria-checked")).toBe(
+      "false"
+    );
   });
 
   it("ignores pinnedButtons for agent IDs (agentSettingsStore wins)", () => {
@@ -207,11 +253,12 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     });
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
-    const claudeCheckbox = getByLabelText("Toggle Claude agent visibility") as HTMLInputElement;
-    expect(claudeCheckbox.checked).toBe(true);
+    expect(getByLabelText("Toggle Claude agent visibility").getAttribute("aria-checked")).toBe(
+      "true"
+    );
   });
 
-  it("routes agent checkbox toggle to setAgentPinned (not toggleButtonVisibility)", () => {
+  it("routes agent switch toggle to setAgentPinned (not toggleButtonVisibility)", () => {
     mockAgentSettings = agentSettings({
       claude: { pinned: true },
     });
@@ -224,7 +271,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
   });
 
-  it("routes agent checkbox toggle upward (unpinned → pinned) via setAgentPinned", () => {
+  it("routes agent switch toggle upward (unpinned → pinned) via setAgentPinned", () => {
     mockAgentSettings = agentSettings({
       gemini: { pinned: false },
     });
@@ -236,7 +283,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
   });
 
-  it("keeps non-agent checkbox toggle on toggleButtonVisibility", () => {
+  it("keeps non-agent switch toggle on toggleButtonVisibility", () => {
     const { getByLabelText } = render(<ToolbarSettingsTab />);
     fireEvent.click(getByLabelText("Toggle Terminal visibility"));
 
@@ -247,8 +294,8 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
 
   it("dispatches `'right'` as the side argument for right-side non-agent toggles", () => {
     // Locks the side argument so future side-aware store changes can't
-    // silently swallow the right-side branch — both handlers (left, right)
-    // are nominally identical today but each is independently wired.
+    // silently swallow the right-side branch — both columns are nominally
+    // identical today but each is independently wired.
     const { getByLabelText } = render(<ToolbarSettingsTab />);
     fireEvent.click(getByLabelText("Toggle Copy context visibility"));
 
@@ -256,25 +303,25 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("copy-tree", "right");
   });
 
-  it("reflects pinned agents in the section visible-count summary", () => {
+  it("reflects pinned agents in the side visible-count summary", () => {
     mockAgentSettings = agentSettings({
       claude: { pinned: true },
       gemini: { pinned: false },
     });
 
-    const { getByTestId } = render(<ToolbarSettingsTab />);
+    const { getByText } = render(<ToolbarSettingsTab />);
     // Left side: agent-tray (visible), claude (pinned, visible),
     // gemini (unpinned, not visible), terminal (not hidden, visible) => 3 / 4.
-    const leftSection = getByTestId("section-Left side buttons");
-    expect(leftSection.getAttribute("data-description")).toContain("3 of 4 visible");
+    expect(getByText("3/4")).toBeTruthy();
   });
 
   it("treats null agentSettings as all-unpinned without crashing", () => {
     mockAgentSettings = null;
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
-    const claudeCheckbox = getByLabelText("Toggle Claude agent visibility") as HTMLInputElement;
-    expect(claudeCheckbox.checked).toBe(false);
+    expect(getByLabelText("Toggle Claude agent visibility").getAttribute("aria-checked")).toBe(
+      "false"
+    );
   });
 
   it("handles a right-side agent correctly (routes through setAgentPinned)", () => {
@@ -296,36 +343,108 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
   });
 });
 
+describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
+  beforeEach(() => {
+    clearStoreMocks();
+    vi.mocked(useSortable).mockImplementation(defaultSortable);
+    mockToolbarState = makeToolbarState();
+    mockAgentSettings = null;
+  });
+
+  function fire(name: string, event: unknown) {
+    act(() => {
+      dnd.props?.[name]?.(event);
+    });
+  }
+
+  it("commits a same-side reorder via setLeftButtons (not moveButton)", () => {
+    render(<ToolbarSettingsTab />);
+
+    // Drag "agent-tray" (index 0) onto "terminal" (index 3) within the left side.
+    fire("onDragEnd", { active: { id: "agent-tray" }, over: { id: "terminal" } });
+
+    expect(setLeftButtonsMock).toHaveBeenCalledTimes(1);
+    expect(setLeftButtonsMock).toHaveBeenCalledWith(["claude", "gemini", "terminal", "agent-tray"]);
+    expect(moveButtonMock).not.toHaveBeenCalled();
+  });
+
+  it("commits a cross-side move via moveButton with the resolved target index", () => {
+    render(<ToolbarSettingsTab />);
+
+    // Drag "claude" from the left side onto "settings" (right side, index 1).
+    fire("onDragStart", { active: { id: "claude" } });
+    fire("onDragOver", {
+      active: { id: "claude", rect: { current: { translated: { right: 1000 } } } },
+      over: { id: "settings", rect: { left: 0, width: 100 } },
+    });
+    fire("onDragEnd", { active: { id: "claude" }, over: { id: "settings" } });
+
+    expect(moveButtonMock).toHaveBeenCalledTimes(1);
+    expect(moveButtonMock).toHaveBeenCalledWith("claude", "left", "right", 1);
+    expect(setLeftButtonsMock).not.toHaveBeenCalled();
+    expect(setRightButtonsMock).not.toHaveBeenCalled();
+  });
+
+  it("supports dropping onto an empty side without crashing", () => {
+    mockToolbarState = makeToolbarState({
+      leftButtons: ["agent-tray", "terminal"],
+      rightButtons: [],
+      pinnedButtons: {},
+    });
+
+    render(<ToolbarSettingsTab />);
+
+    fire("onDragStart", { active: { id: "terminal" } });
+    fire("onDragOver", {
+      active: { id: "terminal", rect: { current: { translated: { right: 1000 } } } },
+      over: { id: "right", rect: { left: 0, width: 100 } },
+    });
+    fire("onDragEnd", { active: { id: "terminal" }, over: { id: "right" } });
+
+    expect(moveButtonMock).toHaveBeenCalledWith("terminal", "left", "right", 0);
+  });
+
+  it("does not mutate the store when a drag is cancelled", () => {
+    render(<ToolbarSettingsTab />);
+
+    fire("onDragStart", { active: { id: "agent-tray" } });
+    fire("onDragCancel", {});
+
+    expect(setLeftButtonsMock).not.toHaveBeenCalled();
+    expect(setRightButtonsMock).not.toHaveBeenCalled();
+    expect(moveButtonMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a drop with no target (over === null)", () => {
+    render(<ToolbarSettingsTab />);
+
+    fire("onDragEnd", { active: { id: "claude" }, over: null });
+
+    expect(setLeftButtonsMock).not.toHaveBeenCalled();
+    expect(setRightButtonsMock).not.toHaveBeenCalled();
+    expect(moveButtonMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("ToolbarSettingsTab — drag-source vs hidden opacity deconfliction", () => {
   // The drag-source ghost (DRAG_GHOST_OPACITY) and the hidden-in-toolbar
   // preview (0.5) are semantically distinct states that previously shared a
   // magic 0.5. These tests lock the deconfliction so the two values can't
   // silently collapse back together.
   beforeEach(() => {
-    setAgentPinnedMock.mockClear();
+    clearStoreMocks();
     vi.mocked(useSortable).mockImplementation(defaultSortable);
-    mockToolbarState = {
-      layout: {
-        leftButtons: ["agent-tray", "claude", "gemini", "terminal"],
-        rightButtons: ["copy-tree", "settings"],
-        pinnedButtons: {},
-      },
-      launcher: { alwaysShowDevServer: false, defaultSelection: undefined },
-      setLeftButtons: setLeftButtonsMock,
-      setRightButtons: setRightButtonsMock,
-      toggleButtonVisibility: toggleButtonVisibilityMock,
-      setAlwaysShowDevServer: setAlwaysShowDevServerMock,
-      setDefaultSelection: setDefaultSelectionMock,
-      reset: resetMock,
-    };
+    mockToolbarState = makeToolbarState();
     mockAgentSettings = null;
   });
 
+  // The opacity-bearing node is the sortable wrapper (`setNodeRef` div): it is
+  // the switch's grandparent — switch → card root → sortable wrapper.
   function rowFor(label: string, container: HTMLElement): HTMLElement {
-    const checkbox = container.querySelector(
-      `input[aria-label="Toggle ${label} visibility"]`
-    ) as HTMLInputElement;
-    return checkbox.parentElement as HTMLElement;
+    const toggle = container.querySelector(
+      `button[role="switch"][aria-label="Toggle ${label} visibility"]`
+    ) as HTMLElement;
+    return toggle.parentElement!.parentElement as HTMLElement;
   }
 
   it("applies DRAG_GHOST_OPACITY to a dragged row (not the legacy 0.5)", () => {
@@ -353,7 +472,7 @@ describe("ToolbarSettingsTab — drag-source vs hidden opacity deconfliction", (
     }));
 
     const { container } = render(<ToolbarSettingsTab />);
-    const row = rowFor("Gemini Agent", container);
+    const row = rowFor("Gemini agent", container);
     expect(row.style.opacity).toBe(String(DRAG_GHOST_OPACITY));
   });
 
@@ -362,7 +481,7 @@ describe("ToolbarSettingsTab — drag-source vs hidden opacity deconfliction", (
     mockAgentSettings = agentSettings({ gemini: { pinned: false } });
 
     const { container } = render(<ToolbarSettingsTab />);
-    const row = rowFor("Gemini Agent", container);
+    const row = rowFor("Gemini agent", container);
     expect(row.style.opacity).toBe("0.5");
   });
 
@@ -370,7 +489,7 @@ describe("ToolbarSettingsTab — drag-source vs hidden opacity deconfliction", (
     mockAgentSettings = agentSettings({ claude: { pinned: true } });
 
     const { container } = render(<ToolbarSettingsTab />);
-    const row = rowFor("Claude Agent", container);
+    const row = rowFor("Claude agent", container);
     expect(row.style.opacity).toBe("1");
   });
 });
