@@ -1,18 +1,13 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
-import { Bell, BellOff, Unplug } from "lucide-react";
+import { Bell, BellOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { NotificationCenter } from "@/components/Notifications/NotificationCenter";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
-import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
+import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { useUIStore } from "@/store/uiStore";
 import { actionService } from "@/services/ActionService";
 import { useShallow } from "zustand/react/shallow";
@@ -40,7 +35,6 @@ export function NotificationCenterToolbarButton({
   const notificationCenterButtonRef = useRef<HTMLButtonElement>(null);
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
   const evictedToInboxCount = useNotificationHistoryStore((s) => s.evictedToInboxCount);
-  const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
   const {
     enabled: notificationsEnabled,
     quietUntil,
@@ -276,10 +270,7 @@ export function NotificationCenterToolbarButton({
           </Tooltip>
         </ContextMenuTrigger>
         <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-          <ContextMenuItem onSelect={() => toggleButtonVisibility("notification-center", "right")}>
-            <Unplug className="mr-2 h-3.5 w-3.5" />
-            Unpin from Toolbar
-          </ContextMenuItem>
+          <ToolbarContextMenuItems buttonId="notification-center" side="right" />
         </ContextMenuContent>
       </ContextMenu>
       <FixedDropdown

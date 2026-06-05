@@ -1,16 +1,11 @@
 import { useCallback, useRef, useState } from "react";
-import { SquareMenu, Unplug } from "lucide-react";
+import { SquareMenu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
-import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
+import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { actionService } from "@/services/ActionService";
 import { shortcutHintStore } from "@/store/shortcutHintStore";
 
@@ -28,7 +23,6 @@ export function ToolbarCommandPaletteButton({
   const shortcut = useKeybindingDisplay(PALETTE_ACTION_ID);
   const ariaShortcut = useAriaKeyshortcuts(PALETTE_ACTION_ID);
   const hover = useShortcutHintHover(PALETTE_ACTION_ID);
-  const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
   // The action palette opens via dispatch and AppPaletteDialog imperatively
   // restores focus to this button on close (see AppPaletteDialog.tsx:55-68).
@@ -108,10 +102,7 @@ export function ToolbarCommandPaletteButton({
         </Tooltip>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-        <ContextMenuItem onSelect={() => toggleButtonVisibility("command-palette", "right")}>
-          <Unplug className="mr-2 h-3.5 w-3.5" />
-          Unpin from Toolbar
-        </ContextMenuItem>
+        <ToolbarContextMenuItems buttonId="command-palette" side="right" />
       </ContextMenuContent>
     </ContextMenu>
   );
