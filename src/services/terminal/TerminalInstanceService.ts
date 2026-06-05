@@ -1462,9 +1462,7 @@ class TerminalInstanceService {
     // and reset (lastScrollbackRestoreError set). The failure case still
     // settles: a cosmetic scrollback failure must not strand the wait, and
     // callers distinguish it via lastScrollbackRestoreError.
-    return (
-      managed.scrollbackRestoreState === "done" || managed.scrollbackRestoreState === "none"
-    );
+    return managed.scrollbackRestoreState === "done" || managed.scrollbackRestoreState === "none";
   }
 
   /**

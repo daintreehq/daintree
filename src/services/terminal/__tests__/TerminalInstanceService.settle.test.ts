@@ -326,9 +326,9 @@ describe("TerminalInstanceService fully-settled waits", () => {
     it("leaves no ghost waiters after a batch timeout", async () => {
       makeManaged("p1", { scrollbackRestoreState: "in-progress" });
       const managed = makeManaged("p2", { scrollbackRestoreState: "in-progress" });
-      await expect(
-        service.waitForAllFullySettled(["p1", "p2"], { timeoutMs: 20 })
-      ).rejects.toThrow(/not fully settled/);
+      await expect(service.waitForAllFullySettled(["p1", "p2"], { timeoutMs: 20 })).rejects.toThrow(
+        /not fully settled/
+      );
 
       // The shared timeout must have detached every per-panel waiter.
       expect(service.fullySettledWaiters.has("p1")).toBe(false);
