@@ -404,6 +404,27 @@ describe("terminalClient MessagePort data routing", () => {
     });
   });
 
+  it("tolerates tier-changed for an unknown terminal and keeps dispatching", () => {
+    const port = acquirePort();
+    const received: Array<{ id: string; tier: string }> = [];
+    terminalClient.onTierChanged((id, tier) => received.push({ id, tier }));
+
+    // A tier-changed for a terminal the consumer doesn't track must not throw
+    // or wedge the dispatcher — the consumer routes by id internally.
+    port.postMessage({ type: "tier-changed", id: "no-such-terminal", tier: "background" });
+    port.postMessage({ type: "tier-changed", id: "term-1", tier: "active" });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        expect(received).toEqual([
+          { id: "no-such-terminal", tier: "background" },
+          { id: "term-1", tier: "active" },
+        ]);
+        resolve();
+      }, 50);
+    });
+  });
+
   it("ignores unknown message types without throwing or emitting acks", () => {
     const port = acquirePort();
     const tierReceived: string[] = [];

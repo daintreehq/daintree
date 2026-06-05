@@ -1022,6 +1022,51 @@ describe("pty-host adversarial", () => {
     expect(backpressure.getActivityTier("t-other")).toBe("background");
   });
 
+  it("TIER_CHANGED_BROADCAST_TOLERATES_A_CLOSING_PORT", async () => {
+    // A port that throws on postMessage (closing mid-iteration) must not block
+    // the reconciliation from reaching the other still-open ports. Window 1 is
+    // connected first, so it is iterated first and exercises the try/catch.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const portThrowing = createRendererPort();
+    const portHealthy = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1 },
+      ports: [portThrowing],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2 },
+      ports: [portHealthy],
+    });
+    await flushMicrotasks();
+
+    // Both windows own t1's project, so both are broadcast targets.
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-1" });
+    await flushMicrotasks();
+    portThrowing.postMessage.mockClear();
+    portHealthy.postMessage.mockClear();
+    portThrowing.postMessage.mockImplementation(() => {
+      throw new Error("port closing");
+    });
+
+    // Re-applying window 2's project triggers a fresh recompute + broadcast.
+    expect(() =>
+      parentPort.emit("message", {
+        type: "set-active-project",
+        windowId: 2,
+        projectId: "project-1",
+      })
+    ).not.toThrow();
+    await flushMicrotasks();
+
+    const tierHealthy = portHealthy.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter((m: { type?: string }) => m?.type === "tier-changed");
+    expect(tierHealthy).toContainEqual({ type: "tier-changed", id: "t1", tier: "active" });
+  });
+
   it("RECOMPUTE_WITH_NO_RENDERER_CONNECTIONS_IS_SAFE", async () => {
     // With no connected ports the broadcast loop must no-op without throwing,
     // while tiers are still applied to the backpressure manager.
