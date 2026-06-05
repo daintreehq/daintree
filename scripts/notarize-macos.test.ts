@@ -79,6 +79,9 @@ describe("notarize-macos", () => {
       if (id === "fs") return mockFs();
       if (id === "os") return mockOs();
       if (id === "child_process") return { execFileSync: mockExecFileSync };
+      // Helper re-signing (#9775) is exercised by its own test; no-op it here so
+      // these assertions stay focused on notarization codesign call counts.
+      if (id === "./resign-helpers-macos.cjs") return { resignHelpers: async () => {} };
       return originalRequire.apply(this, [id]);
     };
 
