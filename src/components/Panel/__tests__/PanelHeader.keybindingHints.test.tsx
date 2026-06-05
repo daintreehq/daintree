@@ -53,7 +53,7 @@ vi.mock("framer-motion", () => {
   };
 });
 
-let mockDragHandle: {
+const mockDragHandle: {
   listeners: Record<string, (e: unknown) => void> | undefined;
   setActivatorNodeRef?: (node: HTMLElement | null) => void;
 } | null = null;
