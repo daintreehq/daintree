@@ -67,6 +67,23 @@ export class TerminalRendererPolicy {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
 
+    // #9779: A pending BACKGROUND downgrade in the hysteresis window means the
+    // ingest queue is holding bytes (the computed-tier gate). If the computed
+    // tier flaps back to an active tier before the timer fires, the applied tier
+    // never transitions through "background", so applyRendererPolicyImmediate's
+    // resume-flush branch never runs and the held bytes strand until the next
+    // chunk self-heals (indefinitely if the producer is also quiet). Flush here
+    // at the debounce-cancellation site, before any branch clears the timer.
+    // resumeFlush re-checks the live computed tier and the queue length, so this
+    // is a safe no-op when nothing is held or the terminal is still backgrounded.
+    if (
+      managed.pendingTier === TerminalRefreshTier.BACKGROUND &&
+      managed.tierChangeTimer !== undefined &&
+      tier !== TerminalRefreshTier.BACKGROUND
+    ) {
+      this.deps.onResumeFlush?.(id);
+    }
+
     if (tier === TerminalRefreshTier.FOCUSED || tier === TerminalRefreshTier.BURST) {
       managed.lastActiveTime = Date.now();
     }

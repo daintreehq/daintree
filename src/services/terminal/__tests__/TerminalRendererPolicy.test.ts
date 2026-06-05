@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TerminalRefreshTier } from "../../../../shared/types/panel";
 import type { ManagedTerminal } from "../types";
 import type { RendererPolicyDeps } from "../TerminalRendererPolicy";
@@ -383,6 +383,114 @@ describe("TerminalRendererPolicy", () => {
       policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
 
       expect(onTierApplied).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("flap-resolution flush (#9779)", () => {
+    let onResumeFlush: ReturnType<typeof vi.fn>;
+
+    beforeEach(async () => {
+      onResumeFlush = vi.fn();
+      mockDeps.onResumeFlush = onResumeFlush;
+      // The active-tier-supersede branch re-arms a downgrade timer via
+      // window.setTimeout; the node test env has no window, so stub it.
+      vi.stubGlobal("window", { setTimeout: vi.fn(() => 999), clearTimeout: vi.fn() });
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    // A pending BACKGROUND downgrade is in flight (timer armed) and the computed
+    // tier flaps back to the SAME active tier it left. This lands in the
+    // equal-tier branch, which clears the timer without applying any tier change
+    // — so without the fix the held bytes would never flush.
+    it("flushes on the equal-tier flap-back (FOCUSED → BG-pending → FOCUSED)", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.pendingTier = TerminalRefreshTier.BACKGROUND;
+      mockManagedTerminal.tierChangeTimer = 999 as unknown as number;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+
+      expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
+    });
+
+    // The computed tier flaps to a MORE active tier than the applied one while a
+    // BACKGROUND downgrade is pending. This lands in the upgrade branch; the
+    // applied tier was active throughout so applyRendererPolicyImmediate's own
+    // flush branch (prevBackendTier !== "active") never fires.
+    it("flushes on the upgrade flap (VISIBLE applied, BG-pending → FOCUSED)", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.VISIBLE;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.pendingTier = TerminalRefreshTier.BACKGROUND;
+      mockManagedTerminal.tierChangeTimer = 999 as unknown as number;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+
+      expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
+      // No wake: the applied tier never went to background.
+      expect(mockDeps.wakeAndRestore).not.toHaveBeenCalled();
+    });
+
+    // The pending BACKGROUND downgrade is superseded by a different active-tier
+    // downgrade (FOCUSED → VISIBLE). The old held bytes must drain now rather
+    // than waiting for the new tier's debounce timer to fire.
+    it("flushes when an active-tier downgrade supersedes the BG-pending one", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.VISIBLE;
+      mockManagedTerminal.pendingTier = TerminalRefreshTier.BACKGROUND;
+      mockManagedTerminal.tierChangeTimer = 999 as unknown as number;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.VISIBLE);
+
+      expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
+    });
+
+    it("does not flush when no BACKGROUND downgrade is pending", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.VISIBLE;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.pendingTier = undefined;
+      mockManagedTerminal.tierChangeTimer = undefined;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+
+      expect(onResumeFlush).not.toHaveBeenCalled();
+    });
+
+    it("does not flush when the pending downgrade targets a non-BACKGROUND tier", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.pendingTier = TerminalRefreshTier.VISIBLE;
+      mockManagedTerminal.tierChangeTimer = 999 as unknown as number;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+
+      expect(onResumeFlush).not.toHaveBeenCalled();
+    });
+
+    it("does not flush when the incoming tier is itself BACKGROUND", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.BACKGROUND;
+      mockManagedTerminal.pendingTier = TerminalRefreshTier.BACKGROUND;
+      mockManagedTerminal.tierChangeTimer = 999 as unknown as number;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.BACKGROUND);
+
+      expect(onResumeFlush).not.toHaveBeenCalled();
+    });
+
+    it("does not flush when a timer is armed but no tier is pending", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.pendingTier = undefined;
+      mockManagedTerminal.tierChangeTimer = 999 as unknown as number;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+
+      expect(onResumeFlush).not.toHaveBeenCalled();
     });
   });
 
