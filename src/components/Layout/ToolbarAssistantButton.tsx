@@ -175,7 +175,7 @@ export function ToolbarAssistantButton({
               data-visible={pip !== null || showAgentPip}
               className={cn(
                 "toolbar-pip toolbar-badge",
-                pip?.className ?? agentPip?.className,
+                pip?.className ?? (showAgentPip ? agentPip?.className : undefined),
                 pip?.delayed && "animate-pulse-delayed"
               )}
             />

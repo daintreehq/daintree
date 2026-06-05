@@ -1394,15 +1394,17 @@ describe("AgentTrayButton", () => {
       return row.querySelector('span.relative span[aria-hidden="true"]');
     }
 
-    it.each([["waiting"], ["directing"]] as const)(
-      "renders the badge for actionable state %s",
-      (state) => {
-        const availability = arrangeClaudePanel(state);
-        const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-        const row = getByTestId("agent-tray-row-claude");
-        expect(badgeIn(row)?.getAttribute("data-visible")).toBe("true");
-      }
-    );
+    it.each([
+      ["waiting", /bg-state-waiting/],
+      ["directing", /bg-state-working/],
+    ] as const)("renders the badge for actionable state %s", (state, colorPattern) => {
+      const availability = arrangeClaudePanel(state);
+      const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      const row = getByTestId("agent-tray-row-claude");
+      const badge = badgeIn(row);
+      expect(badge?.getAttribute("data-visible")).toBe("true");
+      expect(badge?.className).toMatch(colorPattern);
+    });
 
     it.each([["working"], ["idle"]] as const)("hides the badge for passive state %s", (state) => {
       const availability = arrangeClaudePanel(state);
