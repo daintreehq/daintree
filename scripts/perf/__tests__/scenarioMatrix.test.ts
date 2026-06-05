@@ -47,10 +47,11 @@ describe("perf scenario matrix", () => {
     expect(sample.metrics).toBeDefined();
     // 33 KiB crossing + 4 KiB steady + 100 small lines (~26 bytes each) = ~39600
     expect(sample.metrics!.bytesWritten).toBeGreaterThan(39_000);
-    // Invariant: onWriteParsed must actually fire across the workload —
-    // a 0 count would mean the coalesced event is dormant in this version.
-    expect(sample.metrics!.parseInvocations).toBeGreaterThan(0);
-    // Invariant: the last "log line" survives the parser (terminator present).
-    expect(sample.metrics!.lastLineLength).toBeGreaterThan(0);
+    // Each sequential write fires onWriteParsed once it drains. 3 writes
+    // => at least 3 invocations (would catch coalescing/buffering regressions).
+    expect(sample.metrics!.parseInvocations).toBeGreaterThanOrEqual(3);
+    // Length of "log entry 99 from agent terminal" = 32. The last write
+    // is the log stream, so the last line must be the final log entry.
+    expect(sample.metrics!.lastLineLength).toBeGreaterThanOrEqual(32);
   });
 });

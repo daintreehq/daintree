@@ -6,10 +6,17 @@ import {
   createRng,
   createHeadlessTerminal,
 } from "../lib/workloads";
+import { INCREMENTAL_RESTORE_CONFIG } from "../../../src/services/terminal/types";
 
 const BURST_CHUNKS = makeTerminalChunks(6000, 96);
 const SUSTAINED_CHUNKS = makeTerminalChunks(3500, 180);
 const LARGE_SCROLL_CHUNKS = makeTerminalChunks(9000, 200);
+
+// One byte past the Daintree-side incremental-restore slice boundary —
+// the scenario must cover both sides of `chunkBytes` to catch regressions
+// in the slicing path.
+const CROSSING_CHUNK_BYTES = INCREMENTAL_RESTORE_CONFIG.chunkBytes + 1024;
+const STEADY_CHUNK_BYTES = 4 * 1024;
 
 export const terminalScenarios: PerfScenario[] = [
   {
@@ -134,11 +141,12 @@ export const terminalScenarios: PerfScenario[] = [
             terminal.write(data, () => resolve());
           });
 
-        // 33 KiB crosses the Daintree-side INCREMENTAL_RESTORE_CONFIG.chunkBytes
-        // (32 KiB) boundary. Real parser cost, not synthetic.
-        const crossing = "x".repeat(33 * 1024);
+        // CROSSING_CHUNK_BYTES crosses the Daintree-side
+        // INCREMENTAL_RESTORE_CONFIG.chunkBytes boundary. Real parser
+        // cost, not synthetic.
+        const crossing = "x".repeat(CROSSING_CHUNK_BYTES);
         // Steady-state size representative of normal log output.
-        const steady = "y".repeat(4 * 1024);
+        const steady = "y".repeat(STEADY_CHUNK_BYTES);
         // 100 log lines concatenated into a single write — the parser
         // still sees 100 newlines, but the per-write callback brackets
         // the whole batch (no Promise overhead per line).
