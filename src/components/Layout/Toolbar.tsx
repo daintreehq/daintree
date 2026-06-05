@@ -216,13 +216,13 @@ interface OverflowMenuProps {
   errorCount: number;
   notificationUnreadCount: number;
   agentDominantStates: Map<string, AgentState | null>;
+  hasActiveWorktree: boolean;
   githubStatsRef: React.RefObject<GitHubStatsHandle | null>;
   overflowActions: Partial<Record<AnyToolbarButtonId, () => void>>;
   pluginOverflowMeta: Record<string, OverflowMenuMeta>;
-  copyTreeShortcut: string | null;
-  notificationsShortcut: string | null;
-  commandPaletteShortcut: string | null;
-  devServerShortcut: string | null;
+  // Shortcut display strings keyed by toolbar button id, so each overflow item
+  // shows the same hint its visible button does (issue #9821).
+  shortcutById: Partial<Record<string, string | null>>;
 }
 
 // Overflow `…` menu. A component (not just a render helper) so the trigger can
@@ -238,16 +238,22 @@ function OverflowMenu({
   errorCount,
   notificationUnreadCount,
   agentDominantStates,
+  hasActiveWorktree,
   githubStatsRef,
   overflowActions,
   pluginOverflowMeta,
-  copyTreeShortcut,
-  notificationsShortcut,
-  commandPaletteShortcut,
-  devServerShortcut,
+  shortcutById,
 }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
   const isEmpty = overflowIds.length === 0;
+
+  // Keep the controlled `open` state in sync when the menu empties: Radix
+  // closes the popover when `open` is forced false, but `open` state would
+  // stay `true`, so the next non-empty transition would reopen the menu with
+  // no user action. Resetting here makes re-appearing overflow start closed.
+  useEffect(() => {
+    if (isEmpty) setOpen(false);
+  }, [isEmpty]);
   // Set in onPointerDownOutside, read in onCloseAutoFocus. Suppresses focus
   // restoration for pointer dismissals so the ellipsis button doesn't keep its
   // accent focus-visible ring; keyboard close (Escape/Enter) still gets default
@@ -269,13 +275,6 @@ function OverflowMenu({
   const ariaLabel = hasProblem
     ? `More toolbar items — ${n} ${n === 1 ? "problem" : "problems"} hidden`
     : `More toolbar items — ${n} hidden`;
-
-  const shortcutById: Partial<Record<string, string | null>> = {
-    "copy-tree": copyTreeShortcut,
-    "notification-center": notificationsShortcut,
-    "command-palette": commandPaletteShortcut,
-    "dev-server": devServerShortcut,
-  };
 
   const countSuffix = (id: AnyToolbarButtonId) => {
     if (id === "problems" && errorCount > 0) return ` (${errorCount})`;
@@ -374,8 +373,12 @@ function OverflowMenu({
           }
           const Icon = meta.icon;
           const shortcut = shortcutById[id];
+          // Mirror the visible copy-tree button, which is aria-disabled with an
+          // "Open a worktree first" tooltip when no worktree is active — without
+          // this the overflow item would silently close with no feedback.
+          const disabled = id === "copy-tree" && !hasActiveWorktree;
           return [
-            <DropdownMenuItem key={id} onClick={() => overflowActions[id]?.()}>
+            <DropdownMenuItem key={id} disabled={disabled} onClick={() => overflowActions[id]?.()}>
               <Icon className="mr-2 h-4 w-4" />
               <span className="flex-1">
                 {meta.label}
@@ -532,6 +535,10 @@ export function Toolbar({
   const devServerShortcut = useKeybindingDisplay("devServer.start");
   const notificationsShortcut = useKeybindingDisplay("notifications.toggle");
   const commandPaletteShortcut = useKeybindingDisplay("action.palette.open");
+  const settingsShortcut = useKeybindingDisplay("app.settings");
+  const problemsShortcut = useKeybindingDisplay("panel.toggleDiagnostics");
+  const terminalShortcut = useKeybindingDisplay("agent.terminal");
+  const browserShortcut = useKeybindingDisplay("agent.browser");
   const sidebarAriaShortcut = useAriaKeyshortcuts("nav.toggleSidebar");
   const copyTreeAriaShortcut = useAriaKeyshortcuts("worktree.copyTree");
 
@@ -1295,6 +1302,17 @@ export function Toolbar({
     ]
   );
 
+  const overflowShortcutById: Partial<Record<string, string | null>> = {
+    "copy-tree": copyTreeShortcut,
+    "notification-center": notificationsShortcut,
+    "command-palette": commandPaletteShortcut,
+    "dev-server": devServerShortcut,
+    settings: settingsShortcut,
+    problems: problemsShortcut,
+    terminal: terminalShortcut,
+    browser: browserShortcut,
+  };
+
   const renderOverflowMenu = (
     overflowIds: AnyToolbarButtonId[],
     side: "left" | "right",
@@ -1307,13 +1325,11 @@ export function Toolbar({
       errorCount={errorCount}
       notificationUnreadCount={notificationUnreadCount}
       agentDominantStates={agentDominantStates}
+      hasActiveWorktree={!!activeWorktree}
       githubStatsRef={githubStatsRef}
       overflowActions={overflowActions}
       pluginOverflowMeta={pluginOverflowMeta}
-      copyTreeShortcut={copyTreeShortcut}
-      notificationsShortcut={notificationsShortcut}
-      commandPaletteShortcut={commandPaletteShortcut}
-      devServerShortcut={devServerShortcut}
+      shortcutById={overflowShortcutById}
     />
   );
 

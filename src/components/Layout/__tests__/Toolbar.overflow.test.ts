@@ -75,6 +75,35 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
       expect(source).toMatch(/"command-palette":\s*commandPaletteShortcut/);
       expect(source).toMatch(/"dev-server":\s*devServerShortcut/);
     });
+
+    it("covers the remaining shortcut-bearing buttons — settings, problems, terminal, browser", () => {
+      // These all show a shortcut hint on their visible toolbar button, so the
+      // overflow item must too (issue #9821).
+      expect(source).toContain('useKeybindingDisplay("app.settings")');
+      expect(source).toContain('useKeybindingDisplay("panel.toggleDiagnostics")');
+      expect(source).toContain('useKeybindingDisplay("agent.terminal")');
+      expect(source).toContain('useKeybindingDisplay("agent.browser")');
+      expect(source).toMatch(/settings:\s*settingsShortcut/);
+      expect(source).toMatch(/problems:\s*problemsShortcut/);
+      expect(source).toMatch(/terminal:\s*terminalShortcut/);
+      expect(source).toMatch(/browser:\s*browserShortcut/);
+    });
+  });
+
+  describe("review fixes", () => {
+    it("resets controlled open state when the menu empties so it doesn't self-reopen", () => {
+      // Without this, widening then re-narrowing the window pops the overflow
+      // menu open with no user action.
+      expect(source).toMatch(
+        /useEffect\(\(\)\s*=>\s*\{\s*if \(isEmpty\) setOpen\(false\);?\s*\}, \[isEmpty\]\)/
+      );
+    });
+
+    it("disables the overflow copy-tree item when there is no active worktree", () => {
+      // Mirrors the visible button's aria-disabled "Open a worktree first" state.
+      expect(source).toMatch(/id === "copy-tree" && !hasActiveWorktree/);
+      expect(source).toContain("disabled={disabled}");
+    });
   });
 
   describe("github-stats group label", () => {
