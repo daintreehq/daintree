@@ -56,17 +56,21 @@ function isAgentRecipeType(type: RecipeTerminalType): boolean {
   return type !== "terminal" && type !== "dev-preview";
 }
 
-// Recipes read from disk may still contain agentModelId/agentLaunchFlags if
-// they were written by an older build before those fields were stripped on
+// Recipes read from disk may still contain agentModelId/agentLaunchFlags/location
+// if they were written by an older build before those fields were stripped on
 // persist. Treat them as session-only state and drop them at load time.
 function stripSessionOverridesFromRecipe(recipe: TerminalRecipe): TerminalRecipe {
   let changed = false;
   const terminals = recipe.terminals.map((terminal) => {
-    if (terminal.agentModelId === undefined && terminal.agentLaunchFlags === undefined) {
+    if (
+      terminal.agentModelId === undefined &&
+      terminal.agentLaunchFlags === undefined &&
+      terminal.location === undefined
+    ) {
       return terminal;
     }
     changed = true;
-    const { agentModelId: _m, agentLaunchFlags: _f, ...rest } = terminal;
+    const { agentModelId: _m, agentLaunchFlags: _f, location: _l, ...rest } = terminal;
     return rest;
   });
   if (recipe.shadowedBy !== undefined) {
@@ -95,6 +99,7 @@ function sanitizeRecipeTerminal(terminal: RecipeTerminal): RecipeTerminal {
     // Session-scoped overrides must never leak into disk-saved recipes.
     agentModelId: undefined,
     agentLaunchFlags: undefined,
+    location: undefined,
   };
 }
 
@@ -113,6 +118,7 @@ function terminalToRecipeTerminal(terminal: PtyPanelData | DevPreviewPanelData):
       exitBehavior: terminal.exitBehavior,
       agentModelId: undefined,
       agentLaunchFlags: undefined,
+      location: terminal.location === "dock" ? "dock" : undefined,
     };
   }
 
@@ -128,6 +134,7 @@ function terminalToRecipeTerminal(terminal: PtyPanelData | DevPreviewPanelData):
     exitBehavior: terminal.exitBehavior,
     agentModelId: isAgent ? terminal.agentModelId : undefined,
     agentLaunchFlags: isAgent ? terminal.agentLaunchFlags : undefined,
+    location: terminal.location === "dock" ? "dock" : undefined,
   };
 }
 

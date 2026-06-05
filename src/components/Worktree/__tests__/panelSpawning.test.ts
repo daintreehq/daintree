@@ -413,6 +413,86 @@ describe("spawnPanelsFromRecipe", () => {
     expect(mockFlushSpawnBatch).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards dock location to addPanel for all panel kinds (#9764)", async () => {
+    await spawnPanelsFromRecipe({
+      terminals: [
+        makeTerminal({ location: "dock" }),
+        makeAgent({ location: "dock" }),
+        makeDevPreview({ location: "dock" }),
+      ],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+      agentSettings: { agents: { claude: {} } },
+      clipboardDirectory: "/tmp/daintree/daintree-clipboard",
+    });
+
+    expect(mockAddPanel).toHaveBeenCalledTimes(3);
+    expect(
+      mockAddPanel.mock.calls.every((c) => (c[0] as { location?: string })?.location === "dock")
+    ).toBe(true);
+  });
+
+  it("leaves location undefined for terminals without one (grid default)", async () => {
+    await spawnPanelsFromRecipe({
+      terminals: [makeTerminal()],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+    });
+
+    const call = mockAddPanel.mock.calls[0]?.[0] as { location?: string };
+    expect(call.location).toBeUndefined();
+  });
+
+  it("focuses the last grid panel, skipping dock panels (#9764)", async () => {
+    mockAddPanel.mockResolvedValueOnce("panel-grid").mockResolvedValueOnce("panel-dock");
+
+    await spawnPanelsFromRecipe({
+      terminals: [
+        makeTerminal({ title: "Grid" }),
+        makeTerminal({ title: "Docked", location: "dock" }),
+      ],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+    });
+
+    expect(mockSetFocused).toHaveBeenCalledTimes(1);
+    expect(mockSetFocused).toHaveBeenCalledWith("panel-grid");
+  });
+
+  it("focuses the last grid panel in a mixed dock/grid interleaving (#9764)", async () => {
+    mockAddPanel
+      .mockResolvedValueOnce("panel-dock-1")
+      .mockResolvedValueOnce("panel-grid-1")
+      .mockResolvedValueOnce("panel-dock-2")
+      .mockResolvedValueOnce("panel-grid-2");
+
+    await spawnPanelsFromRecipe({
+      terminals: [
+        makeTerminal({ title: "D1", location: "dock" }),
+        makeTerminal({ title: "G1" }),
+        makeTerminal({ title: "D2", location: "dock" }),
+        makeTerminal({ title: "G2" }),
+      ],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+    });
+
+    const locations = mockAddPanel.mock.calls.map((c) => (c[0] as { location?: string }).location);
+    expect(locations).toEqual(["dock", undefined, "dock", undefined]);
+    expect(mockSetFocused).toHaveBeenCalledTimes(1);
+    expect(mockSetFocused).toHaveBeenCalledWith("panel-grid-2");
+  });
+
+  it("does not steal focus when only dock panels spawn (#9764)", async () => {
+    await spawnPanelsFromRecipe({
+      terminals: [makeTerminal({ location: "dock" })],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+    });
+
+    expect(mockSetFocused).not.toHaveBeenCalled();
+  });
+
   it("collects errors from multiple panels and throws single AggregateError", async () => {
     mockAddPanel.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error("fail"));
 
