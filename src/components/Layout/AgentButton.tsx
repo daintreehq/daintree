@@ -34,7 +34,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { MenuActionSourceContext, useMenuActionSource } from "@/components/ui/menu-source";
-import { ChevronDown, PanelBottom, Unplug } from "lucide-react";
+import { ChevronDown, PanelBottom } from "lucide-react";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentAvailabilityState, AgentState } from "@shared/types";
 import {
@@ -48,6 +48,7 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 
 import { resolveEffectivePresetId } from "@shared/types";
 import {
@@ -157,7 +158,6 @@ export function AgentButton({
   const ariaShortcut = useAriaKeyshortcuts(`agent.${type}`);
   const hover = useShortcutHintHover(`agent.${type}`);
   const agentSettings = useAgentSettingsStore((s) => s.settings);
-  const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
   const ccrPresets = useCcrPresetsStore((s) => s.ccrPresetsByAgent[type]);
   const projectPresets = useProjectPresetsStore((s) => s.presetsByAgent[type]);
 
@@ -324,10 +324,6 @@ export function AgentButton({
     }
   };
 
-  const handleUnpinFromToolbar = () => {
-    void setAgentPinned(type, false);
-  };
-
   // Persist the toolbar pick to the worktree-scoped slot so repeated launches
   // on the same worktree stay stable, while other worktrees keep their own
   // defaults. Pass `undefined` to clear the worktree override (returning the
@@ -422,10 +418,7 @@ export function AgentButton({
             </ContextMenuSub>
           )}
           <ContextMenuSeparator />
-          <ContextMenuItem onSelect={handleUnpinFromToolbar}>
-            <Unplug className="mr-2 h-3.5 w-3.5" />
-            Unpin from Toolbar
-          </ContextMenuItem>
+          <ToolbarContextMenuItems buttonId={type} side="left" />
           <ContextMenuActionItem
             actionId="app.settings.openTab"
             args={{ tab: "agents", subtab: type, sectionId: "agents-presets" }}
@@ -720,10 +713,7 @@ export function AgentButton({
           </ContextMenuSub>
         )}
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={handleUnpinFromToolbar}>
-          <Unplug className="mr-2 h-3.5 w-3.5" />
-          Unpin from Toolbar
-        </ContextMenuItem>
+        <ToolbarContextMenuItems buttonId={type} side="left" />
         <ContextMenuActionItem
           actionId="app.settings.openTab"
           args={{ tab: "agents", subtab: type, sectionId: "agents-presets" }}
