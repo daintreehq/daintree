@@ -116,7 +116,7 @@ export function PRBadge({
   const freshness: TooltipFreshness = { cause: freshnessCause, now, rateLimitResetAt };
 
   return (
-    <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300}>
+    <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300} autoDismiss={false}>
       <TooltipTrigger asChild>
         <button
           type="button"

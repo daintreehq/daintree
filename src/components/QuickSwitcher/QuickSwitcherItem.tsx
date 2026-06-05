@@ -65,7 +65,7 @@ export function QuickSwitcherItem({
           </span>
         </div>
         {item.subtitle && (
-          <Tooltip>
+          <Tooltip autoDismiss={false}>
             <TooltipTrigger asChild>
               <div className="text-xs text-daintree-text/50 truncate transition-colors group-aria-selected:text-daintree-text/60">
                 {item.subtitle}

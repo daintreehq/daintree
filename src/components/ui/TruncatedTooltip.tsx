@@ -54,7 +54,9 @@ export function TruncatedTooltip({
   }
 
   return (
-    <Tooltip open={showTooltip ? undefined : false}>
+    // The tooltip IS the content here (the untruncated text), so it stays as
+    // long as the user is reading it — no auto-dismiss.
+    <Tooltip open={showTooltip ? undefined : false} autoDismiss={false}>
       <TooltipTrigger asChild>{React.cloneElement(children, extraProps)}</TooltipTrigger>
       <TooltipContent side={side} align={align} className={contentClassName}>
         {content}

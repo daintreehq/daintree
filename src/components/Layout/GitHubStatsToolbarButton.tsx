@@ -985,7 +985,11 @@ export const GitHubStatsToolbarButton = memo(
               onTransitionEnd={handleGitHubStatusTransitionEnd}
             />
             {rateLimitActive ? (
-              <Tooltip open={rateLimitTooltipOpen} onOpenChange={setRateLimitTooltipOpen}>
+              <Tooltip
+                open={rateLimitTooltipOpen}
+                onOpenChange={setRateLimitTooltipOpen}
+                autoDismiss={false}
+              >
                 <TooltipTrigger asChild>
                   <div
                     role="status"

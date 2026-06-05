@@ -38,7 +38,7 @@ export function CommitChip({
   const accessibleName = author ? `Last commit by ${author.name}` : "Last commit";
 
   return (
-    <Tooltip>
+    <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
         <div
           className="relative z-10 ml-3 flex shrink-0 items-center gap-1.5 text-xs text-text-muted"

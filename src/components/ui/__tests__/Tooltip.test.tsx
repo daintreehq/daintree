@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import * as React from "react";
-import { fireEvent, render } from "@testing-library/react";
+import { act, fireEvent, render } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FixedDropdownVisibleContext } from "../fixed-dropdown";
 import { Tooltip, TooltipTrigger, TooltipContent } from "../tooltip";
 
 const { rootSpy, mountSpy, primeOnEventSpy, contentSpy } = vi.hoisted(() => ({
-  rootSpy: vi.fn(),
+  rootSpy: vi.fn<(props: { open?: boolean; onOpenChange?: (open: boolean) => void }) => void>(),
   mountSpy: vi.fn(),
   primeOnEventSpy: vi.fn(),
   contentSpy: vi.fn(),
@@ -115,18 +115,25 @@ describe("Tooltip wrapper — FixedDropdownVisibleContext gate (issue #8001)", (
     expect(lastCall?.open).toBe(false);
   });
 
-  it("leaves uncontrolled tooltips uncontrolled when the context is `true`", () => {
-    // Outside the hidden state, the wrapper must not force a value — the
-    // caller's `undefined` should pass through so Radix continues to
-    // manage open/close internally.
+  it("manages uncontrolled tooltips through wrapper state when the context is `true`", () => {
+    // The wrapper shadows Radix's internal open state so it can enforce the
+    // auto-dismiss window: the Root is always controlled (closed initially),
+    // and Radix's open requests flow back through the wrapper's onOpenChange.
     render(
       <FixedDropdownVisibleContext.Provider value={true}>
         <TooltipNode />
       </FixedDropdownVisibleContext.Provider>
     );
 
-    const lastCall = rootSpy.mock.calls.at(-1)?.[0];
-    expect(lastCall?.open).toBeUndefined();
+    const initialCall = rootSpy.mock.calls.at(-1)?.[0];
+    expect(initialCall?.open).toBe(false);
+    expect(typeof initialCall?.onOpenChange).toBe("function");
+
+    void act(() => initialCall!.onOpenChange!(true));
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(true);
+
+    void act(() => initialCall!.onOpenChange!(false));
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(false);
   });
 
   it("remounts the Radix Root on each hidden/visible transition to clear stale internal state", () => {
@@ -171,6 +178,129 @@ describe("Tooltip wrapper — FixedDropdownVisibleContext gate (issue #8001)", (
     // The reveal mount id must also differ from the initial one — both are
     // distinct mounts, just both share the "visible" key.
     expect(revealedMountId).not.toBe(initialMountId);
+  });
+});
+
+describe("Tooltip wrapper — auto-dismiss window", () => {
+  beforeEach(() => {
+    rootSpy.mockClear();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function openLastRoot() {
+    const call = rootSpy.mock.calls.at(-1)?.[0];
+    void act(() => call!.onOpenChange!(true));
+  }
+
+  it("closes an uncontrolled tooltip after the dismiss window elapses", () => {
+    render(
+      <FixedDropdownVisibleContext.Provider value={true}>
+        <Tooltip>
+          <TooltipTrigger>trigger</TooltipTrigger>
+          <TooltipContent>content</TooltipContent>
+        </Tooltip>
+      </FixedDropdownVisibleContext.Provider>
+    );
+
+    openLastRoot();
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(true);
+
+    void act(() => vi.runAllTimers());
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(false);
+  });
+
+  it("notifies a controlled consumer through onOpenChange when the window elapses", () => {
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      return (
+        <FixedDropdownVisibleContext.Provider value={true}>
+          <Tooltip open={open} onOpenChange={setOpen}>
+            <TooltipTrigger>trigger</TooltipTrigger>
+            <TooltipContent>content</TooltipContent>
+          </Tooltip>
+        </FixedDropdownVisibleContext.Provider>
+      );
+    }
+    render(<Harness />);
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(true);
+
+    void act(() => vi.runAllTimers());
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(false);
+  });
+
+  it("leaves a pinned `open` without an onOpenChange handler alone (escape hatch)", () => {
+    // Validation/drag hints pin the tooltip via `open` with no handler —
+    // the dismiss request must be a no-op for them.
+    render(
+      <FixedDropdownVisibleContext.Provider value={true}>
+        <Tooltip open={true}>
+          <TooltipTrigger>trigger</TooltipTrigger>
+          <TooltipContent>content</TooltipContent>
+        </Tooltip>
+      </FixedDropdownVisibleContext.Provider>
+    );
+
+    void act(() => vi.runAllTimers());
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(true);
+  });
+
+  it("seeds the shadow state from defaultOpen and then auto-dismisses", () => {
+    render(
+      <FixedDropdownVisibleContext.Provider value={true}>
+        <Tooltip defaultOpen>
+          <TooltipTrigger>trigger</TooltipTrigger>
+          <TooltipContent>content</TooltipContent>
+        </Tooltip>
+      </FixedDropdownVisibleContext.Provider>
+    );
+
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(true);
+
+    void act(() => vi.runAllTimers());
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(false);
+  });
+
+  it("does not arm the dismiss timer when autoDismiss is false", () => {
+    render(
+      <FixedDropdownVisibleContext.Provider value={true}>
+        <Tooltip autoDismiss={false}>
+          <TooltipTrigger>trigger</TooltipTrigger>
+          <TooltipContent>content</TooltipContent>
+        </Tooltip>
+      </FixedDropdownVisibleContext.Provider>
+    );
+
+    openLastRoot();
+    void act(() => vi.runAllTimers());
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(true);
+  });
+
+  it("re-arms a fresh window on each re-open", () => {
+    render(
+      <FixedDropdownVisibleContext.Provider value={true}>
+        <Tooltip>
+          <TooltipTrigger>trigger</TooltipTrigger>
+          <TooltipContent>content</TooltipContent>
+        </Tooltip>
+      </FixedDropdownVisibleContext.Provider>
+    );
+
+    openLastRoot();
+    void act(() => vi.advanceTimersByTime(1000));
+    // Close before the window elapses (pointer leave), then re-open: the
+    // earlier timer must not bleed into the new window.
+    const call = rootSpy.mock.calls.at(-1)?.[0];
+    void act(() => call!.onOpenChange!(false));
+    openLastRoot();
+    void act(() => vi.advanceTimersByTime(2000));
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(true);
+
+    void act(() => vi.runAllTimers());
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(false);
   });
 });
 

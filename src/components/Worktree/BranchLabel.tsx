@@ -81,7 +81,7 @@ export function BranchLabel({
   const Icon = typeId ? (BRANCH_TYPE_ICONS[typeId] ?? GitBranch) : null;
 
   return (
-    <Tooltip>
+    <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
         <span className={cn("flex items-center gap-1.5 min-w-0 cursor-default", className)}>
           {Icon && displayName && (

@@ -242,7 +242,7 @@ export function WorktreeDetails({
 
         {showLastActive &&
           (hasCommit ? (
-            <Tooltip>
+            <Tooltip autoDismiss={false}>
               <TooltipTrigger asChild>{lastActiveLine}</TooltipTrigger>
               <TooltipContent side="bottom" className="p-3">
                 <CommitInfoTooltip

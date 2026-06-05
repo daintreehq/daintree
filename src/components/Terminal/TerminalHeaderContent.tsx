@@ -250,7 +250,7 @@ export function TerminalHeaderContent({
     const stateLabel = getEffectiveStateLabel(agentState);
 
     return (
-      <Tooltip>
+      <Tooltip autoDismiss={false}>
         <TooltipTrigger asChild>
           <div className="inline-flex items-center gap-1.5 shrink-0">
             <div className="relative inline-flex items-center shrink-0">
@@ -334,7 +334,7 @@ export function TerminalHeaderContent({
     <>
       {/* Command Pill - shows currently running command (inline with title) */}
       {showCommandPill && (
-        <Tooltip>
+        <Tooltip autoDismiss={false}>
           <TooltipTrigger asChild>
             <span className="px-3 py-1 rounded-full text-[11px] font-mono bg-overlay-soft text-daintree-text/60 border border-divider truncate max-w-[20rem]">
               {lastCommand}
@@ -479,7 +479,7 @@ export function TerminalHeaderContent({
 
       {/* Resource monitoring badge */}
       {showResource && (
-        <Tooltip>
+        <Tooltip autoDismiss={false}>
           <TooltipTrigger asChild>
             <div
               className={cn(
