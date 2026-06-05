@@ -330,6 +330,35 @@ describe("cache-kind bucketing", () => {
     expect(agg.byCacheKind.warm!.runs).toBe(1);
   });
 
+  it("excludes degraded runs from cache-kind buckets (wall-clock fallback skews durations)", () => {
+    const agg = aggregate([
+      makeRun({ index: 0, durationMs: 800, cacheKind: "warm", cacheFileCount: 10 }),
+      makeRun({
+        index: 1,
+        durationMs: 9999,
+        degraded: true,
+        cacheKind: "warm",
+        cacheFileCount: 10,
+      }),
+    ]);
+
+    expect(agg.byCacheKind.warm).not.toBeNull();
+    expect(agg.byCacheKind.warm!.runs).toBe(1);
+    expect(agg.byCacheKind.warm!.meanMs).toBe(800);
+  });
+
+  it("guards bucket stats against a malformed (NaN) duration", () => {
+    const agg = aggregate([
+      makeRun({ index: 0, durationMs: 1000, cacheKind: "cold" }),
+      makeRun({ index: 1, durationMs: Number.NaN as unknown as number, cacheKind: "cold" }),
+    ]);
+
+    expect(agg.byCacheKind.cold).not.toBeNull();
+    expect(agg.byCacheKind.cold!.runs).toBe(1);
+    expect(Number.isFinite(agg.byCacheKind.cold!.meanMs)).toBe(true);
+    expect(agg.byCacheKind.cold!.meanMs).toBe(1000);
+  });
+
   it("computes the bucket median cacheFileCount and ignores missing counts", () => {
     const agg = aggregate([
       makeRun({ index: 0, durationMs: 800, cacheKind: "warm", cacheFileCount: 40 }),

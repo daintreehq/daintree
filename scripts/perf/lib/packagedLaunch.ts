@@ -233,16 +233,32 @@ export function parseBootDuration(ndjsonPath: string): {
   return { durationMs: -1, metrics };
 }
 
-// Count files in the compile-cache subdir of a userData dir. The dir is created
-// lazily by enableCompileCache(), so a missing dir is a legitimate 0 count. The
-// directory uses opaque content-hash filenames, so a count is all we can get —
-// there's no programmatic cache hit/miss API in Node 22+.
-function countCompileCacheFiles(userDataDir: string): number {
+// Count V8 cache files under a userData dir's compile-cache. The dir is created
+// lazily by enableCompileCache(), so a missing dir is a legitimate 0 count.
+// Node nests the actual cache files one level down in a versioned subdirectory
+// (e.g. `compile-cache/v22.x.x-arch-<hash>/`), so we sum the entries inside each
+// subdir rather than counting the base dir — which would only ever be 0 or 1.
+// The files use opaque content-hash names, so a count is all we can get; there's
+// no programmatic cache hit/miss API in Node 22+.
+export function countCompileCacheFiles(userDataDir: string): number {
+  const base = path.join(userDataDir, "compile-cache");
+  let total = 0;
   try {
-    return fs.readdirSync(path.join(userDataDir, "compile-cache")).length;
+    for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        total += 1;
+        continue;
+      }
+      try {
+        total += fs.readdirSync(path.join(base, entry.name)).length;
+      } catch {
+        // Subdir vanished mid-read — skip it.
+      }
+    }
   } catch {
     return 0;
   }
+  return total;
 }
 
 export async function launchPackagedAndMeasure(
@@ -305,6 +321,16 @@ export async function launchPackagedAndMeasure(
     }
   }
 
+  // Build the child env from the parent, then strip Node's compile-cache env
+  // vars. If NODE_COMPILE_CACHE is inherited (the agent shell / a dev machine
+  // may set it), Node enables the cache against that shared directory before the
+  // app's own enableCompileCache(userDataDir/compile-cache) runs — so a "cold"
+  // run would silently hit the inherited warm cache and report bogus baselines.
+  // Deleting both keys forces the app to own its compile cache inside userDataDir.
+  const launchEnv: Record<string, string | undefined> = { ...process.env, ...env };
+  delete launchEnv.NODE_COMPILE_CACHE;
+  delete launchEnv.NODE_DISABLE_COMPILE_CACHE;
+
   let app: ElectronApplication | null = null;
   const startMs = performance.now();
 
@@ -312,7 +338,7 @@ export async function launchPackagedAndMeasure(
     app = await electron.launch({
       executablePath,
       args,
-      env: { ...process.env, ...env },
+      env: launchEnv,
       timeout: timeoutMs,
     });
 

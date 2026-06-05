@@ -357,19 +357,23 @@ export function aggregate(runs: RunData[]): Aggregate {
 }
 
 // Build headline boot-duration stats for one cache kind. Runs without an
-// explicit cacheKind default to "cold" so pre-#9772 data still buckets. Returns
-// null when the bucket has no runs.
+// explicit cacheKind default to "cold" so pre-#9772 data still buckets. Degraded
+// runs are excluded — their wall-clock fallback durationMs is systematically
+// higher than the mark-based duration, matching the phase-duration table's
+// policy. Returns null when the bucket has no qualifying runs.
 function bucketByCacheKind(runs: RunData[], kind: "cold" | "warm"): CacheKindBucketStats | null {
-  const bucket = runs.filter((r) => (r.cacheKind ?? "cold") === kind);
+  const bucket = runs.filter((r) => !r.degraded && (r.cacheKind ?? "cold") === kind);
   if (bucket.length === 0) return null;
 
-  const durations = bucket.map((r) => r.durationMs);
+  // Guard percentile/mean against malformed durations (NaN/Infinity/negative).
+  const durations = bucket.map((r) => r.durationMs).filter((d) => Number.isFinite(d) && d >= 0);
+  if (durations.length === 0) return null;
   const cacheCounts = bucket
     .map((r) => r.cacheFileCount)
     .filter((c): c is number => typeof c === "number" && Number.isFinite(c));
 
   return {
-    runs: bucket.length,
+    runs: durations.length,
     p50Ms: round(percentile(durations, 50)),
     p95Ms: round(percentile(durations, 95)),
     meanMs: round(mean(durations)),

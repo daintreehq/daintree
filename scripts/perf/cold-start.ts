@@ -424,7 +424,17 @@ Requires a packaged binary under release/. Build one first with:
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`[warm] warmup launch failed: ${message} — measured runs may be cache-cold`);
+      // The cache was never populated, so reusing this dir would mislabel
+      // cache-cold runs as warm. Drop back to fresh cold profiles instead.
+      console.error(
+        `[warm] warmup launch failed: ${message} — falling back to cold runs (no warm bucket)`
+      );
+      try {
+        fs.rmSync(warmDir, { recursive: true, force: true });
+      } catch {
+        // Best effort.
+      }
+      warmDir = null;
     }
   }
 
@@ -467,7 +477,7 @@ Requires a packaged binary under release/. Build one first with:
           marks: [],
           failed: true,
           error: message,
-          cacheKind: warm ? "warm" : "cold",
+          cacheKind: warmDir ? "warm" : "cold",
         });
         if (!asJson) {
           console.error(`[run ${i + 1}/${runs}] FAILED: ${message}`);

@@ -247,6 +247,20 @@ describe("getCompileCacheMeta", () => {
     expect(meta.cacheFileCount).toBeUndefined();
   });
 
+  it("reports compileCacheEnabled=false when getCompileCacheDir throws", async () => {
+    const mod = await loadModule({
+      DAINTREE_PERF_CAPTURE: "1",
+      DAINTREE_PERF_METRICS_FILE: "/tmp/marks.ndjson",
+    });
+    state.getCompileCacheDirImpl = () => {
+      throw new Error("boom");
+    };
+
+    const meta = mod.getCompileCacheMeta();
+    expect(meta.compileCacheEnabled).toBe(false);
+    expect(meta.cacheFileCount).toBeUndefined();
+  });
+
   it("omits status fields until setCompileCacheEnableStatus is called", async () => {
     const mod = await loadModule({
       DAINTREE_PERF_CAPTURE: "1",
