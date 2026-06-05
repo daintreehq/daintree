@@ -346,4 +346,84 @@ describe("terminalClient MessagePort data routing", () => {
       }, 50);
     });
   });
+
+  it("dispatches MessagePort tier-changed messages to onTierChanged callbacks", () => {
+    const port = acquirePort();
+    const received: Array<{ id: string; tier: string }> = [];
+
+    terminalClient.onTierChanged((id, tier) => received.push({ id, tier }));
+
+    port.postMessage({ type: "tier-changed", id: "term-1", tier: "background" });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        expect(received).toEqual([{ id: "term-1", tier: "background" }]);
+        resolve();
+      }, 50);
+    });
+  });
+
+  it("does NOT ack or buffer tier-changed messages (no byte accounting)", () => {
+    const port = acquirePort();
+
+    terminalClient.onTierChanged(() => {});
+
+    // A tier-changed message carries no bytes — it must never enter the ACK loop
+    // the way unconsumed data does (which would emit an immediate early-buffer ack).
+    port.postMessage({ type: "tier-changed", id: "term-1", tier: "active" });
+
+    return new Promise<void>((resolve) => {
+      const acks: Record<string, unknown>[] = [];
+      port.addEventListener("message", (event: MessageEvent) => {
+        const msg = event.data as Record<string, unknown>;
+        if (msg?.type === "ack") acks.push(msg);
+      });
+      port.start();
+
+      setTimeout(() => {
+        expect(acks).toEqual([]);
+        resolve();
+      }, 100);
+    });
+  });
+
+  it("stops dispatching tier-changed after unsubscribe", () => {
+    const port = acquirePort();
+    const received: string[] = [];
+
+    const unsub = terminalClient.onTierChanged((id) => received.push(id));
+    unsub();
+
+    port.postMessage({ type: "tier-changed", id: "term-1", tier: "background" });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        expect(received).toEqual([]);
+        resolve();
+      }, 50);
+    });
+  });
+
+  it("ignores unknown message types without throwing or emitting acks", () => {
+    const port = acquirePort();
+    const tierReceived: string[] = [];
+    terminalClient.onTierChanged((id) => tierReceived.push(id));
+
+    port.postMessage({ type: "totally-unknown", id: "term-1" } as unknown);
+
+    return new Promise<void>((resolve) => {
+      const acks: Record<string, unknown>[] = [];
+      port.addEventListener("message", (event: MessageEvent) => {
+        const msg = event.data as Record<string, unknown>;
+        if (msg?.type === "ack") acks.push(msg);
+      });
+      port.start();
+
+      setTimeout(() => {
+        expect(acks).toEqual([]);
+        expect(tierReceived).toEqual([]);
+        resolve();
+      }, 100);
+    });
+  });
 });

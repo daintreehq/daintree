@@ -24,9 +24,22 @@ const earlyDataBuffer = new Map<string, Array<string | Uint8Array>>();
 const pendingPortAckBytes = new Map<string, number[]>();
 const MAX_EARLY_BUFFER_CHUNKS = 500;
 
+// Single global subscriber set — the host pushes tier-changed reconciliation
+// messages for any terminal, and the lone consumer (TerminalInstanceService)
+// routes by id internally. No per-terminal map and no ACK accounting: these
+// control messages carry no byte count and must never enter pendingPortAckBytes.
+const tierChangedCallbacks = new Set<(id: string, tier: "active" | "background") => void>();
+
 function installPortDataHandler(port: MessagePort): void {
   port.addEventListener("message", (event: MessageEvent) => {
     const msg = event.data as PtyHostToRendererMessage;
+    if (msg?.type === "tier-changed" && typeof msg.id === "string") {
+      // Host-pushed tier reconciliation — no ACK, no byte accounting.
+      for (const cb of tierChangedCallbacks) {
+        cb(msg.id, msg.tier);
+      }
+      return;
+    }
     if (msg?.type === "data" && typeof msg.id === "string") {
       const byteCount = msg.bytes ?? 0;
 
@@ -282,6 +295,21 @@ export const terminalClient = {
         if (set.size === 0) dataCallbacks.delete(id);
       }
       ipcCleanup();
+    };
+  },
+
+  /**
+   * Subscribe to host-pushed activity-tier reconciliation messages.
+   * The PTY host emits these whenever it rewrites a terminal's tier on its own
+   * (window connect/disconnect/project switch) so the renderer can re-arm its
+   * dedupe baseline (TerminalRendererPolicy.initializeBackendTier) before the
+   * producer gate suppresses output. Rides the per-window MessagePort, so it is
+   * FIFO-ordered ahead of subsequent data chunks. Returns a cleanup function.
+   */
+  onTierChanged: (callback: (id: string, tier: "active" | "background") => void): (() => void) => {
+    tierChangedCallbacks.add(callback);
+    return () => {
+      tierChangedCallbacks.delete(callback);
     };
   },
 

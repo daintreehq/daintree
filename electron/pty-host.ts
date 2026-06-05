@@ -215,12 +215,36 @@ function recomputeActivityTiers(): void {
   }
 
   for (const terminal of ptyManager.getAll()) {
+    // A terminal with no project association is global/shared, not orphaned —
+    // it must stay active whenever any window is connected. The old condition
+    // (`projectId !== undefined && activeProjects.has(projectId)`) demoted such
+    // terminals to background the moment any project became active, silently
+    // freezing their output (issue #9778).
     const isActiveInAnyWindow =
       activeProjects.size === 0 ||
-      (terminal.projectId !== undefined && activeProjects.has(terminal.projectId));
+      terminal.projectId === undefined ||
+      activeProjects.has(terminal.projectId);
     const tier = isActiveInAnyWindow ? "active" : "background";
     backpressureManager.setActivityTier(terminal.id, tier);
     ptyManager.setActivityMonitorTier(terminal.id, tier === "active" ? 50 : 500);
+
+    // Reconcile the renderer's dedupe baseline. The host rewrites tiers here
+    // unilaterally, but TerminalRendererPolicy.setBackendTier dedupes outbound
+    // tier messages against its last-known tier — so without this push the
+    // renderer can believe a terminal is still "active" while the producer gate
+    // suppresses its bytes, leaving the pane frozen (issue #9778). Posted on the
+    // same per-window MessagePort as data so it stays FIFO-ordered ahead of any
+    // subsequently gated chunk. Projects are filtered exactly like the data path.
+    const termProject = terminal.projectId ?? null;
+    for (const [windowId, conn] of rendererConnections) {
+      const windowProject = windowProjectMap.get(windowId) ?? null;
+      if (windowProject !== null && termProject !== windowProject) continue;
+      try {
+        conn.port.postMessage({ type: "tier-changed", id: terminal.id, tier });
+      } catch {
+        // Port closing between iteration and post — disconnect handles cleanup.
+      }
+    }
   }
 }
 
