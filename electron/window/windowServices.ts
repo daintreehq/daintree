@@ -16,6 +16,7 @@ import { markPerformance } from "../utils/performance.js";
 import { getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { extractRestorePanelCwds } from "./restorePanelCwds.js";
 import {
   isSmokeTest,
   smokeTestStart,
@@ -356,14 +357,27 @@ export async function setupWindowServices(
     console.warn("[MAIN] Scratch store init failed:", err);
   });
 
+  // Read saved panel cwds concurrently with PTY/store init so the warm hint is
+  // ready the instant `setActiveProject` fires — before the renderer hydrates
+  // and starts requesting restore spawns. getProjectState reads directly by
+  // configDir+projectId (no dependency on projectStore.initialize's in-memory
+  // list), so racing it against initialize() is safe.
+  let restorePanelCwds: string[] = [];
+
   try {
     const results = await Promise.allSettled([
       getPtyClient()!.waitForReady(),
       projectStore.initialize(),
+      opts.initialProjectId
+        ? projectStore.getProjectState(opts.initialProjectId)
+        : Promise.resolve(null),
     ]);
 
     ptyReady = results[0].status === "fulfilled";
     const projectStoreReady = results[1].status === "fulfilled";
+    if (results[2].status === "fulfilled") {
+      restorePanelCwds = extractRestorePanelCwds(results[2].value);
+    }
 
     if (ptyReady && workspaceReady && projectStoreReady) {
       console.log("[MAIN] All critical services ready");
@@ -405,7 +419,7 @@ export async function setupWindowServices(
     createAndDistributePorts(win, ctx);
 
     if (restoreProject) {
-      pty.setActiveProject(win.id, restoreProject.id, restoreProject.path);
+      pty.setActiveProject(win.id, restoreProject.id, restoreProject.path, restorePanelCwds);
     } else {
       pty.setActiveProject(win.id, null);
     }

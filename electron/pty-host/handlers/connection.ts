@@ -1,5 +1,6 @@
 import type { MessagePort } from "node:worker_threads";
 import { SharedRingBuffer } from "../../../shared/utils/SharedRingBuffer.js";
+import { POOL_ENV_EMPTY_HASH } from "../../services/pty/ptyPoolEnvHash.js";
 import { PortBatcher, type PortBatcherFailedBatch } from "../index.js";
 import type { HandlerMap, HostContext } from "./types.js";
 
@@ -180,9 +181,23 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       recomputeActivityTiers();
       const pool = ctx.ptyPool;
       if (msg.projectPath && pool) {
-        pool.drainAndRefill(msg.projectPath).catch((err) => {
-          console.error("[PtyHost] drainAndRefill failed:", err);
-        });
+        const panelCwds = msg.panelCwds ?? [];
+        pool
+          .drainAndRefill(msg.projectPath)
+          .then(() => {
+            // Warm the restored panels' own cwds AFTER the root drain/refill
+            // resolves. drainAndRefill bumps the drain epoch synchronously and
+            // clears stale entries; warming here (not before) guarantees these
+            // entries are tagged with the current epoch and survive (#9774).
+            // warmForKey is idempotent, per-key capacity-capped, and circuit-
+            // broken, so stale/deleted worktree paths self-limit.
+            for (const cwd of panelCwds) {
+              pool.warmForKey(cwd, undefined, POOL_ENV_EMPTY_HASH);
+            }
+          })
+          .catch((err) => {
+            console.error("[PtyHost] drainAndRefill failed:", err);
+          });
       }
     },
 

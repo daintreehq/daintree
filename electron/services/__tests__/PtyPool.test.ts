@@ -554,6 +554,69 @@ describe("PtyPool", () => {
       pool.dispose();
     });
 
+    it("warms multiple restored panel cwds after drainAndRefill so each later acquire hits (#9774)", async () => {
+      const root = createFakeProcess(1801);
+      const wtA = createFakeProcess(1802);
+      const wtB = createFakeProcess(1803);
+      spawnMock.mockReturnValueOnce(root).mockReturnValueOnce(wtA).mockReturnValueOnce(wtB);
+
+      const pool = new PtyPool({ poolSize: 1, defaultCwd: "/home/tester" });
+
+      // Mirror the connection handler: root drain/refill first, then warm each
+      // restored panel cwd at the env-empty key.
+      await pool.drainAndRefill("/repo");
+      pool.warmForKey("/repo/wt-a", undefined, "env-empty");
+      pool.warmForKey("/repo/wt-b", undefined, "env-empty");
+      await flushMicrotasks();
+
+      expect(spawnMock).toHaveBeenCalledTimes(3);
+      expect(spawnMock.mock.calls[1]?.[2]).toMatchObject({ cwd: "/repo/wt-a" });
+      expect(spawnMock.mock.calls[2]?.[2]).toMatchObject({ cwd: "/repo/wt-b" });
+
+      // A restored panel spawning at its own worktree cwd now hits the pool
+      // instead of paying a full cold spawn.
+      expect(pool.acquireByKey("/repo/wt-a", "env-empty")?.process).toBe(wtA);
+      expect(pool.acquireByKey("/repo/wt-b", "env-empty")?.process).toBe(wtB);
+      pool.dispose();
+    });
+
+    it("survives the drain epoch when panel cwds are warmed after drainAndRefill resolves (#9774)", async () => {
+      const stale = createFakeProcess(1901);
+      const root = createFakeProcess(1902);
+      const panel = createFakeProcess(1903);
+      spawnMock.mockReturnValueOnce(stale).mockReturnValueOnce(root).mockReturnValueOnce(panel);
+
+      const pool = new PtyPool({ poolSize: 1, defaultCwd: "/old" });
+      await pool.warmPool();
+
+      // drainAndRefill bumps the epoch and kills the stale entry; the panel
+      // warm fires only after it resolves, so the new entry is tagged with the
+      // current epoch and is not rejected as stale.
+      await pool.drainAndRefill("/repo");
+      pool.warmForKey("/repo/wt-a", undefined, "env-empty");
+      await flushMicrotasks();
+
+      expect(pool.acquireByKey("/repo/wt-a", "env-empty")?.process).toBe(panel);
+      pool.dispose();
+    });
+
+    it("keeps total entries bounded by maxEntries when warming many panel cwds (#9774)", async () => {
+      spawnMock.mockImplementation(() => createFakeProcess(2100 + spawnMock.mock.calls.length));
+      const pool = new PtyPool({ poolSize: 1, maxEntries: 3, defaultCwd: "/home/tester" });
+
+      await pool.drainAndRefill("/repo");
+      // Warm more distinct cwds than the global cap allows; LRU eviction must
+      // hold the pool at maxEntries rather than growing unbounded.
+      pool.warmForKey("/repo/wt-a", undefined, "env-empty");
+      pool.warmForKey("/repo/wt-b", undefined, "env-empty");
+      pool.warmForKey("/repo/wt-c", undefined, "env-empty");
+      pool.warmForKey("/repo/wt-d", undefined, "env-empty");
+      await flushMicrotasks();
+
+      expect(pool.getPoolSize()).toBeLessThanOrEqual(3);
+      pool.dispose();
+    });
+
     it("destroys the pooled PTY on unexpected exit so the master FD is released (#7892)", async () => {
       const first = createFakeProcess(2001);
       const second = createFakeProcess(2002);

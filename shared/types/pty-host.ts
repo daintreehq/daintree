@@ -91,6 +91,15 @@ export type PtyHostRequest =
       projectId: string | null;
       /** Filesystem path of the project; used to warm the PTY pool at the project root. */
       projectPath?: string;
+      /**
+       * Per-panel working directories from restored session state, in
+       * warm-priority order (active worktree first, then most-recently-active).
+       * On session restore each panel spawns at its own worktree cwd rather
+       * than the project root, so warming only `projectPath` always misses the
+       * first terminal. The pty-host warms these extra cwds after the root
+       * drain/refill so the first restored panel hits the pool (#9774).
+       */
+      panelCwds?: string[];
     }
   | {
       type: "project-switch";

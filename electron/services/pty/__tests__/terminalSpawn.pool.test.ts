@@ -136,6 +136,49 @@ describe("acquirePtyProcess pool handling", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it("hits a pool slot warmed at a restored worktree cwd, not just the project root (#9774)", () => {
+    const pooled = createFakePooledPty();
+    const dataHandoff = createFakeDataHandoff();
+    // The pool root is the project path, but the restored panel spawns at its
+    // own worktree cwd. Pre-warming that cwd (the #9774 fix) means acquireByKey
+    // is consulted with — and hits on — the worktree cwd, so no cold spawn.
+    const worktreeCwd = "/repo/.worktrees/feature-a";
+    const acquireByKey = vi.fn<
+      (
+        cwd: string,
+        envHash: string
+      ) => {
+        process: FakePooledPty;
+        prelude: string;
+        dataHandoff: FakeDataHandoff;
+      } | null
+    >((cwd) => (cwd === worktreeCwd ? { process: pooled, prelude: "", dataHandoff } : null));
+    const warmForKey =
+      vi.fn<(cwd: string, env: Record<string, string> | undefined, envHash: string) => void>();
+    const pool = createFakePool({
+      defaultCwd: "/repo",
+      acquireByKey,
+      warmForKey,
+    });
+
+    const result = acquirePtyProcess(
+      "t1",
+      { ...baseOptions, cwd: worktreeCwd },
+      {},
+      "/bin/bash",
+      [],
+      pool,
+      () => {}
+    );
+
+    expect(acquireByKey).toHaveBeenCalledTimes(1);
+    expect(acquireByKey.mock.calls[0]?.[0]).toBe(worktreeCwd);
+    expect(result.ptyProcess).toBe(pooled);
+    // Hit ⇒ no fresh cold spawn and no background warm needed for this key.
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(warmForKey).not.toHaveBeenCalled();
+  });
+
   it("does NOT write a shell-level `cd` command or any preamble to pooled PTYs (#5097 regression guard)", () => {
     const pooled = createFakePooledPty();
     const pool = createFakePool({
