@@ -17,9 +17,12 @@ async function runPostinstall() {
   // It MUST run before @electron/rebuild compiles better-sqlite3 from source, or
   // the V8 14.8 build fails with an opaque compile error. Invoked via node (not
   // npx) for determinism and to match the node-pty post-install pattern below.
+  // --error-on-fail forces a non-zero exit when a patch doesn't apply even off
+  // CI (patch-package otherwise only fails hard under CI/test), so the
+  // patchFailed gate below is reliable on local dev too.
   let patchFailed = false;
   try {
-    execSync("node node_modules/patch-package/index.js", {
+    execSync("node node_modules/patch-package/index.js --error-on-fail", {
       stdio: "inherit",
       cwd: buildPath,
     });
@@ -29,13 +32,14 @@ async function runPostinstall() {
   }
 
   // better-sqlite3 is rebuilt from source against the Electron ABI alongside the
-  // other native modules. It used to skip the rebuild via a dlopen ABI probe,
-  // but Node 24 and Electron 42 share NODE_MODULE_VERSION 146, which breaks the
-  // probe's Node-vs-Electron polarity — a Node-ABI binary loads cleanly under
-  // Node 24, so the probe could wrongly skip the Electron rebuild. Always
-  // rebuilding from source (post-patch) is simpler and correct. It's gated on
-  // the patch succeeding — without the patch, the V8 14.8 build fails with an
-  // opaque compile error that would mask the real cause.
+  // other native modules. It previously skipped the rebuild via a dlopen ABI
+  // probe (load the binary under Node: success → Node ABI, rebuild; throw →
+  // Electron ABI, skip). That heuristic is dropped here — always rebuilding from
+  // source after patching guarantees the Electron ABI without depending on which
+  // binary prebuild-install fetched or on the CI runtime env vars, removing a
+  // fragile path for a ~30s build cost. It's gated on the patch succeeding —
+  // without the patch, the V8 14.8 build fails with an opaque compile error that
+  // would mask the real cause.
   const rebuildModules = patchFailed ? NATIVE_MODULES : [...NATIVE_MODULES, "better-sqlite3"];
 
   for (const mod of rebuildModules) {

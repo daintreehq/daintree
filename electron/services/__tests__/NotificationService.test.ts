@@ -7,6 +7,7 @@ const electronMock = vi.hoisted(() => {
     options: { title: string; body: string; silent?: boolean };
     handlers: Record<string, (...args: unknown[]) => void>;
     show: ReturnType<typeof vi.fn>;
+    removeAllListeners: ReturnType<typeof vi.fn>;
     once(event: string, handler: (...args: unknown[]) => void): NotificationMockInstance;
     trigger(event: string, ...args: unknown[]): void;
   }
@@ -15,6 +16,7 @@ const electronMock = vi.hoisted(() => {
     static isSupported = vi.fn(() => true);
     handlers: Record<string, (...args: unknown[]) => void> = {};
     show = vi.fn();
+    removeAllListeners = vi.fn();
     constructor(public options: { title: string; body: string; silent?: boolean }) {
       notificationInstances.push(this);
     }
@@ -272,6 +274,12 @@ describe("NotificationService", () => {
       expect.stringContaining("native notification failed"),
       error
     );
+    // cleanup() must run on failure so the notification is dropped from the
+    // active set (otherwise it leaks until dispose()).
+    expect(
+      (notificationService as unknown as { activeNotifications: Set<unknown> }).activeNotifications
+        .size
+    ).toBe(0);
   });
 
   it("warns when a watch notification fails", () => {

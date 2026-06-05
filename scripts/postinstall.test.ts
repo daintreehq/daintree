@@ -10,7 +10,7 @@ const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
 const originalExitCode = process.exitCode;
 
-const PATCH_CMD = "node node_modules/patch-package/index.js";
+const PATCH_CMD = "node node_modules/patch-package/index.js --error-on-fail";
 const POSTINSTALL_CMD = "node node_modules/node-pty/scripts/post-install.js";
 
 afterAll(() => {
@@ -68,16 +68,22 @@ describe("postinstall", () => {
     restoreMocks();
   });
 
-  it("should apply patches before rebuilding any native module", async () => {
+  it("should apply patches (with --error-on-fail) before rebuilding any native module", async () => {
     await runPostinstall();
 
-    const patchOrder = mockExecSync.mock.invocationCallOrder[0];
-    const firstRebuildOrder = mockRebuild.mock.invocationCallOrder[0];
+    // The very first execSync must be the patch step — not node-pty post-install
+    // sneaking ahead of it.
+    expect(mockExecSync.mock.calls[0][0]).toBe(PATCH_CMD);
     expect(mockExecSync).toHaveBeenCalledWith(PATCH_CMD, {
       stdio: "inherit",
       cwd: path.resolve(__dirname, ".."),
     });
-    expect(patchOrder).toBeLessThan(firstRebuildOrder);
+
+    const patchOrder = mockExecSync.mock.invocationCallOrder[0];
+    const everyRebuildAfterPatch = mockRebuild.mock.invocationCallOrder.every(
+      (order) => order > patchOrder
+    );
+    expect(everyRebuildAfterPatch).toBe(true);
   });
 
   it("should rebuild all four native modules, better-sqlite3 last", async () => {
