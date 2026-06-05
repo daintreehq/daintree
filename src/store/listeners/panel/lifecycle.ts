@@ -1,4 +1,5 @@
 import type { TerminalStatusPayload } from "@shared/types";
+import type { TerminalReliabilityMetricPayload } from "@shared/types/pty-host";
 import { isPtyPanel } from "@shared/types/panel";
 import { terminalRegistryController } from "@/controllers";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -8,7 +9,11 @@ import { isAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logError } from "@/utils/logger";
 import { isTerminalRestarting } from "@/store/restartExitSuppression";
 import { usePanelStore, type PanelGridState } from "@/store/panelStore";
-import { enqueueFlowStatusUpdate } from "@/store/panelStatusBuffer";
+import {
+  enqueueFlowStatusUpdate,
+  enqueueHeldDurationUpdate,
+  clearHeldDuration,
+} from "@/store/panelStatusBuffer";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { getMergedPresets } from "@/config/agents";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
@@ -362,6 +367,54 @@ export function setupLifecycleListeners(): DisposableStore {
           terminalInstanceService.wake(id);
         }
       })
+    )
+  );
+
+  d.add(
+    toDisposable(
+      terminalRegistryController.onReliabilityMetric(
+        (payload: TerminalReliabilityMetricPayload) => {
+          // `pause-end` and `suspend` are the canonical resume signals —
+          // clear the held-duration gauge for the terminal so a stale
+          // value doesn't outlive the actual pause. `pause-duration-gauge`
+          // is the skip-when-empty gauge that drives the held-duration
+          // tooltip body. Other metric types (queue-depth-gauge,
+          // data-loss-count, pending-bytes-gauge, throughput-rate) are
+          // host-side telemetry sinks — observable via the host log
+          // stream and ignored here.
+          if (payload.metricType === "pause-end" || payload.metricType === "suspend") {
+            const terminal = usePanelStore.getState().panelsById[payload.terminalId];
+            if (terminal && isPtyPanel(terminal) && terminal.heldDurationMs !== undefined) {
+              clearHeldDuration(payload.terminalId);
+            }
+            return;
+          }
+          if (payload.metricType !== "pause-duration-gauge") return;
+          const entries = payload.perTerminalHeld;
+
+          // Snapshot the panel map once per tick so we can both update
+          // terminals present in the gauge AND clear terminals absent from
+          // it (a terminal that was paused on the last tick but is no
+          // longer in the gauge has resumed — clear its stale value).
+          const panelsById = usePanelStore.getState().panelsById;
+          const seenIds = new Set<string>();
+          if (entries) {
+            for (const entry of entries) {
+              const terminal = panelsById[entry.terminalId];
+              if (!terminal || !isPtyPanel(terminal)) continue;
+              seenIds.add(entry.terminalId);
+              enqueueHeldDurationUpdate(entry.terminalId, entry.heldDurationMs);
+            }
+          }
+          for (const id of Object.keys(panelsById)) {
+            if (seenIds.has(id)) continue;
+            const terminal = panelsById[id];
+            if (!terminal || !isPtyPanel(terminal)) continue;
+            if (terminal.heldDurationMs === undefined) continue;
+            clearHeldDuration(id);
+          }
+        }
+      )
     )
   );
 

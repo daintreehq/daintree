@@ -132,6 +132,7 @@ import type {
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
   FdLeakWarningPayload,
+  TerminalReliabilityMetricPayload,
 } from "../shared/types/pty-host.js";
 
 type SpawnResultPayload = SpawnResult;
@@ -970,6 +971,10 @@ const api: ElectronAPI = {
 
     onStatus: (callback: (data: TerminalStatusPayload) => void) =>
       _typedOn(CHANNELS.TERMINAL_STATUS, callback),
+
+    onReliabilityMetric: (
+      callback: (data: TerminalReliabilityMetricPayload) => void
+    ): (() => void) => _eventBusOn("terminal:reliability-metric", callback),
 
     onResourceMetrics: (
       callback: (data: { metrics: TerminalResourceBatchPayload; timestamp: number }) => void

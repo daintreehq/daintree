@@ -109,6 +109,10 @@ const PTY_FIELD_CLASSIFICATION = {
   // serialization layer in panelToSnapshot, not the PTY serializer.
   createdAt: false,
   lastActiveAt: false,
+  // Held-duration gauge — observational, sampled by the host's
+  // `pause-duration-gauge` reliability metric; not part of the
+  // persistent terminal snapshot.
+  heldDurationMs: false,
 } as const satisfies Record<keyof PtySerializeInput, boolean>;
 
 // ── Browser field classification ─────────────────────────────────────

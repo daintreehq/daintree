@@ -11,7 +11,10 @@ import type {
   BroadcastWriteResultPayload,
   SpawnResult,
 } from "@shared/types";
-import type { PtyHostToRendererMessage } from "@shared/types/pty-host";
+import type {
+  PtyHostToRendererMessage,
+  TerminalReliabilityMetricPayload,
+} from "@shared/types/pty-host";
 import { logDebug, logWarn } from "@/utils/logger";
 
 let messagePort: MessagePort | null = null;
@@ -452,6 +455,18 @@ export const terminalClient = {
    */
   onStatus: (callback: (data: TerminalStatusPayload) => void): (() => void) => {
     return window.electron.terminal.onStatus(callback);
+  },
+
+  /**
+   * Listen for terminal reliability metrics (pause-start/end, suspend,
+   * pending-bytes-gauge, throughput-rate, pause-duration-gauge,
+   * queue-depth-gauge, data-loss-count). Emitted by the host's
+   * `ResourceGovernor` tick and the queue managers' pause/resume paths.
+   */
+  onReliabilityMetric: (
+    callback: (data: TerminalReliabilityMetricPayload) => void
+  ): (() => void) => {
+    return window.electron.terminal.onReliabilityMetric(callback);
   },
 
   /**

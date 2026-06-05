@@ -742,6 +742,311 @@ describe("ResourceGovernor", () => {
     });
   });
 
+  describe("pause-duration-gauge", () => {
+    it("emits pause-duration-gauge with per-terminal held durations when metrics enabled", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+
+      const deps = createMockDeps({
+        getPausedDurationsSnapshot: vi.fn().mockReturnValue([
+          { terminalId: "t1", heldDurationMs: 4000 },
+          { terminalId: "t2", heldDurationMs: 12000 },
+        ]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      vi.advanceTimersByTime(2000);
+
+      expect(deps.sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "terminal-reliability-metric",
+          payload: expect.objectContaining({
+            terminalId: "resource-governor",
+            metricType: "pause-duration-gauge",
+            perTerminalHeld: [
+              { terminalId: "t1", heldDurationMs: 4000 },
+              { terminalId: "t2", heldDurationMs: 12000 },
+            ],
+          }),
+        })
+      );
+
+      governor.dispose();
+    });
+
+    it("does not emit gauge when metrics are disabled", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(false);
+
+      const deps = createMockDeps({
+        getPausedDurationsSnapshot: vi
+          .fn()
+          .mockReturnValue([{ terminalId: "t1", heldDurationMs: 4000 }]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      const calls = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls;
+      const gaugeCalls = calls.filter(
+        (c: unknown[]) =>
+          (c[0] as Record<string, unknown>)?.type === "terminal-reliability-metric" &&
+          ((c[0] as Record<string, unknown>)?.payload as Record<string, unknown>)?.metricType ===
+            "pause-duration-gauge"
+      );
+      expect(gaugeCalls).toHaveLength(0);
+
+      governor.dispose();
+    });
+
+    it("does not emit gauge when snapshot is empty", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+
+      const deps = createMockDeps({
+        getPausedDurationsSnapshot: vi.fn().mockReturnValue([]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      const calls = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls;
+      const gaugeCalls = calls.filter(
+        (c: unknown[]) =>
+          (c[0] as Record<string, unknown>)?.type === "terminal-reliability-metric" &&
+          ((c[0] as Record<string, unknown>)?.payload as Record<string, unknown>)?.metricType ===
+            "pause-duration-gauge"
+      );
+      expect(gaugeCalls).toHaveLength(0);
+
+      governor.dispose();
+    });
+
+    it("gracefully handles missing getPausedDurationsSnapshot dep", () => {
+      const deps = createMockDeps();
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      expect(() => vi.advanceTimersByTime(2000)).not.toThrow();
+
+      governor.dispose();
+    });
+  });
+
+  describe("queue-depth-gauge", () => {
+    it("emits queue-depth-gauge with layer-tagged entries when metrics enabled", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+
+      const deps = createMockDeps({
+        getQueueDepthSnapshot: vi.fn().mockReturnValue([
+          { terminalId: "t1", layer: "ipc", pendingBytes: 1024 },
+          { terminalId: "t1", layer: "port", pendingBytes: 2048 },
+          { terminalId: "t2", layer: "port", pendingBytes: 512 },
+        ]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(deps.sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "terminal-reliability-metric",
+          payload: expect.objectContaining({
+            terminalId: "resource-governor",
+            metricType: "queue-depth-gauge",
+            perTerminalQueueDepth: [
+              { terminalId: "t1", layer: "ipc", pendingBytes: 1024 },
+              { terminalId: "t1", layer: "port", pendingBytes: 2048 },
+              { terminalId: "t2", layer: "port", pendingBytes: 512 },
+            ],
+          }),
+        })
+      );
+
+      governor.dispose();
+    });
+
+    it("does not emit gauge when metrics are disabled", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(false);
+
+      const deps = createMockDeps({
+        getQueueDepthSnapshot: vi
+          .fn()
+          .mockReturnValue([{ terminalId: "t1", layer: "ipc", pendingBytes: 1024 }]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      const calls = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls;
+      const gaugeCalls = calls.filter(
+        (c: unknown[]) =>
+          (c[0] as Record<string, unknown>)?.type === "terminal-reliability-metric" &&
+          ((c[0] as Record<string, unknown>)?.payload as Record<string, unknown>)?.metricType ===
+            "queue-depth-gauge"
+      );
+      expect(gaugeCalls).toHaveLength(0);
+
+      governor.dispose();
+    });
+
+    it("does not emit gauge when snapshot is empty", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+
+      const deps = createMockDeps({
+        getQueueDepthSnapshot: vi.fn().mockReturnValue([]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      const calls = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls;
+      const gaugeCalls = calls.filter(
+        (c: unknown[]) =>
+          (c[0] as Record<string, unknown>)?.type === "terminal-reliability-metric" &&
+          ((c[0] as Record<string, unknown>)?.payload as Record<string, unknown>)?.metricType ===
+            "queue-depth-gauge"
+      );
+      expect(gaugeCalls).toHaveLength(0);
+
+      governor.dispose();
+    });
+
+    it("gracefully handles missing getQueueDepthSnapshot dep", () => {
+      const deps = createMockDeps();
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      expect(() => vi.advanceTimersByTime(2000)).not.toThrow();
+
+      governor.dispose();
+    });
+  });
+
+  describe("data-loss-count", () => {
+    it("emits data-loss-count with non-zero deltas when metrics enabled", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+
+      const deps = createMockDeps({
+        getDropSnapshot: vi.fn().mockReturnValue({
+          droppedBytesDelta: 4096,
+          dataLossCountDelta: 3,
+        }),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(deps.sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "terminal-reliability-metric",
+          payload: expect.objectContaining({
+            terminalId: "resource-governor",
+            metricType: "data-loss-count",
+            droppedBytesDelta: 4096,
+            dataLossCountDelta: 3,
+          }),
+        })
+      );
+
+      governor.dispose();
+    });
+
+    it("does not emit when both deltas are zero (skip-when-zero)", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+
+      const deps = createMockDeps({
+        getDropSnapshot: vi.fn().mockReturnValue({
+          droppedBytesDelta: 0,
+          dataLossCountDelta: 0,
+        }),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      const calls = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls;
+      const gaugeCalls = calls.filter(
+        (c: unknown[]) =>
+          (c[0] as Record<string, unknown>)?.type === "terminal-reliability-metric" &&
+          ((c[0] as Record<string, unknown>)?.payload as Record<string, unknown>)?.metricType ===
+            "data-loss-count"
+      );
+      expect(gaugeCalls).toHaveLength(0);
+
+      governor.dispose();
+    });
+
+    it("emits when only one of the two deltas is non-zero (idempotent guard)", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+
+      const deps = createMockDeps({
+        getDropSnapshot: vi.fn().mockReturnValue({
+          droppedBytesDelta: 0,
+          dataLossCountDelta: 2,
+        }),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(deps.sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            metricType: "data-loss-count",
+            droppedBytesDelta: 0,
+            dataLossCountDelta: 2,
+          }),
+        })
+      );
+
+      governor.dispose();
+    });
+
+    it("does not emit gauge when metrics are disabled", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(false);
+
+      const deps = createMockDeps({
+        getDropSnapshot: vi.fn().mockReturnValue({
+          droppedBytesDelta: 4096,
+          dataLossCountDelta: 3,
+        }),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      const calls = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls;
+      const gaugeCalls = calls.filter(
+        (c: unknown[]) =>
+          (c[0] as Record<string, unknown>)?.type === "terminal-reliability-metric" &&
+          ((c[0] as Record<string, unknown>)?.payload as Record<string, unknown>)?.metricType ===
+            "data-loss-count"
+      );
+      expect(gaugeCalls).toHaveLength(0);
+
+      governor.dispose();
+    });
+
+    it("gracefully handles missing getDropSnapshot dep", () => {
+      const deps = createMockDeps();
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      expect(() => vi.advanceTimersByTime(2000)).not.toThrow();
+
+      governor.dispose();
+    });
+  });
+
   describe("host-memory-warning", () => {
     it("emits host-memory-warning when crossing warning threshold", () => {
       const deps = createMockDeps();

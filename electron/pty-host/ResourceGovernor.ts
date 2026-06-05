@@ -39,6 +39,36 @@ export interface ResourceGovernorDeps {
     perTerminal: Array<{ terminalId: string; byteCount: number; packetCount: number }>;
     pauseCount: number;
   } | null;
+  /**
+   * Per-paused-terminal held duration snapshot, aggregated across SAB, IPC,
+   * and per-window MessagePort pause sources via a closure-scoped map in
+   * pty-host.ts. `heldDurationMs` is sampled at the metric tick.
+   */
+  getPausedDurationsSnapshot?: () => Array<{
+    terminalId: string;
+    heldDurationMs: number;
+  }>;
+  /**
+   * Per-terminal queue depth for the live IPC + per-window MessagePort
+   * paths. Excludes the FUTURE_SAB path (dead in production). Each entry
+   * is tagged with the path `layer` so consumers can attribute bytes per
+   * transport.
+   */
+  getQueueDepthSnapshot?: () => Array<{
+    terminalId: string;
+    layer: "ipc" | "port";
+    pendingBytes: number;
+  }>;
+  /**
+   * Data-loss counter snapshot. Returns accumulated drop-event count and
+   * dropped bytes since the last call. Counter is unconditional in
+   * pty-host.ts (gated only by drop site entry); this emission is gated
+   * separately by `metricsEnabled()`. Reset semantics: snapshot-and-reset.
+   */
+  getDropSnapshot?: () => {
+    droppedBytesDelta: number;
+    dataLossCountDelta: number;
+  };
 }
 
 export class ResourceGovernor {
@@ -243,6 +273,9 @@ export class ResourceGovernor {
     this.checkFdUsage();
     this.emitPendingBytesGauge();
     this.emitThroughputRateGauge();
+    this.emitPausedDurationGauge();
+    this.emitQueueDepthGauge();
+    this.emitDataLossCount();
   }
 
   private checkFdUsage(): void {
@@ -362,6 +395,65 @@ export class ResourceGovernor {
     });
 
     this.prevThroughputTimestamp = snapshot.timestamp;
+  }
+
+  private emitPausedDurationGauge(): void {
+    if (!metricsEnabled()) return;
+    if (!this.deps.getPausedDurationsSnapshot) return;
+
+    const snapshot = this.deps.getPausedDurationsSnapshot();
+    if (snapshot.length === 0) return;
+
+    this.deps.sendEvent({
+      type: "terminal-reliability-metric",
+      payload: {
+        terminalId: "resource-governor",
+        metricType: "pause-duration-gauge",
+        timestamp: Date.now(),
+        perTerminalHeld: snapshot,
+      },
+    });
+  }
+
+  private emitQueueDepthGauge(): void {
+    if (!metricsEnabled()) return;
+    if (!this.deps.getQueueDepthSnapshot) return;
+
+    const snapshot = this.deps.getQueueDepthSnapshot();
+    if (snapshot.length === 0) return;
+
+    this.deps.sendEvent({
+      type: "terminal-reliability-metric",
+      payload: {
+        terminalId: "resource-governor",
+        metricType: "queue-depth-gauge",
+        timestamp: Date.now(),
+        perTerminalQueueDepth: snapshot,
+      },
+    });
+  }
+
+  private emitDataLossCount(): void {
+    if (!metricsEnabled()) return;
+    if (!this.deps.getDropSnapshot) return;
+
+    const snapshot = this.deps.getDropSnapshot();
+    // Skip-when-zero matches the throughput-rate gauge contract: a tick
+    // with no drops produces no wire event. Counter is reset on every
+    // snapshot-and-reset, so re-entry on the same tick would see zero
+    // deltas and skip — this is intentional, not a bug.
+    if (snapshot.dataLossCountDelta === 0 && snapshot.droppedBytesDelta === 0) return;
+
+    this.deps.sendEvent({
+      type: "terminal-reliability-metric",
+      payload: {
+        terminalId: "resource-governor",
+        metricType: "data-loss-count",
+        timestamp: Date.now(),
+        dataLossCountDelta: snapshot.dataLossCountDelta,
+        droppedBytesDelta: snapshot.droppedBytesDelta,
+      },
+    });
   }
 
   private engageThrottle(currentUsageMb: number, percent: number): void {

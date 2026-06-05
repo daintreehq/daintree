@@ -33,6 +33,11 @@ type TrashedHandler = (data: { id: string; expiresAt: number }) => void;
 type RestoredHandler = (data: { id: string }) => void;
 type ExitHandler = (id: string, exitCode: number) => void;
 type StatusHandler = (data: { id: string; status: string; timestamp: number }) => void;
+type ReliabilityMetricHandler = (data: {
+  metricType: string;
+  terminalId?: string;
+  perTerminalHeld?: Array<{ terminalId: string; heldDurationMs: number }>;
+}) => void;
 type BackendCrashedHandler = (data: {
   crashType: string;
   code: number | null;
@@ -57,6 +62,7 @@ const handlers: {
   restored?: RestoredHandler;
   exit?: ExitHandler;
   status?: StatusHandler;
+  reliabilityMetric?: ReliabilityMetricHandler;
   backendCrashed?: BackendCrashedHandler;
   backendRecovering?: BackendRecoveringHandler;
   backendReady?: BackendReadyHandler;
@@ -72,6 +78,7 @@ const unsubs = {
   restored: vi.fn(),
   exit: vi.fn(),
   status: vi.fn(),
+  reliabilityMetric: vi.fn(),
   backendCrashed: vi.fn(),
   backendRecovering: vi.fn(),
   backendReady: vi.fn(),
@@ -109,6 +116,10 @@ const onExitMock = vi.fn((cb: ExitHandler) => {
 const onStatusMock = vi.fn((cb: StatusHandler) => {
   handlers.status = cb;
   return unsubs.status;
+});
+const onReliabilityMetricMock = vi.fn((cb: ReliabilityMetricHandler) => {
+  handlers.reliabilityMetric = cb;
+  return unsubs.reliabilityMetric;
 });
 const onBackendCrashedMock = vi.fn((cb: BackendCrashedHandler) => {
   handlers.backendCrashed = cb;
@@ -153,6 +164,7 @@ vi.mock("@/clients", () => ({
     onTrashed: onTrashedMock,
     onRestored: onRestoredMock,
     onStatus: onStatusMock,
+    onReliabilityMetric: onReliabilityMetricMock,
     onBackendCrashed: onBackendCrashedMock,
     onBackendRecovering: onBackendRecoveringMock,
     onBackendReady: onBackendReadyMock,

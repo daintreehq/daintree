@@ -327,6 +327,17 @@ export interface PtyPanelData extends BasePanelData {
   flowStatusTimestamp?: number;
   /** Whether user input is locked (read-only monitor mode) */
   isInputLocked?: boolean;
+  /**
+   * Held duration gauge for currently-paused terminals, sampled by the
+   * `pause-duration-gauge` reliability metric (2s tick). Distinct from
+   * `flowStatus` (a transition) and from `pauseDuration` on the
+   * `terminal-status` event (a one-shot at transition time) — this is a
+   * continuous observation that updates while the terminal is paused and
+   * is cleared on `pause-end`. Surfaced in the Tier-1 status pill
+   * tooltip so users can tell "5s pause for a big burst" from
+   * "renderer wedged for two minutes".
+   */
+  heldDurationMs?: number;
   /** Current URL for browser/dev-preview panels */
   browserUrl?: string;
   /** Navigation history for browser/dev-preview panels */
