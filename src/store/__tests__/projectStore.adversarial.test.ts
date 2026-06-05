@@ -41,6 +41,7 @@ const projectClientMock = vi.hoisted(() => ({
 }));
 
 const notifyMock = vi.hoisted(() => vi.fn());
+const clearHibernateSessionMock = vi.hoisted(() => vi.fn());
 const logErrorWithContextMock = vi.hoisted(() => vi.fn());
 const setProjectIdGetterMock = vi.hoisted(() => vi.fn());
 const panelPersistenceCancelMock = vi.hoisted(() => vi.fn());
@@ -76,6 +77,14 @@ vi.mock("../urlHistoryStore", () => ({
   useUrlHistoryStore: {
     getState: () => ({
       removeProjectHistory: vi.fn(),
+    }),
+  },
+}));
+
+vi.mock("../helpPanelStore", () => ({
+  useHelpPanelStore: {
+    getState: () => ({
+      clearHibernateSession: clearHibernateSessionMock,
     }),
   },
 }));
@@ -478,5 +487,67 @@ describe("projectStore adversarial", () => {
 
     expect(useProjectStore.getState().projects).toEqual([closedProjectA]);
     expect(useProjectStore.getState().currentProject).toBeNull();
+  });
+
+  it("garbage-collects the hibernate session when a project is removed", async () => {
+    installProjectApi({});
+    installLocalStorage(createStorageMock());
+    projectClientMock.remove.mockResolvedValueOnce(undefined);
+    projectClientMock.getAll.mockResolvedValue([]);
+
+    const { useProjectStore } = await import("../projectStore");
+    await useProjectStore.getState().removeProject(projectA.id);
+
+    expect(clearHibernateSessionMock).toHaveBeenCalledTimes(1);
+    expect(clearHibernateSessionMock).toHaveBeenCalledWith(projectA.id);
+  });
+
+  it("does not GC the hibernate session when project removal fails", async () => {
+    installProjectApi({});
+    installLocalStorage(createStorageMock());
+    projectClientMock.remove.mockRejectedValueOnce(new Error("remove failed"));
+
+    const { useProjectStore } = await import("../projectStore");
+    await useProjectStore.getState().removeProject(projectA.id);
+
+    expect(clearHibernateSessionMock).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().error).toBe("Failed to remove project");
+  });
+
+  it("GCs the old hibernate session when locating a project changes its id", async () => {
+    installProjectApi({});
+    installLocalStorage(createStorageMock());
+    const relocated = { ...projectA, id: "project-a-relocated", path: "/tmp/project-a-moved" };
+    projectClientMock.locate.mockResolvedValueOnce(relocated);
+    projectClientMock.getAll.mockResolvedValue([relocated]);
+
+    const { useProjectStore } = await import("../projectStore");
+    await useProjectStore.getState().locateProject(projectA.id);
+
+    expect(clearHibernateSessionMock).toHaveBeenCalledTimes(1);
+    expect(clearHibernateSessionMock).toHaveBeenCalledWith(projectA.id);
+  });
+
+  it("does not GC the hibernate session when locating returns the same id", async () => {
+    installProjectApi({});
+    installLocalStorage(createStorageMock());
+    projectClientMock.locate.mockResolvedValueOnce({ ...projectA });
+    projectClientMock.getAll.mockResolvedValue([projectA]);
+
+    const { useProjectStore } = await import("../projectStore");
+    await useProjectStore.getState().locateProject(projectA.id);
+
+    expect(clearHibernateSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not GC the hibernate session when locate returns null", async () => {
+    installProjectApi({});
+    installLocalStorage(createStorageMock());
+    projectClientMock.locate.mockResolvedValueOnce(null);
+
+    const { useProjectStore } = await import("../projectStore");
+    await useProjectStore.getState().locateProject(projectA.id);
+
+    expect(clearHibernateSessionMock).not.toHaveBeenCalled();
   });
 });

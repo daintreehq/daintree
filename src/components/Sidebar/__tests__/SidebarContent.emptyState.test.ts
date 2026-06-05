@@ -112,38 +112,30 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       expect(branch).not.toContain("clearAllFilters");
     });
 
-    it("names both axes when a facet filter is active alongside the quick-state — issue #7971", () => {
+    it("uses sentence-case copy in the facet-filtered quick-state branch — issue #9664", () => {
       // When the quick-state filter and one or more facet filters are active
-      // together and produce zero results, the title must call out both axes
-      // (e.g. "No worktrees match Working with 2 filters"). The dual-axis
-      // branch is now gated on `showQuickStateEmptyState && hasFacetFiltersActive`
-      // (only entered when facet filters are active alongside quick-state).
+      // together and produce zero results, the title must stay sentence-case
+      // per the CLAUDE.md microcopy rule — no title-cased filter label or
+      // "N filters" suffix interpolated mid-sentence. The branch reuses the
+      // generic filtered-empty copy: a search-aware "No matches for ..." when a
+      // query is present, "No matching worktrees" otherwise.
       const branchStart = source.indexOf("showQuickStateEmptyState && hasFacetFiltersActive ?");
       const branchEnd = source.indexOf(") : filteredWorktrees.length === 0 &&", branchStart);
       const branch = source.slice(branchStart, branchEnd);
-      expect(branch).toMatch(
-        /`No worktrees match \$\{QUICK_STATE_LABELS\[quickStateFilter\]\} with \$\{activeFacetFilterCount\} \$\{[\s\S]*?activeFacetFilterCount === 1 \? "filter" : "filters"[\s\S]*?\}`/
+      expect(branch).toContain('"No matching worktrees"');
+      expect(branch).toContain('No matches for "${truncateSearchQuery(deferredQuery.trim())}"');
+      // The search-aware copy is the hasQuery arm, the plain copy the fallback —
+      // guard against an inverted ternary by checking the query arm comes first.
+      const queryIdx = branch.indexOf(
+        'No matches for "${truncateSearchQuery(deferredQuery.trim())}"'
       );
+      const fallbackIdx = branch.indexOf('"No matching worktrees"');
+      expect(branch.indexOf("hasQuery")).toBeLessThan(queryIdx);
+      expect(queryIdx).toBeLessThan(fallbackIdx);
+      // The old title-cased, count-suffixed copy is gone.
+      expect(branch).not.toContain("QUICK_STATE_LABELS[quickStateFilter]");
+      expect(branch).not.toContain("activeFacetFilterCount");
       expect(branch).toContain('variant="filtered-empty"');
-    });
-
-    it("derives the active facet filter count from the six facet Set sizes — issues #7971, #9087", () => {
-      // The combined-axis title needs the actual number of facet filters
-      // selected. Sum the six facet axes (status, type, github, session,
-      // activity, dev server) — the same axes hasFacetFilters() reads. Do not
-      // include query or quickStateFilter, which are named separately in the title.
-      expect(source).toMatch(
-        /const activeFacetFilterCount =\s*statusFilters\.size \+\s*typeFilters\.size \+\s*prIssueFilters\.size \+\s*sessionFilters\.size \+\s*activityFilters\.size \+\s*devServerFilters\.size;/
-      );
-    });
-
-    it("maps quick-state filter values to title-cased labels for the combined-axis title — issue #7971", () => {
-      // The raw quickStateFilter values are lowercase ("working", "waiting",
-      // "finished"). The combined-axis title displays them title-cased via a
-      // module-level QUICK_STATE_LABELS map so the prose reads naturally.
-      expect(source).toMatch(
-        /const QUICK_STATE_LABELS: Record<"working" \| "waiting" \| "finished", string> = \{\s*working: "Working",\s*waiting: "Waiting",\s*finished: "Finished",\s*\};/
-      );
     });
 
     it("uses both user-cleared and filtered-empty variants in the quick-state branch", () => {
@@ -239,7 +231,9 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       expect(branch).toContain("<EmptyState");
       expect(branch).toContain('variant="filtered-empty"');
       expect(branch).toContain('"No matching worktrees"');
-      expect(branch).toMatch(/hasQuery/);
+      // The title gates on the deferred query (consistent with the filtered
+      // list) rather than the instant hasQuery flag.
+      expect(branch).toMatch(/deferredQuery\.trim\(\)/);
       expect(branch).toMatch(/truncateSearchQuery/);
       expect(branch).toMatch(/onClick=\{clearAllFilters\}[\s\S]*?>\s*Show all worktrees\s*</);
       expect(branch).toMatch(/onClick=\{onOpenOverview\}[\s\S]*?>\s*Open overview\s*</);

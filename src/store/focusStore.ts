@@ -8,6 +8,13 @@ export interface PanelState {
 interface GestureSnapshot {
   hidSidebar: boolean;
   hidAssistant: boolean;
+  // `helpPanelStore.isOpen` captured at gesture entry. The gesture hides the
+  // assistant via `gestureAssistantHidden` but never touches `isOpen` (the
+  // persistent toolbar preference, owned by a separate store). Recording the
+  // pre-entry value lets the exit path restore it symmetrically with the
+  // sidebar — otherwise a toolbar toggle during focus mode would leave the
+  // assistant at whatever `isOpen` drifted to instead of its pre-entry state.
+  assistantWasOpen: boolean;
 }
 
 interface FocusState {
@@ -35,7 +42,8 @@ interface FocusState {
 
   toggleFocusMode: (
     currentPanelState: PanelState,
-    visibility?: { sidebarVisible: boolean; assistantVisible: boolean }
+    visibility?: { sidebarVisible: boolean; assistantVisible: boolean },
+    assistantWasOpen?: boolean
   ) => void;
   setFocusMode: (enabled: boolean, currentPanelState?: PanelState) => void;
   setSidebarGestureHidden: (hidden: boolean, currentPanelState?: PanelState) => void;
@@ -52,7 +60,7 @@ const createFocusStore: StateCreator<FocusState> = (set, get) => ({
   gestureSnapshot: null,
   savedPanelState: null,
 
-  toggleFocusMode: (currentPanelState, visibility) =>
+  toggleFocusMode: (currentPanelState, visibility, assistantWasOpen) =>
     set((state) => {
       // Exit only when the double-click gesture itself is active (snapshot
       // present). The combined `isFocusMode` flag also flips for sidebar-only
@@ -93,7 +101,14 @@ const createFocusStore: StateCreator<FocusState> = (set, get) => ({
         gestureSidebarHidden: sidebarVisible || state.gestureSidebarHidden,
         gestureAssistantHidden: assistantVisible || state.gestureAssistantHidden,
         isFocusMode: true,
-        gestureSnapshot: { hidSidebar: sidebarVisible, hidAssistant: assistantVisible },
+        gestureSnapshot: {
+          hidSidebar: sidebarVisible,
+          hidAssistant: assistantVisible,
+          // Fall back to assistantVisible (which equals the pre-entry isOpen at
+          // gesture entry) when a caller omits the value, so the exit restore
+          // can't silently snap a logically-open assistant shut.
+          assistantWasOpen: assistantWasOpen ?? assistantVisible,
+        },
         savedPanelState: { ...currentPanelState },
       };
     }),
@@ -111,7 +126,9 @@ const createFocusStore: StateCreator<FocusState> = (set, get) => ({
           gestureSidebarHidden: true,
           gestureAssistantHidden: false,
           isFocusMode: true,
-          gestureSnapshot: { hidSidebar: true, hidAssistant: false },
+          // Hydration never hides the assistant (hidAssistant: false), so there's
+          // no isOpen to restore on exit — assistantWasOpen is irrelevant here.
+          gestureSnapshot: { hidSidebar: true, hidAssistant: false, assistantWasOpen: false },
           savedPanelState: cloned,
         };
       } else if (!enabled && state.isFocusMode) {

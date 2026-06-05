@@ -37,7 +37,7 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): DialogCop
           : `${pending.runningAgentCount} have running agents.`;
       return {
         title: `Kill ${pending.targetCount} ${noun}?`,
-        description: `Killing every non-ephemeral terminal stops their processes and discards scrollback. ${agentNote} Active work and unsaved output will be lost.`,
+        description: `Killing every user-facing terminal stops their processes and discards scrollback. ${agentNote} Active work and unsaved output will be lost.`,
         confirmLabel: `Kill ${pending.targetCount} ${noun}`,
       };
     }

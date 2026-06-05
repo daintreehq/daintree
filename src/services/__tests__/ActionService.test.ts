@@ -80,6 +80,30 @@ describe("ActionService", () => {
       expect(service.has("actions.list" as ActionId)).toBe(true);
     });
 
+    it("getTitle() resolves a registered action's title and falls back to empty string", () => {
+      const action: ActionDefinition = {
+        id: "actions.list" as ActionId,
+        title: "Do Thing",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      // Unknown id resolves to "" without throwing.
+      expect(service.getTitle("never.registered" as ActionId)).toBe("");
+
+      service.register(action);
+      expect(service.getTitle("actions.list" as ActionId)).toBe("Do Thing");
+
+      // After unregister the title is no longer resolvable.
+      service.unregister("actions.list" as ActionId);
+      expect(service.getTitle("actions.list" as ActionId)).toBe("");
+    });
+
     it("unregister() removes an action and is a no-op for unknown ids", async () => {
       const action: ActionDefinition = {
         id: "actions.list" as ActionId,
@@ -1735,6 +1759,18 @@ describe("ActionService", () => {
       };
       service.register(failAction);
       await service.dispatch("test.fail" as ActionId, undefined, { source: "user" });
+
+      expect(mockShow).not.toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
+    });
+
+    it("does not emit hint when the action opts out via suppressShortcutHint", async () => {
+      mockGetEffectiveCombo.mockReturnValue("Cmd+K");
+      mockGetDisplayCombo.mockReturnValue("⌘K");
+      mockShow.mockReturnValue(true);
+
+      service.register({ ...makeAction("test.suppressed"), suppressShortcutHint: true });
+      await service.dispatch("test.suppressed" as ActionId, undefined, { source: "user" });
 
       expect(mockShow).not.toHaveBeenCalled();
       expect(mockIncrementCount).not.toHaveBeenCalled();

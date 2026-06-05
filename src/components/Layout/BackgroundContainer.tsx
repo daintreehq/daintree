@@ -1,5 +1,14 @@
 import { useState, useMemo, useCallback } from "react";
-import { Moon, Layers, ChevronDown, ChevronRight, RotateCcw, X, Bell, BellOff } from "lucide-react";
+import {
+  Moon,
+  Layers,
+  ChevronDown,
+  ChevronRight,
+  RotateCcw,
+  OctagonX,
+  Bell,
+  BellOff,
+} from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -18,6 +27,11 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { STATE_ICONS, STATE_LABELS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
 import { fireWatchNotification } from "@/lib/watchNotification";
+import {
+  KILL_TERMINAL_TITLE,
+  KILL_TERMINAL_CONFIRM_LABEL,
+  killTerminalDescription,
+} from "./killTerminalStrings";
 import type { AgentState } from "@/types";
 
 interface BackgroundContainerProps {
@@ -356,14 +370,10 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
       <ConfirmDialog
         isOpen={killConfirmId !== null}
         onClose={() => setKillConfirmId(null)}
-        title="Kill terminal?"
-        description={
-          killTarget
-            ? `${killTarget.title || "The terminal"} will be terminated and cannot be recovered.`
-            : "The terminal will be terminated and cannot be recovered."
-        }
+        title={KILL_TERMINAL_TITLE}
+        description={killTerminalDescription(killTarget?.title || undefined)}
         variant="destructive"
-        confirmLabel="Kill terminal"
+        confirmLabel={KILL_TERMINAL_CONFIRM_LABEL}
         onConfirm={handleKillConfirm}
       />
     </Popover>
@@ -507,7 +517,7 @@ function BackgroundSingleItem({
               aria-label={`Kill ${title}`}
               data-testid="bg-kill-button"
             >
-              <X aria-hidden="true" />
+              <OctagonX aria-hidden="true" />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">{`Kill ${title}`}</TooltipContent>
@@ -538,7 +548,7 @@ function BackgroundGroupItem({
   onWatchToggle: (terminal: PtyPanelData) => void;
   onKill: (terminalId: string) => void;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(true);
   const tabCount = terminals.length;
   const groupName = `Tab group (${tabCount} ${tabCount === 1 ? "tab" : "tabs"})`;
   const groupWaiting = terminals.filter((t) => t.agentState === "waiting").length;

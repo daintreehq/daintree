@@ -514,6 +514,7 @@ export async function listPullRequests(
             hasNextPage: pullRequests?.pageInfo?.hasNextPage ?? false,
             endCursor: pullRequests?.pageInfo?.endCursor ?? null,
           },
+          totalCount,
         };
 
         prListCache.set(cacheKey, result);

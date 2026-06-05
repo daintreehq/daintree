@@ -59,10 +59,11 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
     );
   });
 
-  it("anchors the panel with fixed positioning for full viewport height", () => {
+  it("anchors the panel with fixed positioning below the toolbar", () => {
     // Bug 3: absolute + h-full inside <main> was bounded by the flex cell.
-    // fixed inset-y-0 anchors to the viewport regardless of docks/panels below.
-    expect(source).toMatch(/className="fixed inset-y-0 z-40 pointer-events-auto"/);
+    // fixed top-12 bottom-0 anchors to the viewport (below the h-12 toolbar)
+    // regardless of docks/panels below.
+    expect(source).toMatch(/className="fixed top-12 bottom-0 z-40 pointer-events-auto"/);
   });
 
   it("drops the static backdrop-blur from the main-content wrapper", () => {

@@ -18,7 +18,32 @@ TooltipProvider.displayName = "TooltipProvider";
 
 type TooltipRootProps = React.ComponentProps<typeof TooltipPrimitiveType.Root>;
 
-const Tooltip = ({ children, open, ...props }: TooltipRootProps) => {
+// How long any tooltip stays up before auto-hiding. Tooltips here are
+// transient hints — once read, they've done their job — so every open gets
+// a fixed display window instead of persisting while hovered/focused. The
+// motivating bug: Radix opens tooltips on focus as well as hover, and focus
+// routinely lands on a trigger without the user asking for a tooltip (focus
+// restoration after a popover/dialog closes, webContents.focus() on a
+// project-view swap, window re-activation). Those opens have no natural
+// close, so without a deadline the tooltip pins until the next click.
+// Controlled consumers are closed through their onOpenChange; a pinned
+// `open` with no handler (validation/drag hints) deliberately ignores the
+// dismiss. Tooltips whose body IS the content (rich hover cards, full-text
+// reveals) opt out via `autoDismiss={false}`.
+const TOOLTIP_AUTO_DISMISS_MS = 2500;
+
+type TooltipProps = TooltipRootProps & {
+  autoDismiss?: boolean;
+};
+
+const Tooltip = ({
+  children,
+  open,
+  defaultOpen,
+  onOpenChange,
+  autoDismiss = true,
+  ...props
+}: TooltipProps) => {
   const radix = useRadixPrimitives();
   // When the surrounding keepMounted FixedDropdown has transitioned to the
   // Activity-hidden state, force `open={false}` on the Radix Root so any
@@ -28,20 +53,65 @@ const Tooltip = ({ children, open, ...props }: TooltipRootProps) => {
   // (`true`) preserves the caller's `open` value, so uncontrolled tooltips
   // and any explicit `open={true}` callers keep working unchanged.
   const dropdownVisible = React.useContext(FixedDropdownVisibleContext);
-  const effectiveOpen = dropdownVisible ? open : false;
+  // Shadow of the open state so the Root is always controlled. For
+  // uncontrolled consumers this replaces Radix's internal state; for
+  // controlled consumers it tracks their value so flipping between modes
+  // (`open={cond || undefined}`) can't strand a stale open.
+  const [managedOpen, setManagedOpen] = React.useState(defaultOpen ?? false);
+  const isControlled = open !== undefined;
+  const resolvedOpen = isControlled ? open : managedOpen;
+  const effectiveOpen = dropdownVisible ? resolvedOpen : false;
+
+  // Synced in an effect (not during render) so the React Compiler can
+  // memoize this component; events and timers only fire post-commit, so the
+  // ref is always current when read.
+  const onOpenChangeRef = React.useRef(onOpenChange);
+  React.useEffect(() => {
+    onOpenChangeRef.current = onOpenChange;
+  });
+
+  const handleOpenChange = React.useCallback((next: boolean) => {
+    setManagedOpen(next);
+    onOpenChangeRef.current?.(next);
+  }, []);
+
+  // Fixed display window: each open transition arms the dismiss timer; a
+  // close (pointer leave, Escape, click) clears it via the effect cleanup.
+  // Re-hovering after a dismissal re-opens through Radix's normal
+  // pointer-move path and gets a fresh window. Known papercut: a timed close
+  // bypasses Radix's provider onClose bookkeeping, so the skip-delay window
+  // can stay "warm" (next hover opens with no delay) until any tooltip
+  // closes through Radix's own path — harmless, and self-heals on the next
+  // pointer-leave close anywhere.
+  React.useEffect(() => {
+    if (!autoDismiss || !effectiveOpen) return;
+    const timer = setTimeout(() => {
+      setManagedOpen(false);
+      onOpenChangeRef.current?.(false);
+    }, TOOLTIP_AUTO_DISMISS_MS);
+    return () => clearTimeout(timer);
+  }, [autoDismiss, effectiveOpen]);
+
+  // The prop-forced close while hidden never fires onOpenChange, so the
+  // shadow state must be reset explicitly or the tooltip would re-open
+  // hover-less when the dropdown becomes visible again.
+  React.useEffect(() => {
+    if (!dropdownVisible) setManagedOpen(false);
+  }, [dropdownVisible]);
+
   if (!radix) return <>{children}</>;
   const Root = radix.TooltipPrimitive.Root;
   // Key on visibility so the Radix Root remounts on each hidden/visible
-  // transition. Without this, a tooltip that was uncontrolled-open when
-  // the dropdown hid would leave Radix's internal `uncontrolledProp` stuck
-  // at `true` — the controlled-close path only fires `onOpenChange` and
-  // never resets the uncontrolled state. On reopen, releasing back to
-  // `open={undefined}` would then read that stale `true` and re-open the
-  // tooltip with no user hover. Remounting clears it; the hidden tree has
-  // no user-visible state worth preserving since the prop-forced close
-  // already invalidated it.
+  // transition, clearing any internal state the prop-forced close skipped
+  // (issue #8001). The hidden tree has no user-visible state worth
+  // preserving since the forced close already invalidated it.
   return (
-    <Root key={dropdownVisible ? "visible" : "hidden"} {...props} open={effectiveOpen}>
+    <Root
+      key={dropdownVisible ? "visible" : "hidden"}
+      {...props}
+      open={effectiveOpen}
+      onOpenChange={handleOpenChange}
+    >
       {children}
     </Root>
   );

@@ -426,6 +426,86 @@ describe("TerminalWebGLManager", () => {
     expect(managed.terminal.refresh).not.toHaveBeenCalled();
   });
 
+  describe("repairAtlasForReactivation", () => {
+    it("resets the local renderer and repaints a pooled, sized terminal", () => {
+      const managed = makeManagedTerminal();
+      manager.ensureContext("t1", managed);
+      const addon = addonAt(0);
+
+      const repaired = manager.repairAtlasForReactivation("t1");
+
+      expect(repaired).toBe(true);
+      // Local resize-like reset only — never the shared-atlas clear (which would
+      // perturb co-owning tiled terminals) and never a reacquire (breaker tick).
+      expect(addon._renderer.handleResize).toHaveBeenCalledWith(80, 24);
+      expect(addon.clearTextureAtlas).not.toHaveBeenCalled();
+      expect(mockAddonDispose).not.toHaveBeenCalled();
+      expect(managed.terminal.refresh).toHaveBeenCalledWith(0, 23);
+      // The context stays live — repair must not drop the pool entry.
+      expect(manager.isActive("t1")).toBe(true);
+    });
+
+    it("falls back to local model clear when resize-like reset is unavailable", () => {
+      const managed = makeManagedTerminal();
+      manager.ensureContext("t1", managed);
+      const addon = addonAt(0);
+      delete (addon._renderer as { handleResize?: unknown }).handleResize;
+
+      const repaired = manager.repairAtlasForReactivation("t1");
+
+      expect(repaired).toBe(true);
+      expect(addon._renderer._clearModel).toHaveBeenCalledWith(true);
+      expect(addon.clearTextureAtlas).not.toHaveBeenCalled();
+      expect(managed.terminal.refresh).toHaveBeenCalledWith(0, 23);
+    });
+
+    it("is a no-op for a terminal with no active WebGL context (DOM renderer)", () => {
+      // Never ensureContext'd — no pool entry, so nothing to repair.
+      const repaired = manager.repairAtlasForReactivation("never-attached");
+      expect(repaired).toBe(false);
+      expect(WebglAddonMock).not.toHaveBeenCalled();
+    });
+
+    it("skips the repair when the terminal has no rows yet", () => {
+      const managed = makeManagedTerminal({
+        terminal: {
+          loadAddon: vi.fn(),
+          element: makeFakeElement(),
+          cols: 80,
+          rows: 0,
+          refresh: vi.fn(),
+        } as unknown as ManagedTerminal["terminal"],
+      });
+      manager.ensureContext("t1", managed);
+      const addon = addonAt(0);
+
+      const repaired = manager.repairAtlasForReactivation("t1");
+
+      expect(repaired).toBe(false);
+      // No model touched and no repaint for an unsized grid — the wake resize
+      // rebuilds it from scratch.
+      expect(addon._renderer.handleResize).not.toHaveBeenCalled();
+      expect(addon._renderer._clearModel).not.toHaveBeenCalled();
+      expect(addon.clearTextureAtlas).not.toHaveBeenCalled();
+      expect(managed.terminal.refresh).not.toHaveBeenCalled();
+    });
+
+    it("returns false when the local reset cannot run", () => {
+      const managed = makeManagedTerminal();
+      manager.ensureContext("t1", managed);
+      const addon = addonAt(0);
+      // Neither the resize-like path nor the model-clear fallback is available.
+      delete (addon._renderer as { handleResize?: unknown }).handleResize;
+      delete (addon._renderer as { _clearModel?: unknown })._clearModel;
+
+      const repaired = manager.repairAtlasForReactivation("t1");
+
+      expect(repaired).toBe(false);
+      expect(managed.terminal.refresh).not.toHaveBeenCalled();
+      expect(addon.clearTextureAtlas).not.toHaveBeenCalled();
+    });
+  });
+
   it("dispose() cancels a pending atlas resync frame", () => {
     const managed1 = makeManagedTerminal();
     manager.ensureContext("t1", managed1);

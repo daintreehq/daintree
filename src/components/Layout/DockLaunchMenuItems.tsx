@@ -1,11 +1,18 @@
 import type * as React from "react";
+import { Fragment } from "react";
 import { Globe, MonitorPlay, SquareTerminal } from "lucide-react";
 import { BrandMark, Workflow } from "@/components/icons";
 import { useRecipeStore } from "@/store/recipeStore";
+import { useActionMruStore } from "@/store/actionMruStore";
 import type { RecipeContext } from "@/utils/recipeVariables";
 import { actionService } from "@/services/ActionService";
 import type { ActionSource, AgentAvailabilityState } from "@shared/types";
 import { isAgentBlocked, isAgentLaunchable } from "@shared/utils/agentAvailability";
+
+// Cap the "Recently launched" band so it stays a quick-reach shortcut rather
+// than a second full agent list above the fixed Pinned/Other groups.
+const RECENCY_BAND_CAP = 3;
+const AGENT_MRU_PREFIX = "agent.";
 
 type MenuComponent = React.ElementType;
 type LaunchAgentIcon = React.ComponentType<{ className?: string; brandColor?: string }>;
@@ -67,6 +74,22 @@ export function DockLaunchMenuItems({
       (r.worktreeId === undefined || r.worktreeId === (activeWorktreeId ?? undefined))
   );
 
+  // Subscribe to the stable getter (not its result) so the selector returns a
+  // constant reference — calling getSortedActionMruList() inside the selector
+  // would mint a new array every render and trip Zustand 5's infinite-loop
+  // guard. Mirrors AgentTrayButton's pattern.
+  const getSortedActionMruList = useActionMruStore((s) => s.getSortedActionMruList);
+  // Build the capped recency band from agent launches only. Filter out
+  // cold-start seeds (lastAccessedAt === 0 are never-launched), keep agent.*
+  // keys, map back to the live agent objects (dropping stale/removed agents),
+  // then cap. Duplicates with the Pinned/Other groups below are intentional —
+  // the band is a quick-reach shortcut, not a replacement grouping.
+  const recentAgents = getSortedActionMruList()
+    .filter((entry) => entry.lastAccessedAt > 0 && entry.id.startsWith(AGENT_MRU_PREFIX))
+    .map((entry) => agents.find((a) => a.id === entry.id.slice(AGENT_MRU_PREFIX.length)))
+    .filter((agent): agent is DockLaunchAgent => agent !== undefined)
+    .slice(0, RECENCY_BAND_CAP);
+
   const renderAgentItem = (agent: DockLaunchAgent) => {
     const Icon = agent.icon;
     const isLaunchable = isAgentLaunchable(agent.availability);
@@ -84,6 +107,11 @@ export function DockLaunchMenuItems({
         title={!isLaunchable ? settingsTooltip : undefined}
         onSelect={() => {
           if (isLaunchable) {
+            // Record the launch so it surfaces in the recency band on the next
+            // open. The dock path (both the + pill and the right-click context
+            // menu route through here) previously never recorded MRU; this
+            // mirrors AgentTrayButton's tray-launch recording.
+            useActionMruStore.getState().recordActionMru(`${AGENT_MRU_PREFIX}${agent.id}`);
             onLaunchAgent(agent.id);
           } else {
             void actionService.dispatch(
@@ -113,6 +141,16 @@ export function DockLaunchMenuItems({
 
   return (
     <>
+      {recentAgents.length > 0 && (
+        <>
+          <C.Label>Recently launched</C.Label>
+          {recentAgents.map((agent) => (
+            <Fragment key={`recent-${agent.id}`}>{renderAgentItem(agent)}</Fragment>
+          ))}
+          <C.Separator />
+        </>
+      )}
+
       {agents.length > 0 && (
         <>
           {showGroups ? (
@@ -149,24 +187,46 @@ export function DockLaunchMenuItems({
         </C.Item>
       )}
 
-      {visibleRecipes.length > 0 && (
-        <>
-          <C.Separator />
-          <C.Label>Launch recipe</C.Label>
-          {visibleRecipes.map((recipe) => (
-            <C.Item
-              key={recipe.id}
-              onSelect={() =>
-                void useRecipeStore
-                  .getState()
-                  .runRecipe(recipe.id, cwd, activeWorktreeId ?? undefined, recipeContext)
-              }
-            >
-              <Workflow className="w-3.5 h-3.5 mr-2" />
-              {recipe.name}
-            </C.Item>
-          ))}
-        </>
+      <C.Separator />
+      <C.Label>Launch recipe</C.Label>
+      {visibleRecipes.length > 0 ? (
+        visibleRecipes.map((recipe) => (
+          <C.Item
+            key={recipe.id}
+            onSelect={() =>
+              void useRecipeStore
+                .getState()
+                .runRecipe(recipe.id, cwd, activeWorktreeId ?? undefined, recipeContext)
+            }
+          >
+            <Workflow className="w-3.5 h-3.5 mr-2" />
+            {recipe.name}
+          </C.Item>
+        ))
+      ) : (
+        // First-run discovery cue: route into recipes instead of hiding the
+        // section, so users who have never made one can find their way in.
+        // With an active worktree, open the editor scoped to it; without one
+        // (the common first-run case), fall back to the manager — the editor's
+        // event handler hard-requires a string worktreeId and silently no-ops
+        // on undefined, so dispatching the editor here would do nothing. Both
+        // actions are danger:"safe" and MRU-eligible.
+        <C.Item
+          onSelect={() => {
+            if (activeWorktreeId) {
+              void actionService.dispatch(
+                "recipe.editor.open",
+                { worktreeId: activeWorktreeId },
+                { source: settingsSource }
+              );
+            } else {
+              void actionService.dispatch("recipe.manager.open", {}, { source: settingsSource });
+            }
+          }}
+        >
+          <Workflow className="w-3.5 h-3.5 mr-2" />
+          No recipes yet
+        </C.Item>
       )}
     </>
   );

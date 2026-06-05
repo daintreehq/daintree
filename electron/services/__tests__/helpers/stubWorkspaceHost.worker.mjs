@@ -36,6 +36,7 @@ port.on("message", (raw) => {
 
     case "set-log-level-overrides":
     case "update-forge-credentials":
+    case "retry-auth-fetch":
     case "attach-worktree-port":
     case "dispose":
     case "load-project":

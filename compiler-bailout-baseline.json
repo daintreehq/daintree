@@ -254,14 +254,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "hintCount": 0,
-    "errorBailouts": [
-      {
-        "category": "Refs",
-        "severity": "Error",
-        "reason": "Cannot access refs during render"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -348,31 +342,10 @@
   "src/components/DevPreview/useDevPreviewLoadLifecycle.ts": {
     "success": 0,
     "skip": 0,
-    "error": 4,
+    "error": 1,
     "pipeline": 0,
-    "hintCount": 0,
-    "errorBailouts": [
-      {
-        "category": "Refs",
-        "severity": "Error",
-        "reason": "Cannot access refs during render"
-      },
-      {
-        "category": "Refs",
-        "severity": "Error",
-        "reason": "Cannot access refs during render"
-      },
-      {
-        "category": "Refs",
-        "severity": "Error",
-        "reason": "Cannot access refs during render"
-      },
-      {
-        "category": "Refs",
-        "severity": "Error",
-        "reason": "Cannot access refs during render"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -866,6 +839,26 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/components/HelpPanel/McpActivityStrip.tsx": {
+    "success": 3,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/HelpPanel/RecentCallsPopover.tsx": {
+    "success": 2,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/components/KeyboardShortcuts/AgentShortcutCapture.tsx": {
     "success": 1,
     "skip": 0,
@@ -977,7 +970,7 @@
     "pipelineErrors": []
   },
   "src/components/Layout/DockPanelOffscreenContainer.tsx": {
-    "success": 1,
+    "success": 0,
     "skip": 0,
     "error": 1,
     "pipeline": 0,
@@ -1226,6 +1219,16 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/components/Layout/dockPanelPortalContext.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/components/Layout/useDockBlockedState.ts": {
     "success": 1,
     "skip": 0,
@@ -1452,6 +1455,66 @@
     "error": 0,
     "pipeline": 0,
     "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Plugin/PluginContextMenuSection.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Plugin/PluginDetailPane.tsx": {
+    "success": 3,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Plugin/PluginManagerView.tsx": {
+    "success": 3,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Plugin/PluginMcpConfirmDialog.tsx": {
+    "success": 2,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Plugin/PluginViewHost.tsx": {
+    "success": 2,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Plugin/usePluginManager.ts": {
+    "success": 0,
+    "skip": 0,
+    "error": 7,
+    "pipeline": 0,
+    "hintCount": 7,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1977,11 +2040,11 @@
     "pipelineErrors": []
   },
   "src/components/Settings/CodeForgeSettingsTab.tsx": {
-    "success": 3,
+    "success": 2,
     "skip": 0,
-    "error": 1,
+    "error": 2,
     "pipeline": 0,
-    "hintCount": 1,
+    "hintCount": 2,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2082,6 +2145,16 @@
     "error": 1,
     "pipeline": 0,
     "hintCount": 1,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Settings/ForgeAuditLogViewer.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2246,12 +2319,22 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
-  "src/components/Settings/PluginsTab.tsx": {
-    "success": 0,
+  "src/components/Settings/PluginSettingsForm.tsx": {
+    "success": 1,
     "skip": 0,
-    "error": 1,
+    "error": 2,
     "pipeline": 0,
-    "hintCount": 1,
+    "hintCount": 2,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Settings/PluginsTab.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2497,7 +2580,7 @@
     "pipelineErrors": []
   },
   "src/components/Settings/VoiceInputSettingsTab.tsx": {
-    "success": 6,
+    "success": 7,
     "skip": 0,
     "error": 2,
     "pipeline": 0,
@@ -3118,16 +3201,6 @@
   },
   "src/components/Terminal/TerminalPane.tsx": {
     "success": 3,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0,
-    "hintCount": 0,
-    "errorBailouts": [],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/components/Terminal/TerminalPaneSkeleton.tsx": {
-    "success": 1,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -3803,7 +3876,7 @@
     "pipelineErrors": []
   },
   "src/components/Worktree/WorktreeCard/GitHubTooltipContent.tsx": {
-    "success": 5,
+    "success": 8,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -5194,6 +5267,16 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/hooks/app/usePluginDeepLink.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/hooks/app/useRecipeFocusReload.ts": {
     "success": 1,
     "skip": 0,
@@ -5835,6 +5918,46 @@
     "pipelineErrors": []
   },
   "src/hooks/usePluginActions.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/hooks/usePluginAgents.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/hooks/usePluginBridge.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/hooks/usePluginContextMenuItems.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/hooks/usePluginKeybindings.ts": {
     "success": 1,
     "skip": 0,
     "error": 0,

@@ -9,165 +9,226 @@ export const theme: BuiltInThemeSource = {
   heroImage: "/themes/bali.webp",
   palette: {
     type: "light",
+    // Rice-terrace composition (#9710, Bondi-standard rebuild): ONE sunlit
+    // paddy-green family for the whole field (H~116-122) with white frangipani
+    // content on top. Gold appears only as detail — canang-sari search
+    // highlights, the cursor, warning/waiting status, one whisper on the
+    // project pill — never as a field surface. Everything that carries content
+    // lifts TOWARD white — never a darker fill on a light container.
+    // Ramp L 0.883/0.936/0.958/0.978/1.0: steps 0.0206-0.0526 (gate ≥ 0.02,
+    // runaway ratio 2.55 < 3), span 0.117, panel→elevated not the smallest
+    // step. The grid is the FLOODED PADDY — a full register deeper and richer
+    // than the dry-terrace sidebar, so chrome/field/well read as three planes
+    // and white panels get real figure-ground pop.
     surfaces: {
-      grid: "#E0E6D0",
-      sidebar: "#E8ECD6",
-      canvas: "#F0F4E6",
-      panel: "#F7F9F0",
-      elevated: "#FCFDF8",
+      grid: "#D3DEBC",
+      sidebar: "#E7EDD8",
+      canvas: "#F0F3E4",
+      panel: "#F7F9F1",
+      elevated: "#FFFFFF",
     },
     text: {
-      primary: "#1D2B1E",
-      secondary: "#4F614C",
-      muted: "#788C76",
-      inverse: "#FAFCF5",
+      primary: "#20241E",
+      // Near-neutral ink with a whisper of leaf — heavily-hued green text on
+      // the green field read dirty: secondary 6.0:1 on the grid, muted 4.8:1
+      // on the grid and 6.0:1 on canvas.
+      secondary: "#4B4E47",
+      muted: "#575D54",
+      inverse: "#FDFEFB",
     },
-    border: "rgba(20,40,25,0.07)",
-    accent: "#228243",
-    accentSecondary: "#406045",
+    border: "#CBD0C1",
+    accent: "#218546",
+    accentSecondary: "#3A7A4E",
+    // success/danger/warning render as TEXT (diff numerals, status labels) on
+    // the near-white chips — all hold ≥ 4.5:1 on every surface up to #FFFFFF.
     status: {
-      success: "#2E9148",
-      warning: "#8C5E00",
-      danger: "#B04B40",
-      info: "#3E737A",
+      success: "#208042",
+      warning: "#946400",
+      danger: "#C0453A",
+      info: "#2C7884",
     },
     activity: {
-      active: "#2BA84A",
-      idle: "#829180",
-      working: "#2BA84A",
-      waiting: "#C09A2A",
+      active: "#208042",
+      idle: "#62786A",
+      working: "#208042",
+      waiting: "#8A6A0C",
     },
-    overlayTint: "#142819",
+    // Field ink, not jungle-black: the overlay/wash ladder composites onto the
+    // paddy field, and an off-temperature tint there reads as grime even when
+    // every surface hex is right.
+    overlayTint: "#31342B",
     terminal: {
-      background: "#182B1B",
-      foreground: "#DCE6D9",
-      muted: "#5C8A65",
-      cursor: "#C9A84C",
-      selection: "rgba(34,130,67,0.30)",
-      red: "#E07870",
-      green: "#64B884",
-      yellow: "#D4A840",
-      blue: "#60AACC",
-      magenta: "#C080C0",
-      cyan: "#44C4AA",
-      brightRed: "#F09888",
-      brightGreen: "#80D49C",
-      brightYellow: "#F0C060",
-      brightBlue: "#84C8E4",
-      brightMagenta: "#D4A4D8",
-      brightCyan: "#68D4BC",
-      brightWhite: "#FAFCF5",
+      background: "#1A2620",
+      foreground: "#CDD6CD",
+      // 3.82:1 on the terminal background (the old #5C8A65 leaned chroma over
+      // luminance and fell away in muted output).
+      muted: "#6F8276",
+      cursor: "#E0B341",
+      selection: "#2C4136",
+      red: "#E06A5E",
+      green: "#43BD7F",
+      yellow: "#D9A832",
+      blue: "#46A8D9",
+      magenta: "#B47FE8",
+      cyan: "#2EB5A0",
+      brightRed: "#F0907F",
+      brightGreen: "#63D89C",
+      brightYellow: "#F2C45C",
+      brightBlue: "#7CC8EC",
+      brightMagenta: "#CDA3F2",
+      brightCyan: "#5FD9C2",
+      brightWhite: "#EDF5EC",
     },
     syntax: {
-      comment: "#5A7865",
-      punctuation: "#A4C4AC",
-      number: "#D4A840",
-      string: "#78C090",
-      operator: "#50C4A8",
-      keyword: "#C090CC",
-      function: "#78B8E0",
-      link: "#52BCAC",
-      quote: "#8EA88E",
-      chip: "#6CC8B0",
+      comment: "#586D5C",
+      punctuation: "#54675A",
+      number: "#7E5D08",
+      string: "#1E7048",
+      operator: "#0F7263",
+      keyword: "#7A3FA8",
+      function: "#1D67A8",
+      link: "#106B3C",
+      quote: "#56695C",
+      chip: "#3A7A4E",
     },
     strategy: {
-      shadowStyle: "atmospheric",
+      shadowStyle: "light",
       materialBlur: 10,
-      materialSaturation: 115,
+      materialSaturation: 118,
     },
   },
   tokens: {
-    "accent-muted": "rgba(34,130,67,0.26)",
-    "accent-soft": "rgba(34,130,67,0.14)",
-    "border-divider": "rgba(20,40,25,0.05)",
-    "border-interactive": "rgba(34,130,67,0.22)",
-    "border-strong": "rgba(25,45,28,0.12)",
-    "border-subtle": "rgba(20,40,25,0.04)",
-    "category-amber": "oklch(0.58 0.12 65)",
-    "category-blue": "oklch(0.55 0.11 242)",
-    "category-cyan": "oklch(0.56 0.09 198)",
-    "category-green": "oklch(0.55 0.11 155)",
-    "category-indigo": "oklch(0.54 0.11 264)",
-    "category-orange": "oklch(0.56 0.13 38)",
-    "category-pink": "oklch(0.55 0.11 340)",
-    "category-purple": "oklch(0.55 0.11 318)",
-    "category-rose": "oklch(0.56 0.12 14)",
-    "category-teal": "oklch(0.55 0.09 178)",
-    "category-violet": "oklch(0.54 0.11 295)",
-    "focus-ring": "rgba(34,130,67,0.28)",
-    "focus-ring-offset": "3px",
-    "pr-closed": "#D41E2B",
-    "pr-draft": "#85909C",
-    "pr-merged": "#864BE8",
-    "pr-open": "#188537",
-    "overlay-emphasis": "rgba(20,40,25,0.12)",
-    "overlay-medium": "rgba(20,40,25,0.06)",
-    "overlay-soft": "rgba(20,40,25,0.035)",
-    "overlay-strong": "rgba(20,40,25,0.08)",
-    "overlay-subtle": "rgba(20,40,25,0.02)",
-    "scrim-medium": "rgba(20,40,25,0.46)",
-    "scrim-soft": "rgba(20,40,25,0.28)",
-    "scrim-strong": "rgba(20,40,25,0.64)",
-    "scrollbar-thumb": "#788C76",
-    "scrollbar-thumb-hover": "color-mix(in oklab, #788C76 85%, #1D2B1E)",
-    "search-highlight-background": "rgba(27,133,97,0.12)",
-    "search-highlight-text": "#1B8561",
-    "search-match-badge-background": "rgba(27,133,97,0.12)",
-    "search-match-badge-text": "#1B8561",
-    "search-selected-result-border": "#1B8561",
-    "search-selected-result-icon": "#1B8561",
-    "shadow-ambient": "0 14px 48px rgba(20,40,25,0.06)",
-    "shadow-color": "rgba(20,40,25,0.10)",
-    "shadow-dialog": "0 28px 56px rgba(20,40,25,0.06), 0 10px 24px rgba(20,40,25,0.10)",
-    "shadow-floating": "0 24px 64px rgba(20,40,25,0.10), 0 8px 18px rgba(20,40,25,0.06)",
-    "surface-active": "rgba(20,40,25,0.06)",
-    "surface-hover": "rgba(20,40,25,0.035)",
-    "surface-input": "#F6FAF0",
-    "surface-inset": "#E4E8D4",
-    "surface-toolbar": "#EBF0DE",
-    "terminal-black": "#182B1B",
-    "terminal-white": "#DCE6D9",
+    "accent-muted": "rgba(33,133,70,0.30)",
+    "accent-soft": "rgba(33,133,70,0.18)",
+    "focus-ring": "rgba(33,133,70,0.35)",
+    "overlay-hover": "rgba(49,52,43,0.08)",
+    // Derived 3% is sub-threshold over near-white surfaces.
+    "overlay-soft": "rgba(49,52,43,0.055)",
+    // Opaque elevate-to-select for menu/palette rows on white popovers; field
+    // green so a selected row reads as the same material, not a gray slab.
+    // One register lighter than Bondi's depth: a hued fill at L 0.934 reads
+    // recessed on a pure-white popover where Bondi's neutral sand doesn't.
+    "overlay-raised": "#EBEEE3",
+    // Engine pr-* defaults clear AA here; pr-draft alone is re-inked to the
+    // field temperature (the engine slate reads cool against the green field).
+    "pr-draft": "#62695F",
+    "scrollbar-thumb": "#727D6E",
+    "scrollbar-thumb-hover": "color-mix(in oklab, #727D6E 85%, #20241E)",
+    // Engine light scrims (0.22/0.36/0.55) read as a storm front here.
+    "scrim-soft": "rgba(49,52,43,0.16)",
+    "scrim-medium": "rgba(49,52,43,0.28)",
+    "scrim-strong": "rgba(49,52,43,0.46)",
+    // Search is canang-sari gold — the detail temperature, kept off the green
+    // accent so a match never reads as selection.
+    "search-highlight-background": "rgba(176,128,16,0.16)",
+    "search-highlight-text": "#7A5800",
+    "search-match-badge-background": "rgba(176,128,16,0.16)",
+    "search-match-badge-text": "#7A5800",
+    "search-selected-result-border": "rgba(122,88,0,0.34)",
+    "search-selected-result-icon": "#7A5800",
+    // Two-layer contact+spread; the engine "light" single penumbra has no
+    // contact edge on a near-white field.
+    "shadow-ambient": "0 1px 2px rgba(44,47,38,0.10), 0 6px 16px rgba(44,47,38,0.10)",
+    // Dialogs sit a full z-tier above menus/popovers (the floating fallback
+    // would give a centered modal the same shadow as a context menu).
+    "shadow-dialog": "0 2px 6px rgba(44,47,38,0.10), 0 24px 60px rgba(44,47,38,0.18)",
+    "shadow-floating": "0 1px 3px rgba(44,47,38,0.12), 0 12px 32px rgba(44,47,38,0.14)",
+    // In-card chips: a pale terrace inset one quiet step below the white card,
+    // not a recessed slab.
+    "surface-inset": "#EEF2E6",
+    // Inputs are raised on light, never recessed (overrides the engine's
+    // recessed derivation; promote to the engine once the light family is
+    // rebuilt from Bondi).
+    "surface-input": "#FAFCF6",
+    // Stone chrome: the frame (toolbar/dock/panel caps/dialog headers) carries
+    // Bali's volcanic-stone note at whisper chroma (H~122), one register apart
+    // from the field surfaces rather than a different temperature.
+    "surface-toolbar": "#ECEFE6",
+    "terminal-bright-black": "#5A6B5E",
+    "terminal-white": "#CDD6CD",
+    "text-link": "#0E6434",
+    // 4.5:1 on the raised input (the derived 0.58 sat at ~4.1 and fell away).
+    "text-placeholder": "rgba(32,36,30,0.62)",
   },
   extensions: {
-    "panel-grid-bg": "#EDF0E4",
-    "settings-dialog-bg": "#FAFCF5",
-    "settings-card-bg": "#FAF8F2",
-    "settings-list-item-bg": "#FAF8F2",
-    "pulse-before-bg": "#D4C8A8",
-    "pulse-card-bg": "#FCFDF8",
-    "pulse-card-shadow": "0 1px 3px rgba(20,40,25,0.06)",
-    "pulse-control-hover-bg": "rgba(20,40,25,0.02)",
-    "pulse-empty-bg": "#DBC6AE",
+    "dock-bg": "#ECEFE6",
+    "dock-input-bg": "#FAFCF6",
+    // Registry format guard: shadow-color channels, alpha ≥ 0.25.
+    "dock-shadow": "0 -2px 8px rgb(from var(--theme-shadow-color) r g b / 0.25)",
+    // Panel title bars join the stone chrome; the focused pane's cap brightens.
+    "panel-header-bg": "#EEF1E8",
+    "panel-header-focus-bg": "#F4F7EE",
+    // Emoji tiles get a white-gloss lift instead of the dark-theme black wash
+    // (which rendered murky gray chips on the light field).
+    "project-tile-wash":
+      "linear-gradient(to bottom, rgba(255,255,255,0.40), rgba(255,255,255,0.10))",
+    "project-tile-shadow": "inset 0 1px 1px rgba(44,47,38,0.10), 0 0 0 1px rgba(45,48,38,0.10)",
+    "pulse-before-bg": "#D3DEBC",
+    "pulse-card-bg": "#FFFFFF",
+    "pulse-card-header-bg": "#F7FAF0",
+    "pulse-card-shadow": "0 1px 2px rgba(44,47,38,0.10), 0 4px 10px rgba(44,47,38,0.08)",
+    "pulse-control-hover-bg": "rgba(49,52,43,0.05)",
+    "pulse-empty-bg": "#F0F3E4",
     "pulse-heat-high-opacity": "0.85",
     "pulse-heat-low-opacity": "0.38",
     "pulse-heat-medium-opacity": "0.62",
-    "pulse-missed-bg": "rgba(176,75,64,0.10)",
-    "pulse-range-bg": "#E8EDD8",
-    "pulse-ring-offset": "#FAFCF5",
-    "pulse-skeleton-gradient": "linear-gradient(90deg, #D8CEB8 25%, #E2D8C4 50%, #D8CEB8 75%)",
-    "settings-kbd-bg": "#F0F6E8",
-    "settings-nav-active-bg": "rgba(192,152,42,0.18)",
-    "settings-nav-active-shadow":
-      "0 1px 3px rgba(20,40,25,0.07), inset 0 0 0 1px rgba(192,152,42,0.22)",
-    "settings-nav-hover-bg": "rgba(20,40,25,0.035)",
-    "settings-search-bg": "#F0F6E8",
-    "sidebar-action-hover-bg": "rgba(20,40,25,0.035)",
-    "sidebar-active-bg": "rgba(0,0,0,0.04)",
-    "sidebar-hover-bg": "rgba(0,0,0,0.025)",
-    "toolbar-agent-hover-bg": "rgba(20,40,25,0.035)",
-    "toolbar-control-hover-bg": "rgba(20,40,25,0.035)",
-    "toolbar-control-hover-fg": "#228243",
-    "toolbar-divider": "rgba(20,40,25,0.04)",
+    "pulse-heat-color": "#3A7A4E",
+    // Opaque so the streak-break signal clears the 3:1 graphical floor.
+    "pulse-missed-bg": "#C0453A",
+    "pulse-range-bg": "#F0F3E4",
+    "pulse-ring-offset": "#FFFFFF",
+    "pulse-skeleton-gradient": "linear-gradient(90deg, #D3DEBC 25%, #F0F3E4 50%, #D3DEBC 75%)",
+    "dialog-header-bg": "#F8FAF2",
+    "review-commit-input-bg": "#FAFCF6",
+    "settings-kbd-bg": "#EEF2E6",
+    "settings-kbd-border": "#CBD0C1",
+    // Nav selection elevates to white + the 2px accent marker; the inherited
+    // overlay-raised darker-lift is for menu rows on white popovers only.
+    "settings-nav-active-bg": "#FFFFFF",
+    // Flat like the dark themes: the white fill + 2px accent marker carry
+    // selection, no ring or shadow.
+    "settings-nav-active-shadow": "none",
+    "settings-nav-hover-bg": "rgba(46,58,36,0.05)",
+    // Scope pill elevates to white on the tinted settings sidebar.
+    "settings-scope-bg": "#FFFFFF",
+    "settings-sidebar-bg": "rgba(231,237,216,0.60)",
+    "sidebar-action-hover-bg": "rgba(46,58,36,0.05)",
+    // Worktree cards are paper highlights on the terrace field; hover brightens
+    // toward white; selected is pure white + the accent rail.
+    // idle < hover < selected is audit-enforced; the old ladder darkened to
+    // select, which reads as grime on a near-white field — these sit ~1.5
+    // OKLab points apart.
+    // Soft contact shadow only — no ring: the card must not read as bordered
+    // (#9711 round-3 owner decision; selection = bg + right accent border).
+    "sidebar-card-bg": "#F2F6EA",
+    "sidebar-card-shadow": "0 1px 2px rgba(40,48,30,0.05)",
+    "sidebar-active-bg": "#FFFFFF",
+    "sidebar-hover-bg": "#F8FAF4",
+    "toolbar-agent-hover-bg": "rgba(32,36,30,0.06)",
+    "toolbar-control-hover-bg": "rgba(32,36,30,0.06)",
+    // Accent restraint: hover affordance is the bg, not a green foreground.
+    "toolbar-control-hover-fg": "#20241E",
+    "toolbar-control-hover-shadow": "none",
+    "toolbar-divider": "rgba(203,208,193,0.7)",
+    "toolbar-pill-radius": "0.5rem",
+    // One canang-gold whisper on the project pill; everything else quiet ink.
+    // Pills sit LIGHTER than the chrome strip (raised, like all content).
     "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(192,152,42,0.04), rgba(20,40,25,0.05)), linear-gradient(135deg, #EDF0E6, #E2DDD4)",
-    "toolbar-project-border": "rgba(20,40,25,0.042)",
-    "toolbar-project-chip-bg": "rgba(0,0,0,0.04)",
-    "toolbar-project-chip-border": "rgba(20,40,25,0.042)",
-    "toolbar-project-shadow": "inset 0 1px 0 rgba(25,45,28,0.06)",
-    "toolbar-stats-bg": "rgba(0,0,0,0.04)",
-    "toolbar-stats-border": "rgba(20,40,25,0.035)",
-    "toolbar-stats-divider": "rgba(20,40,25,0.04)",
-    "toolbar-stats-hover-bg": "rgba(20,40,25,0.035)",
-    "worktree-section-hover-bg": "rgba(20,40,25,0.035)",
+      "linear-gradient(180deg, rgba(224,179,65,0.08), rgba(32,36,30,0.02)), #F6F9F0",
+    "toolbar-project-border": "rgba(203,208,193,0.75)",
+    "toolbar-project-chip-bg": "rgba(32,36,30,0.04)",
+    "toolbar-project-chip-border": "rgba(203,208,193,0.75)",
+    "toolbar-project-shadow": "inset 0 1px 0 rgba(255,255,255,0.5)",
+    "toolbar-shadow": "0 1px 2px rgba(44,47,38,0.06)",
+    "toolbar-stats-bg": "#F6F9F0",
+    "toolbar-stats-border": "rgba(203,208,193,0.7)",
+    "toolbar-stats-divider": "rgba(203,208,193,0.7)",
+    "toolbar-stats-hover-bg": "#F8FAF4",
+    // Filter rail sits flush on the field; the raised search input carries it.
+    "worktree-filter-bar-bg": "#E7EDD8",
+    // Active quick-state tab lifts to white under its inset underline.
+    "worktree-quick-state-active-bg": "#FFFFFF",
+    "worktree-search-input-bg": "#FAFCF6",
+    "worktree-section-hover-bg": "rgba(46,58,36,0.05)",
   },
 };

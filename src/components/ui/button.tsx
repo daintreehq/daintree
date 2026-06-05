@@ -16,6 +16,20 @@ const buttonVariants = cva(
           "bg-destructive text-text-inverse [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-tint/20 shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 active:brightness-95 active:inset-shadow-none focus-visible:outline-destructive",
         outline:
           "ring-1 ring-border-strong bg-surface-panel-elevated/95 backdrop-blur-md text-daintree-text shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_var(--color-overlay-soft)] hover:bg-surface-panel-elevated hover:ring-border-default hover:text-daintree-text active:bg-overlay-soft active:shadow-none",
+        // High-contrast INVERSE CTA: a near-white fill + off-black text on dark
+        // themes, near-black fill + off-white text on light themes — so the button
+        // pops against the surrounding UI (white CTA on a dark app / black CTA on a
+        // light app). `text-primary` is the off-white/off-black foreground shade
+        // and `text-inverse` its opposite; the built-in themes keep this pair very
+        // high contrast (~12-16:1). Use where the chromatic accent would be
+        // unreadable (e.g. white text on a bright-green accent) or would
+        // distractingly restyle, and the action needs to be highly noticeable.
+        // Hover/active shift the fill toward the text color — a background-only
+        // press cue that reads correctly in both polarities (darkens the white
+        // fill / lightens the black fill). Not opacity, which would fade the
+        // label and let the surface bleed through.
+        contrast:
+          "bg-daintree-text text-text-inverse ring-1 ring-tint/15 shadow-[var(--theme-shadow-ambient)] hover:bg-[color-mix(in_oklab,var(--color-daintree-text)_90%,var(--color-text-inverse))] active:bg-[color-mix(in_oklab,var(--color-daintree-text)_82%,var(--color-text-inverse))] active:shadow-none",
         secondary:
           "bg-secondary text-secondary-foreground ring-1 ring-tint/[0.08] shadow-[var(--theme-shadow-ambient)] hover:bg-secondary/90 active:shadow-none",
         ghost:

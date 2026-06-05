@@ -31,7 +31,7 @@ const DEFAULT_HIBERNATE_MINUTES = 30;
 // countdown each time.
 const HIBERNATE_BUSY_RECHECK_MS = 2 * 60 * 1000;
 
-const RESUME_BANNER_AUTO_DISMISS_MS = 10_000;
+const RESUME_BANNER_AUTO_DISMISS_MS = 4_000;
 const SNAPSHOT_BANNER_AUTO_DISMISS_MS = 12_000;
 
 // Minimum disabled period after a manual "Check again" click — keeps the
@@ -85,6 +85,44 @@ export interface LaunchErrorState {
   kind: LaunchErrorKind;
 }
 
+/**
+ * Live MCP tool-call activity for the Assistant panel's ambient activity strip
+ * (#9759). One row at a time: an in-flight call (tool id + args + elapsed) that
+ * settles to a dimmed glyph + duration. Bursts within the same turn coalesce to
+ * `callCount` ("N calls · latest tool"). `null` when no call has happened yet
+ * (the strip is absent). An errored settle persists until the next call starts.
+ */
+export interface McpToolActivityState {
+  /** "in-flight" while the call runs; "settled" once it resolves. */
+  status: "in-flight" | "settled";
+  /** The latest tool in the (possibly coalesced) burst. */
+  toolId: string;
+  /** Redacted single-line args summary for the latest call. */
+  argsSummary: string;
+  /** Epoch ms the latest call started — drives the elapsed timer. */
+  startedAt: number;
+  /** True when the latest in-flight call is a `danger: "confirm"` dispatch awaiting the user. */
+  danger: boolean;
+  /** Number of calls coalesced within the current turn (1 for a single call). */
+  callCount: number;
+  /**
+   * Calls in the coalesced burst that have started but not yet settled. The
+   * row only transitions to "settled" when this reaches zero — an early
+   * settle from call A must not mark the row settled while call B still runs.
+   */
+  pendingCalls: number;
+  /** Turn the burst is coalesced under; absent for calls outside a turn boundary. */
+  turnId?: string;
+  /** Settled wall-clock duration in ms. Absent while in-flight. */
+  durationMs?: number;
+  /** Audit-aligned result class. Absent while in-flight. */
+  result?: import("@shared/types/ipc/mcpServer").McpAuditResult;
+  /** Audit-aligned severity. Absent while in-flight. */
+  severity?: import("@shared/types/ipc/mcpServer").McpAuditSeverity;
+  /** True when the settled outcome is an error/critical severity (red tint, persists). */
+  isError: boolean;
+}
+
 export interface HelpSessionSnapshot {
   phase: HelpSessionPhase;
   showResumeBanner: boolean;
@@ -99,6 +137,8 @@ export interface HelpSessionSnapshot {
    */
   isCheckingVersion: boolean;
   launchError: LaunchErrorState | null;
+  /** Live MCP tool-call activity for the ambient strip (#9759); null when idle. */
+  mcpActivity: McpToolActivityState | null;
 }
 
 export interface HelpProjectRef {
@@ -378,6 +418,7 @@ const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
   isApprovingTier: false,
   isCheckingVersion: false,
   launchError: null,
+  mcpActivity: null,
 });
 
 /**
@@ -475,6 +516,14 @@ export class HelpSessionController {
     });
     this._disposers.push(disposeTier);
 
+    const disposeToolStarted = window.electron.mcpServer.onToolCallStarted((payload) => {
+      this._onToolCallStarted(payload);
+    });
+    const disposeToolSettled = window.electron.mcpServer.onToolCallSettled((payload) => {
+      this._onToolCallSettled(payload);
+    });
+    this._disposers.push(disposeToolStarted, disposeToolSettled);
+
     const offSuspend = window.electron.systemSleep.onSuspend(() => {
       this._isSystemSuspended = true;
     });
@@ -565,6 +614,9 @@ export class HelpSessionController {
     revokeHelpSession(store.sessionId);
     this._hasAutoLaunched = false;
     store.clearTerminal();
+    // The bound session is gone — drop any lingering activity row so the strip
+    // doesn't show stale tool calls for a dead session (#9759).
+    this.clearMcpActivity();
   }
 
   /**
@@ -705,6 +757,8 @@ export class HelpSessionController {
         revokeHelpSession(previousSessionId);
         if (reservedId) this._revokePendingSession();
         useHelpPanelStore.getState().clearTerminal();
+        // Replacing the session — clear the prior session's activity row (#9759).
+        this.clearMcpActivity();
       }
       // Discarding the current conversation invalidates any persisted
       // hibernate entry for this project — leaving it would resume the
@@ -951,6 +1005,95 @@ export class HelpSessionController {
     }
   }
 
+  /**
+   * Handle a live `tool-call-started` push (#9759). Coalesces bursts within
+   * the same turn into a single row ("N calls · latest tool") and clears any
+   * lingering errored row — a new call always supersedes the previous result.
+   */
+  private _onToolCallStarted(
+    payload: import("@shared/types/ipc/mcpServer").McpToolCallStartedPayload
+  ): void {
+    const prev = this._snapshot.mcpActivity;
+    // Coalesce only within the same turn: a burst of calls the model fires in
+    // one turn collapses to a count, but a new turn starts a fresh row. Calls
+    // outside a turn boundary (`turnId` absent) never coalesce — last wins.
+    const sameTurn =
+      prev !== null &&
+      payload.turnId !== undefined &&
+      prev.turnId !== undefined &&
+      prev.turnId === payload.turnId;
+    const callCount = sameTurn && prev ? prev.callCount + 1 : 1;
+    // Outstanding-call tracking: a same-turn start joins the burst's pending
+    // pool (settled rows have drained to 0). A new turn starts a fresh pool.
+    const pendingCalls = sameTurn && prev ? prev.pendingCalls + 1 : 1;
+    this._patch({
+      mcpActivity: {
+        status: "in-flight",
+        toolId: payload.toolId,
+        argsSummary: payload.argsSummary,
+        startedAt: payload.startedAt,
+        danger: payload.danger,
+        callCount,
+        pendingCalls,
+        ...(payload.turnId !== undefined ? { turnId: payload.turnId } : {}),
+        isError: false,
+      },
+    });
+  }
+
+  /**
+   * Handle a live `tool-call-settled` push (#9759). Transitions the current
+   * in-flight row to its settled (dimmed glyph + duration) appearance. A push
+   * with no current row is ignored — there's nothing on screen to settle.
+   */
+  private _onToolCallSettled(
+    payload: import("@shared/types/ipc/mcpServer").McpToolCallSettledPayload
+  ): void {
+    const prev = this._snapshot.mcpActivity;
+    if (prev === null) return;
+    // A settle from a different turn must not regress the current row — a
+    // slow call from the previous turn can land after the next turn's call
+    // already started. Settles with no turnId (turn boundary already passed,
+    // or no turn was active) still apply: they belong to the row last shown.
+    if (
+      prev.turnId !== undefined &&
+      payload.turnId !== undefined &&
+      payload.turnId !== prev.turnId
+    ) {
+      return;
+    }
+    // Drain one call from the burst's pending pool. While calls remain
+    // outstanding the row stays in-flight — an early settle from call A must
+    // not flip a coalesced row to "settled" while call B is still running.
+    const pendingCalls = Math.max(0, prev.pendingCalls - 1);
+    if (prev.status === "in-flight" && pendingCalls > 0) {
+      this._patch({ mcpActivity: { ...prev, pendingCalls } });
+      return;
+    }
+    const isError = payload.severity === "error" || payload.severity === "critical";
+    this._patch({
+      mcpActivity: {
+        ...prev,
+        status: "settled",
+        // Reflect the settled call's tool so the glyph labels the right call
+        // even when a burst's latest started differs from what just settled.
+        toolId: payload.toolId,
+        danger: false,
+        durationMs: payload.durationMs,
+        result: payload.result,
+        severity: payload.severity,
+        isError,
+        pendingCalls,
+      },
+    });
+  }
+
+  /** Clear the live activity strip (e.g. on session teardown). */
+  clearMcpActivity(): void {
+    if (this._snapshot.mcpActivity === null) return;
+    this._patch({ mcpActivity: null });
+  }
+
   private _patch(partial: Partial<HelpSessionSnapshot>): void {
     // Spread-merge first, then structurally compare per-field. Reusing the
     // same snapshot reference when nothing changed keeps Object.is stable
@@ -964,7 +1107,8 @@ export class HelpSessionController {
       next.preflightSnapshot === this._snapshot.preflightSnapshot &&
       next.isApprovingTier === this._snapshot.isApprovingTier &&
       next.isCheckingVersion === this._snapshot.isCheckingVersion &&
-      next.launchError === this._snapshot.launchError
+      next.launchError === this._snapshot.launchError &&
+      next.mcpActivity === this._snapshot.mcpActivity
     ) {
       return;
     }
@@ -1343,8 +1487,9 @@ export class HelpSessionController {
       launchAgentId,
       command,
       cwd,
-      location: "dock",
-      ephemeral: true,
+      location: "overlay",
+      excludeFromPersistence: true,
+      removeOnExit: true,
       ...(env && { env }),
       ...(customLaunchFlags.length > 0 && { agentLaunchFlags: customLaunchFlags }),
     });
@@ -1477,9 +1622,10 @@ export class HelpSessionController {
         "agent.launch",
         {
           agentId: launchAgentId,
-          location: "dock",
+          location: "overlay",
           cwd,
-          ephemeral: true,
+          excludeFromPersistence: true,
+          removeOnExit: true,
           ...(env && { env }),
           ...(customLaunchFlags.length > 0 && { agentLaunchFlags: customLaunchFlags }),
         },
@@ -1702,9 +1848,10 @@ export class HelpSessionController {
 
       const dispatchArgs: Record<string, unknown> = {
         agentId: launchAgentId,
-        location: "dock",
+        location: "overlay",
         cwd,
-        ephemeral: true,
+        excludeFromPersistence: true,
+        removeOnExit: true,
       };
       if (env) dispatchArgs.env = env;
       if (customLaunchFlags.length > 0) dispatchArgs.agentLaunchFlags = customLaunchFlags;

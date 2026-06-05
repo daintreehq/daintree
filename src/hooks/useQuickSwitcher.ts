@@ -79,7 +79,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
       if (!t) continue;
       if (t.location === "trash") continue;
       if (!isPtyPanel(t)) continue;
-      if (t.ephemeral === true) continue;
+      if (t.excludeFromPersistence === true) continue;
       if (t.hasPty === false) continue;
       const worktreeName = t.worktreeId ? worktreeMap.get(t.worktreeId)?.name : undefined;
       const isBackground = t.location === "background";

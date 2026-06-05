@@ -33,6 +33,7 @@ import type {
   HelpTokenValidator,
   HelpSessionWebContentsResolver,
   HelpSessionActionContextResolver,
+  HelpSessionIdResolver,
 } from "./mcp-server/shared.js";
 import type { ActionManifestEntry } from "../../shared/types/actions.js";
 import { events } from "./events.js";
@@ -191,7 +192,8 @@ export class McpServerService {
       requestManifestForWebContents: (id) => this.bridge.requestManifestForWebContents(id),
       dispatchActionForWebContents: (id, actionId, args, confirmed, contextOverride) =>
         this.bridge.dispatchActionForWebContents(id, actionId, args, confirmed, contextOverride),
-      handleWaitUntilIdle: (rawArgs, signal) => handleWaitUntilIdle(rawArgs, signal),
+      handleWaitUntilIdle: (rawArgs, signal, options) =>
+        handleWaitUntilIdle(rawArgs, signal, options),
       getCachedManifest: () => this.bridge.getCachedManifest(),
       clearCachedManifest: () => this.bridge.clearCache(),
       cleanupListeners: this.cleanupListeners,
@@ -240,6 +242,10 @@ export class McpServerService {
 
   setHelpSessionActionContextResolver(resolver: HelpSessionActionContextResolver | null): void {
     this.httpLifecycle.setHelpSessionActionContextResolver(resolver);
+  }
+
+  setHelpSessionIdResolver(resolver: HelpSessionIdResolver | null): void {
+    this.httpLifecycle.setHelpSessionIdResolver(resolver);
   }
 
   private emitStatusChange(): void {

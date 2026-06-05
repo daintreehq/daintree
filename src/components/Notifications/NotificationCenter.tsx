@@ -987,7 +987,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       {showMutedPill && (
         <div
           data-testid="notification-muted-pill"
-          className="flex flex-col gap-0.5 px-3 py-1.5 bg-overlay-subtle text-[11px] text-daintree-text/70"
+          className="flex flex-col gap-0.5 px-3 py-1.5 bg-overlay-raised text-[11px] text-daintree-text/70"
         >
           <div className="flex items-center gap-1.5">
             <span className="min-w-0 flex-1 truncate font-medium">{summaryHeroLine}</span>
@@ -997,7 +997,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 onClick={handleResumeNotifications}
                 aria-label="Resume notifications"
                 title="Resume notifications"
-                className="inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] px-1.5 py-0.5 text-[11px] font-medium text-daintree-text/70 hover:bg-overlay-emphasis hover:text-daintree-text transition-colors"
+                className="inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] px-1.5 py-0.5 text-[11px] font-medium text-daintree-text/70 hover:bg-overlay-raised hover:text-daintree-text transition-colors"
               >
                 Resume
               </button>
@@ -1147,10 +1147,10 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
             className={cn(
               "absolute bottom-2 left-1/2 -translate-x-1/2 z-10",
               "inline-flex items-center gap-1.5 px-3 py-1 rounded-full",
-              "bg-overlay-emphasis border border-tint/[0.08]",
+              "bg-overlay-raised border border-border-strong",
               "shadow-[var(--theme-shadow-floating)]",
               "text-[11px] font-medium text-daintree-text/80",
-              "hover:text-daintree-text hover:bg-overlay-emphasis",
+              "hover:text-daintree-text hover:bg-overlay-raised",
               "transition-[transform,opacity] motion-reduce:transition-none",
               showJumpPill
                 ? "opacity-100 translate-y-0 pointer-events-auto"
@@ -1209,7 +1209,7 @@ function NeedsAttentionSection({
       <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-daintree-text/50">
         Needs attention
       </div>
-      <div role="group" aria-label="Needs attention" className="divide-y divide-tint/[0.04]">
+      <div role="group" aria-label="Needs attention">
         {groups.map((group, idx) => {
           const flatIndex = indexOffset + idx;
           return renderGroup(
@@ -1296,7 +1296,7 @@ function ChronoSection({
           onMarkRead={() => onMarkIdsRead(sectionUnreadIds, { resetLastClosed: false })}
         />
       )}
-      <div role="group" aria-label={sectionLabel} className="divide-y divide-tint/[0.04]">
+      <div role="group" aria-label={sectionLabel}>
         {section.groups.map((group, idx) => {
           const groupKey = group.correlationId ?? group.entries[0]!.id;
           const isDivider = dividerGroupId !== null && groupKey === dividerGroupId;
@@ -1459,7 +1459,7 @@ function ContextSectionHeader({
   return (
     <div
       data-testid="context-section-header"
-      className="group/section flex items-center justify-between px-3 py-1 bg-overlay-subtle text-[10px] font-medium uppercase tracking-wide text-daintree-text/60"
+      className="group/section flex items-center justify-between px-3 py-1 bg-overlay-raised text-[10px] font-medium uppercase tracking-wide text-daintree-text/60"
     >
       <span className="truncate">{label}</span>
       <div className="ml-2 shrink-0 flex items-center gap-2">
@@ -1467,7 +1467,7 @@ function ContextSectionHeader({
           <button
             type="button"
             onClick={onMarkRead}
-            className="inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-daintree-text/50 hover:text-daintree-text/80 hover:bg-overlay-emphasis focus-visible:text-daintree-text/80 focus-visible:bg-overlay-emphasis transition-colors"
+            className="inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-daintree-text/50 hover:text-daintree-text/80 hover:bg-overlay-raised focus-visible:text-daintree-text/80 focus-visible:bg-overlay-raised transition-colors"
           >
             Mark read
           </button>
@@ -1494,14 +1494,14 @@ function NewSinceLastLookedDivider({
       ref={ref}
       tabIndex={-1}
       data-testid="new-since-last-looked"
-      className="flex items-center gap-2 px-3 py-1 bg-overlay-subtle text-[10px] font-medium uppercase tracking-wide text-daintree-text/50 outline-hidden"
+      className="flex items-center gap-2 px-3 py-1 bg-overlay-raised text-[10px] font-medium uppercase tracking-wide text-daintree-text/50 outline-hidden"
     >
       <span>New since you last looked</span>
       {unreadCount > 0 && (
         <button
           type="button"
           onClick={onMarkRead}
-          className="inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-daintree-text/60 hover:bg-overlay-emphasis hover:text-daintree-text transition-colors"
+          className="inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-daintree-text/60 hover:bg-overlay-raised hover:text-daintree-text transition-colors"
         >
           {unreadCount === 1 ? "Mark this read" : `Mark these ${unreadCount} read`}
         </button>

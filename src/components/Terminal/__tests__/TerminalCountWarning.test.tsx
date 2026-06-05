@@ -70,11 +70,11 @@ beforeAll(() => {
 
 beforeEach(() => {
   panelState.panelsById = {
-    a: { id: "a", location: "main", agentState: "working", ephemeral: false },
-    b: { id: "b", location: "main", agentState: "working", ephemeral: false },
-    c: { id: "c", location: "main", agentState: "working", ephemeral: false },
-    d: { id: "d", location: "main", agentState: "working", ephemeral: false },
-    e: { id: "e", location: "main", agentState: "working", ephemeral: false },
+    a: { id: "a", location: "main", agentState: "working", excludeFromPersistence: false },
+    b: { id: "b", location: "main", agentState: "working", excludeFromPersistence: false },
+    c: { id: "c", location: "main", agentState: "working", excludeFromPersistence: false },
+    d: { id: "d", location: "main", agentState: "working", excludeFromPersistence: false },
+    e: { id: "e", location: "main", agentState: "working", excludeFromPersistence: false },
   };
   panelState.panelIds = ["a", "b", "c", "d", "e"];
   panelState.trashPanel = vi.fn();
@@ -126,7 +126,7 @@ describe("TerminalCountWarning", () => {
       id: "f",
       location: "main",
       agentState: "completed",
-      ephemeral: false,
+      excludeFromPersistence: false,
     };
     panelState.panelIds = [...panelState.panelIds, "f"];
     render(<TerminalCountWarning />);
@@ -140,7 +140,7 @@ describe("TerminalCountWarning", () => {
       id: "f",
       location: "grid",
       agentState: "completed",
-      ephemeral: false,
+      excludeFromPersistence: false,
     };
     panelState.panelIds = [...panelState.panelIds, "f"];
     render(<TerminalCountWarning />);

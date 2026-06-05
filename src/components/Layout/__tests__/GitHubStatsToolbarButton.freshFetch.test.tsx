@@ -215,8 +215,111 @@ describe("GitHubStatsToolbarButton corner activity chip wiring", () => {
 
   it("clears both chip pulses on project switch alongside the count refs", () => {
     const effectStart = source.indexOf("if (statsLoading || statsError)");
-    const slice = source.slice(effectStart, effectStart + 1500);
+    const slice = source.slice(effectStart, effectStart + 2000);
     expect(slice).toContain("setIssuesPulseAt(null)");
     expect(slice).toContain("setPrsPulseAt(null)");
+  });
+});
+
+/**
+ * Badge count bound to the dropdown's loaded items (issue #9693).
+ *
+ * The toolbar badge used to render the stats query's `totalCount`, which can
+ * exceed the first page the dropdown actually lists. The fix threads an
+ * `onCountUpdate(count, hasMore)` callback from each `GitHubResourceList` and
+ * derives a display value (`20+` when paginated) that binds the badge to what
+ * the dropdown shows. The numeric `count` prop stays on the stats path so the
+ * digit-pulse delta detection is unaffected.
+ */
+describe("GitHubStatsToolbarButton list-count badge wiring", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+  });
+
+  it("declares list-count + has-more state for issues and PRs", () => {
+    expect(source).toMatch(
+      /\[issueListCount,\s*setIssueListCount\]\s*=\s*useState<number\s*\|\s*null>\(null\)/
+    );
+    expect(source).toMatch(/\[issueListHasMore,\s*setIssueListHasMore\]\s*=\s*useState\(false\)/);
+    expect(source).toMatch(
+      /\[prListCount,\s*setPrListCount\]\s*=\s*useState<number\s*\|\s*null>\(null\)/
+    );
+    expect(source).toMatch(/\[prListHasMore,\s*setPrListHasMore\]\s*=\s*useState\(false\)/);
+  });
+
+  it("derives the display count via the recency resolver (issue #9741)", () => {
+    // The badge no longer prefers the list count unconditionally — it defers to
+    // `resolveGitHubDisplayCount`, which arbitrates the list count against the
+    // stats poll's `lastUpdated` so a fresher poll wins.
+    expect(source).toContain('from "./githubStatsCountDisplay"');
+    expect(source).toMatch(
+      /issueDisplayCount[\s\S]{0,80}?=\s*resolveGitHubDisplayCount\(\s*issueCount,\s*lastUpdated,\s*issueListCount,\s*issueListHasMore,\s*issueListTimestampRef\.current/
+    );
+    expect(source).toMatch(
+      /prDisplayCount[\s\S]{0,80}?=\s*resolveGitHubDisplayCount\(\s*prCount,\s*lastUpdated,\s*prListCount,\s*prListHasMore,\s*prListTimestampRef\.current/
+    );
+  });
+
+  it("stamps a recency timestamp when each list count updates (issue #9741)", () => {
+    expect(source).toMatch(/issueListTimestampRef\s*=\s*useRef<number\s*\|\s*null>\(null\)/);
+    expect(source).toMatch(/prListTimestampRef\s*=\s*useRef<number\s*\|\s*null>\(null\)/);
+    // Each handler must record Date.now() so the resolver can compare it to the
+    // stats poll's lastUpdated.
+    const issueHandler = source.slice(
+      source.indexOf("handleIssueListCountUpdate = useCallback"),
+      source.indexOf("handlePrListCountUpdate = useCallback")
+    );
+    expect(issueHandler).toContain("issueListTimestampRef.current = Date.now()");
+    const prHandler = source.slice(
+      source.indexOf("handlePrListCountUpdate = useCallback"),
+      source.indexOf("handlePrListCountUpdate = useCallback") + 300
+    );
+    expect(prHandler).toContain("prListTimestampRef.current = Date.now()");
+  });
+
+  it("passes displayCount to the issue and PR pills", () => {
+    expect(source).toContain("displayCount={issueDisplayCount}");
+    expect(source).toContain("displayCount={prDisplayCount}");
+  });
+
+  it("threads onCountUpdate to all four list instances (issue + PR × eager + lazy)", () => {
+    const issueMatches = source.match(/onCountUpdate=\{handleIssueListCountUpdate\}/g);
+    const prMatches = source.match(/onCountUpdate=\{handlePrListCountUpdate\}/g);
+    expect(issueMatches?.length).toBe(2);
+    expect(prMatches?.length).toBe(2);
+  });
+
+  it("keeps the numeric count prop on the stats path for animation deltas", () => {
+    // The digit-pulse compares raw stats counts, so the pill's `count` prop
+    // must stay numeric (issueCount/prCount), not the display string.
+    expect(source).toContain("count={issueCount}");
+    expect(source).toContain("count={prCount}");
+  });
+
+  it("uses the display count in the issue + PR aria-labels and tooltips", () => {
+    expect(source).toContain('${issueDisplayCount ?? "—"} open issues');
+    expect(source).toContain('${prDisplayCount ?? "—"} open pull requests');
+    expect(source).toContain('${prDisplayCount ?? "—"} open PRs');
+  });
+
+  it("resets the list counts + timestamps via a project-path effect (issue #9741)", () => {
+    // The reset is keyed on currentProject?.path, not the stats `lastUpdated`
+    // reset effect — a fast project switch can leave statsLoading true while
+    // lastUpdated is null, masking that effect's guarded reset.
+    const depIdx = source.lastIndexOf("[currentProject?.path]");
+    expect(depIdx).toBeGreaterThan(-1);
+    // The effect body precedes its dependency array — scan the window just
+    // above the dep marker for the resets.
+    const slice = source.slice(Math.max(0, depIdx - 600), depIdx);
+    expect(slice).toContain("setIssueListCount(null)");
+    expect(slice).toContain("setIssueListHasMore(false)");
+    expect(slice).toContain("setPrListCount(null)");
+    expect(slice).toContain("setPrListHasMore(false)");
+    // Recency timestamps must clear too or project A's timestamp would suppress
+    // project B's first stats poll.
+    expect(slice).toContain("issueListTimestampRef.current = null");
+    expect(slice).toContain("prListTimestampRef.current = null");
   });
 });

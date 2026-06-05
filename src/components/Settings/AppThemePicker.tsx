@@ -18,6 +18,7 @@ import {
   resolveAppTheme,
 } from "@shared/theme";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
+import { Button } from "@/components/ui/button";
 import { APP_THEME_PREVIEW_KEYS } from "@shared/theme";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -336,7 +337,10 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
               <PaletteStrip scheme={selectedScheme} />
             </div>
           )}
-          <div className="absolute bottom-0 inset-x-0 bg-black/40 backdrop-blur-sm px-3 py-1.5 flex items-center justify-between">
+          {/* Media-overlay caption: sits on a guaranteed-dark scrim over the hero
+              image, so the white label text is intentional and stays readable on
+              every theme. `text-inverse` flips dark on dark themes — not usable here. */}
+          <div className="absolute bottom-0 inset-x-0 bg-scrim-strong backdrop-blur-sm px-3 py-1.5 flex items-center justify-between">
             <span className="text-sm font-medium text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
               {selectedScheme.name}
             </span>
@@ -348,16 +352,12 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
           </div>
         </div>
 
-        <div className="flex items-center justify-between px-3 py-2 border-t border-daintree-border bg-daintree-bg">
-          <span className="text-xs text-daintree-text/60">Current theme</span>
+        <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-daintree-border bg-daintree-bg">
+          <span className="min-w-0 truncate text-xs text-daintree-text/60">Current theme</span>
           {onClose && (
-            <button
-              type="button"
-              onClick={handleChangeTheme}
-              className="text-xs font-medium text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors"
-            >
+            <Button variant="contrast" size="sm" onClick={handleChangeTheme} className="shrink-0">
               Change theme…
-            </button>
+            </Button>
           )}
         </div>
       </div>

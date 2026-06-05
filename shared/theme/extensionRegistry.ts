@@ -35,13 +35,20 @@ export interface ExtensionKeyMetadata {
 
 const OPTIONAL: ExtensionKeyMetadata = { required: false };
 
+// Round-2 selection-direction flip (Issue 1): on LIGHT, the selected/hovered
+// sidebar row must ELEVATE toward an opaque brighter surface (panel/canvas) — a
+// darkening rgba(0,0,0,*) reads as grime on near-white, not lift. So the light
+// governance now expects an opaque hex (no black-alpha tint, no alpha floor) and
+// the lift relationship is enforced behaviourally by the OKLab idle<hover<selected
+// audit in builtInThemes.test.ts. DARK is unchanged: selection is still an additive
+// white-alpha glow, so dark keeps the rgba(255,255,255,*) tint + alpha floors.
 const SIDEBAR_HOVER: ExtensionKeyMetadata = {
   required: true,
   perceptibility: {
-    minAlpha: { dark: 0.03, light: 0.025 },
+    minAlpha: { dark: 0.03 },
     expectedTint: {
       dark: /rgba\(\s*255\s*,\s*255\s*,\s*255/,
-      light: /rgba\(\s*0\s*,\s*0\s*,\s*0/,
+      light: /^#[0-9a-fA-F]{6}$/,
     },
   },
 };
@@ -49,14 +56,27 @@ const SIDEBAR_HOVER: ExtensionKeyMetadata = {
 const SIDEBAR_ACTIVE: ExtensionKeyMetadata = {
   required: true,
   perceptibility: {
-    minAlpha: { dark: 0.05, light: 0.04 },
+    minAlpha: { dark: 0.05 },
     expectedTint: {
       dark: /rgba\(\s*255\s*,\s*255\s*,\s*255/,
-      light: /rgba\(\s*0\s*,\s*0\s*,\s*0/,
+      light: /^#[0-9a-fA-F]{6}$/,
     },
   },
 };
 
+// toolbar-control-armed-shadow is the inset ring on armed toolbar controls
+// (dropdown open / toggle on). The CSS fallback in toolbar.css is now
+// `inset 0 0 0 1px var(--theme-border-strong)` — the cool borderInk slate,
+// which is contrast-floored and polarity-correct on BOTH modes, replacing the
+// old hardcoded rgba(0,0,0,0.18) that went near-invisible on dark and read as a
+// black hairline on light (round-2 Issue 2 / Pattern B). Because the fallback
+// is now correct on light, light themes inherit it and must NOT ship their own
+// override (forbidWhenNotRequired) — a white-tinted ring copy-pasted from dark
+// would invert the original #8175 bug on a light toolbar. Dark themes still
+// REQUIRE a per-theme white-tinted override: border-strong is a valid fallback
+// there too, but the curated white ring reads crisper on dark chrome, so the
+// dark requirement is retained for fidelity (the perceptibility/format guards
+// below police those dark override values).
 const TOOLBAR_ARMED: ExtensionKeyMetadata = {
   required: (mode) => mode === "dark",
   forbidWhenNotRequired: true,
@@ -90,11 +110,25 @@ export const EXTENSION_KEY_REGISTRY = {
   // Dock
   "dock-bg": OPTIONAL,
   "dock-border": OPTIONAL,
+  // QuickRun command-input fill. The CSS fallback is the overlay-soft ink wash
+  // (correct on dark); light themes lift the field to a raised input plane.
+  "dock-input-bg": OPTIONAL,
   "dock-shadow": DOCK_SHADOW,
+
+  // Panel title bars. Fallbacks are transparent (idle) and overlay-subtle
+  // (focused) — dark themes render unchanged without the keys.
+  "panel-header-bg": OPTIONAL,
+  "panel-header-focus-bg": OPTIONAL,
 
   // Panel grid
   "panel-grid-bg": OPTIONAL,
   "terminal-grid-bg": OPTIONAL,
+
+  // Project identity tiles. The CSS fallbacks are the original black-wash
+  // gradient + dark inset shadow (correct on dark); light themes flip the
+  // wash to a white-gloss lift so the emoji chips read bright, not murky.
+  "project-tile-shadow": OPTIONAL,
+  "project-tile-wash": OPTIONAL,
 
   // Pulse
   "pulse-before-bg": OPTIONAL,
@@ -104,6 +138,10 @@ export const EXTENSION_KEY_REGISTRY = {
   "pulse-control-hover-bg": OPTIONAL,
   "pulse-empty-bg": OPTIONAL,
   "pulse-heat-color": OPTIONAL,
+  "pulse-heat-1": OPTIONAL,
+  "pulse-heat-2": OPTIONAL,
+  "pulse-heat-3": OPTIONAL,
+  "pulse-heat-4": OPTIONAL,
   "pulse-heat-high-opacity": OPTIONAL,
   "pulse-heat-low-opacity": OPTIONAL,
   "pulse-heat-medium-opacity": OPTIONAL,
@@ -123,6 +161,8 @@ export const EXTENSION_KEY_REGISTRY = {
   "settings-nav-active-bg": OPTIONAL,
   "settings-nav-active-shadow": OPTIONAL,
   "settings-nav-hover-bg": OPTIONAL,
+  // Scope (Global/Project) select trigger fill; transparent fallback.
+  "settings-scope-bg": OPTIONAL,
   "settings-search-bg": OPTIONAL,
   "settings-search-muted": OPTIONAL,
   "settings-section-header-bg": OPTIONAL,
@@ -133,12 +173,18 @@ export const EXTENSION_KEY_REGISTRY = {
   // light themes. See #8175 lineage.
   "sidebar-action-hover-bg": OPTIONAL,
   "sidebar-active-bg": SIDEBAR_ACTIVE,
+  // r3 white-cards-on-sky primitives: the idle worktree card lifts to an
+  // opaque near-white plane (light themes opt in; dark themes leave the card
+  // transparent and keep the additive hover/active ladder).
+  "sidebar-card-bg": OPTIONAL,
+  "sidebar-card-shadow": OPTIONAL,
   "sidebar-hover-bg": SIDEBAR_HOVER,
 
-  // Toolbar — toolbar-control-armed-shadow is polarity-conditional. Dark
-  // themes must override the CSS fallback (which is black-tinted, invisible
-  // on dark surfaces); light themes must inherit the fallback or they put
-  // a white ring on a light toolbar (the original #8175 inversion).
+  // Toolbar — toolbar-control-armed-shadow is polarity-conditional. The CSS
+  // fallback is now border-strong (cool borderInk, correct on both modes), so
+  // light themes inherit it; they must NOT add a white-ring override (that
+  // would invert the original #8175 bug on a light toolbar). Dark themes still
+  // ship a per-theme white-tinted ring for crispness on dark chrome.
   "toolbar-agent-hover-bg": OPTIONAL,
   "toolbar-bg": OPTIONAL,
   "toolbar-control-active-bg": OPTIONAL,
@@ -168,8 +214,18 @@ export const EXTENSION_KEY_REGISTRY = {
   "toolbar-stats-hover-bg": OPTIONAL,
   "toolbar-stats-shadow": OPTIONAL,
 
+  // Review hub — commit-message field fill. The CSS fallback is the canvas
+  // tone (correct on dark); light themes lift the field to a raised plane.
+  "review-commit-input-bg": OPTIONAL,
+
   // Worktree section
   "worktree-section-hover-bg": OPTIONAL,
+  "worktree-filter-bar-bg": OPTIONAL,
+  // Active quick-state segment fill. The CSS fallback is the overlay-subtle
+  // darkening wash (correct on dark); light themes lift the active tab toward
+  // white so selection elevates instead of receding.
+  "worktree-quick-state-active-bg": OPTIONAL,
+  "worktree-search-input-bg": OPTIONAL,
 } as const satisfies Record<ExtensionKey, ExtensionKeyMetadata>;
 
 export function isExtensionKeyRequired(key: ExtensionKey, mode: ColorMode): boolean {

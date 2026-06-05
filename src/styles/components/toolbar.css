@@ -89,14 +89,34 @@
   outline-offset: 2px;
 }
 
-/* Armed state ("anchored" — dropdown open, toggle on) gets an inset hairline ring on
- * top of the emphasis background. The 1px ring reads as a crisp state edge and
- * distinguishes armed from hover (which only differs by an overlay tier) — the
- * previous soft directional shadow (inset 0 1px 2px) read as fog on low-contrast
- * light themes (#7XXX). The accent color is reserved per CLAUDE.md, so the ring
- * carries the signal instead. Dark themes override --toolbar-control-armed-shadow
- * to a white-tinted ring; a black ring goes invisible on dark surfaces. Comes
- * after :hover in source order so the ring survives hover-over-armed (equal
+/* Armed state ("anchored" — dropdown open, toggle on) gets an inset hairline ring
+ * on top of an emphasis/lift background. The 1px ring reads as a crisp state edge
+ * and distinguishes armed from hover (which only differs by an overlay tier) —
+ * the previous soft directional shadow (inset 0 1px 2px) read as fog on
+ * low-contrast light themes (#7XXX). The accent color is reserved per CLAUDE.md,
+ * so the ring carries the state signal, not accent.
+ *
+ * Ring default is now border-strong (the cool borderInk slate — contrast-floored
+ * and polarity-correct on BOTH modes) instead of the old hardcoded
+ * rgba(0,0,0,0.18), which read as a black hairline on a light toolbar
+ * (round-2 Issue 2 / Pattern B). All 7 dark themes already override
+ * --toolbar-control-armed-shadow to a white-tinted ring per-theme, so this
+ * fallback only paints on light built-ins (and custom themes that don't
+ * override) — dark is byte-for-byte unchanged.
+ *
+ * Fill default stays overlay-emphasis here so DARK is byte-for-byte unchanged
+ * (overlay-emphasis = overlayTone@0.10 on dark; the elevate-to-select primitive
+ * overlay-raised is overlayTone@0.04 there, a different value). On LIGHT the
+ * fill is flipped to overlay-raised in the :where(.light, [data-color-mode=light])
+ * block below: overlay-emphasis subtracts luminance, so on near-white light
+ * themes the armed chip read as a darker smudge ("selection by grime"); the
+ * polarity-aware overlay-raised lift mixes the surface toward
+ * surface-panel-elevated (a near-white chip that pops up off the recessed
+ * toolbar, the Finder/VS Code idiom — round-2 Issue 2 / Pattern A). The lift
+ * alone can't contain a control on a thin light ramp, so the border-strong ring
+ * provides the containment edge.
+ *
+ * Comes after :hover in source order so the ring survives hover-over-armed (equal
  * specificity, later wins). The sidebar toggle opts out via
  * [data-sidebar-toggle]: it's pressed nearly all the time (sidebar visible),
  * so an always-on armed state reads as noise rather than state — the
@@ -111,15 +131,38 @@
 .toolbar-agent-button[aria-expanded="true"],
 .toolbar-agent-button[data-state="open"] {
   background: var(--toolbar-control-armed-bg, var(--theme-overlay-emphasis));
-  box-shadow: var(--toolbar-control-armed-shadow, inset 0 0 0 1px rgba(0, 0, 0, 0.18));
+  box-shadow: var(--toolbar-control-armed-shadow, inset 0 0 0 1px var(--theme-border-strong));
 }
 
 /* The press snap (transform: scale(0.98) at 1ms) comes from the base Button cva.
  * This rule only contributes the momentary click background for non-armed
- * buttons. */
+ * buttons. Fill default stays overlay-emphasis so dark is unchanged; light
+ * flips to the overlay-raised lift below alongside armed. */
 .toolbar-icon-button:active,
 .toolbar-agent-button:active {
   background: var(--toolbar-control-active-bg, var(--theme-overlay-emphasis));
+}
+
+/* LIGHT-only: flip the armed/active FILL from a darkening overlay-emphasis to the
+ * elevate-to-select overlay-raised lift. The :where() keeps specificity equal to
+ * the base rules above (selector specificity unchanged; the polarity scope only
+ * adds a zero-weight :where), so source order — these come later — wins, and the
+ * armed-over-hover and :active tiebreakers are preserved. The fallback chain
+ * mirrors the base rules so a per-theme --toolbar-control-armed-bg / -active-bg
+ * override still wins on light. Dark never matches this block. */
+:where(.light, [data-color-mode="light"])
+  .toolbar-icon-button[aria-pressed="true"]:where(:not([data-sidebar-toggle])),
+:where(.light, [data-color-mode="light"]) .toolbar-icon-button[aria-expanded="true"],
+:where(.light, [data-color-mode="light"]) .toolbar-icon-button[data-state="open"],
+:where(.light, [data-color-mode="light"]) .toolbar-agent-button[aria-pressed="true"],
+:where(.light, [data-color-mode="light"]) .toolbar-agent-button[aria-expanded="true"],
+:where(.light, [data-color-mode="light"]) .toolbar-agent-button[data-state="open"] {
+  background: var(--toolbar-control-armed-bg, var(--theme-overlay-raised));
+}
+
+:where(.light, [data-color-mode="light"]) .toolbar-icon-button:active,
+:where(.light, [data-color-mode="light"]) .toolbar-agent-button:active {
+  background: var(--toolbar-control-active-bg, var(--theme-overlay-raised));
 }
 
 .toolbar-divider {

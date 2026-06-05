@@ -63,6 +63,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       sessionTierMap: new Map(),
       sessionWebContentsMap: new Map(),
       sessionContextMap: new Map(),
+      sessionHelpIdMap: new Map(),
       resourceSubscriptions: new Map(),
       drain: vi.fn(),
       getTier: vi.fn(() => "workbench" as const),
@@ -437,12 +438,13 @@ describe("HttpLifecycle", () => {
     });
   });
 
-  describe("buildSessionServerDeps — appendAuditRecord turnId stamping", () => {
-    it("stamps turnId on appendRecord when getCurrentTurnIdForSession returns a value", () => {
+  describe("buildSessionServerDeps — appendAuditRecord turnId/helpSessionId stamping", () => {
+    it("resolves turnId via the HELP session id and stamps both onto the record", () => {
       const deps = fakeDeps();
       (
         deps.turnOutcomeService.getCurrentTurnIdForSession as ReturnType<typeof vi.fn>
       ).mockReturnValue("turn-uuid-abc");
+      deps.sessionStore.sessionHelpIdMap.set("session-1", "help-session-9");
       const lc = new HttpLifecycle(deps);
       const deps_ = (
         lc as unknown as {
@@ -459,8 +461,13 @@ describe("HttpLifecycle", () => {
         durationMs: 5,
         outcome: { kind: "result", value: { ok: true, result: null } },
       });
+      // The turn-id register is keyed by HELP session id, not the MCP
+      // transport id — passing the transport id always missed (#9759 gap).
+      expect(deps.turnOutcomeService.getCurrentTurnIdForSession).toHaveBeenCalledWith(
+        "help-session-9"
+      );
       expect(deps.auditService.appendRecord).toHaveBeenCalledWith(
-        expect.objectContaining({ turnId: "turn-uuid-abc" })
+        expect.objectContaining({ turnId: "turn-uuid-abc", helpSessionId: "help-session-9" })
       );
     });
 
@@ -469,6 +476,7 @@ describe("HttpLifecycle", () => {
       (
         deps.turnOutcomeService.getCurrentTurnIdForSession as ReturnType<typeof vi.fn>
       ).mockReturnValue(null);
+      deps.sessionStore.sessionHelpIdMap.set("session-1", "help-session-9");
       const lc = new HttpLifecycle(deps);
       const deps_ = (
         lc as unknown as {
@@ -489,6 +497,32 @@ describe("HttpLifecycle", () => {
         .calls[0]?.[0];
       expect(callArgs).toBeDefined();
       expect(callArgs.turnId).toBeUndefined();
+      expect(callArgs.helpSessionId).toBe("help-session-9");
+    });
+
+    it("skips turn lookup and helpSessionId for sessions with no help binding", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      const deps_ = (
+        lc as unknown as {
+          buildSessionServerDeps: (sessionId: string) => {
+            appendAuditRecord: (input: Record<string, unknown>) => void;
+          };
+        }
+      ).buildSessionServerDeps("session-external");
+      deps_.appendAuditRecord({
+        toolId: "agent.terminal",
+        sessionId: "session-external",
+        tier: "action",
+        args: {},
+        durationMs: 5,
+        outcome: { kind: "result", value: { ok: true, result: null } },
+      });
+      expect(deps.turnOutcomeService.getCurrentTurnIdForSession).not.toHaveBeenCalled();
+      const callArgs = (deps.auditService.appendRecord as ReturnType<typeof vi.fn>).mock
+        .calls[0]?.[0];
+      expect(callArgs.turnId).toBeUndefined();
+      expect(callArgs.helpSessionId).toBeUndefined();
     });
   });
 

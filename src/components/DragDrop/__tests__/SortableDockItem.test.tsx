@@ -5,7 +5,17 @@ import { SortableDockItem } from "../SortableDockItem";
 import { useDragHandle } from "../DragHandleContext";
 import type { PanelInstance } from "@shared/types/panel";
 
-let mockIsDragging = false;
+interface MockSortableState {
+  isDragging?: boolean;
+  isOver?: boolean;
+  active?: {
+    data: { current: { sourceLocation?: string; origin?: string } };
+    rect: { current: { translated: { left: number; width: number } | null } };
+  } | null;
+  over?: { rect: { left: number; width: number } } | null;
+}
+
+let mockState: MockSortableState = { isDragging: false };
 const mockSetActivatorNodeRef = vi.fn();
 
 vi.mock("@dnd-kit/sortable", () => ({
@@ -16,7 +26,10 @@ vi.mock("@dnd-kit/sortable", () => ({
     setActivatorNodeRef: mockSetActivatorNodeRef,
     transform: null,
     transition: undefined,
-    isDragging: mockIsDragging,
+    isDragging: mockState.isDragging ?? false,
+    isOver: mockState.isOver ?? false,
+    active: mockState.active ?? null,
+    over: mockState.over ?? null,
   }),
 }));
 
@@ -42,7 +55,7 @@ const terminal: PanelInstance = {
 
 describe("SortableDockItem", () => {
   it("renders children through DragHandleProvider", () => {
-    mockIsDragging = false;
+    mockState = { isDragging: false };
     const { getByTestId } = render(
       <SortableDockItem terminal={terminal} sourceIndex={0}>
         <div data-testid="child" />
@@ -52,7 +65,7 @@ describe("SortableDockItem", () => {
   });
 
   it("does not render role=button on the outer m.div (stripped from dnd-kit attributes)", () => {
-    mockIsDragging = false;
+    mockState = { isDragging: false };
     const { container } = render(
       <SortableDockItem terminal={terminal} sourceIndex={0}>
         <div />
@@ -63,7 +76,7 @@ describe("SortableDockItem", () => {
   });
 
   it("does not apply opacity-40 class (opacity now driven by framer-motion animate)", () => {
-    mockIsDragging = true;
+    mockState = { isDragging: true };
     const { container } = render(
       <SortableDockItem terminal={terminal} sourceIndex={0}>
         <div />
@@ -75,7 +88,7 @@ describe("SortableDockItem", () => {
   });
 
   it("forwards setActivatorNodeRef through DragHandleProvider for keyboard a11y", () => {
-    mockIsDragging = false;
+    mockState = { isDragging: false };
     let captured: ReturnType<typeof useDragHandle> = null;
     function Probe() {
       captured = useDragHandle();
@@ -89,5 +102,106 @@ describe("SortableDockItem", () => {
     expect(captured).not.toBeNull();
     expect(captured!.setActivatorNodeRef).toBe(mockSetActivatorNodeRef);
     expect(captured!.listeners).toBeDefined();
+  });
+
+  it("renders no insertion indicator when idle", () => {
+    mockState = { isDragging: false };
+    const { container } = render(
+      <SortableDockItem terminal={terminal} sourceIndex={0}>
+        <div />
+      </SortableDockItem>
+    );
+    expect(container.querySelector("[data-dock-drop-indicator]")).toBeNull();
+  });
+
+  it("shows a 'before' indicator on the left when the dragged midpoint is left of the hovered chip", () => {
+    mockState = {
+      isOver: true,
+      active: {
+        data: { current: { sourceLocation: "dock" } },
+        rect: { current: { translated: { left: 0, width: 40 } } },
+      },
+      over: { rect: { left: 100, width: 40 } },
+    };
+    const { container } = render(
+      <SortableDockItem terminal={terminal} sourceIndex={0}>
+        <div />
+      </SortableDockItem>
+    );
+    const indicator = container.querySelector("[data-dock-drop-indicator]");
+    expect(indicator?.getAttribute("data-dock-drop-indicator")).toBe("before");
+    expect(indicator?.className).toContain("-left-px");
+    expect(indicator?.className).not.toContain("-right-px");
+  });
+
+  it("shows an 'after' indicator on the right when the dragged midpoint is right of the hovered chip", () => {
+    mockState = {
+      isOver: true,
+      active: {
+        data: { current: { sourceLocation: "dock" } },
+        rect: { current: { translated: { left: 200, width: 40 } } },
+      },
+      over: { rect: { left: 100, width: 40 } },
+    };
+    const { container } = render(
+      <SortableDockItem terminal={terminal} sourceIndex={0}>
+        <div />
+      </SortableDockItem>
+    );
+    const indicator = container.querySelector("[data-dock-drop-indicator]");
+    expect(indicator?.getAttribute("data-dock-drop-indicator")).toBe("after");
+    expect(indicator?.className).toContain("-right-px");
+    expect(indicator?.className).not.toContain("-left-px");
+  });
+
+  it("renders no indicator for a cross-container grid drag even when hovered", () => {
+    mockState = {
+      isOver: true,
+      active: {
+        data: { current: { sourceLocation: "grid" } },
+        rect: { current: { translated: { left: 0, width: 40 } } },
+      },
+      over: { rect: { left: 100, width: 40 } },
+    };
+    const { container } = render(
+      <SortableDockItem terminal={terminal} sourceIndex={0}>
+        <div />
+      </SortableDockItem>
+    );
+    expect(container.querySelector("[data-dock-drop-indicator]")).toBeNull();
+  });
+
+  it("renders no indicator for an accordion-origin drag of a docked terminal", () => {
+    mockState = {
+      isOver: true,
+      active: {
+        data: { current: { sourceLocation: "dock", origin: "accordion" } },
+        rect: { current: { translated: { left: 0, width: 40 } } },
+      },
+      over: { rect: { left: 100, width: 40 } },
+    };
+    const { container } = render(
+      <SortableDockItem terminal={terminal} sourceIndex={0}>
+        <div />
+      </SortableDockItem>
+    );
+    expect(container.querySelector("[data-dock-drop-indicator]")).toBeNull();
+  });
+
+  it("renders no indicator before dnd-kit has measured the dragged rect", () => {
+    mockState = {
+      isOver: true,
+      active: {
+        data: { current: { sourceLocation: "dock" } },
+        rect: { current: { translated: null } },
+      },
+      over: { rect: { left: 100, width: 40 } },
+    };
+    const { container } = render(
+      <SortableDockItem terminal={terminal} sourceIndex={0}>
+        <div />
+      </SortableDockItem>
+    );
+    expect(container.querySelector("[data-dock-drop-indicator]")).toBeNull();
   });
 });

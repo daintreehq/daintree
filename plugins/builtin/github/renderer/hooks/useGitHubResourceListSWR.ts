@@ -46,6 +46,7 @@ interface UseGitHubResourceListSWRParams {
   sortOrder: GitHubSortOrder;
   githubConfig: { hasToken: boolean } | null;
   onFreshFetch?: () => void;
+  onCountUpdate?: (count: number, hasMore: boolean) => void;
 }
 
 export interface UseGitHubResourceListSWRReturn {
@@ -76,6 +77,7 @@ export function useGitHubResourceListSWR({
   sortOrder,
   githubConfig,
   onFreshFetch,
+  onCountUpdate,
 }: UseGitHubResourceListSWRParams): UseGitHubResourceListSWRReturn {
   const debouncedSearch = useDebounce(searchQuery, 300);
 
@@ -272,6 +274,35 @@ export function useGitHubResourceListSWR({
                 timestamp: now,
               });
               setLastUpdatedAt(now);
+              // Bind the toolbar count badge to the authoritative server total
+              // (`totalCount`) when the list query provides it, so the badge
+              // shows the real open count (e.g. "47") instead of the loaded
+              // first-page length with a "+" suffix ("20+", issue #9717). The
+              // `totalCount` comes from the same GraphQL response as the items,
+              // so it never claims more than is actually open (issue #9693).
+              // The second arg to `onCountUpdate` is the "count is approximate"
+              // flag that drives the badge's "+" suffix — when `totalCount` is
+              // known the count is exact, so it is `false`. Search results and
+              // cache hits carry no `totalCount`, so they fall back to the
+              // loaded length plus the real `hasNextPage`.
+              //
+              // Fires on cold-mount AND revalidation (NOT gated on
+              // `isRevalidate`) so the badge reconciles the moment the dropdown
+              // first loads, not just on a later background refresh.
+              //
+              // Gated to the `open` filter: the badge represents the OPEN
+              // issue/PR count (its aria-label and tooltip say "open"). The
+              // hook is kept mounted across filter tabs, so without this gate
+              // switching the dropdown to Closed/Merged would fire
+              // `onCountUpdate` with the closed/merged count and poison the
+              // open badge. The last known open count stays correct while the
+              // user browses other states.
+              if (filterState === "open") {
+                onCountUpdate?.(
+                  result.totalCount ?? result.items.length,
+                  result.totalCount == null ? result.pageInfo.hasNextPage : false
+                );
+              }
               // Notify parent (toolbar count badge) that fresh first-page data
               // landed. Gated on `isRevalidate` so it fires only when
               // `bypassCache: true` was sent — the main process's
@@ -339,7 +370,16 @@ export function useGitHubResourceListSWR({
         }
       }
     },
-    [projectPath, debouncedSearch, filterState, type, sortOrder, numberQuery, onFreshFetch]
+    [
+      projectPath,
+      debouncedSearch,
+      filterState,
+      type,
+      sortOrder,
+      numberQuery,
+      onFreshFetch,
+      onCountUpdate,
+    ]
   );
 
   // ── Mount / filter-change effect ──────────────────────────────────────

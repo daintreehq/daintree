@@ -9,13 +9,14 @@ import type { WindowRegistry } from "../../window/WindowRegistry.js";
 import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { summarizeMcpArgs } from "../../../shared/utils/mcpArgsSummary.js";
+import { summarizeMcpArgs, summarizeMcpResult } from "../../../shared/utils/mcpArgsSummary.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { sanitizePath } from "../../utils/pathScrubber.js";
 import type {
   HelpTokenValidator,
   HelpSessionWebContentsResolver,
   HelpSessionActionContextResolver,
+  HelpSessionIdResolver,
   McpTier,
 } from "./shared.js";
 import type {
@@ -34,6 +35,8 @@ import {
 import { createSessionServer, cleanupResourceSubscriptions } from "./sessionServer.js";
 import type { SessionStore } from "./sessionStore.js";
 import type { AuditService } from "./auditLog.js";
+import { classifyMcpDispatchResult } from "./auditLog.js";
+import { computeMcpAuditSeverity } from "../../../shared/types/ipc/mcpServer.js";
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
 import type { AbusePolicy } from "./abusePolicy.js";
 import {
@@ -76,7 +79,8 @@ export interface HttpLifecycleDeps {
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   handleWaitUntilIdle: (
     rawArgs: unknown,
-    signal: AbortSignal
+    signal: AbortSignal,
+    options?: { maxTimeoutMs?: number }
   ) => Promise<import("./shared.js").WaitUntilIdleResult>;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   clearCachedManifest: () => void;
@@ -106,6 +110,30 @@ export interface HttpLifecycleDeps {
 function resolveUserAgent(req: http.IncomingMessage): string {
   const ua = req.headers["user-agent"];
   return typeof ua === "string" && ua.trim().length > 0 ? ua : "Unknown client";
+}
+
+/**
+ * Render a dispatch outcome as a redacted, bounded result summary for the
+ * audit record, so the recent-calls popover can show what each call actually
+ * returned. Gate outcomes (unauthorized / dedup / collision / rate-limit)
+ * return null — their `result` classification already says everything.
+ */
+function summarizeAuditOutcome(
+  outcome: import("./auditLog.js").AuditOutcome,
+  scrub: (value: string) => string
+): string | null {
+  if (outcome.kind === "result") {
+    if (outcome.value.ok) {
+      return summarizeMcpResult(outcome.value.result, scrub);
+    }
+    const { code, message } = outcome.value.error;
+    return scrub(`${code}: ${message}`).slice(0, 500);
+  }
+  if (outcome.kind === "throw") {
+    const text = formatErrorMessage(outcome.error, "Dispatch threw");
+    return scrub(text).slice(0, 500);
+  }
+  return null;
 }
 
 /**
@@ -150,6 +178,7 @@ export class HttpLifecycle {
   private helpTokenValidator: HelpTokenValidator | null = null;
   private helpSessionWebContentsResolver: HelpSessionWebContentsResolver | null = null;
   private helpSessionActionContextResolver: HelpSessionActionContextResolver | null = null;
+  private helpSessionIdResolver: HelpSessionIdResolver | null = null;
   private lastError: string | null = null;
   private intentionalStop = false;
   private restartAttempts = 0;
@@ -227,6 +256,10 @@ export class HttpLifecycle {
     this.helpSessionActionContextResolver = resolver;
   }
 
+  setHelpSessionIdResolver(resolver: HelpSessionIdResolver | null): void {
+    this.helpSessionIdResolver = resolver;
+  }
+
   /**
    * Parses a Bearer header and asks the help-session resolver for the
    * pinned WebContents id. Returns null for non-help bearers (api-key /
@@ -253,6 +286,18 @@ export class HttpLifecycle {
     const token = extractBearerToken(authHeader);
     if (!token) return null;
     return this.helpSessionActionContextResolver(token);
+  }
+
+  /**
+   * Parses a Bearer header and asks the help-session resolver for the public
+   * help-session id minted at provision. Returns null for non-help bearers
+   * so external/api-key sessions never enter `sessionHelpIdMap`.
+   */
+  private resolveHelpSessionId(authHeader: string): string | null {
+    if (!this.helpSessionIdResolver) return null;
+    const token = extractBearerToken(authHeader);
+    if (!token) return null;
+    return this.helpSessionIdResolver(token);
   }
 
   /** Normalize a possibly-array request header to a trimmed string or null. */
@@ -854,6 +899,11 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionContextMap.set(sessionId, boundActionContext);
       }
 
+      const helpSessionId = this.resolveHelpSessionId(authHeader);
+      if (helpSessionId !== null) {
+        this.deps.sessionStore.sessionHelpIdMap.set(sessionId, helpSessionId);
+      }
+
       const deps = this.buildSessionServerDeps(sessionId);
       const server = createSessionServer(sessionId, deps);
 
@@ -875,6 +925,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.grantCache.revokeSession(sessionId, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(sessionId);
         this.deps.sessionStore.sessionContextMap.delete(sessionId);
+        this.deps.sessionStore.sessionHelpIdMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
         this.deps.sessionStore.clearRateLimitState(sessionId);
         this.deps.sessionStore.clearClientMetadata(sessionId);
@@ -895,6 +946,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.grantCache.revokeSession(sessionId, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(sessionId);
         this.deps.sessionStore.sessionContextMap.delete(sessionId);
+        this.deps.sessionStore.sessionHelpIdMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
         this.deps.sessionStore.clearRateLimitState(sessionId);
         this.deps.sessionStore.clearClientMetadata(sessionId);
@@ -978,6 +1030,11 @@ export class HttpLifecycle {
       this.deps.sessionStore.sessionContextMap.set(newSessionId, boundActionContext);
     }
 
+    const helpSessionId = this.resolveHelpSessionId(authHeader);
+    if (helpSessionId !== null) {
+      this.deps.sessionStore.sessionHelpIdMap.set(newSessionId, helpSessionId);
+    }
+
     const deps = this.buildSessionServerDeps(newSessionId);
     const server = createSessionServer(newSessionId, deps);
     const allowedHosts = [`127.0.0.1:${this.port}`, `localhost:${this.port}`];
@@ -1020,6 +1077,7 @@ export class HttpLifecycle {
       this.deps.sessionStore.grantCache.revokeSession(id, "session-ended");
       this.deps.sessionStore.sessionWebContentsMap.delete(id);
       this.deps.sessionStore.sessionContextMap.delete(id);
+      this.deps.sessionStore.sessionHelpIdMap.delete(id);
       this.deps.sessionStore.clearDedupState(id);
       this.deps.sessionStore.clearRateLimitState(id);
       this.deps.sessionStore.clearClientMetadata(id);
@@ -1045,6 +1103,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.grantCache.revokeSession(id, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(id);
         this.deps.sessionStore.sessionContextMap.delete(id);
+        this.deps.sessionStore.sessionHelpIdMap.delete(id);
         this.deps.sessionStore.clearDedupState(id);
         this.deps.sessionStore.clearRateLimitState(id);
         this.deps.sessionStore.clearClientMetadata(id);
@@ -1057,6 +1116,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.grantCache.revokeSession(newSessionId, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(newSessionId);
         this.deps.sessionStore.sessionContextMap.delete(newSessionId);
+        this.deps.sessionStore.sessionHelpIdMap.delete(newSessionId);
         this.deps.sessionStore.clearDedupState(newSessionId);
         this.deps.sessionStore.clearRateLimitState(newSessionId);
         this.deps.sessionStore.clearClientMetadata(newSessionId);
@@ -1085,6 +1145,13 @@ export class HttpLifecycle {
   ): import("./sessionServer.js").SessionServerDeps {
     const pinnedDispatch = this.deps.dispatchActionForWebContents;
     const pinnedManifest = this.deps.requestManifestForWebContents;
+    // Captured at build time (both handshakes populate the map before calling
+    // this) so an in-flight dispatch settling after teardown deletes the map
+    // entry still stamps its audit record / resolves its turnId correctly.
+    // The turn-id register in TurnOutcomeService is keyed by HELP session id,
+    // not the MCP transport id `sessionId` — passing the transport id there
+    // always missed, which broke same-turn coalescing and turnId stamping.
+    const helpSessionId = this.deps.sessionStore.sessionHelpIdMap.get(sessionId) ?? null;
 
     const requestManifest: import("./sessionServer.js").SessionServerDeps["requestManifest"] =
       () => {
@@ -1175,6 +1242,64 @@ export class HttpLifecycle {
         }
       };
 
+    const notifyToolCallStarted: import("./sessionServer.js").SessionServerDeps["notifyToolCallStarted"] =
+      (payload) => {
+        // Help-session bearers only — targeted at the pinned WebContents so the
+        // assistant panel that triggered the call gets the live activity event,
+        // even if a different project view is focused. External/api-key sessions
+        // have no panel to show the strip, so the map lookup no-ops for them.
+        const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
+        if (id === undefined) return;
+        const wc = webContentsModule.fromId(id);
+        if (!wc || wc.isDestroyed()) return;
+        // Redact args with the same pipeline the audit record uses so the strip
+        // never shows raw bearer tokens or absolute paths (#9759).
+        const turnId =
+          helpSessionId !== null
+            ? this.deps.turnOutcomeService.getCurrentTurnIdForSession(helpSessionId)
+            : null;
+        try {
+          wc.send(CHANNELS.MCP_TOOL_CALL_STARTED, {
+            sessionId: payload.sessionId,
+            toolId: payload.toolId,
+            argsSummary: summarizeMcpArgs(payload.args, (s) => scrubSecrets(sanitizePath(s))),
+            startedAt: payload.startedAt,
+            danger: payload.danger,
+            ...(turnId !== null ? { turnId } : {}),
+          });
+        } catch (err) {
+          console.error("[MCP] tool-call-started send failed:", err);
+        }
+      };
+
+    const notifyToolCallSettled: import("./sessionServer.js").SessionServerDeps["notifyToolCallSettled"] =
+      (payload) => {
+        const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
+        if (id === undefined) return;
+        const wc = webContentsModule.fromId(id);
+        if (!wc || wc.isDestroyed()) return;
+        // Derive result/errorCode/severity from the same classifier the audit
+        // writer uses, so the strip's glyph and red-tint match the audit log.
+        const { result, errorCode } = classifyMcpDispatchResult(payload.outcome);
+        const turnId =
+          helpSessionId !== null
+            ? this.deps.turnOutcomeService.getCurrentTurnIdForSession(helpSessionId)
+            : null;
+        try {
+          wc.send(CHANNELS.MCP_TOOL_CALL_SETTLED, {
+            sessionId: payload.sessionId,
+            toolId: payload.toolId,
+            durationMs: Math.max(0, Math.round(payload.durationMs)),
+            result,
+            ...(errorCode !== undefined ? { errorCode } : {}),
+            severity: computeMcpAuditSeverity(result, errorCode),
+            ...(turnId !== null ? { turnId } : {}),
+          });
+        } catch (err) {
+          console.error("[MCP] tool-call-settled send failed:", err);
+        }
+      };
+
     return {
       sessionStore: this.deps.sessionStore,
       requestManifest,
@@ -1185,11 +1310,19 @@ export class HttpLifecycle {
         // `summarizeMcpArgs` — running the scrubber after truncation would
         // miss bearer tokens whose body got cut below the scrubber's
         // 8-char minimum match length.
-        const turnId = this.deps.turnOutcomeService.getCurrentTurnIdForSession(sessionId);
+        const turnId =
+          helpSessionId !== null
+            ? this.deps.turnOutcomeService.getCurrentTurnIdForSession(helpSessionId)
+            : null;
+        const resultSummary = summarizeAuditOutcome(input.outcome, (s) =>
+          scrubSecrets(sanitizePath(s))
+        );
         this.deps.auditService.appendRecord({
           ...input,
           argsSummary: summarizeMcpArgs(input.args, (s) => scrubSecrets(sanitizePath(s))),
           ...(turnId !== null ? { turnId } : {}),
+          ...(helpSessionId !== null ? { helpSessionId } : {}),
+          ...(resultSummary !== null ? { resultSummary } : {}),
         });
       },
       getCachedManifest,
@@ -1200,6 +1333,8 @@ export class HttpLifecycle {
       clearDenialState: (sessionId) => {
         this.deps.abusePolicy.dropSession(sessionId);
       },
+      notifyToolCallStarted,
+      notifyToolCallSettled,
     };
   }
 

@@ -40,6 +40,7 @@
   --color-surface-toolbar: var(--theme-surface-toolbar);
   --color-surface-panel: var(--theme-surface-panel);
   --color-surface-panel-elevated: var(--theme-surface-panel-elevated);
+  --color-surface-dialog: var(--theme-surface-dialog);
   --color-surface-grid: var(--theme-surface-grid);
   --color-surface-input: var(--theme-surface-input);
   --color-surface-inset: var(--theme-surface-inset);
@@ -73,6 +74,9 @@
   --color-status-danger: var(--theme-status-danger);
   --color-status-info: var(--theme-status-info);
   --color-status-danger-surface: var(--theme-status-danger-surface);
+  --color-status-success-surface: var(--theme-status-success-surface);
+  --color-status-warning-surface: var(--theme-status-warning-surface);
+  --color-status-info-surface: var(--theme-status-info-surface);
   --color-knob-base: var(--theme-knob-base);
   --color-state-modified: var(--theme-state-modified);
   --color-activity-active: var(--theme-activity-active);
@@ -91,6 +95,7 @@
   --color-overlay-active: var(--theme-overlay-active);
   --color-overlay-selected: var(--theme-overlay-selected);
   --color-overlay-elevated: var(--theme-overlay-elevated);
+  --color-overlay-raised: var(--theme-overlay-raised);
   --color-filter-selected-bg-soft: var(--theme-filter-selected-bg-soft);
   --color-filter-selected-bg-strong: var(--theme-filter-selected-bg-strong);
   --color-wash-subtle: var(--theme-wash-subtle);
@@ -170,8 +175,8 @@
 
   --color-category-blue-subtle: color-mix(
     in oklch,
-    var(--theme-category-blue) 12%,
-    var(--theme-surface-canvas)
+    var(--theme-category-blue) var(--category-subtle-mix),
+    var(--pill-surface)
   );
   --color-category-blue-text: color-mix(
     in oklch,
@@ -180,13 +185,13 @@
   );
   --color-category-blue-border: color-mix(
     in oklch,
-    var(--theme-category-blue) 28%,
-    var(--theme-surface-canvas)
+    var(--theme-category-blue) var(--category-border-mix),
+    var(--pill-surface)
   );
   --color-category-purple-subtle: color-mix(
     in oklch,
-    var(--theme-category-purple) 12%,
-    var(--theme-surface-canvas)
+    var(--theme-category-purple) var(--category-subtle-mix),
+    var(--pill-surface)
   );
   --color-category-purple-text: color-mix(
     in oklch,
@@ -195,13 +200,13 @@
   );
   --color-category-purple-border: color-mix(
     in oklch,
-    var(--theme-category-purple) 28%,
-    var(--theme-surface-canvas)
+    var(--theme-category-purple) var(--category-border-mix),
+    var(--pill-surface)
   );
   --color-category-cyan-subtle: color-mix(
     in oklch,
-    var(--theme-category-cyan) 12%,
-    var(--theme-surface-canvas)
+    var(--theme-category-cyan) var(--category-subtle-mix),
+    var(--pill-surface)
   );
   --color-category-cyan-text: color-mix(
     in oklch,
@@ -210,13 +215,13 @@
   );
   --color-category-cyan-border: color-mix(
     in oklch,
-    var(--theme-category-cyan) 28%,
-    var(--theme-surface-canvas)
+    var(--theme-category-cyan) var(--category-border-mix),
+    var(--pill-surface)
   );
   --color-category-green-subtle: color-mix(
     in oklch,
-    var(--theme-category-green) 12%,
-    var(--theme-surface-canvas)
+    var(--theme-category-green) var(--category-subtle-mix),
+    var(--pill-surface)
   );
   --color-category-green-text: color-mix(
     in oklch,
@@ -225,13 +230,13 @@
   );
   --color-category-green-border: color-mix(
     in oklch,
-    var(--theme-category-green) 28%,
-    var(--theme-surface-canvas)
+    var(--theme-category-green) var(--category-border-mix),
+    var(--pill-surface)
   );
   --color-category-amber-subtle: color-mix(
     in oklch,
-    var(--theme-category-amber) 12%,
-    var(--theme-surface-canvas)
+    var(--theme-category-amber) var(--category-subtle-mix),
+    var(--pill-surface)
   );
   --color-category-amber-text: color-mix(
     in oklch,
@@ -240,13 +245,13 @@
   );
   --color-category-amber-border: color-mix(
     in oklch,
-    var(--theme-category-amber) 28%,
-    var(--theme-surface-canvas)
+    var(--theme-category-amber) var(--category-border-mix),
+    var(--pill-surface)
   );
   --color-category-orange-subtle: color-mix(
     in oklch,
-    var(--theme-category-orange) 12%,
-    var(--theme-surface-canvas)
+    var(--theme-category-orange) var(--category-subtle-mix),
+    var(--pill-surface)
   );
   --color-category-orange-text: color-mix(
     in oklch,
@@ -255,13 +260,13 @@
   );
   --color-category-orange-border: color-mix(
     in oklch,
-    var(--theme-category-orange) 28%,
-    var(--theme-surface-canvas)
+    var(--theme-category-orange) var(--category-border-mix),
+    var(--pill-surface)
   );
   --color-category-teal-subtle: color-mix(
     in oklch,
-    var(--theme-category-teal) 12%,
-    var(--theme-surface-canvas)
+    var(--theme-category-teal) var(--category-subtle-mix),
+    var(--pill-surface)
   );
   --color-category-teal-text: color-mix(
     in oklch,
@@ -270,13 +275,13 @@
   );
   --color-category-teal-border: color-mix(
     in oklch,
-    var(--theme-category-teal) 28%,
-    var(--theme-surface-canvas)
+    var(--theme-category-teal) var(--category-border-mix),
+    var(--pill-surface)
   );
   --color-category-indigo-subtle: color-mix(
     in oklch,
-    var(--theme-category-indigo) 12%,
-    var(--theme-surface-canvas)
+    var(--theme-category-indigo) var(--category-subtle-mix),
+    var(--pill-surface)
   );
   --color-category-indigo-text: color-mix(
     in oklch,
@@ -285,13 +290,13 @@
   );
   --color-category-indigo-border: color-mix(
     in oklch,
-    var(--theme-category-indigo) 28%,
-    var(--theme-surface-canvas)
+    var(--theme-category-indigo) var(--category-border-mix),
+    var(--pill-surface)
   );
   --color-category-rose-subtle: color-mix(
     in oklch,
-    var(--theme-category-rose) 12%,
-    var(--theme-surface-canvas)
+    var(--theme-category-rose) var(--category-subtle-mix),
+    var(--pill-surface)
   );
   --color-category-rose-text: color-mix(
     in oklch,
@@ -300,13 +305,13 @@
   );
   --color-category-rose-border: color-mix(
     in oklch,
-    var(--theme-category-rose) 28%,
-    var(--theme-surface-canvas)
+    var(--theme-category-rose) var(--category-border-mix),
+    var(--pill-surface)
   );
   --color-category-pink-subtle: color-mix(
     in oklch,
-    var(--theme-category-pink) 12%,
-    var(--theme-surface-canvas)
+    var(--theme-category-pink) var(--category-subtle-mix),
+    var(--pill-surface)
   );
   --color-category-pink-text: color-mix(
     in oklch,
@@ -315,13 +320,13 @@
   );
   --color-category-pink-border: color-mix(
     in oklch,
-    var(--theme-category-pink) 28%,
-    var(--theme-surface-canvas)
+    var(--theme-category-pink) var(--category-border-mix),
+    var(--pill-surface)
   );
   --color-category-violet-subtle: color-mix(
     in oklch,
-    var(--theme-category-violet) 12%,
-    var(--theme-surface-canvas)
+    var(--theme-category-violet) var(--category-subtle-mix),
+    var(--pill-surface)
   );
   --color-category-violet-text: color-mix(
     in oklch,
@@ -330,13 +335,13 @@
   );
   --color-category-violet-border: color-mix(
     in oklch,
-    var(--theme-category-violet) 28%,
-    var(--theme-surface-canvas)
+    var(--theme-category-violet) var(--category-border-mix),
+    var(--pill-surface)
   );
   --color-category-slate-subtle: color-mix(
     in oklch,
-    var(--theme-category-slate) 12%,
-    var(--theme-surface-canvas)
+    var(--theme-category-slate) var(--category-subtle-mix),
+    var(--pill-surface)
   );
   --color-category-slate-text: color-mix(
     in oklch,
@@ -345,8 +350,8 @@
   );
   --color-category-slate-border: color-mix(
     in oklch,
-    var(--theme-category-slate) 28%,
-    var(--theme-surface-canvas)
+    var(--theme-category-slate) var(--category-border-mix),
+    var(--pill-surface)
   );
 
   --color-background: var(--background);
@@ -403,6 +408,7 @@
   --color-grid-bg: var(--panel-grid-bg, var(--terminal-grid-bg, var(--theme-surface-grid)));
   --color-daintree-focus: var(--theme-focus-ring);
   --color-status-error: var(--theme-status-danger);
+  --color-status-error-surface: var(--theme-status-danger-surface);
   --color-state-active: var(--theme-activity-active);
   --color-state-idle: var(--theme-activity-idle);
   --color-state-working: var(--theme-activity-working);
@@ -582,6 +588,13 @@ code.hljs {
 :root {
   interpolate-size: allow-keywords;
 
+  /* Dialog surface is polarity-aware (consumed via `bg-surface-dialog`). `:root`
+     is the dark source of truth: dark dialogs sit on `surface-panel` (the
+     historical look), not the lightest `surface-panel-elevated` plane, whose
+     grey reads as washed-out against the near-black workbench. The `.light`
+     block overrides to the elevated plane (the round-2 light-contrast audit). */
+  --theme-surface-dialog: var(--theme-surface-panel);
+
   /* Z-index tier system
    * Establishes a clear stacking hierarchy for UI layers.
    * Higher tiers always appear above lower tiers.
@@ -602,6 +615,15 @@ code.hljs {
   --z-nested-dialog: 75;
   --z-toast: 80;
 
+  /* Legacy floating-chrome shadow stack. The :root values are the ORIGINAL
+   * black-derived stack and remain the dark-mode source of truth (byte-for-byte
+   * unchanged). E7 re-expresses this on top of the single cool-slate engine
+   * source (--theme-shadow-floating/-dialog) ONLY on light, in the `.light`
+   * block below — on light the old stack re-derived every layer from
+   * --theme-shadow-color (pure black on 6/7 light themes) and baked a DARK inset
+   * top-highlight, a black hairline on the element's top edge (wrong direction
+   * on near-white). On light the inset top-highlight becomes a true white
+   * bevel. */
   --shadow-overlay:
     0 1px 0 var(--theme-overlay-soft) inset,
     0 12px 40px color-mix(in oklch, var(--theme-shadow-color) 89%, transparent);
@@ -655,6 +677,21 @@ code.hljs {
   --panel-state-edge-radius: var(--theme-panel-state-edge-radius, 2px);
   --focus-ring-offset: var(--theme-focus-ring-offset, 2px);
   --chrome-noise-texture: var(--theme-chrome-noise-texture, none);
+
+  /* B1 — Category pill (and subtle/border) blend surface + mix strength. The
+   * category-*-subtle/-border tokens in the @theme block mix the category hue
+   * into --pill-surface at --category-subtle-mix / --category-border-mix.
+   * The :root defaults reproduce the ORIGINAL behavior (mix into surface-canvas
+   * at 12% / 28%) so DARK is byte-for-byte unchanged. On light (the `.light`
+   * block below) the base is re-pointed to the elevated plane — category pills
+   * render on elevated/floating chrome, so mixing into canvas produced a fill
+   * DARKER than its real container (an inverted figure-ground; a Fleet pill on
+   * elevated read recessed) — and the mix strength is raised because 12% over a
+   * near-white surface is sub-JND. Consumers on a different surface can locally
+   * override --pill-surface. */
+  --pill-surface: var(--color-surface-canvas);
+  --category-subtle-mix: 12%;
+  --category-border-mix: 28%;
 
   --animation-duration: 150ms;
   --transition-duration: 150ms;
@@ -721,6 +758,30 @@ code.hljs {
   --dock-item-height: 2.25rem;
 }
 
+/* E7 — On light, re-express the legacy floating-chrome shadow stack on top of
+ * the single cool-slate engine source (--theme-shadow-floating/-dialog), and
+ * flip the inset top-highlight to a true white bevel (rgba(255,255,255,0.6)) —
+ * a 1px lifted top lip, the correct elevation direction on near-white chrome.
+ * The black-derived :root stack stays the dark source of truth. The `.light`
+ * class is toggled on the root by applyAppThemeToRoot. */
+.light {
+  /* See the `.dark` note: light dialogs stay on the elevated plane. */
+  --theme-surface-dialog: var(--theme-surface-panel-elevated);
+  --shadow-overlay: 0 1px 0 rgba(255, 255, 255, 0.6) inset, var(--theme-shadow-floating);
+  --shadow-modal: 0 1px 0 rgba(255, 255, 255, 0.6) inset, var(--theme-shadow-dialog);
+  --shadow-dock-popover: 0 1px 0 rgba(255, 255, 255, 0.6) inset, var(--theme-shadow-dialog);
+  --shadow-dock-panel-popover: 0 1px 0 rgba(255, 255, 255, 0.6) inset, var(--theme-shadow-dialog);
+
+  /* B1 — on light, re-point the pill blend surface to the elevated plane (the
+   * surface category pills actually render on) and raise the hue mix. 12% over a
+   * near-white surface is sub-JND; 20% clears a visible fill while staying within
+   * passive-pill (not actionable-control) loudness. --category-border-mix is
+   * bumped slightly so the pill edge stays legible against the brighter fill. */
+  --pill-surface: var(--color-surface-panel-elevated);
+  --category-subtle-mix: 20%;
+  --category-border-mix: 34%;
+}
+
 .dark {
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
@@ -732,6 +793,14 @@ code.hljs {
 @layer base {
   * {
     @apply border-border;
+  }
+
+  /* Native checkboxes/radios tint to the theme accent instead of the OS
+     cobalt — the only non-theme hue otherwise rendered in the app. The
+     AccentColor keyword keeps any context without the var on OS behavior. */
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: var(--theme-accent-primary, AccentColor);
   }
 
   *:focus-visible {
@@ -1904,12 +1973,65 @@ body,
  * dictation hotkey; this border paints synchronously so the target panel is
  * unambiguous before the mic goes hot. Uses the accent token because the
  * arming panel is the single load-bearing focus signal in its region for the
- * brief window before "connecting" → "recording" replaces it. */
+ * brief window before "connecting" → "recording" replaces it.
+ *
+ * G2 (round-2 accent-restraint): this stacks three accent cues (accent-mixed
+ * border + inset accent ring + outer accent ring), which would normally be an
+ * accent-restraint violation. It is a DELIBERATE, documented exception: arming
+ * is a momentary (~200ms), destructive-adjacent, high-salience state and is the
+ * single load-bearing signal in its region for that window, so the layered
+ * accent is justified. Owner decision: KEEP the accent here (do not collapse to
+ * one cue). It is intentionally NOT light-branched — the accent reads on both
+ * polarities and the state is too brief to suffer the near-white wash. */
 .panel-state-arming {
   border-color: color-mix(in oklab, var(--theme-accent-primary) 70%, transparent);
   box-shadow:
     inset 0 0 0 1px color-mix(in oklab, var(--theme-accent-primary) 18%, transparent),
     0 0 0 1px color-mix(in oklab, var(--theme-accent-primary) 12%, transparent);
+}
+
+/* B2 — Light-mode panel-state border hierarchy.
+ *
+ * The default alphas above were tuned for dark, where activity-* is composited
+ * over a near-black pane with a white-glow inset. On a near-white light pane
+ * the same alphas invert the prominence: idle (60%) reads STRONGER than working
+ * (35%). On light the eye's luminance discrimination is compressed near white,
+ * so a low-alpha mix toward `transparent` admits the bright pane and washes the
+ * colored border out. Raise the light alphas so the composited border clears a
+ * ~3:1 graphical-indicator floor and the ordering is restored:
+ *   prominence = working > waiting > idle (hibernated).
+ * The inset/outer ring spread is driven by `--panel-state-edge-width` (the
+ * previously-dead 2px token) so the state ring is a crisp 2px lift without
+ * widening the resting 1px container border (no reflow). Dark inherits the
+ * :root definitions above unchanged. */
+.light .panel-state-working {
+  border-color: color-mix(in oklab, var(--color-activity-working) 95%, transparent);
+  box-shadow:
+    inset 0 0 0 var(--panel-state-edge-width)
+      color-mix(in oklab, var(--color-activity-working) 30%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-activity-working) 18%, transparent);
+}
+
+.light .panel-state-waiting {
+  border-color: color-mix(in oklab, var(--color-activity-waiting) 80%, transparent);
+  box-shadow:
+    inset 0 0 0 var(--panel-state-edge-width)
+      color-mix(in oklab, var(--color-activity-waiting) 24%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-activity-waiting) 14%, transparent);
+}
+
+.light .panel-state-hibernated {
+  border-color: color-mix(in oklab, var(--color-activity-idle) 55%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-activity-idle) 14%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-activity-idle) 8%, transparent);
+}
+
+.light .panel-state-compiling {
+  border-color: color-mix(in oklab, var(--color-border-subtle) 70%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-border-subtle) 14%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-border-subtle) 8%, transparent);
 }
 
 /* Per-worktree color identity — left-edge stripe on grid panels */
@@ -2346,7 +2468,13 @@ body[data-performance-mode="true"] .github-status-error {
   white-space: pre;
 }
 
-/* Added lines - Tokyo Night green */
+/* Added lines. The :root values below are the ORIGINAL hardcoded status-based
+ * fills and are the dark-mode source of truth (byte-for-byte unchanged). D1a
+ * wires the previously-dead per-palette diff-* tokens ONLY on light (in the
+ * `.light .diff-viewer` overrides below), where they unblock D1b's light alpha
+ * tuning. (Wiring on dark too would shift dark from the hardcoded 12/20/30% to
+ * the engine's intended 0.18/full/0.28 — a real dark change deferred pending
+ * confirmation that the dark diff token values are intended; see report.) */
 .diff-viewer .diff-code-insert {
   background: color-mix(in oklab, var(--color-status-success) 12%, transparent);
 }
@@ -2375,6 +2503,38 @@ body[data-performance-mode="true"] .github-status-error {
 .diff-viewer .diff-code-edit .diff-code-delete-edit {
   background: color-mix(in oklab, var(--color-status-danger) 30%, transparent);
   border-radius: var(--radius-xs);
+}
+
+/* D1a (light) — wire the per-palette diff-* tokens. The line fills consume
+ * --color-diff-{insert,delete}-background / -edit; the gutter backgrounds use a
+ * stronger mix of the same line-fill token so the gutter reads as a denser band
+ * of the line color (the raw --color-diff-gutter-* token is full-opacity
+ * status color — usable as the glyph color, not as a legible background under
+ * same-color glyph text). This unblocks D1b light alpha tuning. */
+.light .diff-viewer .diff-code-insert {
+  background: var(--color-diff-insert-background);
+}
+
+.light .diff-viewer .diff-gutter-insert {
+  background: color-mix(in oklab, var(--color-diff-insert-background) 70%, var(--color-surface));
+  color: var(--color-diff-gutter-insert);
+}
+
+.light .diff-viewer .diff-code-delete {
+  background: var(--color-diff-delete-background);
+}
+
+.light .diff-viewer .diff-gutter-delete {
+  background: color-mix(in oklab, var(--color-diff-delete-background) 70%, var(--color-surface));
+  color: var(--color-diff-gutter-delete);
+}
+
+.light .diff-viewer .diff-code-edit .diff-code-insert-edit {
+  background: var(--color-diff-insert-edit-background);
+}
+
+.light .diff-viewer .diff-code-edit .diff-code-delete-edit {
+  background: var(--color-diff-delete-edit-background);
 }
 
 /* Hunk header styling */
@@ -2434,6 +2594,21 @@ body[data-performance-mode="true"] .github-status-error {
 
 .diff-viewer::-webkit-scrollbar-thumb:hover {
   background: color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary));
+}
+
+/* D1a (light) — diff scrollbars consume the shared --scrollbar-* tokens so
+ * per-theme scrollbar tuning applies. Dark keeps the original hardcoded values
+ * above (byte-for-byte unchanged). */
+.light .diff-viewer::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+.light .diff-viewer::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+}
+
+.light .diff-viewer::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* Syntax highlighting overrides for Tokyo Night palette */
@@ -2519,6 +2694,19 @@ body[data-performance-mode="true"] .github-status-error {
   background: color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary));
 }
 
+/* D1a (light) — see the .diff-viewer scrollbar note above. */
+.light .diff-viewer .diff-file-scroll::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+.light .diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+}
+
+.light .diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
 .diff-viewer table.diff td {
   vertical-align: top;
 }
@@ -2570,6 +2758,13 @@ body[data-performance-mode="true"] .surface-overlay {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
   background-color: var(--color-surface-sidebar) !important;
+}
+
+/* F1 (light) — match the elevated floating-surface base in performance mode.
+ * `.light` lives on <html>, `data-performance-mode` on <body>, so the light
+ * class is an ANCESTOR of the perf-mode attribute, not a descendant. */
+.light body[data-performance-mode="true"] .surface-overlay {
+  background-color: var(--color-surface-panel-elevated) !important;
 }
 
 body[data-performance-mode="true"] .surface-overlay.active-sessions-menu {
@@ -2797,6 +2992,14 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
 }
 
 @layer utilities {
+  /* Floating Radix surfaces (menus, popovers, palette, NotificationCenter).
+   * The base rule below is the ORIGINAL dark behavior (sidebar @94%, frosted)
+   * and is left byte-for-byte unchanged. F1 re-points these to the elevated
+   * plane and forces them opaque ONLY on light, in the `.light .surface-overlay`
+   * override below — on light the old sidebar base was DARKER than canvas (e.g.
+   * bondi), so every menu read as a dark blob over the editor, and the 94%
+   * transparency only admitted the darker canvas behind it; the material blur is
+   * also inert on near-white (RC-9), so the surface must be solid/opaque. */
   .surface-overlay {
     --scroll-shadow-color: var(--color-surface-sidebar);
     background-color: var(--color-surface-sidebar);
@@ -2805,6 +3008,13 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     -webkit-backdrop-filter: blur(var(--theme-material-blur))
       saturate(var(--theme-material-saturation));
     backdrop-filter: blur(var(--theme-material-blur)) saturate(var(--theme-material-saturation));
+  }
+
+  /* F1 (light) — elevate the floating surface to the brightest plane and force
+   * it opaque (no transparency mix). */
+  .light .surface-overlay {
+    --scroll-shadow-color: var(--color-surface-panel-elevated);
+    background-color: var(--color-surface-panel-elevated);
   }
 
   /* High-contrast users want solid chrome behind text; drop the frosted-glass
@@ -2816,6 +3026,10 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
       background-color: var(--color-surface-sidebar);
+    }
+
+    .light .surface-overlay {
+      background-color: var(--color-surface-panel-elevated);
     }
   }
 

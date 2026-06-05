@@ -48,25 +48,47 @@ function isMissedDay(cells: HeatCell[], index: number): boolean {
   return false;
 }
 
-function getHeatCellBackground(level: HeatCell["level"]): string {
+// Per-theme opaque heat stops (pulse-heat-1..4) step in both lightness and
+// chroma (GitHub light-contributions model) rather than one hue at four alphas
+// — an alpha ramp over the empty cell left level-1 sub-JND and washed light
+// themes out. Each stop falls back to the legacy hue@alpha composite so the map
+// degrades gracefully on themes that haven't authored opaque stops yet.
+function legacyHeatComposite(level: 1 | 2 | 3 | 4): string {
   const baseColor = "var(--pulse-heat-color, var(--color-state-working))";
-
-  if (level === 4) {
-    return baseColor;
-  }
-
+  if (level === 4) return baseColor;
   const opacityVar =
     level === 3
       ? "var(--pulse-heat-high-opacity, 0.55)"
       : level === 2
         ? "var(--pulse-heat-medium-opacity, 0.35)"
         : "var(--pulse-heat-low-opacity, 0.18)";
-
   return `color-mix(in oklab, ${baseColor} calc(${opacityVar} * 100%), transparent)`;
+}
+
+function getHeatCellBackground(level: HeatCell["level"]): string {
+  // Static per-level references (not a template literal) so the
+  // EXTENSION_KEYS drift scanner registers each opaque stop (pulse-heat-1..4)
+  // as a consumer.
+  switch (Math.max(1, Math.min(4, level))) {
+    case 4:
+      return `var(--pulse-heat-4, ${legacyHeatComposite(4)})`;
+    case 3:
+      return `var(--pulse-heat-3, ${legacyHeatComposite(3)})`;
+    case 2:
+      return `var(--pulse-heat-2, ${legacyHeatComposite(2)})`;
+    default:
+      return `var(--pulse-heat-1, ${legacyHeatComposite(1)})`;
+  }
 }
 
 function getCellStyle(cell: RenderCell): CSSProperties {
   if (cell.isMissedDay) {
+    // Destructive-tier streak-break signal. Backed by an opaque danger tint
+    // (pulse-missed-bg, P-Heat authors these >=3:1 vs the empty cell) PLUS a
+    // non-colour shape cue (inset danger ring, light-only) so it stays distinct
+    // from heat levels and legible for colour-vision deficiency. The ring is
+    // drawn with an inset box-shadow via the .pulse-heat-cell-missed class.
+    // Every built-in defines pulse-missed-bg (P-Heat authors them opaque, >=3:1).
     return { background: "var(--pulse-missed-bg)" };
   }
 
@@ -137,6 +159,7 @@ function PulseHeatmapCell({
           }}
           className={cn(
             "rounded-[2px] shrink-0 border-0 p-0 cursor-default transition-[transform,background-color,box-shadow] duration-150",
+            cell.isMissedDay && "pulse-heat-cell-missed",
             cell.isMostRecentActive && "ring-1 ring-daintree-text/25 ring-offset-1"
           )}
           aria-label={`${formatted}: ${getTooltipText(cell)}`}

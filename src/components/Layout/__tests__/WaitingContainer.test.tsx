@@ -238,7 +238,7 @@ describe("WaitingContainer", () => {
   });
 
   describe("row metadata", () => {
-    it("renders worktree name, state label, headline, and live time", () => {
+    it("renders title, worktree name, headline, and live time on a single line", () => {
       mockTerminals = [
         makeTerminal({
           id: "t1",
@@ -252,9 +252,26 @@ describe("WaitingContainer", () => {
       const text = row.textContent ?? "";
       expect(text).toContain("Fix auth bug");
       expect(text).toContain("feature-auth");
-      expect(text).toContain("waiting");
       expect(text).toContain("Awaiting permission");
       expect(within(row).getByTestId("live-time-ago")).toBeTruthy();
+    });
+
+    it("does not render the redundant per-row state chip (state is surfaced once in the header)", () => {
+      mockTerminals = [makeTerminal({ id: "t1", title: "Fix auth bug" })];
+      render(<WaitingContainer />);
+      const row = screen.getByTestId("waiting-single-item");
+      // The removed state chip carried STATE_COLORS.waiting ("text-state-waiting");
+      // asserting on the class (not row text) avoids false-failing on titles/headlines
+      // that legitimately contain the substring "waiting" (e.g. "Awaiting permission").
+      expect(row.querySelector(".text-state-waiting")).toBeNull();
+    });
+
+    it("keeps the kill button hidden until row hover/focus (invisible, not just transparent)", () => {
+      mockTerminals = [makeTerminal({ id: "t1" })];
+      render(<WaitingContainer />);
+      const killWrapper = screen.getByTestId("waiting-kill-button").parentElement;
+      expect(killWrapper?.className).toContain("invisible");
+      expect(killWrapper?.className).toContain("group-focus-within/row:visible");
     });
 
     it("uses a transparent border placeholder (no amber tint on every row)", () => {

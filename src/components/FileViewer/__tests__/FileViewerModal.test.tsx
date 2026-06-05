@@ -191,8 +191,8 @@ describe("FileViewerModal", () => {
       expect(screen.getByTestId("code-viewer")).toBeTruthy();
     });
 
-    expect(screen.getByText("Open in Editor")).toBeTruthy();
-    expect(screen.queryByText("Open in Image Viewer")).toBeNull();
+    expect(screen.getByLabelText("Open in editor")).toBeTruthy();
+    expect(screen.queryByLabelText("Open in image viewer")).toBeNull();
   });
 
   it("renders inline image for PNG files without calling filesClient.read", async () => {
@@ -206,8 +206,8 @@ describe("FileViewerModal", () => {
     });
 
     expect(mockRead).not.toHaveBeenCalled();
-    expect(screen.getByText("Open in Image Viewer")).toBeTruthy();
-    expect(screen.queryByText("Open in Editor")).toBeNull();
+    expect(screen.getByLabelText("Open in image viewer")).toBeTruthy();
+    expect(screen.queryByLabelText("Open in editor")).toBeNull();
   });
 
   it.each(["jpg", "jpeg", "gif", "webp", "bmp", "ico"])(
@@ -243,8 +243,8 @@ describe("FileViewerModal", () => {
     });
     expect(container.innerHTML).toContain('<circle r="10">');
     expect(mockCreateTrustedHTML).toHaveBeenCalledWith(svg);
-    expect(screen.getByText("Open in Image Viewer")).toBeTruthy();
-    expect(screen.queryByText("Open in Editor")).toBeNull();
+    expect(screen.getByLabelText("Open in image viewer")).toBeTruthy();
+    expect(screen.queryByLabelText("Open in editor")).toBeNull();
   });
 
   it("shows binary error with Open in Editor for non-image binaries", async () => {
@@ -258,17 +258,17 @@ describe("FileViewerModal", () => {
       expect(screen.getByText("Binary file — cannot display")).toBeTruthy();
     });
 
-    expect(screen.queryByText("Open in Image Viewer")).toBeNull();
+    expect(screen.queryByLabelText("Open in image viewer")).toBeNull();
   });
 
   it("dispatches file.openImageViewer when image viewer button is clicked", async () => {
     render(<FileViewerModal {...defaultProps} filePath="/project/photo.jpg" />);
 
     await waitFor(() => {
-      expect(screen.getByText("Open in Image Viewer")).toBeTruthy();
+      expect(screen.getByLabelText("Open in image viewer")).toBeTruthy();
     });
 
-    screen.getByText("Open in Image Viewer").click();
+    screen.getByLabelText("Open in image viewer").click();
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "file.openImageViewer",

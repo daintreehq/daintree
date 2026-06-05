@@ -16,7 +16,7 @@ export interface DockedPanelProps {
   terminal: PanelInstance;
   onPopoverClose?: () => void;
   onAddTab?: () => void;
-  /** Show the inline "Open in grid" header control (single-panel dock only). */
+  /** Show the inline "Move to grid" header control (single-panel dock only). */
   showRestoreControl?: boolean;
 }
 

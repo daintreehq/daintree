@@ -725,7 +725,7 @@ describe("buildWorktreeIds memoization", () => {
     const visible = {
       id: "t1",
       location: "grid" as const,
-      ephemeral: false,
+      excludeFromPersistence: false,
       worktreeId: "wt-1",
     } as const;
     expect(

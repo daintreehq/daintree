@@ -25,7 +25,6 @@ import {
   PanelTopClose,
   Pencil,
   RefreshCw,
-  SquareArrowOutUpRight,
   Trash2,
   Unlock,
 } from "lucide-react";
@@ -109,10 +108,10 @@ export interface PanelHeaderProps {
   onMinimize?: () => void;
   onRestore?: () => void;
   /**
-   * Render the inline "Open in grid" control in the dock header. Gated so it
+   * Render the inline "Move to grid" control in the dock header. Gated so it
    * isn't duplicated by DockedTabGroup's own restore button on grouped panels
    * (single-panel dock only). onRestore still powers double-click + the
-   * overflow-menu "Restore to Grid" item regardless of this flag.
+   * overflow-menu "Move to grid" item regardless of this flag.
    */
   showRestoreControl?: boolean;
   onRestart?: () => void;
@@ -273,12 +272,10 @@ function PanelHeaderComponent({
 
   const duplicateShortcut = useKeybindingDisplay("terminal.duplicate");
   const moveToDockShortcut = useKeybindingDisplay("terminal.moveToDock");
-  const toggleDockShortcut = useKeybindingDisplay("terminal.toggleDock");
   const maximizeShortcut = useKeybindingDisplay("terminal.maximize");
   const closeShortcut = useKeybindingDisplay("terminal.close");
   const duplicateAriaShortcut = useAriaKeyshortcuts("terminal.duplicate");
   const moveToDockAriaShortcut = useAriaKeyshortcuts("terminal.moveToDock");
-  const toggleDockAriaShortcut = useAriaKeyshortcuts("terminal.toggleDock");
   const maximizeAriaShortcut = useAriaKeyshortcuts("terminal.maximize");
   const closeAriaShortcut = useAriaKeyshortcuts("terminal.close");
   const addTabTooltipContent = createTooltipContent(
@@ -589,13 +586,15 @@ function PanelHeaderComponent({
           : location === "dock"
             ? "bg-surface"
             : isFocused || isSelected
-              ? "bg-overlay-subtle"
+              ? // Var fallbacks keep themes without the panel-header hooks
+                // byte-identical.
+                "bg-[var(--panel-header-focus-bg,var(--color-overlay-subtle))]"
               : // Preview tint sits between transparent and bg-overlay-subtle so
                 // a previewed-but-unselected pane reads distinctly from both.
                 // Neutral surface, no accent — accent restraint per CLAUDE.md.
                 isFleetPreviewed
                 ? "bg-tint/[0.05]"
-                : "bg-transparent",
+                : "bg-[var(--panel-header-bg,transparent)]",
         // Mirror the fleet ribbon's 2px amber left stripe on follower panes.
         // Renders via `before:` so it stacks alongside the worktree-identity
         // `after:` stripe on the panel container without conflicting. The
@@ -943,7 +942,7 @@ function PanelHeaderComponent({
               {location === "dock" && onRestore && (
                 <DropdownMenuItem onSelect={() => onRestore()}>
                   <PanelTopClose className="w-3 h-3 mr-2" aria-hidden="true" />
-                  Restore to Grid
+                  Move to grid
                 </DropdownMenuItem>
               )}
               <DropdownMenuItem
@@ -1022,7 +1021,7 @@ function PanelHeaderComponent({
           </DropdownMenu>
         )}
 
-        {/* Move to Dock — visible button for grid panels */}
+        {/* Move to dock — visible button for grid panels */}
         {showMoveToDock && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -1033,7 +1032,7 @@ function PanelHeaderComponent({
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
                 className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
-                aria-label="Move to Dock"
+                aria-label="Move to dock"
                 aria-keyshortcuts={moveToDockAriaShortcut}
                 data-testid="panel-move-to-dock"
               >
@@ -1041,38 +1040,17 @@ function PanelHeaderComponent({
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {createTooltipContent("Move to Dock", moveToDockShortcut)}
+              {createTooltipContent("Move to dock", moveToDockShortcut)}
             </TooltipContent>
           </Tooltip>
         )}
 
-        {/* Middle control: Collapse-to-Dock + Open-in-grid (dock) / Maximize / Restore.
-            Dock panels never receive onToggleMaximize, so this branch owns the
-            slot whenever location is "dock" regardless of onMinimize. */}
+        {/* Middle control: Move-to-grid (dock) / Maximize / Restore. Dock panels
+            never receive onToggleMaximize, so this branch owns the slot whenever
+            location is "dock". Collapse is handled by Escape, outside-click, and
+            the dock chip toggle — no dedicated header button. */}
         {location === "dock" ? (
           <>
-            {onMinimize && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onMinimize();
-                    }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
-                    aria-label="Collapse to Dock"
-                    aria-keyshortcuts={toggleDockAriaShortcut}
-                    data-testid="panel-collapse-to-dock"
-                  >
-                    <PanelBottomClose className="w-3 h-3" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {createTooltipContent("Collapse to Dock", toggleDockShortcut)}
-                </TooltipContent>
-              </Tooltip>
-            )}
             {onRestore && showRestoreControl && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1083,13 +1061,13 @@ function PanelHeaderComponent({
                     }}
                     onPointerDown={(e) => e.stopPropagation()}
                     className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
-                    aria-label="Open in grid"
-                    data-testid="panel-open-in-grid"
+                    aria-label="Move to grid"
+                    data-testid="panel-move-to-grid"
                   >
-                    <SquareArrowOutUpRight className="w-3 h-3" aria-hidden="true" />
+                    <PanelTopClose className="w-3 h-3" aria-hidden="true" />
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="bottom">Open in grid</TooltipContent>
+                <TooltipContent side="bottom">Move to grid</TooltipContent>
               </Tooltip>
             )}
           </>

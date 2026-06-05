@@ -38,8 +38,16 @@
   background: var(--settings-nav-hover-bg, var(--theme-overlay-hover));
 }
 
+/* Active nav item ELEVATES toward surface-panel-elevated (overlay-raised),
+   it does not darken a recessed sidebar. The single load-bearing accent for
+   the active item is the 2px accent marker (a left-edge before: pseudo-element)
+   in SettingsDialog.tsx. The inset ring is polarity-scoped through the token:
+   dark palettes set --settings-nav-active-shadow to a subtle ring; light
+   palettes drop the value so it falls back to `none`, leaving the 2px marker
+   as the sole accent cue (S1). Keeping the consumer wired preserves the dark
+   ring instead of silently dropping it. */
 .settings-nav-item[data-active="true"] {
-  background: var(--settings-nav-active-bg, var(--theme-overlay-selected));
+  background: var(--settings-nav-active-bg, var(--theme-overlay-raised));
   box-shadow: var(--settings-nav-active-shadow, none);
 }
 
@@ -74,10 +82,14 @@
   }
 }
 
+/* Cards and list items sit ABOVE the dialog body (.settings-shell, which
+   defaults to surface-panel). Defaulting them to surface-panel-elevated keeps
+   the figure-ground lift even when a theme sets dialog-bg but not card-bg —
+   previously both fell back to surface-panel and collapsed (S1). */
 .settings-card {
-  background: var(--settings-card-bg, var(--theme-surface-panel));
+  background: var(--settings-card-bg, var(--theme-surface-panel-elevated));
 }
 
 .settings-list-item {
-  background: var(--settings-list-item-bg, var(--theme-surface-panel));
+  background: var(--settings-list-item-bg, var(--theme-surface-panel-elevated));
 }

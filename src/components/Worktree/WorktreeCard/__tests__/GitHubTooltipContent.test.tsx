@@ -1,0 +1,272 @@
+// @vitest-environment jsdom
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import type { GitHubUser, IssueTooltipData, PRTooltipData } from "@shared/types/github";
+
+import { IssueTooltipContent, PRTooltipContent } from "../GitHubTooltipContent";
+
+// Avatar wraps in a Radix tooltip when `title` is set (the assignee stack). Stub
+// it so the stacked avatars render without a TooltipProvider in the test tree.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+function user(
+  login: string,
+  avatarUrl = `https://avatars.githubusercontent.com/u/${login}`
+): GitHubUser {
+  return { login, avatarUrl };
+}
+
+const baseIssue: IssueTooltipData = {
+  number: 42,
+  title: "Something is broken",
+  bodyExcerpt: "",
+  state: "OPEN",
+  createdAt: "2025-06-15T12:00:00Z",
+  author: user("octocat"),
+  assignees: [],
+  labels: [],
+};
+
+function imgSrcs(container: HTMLElement): string[] {
+  return Array.from(container.querySelectorAll("img")).map((img) => img.getAttribute("src") ?? "");
+}
+
+describe("GitHubTooltipContent avatars", () => {
+  it("requests a 2x avatar size, appending to a URL with no query string", () => {
+    const { container } = render(<IssueTooltipContent data={baseIssue} />);
+    const src = imgSrcs(container)[0]!;
+    expect(src).toBe("https://avatars.githubusercontent.com/u/octocat?s=28");
+  });
+
+  it("preserves an existing query string when adding the size param", () => {
+    const data = {
+      ...baseIssue,
+      author: user("octocat", "https://avatars.githubusercontent.com/u/1?v=4"),
+    };
+    const { container } = render(<IssueTooltipContent data={data} />);
+    const src = imgSrcs(container)[0]!;
+    expect(src).toContain("v=4");
+    expect(src).toContain("s=28");
+    expect(src.startsWith("https://avatars.githubusercontent.com/u/1?")).toBe(true);
+    // Single query separator — never a second `?`.
+    expect(src.indexOf("?")).toBe(src.lastIndexOf("?"));
+  });
+
+  it("replaces an existing s= param rather than duplicating it", () => {
+    const data = {
+      ...baseIssue,
+      author: user("octocat", "https://avatars.githubusercontent.com/u/1?s=40&v=4"),
+    };
+    const { container } = render(<IssueTooltipContent data={data} />);
+    const src = imgSrcs(container)[0]!;
+    expect(src).toContain("s=28");
+    expect(src).not.toContain("s=40");
+    expect(src.match(/s=/g)).toHaveLength(1);
+  });
+
+  it("distinguishes the creator from the assignee role", () => {
+    const data = { ...baseIssue, assignees: [user("alice")] };
+    render(<IssueTooltipContent data={data} />);
+    // Distinct role labels mean the two chips are not interchangeable, even
+    // when the same person is both author and assignee.
+    expect(screen.getByText("Created by")).toBeDefined();
+    expect(screen.getByText("Assigned to")).toBeDefined();
+  });
+
+  it("requests smaller avatars for the stacked assignees than for the author", () => {
+    const data = {
+      ...baseIssue,
+      assignees: [user("alice"), user("bob"), user("carol"), user("dave")],
+    };
+    const { container } = render(<IssueTooltipContent data={data} />);
+    const srcs = imgSrcs(container);
+    // Author avatar renders first at the larger size; the stack follows at 2x
+    // of the smaller rendered size.
+    expect(srcs[0]).toContain("s=28");
+    expect(srcs.slice(1)).toHaveLength(3);
+    for (const src of srcs.slice(1)) {
+      expect(src).toContain("s=24");
+    }
+  });
+
+  it("renders the author login next to an avatar image", () => {
+    const { container } = render(<IssueTooltipContent data={baseIssue} />);
+    expect(screen.getByText("octocat")).toBeDefined();
+    expect(container.querySelectorAll("img")).toHaveLength(1);
+  });
+
+  it("renders a single assignee as avatar + login", () => {
+    const data = { ...baseIssue, assignees: [user("alice")] };
+    const { container } = render(<IssueTooltipContent data={data} />);
+    expect(screen.getByText("alice")).toBeDefined();
+    // Author avatar + assignee avatar.
+    expect(container.querySelectorAll("img")).toHaveLength(2);
+  });
+
+  it("caps the assignee stack at three avatars with a +N overflow", () => {
+    const data = {
+      ...baseIssue,
+      assignees: [user("alice"), user("bob"), user("carol"), user("dave")],
+    };
+    const { container } = render(<IssueTooltipContent data={data} />);
+    // Author (1) + three stacked assignees (3) = 4 images; the 4th assignee
+    // collapses into the overflow count.
+    expect(container.querySelectorAll("img")).toHaveLength(4);
+    expect(screen.getByText("+1")).toBeDefined();
+  });
+
+  it("names every assignee for screen readers even when avatars overflow", () => {
+    const data = {
+      ...baseIssue,
+      assignees: [user("alice"), user("bob"), user("carol"), user("dave")],
+    };
+    render(<IssueTooltipContent data={data} />);
+    expect(screen.getByText("Assigned to alice, bob, carol, dave")).toBeDefined();
+  });
+
+  it("handles a missing avatar URL without crashing", () => {
+    const data = { ...baseIssue, author: user("ghost", "") };
+    const { container } = render(<IssueTooltipContent data={data} />);
+    expect(imgSrcs(container)[0]).toBe("");
+    expect(screen.getByText("ghost")).toBeDefined();
+  });
+
+  it("applies the same avatar treatment to PR tooltips", () => {
+    const prData: PRTooltipData = {
+      number: 7,
+      title: "Add the thing",
+      bodyExcerpt: "",
+      state: "OPEN",
+      isDraft: false,
+      createdAt: "2025-06-15T12:00:00Z",
+      author: user("octocat"),
+      assignees: [user("alice"), user("bob")],
+      labels: [],
+    };
+    const { container } = render(<PRTooltipContent data={prData} />);
+    expect(screen.getByText("octocat")).toBeDefined();
+    // Author + two stacked assignees.
+    expect(container.querySelectorAll("img")).toHaveLength(3);
+    expect(screen.getByText("Assigned to alice, bob")).toBeDefined();
+  });
+});
+
+const issueData: IssueTooltipData = {
+  number: 42,
+  title: "Something is broken",
+  bodyExcerpt: "Steps to reproduce…",
+  state: "OPEN",
+  createdAt: "2026-01-02T00:00:00.000Z",
+  author: user("octocat"),
+  assignees: [],
+  labels: [],
+};
+
+const prData: PRTooltipData = {
+  number: 7,
+  title: "Fix the thing",
+  bodyExcerpt: "This fixes the thing.",
+  state: "OPEN",
+  isDraft: false,
+  createdAt: "2026-01-02T00:00:00.000Z",
+  author: user("octocat"),
+  assignees: [],
+  labels: [],
+};
+
+describe("IssueTooltipContent freshness item", () => {
+  it("renders no freshness item when freshness is absent", () => {
+    const { container } = render(<IssueTooltipContent data={issueData} />);
+    expect(container.querySelector(".lucide-clock")).toBeNull();
+    expect(container.querySelector(".lucide-circle-pause")).toBeNull();
+    expect(screen.queryByText(/rate limited/)).toBeNull();
+  });
+
+  it("renders no freshness item when the cause is undefined", () => {
+    const { container } = render(
+      <IssueTooltipContent data={issueData} freshness={{ cause: undefined, now: 1000 }} />
+    );
+    expect(container.querySelector(".lucide-clock")).toBeNull();
+    expect(container.querySelector(".lucide-circle-pause")).toBeNull();
+  });
+
+  it("folds a rate-limit cause onto the metadata row as a Clock + label", () => {
+    const { container } = render(
+      <IssueTooltipContent data={issueData} freshness={{ cause: "rate-limit", now: 1000 }} />
+    );
+    expect(container.querySelector(".lucide-clock")).toBeTruthy();
+    expect(screen.getByText(/^rate limited$/)).toBeTruthy();
+  });
+
+  it("includes the retry time when a future reset is provided", () => {
+    const now = 1000;
+    const { container } = render(
+      <IssueTooltipContent
+        data={issueData}
+        freshness={{ cause: "rate-limit", now, rateLimitResetAt: now + 60_000 }}
+      />
+    );
+    expect(container.querySelector(".lucide-clock")).toBeTruthy();
+    expect(screen.getByText(/rate limited, retry at /)).toBeTruthy();
+  });
+
+  it.each([
+    ["null", null],
+    ["past", 999],
+    ["equal to now", 1000],
+    ["non-finite", Number.POSITIVE_INFINITY],
+  ])("omits the retry time when reset is %s", (_label, rateLimitResetAt) => {
+    render(
+      <IssueTooltipContent
+        data={issueData}
+        freshness={{ cause: "rate-limit", now: 1000, rateLimitResetAt }}
+      />
+    );
+    expect(screen.getByText("rate limited")).toBeTruthy();
+    expect(screen.queryByText(/retry at/)).toBeNull();
+  });
+
+  it("renders a single freshness item — no duplicate when data is present", () => {
+    const { container } = render(
+      <IssueTooltipContent data={issueData} freshness={{ cause: "rate-limit", now: 1000 }} />
+    );
+    expect(container.querySelectorAll(".lucide-clock")).toHaveLength(1);
+  });
+
+  it("renders a circuit-breaker cause as a PauseCircle, not a Clock", () => {
+    const { container } = render(
+      <IssueTooltipContent data={issueData} freshness={{ cause: "circuit-breaker", now: 1000 }} />
+    );
+    expect(container.querySelector(".lucide-circle-pause")).toBeTruthy();
+    expect(container.querySelector(".lucide-clock")).toBeNull();
+    expect(screen.getByText(/data may be stale/)).toBeTruthy();
+  });
+});
+
+describe("PRTooltipContent freshness item", () => {
+  it("renders no freshness item when freshness is absent", () => {
+    const { container } = render(<PRTooltipContent data={prData} />);
+    expect(container.querySelector(".lucide-clock")).toBeNull();
+    expect(container.querySelector(".lucide-circle-pause")).toBeNull();
+  });
+
+  it("folds a rate-limit cause onto the metadata row as a Clock + label", () => {
+    const { container } = render(
+      <PRTooltipContent data={prData} freshness={{ cause: "rate-limit", now: 1000 }} />
+    );
+    expect(container.querySelector(".lucide-clock")).toBeTruthy();
+    expect(screen.getByText(/^rate limited$/)).toBeTruthy();
+  });
+
+  it("renders a circuit-breaker cause as a PauseCircle", () => {
+    const { container } = render(
+      <PRTooltipContent data={prData} freshness={{ cause: "circuit-breaker", now: 1000 }} />
+    );
+    expect(container.querySelector(".lucide-circle-pause")).toBeTruthy();
+    expect(screen.getByText(/data may be stale/)).toBeTruthy();
+  });
+});

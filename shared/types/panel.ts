@@ -16,10 +16,39 @@ export type { BuiltInPanelKind };
 export type PanelKind = BuiltInPanelKind | (string & {});
 
 /** Location of a panel instance in the UI */
-export type PanelLocation = "grid" | "dock" | "trash" | "background";
+export type PanelLocation = "grid" | "dock" | "overlay" | "trash" | "background";
 
 /** Tab group location (subset of PanelLocation, excludes trash) */
 export type TabGroupLocation = "grid" | "dock";
+
+/**
+ * Maps every `PanelLocation` to whether a panel at that location is a member of
+ * the user-visible panel grid. `undefined` (legacy persisted panels written
+ * before the `location` field existed) is treated as grid.
+ *
+ * The `satisfies Record<PanelLocation, boolean>` annotation makes any future
+ * widening of `PanelLocation` a compile error here — forcing a placement
+ * decision for the new value instead of silently defaulting it into the grid
+ * (the root cause of issue #9699, where `"overlay"` leaked into grid filters).
+ */
+const GRID_MEMBER_BY_LOCATION = {
+  grid: true,
+  dock: false,
+  overlay: false,
+  trash: false,
+  background: false,
+} satisfies Record<PanelLocation, boolean>;
+
+/**
+ * Whether a panel at this location is a member of the user-visible panel grid.
+ *
+ * True only for `"grid"` and `undefined` (legacy panels). `"dock"`, `"overlay"`
+ * (Daintree Assistant), `"trash"`, and `"background"` are NOT grid members and
+ * must be excluded from grid fleet membership, counts, badges, and focus.
+ */
+export function isGridPanelLocation(location: PanelLocation | undefined): boolean {
+  return location === undefined || GRID_MEMBER_BY_LOCATION[location];
+}
 
 /**
  * Tab group - a collection of panels displayed as tabs
@@ -361,10 +390,17 @@ export interface PtyPanelData extends BasePanelData {
   /** Focus policy applied when this panel was created. */
   focusPolicy?: AddPanelFocusPolicy;
   /**
-   * When true, this panel is excluded from persisted layout snapshots and is
-   * never rehydrated on app restart (e.g. Daintree assistant dock terminals).
+   * When true, this panel is excluded from persisted layout snapshots and from
+   * user-visible terminal surfaces (counts, switchers, bulk actions). Such
+   * panels are never rehydrated on app restart (e.g. Daintree assistant dock
+   * terminals). Independent of `removeOnExit`.
    */
-  ephemeral?: boolean;
+  excludeFromPersistence?: boolean;
+  /**
+   * When true, this panel is removed immediately when its PTY exits instead of
+   * being retained under the trash TTL. Independent of `excludeFromPersistence`.
+   */
+  removeOnExit?: boolean;
   /** Timestamp when this terminal was created */
   startedAt?: number;
   /** Exit code from the last process exit */
@@ -595,10 +631,12 @@ export interface TerminalInstance {
   /** Focus policy applied when this panel was created. */
   focusPolicy?: AddPanelFocusPolicy;
   /**
-   * When true, this panel is excluded from persisted layout snapshots and is
-   * never rehydrated on app restart (e.g. Daintree assistant dock terminals).
+   * When true, this panel is excluded from persisted layout snapshots and from
+   * user-visible terminal surfaces (counts, switchers, bulk actions). Such
+   * panels are never rehydrated on app restart (e.g. Daintree assistant dock
+   * terminals).
    */
-  ephemeral?: boolean;
+  excludeFromPersistence?: boolean;
   /** Timestamp when this terminal was created */
   startedAt?: number;
   /** Exit code from the last process exit */

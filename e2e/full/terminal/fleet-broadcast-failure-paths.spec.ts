@@ -152,8 +152,8 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
     fixtureCleanup = cleanup;
     ctx = await launchApp({ env: { DAINTREE_E2E_FAULT_MODE: "1" } });
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Fleet Failure");
-    // The broadcast confirm + failure store paths only run through the
-    // structured-submit route, which requires the hybrid input editor.
+    // The failure/progress store paths only run through the structured-submit
+    // route, which requires the hybrid input editor.
     const enableHybrid = await dispatchAction(
       ctx.window,
       "terminalConfig.setHybridInputEnabled",
@@ -322,7 +322,7 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
         ? `${windowsSentinelVariable} = '${"A".repeat(103_000)}'`
         : `printf '${sentinel}\\n'; : # ${"A".repeat(103_000)}`;
 
-    await test.step("Send the oversized broadcast through the byte-limit confirm", async () => {
+    await test.step("Send the oversized broadcast directly through the editor", async () => {
       // A long per-submit delay removes the cancel-click race: batch one stays
       // in flight for ~12s, far longer than it takes to click Cancel, so the
       // abort always lands before batch two would dispatch.
@@ -337,9 +337,10 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
       await editor.click();
       await editor.fill(largePayload);
       await window.keyboard.press("Enter");
-      // The oversized payload trips the byte-limit confirm gate before dispatch.
-      await expect(window.locator(SEL.fleet.pasteConfirmSend)).toBeVisible({ timeout: T_MEDIUM });
-      await window.locator(SEL.fleet.pasteConfirmSend).click();
+      // Editor fleet broadcasts intentionally do not show a paste/destructive
+      // confirm; arming is the consent boundary. The large payload still
+      // forces the batched progress path below.
+      await expect(window.locator(SEL.fleet.pasteConfirmSend)).toBeHidden({ timeout: T_MEDIUM });
     });
 
     await test.step("Progress and cancel affordances surface, then cancel mid-flight", async () => {

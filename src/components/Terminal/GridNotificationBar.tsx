@@ -13,32 +13,35 @@ import {
   type Notification,
 } from "@/store/notificationStore";
 
+// Background uses the pre-baked status-surface wash (rgba, polarity-aware) and
+// the border mixes the status color toward the opaque grid surface. Both avoid
+// color-mix(..., transparent), which black-shifts on light backgrounds in oklab.
 const STATUS_CONFIG = {
   success: {
     icon: CheckCircle2,
     containerClass:
-      "border-[color-mix(in_oklab,var(--color-status-success)_35%,transparent)] bg-[linear-gradient(90deg,color-mix(in_oklab,var(--color-status-success)_14%,transparent),color-mix(in_oklab,var(--color-status-success)_6%,transparent))]",
+      "border-[color-mix(in_oklab,var(--color-status-success)_35%,var(--color-surface-grid))] bg-status-success-surface",
     iconClass: "text-status-success",
     titleClass: "text-status-success",
   },
   error: {
     icon: XCircle,
     containerClass:
-      "border-[color-mix(in_oklab,var(--color-status-error)_35%,transparent)] bg-[linear-gradient(90deg,color-mix(in_oklab,var(--color-status-error)_14%,transparent),color-mix(in_oklab,var(--color-status-error)_6%,transparent))]",
+      "border-[color-mix(in_oklab,var(--color-status-error)_35%,var(--color-surface-grid))] bg-status-error-surface",
     iconClass: "text-status-error",
     titleClass: "text-status-error",
   },
   info: {
     icon: Info,
     containerClass:
-      "border-[color-mix(in_oklab,var(--color-status-info)_35%,transparent)] bg-[linear-gradient(90deg,color-mix(in_oklab,var(--color-status-info)_14%,transparent),color-mix(in_oklab,var(--color-status-info)_6%,transparent))]",
+      "border-[color-mix(in_oklab,var(--color-status-info)_35%,var(--color-surface-grid))] bg-status-info-surface",
     iconClass: "text-status-info",
     titleClass: "text-status-info",
   },
   warning: {
     icon: AlertTriangle,
     containerClass:
-      "border-[color-mix(in_oklab,var(--color-status-warning)_35%,transparent)] bg-[linear-gradient(90deg,color-mix(in_oklab,var(--color-status-warning)_14%,transparent),color-mix(in_oklab,var(--color-status-warning)_6%,transparent))]",
+      "border-[color-mix(in_oklab,var(--color-status-warning)_35%,var(--color-surface-grid))] bg-status-warning-surface",
     iconClass: "text-status-warning",
     titleClass: "text-status-warning",
   },

@@ -119,7 +119,7 @@ export function CommitListItem({
         <div className="flex-1 min-w-0">
           {/* Title row: full-width subject */}
           <div className="flex items-center gap-1.5 min-w-0">
-            <Tooltip>
+            <Tooltip autoDismiss={false}>
               <TooltipTrigger asChild>{renderMessage()}</TooltipTrigger>
               <TooltipContent side="bottom">{commit.message}</TooltipContent>
             </Tooltip>

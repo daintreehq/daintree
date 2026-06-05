@@ -387,6 +387,61 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
     });
   });
 
+  describe("issue #9667 — keyboard cursor surfaced as a visible row state", () => {
+    const SIDEBAR_CSS_PATH = path.resolve(__dirname, "../../../styles/components/sidebar.css");
+
+    it("exposes keyboardCursorId from the keyboard hook, mode-guarded to list mode", async () => {
+      const source = await fs.readFile(KEYBOARD_HOOK_PATH, "utf-8");
+      expect(source).toMatch(/keyboardCursorId:\s*string \| null/);
+      // Cursor only exists in list mode — toolbar mode hands the focus ring to
+      // the real DOM button, so the row-level cursor must read null there.
+      expect(source).toMatch(/keyboardCursorId\s*=\s*mode === "list" \? activeWorktreeId : null/);
+    });
+
+    it("threads keyboardCursorId through the Virtuoso context into both row paths", async () => {
+      const source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
+      expect(source).toMatch(/keyboardCursorId:\s*string \| null/);
+      expect(source).toContain("keyboardCursorId={context.keyboardCursorId}");
+      // The pinned (main + integration) rows live outside the Virtuoso surface
+      // and must receive the cursor id directly from the hook return.
+      expect(source).toContain("keyboardCursorId={keyboardCursorId}");
+    });
+
+    it("flags the cursor row via data-keyboard-cursor in both static and sortable paths", async () => {
+      const staticSource = await fs.readFile(STATIC_ROW_PATH, "utf-8");
+      const sortableSource = await fs.readFile(SORTABLE_CARD_PATH, "utf-8");
+      expect(staticSource).toContain(
+        'data-keyboard-cursor={isKeyboardCursor ? "true" : undefined}'
+      );
+      expect(sortableSource).toContain(
+        'data-keyboard-cursor={isKeyboardCursor ? "true" : undefined}'
+      );
+    });
+
+    it("includes isKeyboardCursor in the SortableWorktreeCard memo comparator so the ring updates", async () => {
+      // Without this the React.memo comparator would swallow cursor changes and
+      // the ring would stick on a stale row as the user navigates.
+      const sortableSource = await fs.readFile(SORTABLE_CARD_PATH, "utf-8");
+      expect(sortableSource).toMatch(/prev\.isKeyboardCursor\s*!==\s*next\.isKeyboardCursor/);
+    });
+
+    it("ships a forced-colors outline fallback for the cursor ring (box-shadow is stripped there)", async () => {
+      const css = await fs.readFile(SIDEBAR_CSS_PATH, "utf-8");
+      // Split on each forced-colors media query and inspect the segment up to
+      // the next media query — robust to brace indentation, unlike a lazy
+      // `\n}` block match which depends on prettier's exact formatting.
+      const segments = css.split("@media (forced-colors: active)").slice(1);
+      const hasCursorFallback = segments.some((seg) => {
+        const block = seg.split("@media")[0]!;
+        return (
+          block.includes('data-keyboard-cursor="true"') &&
+          /outline:\s*2px solid Highlight/.test(block)
+        );
+      });
+      expect(hasCursorFallback).toBe(true);
+    });
+  });
+
   describe("issue #8389 — per-row sidebar subscription stops full-list re-renders", () => {
     let source: string;
     let staticSource: string;

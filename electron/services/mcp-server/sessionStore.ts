@@ -107,6 +107,12 @@ export class SessionStore {
   // `contextOverride` so a focus shift between the model's tool call and the
   // dispatch can't retarget the action. See #8317.
   readonly sessionContextMap = new Map<string, ActionContext>();
+  // MCP transport sessionId → public help-session id (the one persisted in
+  // the renderer's helpPanelStore). Populated only for help-session bearers,
+  // in lockstep with sessionWebContentsMap. The transport mints its own
+  // per-connection id, so this is the join that lets audit records and
+  // turn-id lookups correlate back to the help session the user sees.
+  readonly sessionHelpIdMap = new Map<string, string>();
   readonly resourceSubscriptions = new Map<string, Map<string, () => void>>();
   // Per-session idempotency dedup state for the MCP creation-tool allowlist.
   // Two phases: in-flight singleflight (same-moment duplicates share the
@@ -283,6 +289,7 @@ export class SessionStore {
     this.grantCache.revokeSession(sessionId, "session-idle");
     this.sessionWebContentsMap.delete(sessionId);
     this.sessionContextMap.delete(sessionId);
+    this.sessionHelpIdMap.delete(sessionId);
     this.clearDedupState(sessionId);
     this.clearRateLimitState(sessionId);
     this.clearClientMetadata(sessionId);
@@ -339,6 +346,7 @@ export class SessionStore {
     this.grantCache.revokeSession(sessionId, "session-idle");
     this.sessionWebContentsMap.delete(sessionId);
     this.sessionContextMap.delete(sessionId);
+    this.sessionHelpIdMap.delete(sessionId);
     this.clearDedupState(sessionId);
     this.clearRateLimitState(sessionId);
     this.clearClientMetadata(sessionId);
@@ -587,6 +595,7 @@ export class SessionStore {
     this.grantCache.revokeSession(sessionId, "session-ended");
     this.sessionWebContentsMap.delete(sessionId);
     this.sessionContextMap.delete(sessionId);
+    this.sessionHelpIdMap.delete(sessionId);
     this.clearDedupState(sessionId);
     this.clearRateLimitState(sessionId);
     this.clearClientMetadata(sessionId);
@@ -640,6 +649,7 @@ export class SessionStore {
     this.sessionTierMap.clear();
     this.sessionWebContentsMap.clear();
     this.sessionContextMap.clear();
+    this.sessionHelpIdMap.clear();
     this.sessionConnectedAtMs.clear();
     this.sessionUserAgent.clear();
     this.sessionTransport.clear();

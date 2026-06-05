@@ -20,26 +20,62 @@ interface FilterSectionProps {
   title: string;
   children: React.ReactNode;
   defaultOpen?: boolean;
+  activeCount?: number;
+  onClear?: () => void;
 }
 
-function FilterSection({ title, children, defaultOpen = false }: FilterSectionProps) {
+function FilterSection({
+  title,
+  children,
+  defaultOpen = false,
+  activeCount = 0,
+  onClear,
+}: FilterSectionProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const contentId = `filter-section-${title.toLowerCase().replace(/\s+/g, "-")}`;
+  const hasActive = activeCount > 0;
+  const expandButtonRef = useRef<HTMLButtonElement>(null);
 
   return (
-    <div className="border-b border-daintree-border last:border-b-0">
-      <button
-        type="button"
-        onClick={() => setIsOpen(!isOpen)}
-        aria-expanded={isOpen}
-        aria-controls={contentId}
-        className="flex items-center justify-between w-full px-3 py-2 text-xs font-medium text-daintree-text/70 hover:bg-overlay-soft"
-      >
-        {title}
-        <ChevronDown
-          className={cn("w-3.5 h-3.5 transition-transform", isOpen ? "transform rotate-180" : "")}
-        />
-      </button>
+    <div className="flex flex-col border-b border-daintree-border last:border-b-0">
+      <div className="flex items-center">
+        <button
+          ref={expandButtonRef}
+          type="button"
+          onClick={() => setIsOpen(!isOpen)}
+          aria-expanded={isOpen}
+          aria-controls={contentId}
+          className="flex flex-1 items-center justify-between px-3 py-2 text-xs font-medium text-daintree-text/70 hover:bg-overlay-soft"
+        >
+          <span className="flex items-center gap-1.5">
+            {title}
+            {hasActive && (
+              <span className="rounded-full bg-tint/10 px-1.5 py-0.5 text-[10px] font-medium leading-none tabular-nums text-daintree-text/60">
+                {activeCount}
+              </span>
+            )}
+          </span>
+          <ChevronDown
+            className={cn("w-3.5 h-3.5 transition-transform", isOpen ? "transform rotate-180" : "")}
+          />
+        </button>
+        {onClear && hasActive && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              // The Clear button unmounts itself once activeCount hits 0, so move
+              // focus to the adjacent expand toggle first to keep it off body.
+              expandButtonRef.current?.focus();
+              onClear();
+            }}
+            aria-label={`Clear ${title} filters`}
+            className="shrink-0 px-2 py-2 text-[11px] text-daintree-text/50 transition-colors hover:text-daintree-text"
+          >
+            Clear
+          </button>
+        )}
+      </div>
       {isOpen && (
         <div id={contentId} className="px-3 pb-3 pt-1">
           {children}
@@ -178,6 +214,12 @@ export function WorktreeFilterPopover({
     toggleSessionFilter,
     toggleActivityFilter,
     toggleDevServerFilter,
+    clearStatusFilters,
+    clearTypeFilters,
+    clearPrIssueFilters,
+    clearSessionFilters,
+    clearActivityFilters,
+    clearDevServerFilters,
     clearAll,
     getActiveFilterCount,
     hasActiveFilters,
@@ -201,6 +243,12 @@ export function WorktreeFilterPopover({
       toggleSessionFilter: state.toggleSessionFilter,
       toggleActivityFilter: state.toggleActivityFilter,
       toggleDevServerFilter: state.toggleDevServerFilter,
+      clearStatusFilters: state.clearStatusFilters,
+      clearTypeFilters: state.clearTypeFilters,
+      clearPrIssueFilters: state.clearPrIssueFilters,
+      clearSessionFilters: state.clearSessionFilters,
+      clearActivityFilters: state.clearActivityFilters,
+      clearDevServerFilters: state.clearDevServerFilters,
       clearAll: state.clearAll,
       getActiveFilterCount: state.getActiveFilterCount,
       hasActiveFilters: state.hasActiveFilters,
@@ -365,7 +413,12 @@ export function WorktreeFilterPopover({
           </div>
 
           {/* Filter Sections */}
-          <FilterSection title="Status" defaultOpen={statusFilters.size > 0}>
+          <FilterSection
+            title="Status"
+            defaultOpen={statusFilters.size > 0}
+            activeCount={statusFilters.size}
+            onClear={clearStatusFilters}
+          >
             <div className="flex flex-wrap gap-1.5">
               {STATUS_OPTIONS.map((option) => (
                 <FilterChip
@@ -379,7 +432,12 @@ export function WorktreeFilterPopover({
             </div>
           </FilterSection>
 
-          <FilterSection title="Branch Type" defaultOpen={typeFilters.size > 0}>
+          <FilterSection
+            title="Branch Type"
+            defaultOpen={typeFilters.size > 0}
+            activeCount={typeFilters.size}
+            onClear={clearTypeFilters}
+          >
             <div className="flex flex-wrap gap-1.5">
               {TYPE_OPTIONS.map((option) => (
                 <FilterChip
@@ -393,7 +451,12 @@ export function WorktreeFilterPopover({
             </div>
           </FilterSection>
 
-          <FilterSection title="Issues & PRs" defaultOpen={prIssueFilters.size > 0}>
+          <FilterSection
+            title="Issues & PRs"
+            defaultOpen={prIssueFilters.size > 0}
+            activeCount={prIssueFilters.size}
+            onClear={clearPrIssueFilters}
+          >
             <div className="flex flex-wrap gap-1.5">
               {PR_ISSUE_OPTIONS.map((option) => (
                 <FilterChip
@@ -407,7 +470,12 @@ export function WorktreeFilterPopover({
             </div>
           </FilterSection>
 
-          <FilterSection title="Sessions" defaultOpen={sessionFilters.size > 0}>
+          <FilterSection
+            title="Sessions"
+            defaultOpen={sessionFilters.size > 0}
+            activeCount={sessionFilters.size}
+            onClear={clearSessionFilters}
+          >
             <div className="flex flex-wrap gap-1.5">
               {SESSION_OPTIONS.map((option) => (
                 <FilterChip
@@ -421,7 +489,12 @@ export function WorktreeFilterPopover({
             </div>
           </FilterSection>
 
-          <FilterSection title="Activity" defaultOpen={activityFilters.size > 0}>
+          <FilterSection
+            title="Activity"
+            defaultOpen={activityFilters.size > 0}
+            activeCount={activityFilters.size}
+            onClear={clearActivityFilters}
+          >
             <div className="flex flex-wrap gap-1.5">
               {ACTIVITY_OPTIONS.map((option) => (
                 <FilterChip
@@ -435,7 +508,12 @@ export function WorktreeFilterPopover({
             </div>
           </FilterSection>
 
-          <FilterSection title="Dev server" defaultOpen={devServerFilters.size > 0}>
+          <FilterSection
+            title="Dev server"
+            defaultOpen={devServerFilters.size > 0}
+            activeCount={devServerFilters.size}
+            onClear={clearDevServerFilters}
+          >
             <div className="flex flex-wrap gap-1.5">
               {DEV_SERVER_OPTIONS.map((option) => (
                 <FilterChip

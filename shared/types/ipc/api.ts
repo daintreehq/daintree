@@ -211,6 +211,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getAllIssueAssociations(): Promise<Record<string, IssueAssociation>>;
     restartService(): Promise<void>;
     retryProjectLoad(): Promise<void>;
+    retryAuthFetch(): Promise<void>;
     onUpdate(callback: (state: WorktreeState) => void): () => void;
     onRemove(callback: (data: { worktreeId: string }) => void): () => void;
     onActivated(callback: (data: { worktreeId: string }) => void): () => void;
@@ -407,6 +408,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     clearQuarantinedPanel(panelId: string): Promise<{ cleared: boolean }>;
     notifyFirstInteractive(): Promise<void>;
     notifyViewPainted(): Promise<void>;
+    notifyWarmViewPainted(): Promise<void>;
     onMenuAction(callback: (payload: { actionId: string; args?: unknown }) => void): () => void;
     reloadConfig(): Promise<{ success: boolean }>;
     onConfigReloaded(callback: () => void): () => void;
@@ -1420,6 +1422,20 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onGrantLifecycle(
       callback: (payload: import("./mcpServer.js").McpGrantLifecyclePayload) => void
     ): () => void;
+    /**
+     * Subscribe to live tool-call-started pushes for the pinned help-session
+     * in this WebContents. Drives the Assistant panel's activity strip (#9759).
+     */
+    onToolCallStarted(
+      callback: (payload: import("./mcpServer.js").McpToolCallStartedPayload) => void
+    ): () => void;
+    /**
+     * Subscribe to live tool-call-settled pushes that match a prior
+     * `onToolCallStarted` for this WebContents' pinned help-session (#9759).
+     */
+    onToolCallSettled(
+      callback: (payload: import("./mcpServer.js").McpToolCallSettledPayload) => void
+    ): () => void;
   };
   // helpAssistant is generated — see GeneratedElectronAPI.
   mcpBridge: {
@@ -1693,6 +1709,34 @@ export interface VoiceInputSettings {
   projectId: string;
   /** Controls whether recording is held (push-to-talk) or toggled. Defaults to "toggle". */
   recordingMode: VoiceRecordingMode;
+  /**
+   * Runtime-only. Context keyterms (custom dictionary + project/branch/terminal
+   * context) assembled at session start and frozen for the session's lifetime.
+   * Deepgram injects them into the streaming URL as repeated `keyterm=` params;
+   * OpenAI passes them through the transcription prompt. Populated by the
+   * voice-input start handler — never persisted to the store or supplied by the
+   * renderer. Reconnects reuse this snapshot.
+   */
+  keyterms?: string[];
+  /**
+   * Words learned from the user's manual corrections to dictated text, pending
+   * explicit accept/dismiss. Never added to `customDictionary` silently.
+   */
+  suggestedDictionary: SuggestedDictionaryEntry[];
+  /** When enabled, manual corrections to dictated text surface as suggested dictionary words. Defaults to true. */
+  learnFromCorrections: boolean;
+}
+
+/** A dictionary word suggested from a user's manual correction, with provenance. */
+export interface SuggestedDictionaryEntry {
+  /** The corrected term, in the casing the user typed (e.g. "Zustand"). */
+  word: string;
+  /** The misheard phrase it replaced, shown as provenance (e.g. "zoo stand"). */
+  utterance: string;
+  /** Epoch ms when the suggestion was last observed. */
+  suggestedAt: number;
+  /** How many times this substitution has been seen. */
+  frequency: number;
 }
 
 export type HelpAssistantAuditRetention = 7 | 30 | 0;

@@ -416,6 +416,8 @@ beforeEach(() => {
         },
         mcpServer: {
           onTierNotPermitted: vi.fn(() => () => {}),
+          onToolCallStarted: vi.fn(() => () => {}),
+          onToolCallSettled: vi.fn(() => () => {}),
           setSessionTier: vi.fn().mockResolvedValue({ sessionId: "", tier: "workbench" }),
           issueGrant: vi.fn().mockResolvedValue({
             sessionId: "",
@@ -470,7 +472,8 @@ describe("HelpPanel — resume from hibernated session", () => {
         launchAgentId: "claude",
         command: "claude --resume abc-123",
         cwd: "/tmp/help/proj-1",
-        ephemeral: true,
+        excludeFromPersistence: true,
+        removeOnExit: true,
       })
     );
     // Resume bypasses the standard agent.launch dispatch.

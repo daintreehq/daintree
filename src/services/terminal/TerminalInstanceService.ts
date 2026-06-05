@@ -812,11 +812,13 @@ class TerminalInstanceService {
 
   /**
    * Run the full click-equivalent wake sequence on a visible terminal whose
-   * project view just regained visibility (#8562). `wake(id)` only triggers
-   * buffer restore + xterm.refresh; the click/focus path additionally runs
-   * `applyDeferredResize`, `forceXtermReflow`, `handlePostWake`, and
-   * `dataBuffer.resumeFlush`. Without those steps, visible terminals show
-   * stale geometry and missing recent output until the user clicks each pane.
+   * project view just regained visibility (#8562). This method is the complete
+   * path: it runs `applyDeferredResize`, `forceXtermReflow`,
+   * `repairAtlasForReactivation`, `wakeAndRestore`, `xterm.refresh`,
+   * `handlePostWake`, and `dataBuffer.resumeFlush`. The plain `wake(id)` path
+   * (used on click/focus) only triggers buffer restore + xterm.refresh. Without
+   * the full sequence, visible terminals show stale geometry and missing recent
+   * output until the user clicks each pane.
    *
    * Bypasses {@link TerminalRendererPolicy.applyRendererPolicy} — that path
    * early-returns on tier equality and a backgrounded view's terminals stay
@@ -838,15 +840,31 @@ class TerminalInstanceService {
     if (!current) return;
     if (!current.isOpened) return;
 
-    // Attach is in progress — its post-rAF reconciliation (around L1166) will
-    // apply the renderer policy and run the wake. A second path here would
-    // race.
-    if (current.isAttaching) return;
+    // Attach is in progress — running the wake now would race the attach's own
+    // post-rAF reconciliation. That reconciliation path does NOT run the full
+    // visibility-restore sequence, so we can't simply defer to it: mark the
+    // terminal so notifyAttachSettledWaiters re-runs this wake once attach
+    // settles (#9702).
+    if (current.isAttaching) {
+      current.pendingVisibilityWake = true;
+      return;
+    }
 
+    // We're proceeding with the full wake now, so clear any stale deferred-wake
+    // flag (e.g. a prior skip whose deferred re-run we are now satisfying).
+    current.pendingVisibilityWake = false;
+
+    // Unlock symmetrically with the relock in the finally below: bypass the
+    // lock whenever resize is suppressed, even if the suppression end time was
+    // already cleared (the timer can fire between switch-back and this deferred
+    // wake). Without the unlock, applyDeferredResize would no-op under the lock
+    // and geometry would stay stale.
     const needsLockBypass = current.isResizeSuppressed === true;
     let remainingMs = 0;
-    if (needsLockBypass && current.resizeSuppressionEndTime) {
-      remainingMs = Math.max(0, current.resizeSuppressionEndTime - Date.now());
+    if (needsLockBypass) {
+      remainingMs = current.resizeSuppressionEndTime
+        ? Math.max(0, current.resizeSuppressionEndTime - Date.now())
+        : 0;
       this.resizeController.lockResize(id, false);
     }
     try {
@@ -865,6 +883,13 @@ class TerminalInstanceService {
         logWarn(`forceXtermReflow failed for ${id}`, { error });
       }
     }
+
+    // Repair the stale local WebGL glyph model synchronously, before the async
+    // wakeAndRestore IPC and before the view's first composited frame. On warm
+    // project-view reactivation the compositor can flash the pre-freeze atlas
+    // state; resetting the local model here (no breaker, no shared-atlas churn)
+    // clears it in place. No-op for DOM-renderer terminals.
+    this.webGLManager.repairAtlasForReactivation(id);
 
     const ok = await this.wakeManager.wakeAndRestore(id);
 
@@ -1205,15 +1230,31 @@ class TerminalInstanceService {
 
   private notifyAttachSettledWaiters(id: string): void {
     if (!this.isAttachSettled(id)) return;
-    const waiters = this.attachSettledWaiters.get(id);
-    if (!waiters) return;
 
-    for (const waiter of waiters) {
-      clearTimeout(waiter.timeout);
-      waiter.resolve();
+    // Consume a deferred visibility wake that was skipped while this terminal
+    // was mid-attach (#9702). Read and clear the flag before dispatching so a
+    // re-entrant call can't double-fire; fullWakeForVisibilityRestore guards
+    // against stale/replaced instances on its own.
+    const managed = this.instances.get(id);
+    const deferredWake = managed?.pendingVisibilityWake === true;
+    if (managed) managed.pendingVisibilityWake = false;
+
+    const waiters = this.attachSettledWaiters.get(id);
+    if (waiters) {
+      for (const waiter of waiters) {
+        clearTimeout(waiter.timeout);
+        waiter.resolve();
+      }
+      this.attachSettledWaiters.delete(id);
     }
 
-    this.attachSettledWaiters.delete(id);
+    if (deferredWake) {
+      void this.fullWakeForVisibilityRestore(id).catch((error) => {
+        logWarn(`deferred fullWakeForVisibilityRestore failed for ${id}`, {
+          error,
+        });
+      });
+    }
   }
 
   private removeAttachSettledWaiter(id: string, resolve: () => void): void {
@@ -2054,8 +2095,16 @@ class TerminalInstanceService {
 
       logDebug(`resetRenderer running for ${id}`);
 
-      managed.terminal.clearTextureAtlas();
-      managed.terminal.refresh(0, managed.terminal.rows - 1);
+      // Recover this terminal's renderer WITHOUT clearing the shared texture
+      // atlas: clearTextureAtlas() flushes xterm's module-global atlas shared by
+      // every WebGL terminal with matching font/theme, blanking co-owner panes
+      // until they get their own resize/click trigger (#9701). repairAtlasForReactivation
+      // does a local-only model reset + refresh on this terminal's pool entry and
+      // returns false for DOM-renderer terminals, where we fall back to a plain
+      // refresh so the targeted pane still repaints.
+      if (!this.webGLManager.repairAtlasForReactivation(id)) {
+        managed.terminal.refresh(0, managed.terminal.rows - 1);
+      }
 
       try {
         this.resizeController.fit(id);

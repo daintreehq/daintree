@@ -264,9 +264,15 @@ async function expectAgentIconColor(
   await expect(panel).toHaveAttribute("data-runtime-icon-id", agentId, { timeout: T_LONG });
   const icon = panel.locator(`[data-terminal-icon-id="${agentId}"]`).first();
   await expect(icon).toHaveAttribute("data-terminal-icon-color", color, { timeout: T_LONG });
-  await expect(icon.locator("path").first()).toHaveAttribute("fill", color, {
-    timeout: T_LONG,
-  });
+  // BrandMark may apply a contrast-clearing tint on light themes. The marker
+  // above is the canonical preset color contract; the SVG must still be
+  // concretely painted rather than falling back to currentColor.
+  await expect
+    .poll(() => icon.locator("path").first().getAttribute("fill"), {
+      timeout: T_LONG,
+      intervals: [250, 500],
+    })
+    .toMatch(/^#[0-9a-f]{6}$/i);
 }
 
 async function quitAgentOrWaitForDemotion(page: Page, panel: Locator): Promise<void> {

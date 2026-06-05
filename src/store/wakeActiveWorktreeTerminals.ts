@@ -1,7 +1,9 @@
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { logWarn } from "@/utils/logger";
+import { notifyWarmReactivationComplete } from "@/utils/warmReactivationGate";
 
 const WAKE_CONCURRENCY = 2;
 
@@ -37,6 +39,17 @@ const WAKE_CONCURRENCY = 2;
  * Dock and trash terminals are excluded — they manage their own visibility.
  */
 export async function wakeActiveWorktreeTerminals(): Promise<void> {
+  try {
+    await wakeActiveWorktreeTerminalsInner();
+  } finally {
+    // Always release any warm-reactivation paint gate main may be holding for
+    // this view (#9679), even on a zero-terminal grid or a thrown fan-out —
+    // otherwise the opaque cover lingers until main's hard-timeout fallback.
+    notifyWarmReactivationComplete();
+  }
+}
+
+async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
   const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId ?? null;
   const { panelIds, panelsById } = usePanelStore.getState();
 
@@ -47,8 +60,21 @@ export async function wakeActiveWorktreeTerminals(): Promise<void> {
     if ((panel.kind ?? "terminal") !== "terminal") continue;
     if ((panel.worktreeId ?? null) !== activeWorktreeId) continue;
     const location = panel.location ?? "grid";
-    if (location === "dock" || location === "trash") continue;
+    if (location === "dock" || location === "trash" || location === "overlay") continue;
     targets.push(id);
+  }
+
+  // The Daintree Assistant terminal is a `location: "overlay"` panel and so is
+  // excluded by the loop above, but it's rendered persistently in `HelpPanel`
+  // (not via the dock popover), so nothing else wakes it on view reactivation.
+  // Without this it stays frozen — accumulating headless-mirror output but
+  // never syncing its xterm buffer — until a manual resize (#9637). Pull its
+  // id straight from the help-panel store and fold it into the same fan-out;
+  // `fullWakeForVisibilityRestore` guards on disposal internally, so a stale
+  // id whose panel was cleared on project switch safely misses the lookup.
+  const assistantId = useHelpPanelStore.getState().terminalId;
+  if (assistantId && panelsById[assistantId] && !targets.includes(assistantId)) {
+    targets.push(assistantId);
   }
 
   if (targets.length === 0) return;

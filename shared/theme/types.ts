@@ -50,7 +50,13 @@ export const APP_THEME_TOKEN_KEYS = [
   "status-warning",
   "status-danger",
   "status-info",
+  // Status surfaces: low-alpha tinted washes for banner/pill backgrounds.
+  // Derived via withAlpha() so hex status colors emit rgba() (not the
+  // color-mix(..., transparent) form, which black-shifts on light backgrounds).
   "status-danger-surface",
+  "status-success-surface",
+  "status-warning-surface",
+  "status-info-surface",
 
   // Activity (real-time agent states)
   "activity-active",
@@ -72,6 +78,14 @@ export const APP_THEME_TOKEN_KEYS = [
   "overlay-active",
   "overlay-selected",
   "overlay-elevated",
+  // Elevate-to-select primitive (E1). The generic "this item is selected/active/
+  // armed" fill. On LIGHT it is a real upward lift (the brightest `elevated`
+  // plane nudged a hair toward text — a faint cool-gray highlight, the macOS /
+  // VS Code light idiom: the container recedes, the selection elevates). On DARK
+  // it aliases the additive-white `overlay-selected` behavior so dark is
+  // unchanged. Consumers: menu/select/palette active item, active tab, focused
+  // pane, notification row / active-filter chip.
+  "overlay-raised",
 
   // Selected-state pill backgrounds (tint-derived; neutral across hued themes)
   "filter-selected-bg-soft",
@@ -220,11 +234,20 @@ export const EXTENSION_KEYS = [
   // Dock (docked terminal/agent dock pill)
   "dock-bg",
   "dock-border",
+  "dock-input-bg",
   "dock-shadow",
+
+  // Panel chrome (per-pane title bars)
+  "panel-header-bg",
+  "panel-header-focus-bg",
 
   // Panel grid background
   "panel-grid-bg",
   "terminal-grid-bg",
+
+  // Project identity tiles (emoji chips in switcher/palette/welcome rows)
+  "project-tile-shadow",
+  "project-tile-wash",
 
   // Pulse (work-pulse heatmap)
   "pulse-before-bg",
@@ -234,6 +257,10 @@ export const EXTENSION_KEYS = [
   "pulse-control-hover-bg",
   "pulse-empty-bg",
   "pulse-heat-color",
+  "pulse-heat-1",
+  "pulse-heat-2",
+  "pulse-heat-3",
+  "pulse-heat-4",
   "pulse-heat-high-opacity",
   "pulse-heat-low-opacity",
   "pulse-heat-medium-opacity",
@@ -253,6 +280,7 @@ export const EXTENSION_KEYS = [
   "settings-nav-active-bg",
   "settings-nav-active-shadow",
   "settings-nav-hover-bg",
+  "settings-scope-bg",
   "settings-search-bg",
   "settings-search-muted",
   "settings-section-header-bg",
@@ -262,6 +290,8 @@ export const EXTENSION_KEYS = [
   // Sidebar interaction
   "sidebar-action-hover-bg",
   "sidebar-active-bg",
+  "sidebar-card-bg",
+  "sidebar-card-shadow",
   "sidebar-hover-bg",
 
   // Toolbar
@@ -294,8 +324,14 @@ export const EXTENSION_KEYS = [
   "toolbar-stats-hover-bg",
   "toolbar-stats-shadow",
 
+  // Review hub
+  "review-commit-input-bg",
+
   // Worktree section
   "worktree-section-hover-bg",
+  "worktree-filter-bar-bg",
+  "worktree-quick-state-active-bg",
+  "worktree-search-input-bg",
 ] as const;
 
 export type ExtensionKey = (typeof EXTENSION_KEYS)[number];

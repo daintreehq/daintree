@@ -27,7 +27,7 @@ import {
   isAgentReady,
 } from "./slices";
 import type { TerminalRefreshTier, AddPanelFocusPolicy } from "@shared/types";
-import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import { isGridPanelLocation, isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { TerminalRefreshTier as TerminalRefreshTierEnum } from "@/types";
 import { terminalRegistryController } from "@/controllers";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -126,8 +126,7 @@ function pickFallbackFocusId(
 }
 
 function isVisibleLivePtyTerminal(terminal: PtyPanelData): boolean {
-  const location = terminal.location ?? "grid";
-  if (location === "trash" || location === "background" || location === "dock") return false;
+  if (!isGridPanelLocation(terminal.location)) return false;
   if (terminal.isVisible === false) return false;
   if (terminal.hasPty === false) return false;
   if (terminal.runtimeStatus === "exited" || terminal.runtimeStatus === "error") return false;
@@ -170,9 +169,7 @@ export function getTerminalRefreshTier(
   if (
     options.isFleetArmed &&
     ptyTerminal?.hasPty !== false &&
-    terminal.location !== "trash" &&
-    terminal.location !== "background" &&
-    terminal.location !== "dock" &&
+    isGridPanelLocation(terminal.location) &&
     ptyTerminal?.runtimeStatus !== "exited" &&
     ptyTerminal?.runtimeStatus !== "error"
   ) {

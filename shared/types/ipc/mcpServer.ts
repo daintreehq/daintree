@@ -107,8 +107,25 @@ export interface McpAuditRecord {
   timestamp: number;
   toolId: string;
   sessionId: string;
+  /**
+   * Public help-session id (the one persisted in the renderer's
+   * `helpPanelStore`) when the dispatch came from an assistant bearer.
+   * `sessionId` above is the per-connection MCP transport id, which the
+   * renderer never sees — this field is the join the assistant panel's
+   * recent-calls view and turn-outcome diagnostics filter on. Absent for
+   * external/api-key sessions and for records written before the field
+   * existed.
+   */
+  helpSessionId?: string;
   tier: string;
   argsSummary: string;
+  /**
+   * Redacted, bounded (1500-char) pretty-printed JSON of what the call
+   * returned — or the error code + message for failed dispatches. Lets the
+   * recent-calls popover show each call's actual output. Absent for gate
+   * outcomes (unauthorized/dedup/collision/rate-limit) and old records.
+   */
+  resultSummary?: string;
   result: McpAuditResult;
   errorCode?: string;
   durationMs: number;
@@ -239,6 +256,45 @@ export interface McpGrantLifecyclePayload {
   ttlMs: number;
   expiresAt?: number;
   revokedReason?: McpGrantRevokedReason;
+}
+
+/**
+ * Live event marking the start of an MCP tool dispatch, pushed to the pinned
+ * help-session renderer so the Assistant panel can show an in-flight activity
+ * strip (#9759). Emitted once per dispatch that actually enters the call path,
+ * after the manifest entry is resolved (so `danger` is known) and before any
+ * elicitation await. Pre-dispatch rejections (unauthorized, rate-limited,
+ * dedup) do not emit — they settle in microseconds and would only flicker the
+ * strip. Send is targeted to the minting WebContents, never broadcast.
+ *
+ * `argsSummary` is the same redacted single-level view persisted on
+ * {@link McpAuditRecord} — raw argument values never cross the bridge.
+ * `danger` is true when the resolved manifest entry is `danger: "confirm"`,
+ * letting the strip show "awaiting confirmation" while the user decides.
+ */
+export interface McpToolCallStartedPayload {
+  sessionId: string;
+  toolId: string;
+  argsSummary: string;
+  startedAt: number;
+  turnId?: string;
+  danger: boolean;
+}
+
+/**
+ * Live event marking the settlement of an MCP tool dispatch previously
+ * announced by {@link McpToolCallStartedPayload}. Carries the audit-aligned
+ * outcome fields so the activity strip can dim to a result glyph, show the
+ * duration, and tint red on error. Send is targeted, never broadcast.
+ */
+export interface McpToolCallSettledPayload {
+  sessionId: string;
+  toolId: string;
+  durationMs: number;
+  result: McpAuditResult;
+  errorCode?: string;
+  severity: McpAuditSeverity;
+  turnId?: string;
 }
 
 /**

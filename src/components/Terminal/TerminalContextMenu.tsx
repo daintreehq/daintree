@@ -489,7 +489,7 @@ export function TerminalContextMenu({
         <ContextMenuSub>
           <ContextMenuSubTrigger>
             <FolderGit2 className={ICON_CLASS} />
-            Move to Worktree
+            Move to worktree
           </ContextMenuSubTrigger>
           <ContextMenuSubContent>
             {worktrees.map((wt) => {
@@ -521,7 +521,7 @@ export function TerminalContextMenu({
           }
         >
           <FolderGit2 className={ICON_CLASS} />
-          Move to New Worktree…
+          Move to new worktree…
         </ContextMenuItem>
       )}
       <ContextMenuItem
@@ -532,7 +532,7 @@ export function TerminalContextMenu({
         ) : (
           <PanelTopClose className={ICON_CLASS} />
         )}
-        {currentLocation === "grid" ? "Move to Dock" : "Move to Grid"}
+        {currentLocation === "grid" ? "Move to dock" : "Move to grid"}
       </ContextMenuItem>
       {currentLocation === "grid" && (
         <ContextMenuItem onSelect={() => handleAction("toggle-maximize")}>
@@ -568,11 +568,11 @@ export function TerminalContextMenu({
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
             <RefreshCw className={ICON_CLASS} aria-hidden="true" />
-            Reload Page
+            Reload page
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("open-external")}>
             <Globe className={ICON_CLASS} aria-hidden="true" />
-            Open in Browser
+            Open in browser
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("copy-url")}>
             <Link className={ICON_CLASS} aria-hidden="true" />
@@ -581,24 +581,24 @@ export function TerminalContextMenu({
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("duplicate")}>
             <CopyPlus className={ICON_CLASS} aria-hidden="true" />
-            Duplicate Browser
+            Duplicate browser
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleAction("rename")}>
             <Pencil className={ICON_CLASS} aria-hidden="true" />
-            Rename Browser
+            Rename browser
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
-            Send to Background
+            Send to background
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleAction("trash")}>
             <Trash2 className={ICON_CLASS} aria-hidden="true" />
-            Close Browser
+            Close browser
           </ContextMenuItem>
           <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
-            Remove Browser
+            Remove browser
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
@@ -625,11 +625,11 @@ export function TerminalContextMenu({
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
             <RefreshCw className={ICON_CLASS} aria-hidden="true" />
-            Reload Preview
+            Reload preview
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("open-external")}>
             <Globe className={ICON_CLASS} aria-hidden="true" />
-            Open in Browser
+            Open in browser
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("copy-url")}>
             <Link className={ICON_CLASS} aria-hidden="true" />
@@ -638,24 +638,24 @@ export function TerminalContextMenu({
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("duplicate")}>
             <CopyPlus className={ICON_CLASS} aria-hidden="true" />
-            Duplicate Dev Preview
+            Duplicate dev preview
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleAction("rename")}>
             <Pencil className={ICON_CLASS} aria-hidden="true" />
-            Rename Dev Preview
+            Rename dev preview
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
-            Send to Background
+            Send to background
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleAction("trash")}>
             <Trash2 className={ICON_CLASS} aria-hidden="true" />
-            Close Dev Preview
+            Close dev preview
           </ContextMenuItem>
           <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
-            Stop Dev Server
+            Stop dev server
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
@@ -681,24 +681,24 @@ export function TerminalContextMenu({
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("duplicate")}>
             <CopyPlus className={ICON_CLASS} aria-hidden="true" />
-            Duplicate Review
+            Duplicate review
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleAction("rename")}>
             <Pencil className={ICON_CLASS} aria-hidden="true" />
-            Rename Review
+            Rename review
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
-            Send to Background
+            Send to background
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleAction("trash")}>
             <Trash2 className={ICON_CLASS} aria-hidden="true" />
-            Close Review
+            Close review
           </ContextMenuItem>
           <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
-            Remove Review
+            Remove review
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
@@ -748,7 +748,7 @@ export function TerminalContextMenu({
                 }
               >
                 <Send className={ICON_CLASS} aria-hidden="true" />
-                Send to Agent
+                Send to agent
                 <ContextMenuShortcut>{mac ? "⌘⇧E" : "Ctrl+⇧E"}</ContextMenuShortcut>
               </ContextMenuItem>
               {hoveredUrl && (
@@ -756,11 +756,11 @@ export function TerminalContextMenu({
                   <ContextMenuSeparator />
                   <ContextMenuItem onSelect={() => handleAction("open-link")}>
                     <ExternalLink className={ICON_CLASS} aria-hidden="true" />
-                    Open Link
+                    Open link
                   </ContextMenuItem>
                   <ContextMenuItem onSelect={() => handleAction(`copy-link:${hoveredUrl}`)}>
                     <Link className={ICON_CLASS} aria-hidden="true" />
-                    Copy Link Address
+                    Copy link address
                   </ContextMenuItem>
                 </>
               )}
@@ -775,16 +775,16 @@ export function TerminalContextMenu({
                 ) : (
                   <RadioTower className={ICON_CLASS} aria-hidden="true" />
                 )}
-                {isArmed ? "Remove from Fleet" : "Add to Fleet"}
+                {isArmed ? "Remove from fleet" : "Add to fleet"}
               </ContextMenuItem>
               <ContextMenuItem onSelect={() => handleAction("fleet-arm-worktree")}>
                 <RadioTower className={ICON_CLASS} aria-hidden="true" />
-                Arm All in This Worktree
+                Arm all in this worktree
               </ContextMenuItem>
               {isArmed && fleetSize >= 2 && (
                 <ContextMenuItem destructive onSelect={() => handleAction("fleet-clear")}>
                   <Radio className={ICON_CLASS} aria-hidden="true" />
-                  Clear Fleet
+                  Clear fleet
                 </ContextMenuItem>
               )}
               <ContextMenuSeparator />
@@ -795,19 +795,19 @@ export function TerminalContextMenu({
           {hasPty && (
             <ContextMenuItem disabled={isHibernated} onSelect={() => handleAction("redraw")}>
               <RefreshCw className={ICON_CLASS} aria-hidden="true" />
-              Redraw Terminal
+              Redraw terminal
             </ContextMenuItem>
           )}
           {hasPty && (
             <ContextMenuItem onSelect={() => handleAction("restart")}>
               <RotateCcw className={ICON_CLASS} aria-hidden="true" />
-              Restart Terminal
+              Restart terminal
             </ContextMenuItem>
           )}
           {isPaused && (
             <ContextMenuItem onSelect={() => handleAction("force-resume")}>
               <Play className={ICON_CLASS} aria-hidden="true" />
-              Force Resume (Paused)
+              Force resume (paused)
             </ContextMenuItem>
           )}
           <ContextMenuItem onSelect={() => handleAction("toggle-input-lock")}>
@@ -816,7 +816,7 @@ export function TerminalContextMenu({
             ) : (
               <Lock className={ICON_CLASS} aria-hidden="true" />
             )}
-            {terminal.isInputLocked ? "Unlock Input" : "Lock Input"}
+            {terminal.isInputLocked ? "Unlock input" : "Lock input"}
           </ContextMenuItem>
           {hasPty && (
             <ContextMenuItem
@@ -858,27 +858,27 @@ export function TerminalContextMenu({
               ) : (
                 <Bell className={ICON_CLASS} aria-hidden="true" />
               )}
-              {isWatched ? "Cancel Watch" : "Watch Terminal"}
+              {isWatched ? "Cancel watch" : "Watch terminal"}
               <ContextMenuShortcut>{mac ? "⌘⇧W" : "Ctrl+⇧W"}</ContextMenuShortcut>
             </ContextMenuItem>
           )}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("duplicate")}>
             <CopyPlus className={ICON_CLASS} aria-hidden="true" />
-            Duplicate Terminal
+            Duplicate terminal
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleAction("rename")}>
             <Pencil className={ICON_CLASS} aria-hidden="true" />
-            Rename Terminal
+            Rename terminal
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleAction("view-info")}>
             <Info className={ICON_CLASS} aria-hidden="true" />
-            View Terminal Info
+            View terminal info
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
-            Send to Background
+            Send to background
           </ContextMenuItem>
           {hasPty && (
             <ContextMenuItem
@@ -886,16 +886,17 @@ export function TerminalContextMenu({
               onSelect={() => handleAction("hibernate")}
             >
               <Moon className={ICON_CLASS} aria-hidden="true" />
-              Sleep Terminal
+              Sleep terminal
             </ContextMenuItem>
           )}
+          <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("trash")}>
             <Trash2 className={ICON_CLASS} aria-hidden="true" />
-            Trash Terminal
+            Trash terminal
           </ContextMenuItem>
           <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
-            Kill Terminal
+            Kill terminal
           </ContextMenuItem>
           <PluginContextMenuSection items={pluginItems} />
         </ContextMenuContent>

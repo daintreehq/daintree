@@ -1,10 +1,28 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
+import { contrastRatio } from "@shared/theme";
 import { PresetColorPicker } from "../PresetColorPicker";
 
+// Mirrors the curated PALETTE inside PresetColorPicker. Kept here so the
+// checkmark-contrast invariant below exercises every swatch.
+const PALETTE = [
+  "#e06c75",
+  "#e5c07b",
+  "#98c379",
+  "#56b6c2",
+  "#61afef",
+  "#c678dd",
+  "#be5046",
+  "#d19a66",
+  "#7c8fa8",
+  "#abb2bf",
+] as const;
+
 vi.mock("lucide-react", () => ({
-  Check: () => <span data-testid="check-icon" />,
+  Check: ({ className }: { className?: string }) => (
+    <span data-testid="check-icon" className={className} />
+  ),
   X: () => <span data-testid="x-icon" />,
 }));
 
@@ -160,6 +178,35 @@ describe("PresetColorPicker", () => {
     expect(done.disabled).toBe(true);
     fireEvent.click(done);
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("checkmark uses dark ink on a light swatch so it stays visible", () => {
+    // #abb2bf (light gray, luminance ~0.44) — a white checkmark would wash out.
+    const { getByTestId } = render(
+      <PresetColorPicker color="#abb2bf" onChange={onChange} agentColor="#888888" />
+    );
+    expect(getByTestId("check-icon").className).toContain("text-black/80");
+    expect(getByTestId("check-icon").className).not.toContain("text-white");
+  });
+
+  it("checkmark uses white ink on a dark swatch", () => {
+    // #be5046 (dark red, luminance ~0.17) — white reads cleanly.
+    const { getByTestId } = render(
+      <PresetColorPicker color="#be5046" onChange={onChange} agentColor="#888888" />
+    );
+    expect(getByTestId("check-icon").className).toContain("text-white");
+    expect(getByTestId("check-icon").className).not.toContain("text-black");
+  });
+
+  it.each(PALETTE)("checkmark ink on %s is the higher-contrast of black/white", (swatch) => {
+    const { getByTestId } = render(
+      <PresetColorPicker color={swatch} onChange={onChange} agentColor="#888888" />
+    );
+    const usesWhite = getByTestId("check-icon").className.includes("text-white");
+    const whiteContrast = contrastRatio("#ffffff", swatch);
+    const blackContrast = contrastRatio("#000000", swatch);
+    // The rendered ink must be whichever achieves more contrast against the swatch.
+    expect(usesWhite).toBe(whiteContrast >= blackContrast);
   });
 
   it("selected palette swatch is marked aria-pressed for the draft color", () => {

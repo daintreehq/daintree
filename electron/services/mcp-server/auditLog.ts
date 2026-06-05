@@ -123,27 +123,7 @@ export class AuditService {
     result: McpAuditResult;
     errorCode?: string;
   } {
-    if (outcome.kind === "throw") {
-      return { result: "error", errorCode: "DISPATCH_THREW" };
-    }
-    if (outcome.kind === "unauthorized") {
-      return { result: "unauthorized", errorCode: TIER_NOT_PERMITTED_CODE };
-    }
-    if (outcome.kind === "dedup") {
-      return { result: "dedup" };
-    }
-    if (outcome.kind === "collision") {
-      return { result: "collision", errorCode: MCP_DEDUP_KEY_COLLISION_CODE };
-    }
-    if (outcome.kind === "rate_limited") {
-      return { result: "rate_limited", errorCode: MCP_RATE_LIMITED_CODE };
-    }
-    const value = outcome.value;
-    if (value.ok) return { result: "success" };
-    if (value.error.code === CONFIRMATION_REQUIRED_CODE) {
-      return { result: "confirmation-pending", errorCode: value.error.code };
-    }
-    return { result: "error", errorCode: value.error.code };
+    return classifyMcpDispatchResult(outcome);
   }
 
   private deriveConfirmationDecision(
@@ -171,6 +151,8 @@ export class AuditService {
     argsSummary: string;
     bannerSuppressed?: boolean;
     turnId?: string;
+    helpSessionId?: string;
+    resultSummary?: string;
   }): void {
     if (this.readConfig().auditEnabled === false) return;
     this.hydrate();
@@ -206,6 +188,12 @@ export class AuditService {
     }
     if (input.turnId !== undefined) {
       record.turnId = input.turnId;
+    }
+    if (input.helpSessionId !== undefined) {
+      record.helpSessionId = input.helpSessionId;
+    }
+    if (input.resultSummary !== undefined) {
+      record.resultSummary = input.resultSummary;
     }
 
     this.enqueueAndTrim(record);
@@ -604,3 +592,36 @@ export type AuditOutcome =
   | { kind: "dedup" }
   | { kind: "collision" }
   | { kind: "rate_limited"; retryAfter: number };
+
+/**
+ * Map a dispatch {@link AuditOutcome} to its persisted `result` class and
+ * optional `errorCode`. Shared between the audit-record writer and the live
+ * tool-activity push (#9759) so the activity strip's glyph/severity matches
+ * exactly what the audit log records for the same dispatch.
+ */
+export function classifyMcpDispatchResult(outcome: AuditOutcome): {
+  result: McpAuditResult;
+  errorCode?: string;
+} {
+  if (outcome.kind === "throw") {
+    return { result: "error", errorCode: "DISPATCH_THREW" };
+  }
+  if (outcome.kind === "unauthorized") {
+    return { result: "unauthorized", errorCode: TIER_NOT_PERMITTED_CODE };
+  }
+  if (outcome.kind === "dedup") {
+    return { result: "dedup" };
+  }
+  if (outcome.kind === "collision") {
+    return { result: "collision", errorCode: MCP_DEDUP_KEY_COLLISION_CODE };
+  }
+  if (outcome.kind === "rate_limited") {
+    return { result: "rate_limited", errorCode: MCP_RATE_LIMITED_CODE };
+  }
+  const value = outcome.value;
+  if (value.ok) return { result: "success" };
+  if (value.error.code === CONFIRMATION_REQUIRED_CODE) {
+    return { result: "confirmation-pending", errorCode: value.error.code };
+  }
+  return { result: "error", errorCode: value.error.code };
+}

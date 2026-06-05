@@ -1,5 +1,5 @@
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
-import type { PanelInstance } from "@shared/types/panel";
+import { isGridPanelLocation, type PanelInstance } from "@shared/types/panel";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -18,7 +18,7 @@ export function buildFleetPanels(
     if (!armedIds.has(id)) continue;
     const t = panelsById[id];
     if (!t) continue;
-    if (t.location === "trash" || t.location === "background" || t.location === "dock") continue;
+    if (!isGridPanelLocation(t.location)) continue;
     const narrowed = getNarrowPanel(panelsById, id);
     if (!narrowed) continue;
     result.push(narrowed);

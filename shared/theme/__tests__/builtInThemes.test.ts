@@ -2,11 +2,67 @@ import { readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BUILT_IN_THEME_SOURCES } from "../builtInThemes/index.js";
-import { getThemeContrastWarnings } from "../contrast.js";
+import { getThemeContrastWarnings, getLightThemeMatrixWarnings } from "../contrast.js";
 import { EXTENSION_KEY_REGISTRY, isExtensionKeyRequired } from "../extensionRegistry.js";
-import { auditSurfaceRamp, auditAccentProminence, auditCrossThemeAccents } from "../oklch.js";
-import { BUILT_IN_APP_SCHEMES } from "../themes.js";
+import {
+  auditSurfaceRamp,
+  auditAccentProminence,
+  auditCrossThemeAccents,
+  auditBorderSeparation,
+  hexToOklch,
+} from "../oklch.js";
+import { BUILT_IN_APP_SCHEMES, createDaintreeTokens, normalizeAppColorScheme } from "../themes.js";
+import { RED_GREEN_OVERRIDES, BLUE_YELLOW_OVERRIDES } from "../colorVisionOverrides.js";
 import { APP_THEME_TOKEN_KEYS, EXTENSION_KEYS } from "../types.js";
+
+// Minimal hex-only engine input covering createDaintreeTokens' required Pick.
+// Deliberately omits border-* and status-*-surface so the engine derives them
+// (the knob tests below assert on those derivations).
+const LIGHT_ENGINE_INPUT = {
+  "surface-canvas": "#f5f8fb",
+  "surface-sidebar": "#d8dee6",
+  "surface-panel": "#ffffff",
+  "surface-panel-elevated": "#ffffff",
+  "surface-grid": "#cdd3db",
+  "text-primary": "#1a2230",
+  "text-secondary": "#3a4658",
+  "text-muted": "#6b7686",
+  "text-inverse": "#ffffff",
+  "border-default": "#c2cad6",
+  "accent-primary": "#2f6fed",
+  "status-success": "#1f9d57",
+  "status-warning": "#c98a17",
+  "status-danger": "#d23b3b",
+  "status-info": "#2f6fed",
+  "activity-active": "#1f9d57",
+  "activity-idle": "#9aa4b2",
+  "activity-working": "#c98a17",
+  "activity-waiting": "#2f6fed",
+  "terminal-selection": "#2f6fed",
+  "terminal-red": "#d23b3b",
+  "terminal-green": "#1f9d57",
+  "terminal-yellow": "#c98a17",
+  "terminal-blue": "#2f6fed",
+  "terminal-magenta": "#a64fd2",
+  "terminal-cyan": "#1797a6",
+  "terminal-bright-red": "#d23b3b",
+  "terminal-bright-green": "#1f9d57",
+  "terminal-bright-yellow": "#c98a17",
+  "terminal-bright-blue": "#2f6fed",
+  "terminal-bright-magenta": "#a64fd2",
+  "terminal-bright-cyan": "#1797a6",
+  "terminal-bright-white": "#1a2230",
+  "syntax-comment": "#6b7686",
+  "syntax-punctuation": "#3a4658",
+  "syntax-number": "#c98a17",
+  "syntax-string": "#1f9d57",
+  "syntax-operator": "#3a4658",
+  "syntax-keyword": "#a64fd2",
+  "syntax-function": "#2f6fed",
+  "syntax-link": "#2f6fed",
+  "syntax-quote": "#1797a6",
+  "syntax-chip": "#3a4658",
+} as const;
 
 describe("built-in themes", () => {
   it("every source compiles to a valid AppColorScheme", () => {
@@ -108,14 +164,82 @@ describe("built-in themes", () => {
     }
   });
 
-  it("status-danger-surface token derives as transparent wash", () => {
+  it("every status-*-surface token derives as a low-alpha wash, not color-mix(..., transparent)", () => {
     for (const scheme of BUILT_IN_APP_SCHEMES) {
-      expect(
-        scheme.tokens["status-danger-surface"],
-        `${scheme.id} status-danger-surface should be transparent wash`
-      ).toMatch(
-        /rgba\(.*,\s*0\.\d+\)|color-mix\(in oklab,\s*var\(--theme-status-danger\)\s*\d+%,\s*transparent\)/
+      for (const status of ["danger", "success", "warning", "info"] as const) {
+        const key = `status-${status}-surface` as const;
+        const value = scheme.tokens[key];
+        expect(value, `${scheme.id} ${key} should exist`).toBeTruthy();
+        // Built-in palettes use hex status colors, so withAlpha emits rgba() —
+        // never the color-mix(..., transparent) form that black-shifts on light.
+        expect(value, `${scheme.id} ${key} should be an rgba wash`).toMatch(/^rgba\(/);
+        const alpha = parseAlpha(value);
+        expect(alpha, `${scheme.id} ${key} alpha in (0, 1)`).toBeGreaterThan(0);
+        expect(alpha, `${scheme.id} ${key} alpha in (0, 1)`).toBeLessThan(1);
+      }
+    }
+  });
+
+  it("borderInkOverride strategy retints the border ladder without per-token overrides", () => {
+    const base = createDaintreeTokens("light", LIGHT_ENGINE_INPUT);
+    const warm = createDaintreeTokens("light", LIGHT_ENGINE_INPUT, {
+      borderInkOverride: "#3a2a1a",
+    });
+    // The warm ink composites to a different border value than the cool default,
+    // and it propagates across the whole ladder (subtle/strong/divider/interactive).
+    for (const key of [
+      "border-subtle",
+      "border-strong",
+      "border-divider",
+      "border-interactive",
+    ] as const) {
+      expect(warm[key], `${key} should shift with borderInkOverride`).not.toBe(base[key]);
+    }
+  });
+
+  it("statusSurfaceOpacity strategy scales every status-surface alpha", () => {
+    const base = createDaintreeTokens("light", LIGHT_ENGINE_INPUT);
+    const dimmed = createDaintreeTokens("light", LIGHT_ENGINE_INPUT, {
+      statusSurfaceOpacity: 0.5,
+    });
+    for (const status of ["danger", "success", "warning", "info"] as const) {
+      const key = `status-${status}-surface` as const;
+      expect(parseAlpha(dimmed[key]), `${key} alpha should halve`).toBeCloseTo(
+        parseAlpha(base[key]) * 0.5,
+        4
       );
+    }
+  });
+
+  it("plugin theme that overrides a status color re-derives its surface to match", () => {
+    // Raw-token (no palette) path: a plugin sets a custom magenta info color but
+    // no explicit surface — the engine must derive a magenta wash, not leak the
+    // fallback scheme's (differently-hued) info surface.
+    const scheme = normalizeAppColorScheme({ tokens: { "status-info": "#ff00ff" } });
+    expect(scheme.tokens["status-info-surface"]).toMatch(/^rgba\(\s*255,\s*0,\s*255,/);
+  });
+
+  it("plugin theme keeps an explicit status surface override untouched", () => {
+    const scheme = normalizeAppColorScheme({
+      tokens: { "status-info": "#ff00ff", "status-info-surface": "rgba(1, 2, 3, 0.5)" },
+    });
+    expect(scheme.tokens["status-info-surface"]).toBe("rgba(1, 2, 3, 0.5)");
+  });
+
+  it("CVD overrides re-derive a status surface for every patched status base color", () => {
+    // When a CVD map patches a status base color, it must also patch the
+    // matching surface token (consumed directly as bg-status-*-surface), else
+    // the pre-baked wash keeps the original — now indistinguishable — hue.
+    for (const overrides of [RED_GREEN_OVERRIDES, BLUE_YELLOW_OVERRIDES]) {
+      for (const status of ["success", "danger", "warning", "info"] as const) {
+        const baseHex = overrides[`--theme-status-${status}`];
+        if (!baseHex) continue;
+        const surface = overrides[`--theme-status-${status}-surface`];
+        expect(surface, `surface override missing for status-${status}`).toBeTruthy();
+        // The surface must carry the override's own RGB, not an arbitrary value.
+        const [r, g, b] = hexToRgbTuple(baseHex);
+        expect(surface).toMatch(new RegExp(`^rgba\\(\\s*${r},\\s*${g},\\s*${b},`));
+      }
     }
   });
 
@@ -221,18 +345,38 @@ describe("built-in themes", () => {
         }
       }
 
-      // Cross-key invariant: sidebar-active-bg must be stronger than sidebar-hover-bg
-      // so the selected row is distinguishable from the hovered row.
+      // Cross-key invariant: the selected row must read as MORE prominent than
+      // the hovered row. The polarity-correct measure of "more prominent" differs:
+      //   - dark: additive white-alpha glow, so stronger = higher alpha.
+      //   - light (round-2 Issue 1): opaque elevate-to-select, so stronger = higher
+      //     OKLab lightness (selected lifts further toward elevated than hover).
       const hover = extensions["sidebar-hover-bg"];
       const active = extensions["sidebar-active-bg"];
       if (hover !== undefined && active !== undefined) {
-        const hoverAlpha = parseAlpha(hover);
-        const activeAlpha = parseAlpha(active);
-        if (!(activeAlpha > hoverAlpha)) {
-          failures.push(
-            `${source.id} sidebar-active-bg (alpha ${activeAlpha}) must be stronger than ` +
-              `sidebar-hover-bg (alpha ${hoverAlpha}); values "${active}" vs "${hover}"`
-          );
+        if (polarity === "dark") {
+          const hoverAlpha = parseAlpha(hover);
+          const activeAlpha = parseAlpha(active);
+          if (!(activeAlpha > hoverAlpha)) {
+            failures.push(
+              `${source.id} sidebar-active-bg (alpha ${activeAlpha}) must be stronger than ` +
+                `sidebar-hover-bg (alpha ${hoverAlpha}); values "${active}" vs "${hover}"`
+            );
+          }
+        } else {
+          const activeL = hexToOklch(active)?.l;
+          const hoverL = hexToOklch(hover)?.l;
+          if (activeL === undefined || hoverL === undefined) {
+            failures.push(
+              `${source.id} light sidebar selection rows must be opaque hex so their lift is ` +
+                `measurable; got active="${active}" hover="${hover}"`
+            );
+          } else if (!(activeL > hoverL)) {
+            failures.push(
+              `${source.id} light sidebar-active-bg (L ${activeL.toFixed(3)}) must lift above ` +
+                `sidebar-hover-bg (L ${hoverL.toFixed(3)}); selected must elevate further than ` +
+                `hover (Issue 1); values "${active}" vs "${hover}"`
+            );
+          }
         }
       }
 
@@ -252,13 +396,106 @@ describe("built-in themes", () => {
 
   it("surface elevation ramp passes OKLCH audit", () => {
     for (const source of BUILT_IN_THEME_SOURCES) {
-      const result = auditSurfaceRamp(source.palette.surfaces, source.id);
+      // Light themes carry depth in the ramp itself, so the JND/span/shape
+      // checks are hard failures there (RC-1); dark stays warn-only.
+      const result = auditSurfaceRamp(source.palette.surfaces, source.id, source.type);
       for (const warning of result.warnings) {
         console.warn(`[OKLCH ramp] ${warning}`);
       }
       expect(
         result.failures,
         `${source.id} ramp failures:\n${result.failures.join("\n")}`
+      ).toHaveLength(0);
+    }
+  });
+
+  it("light surface ramps clear the depth budget (span, per-step JND, panel→elevated lift)", () => {
+    // Behavioural guard, not a value mirror: a light ramp whose span collapses,
+    // whose steps merge, or whose floating tier gets the weakest lift will fail
+    // here even though every other token passes (RC-1).
+    const lightSources = BUILT_IN_THEME_SOURCES.filter((s) => s.type === "light");
+    expect(lightSources.length).toBeGreaterThan(0);
+    for (const source of lightSources) {
+      const result = auditSurfaceRamp(source.palette.surfaces, source.id, "light");
+      expect(
+        result.failures,
+        `${source.id} light ramp failures:\n${result.failures.join("\n")}`
+      ).toHaveLength(0);
+    }
+  });
+
+  it("light borders clear the separation floor vs the brightest surface", () => {
+    // RC-6: when overlay/shadow depth dies on a near-white field, separation
+    // falls to borders. border-default and border-interactive must stay
+    // perceptible against the brightest surface they can sit against.
+    const schemesById = new Map(BUILT_IN_APP_SCHEMES.map((s) => [s.id, s] as const));
+    const lightSources = BUILT_IN_THEME_SOURCES.filter((s) => s.type === "light");
+    expect(lightSources.length).toBeGreaterThan(0);
+    for (const source of lightSources) {
+      const scheme = schemesById.get(source.id);
+      expect(scheme, `${source.id} has no compiled scheme`).toBeDefined();
+      if (!scheme) continue;
+      const surfaces: Record<string, string> = {
+        "surface-grid": scheme.tokens["surface-grid"],
+        "surface-sidebar": scheme.tokens["surface-sidebar"],
+        "surface-canvas": scheme.tokens["surface-canvas"],
+        "surface-panel": scheme.tokens["surface-panel"],
+        "surface-panel-elevated": scheme.tokens["surface-panel-elevated"],
+      };
+      const result = auditBorderSeparation(
+        {
+          borderDefault: scheme.tokens["border-default"],
+          borderInteractive: scheme.tokens["border-interactive"],
+          surfaces,
+        },
+        source.id,
+        "light"
+      );
+      expect(
+        result.failures,
+        `${source.id} border separation failures:\n${result.failures.join("\n")}`
+      ).toHaveLength(0);
+    }
+  });
+
+  it("LIGHT themes clear the round-2 selection/elevation validation matrix (hard-fail)", () => {
+    // Harden phase: the consolidated round-2 matrix (E6) — activity/pr/scrollbar
+    // floors, input/placeholder legibility, filter-selected separation, settings
+    // card lift, pulse heat/missed, and the OKLab elevation-direction inversions
+    // (sidebar selected lift, grid-bg-below-panel, panel→elevated not smallest) —
+    // is now a HARD FAILURE for LIGHT themes. Every check is behavioural: it
+    // computes a real contrast ratio / OKLab ΔE / luminance relationship from the
+    // resolved token values, never mirrors a literal, so it only fires when the
+    // perceptual relationship actually breaks. getLightThemeMatrixWarnings is
+    // internally light-scoped (every block either gates appliesTo:"light" or is a
+    // both-polarity check that dark already clears), so this loop is safe to run
+    // across all schemes — but we restrict the hard assertion to light and merely
+    // surface any dark output as a warning to keep dark byte-for-byte unaffected.
+    const lightSchemes = BUILT_IN_APP_SCHEMES.filter((s) => s.type === "light");
+    expect(lightSchemes.length).toBeGreaterThan(0);
+    for (const scheme of lightSchemes) {
+      const warnings = getLightThemeMatrixWarnings(scheme);
+      expect(
+        warnings,
+        `${scheme.id} round-2 matrix failures:\n${warnings.map((w) => w.message).join("\n")}`
+      ).toHaveLength(0);
+    }
+  });
+
+  it("DARK themes emit no round-2 light-matrix failures (warn-only, unaffected)", () => {
+    // Guard the dark byte-for-byte invariant: the round-2 matrix must never trip a
+    // dark theme. If a future matrix pair forgets its light-scoping this fails loud
+    // rather than silently regressing dark.
+    const darkSchemes = BUILT_IN_APP_SCHEMES.filter((s) => s.type === "dark");
+    expect(darkSchemes.length).toBeGreaterThan(0);
+    for (const scheme of darkSchemes) {
+      const warnings = getLightThemeMatrixWarnings(scheme);
+      for (const w of warnings) console.warn(`[round-2 matrix:dark] ${scheme.id}: ${w.message}`);
+      expect(
+        warnings,
+        `${scheme.id} unexpectedly tripped the round-2 light matrix:\n${warnings
+          .map((w) => w.message)
+          .join("\n")}`
       ).toHaveLength(0);
     }
   });
@@ -497,4 +734,20 @@ function walk(dir: string, out: string[], accept: (path: string) => boolean): vo
 function parseAlpha(value: string): number {
   const match = value.match(/rgba?\([^)]*?,\s*([0-9.]+)\s*\)/);
   return match ? Number(match[1]) : NaN;
+}
+
+function hexToRgbTuple(hex: string): [number, number, number] {
+  const clean = hex.replace("#", "");
+  const expanded =
+    clean.length === 3
+      ? clean
+          .split("")
+          .map((c) => `${c}${c}`)
+          .join("")
+      : clean;
+  return [
+    parseInt(expanded.slice(0, 2), 16),
+    parseInt(expanded.slice(2, 4), 16),
+    parseInt(expanded.slice(4, 6), 16),
+  ];
 }

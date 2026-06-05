@@ -290,6 +290,9 @@ export function registerTerminalLayoutActions(
           (t) =>
             t &&
             t.location !== "trash" &&
+            // Overlay panels (the Daintree Assistant) are not dock/grid members;
+            // including one would make `allDocked` permanently false (#9699).
+            t.location !== "overlay" &&
             (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         );
       const allDocked = activeTerminals.every((t) => t!.location === "dock");

@@ -10,6 +10,46 @@ function listen(server: http.Server): Promise<number> {
   });
 }
 
+// Bind a server to the IPv6 loopback ONLY (no IPv4) — reproduces Vite 8 on macOS, which resolves
+// `localhost` to [::1] and binds IPv6-only. A proxy that hardcodes a 127.0.0.1 upstream can't
+// reach this (#9747).
+function listenIpv6Only(server: http.Server): Promise<number> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen({ host: "::1", port: 0, ipv6Only: true }, () =>
+      resolve((server.address() as AddressInfo).port)
+    );
+  });
+}
+
+// Confirm the IPv6-only bind genuinely reproduces the bug: nothing is on IPv4, so a direct
+// 127.0.0.1 connection (what the old proxy did) is refused. Guards the new tests against silently
+// passing on a dual-stack upstream.
+function expectIpv4Refused(port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: "127.0.0.1", port, path: "/", agent: false }, (res) => {
+      res.destroy();
+      req.destroy();
+      reject(new Error(`expected ECONNREFUSED on 127.0.0.1:${port} but the request connected`));
+    });
+    req.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "ECONNREFUSED") resolve();
+      else reject(err);
+    });
+    req.end();
+  });
+}
+
+// Some sandboxed/exotic environments can't bind [::1] at all — probe once and skip the IPv6-only
+// cases there rather than reporting a misleading pass. Ubuntu/macOS CI runners support it.
+const canBindIpv6Only = await new Promise<boolean>((resolve) => {
+  const probe = http.createServer();
+  probe.once("error", () => resolve(false));
+  probe.listen({ host: "::1", port: 0, ipv6Only: true }, () => {
+    probe.close(() => resolve(true));
+  });
+});
+
 interface ProxyResponse {
   status: number;
   body: string;
@@ -77,10 +117,66 @@ describe("DevPreviewProxyService", () => {
     expect(res.status).toBe(200);
     expect(res.body).toBe("hello from upstream");
     // changeOrigin rewrote the Host away from the proxy subdomain to the upstream — Vite/Next
-    // host checks depend on this.
-    expect(seenHost).toContain("127.0.0.1");
+    // host checks depend on this. The upstream target host is "localhost" (#9747), so the
+    // rewritten Host carries that hostname rather than the proxy's `dp-*` subdomain.
+    expect(seenHost).not.toContain("dp-test");
+    expect(seenHost).toContain("localhost");
     expect(seenHost).toContain(String(upstreamPort));
   });
+
+  it.skipIf(!canBindIpv6Only)(
+    "forwards an HTTP request to an IPv6-only upstream (Vite IPv6-only bind, #9747)",
+    async () => {
+      upstream = http.createServer((_req, res) => {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("hello over ipv6");
+      });
+      const upstreamPort = await listenIpv6Only(upstream);
+      // Sanity-check the fixture: the old 127.0.0.1 upstream target can't reach this server.
+      await expectIpv4Refused(upstreamPort);
+
+      proxy = new DevPreviewProxyService((sub) => (sub === "dp-test" ? upstreamPort : null));
+      const proxyPort = await proxy.start();
+
+      const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
+
+      // The proxy now targets `localhost`, so Node's Happy Eyeballs reaches the IPv6-only
+      // upstream instead of 502ing.
+      expect(res.status).toBe(200);
+      expect(res.body).toBe("hello over ipv6");
+    }
+  );
+
+  it.skipIf(!canBindIpv6Only)(
+    "forwards a WebSocket upgrade to an IPv6-only upstream (HMR over IPv6, #9747)",
+    async () => {
+      // ws's port option doesn't forward ipv6Only, so bind the http server ourselves and hand it
+      // to WebSocketServer. Assigning it to `upstream` lets afterEach close it.
+      const httpServer = http.createServer();
+      const upstreamPort = await listenIpv6Only(httpServer);
+      await expectIpv4Refused(upstreamPort);
+      upstream = httpServer;
+      wss = new WebSocketServer({ server: httpServer });
+      wss.on("connection", (socket) => {
+        socket.on("message", (msg) => socket.send(`echo:${msg}`));
+      });
+
+      proxy = new DevPreviewProxyService(() => upstreamPort);
+      const proxyPort = await proxy.start();
+
+      const client = new WebSocket(`ws://127.0.0.1:${proxyPort}/`, {
+        headers: { host: `dp-test.localhost:${proxyPort}` },
+      });
+      const reply = await new Promise<string>((resolve, reject) => {
+        client.on("open", () => client.send("ping"));
+        client.on("message", (data) => resolve(data.toString()));
+        client.on("error", reject);
+      });
+      client.close();
+
+      expect(reply).toBe("echo:ping");
+    }
+  );
 
   it("strips the Domain attribute from upstream Set-Cookie headers", async () => {
     upstream = http.createServer((_req, res) => {

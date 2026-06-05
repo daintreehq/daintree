@@ -35,6 +35,7 @@ function Harness({ items, onKeyboardReorder, onSelectWorktree }: HarnessProps) {
   const {
     gridRef,
     activeDescendantId,
+    keyboardCursorId,
     handleGridKeyDown,
     handleGridFocus,
     handleGridFocusCapture,
@@ -51,6 +52,7 @@ function Harness({ items, onKeyboardReorder, onSelectWorktree }: HarnessProps) {
       role="grid"
       tabIndex={0}
       aria-activedescendant={activeDescendantId}
+      data-cursor-id={keyboardCursorId ?? ""}
       data-testid="grid"
       onKeyDown={handleGridKeyDown}
       onFocus={handleGridFocus}
@@ -63,6 +65,7 @@ function Harness({ items, onKeyboardReorder, onSelectWorktree }: HarnessProps) {
             id={getWorktreeSidebarRowId(item.worktreeId)}
             role="row"
             data-worktree-row={item.worktreeId}
+            data-keyboard-cursor={item.worktreeId === keyboardCursorId ? "true" : undefined}
             tabIndex={-1}
           >
             <div data-worktree-row-toolbar="">
@@ -242,6 +245,38 @@ describe("useWorktreeSidebarKeyboard — pinned rows in navigation", () => {
     // bounces the move when the worktree id isn't in the visible
     // (non-pinned) dragStartOrder. The hook itself just translates the key.
     expect(onKeyboardReorder).toHaveBeenCalledWith("main", 1);
+  });
+});
+
+describe("useWorktreeSidebarKeyboard — keyboard cursor exposure", () => {
+  it("exposes keyboardCursorId tracking the active row in list mode", () => {
+    const { getByTestId } = render(<Harness items={ITEMS} />);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid); // seeds wt1
+    expect(grid.getAttribute("data-cursor-id")).toBe("wt1");
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    expect(grid.getAttribute("data-cursor-id")).toBe("wt2");
+  });
+
+  it("flags exactly one row with data-keyboard-cursor in list mode", () => {
+    const { getByTestId, container } = render(<Harness items={ITEMS} />);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    const flagged = container.querySelectorAll('[data-keyboard-cursor="true"]');
+    expect(flagged).toHaveLength(1);
+    expect((flagged[0] as HTMLElement).dataset.worktreeRow).toBe("wt2");
+  });
+
+  it("clears keyboardCursorId in toolbar mode and restores it on Escape", () => {
+    const { getByTestId, container } = render(<Harness items={ITEMS} />);
+    const grid = getByTestId("grid");
+    grid.focus(); // → wt1 active in list mode
+    fireEvent.keyDown(grid, { key: "Enter" }); // enter toolbar mode
+    expect(grid.getAttribute("data-cursor-id")).toBe("");
+    expect(container.querySelectorAll('[data-keyboard-cursor="true"]')).toHaveLength(0);
+    fireEvent.keyDown(getByTestId("tb-wt1-1"), { key: "Escape" }); // back to list mode
+    expect(grid.getAttribute("data-cursor-id")).toBe("wt1");
   });
 });
 

@@ -410,7 +410,7 @@ describe("agentActions adversarial", () => {
           id: "term-ephemeral",
           launchAgentId: "claude",
           agentState: "working",
-          ephemeral: true,
+          excludeFromPersistence: true,
         },
         "term-real": {
           id: "term-real",
@@ -544,6 +544,31 @@ describe("agent.launch dispatch integration", () => {
     expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
       "dev-preview",
       expect.objectContaining({ worktreeId: "wt-1", location: "grid" })
+    );
+  });
+
+  it("accepts overlay location through the schema so Assistant launches don't silently fail (#9640)", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "claude", cwd: "/help", location: "overlay", excludeFromPersistence: true },
+      { source: "user" }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ location: "overlay" })
     );
   });
 });

@@ -118,6 +118,77 @@ describe("PendingHelpHibernationStore", () => {
     expect(store.get("proj-fresh")).not.toBeNull();
   });
 
+  it("accepts an empty agentSessionId as the resume-latest sentinel (#9639)", async () => {
+    // The empty-sentinel placeholder written before gracefulKill must survive a
+    // round-trip through load — dropping it would reintroduce the fresh-launch
+    // race after an app restart mid-capture.
+    const capturedAt = Date.now();
+    const store = new PendingHelpHibernationStore(filePath);
+    await store.load();
+    await store.set("proj-sentinel", {
+      agentId: "claude",
+      agentSessionId: "",
+      cwd: "/sessions/proj-sentinel",
+      capturedAt,
+    });
+
+    const fresh = new PendingHelpHibernationStore(filePath);
+    await fresh.load();
+    expect(fresh.get("proj-sentinel")).toEqual({
+      agentId: "claude",
+      agentSessionId: "",
+      cwd: "/sessions/proj-sentinel",
+      capturedAt,
+    });
+  });
+
+  it("still drops a stale empty-sentinel entry past the 14-day cutoff (#9639)", async () => {
+    const stalePast = Date.now() - 15 * 24 * 60 * 60 * 1000;
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "proj-stale-sentinel": {
+            agentId: "claude",
+            agentSessionId: "",
+            cwd: "/stale",
+            capturedAt: stalePast,
+          },
+        },
+      }),
+      "utf-8"
+    );
+
+    const store = new PendingHelpHibernationStore(filePath);
+    await store.load();
+    expect(store.get("proj-stale-sentinel")).toBeNull();
+  });
+
+  it("rejects entries with a far-future capturedAt (corruption / clock skew)", async () => {
+    // A future timestamp would never satisfy the `capturedAt < now - 14d` stale
+    // cutoff, pinning a dead resume entry forever — isValid must drop it.
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "proj-future-stamp": {
+            agentId: "claude",
+            agentSessionId: "future-id",
+            cwd: "/future",
+            capturedAt: Date.now() + 999_999_999_999,
+          },
+        },
+      }),
+      "utf-8"
+    );
+
+    const store = new PendingHelpHibernationStore(filePath);
+    await store.load();
+    expect(store.get("proj-future-stamp")).toBeNull();
+  });
+
   it("ignores entries with the wrong shape", async () => {
     await fs.writeFile(
       filePath,

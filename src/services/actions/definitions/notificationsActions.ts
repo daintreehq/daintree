@@ -16,6 +16,10 @@ export function registerNotificationsActions(actions: ActionRegistry): void {
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    // The bell's tooltip already shows the unread count; the keyboard-shortcut
+    // discovery hint would pop a competing "Toggle Notification Inbox" bubble
+    // on the same button at milestone click counts. Opt out.
+    suppressShortcutHint: true,
     keywords: ["notifications", "inbox", "bell", "alerts"],
     run: async () => {
       useUIStore.getState().toggleNotificationCenter();

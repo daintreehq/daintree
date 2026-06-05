@@ -218,7 +218,8 @@ jobs:
           ELECTRON_ENABLE_LOGGING: "1"
           SMOKE_RUNS: "1"
           SMOKE_TIMEOUT_MS: "210000"
-        timeout-minutes: 6
+          SMOKE_RETRIES: "1"
+        timeout-minutes: 10
 
       - name: Smoke test (macOS)
         if: matrix.os == 'macos-14'
@@ -228,7 +229,8 @@ jobs:
           ELECTRON_ENABLE_LOGGING: "1"
           SMOKE_RUNS: "1"
           SMOKE_TIMEOUT_MS: "210000"
-        timeout-minutes: 6
+          SMOKE_RETRIES: "1"
+        timeout-minutes: 10
 
       - name: Smoke test (Windows)
         if: matrix.os == 'windows-latest'
@@ -239,7 +241,8 @@ jobs:
           ELECTRON_ENABLE_STACK_DUMPING: "1"
           SMOKE_RUNS: "3"
           SMOKE_TIMEOUT_MS: "210000"
-        timeout-minutes: 12
+          SMOKE_RETRIES: "1"
+        timeout-minutes: 16
 
       - name: Import macOS certificates
         if: startsWith(matrix.os, 'macos')

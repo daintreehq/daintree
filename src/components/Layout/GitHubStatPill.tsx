@@ -8,6 +8,13 @@ export interface GitHubStatPillProps {
   buttonRef: React.RefObject<HTMLButtonElement | null>;
   open: boolean;
   count: number | null;
+  /**
+   * Pre-formatted value to render in the badge when it should differ from the
+   * raw `count` — e.g. `"20+"` when the dropdown has loaded a first page but
+   * more items exist. `count` stays numeric for the digit-pulse animation
+   * delta comparisons; this is display-only. Falls back to `count` when unset.
+   */
+  displayCount?: number | string | null;
   animKey: number;
   ariaLabel: string;
   testId?: string;
@@ -34,6 +41,7 @@ export function GitHubStatPill({
   buttonRef,
   open,
   count,
+  displayCount,
   animKey,
   ariaLabel,
   testId,
@@ -83,7 +91,7 @@ export function GitHubStatPill({
                 animKey > 0 && "animate-badge-bump"
               )}
             >
-              {count ?? "—"}
+              {displayCount ?? count ?? "—"}
             </span>
             {activityChip}
           </Button>

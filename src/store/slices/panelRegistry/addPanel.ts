@@ -185,7 +185,8 @@ export const createAddPanelActions = (
         runtimeStatus,
         extensionState: options.extensionState,
         pluginId,
-        ephemeral: options.ephemeral,
+        excludeFromPersistence: options.excludeFromPersistence,
+        removeOnExit: options.removeOnExit,
         ...kindFields,
       } as PanelInstance;
 
@@ -373,7 +374,8 @@ export const createAddPanelActions = (
       pluginId: ptyPluginId,
       spawnedBy: options.spawnedBy,
       focusPolicy: options.focusPolicy,
-      ephemeral: options.ephemeral,
+      excludeFromPersistence: options.excludeFromPersistence,
+      removeOnExit: options.removeOnExit,
       startedAt: Date.now(),
       spawnStatus,
     } as PanelInstance;

@@ -12,7 +12,7 @@ import {
 } from "@shared/types/panel";
 import { projectClient, agentSettingsClient, systemClient, globalRecipesClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
-import { generateAgentCommand } from "@shared/types";
+import { generateAgentCommand, buildAgentLaunchFlags } from "@shared/types";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { sanitizeRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
 import type { ActionSource } from "@shared/types/actions";
@@ -56,17 +56,21 @@ function isAgentRecipeType(type: RecipeTerminalType): boolean {
   return type !== "terminal" && type !== "dev-preview";
 }
 
-// Recipes read from disk may still contain agentModelId/agentLaunchFlags if
-// they were written by an older build before those fields were stripped on
+// Recipes read from disk may still contain agentModelId/agentLaunchFlags/location
+// if they were written by an older build before those fields were stripped on
 // persist. Treat them as session-only state and drop them at load time.
 function stripSessionOverridesFromRecipe(recipe: TerminalRecipe): TerminalRecipe {
   let changed = false;
   const terminals = recipe.terminals.map((terminal) => {
-    if (terminal.agentModelId === undefined && terminal.agentLaunchFlags === undefined) {
+    if (
+      terminal.agentModelId === undefined &&
+      terminal.agentLaunchFlags === undefined &&
+      terminal.location === undefined
+    ) {
       return terminal;
     }
     changed = true;
-    const { agentModelId: _m, agentLaunchFlags: _f, ...rest } = terminal;
+    const { agentModelId: _m, agentLaunchFlags: _f, location: _l, ...rest } = terminal;
     return rest;
   });
   if (recipe.shadowedBy !== undefined) {
@@ -95,6 +99,7 @@ function sanitizeRecipeTerminal(terminal: RecipeTerminal): RecipeTerminal {
     // Session-scoped overrides must never leak into disk-saved recipes.
     agentModelId: undefined,
     agentLaunchFlags: undefined,
+    location: undefined,
   };
 }
 
@@ -113,6 +118,7 @@ function terminalToRecipeTerminal(terminal: PtyPanelData | DevPreviewPanelData):
       exitBehavior: terminal.exitBehavior,
       agentModelId: undefined,
       agentLaunchFlags: undefined,
+      location: terminal.location === "dock" ? "dock" : undefined,
     };
   }
 
@@ -128,6 +134,7 @@ function terminalToRecipeTerminal(terminal: PtyPanelData | DevPreviewPanelData):
     exitBehavior: terminal.exitBehavior,
     agentModelId: isAgent ? terminal.agentModelId : undefined,
     agentLaunchFlags: isAgent ? terminal.agentLaunchFlags : undefined,
+    location: terminal.location === "dock" ? "dock" : undefined,
   };
 }
 
@@ -804,8 +811,23 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             const command = generateAgentCommand(baseCommand, entry, agentId, {
               initialPrompt,
               clipboardDirectory,
+              modelId: terminal.agentModelId,
               recipeArgs: terminal.args?.trim() || undefined,
             });
+            // Persist the process-level launch flags so restart/resume/continue
+            // reproduce the same configuration. Without this the panel arrives
+            // with `agentLaunchFlags: undefined` and the restart slice silently
+            // regenerates the command from current settings, dropping
+            // `--dangerously-skip-permissions` and the recipe's args (#9650).
+            // Preserve flags an in-memory recipe already carries; for disk
+            // recipes the field is stripped (undefined), so compute from live
+            // settings (mirroring useAgentLauncher) and append recipe args as
+            // raw tokens since the restart command builder applies its own
+            // escaping.
+            const agentLaunchFlags = terminal.agentLaunchFlags ?? [
+              ...buildAgentLaunchFlags(entry, agentId, { modelId: terminal.agentModelId }),
+              ...(terminal.args?.trim().split(/\s+/).filter(Boolean) ?? []),
+            ];
             return terminalStore.addPanel({
               kind: "terminal",
               launchAgentId: agentId,
@@ -813,6 +835,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               title: terminal.title,
               cwd: worktreePath,
               worktreeId: worktreeId,
+              agentLaunchFlags,
+              agentModelId: terminal.agentModelId,
               env: terminal.env,
               exitBehavior: terminal.exitBehavior,
               spawnedBy,

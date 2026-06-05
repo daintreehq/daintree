@@ -189,6 +189,64 @@ describe("recipeStore", () => {
       expect(devEntry?.agentLaunchFlags).toBeUndefined();
     });
 
+    it("captures dock placement and omits location for grid-equivalent panels (#9764)", () => {
+      panelStoreState.panelIds = ["panel-dock", "panel-grid", "panel-overlay"];
+      panelStoreState.panelsById = {
+        "panel-dock": {
+          id: "panel-dock",
+          kind: "terminal",
+          title: "Docked",
+          worktreeId: "wt-1",
+          location: "dock",
+          command: "npm test",
+        },
+        "panel-grid": {
+          id: "panel-grid",
+          kind: "terminal",
+          title: "Grid",
+          worktreeId: "wt-1",
+          location: "grid",
+        },
+        "panel-overlay": {
+          id: "panel-overlay",
+          kind: "terminal",
+          title: "Overlay",
+          worktreeId: "wt-1",
+          location: "overlay",
+        },
+      };
+
+      const terminals = useRecipeStore.getState().generateRecipeFromActiveTerminals("wt-1");
+      expect(terminals).toHaveLength(3);
+      expect(terminals.find((t) => t.title === "Docked")?.location).toBe("dock");
+      expect(terminals.find((t) => t.title === "Grid")?.location).toBeUndefined();
+      // Transient system placements are not user layout choices — never cloned.
+      expect(terminals.find((t) => t.title === "Overlay")?.location).toBeUndefined();
+    });
+
+    it("strips location when persisting to disk via createRecipe (#9764)", async () => {
+      useRecipeStore.setState({ currentProjectId: "project-1" });
+      await useRecipeStore.getState().createRecipe(
+        "project-1",
+        "Layout",
+        undefined,
+        [
+          {
+            type: "terminal",
+            title: "Docked",
+            command: "npm test",
+            env: {},
+            location: "dock",
+          },
+        ],
+        false
+      );
+
+      expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
+      const persistedRecipe = updateInRepoRecipeMock.mock.calls[0]?.[1];
+      expect(persistedRecipe?.terminals?.[0]?.location).toBeUndefined();
+    });
+
     it("strips agentModelId and agentLaunchFlags when persisting to disk via createRecipe", async () => {
       useRecipeStore.setState({ currentProjectId: "project-1" });
       await useRecipeStore.getState().createRecipe(
@@ -298,6 +356,7 @@ describe("recipeStore", () => {
             env: {},
             agentModelId: "claude-opus-4-7",
             agentLaunchFlags: ["--resume", "old"],
+            location: "dock" as const,
           },
         ],
         createdAt: 1000,
@@ -311,6 +370,7 @@ describe("recipeStore", () => {
       const loaded = useRecipeStore.getState().inRepoRecipes[0];
       expect(loaded?.terminals[0]?.agentModelId).toBeUndefined();
       expect(loaded?.terminals[0]?.agentLaunchFlags).toBeUndefined();
+      expect(loaded?.terminals[0]?.location).toBeUndefined();
     });
   });
 
@@ -931,6 +991,79 @@ describe("recipeStore", () => {
       expect(addTerminalMock).toHaveBeenCalledTimes(10);
       expect(results.spawned).toHaveLength(10);
       expect(results.failed).toHaveLength(0);
+    });
+
+    it("persists agentLaunchFlags so resume keeps dangerous flag and recipe args (#9650)", async () => {
+      getAgentSettingsMock.mockResolvedValue({ agents: { claude: { dangerousEnabled: true } } });
+      addTerminalMock.mockResolvedValue("terminal-1");
+
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-1",
+            name: "Agent Recipe",
+            projectId: "project-1",
+            terminals: [
+              {
+                type: "claude",
+                title: "Claude",
+                args: "--recipe-arg value",
+                agentModelId: "sonnet",
+                env: {},
+              },
+            ],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
+
+      const call = addTerminalMock.mock.calls[0]?.[0] as {
+        command?: string;
+        agentLaunchFlags?: string[];
+        agentModelId?: string;
+      };
+      expect(call.agentLaunchFlags).toEqual(
+        expect.arrayContaining(["--dangerously-skip-permissions", "--recipe-arg", "value"])
+      );
+      expect(call.agentModelId).toBe("sonnet");
+      // The initial command must also carry the model — without it the first run
+      // uses the default model and only restart (which replays the flags) fixes it.
+      expect(call.command).toContain("--model sonnet");
+    });
+
+    it("emits no blank flag tokens when an agent terminal has no recipe args (#9650)", async () => {
+      getAgentSettingsMock.mockResolvedValue({ agents: { claude: { dangerousEnabled: true } } });
+      addTerminalMock.mockResolvedValue("terminal-1");
+
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-1",
+            name: "Agent Recipe",
+            projectId: "project-1",
+            terminals: [{ type: "claude", title: "Claude", env: {} }],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
+
+      const call = addTerminalMock.mock.calls[0]?.[0] as { agentLaunchFlags?: string[] };
+      expect(call.agentLaunchFlags).toEqual(
+        expect.arrayContaining(["--dangerously-skip-permissions"])
+      );
+      expect(call.agentLaunchFlags?.every((f) => f.trim().length > 0)).toBe(true);
     });
   });
 

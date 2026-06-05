@@ -51,7 +51,7 @@ export interface ActionCallbacks {
   onLaunchAgent: (
     agentId: string,
     options?: {
-      location?: "grid" | "dock";
+      location?: "grid" | "dock" | "overlay";
       cwd?: string;
       worktreeId?: string;
       prompt?: string;
@@ -60,7 +60,8 @@ export interface ActionCallbacks {
       presetId?: string | null;
       activateDockOnCreate?: boolean;
       env?: Record<string, string>;
-      ephemeral?: boolean;
+      excludeFromPersistence?: boolean;
+      removeOnExit?: boolean;
       agentLaunchFlags?: string[];
       spawnedBy?: TerminalSpawnSource;
       focusPolicy?: AddPanelFocusPolicy;

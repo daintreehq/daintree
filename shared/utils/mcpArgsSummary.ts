@@ -89,3 +89,59 @@ export function summarizeMcpArgs(
   }
   return serialized;
 }
+
+/**
+ * Hard cap on a persisted tool-call result summary. Generous enough to show
+ * a useful slice of a tool's response in the recent-calls popover, bounded
+ * so the audit ring buffer (up to 500 records, persisted to config) can't
+ * balloon the config file.
+ */
+export const MCP_RESULT_SUMMARY_LIMIT = 1500;
+
+/**
+ * Build a redacted, bounded, pretty-printed JSON summary of a tool-call
+ * RESULT for the audit record. Unlike {@link summarizeMcpArgs} this keeps
+ * nested structure — the whole point is letting the user inspect what a
+ * call returned. Safety comes from three layers: the same sensitive-key
+ * redaction the args summary uses (applied at EVERY depth via the stringify
+ * replacer, since nesting is preserved here), the post-serialize scrub for
+ * structural secrets, and the hard length cap. Scrub runs BEFORE truncation
+ * so a cut can't bisect a secret below the scrubber's minimum match length.
+ */
+export function summarizeMcpResult(
+  value: unknown,
+  postSerializeScrub?: (value: string) => string
+): string {
+  const replacer = (key: string, v: unknown): unknown => {
+    if (typeof v === "bigint") return `${v.toString()}n`;
+    if (SENSITIVE_KEY_PATTERN.test(key) && typeof v === "string" && v.length > 0) {
+      return REDACTED_PLACEHOLDER;
+    }
+    // Individual strings can't usefully exceed the final cap — bound them
+    // here so a multi-megabyte payload doesn't balloon the intermediate
+    // serialization only to be thrown away by the truncation below. Scrub
+    // BEFORE the cap: a slice landing mid-secret would otherwise leave a
+    // prefix too short for the structural scrubber to match downstream.
+    if (typeof v === "string" && v.length > MCP_RESULT_SUMMARY_LIMIT) {
+      const scrubbed = postSerializeScrub ? postSerializeScrub(v) : v;
+      return scrubbed.length > MCP_RESULT_SUMMARY_LIMIT
+        ? `${scrubbed.slice(0, MCP_RESULT_SUMMARY_LIMIT)}…`
+        : scrubbed;
+    }
+    return v;
+  };
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value, replacer, 2) ?? "null";
+  } catch {
+    serialized = "<unserializable>";
+  }
+  if (postSerializeScrub) {
+    serialized = postSerializeScrub(serialized);
+  }
+  if (serialized.length > MCP_RESULT_SUMMARY_LIMIT) {
+    const omitted = serialized.length - MCP_RESULT_SUMMARY_LIMIT;
+    return `${serialized.slice(0, MCP_RESULT_SUMMARY_LIMIT)}\n… ${omitted} more characters`;
+  }
+  return serialized;
+}

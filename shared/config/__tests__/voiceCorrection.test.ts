@@ -41,8 +41,47 @@ describe("CORE_CORRECTION_PROMPT", () => {
     expect(CORE_CORRECTION_PROMPT).toContain("Zustand");
   });
 
+  it("gates custom-dictionary correction on context instead of forcing every phonetic match", () => {
+    // ASR-level biasing now handles the terms, so the prompt must NOT force an
+    // unconditional remap of every phonetically similar word.
+    expect(CORE_CORRECTION_PROMPT).not.toContain("Always map phonetically similar words");
+    expect(CORE_CORRECTION_PROMPT).toMatch(/only when the existing word does not fit the context/i);
+  });
+
   it("is identified as a speech-to-text correction engine", () => {
     expect(CORE_CORRECTION_PROMPT).toContain("speech-to-text correction engine");
+  });
+
+  it("keeps the static prefix long enough to clear OpenAI's prompt-cache floor", () => {
+    // OpenAI's Responses API only caches a prefix of at least 1,024 tokens. This
+    // floor is a character proxy for that token threshold: at a conservative ~4.4
+    // chars/token for dense technical English, 4,800 chars maps to ~1,090 tokens,
+    // keeping headroom above 1,024 even if a future edit compacts the prose. Guards
+    // against accidental truncation that would silently drop the prefix below the
+    // cache threshold (issue #9746).
+    expect(CORE_CORRECTION_PROMPT.length).toBeGreaterThan(4800);
+  });
+
+  it("includes expanded domain-grouped phonetic mappings", () => {
+    expect(CORE_CORRECTION_PROMPT).toContain("npm");
+    expect(CORE_CORRECTION_PROMPT).toContain("pnpm");
+    expect(CORE_CORRECTION_PROMPT).toContain("Storybook");
+    expect(CORE_CORRECTION_PROMPT).toContain("Vite");
+    expect(CORE_CORRECTION_PROMPT).toContain("kubectl");
+    expect(CORE_CORRECTION_PROMPT).toContain("Terraform");
+    expect(CORE_CORRECTION_PROMPT).toContain("OAuth");
+    expect(CORE_CORRECTION_PROMPT).toContain("gRPC");
+    expect(CORE_CORRECTION_PROMPT).toContain("PyTorch");
+    expect(CORE_CORRECTION_PROMPT).toContain("Anthropic");
+    expect(CORE_CORRECTION_PROMPT).toContain("idempotent");
+    expect(CORE_CORRECTION_PROMPT).toContain("regex");
+  });
+
+  it("includes few-shot correction examples that defer output format to the JSON schema", () => {
+    expect(CORE_CORRECTION_PROMPT).toContain("EXAMPLES");
+    expect(CORE_CORRECTION_PROMPT).toContain("Corrected:");
+    // Examples must not instruct the model to emit plain text — the schema wins.
+    expect(CORE_CORRECTION_PROMPT).toMatch(/always return the JSON object/i);
   });
 
   it("instructs LLM to convert standalone paragraph voice commands to newlines", () => {
@@ -118,11 +157,13 @@ describe("buildCorrectionSystemPrompt", () => {
     expect(prompt).toContain("my-app");
   });
 
-  it("includes custom dictionary terms as required terms", () => {
+  it("includes custom dictionary terms as preferred (not forced) terms", () => {
     const prompt = buildCorrectionSystemPrompt({ customDictionary: ["Daintree", "Worktree"] });
     expect(prompt).toContain("Daintree");
     expect(prompt).toContain("Worktree");
-    expect(prompt).toContain("REQUIRED TERMS");
+    // ASR biasing handles these terms, so the dynamic section must prefer — not force — them.
+    expect(prompt).toContain("PREFERRED TERMS");
+    expect(prompt).not.toContain("correct phonetic matches to these exact forms");
   });
 
   it("omits project section when no project context provided", () => {
@@ -130,11 +171,12 @@ describe("buildCorrectionSystemPrompt", () => {
     expect(prompt).not.toContain("CURRENT PROJECT");
   });
 
-  it("omits dynamic required terms section when custom dictionary is empty", () => {
+  it("omits dynamic preferred terms section when custom dictionary is empty", () => {
     const prompt = buildCorrectionSystemPrompt({ customDictionary: [] });
-    // The dynamic section header includes "(correct phonetic matches..." — distinct from
-    // the "REQUIRED TERMS / CUSTOM DICTIONARY" label in the priority list
-    expect(prompt).not.toContain("REQUIRED TERMS (correct phonetic matches");
+    // The dynamic section header starts with "PREFERRED TERMS (prefer these exact forms..." —
+    // distinct from the "REQUIRED TERMS / CUSTOM DICTIONARY" label in the priority list, which
+    // is always present in the core prompt.
+    expect(prompt).not.toContain("PREFERRED TERMS (prefer these exact forms");
   });
 
   it("excludes project directory from prompt when it matches project name", () => {

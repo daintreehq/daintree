@@ -247,6 +247,14 @@ export class HelpSessionService {
   private mcpRegistry: WindowRegistry | null = null;
   private ptyClient: PtyKillClient | null = null;
   private pendingHibernationStore: PendingHelpHibernationStore | null = null;
+  // #9639: tracks the in-flight capture owner per project (projectId →
+  // sessionId) while `gracefulKill` is outstanding. A placeholder
+  // pending-hibernation entry is written synchronously before the kill so a
+  // racing project switch-back resumes instead of fresh-launching; this map
+  // decides who is allowed to overwrite/clear that placeholder afterwards so a
+  // mid-kill displacement can't let a stale resume ID shadow the new session.
+  // In-memory only — no in-flight capture is meaningful across an app restart.
+  private readonly pendingCapturesByProject = new Map<string, string>();
   private onMcpSessionRevokedFn: ((token: string) => void) | null = null;
   private disposed = false;
 
@@ -366,6 +374,21 @@ export class HelpSessionService {
     const record = this.sessionsByToken.get(token);
     if (!record || record.revoked) return null;
     return record.actionContext ?? null;
+  }
+
+  /**
+   * Looks up the public help-session id minted at provision for a bearer
+   * token. The MCP server resolves this at handshake to join its own
+   * per-connection transport session id back to the help session the
+   * renderer knows about (`helpPanelStore.sessionId`), so audit records and
+   * turn-id lookups correlate with what the assistant panel displays.
+   * Returns null for unknown or revoked tokens.
+   */
+  getSessionIdForToken(token: string): string | null {
+    if (!token) return null;
+    const record = this.sessionsByToken.get(token);
+    if (!record || record.revoked) return null;
+    return record.sessionId;
   }
 
   /**
@@ -840,6 +863,32 @@ export class HelpSessionService {
     // the previous behaviour of always losing the conversation.
     let capturedAgentSessionId: string | null = null;
     if (opts?.captureHibernation && terminalId && this.ptyClient) {
+      // #9639: write a placeholder resume entry SYNCHRONOUSLY (memory-first
+      // via `set`) before the gracefulKill round-trip. The eviction path that
+      // calls us is fire-and-forget, so a project switch-back can load the new
+      // renderer view and call `takePendingHibernation` before gracefulKill
+      // resolves. Without the placeholder it gets null and starts a *fresh*
+      // assistant session — the visible "restart" this issue is about. The
+      // empty-`agentSessionId` sentinel routes the renderer down the
+      // resume-latest path instead; once gracefulKill returns we overwrite the
+      // placeholder with the agent's real resume ID (below).
+      if (this.pendingHibernationStore) {
+        this.pendingCapturesByProject.set(record.projectId, sessionId);
+        void this.pendingHibernationStore
+          .set(record.projectId, {
+            agentId: record.agentId,
+            agentSessionId: "",
+            cwd: record.sessionPath,
+            capturedAt: Date.now(),
+          })
+          .catch((err) => {
+            console.warn(
+              "[HelpSessionService] Failed to persist pending hibernation placeholder:",
+              record.projectId,
+              err
+            );
+          });
+      }
       try {
         capturedAgentSessionId = await this.ptyClient.gracefulKill(terminalId);
       } catch (err) {
@@ -902,21 +951,34 @@ export class HelpSessionService {
       );
     }
 
-    if (capturedAgentSessionId && this.pendingHibernationStore && !displacedDuringCapture) {
-      void this.pendingHibernationStore
-        .set(record.projectId, {
-          agentId: record.agentId,
-          agentSessionId: capturedAgentSessionId,
-          cwd: record.sessionPath,
-          capturedAt: Date.now(),
-        })
-        .catch((err) => {
-          console.warn(
-            "[HelpSessionService] Failed to persist pending hibernation:",
-            record.projectId,
-            err
-          );
-        });
+    // #9639: finalize the placeholder written before gracefulKill. Only act if
+    // we still own the capture — a same-project re-provision that ran
+    // `displacePriorSessions` during the await clears our ownership and the
+    // placeholder, so the old resume ID can't shadow the fresh session that
+    // took the slot. When we still own it: overwrite with the real resume ID
+    // if gracefulKill yielded one, otherwise leave the empty-sentinel in place
+    // (resume-latest beats a fresh launch). Then release ownership.
+    if (
+      this.pendingHibernationStore &&
+      this.pendingCapturesByProject.get(record.projectId) === sessionId
+    ) {
+      if (capturedAgentSessionId) {
+        void this.pendingHibernationStore
+          .set(record.projectId, {
+            agentId: record.agentId,
+            agentSessionId: capturedAgentSessionId,
+            cwd: record.sessionPath,
+            capturedAt: Date.now(),
+          })
+          .catch((err) => {
+            console.warn(
+              "[HelpSessionService] Failed to persist pending hibernation:",
+              record.projectId,
+              err
+            );
+          });
+      }
+      this.pendingCapturesByProject.delete(record.projectId);
     }
 
     // Claude bakes a literal session bearer into `.mcp.json`; Copilot
@@ -965,6 +1027,19 @@ export class HelpSessionService {
       prior.revoked = true;
       this.sessionsByToken.delete(prior.token);
       this.sessionsById.delete(prior.sessionId);
+      // #9639: if this displaced session owns an in-flight capture placeholder,
+      // drop it (and release ownership) so the old, soon-to-be-stale resume ID
+      // can't shadow the fresh session now taking the project's slot.
+      if (this.pendingCapturesByProject.get(projectId) === prior.sessionId) {
+        this.pendingCapturesByProject.delete(projectId);
+        void this.pendingHibernationStore?.clear(projectId).catch((err) => {
+          console.warn(
+            "[HelpSessionService] Failed to clear displaced pending hibernation:",
+            projectId,
+            err
+          );
+        });
+      }
       const terminalId = this.terminalBySessionId.get(prior.sessionId);
       if (terminalId) {
         this.terminalBySessionId.delete(prior.sessionId);
@@ -1225,6 +1300,7 @@ export class HelpSessionService {
     mcpServerService.setHelpSessionActionContextResolver((token) =>
       this.getActionContextForToken(token)
     );
+    mcpServerService.setHelpSessionIdResolver((token) => this.getSessionIdForToken(token));
     mcpServerService.setSessionIdResolver((terminalId) => this.getSessionIdForTerminal(terminalId));
     // Eager MCP-session teardown on revoke (#9151). Idempotent re-set.
     this.setOnMcpSessionRevoked((token) => mcpServerService.disconnectHelpBearer(token));

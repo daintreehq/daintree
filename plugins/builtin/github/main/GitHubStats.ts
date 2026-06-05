@@ -163,6 +163,14 @@ export interface RepoStatsAndPageResult {
     totalCount: number;
   } | null;
   source?: "network" | "memory-cache";
+  /**
+   * Adaptive delay (ms) until the next background poll, from
+   * {@link eventsProbeDelayMs} — ~60s while changes land, growing toward ~5min
+   * when idle (issue #9741). Set on every successful stats return so the
+   * renderer's visible-poll scheduler can match the probe cadence; omitted on
+   * error / disk-fallback paths where the renderer applies its own backoff.
+   */
+  nextPollIntervalMs?: number;
   error?: string;
 }
 
@@ -370,6 +378,7 @@ export async function getRepoStatsAndPage(
           totalCount: cachedStats.prCount,
         },
         source: "memory-cache",
+        nextPollIntervalMs: eventsProbeDelayMs(cacheKey),
       };
     }
   }
@@ -422,6 +431,7 @@ export async function getRepoStatsAndPage(
             hasNextPage: snapshot.issues.hasNextPage,
             endCursor: snapshot.issues.endCursor,
           },
+          totalCount: snapshot.issues.totalCount,
         });
         prListCache.set(prsListCacheKey, {
           items: snapshot.prs.items,
@@ -429,6 +439,7 @@ export async function getRepoStatsAndPage(
             hasNextPage: snapshot.prs.hasNextPage,
             endCursor: snapshot.prs.endCursor,
           },
+          totalCount: snapshot.prs.totalCount,
         });
         // Re-stamp the durable disk cache too. The 60s in-memory caches above
         // keep hot polls fast, but the disk cache is the failure-mode fallback:
@@ -446,6 +457,7 @@ export async function getRepoStatsAndPage(
           issues: { ...snapshot.issues },
           prs: { ...snapshot.prs },
           source: "network",
+          nextPollIntervalMs: eventsProbeDelayMs(cacheKey),
         };
       }
     }
@@ -560,10 +572,12 @@ export async function getRepoStatsAndPage(
     issueListCache.set(issuesListCacheKey, {
       items: issuesPage.items,
       pageInfo: { hasNextPage: issuesPage.hasNextPage, endCursor: issuesPage.endCursor },
+      totalCount: issuesPage.totalCount,
     });
     prListCache.set(prsListCacheKey, {
       items: prsPage.items,
       pageInfo: { hasNextPage: prsPage.hasNextPage, endCursor: prsPage.endCursor },
+      totalCount: prsPage.totalCount,
     });
 
     // Record the snapshot so the next poll can skip the heavy query when the
@@ -587,7 +601,13 @@ export async function getRepoStatsAndPage(
       }
     }
 
-    return { stats, issues: issuesPage, prs: prsPage, source: "network" };
+    return {
+      stats,
+      issues: issuesPage,
+      prs: prsPage,
+      source: "network",
+      nextPollIntervalMs: eventsProbeDelayMs(cacheKey),
+    };
   } catch (error) {
     if (!_retried && isRepoNotFoundError(error)) {
       repoContextCache.invalidate(cwd);
@@ -712,6 +732,7 @@ export async function getRepoStatsComplete(
       rateLimitResetAt:
         rateLimitState.blocked && rateLimitState.resetAt ? rateLimitState.resetAt : undefined,
       rateLimitKind: rateLimitState.blocked ? (rateLimitState.kind ?? undefined) : undefined,
+      nextPollIntervalMs: statsResult.nextPollIntervalMs,
     };
 
     return {

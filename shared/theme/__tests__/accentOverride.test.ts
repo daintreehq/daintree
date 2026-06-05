@@ -48,20 +48,28 @@ describe("computeAccentOverrideTokens", () => {
     expect(tokens["accent-rgb"]).toBe("170, 187, 204");
   });
 
-  it("brightens accent-hover for dark schemes and darkens for light schemes", () => {
+  it("brightens accent-hover toward white for both polarities (RC-4)", () => {
+    // The accent must ADVANCE on hover regardless of polarity: on light the old
+    // darken-toward-black pushed an already-receding accent further into the
+    // canvas, so both modes now mix toward white.
     const dark = computeAccentOverrideTokens("#3366ff", darkScheme);
     const light = computeAccentOverrideTokens("#3366ff", lightScheme);
-    expect(dark["accent-hover"]).toBe("color-mix(in oklab, #3366ff 90%, #ffffff)");
-    expect(light["accent-hover"]).toBe("color-mix(in oklab, #3366ff 90%, #000000)");
+    expect(dark["accent-hover"]).toContain("#ffffff");
+    expect(light["accent-hover"]).toContain("#ffffff");
+    expect(dark["accent-hover"]).toBe(light["accent-hover"]);
   });
 
-  it("uses higher alpha for soft/muted on dark than on light", () => {
+  it("uses the same soft/muted membership-tint alphas across polarities (RC-4)", () => {
+    // Light's soft/muted were previously lower, compositing to a near-achromatic
+    // grey on a light canvas; they now match dark so the membership tint reads as
+    // colored. soft stays below muted (a tint, not a second accent anchor).
     const dark = computeAccentOverrideTokens("#3366ff", darkScheme);
     const light = computeAccentOverrideTokens("#3366ff", lightScheme);
-    expect(dark["accent-soft"]).toBe("rgba(51, 102, 255, 0.18)");
-    expect(dark["accent-muted"]).toBe("rgba(51, 102, 255, 0.3)");
-    expect(light["accent-soft"]).toBe("rgba(51, 102, 255, 0.12)");
-    expect(light["accent-muted"]).toBe("rgba(51, 102, 255, 0.2)");
+    expect(light["accent-soft"]).toBe(dark["accent-soft"]);
+    expect(light["accent-muted"]).toBe(dark["accent-muted"]);
+    const softAlpha = Number(/,\s*([\d.]+)\)$/.exec(light["accent-soft"])![1]);
+    const mutedAlpha = Number(/,\s*([\d.]+)\)$/.exec(light["accent-muted"])![1]);
+    expect(softAlpha).toBeLessThan(mutedAlpha);
   });
 
   it("picks a high-contrast accent-foreground for a very light accent", () => {

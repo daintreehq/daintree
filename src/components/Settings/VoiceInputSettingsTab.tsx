@@ -33,6 +33,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { CORE_CORRECTION_PROMPT } from "@shared/config/voiceCorrection";
 import type {
   VoiceInputSettings,
+  SuggestedDictionaryEntry,
   MicPermissionStatus,
   VoiceCorrectionModel,
   VoiceParagraphingStrategy,
@@ -104,6 +105,8 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
   organizationId: "",
   projectId: "",
   recordingMode: "toggle",
+  suggestedDictionary: [],
+  learnFromCorrections: true,
 };
 
 type ApiKeyValidation = "idle" | "testing" | "valid" | "invalid";
@@ -124,7 +127,9 @@ export function VoiceInputSettingsTab() {
 
   const loadSettings = useCallback(async () => {
     const s = await window.electron?.voiceInput?.getSettings();
-    if (s) setSettings(s);
+    // Merge over defaults so fields added after a settings blob was written
+    // (e.g. suggestedDictionary, learnFromCorrections) are never undefined.
+    if (s) setSettings({ ...DEFAULT_SETTINGS, ...s });
   }, []);
 
   const { isLoading, loadError, retryAction } = useTabLoad({
@@ -191,6 +196,22 @@ export function VoiceInputSettingsTab() {
 
   const removeDictionaryWord = (word: string) => {
     update({ customDictionary: settings.customDictionary.filter((w) => w !== word) });
+  };
+
+  // Suggestions live in voiceInput settings, so accept/dismiss are plain
+  // settings mutations through `update` — accept moves the word into the
+  // confirmed dictionary, dismiss just drops it from the queue.
+  const acceptSuggestion = (word: string) => {
+    update({
+      suggestedDictionary: settings.suggestedDictionary.filter((e) => e.word !== word),
+      customDictionary: settings.customDictionary.includes(word)
+        ? settings.customDictionary
+        : [...settings.customDictionary, word],
+    });
+  };
+
+  const dismissSuggestion = (word: string) => {
+    update({ suggestedDictionary: settings.suggestedDictionary.filter((e) => e.word !== word) });
   };
 
   useSettingsTabValidation("voice", Boolean(loadError));
@@ -347,6 +368,11 @@ export function VoiceInputSettingsTab() {
 
             <DictionarySection
               words={settings.customDictionary}
+              suggestedWords={settings.suggestedDictionary}
+              learnFromCorrections={settings.learnFromCorrections}
+              onLearnFromCorrectionsChange={(v) => update({ learnFromCorrections: v })}
+              onAcceptSuggestion={acceptSuggestion}
+              onDismissSuggestion={dismissSuggestion}
               newWord={newDictionaryWord}
               onNewWordChange={setNewDictionaryWord}
               onAdd={addDictionaryWord}
@@ -851,6 +877,11 @@ function RecordingModeRow({
 
 function DictionarySection({
   words,
+  suggestedWords,
+  learnFromCorrections,
+  onLearnFromCorrectionsChange,
+  onAcceptSuggestion,
+  onDismissSuggestion,
   newWord,
   onNewWordChange,
   onAdd,
@@ -858,6 +889,11 @@ function DictionarySection({
   inputRef,
 }: {
   words: string[];
+  suggestedWords: SuggestedDictionaryEntry[];
+  learnFromCorrections: boolean;
+  onLearnFromCorrectionsChange: (v: boolean) => void;
+  onAcceptSuggestion: (word: string) => void;
+  onDismissSuggestion: (word: string) => void;
   newWord: string;
   onNewWordChange: (v: string) => void;
   onAdd: () => void;
@@ -873,6 +909,49 @@ function DictionarySection({
           {words.length > 0 && `${words.length}/100`}
         </span>
       </label>
+
+      <SettingsSwitchCard
+        variant="compact"
+        title="Learn words from corrections"
+        subtitle="Suggest dictionary terms when you fix a mishearing before sending"
+        isEnabled={learnFromCorrections}
+        onChange={() => onLearnFromCorrectionsChange(!learnFromCorrections)}
+        ariaLabel="Toggle learning words from corrections"
+      />
+
+      {suggestedWords.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs text-daintree-text/50">Suggested from corrections</p>
+          <div className="flex flex-wrap gap-1.5">
+            {suggestedWords.map((entry) => (
+              <span
+                key={entry.word}
+                className="inline-flex items-center gap-1.5 rounded-full border border-daintree-border bg-overlay-subtle px-2 py-0.5 text-xs text-daintree-text"
+                title={entry.utterance ? `Heard as "${entry.utterance}"` : undefined}
+              >
+                {entry.word}
+                <button
+                  type="button"
+                  onClick={() => onAcceptSuggestion(entry.word)}
+                  className="inline-flex items-center gap-0.5 text-daintree-text/50 hover:text-daintree-text transition-colors"
+                  aria-label={`Add ${entry.word} to dictionary`}
+                >
+                  <Plus className="h-3 w-3" />
+                  Add
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDismissSuggestion(entry.word)}
+                  className="text-daintree-text/30 hover:text-daintree-text/70 transition-colors"
+                  aria-label={`Dismiss ${entry.word}`}
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="flex gap-2">
         <input

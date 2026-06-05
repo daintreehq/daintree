@@ -28,6 +28,17 @@ async function userSecretsSet(page: Page): Promise<string[]> {
   }, PLUGIN_ID);
 }
 
+/** Remove user-scope rich-plugin settings so the serial form tests start clean. */
+async function resetUserSettings(page: Page): Promise<void> {
+  await page.evaluate(async (pluginId) => {
+    await Promise.all(
+      ["greeting", "retries", "verbose", "level", "config", "apiKey"].map((key) =>
+        window.electron.plugin.deleteSettingValue(pluginId, key, "user", null)
+      )
+    );
+  }, PLUGIN_ID);
+}
+
 /** Open the manager, select the rich plugin, and switch to its Settings tab. */
 async function openRichSettings(page: Page): Promise<void> {
   await openPluginManager(page);
@@ -64,9 +75,11 @@ test.describe.serial("Core: Plugin settings form", () => {
     ctx = launched;
     fixtureCleanup = cleanup;
     await waitForRichPluginReady(ctx.window);
+    await resetUserSettings(ctx.window);
   });
 
   test.afterAll(async () => {
+    if (ctx?.window) await resetUserSettings(ctx.window);
     if (ctx?.app) await closeApp(ctx.app);
     fixtureCleanup?.();
   });

@@ -342,7 +342,6 @@ export function WorktreeHeader({
                 isHeadline
                 isActive={isActive}
                 underlineOnHover={underlineOnHover}
-                rowLastUpdatedAt={worktree.prLastUpdatedAt}
               />
             ) : (
               <IssueBadge

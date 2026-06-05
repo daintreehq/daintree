@@ -46,6 +46,8 @@ import {
   isWorktreeSortDragData,
 } from "@/components/DragDrop/SortableWorktreeCard";
 import { applyManualWorktreeReorder } from "@/lib/worktreeReorder";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore, useWorktreeSelectionStore, useProjectStore } from "@/store";
 import type { PendingCreation } from "@/store/worktreeStore";
 import { useFleetArmingStore, collectFilterArmEligibleIds } from "@/store/fleetArmingStore";
@@ -163,6 +165,7 @@ type SidebarFlatItem = SidebarHeaderFlatItem | SidebarRowFlatItem;
 interface SidebarVirtuosoContext {
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
+  keyboardCursorId: string | null;
   totalWorktreeCount: number;
   selectWorktree: (id: string) => void;
   worktreeActions: WorktreeActions;
@@ -250,6 +253,7 @@ function renderSidebarFlatItem(
         worktreeId={item.worktreeId}
         activeWorktreeId={context.activeWorktreeId}
         focusedWorktreeId={context.focusedWorktreeId}
+        keyboardCursorId={context.keyboardCursorId}
         totalWorktreeCount={context.totalWorktreeCount}
         selectWorktree={context.selectWorktree}
         worktreeActions={context.worktreeActions}
@@ -265,6 +269,7 @@ function renderSidebarFlatItem(
       worktreeId={item.worktreeId}
       activeWorktreeId={context.activeWorktreeId}
       focusedWorktreeId={context.focusedWorktreeId}
+      keyboardCursorId={context.keyboardCursorId}
       totalWorktreeCount={context.totalWorktreeCount}
       selectWorktree={context.selectWorktree}
       worktreeActions={context.worktreeActions}
@@ -434,6 +439,29 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // sub-400ms port replacements don't flash the spinner. A real host crash
   // takes 2–4s to recover, well past the threshold.
   const showReconnecting = useDohertyGate(isReconnecting);
+  // One-shot screen-reader announcements on the rising edges of the reconnecting
+  // state. The visible indicator's text is rewritten every second by the 1Hz
+  // tick above; routing those changes through an `aria-live` region would make
+  // the AT re-announce on every tick. Instead the visible span is `aria-hidden`
+  // and we fire a single announcement here when reconnecting starts and again
+  // when it escalates. Recovery is intentionally silent — the spinner vanishing
+  // is self-evident, and a "Connected" announcement would be noise.
+  const prevReconnecting = useRef(false);
+  const prevEscalated = useRef(false);
+  useEffect(() => {
+    if (showReconnecting && !prevReconnecting.current) {
+      useAnnouncerStore.getState().announce("Reconnecting…", "polite");
+    }
+    // Gate escalation on `showReconnecting` (the Doherty-gated value) too:
+    // `showReconnectingEscalated` reads raw `isReconnecting`, so mounting mid-
+    // outage could otherwise fire "Still reconnecting…" 400ms before the base
+    // "Reconnecting…" announcement and invert their order.
+    if (showReconnectingEscalated && !prevEscalated.current) {
+      useAnnouncerStore.getState().announce("Still reconnecting…", "polite");
+    }
+    prevReconnecting.current = showReconnecting;
+    prevEscalated.current = showReconnectingEscalated;
+  }, [showReconnecting, showReconnectingEscalated]);
   const currentProject = useProjectStore((state) => state.currentProject);
   const worktreeLoadError = useProjectStore((state) => state.worktreeLoadError);
   useProjectSettings();
@@ -502,7 +530,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   // Filter/sort state - destructured for stable memoization
   const {
-    query,
+    liveQuery,
     orderBy,
     groupByType: isGroupedByType,
     statusFilters,
@@ -518,7 +546,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     quickStateFilter,
   } = useWorktreeFilterStore(
     useShallow((state) => ({
-      query: state.query,
+      liveQuery: state.liveQuery,
       orderBy: state.orderBy,
       groupByType: state.groupByType,
       statusFilters: state.statusFilters,
@@ -537,9 +565,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   const devServerSessions = useWorktreeDevServerStore((s) => s.sessionsByWorktreeId);
 
-  const isSortDisabledPrevRef = useRef(isGroupedByType || query.trim().length > 0);
+  // Lag the expensive filtering work behind the input so keystrokes stay
+  // responsive. `liveQuery` updates instantly (input + urgent UI state); the
+  // filtering memos consume `deferredQuery`, which yields to input events.
+  const deferredQuery = useDeferredValue(liveQuery);
+
+  const isSortDisabledPrevRef = useRef(isGroupedByType || liveQuery.trim().length > 0);
   useEffect(() => {
-    const current = isGroupedByType || query.trim().length > 0;
+    const current = isGroupedByType || liveQuery.trim().length > 0;
     const prev = isSortDisabledPrevRef.current;
     isSortDisabledPrevRef.current = current;
     if (prev && !current) {
@@ -557,19 +590,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         reorderAnnouncementTimerRef.current = null;
       }
     };
-  }, [isGroupedByType, query]);
+  }, [isGroupedByType, liveQuery]);
 
   const clearAllFilters = useWorktreeFilterStore((state) => state.clearAll);
-  const hasActiveFilters = useWorktreeFilterStore((state) => state.hasActiveFilters);
   const hasFacetFilters = useWorktreeFilterStore((state) => state.hasFacetFilters);
   const hasFacetFiltersActive = hasFacetFilters();
-  const activeFacetFilterCount =
-    statusFilters.size +
-    typeFilters.size +
-    prIssueFilters.size +
-    sessionFilters.size +
-    activityFilters.size +
-    devServerFilters.size;
   const collapsedWorktrees = useWorktreeFilterStore((state) => state.collapsedWorktrees);
   const pruneStaleWorktreeIds = useWorktreeFilterStore((state) => state.pruneStaleWorktreeIds);
   const setQuickStateFilter = useWorktreeFilterStore((state) => state.setQuickStateFilter);
@@ -715,6 +740,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       const isComplete =
         !!worktree.issueNumber &&
         !!worktree.linked?.pr &&
+        worktree.linked.pr.state !== "closed" &&
+        worktree.linked.pr.state !== "declined" &&
         !hasChanges &&
         worktree.worktreeChanges !== null;
 
@@ -782,7 +809,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       derivedMetaMap,
       activeWorktreeId,
       {
-        query,
+        query: deferredQuery,
         statusFilters,
         typeFilters,
         prIssueFilters,
@@ -798,7 +825,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     mainWorktree,
     integrationWorktree,
     activeWorktreeId,
-    query,
+    deferredQuery,
     statusFilters,
     typeFilters,
     prIssueFilters,
@@ -829,7 +856,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const { filteredWorktrees, groupedSections, hasResultsWithoutQuickState, totalCount } =
     useMemo(() => {
       const filters: FilterState = {
-        query,
+        query: deferredQuery,
         statusFilters,
         typeFilters,
         prIssueFilters,
@@ -854,7 +881,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           chipState: null,
         };
         const isActive = worktree.id === activeWorktreeId;
-        const hasActiveQuery = query.trim().length > 0;
+        const hasActiveQuery = deferredQuery.trim().length > 0;
 
         // Counterfactual: would this worktree be visible if the quick state
         // filter were "all"? Mirrors the same precedence below (active /
@@ -906,9 +933,15 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       const existingWorktreeIds = new Set(deferredWorktrees.map((w) => w.id));
       const validPinnedWorktrees = pinnedWorktrees.filter((id) => existingWorktreeIds.has(id));
 
-      const hasQuery = query.trim().length > 0;
+      const hasQuery = deferredQuery.trim().length > 0;
       const sorted = hasQuery
-        ? sortWorktreesByRelevance(filtered, query, orderBy, validPinnedWorktrees, manualOrder)
+        ? sortWorktreesByRelevance(
+            filtered,
+            deferredQuery,
+            orderBy,
+            validPinnedWorktrees,
+            manualOrder
+          )
         : sortWorktrees(filtered, orderBy, validPinnedWorktrees, manualOrder);
 
       if (isGroupedByType && !hasQuery) {
@@ -928,7 +961,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       };
     }, [
       deferredWorktrees,
-      query,
+      deferredQuery,
       orderBy,
       isGroupedByType,
       statusFilters,
@@ -949,25 +982,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       quickStateFilter,
       hasFacetFiltersActive,
     ]);
-
-  const {
-    hiddenAbove,
-    hiddenBelow,
-    scrollToTop,
-    scrollToBottom,
-    scrollerRef: scrollIndicatorScrollerRef,
-    handleScroll,
-  } = useScrollIndicator({
-    itemCount: filteredWorktrees.length,
-  });
-
-  const setScrollerElement = useCallback(
-    (el: HTMLElement | Window | null) => {
-      scrollerElementRef.current = el instanceof HTMLElement ? el : null;
-      scrollIndicatorScrollerRef(el);
-    },
-    [scrollIndicatorScrollerRef]
-  );
 
   const worktreeActions = useWorktreeActions({
     onOpenRecipeEditor: handleOpenRecipeEditor,
@@ -1019,16 +1033,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // in a single, render-order-stable position. Without this hoist the hooks
   // would sit after `if (isLoading) return …`, breaking rules-of-hooks.
   const worktreeMatchesQueryPre = (w: WorktreeState) => {
-    if (!query) return true;
-    const exactNum = parseExactNumber(query);
+    if (!deferredQuery) return true;
+    const exactNum = parseExactNumber(deferredQuery);
     if (exactNum !== null) {
       return w.issueNumber === exactNum || w.linked?.pr?.ref.number === exactNum;
     }
-    return scoreWorktree(w, query) > 0;
+    return scoreWorktree(w, deferredQuery) > 0;
   };
 
   const pinnedFiltersPre: FilterState = {
-    query,
+    query: deferredQuery,
     statusFilters,
     typeFilters,
     prIssueFilters,
@@ -1080,11 +1094,58 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       ));
   const integrationVisible = integrationMatchesQueryPre && integrationMatchesFacetsPre;
 
-  const hasQuery = query.trim().length > 0;
+  const hasQuery = liveQuery.trim().length > 0;
   const isSortDisabled = isGroupedByType || hasQuery;
   useEffect(() => {
     isSortDisabledRef.current = isSortDisabled;
   }, [isSortDisabled]);
+
+  // Filter-scope + sort-disabled state. Hoisted above the early returns below so
+  // the announcement effects that depend on them keep a stable hook order.
+  // `hasFilters` mirrors the store's `hasActiveFilters()` but uses the instant
+  // `liveQuery` so filter-dependent UI (scope line, filtered-empty state) reacts
+  // immediately rather than after the persisted-query debounce.
+  const hasFilters =
+    liveQuery.trim().length > 0 || hasFacetFiltersActive || quickStateFilter !== "all";
+  const filteredCount = filteredWorktrees.length;
+  const showScope = hasFilters && filteredCount !== totalCount;
+  const dragDisabledReason = hasQuery
+    ? "Sorting disabled while searching"
+    : isGroupedByType
+      ? "Sorting disabled while grouped by type"
+      : null;
+
+  // Announce the filtered worktree count to screen readers, debounced so rapid
+  // typing in the search box doesn't flood the AT speech queue. Routed through
+  // the global announcer (document.ariaNotify + always-mounted fallback) rather
+  // than a persistent aria-atomic live region — that region re-announced the
+  // whole status line, including the persistent sort-disabled text, on every
+  // keystroke (#9665).
+  useEffect(() => {
+    if (!showScope) return;
+    const timer = window.setTimeout(() => {
+      useAnnouncerStore.getState().announce(`${filteredCount} of ${totalCount} worktrees`);
+    }, UI_DOHERTY_THRESHOLD);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [showScope, filteredCount, totalCount]);
+
+  // Announce the sort-disabled reason whenever it appears or changes — covers
+  // null → reason (sorting becomes disabled) and reason → reason (e.g. switching
+  // from group-by-type to an active search). The reason → null re-enable
+  // transition ("Manual reorder available") is owned by the isSortDisabledPrevRef
+  // effect above, so we skip it here to avoid double-speaking. Initialising the
+  // ref to the current value keeps mount silent: a sidebar that opens with a
+  // persisted filter shows the visual text rather than announcing stale state.
+  const prevDragDisabledReasonRef = useRef<string | null>(dragDisabledReason);
+  useEffect(() => {
+    const prev = prevDragDisabledReasonRef.current;
+    prevDragDisabledReasonRef.current = dragDisabledReason;
+    if (dragDisabledReason !== null && prev !== dragDisabledReason) {
+      useAnnouncerStore.getState().announce(dragDisabledReason);
+    }
+  }, [dragDisabledReason]);
 
   const mainRowIndex = mainVisible ? 1 : 0;
   const integrationRowIndex = integrationVisible ? mainRowIndex + 1 : mainRowIndex;
@@ -1150,6 +1211,29 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     dragStartOrder,
   ]);
 
+  // Computed after `sidebarItems` because the indicator counts hidden worktree
+  // rows directly from the flat list geometry (variable-height rows + section
+  // headers, issue #9666), so it needs the full item array as its input.
+  const {
+    hiddenAbove,
+    hiddenBelow,
+    scrollToTop,
+    scrollToBottom,
+    scrollerRef: scrollIndicatorScrollerRef,
+    handleScroll,
+    handleItemsRendered,
+  } = useScrollIndicator({
+    items: sidebarItems,
+  });
+
+  const setScrollerElement = useCallback(
+    (el: HTMLElement | Window | null) => {
+      scrollerElementRef.current = el instanceof HTMLElement ? el : null;
+      scrollIndicatorScrollerRef(el);
+    },
+    [scrollIndicatorScrollerRef]
+  );
+
   // The pinned main + integration rows live OUTSIDE the Virtuoso surface but
   // INSIDE the role="grid" container, so keyboard navigation must visit them
   // before descending into the virtualized list. They carry isPinned so the
@@ -1173,6 +1257,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const {
     gridRef,
     activeDescendantId,
+    keyboardCursorId,
     handleGridKeyDown,
     handleGridFocus,
     handleGridFocusCapture,
@@ -1188,6 +1273,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     () => ({
       activeWorktreeId,
       focusedWorktreeId,
+      keyboardCursorId,
       totalWorktreeCount: deferredWorktrees.length,
       selectWorktree,
       worktreeActions,
@@ -1200,6 +1286,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     [
       activeWorktreeId,
       focusedWorktreeId,
+      keyboardCursorId,
       deferredWorktrees.length,
       selectWorktree,
       worktreeActions,
@@ -1364,7 +1451,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   }
 
   const hasNonMainWorktrees = deferredWorktrees.length > 1;
-  const hasFilters = hasActiveFilters();
   const showQuickStateEmptyState =
     filteredWorktrees.length === 0 &&
     quickStateFilter !== "all" &&
@@ -1421,14 +1507,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       <TooltipContent side="bottom">{armMatchingLabel}</TooltipContent>
     </Tooltip>
   );
-  const filteredCount = filteredWorktrees.length;
-  const showScope = hasActiveFilters() && filteredCount !== totalCount;
-  const dragDisabledReason = hasQuery
-    ? "Sorting disabled while searching"
-    : isGroupedByType
-      ? "Sorting disabled while grouped by type"
-      : null;
-
   return (
     <div className="flex flex-col h-full">
       {worktreeLoadErrorBanner}
@@ -1438,8 +1516,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
           {showReconnecting && (
             <span
-              role="status"
-              aria-live="polite"
+              aria-hidden="true"
               className="flex items-center gap-1 text-daintree-text/60 text-xs"
               data-reconnect-escalated={showReconnectingEscalated ? "true" : undefined}
             >
@@ -1474,8 +1551,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             <button
               type="button"
               onClick={handleRefreshAll}
-              disabled={isRefreshing}
-              className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-daintree-text/40"
+              aria-disabled={isRefreshing || undefined}
+              className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-daintree-text/40"
               aria-label="Refresh sidebar"
               aria-keyshortcuts={refreshAriaShortcut}
               title={formatButtonTitle("Refresh sidebar", refreshShortcut)}
@@ -1501,14 +1578,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         </div>
       </div>
 
-      {/* Filter scope and sort-disabled status */}
+      {/* Filter scope and sort-disabled status. Visual-only — screen readers
+          are served by the debounced announcer effects above, not a live region
+          here, so the persistent sort-disabled text isn't re-announced on every
+          keystroke (#9665). */}
       {(showScope || dragDisabledReason) && (
-        <div
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          className="px-4 shrink-0 text-xs text-daintree-text/50 leading-5"
-        >
+        <div className="px-4 shrink-0 text-xs text-daintree-text/50 leading-5">
           {showScope && (
             <span>
               {filteredCount} of {totalCount} worktrees
@@ -1567,6 +1642,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               worktreeId={mainWorktree.id}
               activeWorktreeId={activeWorktreeId}
               focusedWorktreeId={focusedWorktreeId}
+              keyboardCursorId={keyboardCursorId}
               totalWorktreeCount={deferredWorktrees.length}
               selectWorktree={selectWorktree}
               worktreeActions={worktreeActions}
@@ -1591,6 +1667,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               worktreeId={integrationWorktree.id}
               activeWorktreeId={activeWorktreeId}
               focusedWorktreeId={focusedWorktreeId}
+              keyboardCursorId={keyboardCursorId}
               totalWorktreeCount={deferredWorktrees.length}
               selectWorktree={selectWorktree}
               worktreeActions={worktreeActions}
@@ -1664,9 +1741,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               variant="filtered-empty"
               scale="sidebar"
               instant
-              title={`No worktrees match ${QUICK_STATE_LABELS[quickStateFilter]} with ${activeFacetFilterCount} ${
-                activeFacetFilterCount === 1 ? "filter" : "filters"
-              }`}
+              title={
+                hasQuery
+                  ? `No matches for "${truncateSearchQuery(deferredQuery.trim())}"`
+                  : "No matching worktrees"
+              }
               action={
                 <>
                   <button
@@ -1697,8 +1776,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               scale="sidebar"
               instant
               title={
-                hasQuery
-                  ? `No matches for "${truncateSearchQuery(query.trim())}"`
+                deferredQuery.trim()
+                  ? `No matches for "${truncateSearchQuery(deferredQuery.trim())}"`
                   : "No matching worktrees"
               }
               action={
@@ -1735,6 +1814,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               itemContent={renderSidebarFlatItem}
               scrollerRef={setScrollerElement}
               onScroll={handleScroll}
+              itemsRendered={handleItemsRendered}
               className="absolute inset-0 overflow-y-auto scrollbar-none"
             />
           ) : (
@@ -1751,6 +1831,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 itemContent={renderSidebarFlatItem}
                 scrollerRef={setScrollerElement}
                 onScroll={handleScroll}
+                itemsRendered={handleItemsRendered}
                 className="absolute inset-0 overflow-y-auto scrollbar-none"
               />
             </SortableContext>

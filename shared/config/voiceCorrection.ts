@@ -7,23 +7,79 @@ export const CONFIDENCE_TAG_THRESHOLD = 0.8;
 const SHARED_TERMS_BLOCK = `<terms>
 racked/react: React
 type script: TypeScript
-next jess: Next.js
+next jess/next yes: Next.js
+nuxed/nucks/nuts: Nuxt
+remixed/re mix: Remix
+svelt/s felt: Svelte
+solid jess: SolidJS
+veet/veat: Vite
+view jess/voo jay ess: Vue.js
+story book: Storybook
+tan stack: TanStack
 get hub: GitHub
-cube netties: Kubernetes
-post gress: Postgres
+get lab: GitLab
+cube netties/cube nettis: Kubernetes
+cube cuttle/cube control: kubectl
+docker compose: Docker Compose
+terra form/tariff form: Terraform
+post gress/post grey ess: Postgres
+my sequel: MySQL
+mongo dee bee: MongoDB
+sequel/sea quel: SQL
+rediss: Redis
 graph cue el: GraphQL
+g RPC/jeep are see: gRPC
+o auth/oh auth: OAuth
+jot/jay double you tee: JWT
+rest a pi/rest API: REST API
+web socket: WebSocket
+web hook: webhook
 engine ex: Nginx
 web pack: Webpack
+es build/e s build: esbuild
+roll up: Rollup
 pie test: pytest
-see eye: CI
-node jess: Node.js
 vie test: Vitest
+play right: Playwright
+see eye/see eye see dee: CI/CD
+node jess: Node.js
+deno/dino: Deno
+npm/m pm: npm
+p n p m/pin pin: pnpm
 tail wind: Tailwind
 zoo stand: Zustand
 prism a: Prisma
-rediss: Redis
 E S lint: ESLint
-docker compose: Docker Compose
+pretty err: Prettier
+jason: JSON
+yam el/yammel: YAML
+a sync: async
+a weight: await
+rejects/red jacks: regex
+bouillon/bool ee an: boolean
+too pull/toople: tuple
+e num: enum
+no junk shun/null junction: NaN
+I dem potent/item potent: idempotent
+pie torch: PyTorch
+anthro pick: Anthropic
+see lie/c l i: CLI
+s d k: SDK
+a p i: API
+you are el/u r l: URL
+crud: CRUD
+dot env/dot e n v: .env
+mono repo: monorepo
+feature flag: feature flag
+web assembly/wasm: WebAssembly
+type orm: TypeORM
+super base: Supabase
+verse el/voucell: Vercel
+cloud flare: Cloudflare
+dot net/dotnet: .NET
+see sharp/c sharp: C#
+go lang: Golang
+rust lang: Rust
 </terms>`;
 
 export const CORE_CORRECTION_PROMPT = `You are a speech-to-text correction engine for a developer dictating to AI coding agents.
@@ -40,7 +96,7 @@ Use history and metadata only as bounded context. Correct only the content of <t
 CONFIDENCE TAGS: Words wrapped in <uncertain>word</uncertain> inside <target> were transcribed with low confidence and are likely misheard. Focus your corrections on these regions. Text outside <uncertain> tags was transcribed with high confidence — preserve it verbatim unless a correction is clearly necessary for grammar or term matching.
 
 CORRECTION PRIORITY:
-1. REQUIRED TERMS / CUSTOM DICTIONARY — Always map phonetically similar words to their exact canonical form.
+1. REQUIRED TERMS / CUSTOM DICTIONARY — The transcriber is already biased toward these terms, so do not force them in. Map a word to its custom-dictionary canonical form only when the existing word does not fit the context and the audio plausibly matches that term. When both the transcribed word and a dictionary term are plausible, keep the transcribed wording.
 2. TECHNICAL TERMS — Correct misheard programming terms using the <terms> dictionary below.
 3. PARAGRAPHS & PUNCTUATION — Add natural paragraph breaks, sentence punctuation, and casing. When the speaker uses a standalone voice formatting command (a phrase whose sole purpose is to insert a break, not part of a grammatical sentence), remove the command text and insert the corresponding characters:
    - Paragraph break (\\n\\n): "new paragraph", "next paragraph", "start a new paragraph", "start new paragraph"
@@ -50,6 +106,16 @@ CORRECTION PRIORITY:
 5. HOMOPHONES — Fix their/there, its/it's, your/you're when context makes the correct form unambiguous.
 
 PRESERVE: Keep the speaker's meaning, ordering, and phrasing intact. You may lightly restructure punctuation and paragraph breaks so the dictated passage reads cleanly, but do not turn it into polished prose, add new information, or rewrite it stylistically. If the target is already clean enough, return it character-for-character without any modification.
+
+EXAMPLES: These show the corrected text only — always return the JSON object described at the end of the message, never plain text.
+- Target: "let's wire up the racked component with type script and post gress"
+  Corrected: "Let's wire up the React component with TypeScript and Postgres."
+- Target: "run the pie test suite new paragraph then push to get hub and watch the see eye"
+  Corrected: "Run the pytest suite.\\n\\nThen push to GitHub and watch the CI."
+- Target: "the <uncertain>a sync</uncertain> handler needs an <uncertain>a weight</uncertain> before we parse the jason"
+  Corrected: "The async handler needs an await before we parse the JSON."
+- Target: "deploy with cube cuttle and check the o auth flow um and the jot expiry"
+  Corrected: "Deploy with kubectl and check the OAuth flow and the JWT expiry."
 
 ${SHARED_TERMS_BLOCK}`;
 
@@ -115,13 +181,13 @@ export function buildCorrectionSystemPrompt(context: CorrectionPromptContext): s
       }
     }
     parts.push(
-      `CURRENT PROJECT:\n${projectParts.join(", ")}\nCorrect any word that sounds like the project name or related terms to their proper form.`
+      `CURRENT PROJECT:\n${projectParts.join(", ")}\nPrefer these forms when a word plausibly matches the project name or related terms, but keep the transcribed wording when it already fits the context.`
     );
   }
 
   if (context.customDictionary && context.customDictionary.length > 0) {
     parts.push(
-      `REQUIRED TERMS (correct phonetic matches to these exact forms):\n${context.customDictionary.map((term) => `"${term}"`).join(" | ")}`
+      `PREFERRED TERMS (prefer these exact forms when the audio plausibly matches, but do not force them over a transcribed word that already fits the context):\n${context.customDictionary.map((term) => `"${term}"`).join(" | ")}`
     );
   }
 

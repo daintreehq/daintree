@@ -189,6 +189,8 @@ describe("ProjectViewManager — eviction safety", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
   });
@@ -234,6 +236,8 @@ describe("ProjectViewManager — eviction safety", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -268,6 +272,8 @@ describe("ProjectViewManager — eviction safety", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -302,6 +308,8 @@ describe("ProjectViewManager — eviction safety", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -336,6 +344,8 @@ describe("ProjectViewManager — eviction safety", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -377,6 +387,8 @@ describe("ProjectViewManager — eviction safety", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -413,6 +425,8 @@ describe("ProjectViewManager — eviction safety", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -446,6 +460,8 @@ describe("ProjectViewManager — eviction safety", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -472,6 +488,8 @@ describe("ProjectViewManager — eviction safety", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -501,6 +519,8 @@ describe("ProjectViewManager — eviction safety", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -538,6 +558,8 @@ describe("ProjectViewManager — eviction safety", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -564,6 +586,8 @@ describe("ProjectViewManager — eviction safety", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -591,6 +615,8 @@ describe("ProjectViewManager — eviction safety", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 4,
     });
 
@@ -640,6 +666,8 @@ describe("ProjectViewManager — eviction safety", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -658,6 +686,8 @@ describe("ProjectViewManager — eviction safety", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -691,6 +721,8 @@ describe("ProjectViewManager — telemetry", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -724,6 +756,8 @@ describe("ProjectViewManager — telemetry", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -767,6 +801,8 @@ describe("ProjectViewManager — telemetry", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -803,6 +839,8 @@ describe("ProjectViewManager — telemetry", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -838,6 +876,8 @@ describe("ProjectViewManager — telemetry", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -865,6 +905,8 @@ describe("ProjectViewManager — telemetry", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -885,6 +927,8 @@ describe("ProjectViewManager — telemetry", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -908,6 +952,8 @@ describe("ProjectViewManager — telemetry", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -943,6 +989,8 @@ describe("ProjectViewManager — telemetry", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -980,6 +1028,8 @@ describe("ProjectViewManager — telemetry", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -1006,6 +1056,8 @@ describe("ProjectViewManager — telemetry", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -1033,6 +1085,8 @@ describe("ProjectViewManager — telemetry", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 4,
     });
 
@@ -1077,6 +1131,8 @@ describe("ProjectViewManager — telemetry", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -1105,6 +1161,8 @@ describe("ProjectViewManager — telemetry", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -1150,6 +1208,8 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
       onViewCached,
     });
@@ -1176,6 +1236,8 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
       onViewCached,
     });
@@ -1207,6 +1269,8 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
       onViewCached,
     });
@@ -1234,6 +1298,8 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
       onViewCached,
     });
@@ -1252,6 +1318,8 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
       onViewCached,
     });
@@ -1271,6 +1339,8 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
       onViewCached,
     });
@@ -1297,6 +1367,8 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
       onViewCached,
     });
@@ -1318,6 +1390,8 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -1358,6 +1432,8 @@ describe("ProjectViewManager — listener cleanup", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -1413,6 +1489,8 @@ describe("ProjectViewManager — listener cleanup", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -1449,6 +1527,8 @@ describe("ProjectViewManager — listener cleanup", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
       onViewReady,
     });
@@ -1487,6 +1567,8 @@ describe("ProjectViewManager — listener cleanup", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -1512,6 +1594,8 @@ describe("ProjectViewManager — listener cleanup", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -1585,6 +1669,8 @@ describe("ProjectViewManager — low-memory eviction", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
   });
@@ -1744,6 +1830,8 @@ describe("ProjectViewManager — low-memory eviction", () => {
       cachedProjectViews: 2,
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
     });
     managerWithLimit.setLowMemoryFreeThresholdMb(768);
 
@@ -1836,6 +1924,8 @@ describe("ProjectViewManager — low-memory eviction", () => {
       onViewEvicted,
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
     });
     stubSystemMemoryInfo({ free: 64 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
     pressureManager.setLowMemoryFreeThresholdMb(768);

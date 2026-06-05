@@ -66,10 +66,17 @@ export interface LaunchAgentOptions {
   env?: Record<string, string>;
   /**
    * When true, the spawned panel is excluded from persisted layout snapshots
-   * and is never rehydrated on app restart. Used by the help panel so the
-   * Daintree assistant terminal doesn't reappear in the dock after quit.
+   * and from user-visible terminal surfaces, and is never rehydrated on app
+   * restart. Used by the help panel so the Daintree assistant terminal doesn't
+   * reappear in the dock after quit. Independent of `removeOnExit`.
    */
-  ephemeral?: boolean;
+  excludeFromPersistence?: boolean;
+  /**
+   * When true, the spawned panel is removed immediately when its PTY exits
+   * instead of being retained under the trash TTL. Independent of
+   * `excludeFromPersistence`.
+   */
+  removeOnExit?: boolean;
   /**
    * Extra launch flags appended after the resolved settings/preset flags.
    * Used by the help panel to inject user-provided customArgs (e.g. `--model
@@ -490,7 +497,8 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               agentPresetColor: preset?.color,
               env: presetEnv,
               activateDockOnCreate: launchOptions?.activateDockOnCreate,
-              ephemeral: launchOptions?.ephemeral,
+              excludeFromPersistence: launchOptions?.excludeFromPersistence,
+              removeOnExit: launchOptions?.removeOnExit,
               spawnedBy,
               focusPolicy,
               requestedId: launchOptions?.requestedId,
@@ -503,7 +511,8 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               command,
               location: launchOptions?.location,
               activateDockOnCreate: launchOptions?.activateDockOnCreate,
-              ephemeral: launchOptions?.ephemeral,
+              excludeFromPersistence: launchOptions?.excludeFromPersistence,
+              removeOnExit: launchOptions?.removeOnExit,
               spawnedBy,
               focusPolicy,
               requestedId: launchOptions?.requestedId,
@@ -540,7 +549,8 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               startedAt: Date.now(),
               isVisible: true,
               extensionState: presetEnv ? { presetEnv } : undefined,
-              ephemeral: launchOptions?.ephemeral,
+              excludeFromPersistence: launchOptions?.excludeFromPersistence,
+              removeOnExit: launchOptions?.removeOnExit,
               spawnedBy,
               focusPolicy,
             };

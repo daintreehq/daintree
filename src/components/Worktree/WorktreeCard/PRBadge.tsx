@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
-import { Clock, CloudOff, CornerDownRight, GitPullRequest } from "lucide-react";
+import { CloudOff, CornerDownRight, GitPullRequest } from "lucide-react";
 import type { CIStatus } from "@shared/types/forge";
 import type { NormalizedPRState } from "@shared/types/forge";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
@@ -8,8 +8,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { usePRTooltip } from "@/hooks/useGitHubTooltip";
 import { useGitHubBadgeTooltip } from "./hooks/useGitHubBadgeTooltip";
 import { useGitHubBadgeFreshness } from "./hooks/useGitHubBadgeFreshness";
-import { badgeFreshnessSuffix } from "@/components/Layout/FreshnessUtils";
-import { PRTooltipContent, TooltipLoading, TokenMissingTooltip } from "./GitHubTooltipContent";
+import {
+  PRTooltipContent,
+  TooltipLoading,
+  TokenMissingTooltip,
+  FreshnessMetaItem,
+  type TooltipFreshness,
+} from "./GitHubTooltipContent";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 
 interface PRBadgeProps {
@@ -21,7 +26,6 @@ interface PRBadgeProps {
   onOpen?: () => void;
   isActive?: boolean;
   underlineOnHover?: boolean;
-  rowLastUpdatedAt?: number;
   /** Service-wide PR detection circuit breaker tripped — this rollup may be stale. */
   prDetectionPaused?: boolean;
   /**
@@ -42,7 +46,6 @@ export function PRBadge({
   onOpen,
   isActive,
   underlineOnHover,
-  rowLastUpdatedAt,
   prDetectionPaused,
   isHeadline,
   prTitle,
@@ -73,10 +76,7 @@ export function PRBadge({
     onOpen,
   });
 
-  const { freshnessCause, cacheLastUpdatedAt, rateLimitResetAt, now } = useGitHubBadgeFreshness(
-    "pr",
-    rowLastUpdatedAt
-  );
+  const { freshnessCause, rateLimitResetAt, now } = useGitHubBadgeFreshness("pr");
 
   const prStateColor =
     prState === "merged"
@@ -94,7 +94,6 @@ export function PRBadge({
 
   const ciVisual = getCIStatusVisual(prCiStatus);
 
-  const showStaleGlyph = freshnessCause === "stale" && !missingToken;
   const showPausedGlyph =
     (freshnessCause === "rate-limit" ||
       freshnessCause === "circuit-breaker" ||
@@ -114,19 +113,10 @@ export function PRBadge({
           ? " — PR detection paused"
           : "");
 
-  const freshnessSuffixStr = useMemo(
-    () =>
-      badgeFreshnessSuffix(
-        freshnessCause,
-        rowLastUpdatedAt ?? cacheLastUpdatedAt,
-        now,
-        rateLimitResetAt
-      ),
-    [freshnessCause, rowLastUpdatedAt, cacheLastUpdatedAt, rateLimitResetAt, now]
-  );
+  const freshness: TooltipFreshness = { cause: freshnessCause, now, rateLimitResetAt };
 
   return (
-    <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300}>
+    <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300} autoDismiss={false}>
       <TooltipTrigger asChild>
         <button
           type="button"
@@ -200,13 +190,6 @@ export function PRBadge({
               )}
             </span>
           )}
-          {showStaleGlyph && (
-            <Clock
-              className="w-3 h-3 shrink-0 text-text-muted"
-              strokeWidth={2.5}
-              aria-hidden="true"
-            />
-          )}
           {showPausedGlyph && (
             <CloudOff className="w-3 h-3 shrink-0 text-text-muted" aria-hidden="true" />
           )}
@@ -218,14 +201,14 @@ export function PRBadge({
         ) : showTooltipLoading ? (
           <TooltipLoading />
         ) : data ? (
-          <PRTooltipContent data={data} />
+          <PRTooltipContent data={data} freshness={freshness} />
         ) : error ? (
           <span className="text-xs text-text-secondary">Failed to load PR details</span>
         ) : (
           <span className="text-xs text-text-secondary">PR #{prNumber}</span>
         )}
-        {freshnessSuffixStr && (
-          <span className="block text-[11px] text-text-muted mt-1">{freshnessSuffixStr}</span>
+        {!data && (
+          <FreshnessMetaItem freshness={freshness} className="text-[11px] text-text-muted mt-1" />
         )}
       </TooltipContent>
     </Tooltip>

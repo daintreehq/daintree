@@ -757,5 +757,22 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     })
   );
 
+  handlers.push(
+    typedHandleWithContext(CHANNELS.APP_VIEW_WARM_PAINTED, async (ctx) => {
+      // Warm reactivation paint signal: the renderer fired this after its wake
+      // fan-out completed and a clean post-atlas-repair frame painted. Release
+      // the warm paint gate that is holding the reactivated view's opaque
+      // background-color cover (#9679). Same per-window resolution as
+      // APP_VIEW_PAINTED, but re-fireable across reactivations (unlike the
+      // one-shot APP_VIEW_PAINTED).
+      const senderWindow = getWindowForWebContents(ctx.event.sender);
+      const pvm =
+        (senderWindow &&
+          deps?.windowRegistry?.getByWindowId(senderWindow.id)?.services?.projectViewManager) ??
+        deps?.projectViewManager;
+      pvm?.signalWarmViewPainted(ctx.webContentsId);
+    })
+  );
+
   return () => handlers.forEach((cleanup) => cleanup());
 }

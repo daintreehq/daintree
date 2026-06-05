@@ -13,7 +13,7 @@ import {
 import { SortableContext, horizontalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { LayoutGroup, AnimatePresence, m } from "framer-motion";
-import { ChevronDown, CopyPlus, SquareArrowOutUpRight } from "lucide-react";
+import { ChevronDown, CopyPlus } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   DropdownMenu,
@@ -425,12 +425,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     [panels, activeTabId, tabListEl]
   );
 
-  const handlePopOut = useCallback(() => {
-    if (!activePanel) return;
-    const moved = moveTerminalToGrid(activePanel.id);
-    if (moved) closeDockTerminal();
-  }, [activePanel, moveTerminalToGrid, closeDockTerminal]);
-
   // Handle add tab - duplicate the current panel as a new tab
   const handleAddTab = useCallback(async () => {
     if (!activePanel) return;
@@ -723,23 +717,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                       <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
                     </Tooltip>
                   </div>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handlePopOut();
-                        }}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-                        aria-label="Open in grid"
-                      >
-                        <SquareArrowOutUpRight className="w-3 h-3" aria-hidden="true" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Open in grid</TooltipContent>
-                  </Tooltip>
                   {hiddenPanels.length > 0 && (
                     <DropdownMenu>
                       <Tooltip>

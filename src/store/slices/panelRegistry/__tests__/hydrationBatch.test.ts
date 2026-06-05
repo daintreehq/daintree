@@ -460,6 +460,41 @@ describe("hydration batch (#5196)", () => {
       }
     });
 
+    it("surfaces a batched grid panel via getTabGroups before flush (#9649)", async () => {
+      // Regression for the blank recipe-launched terminal: during the spawn
+      // batch window the worktree index is committed eagerly but panelIds is
+      // deferred. getTabGroups must still return the panel as a virtual group
+      // so the grid paints on first mount. Drives the real addPanel batch path
+      // — guards against addPanel ever dropping its addToWorktreeIndex call.
+      const { beginSpawnBatch, flushSpawnBatch, addPanel, getTabGroups } = usePanelStore.getState();
+
+      const token = beginSpawnBatch();
+      expect(token).not.toBeNull();
+      await addPanel({
+        kind: "terminal",
+        launchAgentId: "claude",
+        command: "claude",
+        requestedId: "recipe-term",
+        cwd: "/",
+        worktreeId: "wt-a",
+        location: "grid",
+        bypassLimits: true,
+      });
+
+      // Pre-flush: panelIds is still empty, but the index already has the panel.
+      expect(usePanelStore.getState().panelIds).toEqual([]);
+      expect(usePanelStore.getState().panelIdsByWorktreeId["wt-a"]).toContain("recipe-term");
+
+      const groups = getTabGroups("grid", "wt-a");
+      expect(groups.flatMap((g) => g.panelIds)).toContain("recipe-term");
+
+      // Post-flush: still exactly one group, no duplicate from the id now being
+      // in both panelIds and the index.
+      flushSpawnBatch(token);
+      const afterIds = getTabGroups("grid", "wt-a").flatMap((g) => g.panelIds);
+      expect(afterIds).toEqual(["recipe-term"]);
+    });
+
     it("refuses to open a nested batch and sweeps overlapping ids via the active flush", async () => {
       const { beginSpawnBatch, flushSpawnBatch, addPanel } = usePanelStore.getState();
 

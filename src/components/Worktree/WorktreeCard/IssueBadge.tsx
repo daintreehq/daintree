@@ -1,13 +1,19 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
-import { CircleDot, Clock, CloudOff } from "lucide-react";
+import { CircleDot, CloudOff } from "lucide-react";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { useIssueTooltip } from "@/hooks/useGitHubTooltip";
 import { useGitHubBadgeTooltip } from "./hooks/useGitHubBadgeTooltip";
 import { useGitHubBadgeFreshness } from "./hooks/useGitHubBadgeFreshness";
-import { freshnessClass, badgeFreshnessSuffix } from "@/components/Layout/FreshnessUtils";
-import { IssueTooltipContent, TooltipLoading, TokenMissingTooltip } from "./GitHubTooltipContent";
+import { freshnessClass } from "@/components/Layout/FreshnessUtils";
+import {
+  IssueTooltipContent,
+  TooltipLoading,
+  TokenMissingTooltip,
+  FreshnessMetaItem,
+  type TooltipFreshness,
+} from "./GitHubTooltipContent";
 
 interface IssueBadgeProps {
   issueNumber: number;
@@ -17,7 +23,6 @@ interface IssueBadgeProps {
   isHeadline?: boolean;
   isActive?: boolean;
   underlineOnHover?: boolean;
-  rowLastUpdatedAt?: number;
 }
 
 export function IssueBadge({
@@ -28,7 +33,6 @@ export function IssueBadge({
   isHeadline,
   isActive,
   underlineOnHover,
-  rowLastUpdatedAt,
 }: IssueBadgeProps) {
   // Detects the cold-title gap by comparing issueNumber to its previous-render
   // value via a ref; the lag (ref written in effect, no re-render) is what
@@ -63,34 +67,24 @@ export function IssueBadge({
     prevIssueNumber.current = issueNumber;
   }, [issueNumber]);
 
-  const { freshnessLevel, freshnessCause, cacheLastUpdatedAt, rateLimitResetAt, now } =
-    useGitHubBadgeFreshness("issue", rowLastUpdatedAt);
+  const { freshnessLevel, freshnessCause, rateLimitResetAt, now } =
+    useGitHubBadgeFreshness("issue");
 
-  const freshnessSuffixStr = useMemo(
-    () =>
-      badgeFreshnessSuffix(
-        freshnessCause,
-        rowLastUpdatedAt ?? cacheLastUpdatedAt,
-        now,
-        rateLimitResetAt
-      ),
-    [freshnessCause, rowLastUpdatedAt, cacheLastUpdatedAt, rateLimitResetAt, now]
-  );
+  const freshness: TooltipFreshness = { cause: freshnessCause, now, rateLimitResetAt };
 
-  const showStaleGlyph = freshnessCause === "stale" && !missingToken;
   const showPausedGlyph = freshnessCause === "rate-limit" && !missingToken;
 
   return (
-    <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300}>
+    <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300} autoDismiss={false}>
       <TooltipTrigger asChild>
         <button
           type="button"
           onClick={handleClick}
           data-no-dnd
           className={cn(
-            "flex items-center gap-1.5 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0",
+            "flex items-center gap-1 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0",
             freshnessClass(freshnessLevel),
-            isHeadline ? "text-[13px]" : "text-xs"
+            isHeadline ? "gap-1.5 text-[13px]" : "text-xs"
           )}
           aria-disabled={!isActive || undefined}
           aria-label={
@@ -131,13 +125,6 @@ export function IssueBadge({
                 </span>
               ))}
           </span>
-          {showStaleGlyph && (
-            <Clock
-              className="w-3 h-3 shrink-0 text-text-muted"
-              strokeWidth={2.5}
-              aria-hidden="true"
-            />
-          )}
           {showPausedGlyph && (
             <CloudOff className="w-3 h-3 shrink-0 text-text-muted" aria-hidden="true" />
           )}
@@ -149,14 +136,14 @@ export function IssueBadge({
         ) : showTooltipLoading ? (
           <TooltipLoading />
         ) : data ? (
-          <IssueTooltipContent data={data} />
+          <IssueTooltipContent data={data} freshness={freshness} />
         ) : error ? (
           <span className="text-xs text-text-secondary">Failed to load issue details</span>
         ) : (
           <span className="text-xs text-text-secondary">Issue #{issueNumber}</span>
         )}
-        {freshnessSuffixStr && (
-          <span className="block text-[11px] text-text-muted mt-1">{freshnessSuffixStr}</span>
+        {!data && (
+          <FreshnessMetaItem freshness={freshness} className="text-[11px] text-text-muted mt-1" />
         )}
       </TooltipContent>
     </Tooltip>

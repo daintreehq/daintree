@@ -15,7 +15,10 @@ function makeAuditRecord(overrides: Partial<McpAuditRecord>): McpAuditRecord {
     id: overrides.id ?? "audit-1",
     timestamp: overrides.timestamp ?? Date.now(),
     toolId: overrides.toolId ?? "agent.getState",
-    sessionId: overrides.sessionId ?? "session-1",
+    // The classifier joins on helpSessionId (the help-session id); sessionId
+    // is the MCP transport id and intentionally never matches it.
+    sessionId: overrides.sessionId ?? "mcp-transport-1",
+    helpSessionId: overrides.helpSessionId ?? "session-1",
     tier: overrides.tier ?? "action",
     argsSummary: overrides.argsSummary ?? "{}",
     result: overrides.result ?? "success",
@@ -214,7 +217,7 @@ describe("classifyTurnOutcome", () => {
 
   it("ignores audit records from other sessions", () => {
     const audit = makeAuditRecord({
-      sessionId: "session-other",
+      helpSessionId: "session-other",
       result: "error",
     });
     expect(

@@ -138,9 +138,11 @@ export function classifyTurnOutcome(args: {
     // recentAuditRecords arrives newest-first; the FIRST matching record is
     // the most recent. Filter to records that fall inside the current turn
     // window so a stale error from a prior turn cannot poison the
-    // classification.
+    // classification. Audit records carry the MCP transport id in
+    // `sessionId`; `helpSessionId` is the field that matches the help
+    // session id this classifier receives.
     const lastRecord = recentAuditRecords.find(
-      (r) => r.sessionId === sessionId && r.timestamp >= turnStartTimestamp
+      (r) => r.helpSessionId === sessionId && r.timestamp >= turnStartTimestamp
     );
     if (lastRecord) {
       if (
@@ -156,7 +158,7 @@ export function classifyTurnOutcome(args: {
 
     const callCounts = new Map<string, number>();
     for (const r of recentAuditRecords) {
-      if (r.sessionId === sessionId && r.timestamp >= turnStartTimestamp) {
+      if (r.helpSessionId === sessionId && r.timestamp >= turnStartTimestamp) {
         const key = `${r.toolId}::${r.argsSummary}`;
         const count = (callCounts.get(key) ?? 0) + 1;
         if (count >= REASONING_LOOP_THRESHOLD) {

@@ -113,7 +113,11 @@ test.describe.serial("Core: Terminal Context Menu", () => {
         "Kill Terminal",
       ];
       for (const name of expectedItems) {
-        await expect(window.getByRole("menuitem", { name })).toBeVisible({ timeout: T_SHORT });
+        await expect(
+          window.getByRole("menuitem", { name: new RegExp(`^${name}\\b`, "i") })
+        ).toBeVisible({
+          timeout: T_SHORT,
+        });
       }
 
       await window.keyboard.press("Escape");

@@ -30,6 +30,7 @@ function hasSendTargets(sourceTerminalId: string | null): boolean {
       t.id !== sourceTerminalId &&
       t.location !== "trash" &&
       t.location !== "background" &&
+      t.location !== "overlay" &&
       isPtyPanel(t) &&
       t.hasPty !== false
     );
@@ -110,7 +111,8 @@ export function useSendToAgentPalette() {
       const t = panelsById[id];
       if (!t) continue;
       if (sourceId && t.id === sourceId) continue;
-      if (t.location === "trash" || t.location === "background") continue;
+      if (t.location === "trash" || t.location === "background" || t.location === "overlay")
+        continue;
       if (!isPtyPanel(t)) continue;
       if (t.hasPty === false) continue;
 

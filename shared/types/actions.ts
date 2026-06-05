@@ -116,6 +116,16 @@ export interface ActionDefinition<
    * repeatable operation.
    */
   nonRepeatable?: boolean;
+  /**
+   * When true, dispatching this action never fires the automatic
+   * keyboard-shortcut discovery hint (the `ShortcutHint` nudge emitted from
+   * `ActionService` on user-source dispatch). Use for actions whose toolbar
+   * affordance already carries a meaning-bearing tooltip the hint would
+   * duplicate or compete with — e.g. the notification bell, whose tooltip
+   * shows the unread count. Buttons that opt out should also skip
+   * `useShortcutHintHover`, since the hover path teaches the same hint.
+   */
+  suppressShortcutHint?: boolean;
   /** Synonyms and alternative mental-model terms for palette search. */
   keywords?: string[];
   /**

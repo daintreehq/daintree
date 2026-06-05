@@ -134,7 +134,7 @@ describe("help.launchAgent", () => {
     expect(window.electron.help.getFolderPath).toHaveBeenCalled();
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
-      expect.objectContaining({ agentId: "claude", cwd: "/mock/help", location: "dock" }),
+      expect.objectContaining({ agentId: "claude", cwd: "/mock/help", location: "overlay" }),
       { source: "user" }
     );
     expect(mockNotify).not.toHaveBeenCalled();
@@ -154,7 +154,7 @@ describe("help.launchAgent", () => {
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
-      expect.objectContaining({ agentId: "gemini", cwd: "/mock/help", location: "dock" }),
+      expect.objectContaining({ agentId: "gemini", cwd: "/mock/help", location: "overlay" }),
       { source: "user" }
     );
   });
@@ -173,7 +173,7 @@ describe("help.launchAgent", () => {
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
-      expect.objectContaining({ agentId: "claude", cwd: "/mock/help", location: "dock" }),
+      expect.objectContaining({ agentId: "claude", cwd: "/mock/help", location: "overlay" }),
       { source: "user" }
     );
   });
@@ -196,7 +196,7 @@ describe("help.launchAgent", () => {
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
-      expect.objectContaining({ agentId: "codex", cwd: "/mock/help", location: "dock" }),
+      expect.objectContaining({ agentId: "codex", cwd: "/mock/help", location: "overlay" }),
       { source: "user" }
     );
   });
@@ -220,7 +220,7 @@ describe("help.launchAgent", () => {
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
-      expect.objectContaining({ agentId: "claude", cwd: "/mock/help", location: "dock" }),
+      expect.objectContaining({ agentId: "claude", cwd: "/mock/help", location: "overlay" }),
       { source: "user" }
     );
   });
@@ -235,7 +235,7 @@ describe("help.launchAgent", () => {
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
-      expect.objectContaining({ agentId: "codex", cwd: "/mock/help", location: "dock" }),
+      expect.objectContaining({ agentId: "codex", cwd: "/mock/help", location: "overlay" }),
       { source: "user" }
     );
   });

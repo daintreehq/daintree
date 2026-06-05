@@ -143,6 +143,19 @@ describe("Terminal Entry Validation Schemas", () => {
       expect(result.success).toBe(false);
     });
 
+    it("rejects overlay location (overlay terminals are never persisted to app state)", () => {
+      const entry = {
+        id: "term-123",
+        type: "terminal",
+        title: "Terminal",
+        cwd: "/Users/test",
+        location: "overlay",
+      };
+
+      const result = AppStateTerminalEntrySchema.safeParse(entry);
+      expect(result.success).toBe(false);
+    });
+
     it("rejects non-object values", () => {
       expect(AppStateTerminalEntrySchema.safeParse(null).success).toBe(false);
       expect(AppStateTerminalEntrySchema.safeParse(undefined).success).toBe(false);
@@ -260,8 +273,8 @@ describe("Terminal Entry Validation Schemas", () => {
       expect(result.success).toBe(true);
     });
 
-    it("accepts all locations including trash", () => {
-      const locations = ["grid", "dock", "trash"];
+    it("accepts all locations including trash and overlay", () => {
+      const locations = ["grid", "dock", "overlay", "trash", "background"];
 
       for (const location of locations) {
         const snapshot = {

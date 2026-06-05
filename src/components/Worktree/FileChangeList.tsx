@@ -227,7 +227,7 @@ export function FileChangeList({
     const index = indexByKey.get(key) ?? 0;
 
     return (
-      <Tooltip key={key}>
+      <Tooltip key={key} autoDismiss={false}>
         <TooltipTrigger asChild>
           <div
             data-recency-new={isNew ? "true" : undefined}

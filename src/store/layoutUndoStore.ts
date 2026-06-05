@@ -9,7 +9,7 @@ const MAX_UNDO_HISTORY = 10;
 
 interface TerminalLayoutEntry {
   id: string;
-  location: "grid" | "dock" | "trash" | "background";
+  location: "grid" | "dock" | "overlay" | "trash" | "background";
   worktreeId?: string;
 }
 

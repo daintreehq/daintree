@@ -156,9 +156,10 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         {
           agentId,
           cwd,
-          location: "dock",
+          location: "overlay",
           prompt: helpPrompt,
-          ephemeral: true,
+          excludeFromPersistence: true,
+          removeOnExit: true,
           ...(env && { env }),
         },
         { source: "user" }

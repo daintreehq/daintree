@@ -1,6 +1,20 @@
 import type { WaitingReason } from "./agent.js";
 
-export const DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+/**
+ * Default wait is a bounded long-poll, not an open-ended block. A tool call
+ * held open freezes an interactive Claude Code session (the user can't talk
+ * to the assistant until it returns), so the default is sized for "wait a
+ * beat, then return `timedOut: true` and let the agent re-poll or schedule a
+ * wakeup" — the idiom agent harnesses already expect.
+ */
+export const DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS = 60 * 1000;
+/**
+ * Hard ceiling applied server-side to interactive help sessions regardless of
+ * the requested `timeoutMs`. Headless/external (api-key) sessions are exempt
+ * — a scripted one-shot flow blocking for hours is fine when no human is
+ * waiting on the conversation.
+ */
+export const INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS = 60 * 1000;
 export const MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
 export type WaitUntilIdleResult = {
@@ -30,7 +44,7 @@ export const WAIT_UNTIL_IDLE_INPUT_SCHEMA: Record<string, unknown> = {
       type: "integer",
       minimum: 0,
       maximum: MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS,
-      description: `Pass 0 for an immediate non-blocking snapshot — the recommended mode when polling multiple terminals in parallel. Otherwise, the maximum time to block in milliseconds; defaults to ${DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS} ms (${DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS / 60_000} minutes) and clamped to ${MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS} ms (${MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS / 60_000 / 60} hours).`,
+      description: `Pass 0 for an immediate non-blocking snapshot — the recommended mode for status checks and parallel polling. Omitted, it long-polls for ${DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS / 1000}s and returns \`timedOut: true\` if the agent is still working — re-call to keep waiting. Interactive sessions are capped at ${INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS / 1000}s server-side (a longer block would freeze the conversation); headless sessions may block up to ${MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS / 60_000 / 60} hours.`,
     },
   },
   required: ["terminalId"],
@@ -61,4 +75,4 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
 };
 
 export const WAIT_UNTIL_IDLE_DESCRIPTION =
-  "Block until the agent in one terminal leaves the working state (or the timeout elapses), then return its resolved state. Args: `terminalId` is a panel UUID from `terminal.list` (the `id` field); `timeoutMs` is optional (0 = immediate non-blocking snapshot, otherwise max ms to block, default 30 minutes, clamped to 2 hours). Returns { terminalId, busyState ('working'|'idle'), idleReason, waitingReason ('prompt'|'question', present only while waiting_for_user), timedOut }. An untracked `terminalId` is not an error — it returns immediately as { busyState: 'idle', idleReason: 'unknown', timedOut: false }. Do NOT use this to poll many terminals — call `terminal.getStatus` for fleet-wide state, or pass timeoutMs:0 here for a single non-blocking check.";
+  "Check whether the agent in one terminal has left the working state, with an optional bounded wait. Args: `terminalId` is a panel UUID from `terminal.list` (the `id` field); `timeoutMs` is optional (0 = immediate non-blocking snapshot — the recommended mode; otherwise max ms to long-poll, default 60s). Returns { terminalId, busyState ('working'|'idle'), idleReason, waitingReason ('prompt'|'question', present only while waiting_for_user), timedOut }. `timedOut: true` means the agent is still working — re-call to keep waiting, or pace with a scheduled wakeup. While this call is in flight the conversation is blocked, so interactive sessions are capped at 60s server-side regardless of `timeoutMs`; only headless/scripted sessions may block longer (clamped to 2 hours). An untracked `terminalId` is not an error — it returns immediately as { busyState: 'idle', idleReason: 'unknown', timedOut: false }. Do NOT use this to poll many terminals — call `terminal.getStatus` for fleet-wide state.";

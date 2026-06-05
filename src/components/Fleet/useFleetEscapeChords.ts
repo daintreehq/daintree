@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 import { actionService } from "@/services/ActionService";
 import type { FleetPendingActionSnapshot } from "@/store/fleetPendingActionStore";
-import type { PendingFleetBroadcast } from "@/store/fleetBroadcastConfirmStore";
 
 const DOUBLE_ESC_WINDOW_MS = 350;
 
@@ -9,8 +8,7 @@ export function useFleetEscapeChords(
   armedCount: number,
   exitFleet: () => void,
   pending: FleetPendingActionSnapshot | null,
-  popoverOpen: boolean,
-  pendingBroadcast: PendingFleetBroadcast | null
+  popoverOpen: boolean
 ): void {
   const lastEscapeMsRef = useRef<number>(0);
   const lastBareEscapeMsRef = useRef<number>(0);
@@ -23,12 +21,12 @@ export function useFleetEscapeChords(
   // Mirror modal state into a ref so the capture-phase handler (whose
   // effect only re-binds on armedCount change) can skip bare-Escape
   // double-tap detection when an Escape-stack handler should win instead
-  // — pending confirm, popover, and pending broadcast all absorb bare
-  // Escape via useEscapeStack and must not also start a double-tap timer.
+  // — pending confirm and popover both absorb bare Escape via
+  // useEscapeStack and must not also start a double-tap timer.
   const bareEscapeBlockedRef = useRef(false);
   useEffect(() => {
-    bareEscapeBlockedRef.current = pending !== null || popoverOpen || pendingBroadcast !== null;
-  }, [pending, popoverOpen, pendingBroadcast]);
+    bareEscapeBlockedRef.current = pending !== null || popoverOpen;
+  }, [pending, popoverOpen]);
 
   useEffect(() => {
     const clearPendingExit = () => {

@@ -1094,6 +1094,145 @@ describe("sessionServer tier-mismatch notifier", () => {
   });
 });
 
+describe("CallTool live activity notifications (#9759)", () => {
+  it("emits started then settled for a permitted dispatch", async () => {
+    const started = vi.fn();
+    const settled = vi.fn();
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({
+      notifyToolCallStarted: started,
+      notifyToolCallSettled: settled,
+      dispatchAction,
+    });
+    const server = createSessionServer("session-A", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.list", arguments: {} });
+
+    expect(started).toHaveBeenCalledTimes(1);
+    expect(started).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "session-A", toolId: "worktree.list", danger: false })
+    );
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(settled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-A",
+        toolId: "worktree.list",
+        outcome: expect.objectContaining({ kind: "result" }),
+      })
+    );
+    // Started must precede settled.
+    expect(started.mock.invocationCallOrder[0]).toBeLessThan(settled.mock.invocationCallOrder[0]);
+  });
+
+  it("does not emit started/settled for a pre-dispatch tier rejection", async () => {
+    const started = vi.fn();
+    const settled = vi.fn();
+    const deps = fakeDeps({ notifyToolCallStarted: started, notifyToolCallSettled: settled });
+    const server = createSessionServer("session-B", deps);
+    await server.connect(makeMockTransport());
+
+    // worktree.delete is system-tier — denied at the default workbench tier.
+    await callTool(server, { name: "worktree.delete", arguments: {} });
+
+    expect(started).not.toHaveBeenCalled();
+    expect(settled).not.toHaveBeenCalled();
+  });
+
+  it("does not emit started/settled for a rate-limited rejection", async () => {
+    const started = vi.fn();
+    const settled = vi.fn();
+    const sessionStore = fakeSessionStore("workbench");
+    (sessionStore.consumeRateLimitToken as ReturnType<typeof vi.fn>).mockReturnValue({
+      allowed: false,
+      retryAfter: 5,
+    });
+    const deps = fakeDeps({
+      sessionStore,
+      notifyToolCallStarted: started,
+      notifyToolCallSettled: settled,
+    });
+    const server = createSessionServer("session-C", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.list", arguments: {} });
+
+    expect(started).not.toHaveBeenCalled();
+    expect(settled).not.toHaveBeenCalled();
+  });
+
+  it('flags danger:"confirm" tools on the started event', async () => {
+    const started = vi.fn();
+    const requestManifest = vi
+      .fn()
+      .mockResolvedValue([
+        { id: "worktree.list", title: "List", description: "d", danger: "confirm" },
+      ]);
+    const deps = fakeDeps({
+      notifyToolCallStarted: started,
+      requestManifest,
+      dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: null } }),
+    });
+    const server = createSessionServer("session-D", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.list", arguments: {} });
+
+    expect(started).toHaveBeenCalledWith(expect.objectContaining({ danger: true }));
+  });
+
+  it("emits started (danger:false) + settled for the waitUntilIdle short-circuit", async () => {
+    const started = vi.fn();
+    const settled = vi.fn();
+    const handleWaitUntilIdle = vi.fn().mockResolvedValue({
+      idleReason: "idle" as const,
+      durationMs: 10,
+      finalState: "idle",
+    });
+    const deps = fakeDeps({
+      // waitUntilIdle is in ACTION_TIER_ADDONS — use an action-tier session so
+      // the call clears the tier floor and reaches the dispatch path.
+      sessionStore: fakeSessionStore("action"),
+      notifyToolCallStarted: started,
+      notifyToolCallSettled: settled,
+      handleWaitUntilIdle,
+    });
+    const server = createSessionServer("session-W", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, {
+      name: "terminal.waitUntilIdle",
+      arguments: { terminalId: "t1", timeoutMs: 10 },
+    });
+
+    expect(started).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "terminal.waitUntilIdle", danger: false })
+    );
+    expect(settled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolId: "terminal.waitUntilIdle",
+        outcome: expect.objectContaining({ kind: "result" }),
+      })
+    );
+  });
+
+  it("survives a notifyToolCallStarted throw without failing the dispatch", async () => {
+    const started = vi.fn(() => {
+      throw new Error("boom");
+    });
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const deps = fakeDeps({ notifyToolCallStarted: started, dispatchAction });
+    const server = createSessionServer("session-E", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, { name: "worktree.list", arguments: {} })) as {
+      isError?: boolean;
+    };
+    expect(result.isError).toBeFalsy();
+    expect(dispatchAction).toHaveBeenCalled();
+  });
+});
+
 describe("CallTool error envelope (integration through sessionServer)", () => {
   async function callTool(
     server: ReturnType<typeof createSessionServer>,

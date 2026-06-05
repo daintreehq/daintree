@@ -22,7 +22,7 @@ import { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import { notificationService } from "../services/NotificationService.js";
 import { logInfo } from "../utils/logger.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
-import { isDemoMode } from "../setup/environment.js";
+import { isDemoMode, isSmokeTest } from "../setup/environment.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { registerDeferredTask, finalizeDeferredRegistration } from "./deferredInitQueue.js";
 import { toDisposable } from "../utils/lifecycle.js";
@@ -141,7 +141,7 @@ export async function initPerWindowServices(
     // during PTY host fork (worst case: a synchronous spawn that hangs) is
     // still recoverable. The watchdog is fail-open: if its own fork throws,
     // PtyClient still starts normally.
-    if (!getMainProcessWatchdogClientRef()) {
+    if (!isSmokeTest && !getMainProcessWatchdogClientRef()) {
       try {
         // Use the singleton accessor so `disposeMainProcessWatchdog()` in
         // shutdown.ts reaches the running instance instead of a no-op.

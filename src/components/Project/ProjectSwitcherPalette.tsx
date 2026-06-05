@@ -201,14 +201,14 @@ function ProjectListItem({
       className={cn(
         "group relative w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent",
         project.isActive
-          ? cn("text-daintree-text", isSelected && "bg-overlay-soft border-border-subtle")
+          ? cn("text-daintree-text", isSelected && "bg-overlay-raised border-border-subtle")
           : project.isMissing
             ? cn(
                 "text-daintree-text/50",
-                isSelected ? "bg-overlay-soft border-border-subtle" : "hover:bg-overlay-soft"
+                isSelected ? "bg-overlay-raised border-border-subtle" : "hover:bg-overlay-soft"
               )
             : isSelected
-              ? "bg-overlay-soft border-border-subtle text-daintree-text cursor-pointer"
+              ? "bg-overlay-raised border-border-subtle text-daintree-text cursor-pointer"
               : "text-daintree-text/70 hover:bg-overlay-soft hover:text-daintree-text cursor-pointer"
       )}
       onClick={() => !project.isActive && !project.isMissing && onSelect(project)}
@@ -219,13 +219,14 @@ function ProjectListItem({
 
       <div
         className={cn(
-          "flex items-center justify-center rounded-[var(--radius-lg)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.3)] shrink-0 transition duration-150",
+          // Wash/shadow var fallbacks keep themes without the overrides byte-identical.
+          "flex items-center justify-center rounded-[var(--radius-lg)] shadow-[var(--project-tile-shadow,inset_0_1px_2px_rgba(0,0,0,0.3))] shrink-0 transition duration-150",
           "h-8 w-8 text-base"
         )}
         style={{
           background: project.color
-            ? `linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2)), ${getProjectGradient(project.color)}`
-            : "linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2)), var(--color-daintree-sidebar)",
+            ? `var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), ${getProjectGradient(project.color)}`
+            : "var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), var(--color-daintree-sidebar)",
         }}
       >
         <span className="leading-none select-none filter drop-shadow-sm">{project.emoji}</span>
@@ -676,13 +677,13 @@ function ProjectSwitcherFooter({ mode }: { mode?: ProjectSwitcherMode }) {
           <span className="ml-1.5">{hint.label}</span>
         </span>
         {mode !== "modal" && (
-          <span className="text-daintree-text/30">
+          <span className="text-daintree-text/50">
             <kbd className={KBD_CLASS}>⌘⌫</kbd>
             <span className="ml-1.5">Remove</span>
           </span>
         )}
       </div>
-      <span className="text-daintree-text/30">
+      <span className="text-daintree-text/50">
         <span>Right-click for more</span>
       </span>
     </div>

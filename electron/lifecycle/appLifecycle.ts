@@ -1,3 +1,4 @@
+// eager-import-allow: manages application lifetime hooks and native deep link triggers on startup
 import { app, BrowserWindow } from "electron";
 import path from "node:path";
 import fs from "node:fs";

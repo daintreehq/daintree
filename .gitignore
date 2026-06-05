@@ -11,6 +11,9 @@ release/
 *.asar
 stats.html
 
+# Screenshot capture output (marketing reel + theme-review harness)
+artifacts/
+
 # Build resources - keep icons but ignore iconset
 build/icon.iconset/
 
@@ -49,6 +52,10 @@ lerna-debug.log*
 
 # Signing keys (local only — NEVER commit)
 keys/
+.signing/
+
+# Local build lock (concurrency guard for package:local)
+.local-build.lock
 
 # Environment
 .env

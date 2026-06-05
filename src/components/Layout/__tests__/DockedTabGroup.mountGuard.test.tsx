@@ -614,21 +614,21 @@ describe("DockedTabGroup lifecycle and pop-out (#8160)", () => {
     expect(calls.some((c) => c[1] === TerminalRefreshTier.BACKGROUND)).toBe(true);
   });
 
-  it("renders an 'Open in grid' button that pops the active panel to the grid", () => {
+  it("double-clicking the chip moves the active panel to the grid and closes the dock", () => {
     mockActiveDockTerminalId = "t-1";
     const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
     const { container } = render(
       <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
     );
 
-    const popOut = container.querySelector(
-      'button[aria-label="Open in grid"]'
+    const chip = container.querySelector(
+      'button[aria-label*="double-click to move to grid"]'
     ) as HTMLButtonElement | null;
-    expect(popOut).not.toBeNull();
+    expect(chip).not.toBeNull();
 
     moveTerminalToGridMock.mockReturnValue(true);
     act(() => {
-      popOut?.click();
+      fireEvent.doubleClick(chip!);
     });
 
     expect(moveTerminalToGridMock).toHaveBeenCalledWith("t-1");
@@ -642,14 +642,14 @@ describe("DockedTabGroup lifecycle and pop-out (#8160)", () => {
       <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
     );
 
-    const popOut = container.querySelector(
-      'button[aria-label="Open in grid"]'
+    const chip = container.querySelector(
+      'button[aria-label*="double-click to move to grid"]'
     ) as HTMLButtonElement | null;
-    expect(popOut).not.toBeNull();
+    expect(chip).not.toBeNull();
 
     moveTerminalToGridMock.mockReturnValue(false);
     act(() => {
-      popOut?.click();
+      fireEvent.doubleClick(chip!);
     });
 
     expect(moveTerminalToGridMock).toHaveBeenCalledWith("t-1");

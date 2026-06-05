@@ -18,6 +18,8 @@ import type {
   McpRuntimeSnapshot,
   McpGrantLifecyclePayload,
   McpBearerIdentity,
+  McpToolCallStartedPayload,
+  McpToolCallSettledPayload,
 } from "../shared/types/ipc/mcpServer.js";
 import type { ActionContext, ActionDispatchResult } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
@@ -791,6 +793,8 @@ const api: ElectronAPI = {
 
     retryProjectLoad: (): Promise<void> => _unwrappingInvoke(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD),
 
+    retryAuthFetch: (): Promise<void> => _unwrappingInvoke(CHANNELS.WORKTREE_RETRY_AUTH_FETCH),
+
     onUpdate: (callback: (state: WorktreeState) => void) =>
       _eventBusOn("worktree:update", (payload) => callback(payload.worktree)),
 
@@ -1200,6 +1204,8 @@ const api: ElectronAPI = {
     notifyFirstInteractive: () => _unwrappingInvoke(CHANNELS.APP_FIRST_INTERACTIVE),
 
     notifyViewPainted: () => _unwrappingInvoke(CHANNELS.APP_VIEW_PAINTED),
+
+    notifyWarmViewPainted: () => _unwrappingInvoke(CHANNELS.APP_VIEW_WARM_PAINTED),
 
     onMenuAction: (callback: (payload: { actionId: string; args?: unknown }) => void) =>
       _typedOn(CHANNELS.MENU_ACTION, callback),
@@ -2421,6 +2427,10 @@ const api: ElectronAPI = {
     ) => _typedOn(CHANNELS.MCP_TIER_NOT_PERMITTED, callback),
     onGrantLifecycle: (callback: (payload: McpGrantLifecyclePayload) => void) =>
       _typedOn(CHANNELS.MCP_GRANT_LIFECYCLE, callback),
+    onToolCallStarted: (callback: (payload: McpToolCallStartedPayload) => void) =>
+      _typedOn(CHANNELS.MCP_TOOL_CALL_STARTED, callback),
+    onToolCallSettled: (callback: (payload: McpToolCallSettledPayload) => void) =>
+      _typedOn(CHANNELS.MCP_TOOL_CALL_SETTLED, callback),
   },
 
   helpAssistant: buildHelpAssistantPreloadBindings(_unwrappingInvoke),

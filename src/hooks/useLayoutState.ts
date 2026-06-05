@@ -16,7 +16,8 @@ export interface LayoutState {
   gestureAssistantHidden: boolean;
   toggleFocusMode: (
     currentState: PanelState,
-    visibility?: { sidebarVisible: boolean; assistantVisible: boolean }
+    visibility?: { sidebarVisible: boolean; assistantVisible: boolean },
+    assistantWasOpen?: boolean
   ) => void;
   setFocusMode: (mode: boolean, savedState?: PanelState) => void;
   setSidebarGestureHidden: (hidden: boolean, currentPanelState?: PanelState) => void;

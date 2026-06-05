@@ -15,7 +15,7 @@ export function getLiveTerminalIdsForWorktree(worktreeId: string): string[] {
     return (
       panel?.worktreeId === worktreeId &&
       panel.location !== "trash" &&
-      (!isPtyPanel(panel) || panel.ephemeral !== true)
+      (!isPtyPanel(panel) || panel.excludeFromPersistence !== true)
     );
   });
 }

@@ -244,6 +244,7 @@ export type {
   ElectronAPI,
   NotificationSettings,
   VoiceInputSettings,
+  SuggestedDictionaryEntry,
   VoiceInputStatus,
   VoiceTranscriptionModel,
   VoiceTranscriptionProvider,

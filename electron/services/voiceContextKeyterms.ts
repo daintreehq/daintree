@@ -4,7 +4,11 @@ import { logDebug } from "../utils/logger.js";
 
 const P = "[VoiceKeyterms]";
 
-const MAX_KEYTERMS = 96;
+const MAX_KEYTERMS = 50;
+const TERMINAL_TIER_CAP = 30;
+// Deepgram nova-3 rejects any keyterm longer than 100 chars with an HTTP 400
+// that fails the WebSocket upgrade, so cap every term at the source.
+const MAX_KEYTERM_LENGTH = 100;
 const ASSEMBLY_TIMEOUT_MS = 500;
 const MIN_TERM_LENGTH = 4;
 const MAX_KEYTERM_LINES = 200;
@@ -223,33 +227,65 @@ export function tokenizeProjectName(name: string): string[] {
   return expanded.filter(isValidTerm);
 }
 
-export function extractTerminalIdentifiers(lines: string[]): string[] {
-  const seen = new Set<string>();
-  const results: string[] = [];
+interface TermScore {
+  canonical: string;
+  // Number of distinct lines the term appears on (frequency signal).
+  lineCount: number;
+  // Index of the most recent line the term appeared on (recency signal).
+  lastLineIndex: number;
+}
 
-  for (const line of lines) {
+// Ranks terminal-derived identifiers by a deterministic composite score so the
+// strongest candidates are emitted first. The score is a pure function of the
+// input lines: `lineCount * (lastLineIndex + 1)`, combining how often a term
+// recurs (distinct-line frequency) with how recently it appeared (line index as
+// the recency proxy). Rarity is handled by the existing blocklist + length
+// filter in `isValidTerm`. Ties break on canonical form ascending for stable,
+// cross-platform ordering. No clocks, no floats, no external state.
+export function extractTerminalIdentifiers(lines: string[]): string[] {
+  const scores = new Map<string, TermScore>();
+
+  lines.forEach((line, lineIndex) => {
+    // Guard against malformed IPC payloads delivering non-string lines, which
+    // would otherwise throw in stripAnsi and drop the entire terminal tier.
+    if (typeof line !== "string") return;
     const clean = stripAnsi(line);
+    // Count each term at most once per line so same-line repeats don't inflate
+    // frequency (e.g. a log line spamming one identifier).
+    const seenThisLine = new Set<string>();
+
+    const record = (term: string): void => {
+      if (!isValidTerm(term)) return;
+      const key = term.toLowerCase();
+      if (seenThisLine.has(key)) return;
+      seenThisLine.add(key);
+      const existing = scores.get(key);
+      if (existing) {
+        existing.lineCount += 1;
+        existing.lastLineIndex = lineIndex;
+      } else {
+        scores.set(key, { canonical: term, lineCount: 1, lastLineIndex: lineIndex });
+      }
+    };
 
     // Extract compound identifiers (snake_case, kebab-case)
-    for (const match of clean.matchAll(IDENTIFIER_RE)) {
-      const term = match[0];
-      if (isValidTerm(term) && !seen.has(term.toLowerCase())) {
-        seen.add(term.toLowerCase());
-        results.push(term);
-      }
-    }
-
+    for (const match of clean.matchAll(IDENTIFIER_RE)) record(match[0]);
     // Extract camelCase/PascalCase identifiers
-    for (const match of clean.matchAll(CAMEL_RE)) {
-      const term = match[0];
-      if (isValidTerm(term) && !seen.has(term.toLowerCase())) {
-        seen.add(term.toLowerCase());
-        results.push(term);
-      }
-    }
-  }
+    for (const match of clean.matchAll(CAMEL_RE)) record(match[0]);
+  });
 
-  return results;
+  return Array.from(scores.values())
+    .sort((a, b) => {
+      const scoreA = a.lineCount * (a.lastLineIndex + 1);
+      const scoreB = b.lineCount * (b.lastLineIndex + 1);
+      if (scoreB !== scoreA) return scoreB - scoreA;
+      // Codepoint comparison (not localeCompare) keeps ties deterministic
+      // regardless of host locale.
+      if (a.canonical < b.canonical) return -1;
+      if (a.canonical > b.canonical) return 1;
+      return 0;
+    })
+    .map((entry) => entry.canonical);
 }
 
 async function getBranchName(projectPath: string): Promise<string | null> {
@@ -285,10 +321,11 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
 
   function add(term: string): boolean {
     if (result.length >= MAX_KEYTERMS) return false;
-    const key = term.toLowerCase();
+    const capped = term.length > MAX_KEYTERM_LENGTH ? term.slice(0, MAX_KEYTERM_LENGTH) : term;
+    const key = capped.toLowerCase();
     if (seen.has(key)) return false;
     seen.add(key);
-    result.push(term);
+    result.push(capped);
     return true;
   }
 
@@ -311,46 +348,61 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
     }
   }
 
-  // Gather dynamic context in parallel with a timeout.
-  // Branch tokens run first (Priority 3), then terminal identifiers (Priority 4).
-  // We await sequentially to preserve priority ordering for the dedup/cap logic.
-  if (projectPath) {
-    let branchTimer: NodeJS.Timeout | undefined;
-    try {
-      const timeoutPromise = new Promise<null>((resolve) => {
-        branchTimer = setTimeout(() => resolve(null), ASSEMBLY_TIMEOUT_MS);
-        branchTimer.unref();
-      });
-      const branchName = await Promise.race([getBranchName(projectPath), timeoutPromise]);
-      if (branchName) {
-        for (const token of tokenizeBranchName(branchName)) {
-          add(token);
+  // Gather dynamic context concurrently, each read guarded by its own timeout.
+  // Both reads fire at once so leading speech isn't delayed; results are merged
+  // in priority order afterward (branch tokens = Priority 3, terminal = Priority 4).
+  const branchPromise = projectPath
+    ? (async (): Promise<string | null> => {
+        let branchTimer: NodeJS.Timeout | undefined;
+        try {
+          const timeoutPromise = new Promise<null>((resolve) => {
+            branchTimer = setTimeout(() => resolve(null), ASSEMBLY_TIMEOUT_MS);
+            branchTimer.unref();
+          });
+          return await Promise.race([getBranchName(projectPath), timeoutPromise]);
+        } catch {
+          logDebug(`${P} Branch name lookup failed`);
+          return null;
+        } finally {
+          if (branchTimer) clearTimeout(branchTimer);
         }
-      }
-    } catch {
-      logDebug(`${P} Branch name lookup failed`);
-    } finally {
-      if (branchTimer) clearTimeout(branchTimer);
+      })()
+    : Promise.resolve(null);
+
+  const linesPromise = ptyClient
+    ? (async (): Promise<string[]> => {
+        let linesTimer: NodeJS.Timeout | undefined;
+        try {
+          const timeoutPromise = new Promise<string[]>((resolve) => {
+            linesTimer = setTimeout(() => resolve([]), ASSEMBLY_TIMEOUT_MS);
+            linesTimer.unref();
+          });
+          return await Promise.race([getTerminalLines(ptyClient), timeoutPromise]);
+        } catch {
+          logDebug(`${P} Terminal identifier extraction failed`);
+          return [];
+        } finally {
+          if (linesTimer) clearTimeout(linesTimer);
+        }
+      })()
+    : Promise.resolve<string[]>([]);
+
+  const [branchName, lines] = await Promise.all([branchPromise, linesPromise]);
+
+  // Priority 3: Branch name tokens
+  if (branchName) {
+    for (const token of tokenizeBranchName(branchName)) {
+      add(token);
     }
   }
 
-  if (ptyClient) {
-    let linesTimer: NodeJS.Timeout | undefined;
-    try {
-      const timeoutPromise = new Promise<string[]>((resolve) => {
-        linesTimer = setTimeout(() => resolve([]), ASSEMBLY_TIMEOUT_MS);
-        linesTimer.unref();
-      });
-      const lines = await Promise.race([getTerminalLines(ptyClient), timeoutPromise]);
-      const identifiers = extractTerminalIdentifiers(lines);
-      for (const id of identifiers) {
-        add(id);
-      }
-    } catch {
-      logDebug(`${P} Terminal identifier extraction failed`);
-    } finally {
-      if (linesTimer) clearTimeout(linesTimer);
-    }
+  // Priority 4: Terminal identifiers. Lines were fetched in parallel above.
+  // Terminal terms are ranked best-first; bound the tier independently so
+  // dictionary/project/branch terms always keep headroom under MAX_KEYTERMS.
+  let terminalAdded = 0;
+  for (const id of extractTerminalIdentifiers(lines)) {
+    if (terminalAdded >= TERMINAL_TIER_CAP) break;
+    if (add(id)) terminalAdded++;
   }
 
   logDebug(`${P} Assembled ${result.length} keyterms`, {

@@ -461,6 +461,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "app:view-warm-painted": {
+    args: [];
+    result: void;
+  };
   "app:reload-config": {
     args: [];
     result: { success: boolean };
@@ -1667,6 +1671,17 @@ export interface IpcEventMap {
    * Sent to the pinned WebContents so the renderer can track grant state.
    */
   "mcp-server:grant-lifecycle": import("./mcpServer.js").McpGrantLifecyclePayload;
+
+  /**
+   * Targeted push: an MCP tool dispatch entered the call path for the pinned
+   * help-session. Drives the Assistant panel's live activity strip (#9759).
+   */
+  "mcp-server:tool-call-started": import("./mcpServer.js").McpToolCallStartedPayload;
+  /**
+   * Targeted push: an MCP tool dispatch announced via `tool-call-started`
+   * settled. Carries the audit-aligned outcome for the activity strip (#9759).
+   */
+  "mcp-server:tool-call-settled": import("./mcpServer.js").McpToolCallSettledPayload;
 
   // Error events
   "error:notify": ErrorRecord;

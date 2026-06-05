@@ -22,7 +22,7 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
         const t = state.panelsById[id];
         if (!t || t.location === "trash") continue;
         const pty = isPtyPanel(t) ? t : undefined;
-        if (pty?.ephemeral === true) continue;
+        if (pty?.excludeFromPersistence === true) continue;
         active++;
         if (pty?.agentState === "completed" || pty?.agentState === "exited") completed++;
       }
@@ -87,7 +87,7 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
         const t = panelsById[id];
         if (!t || t.location === "trash") continue;
         const pty = isPtyPanel(t) ? t : undefined;
-        if (pty?.ephemeral === true) continue;
+        if (pty?.excludeFromPersistence === true) continue;
         if (pty?.agentState === "completed" || pty?.agentState === "exited") {
           idsToClose.push(t.id);
         }

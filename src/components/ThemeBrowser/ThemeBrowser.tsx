@@ -14,6 +14,7 @@ import {
   resolveAppTheme,
 } from "@shared/theme";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
+import { Button } from "@/components/ui/button";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
@@ -457,11 +458,14 @@ export function ThemeBrowser() {
           type="button"
           onClick={handleCancel}
           aria-label="Close theme browser"
-          className="absolute top-2 right-2 p-1 rounded-full bg-black/40 text-white/90 hover:bg-black/60 transition-colors"
+          className="absolute top-2 right-2 p-1 rounded-full bg-scrim-medium text-white/90 hover:bg-scrim-strong transition-colors"
         >
           <X className="w-4 h-4" />
         </button>
-        <div className="absolute bottom-0 inset-x-0 bg-black/40 backdrop-blur-sm px-3 py-1.5 flex items-center justify-between">
+        {/* Media-overlay caption: sits on a guaranteed-dark scrim over the hero
+            image, so the white label text is intentional and stays readable on
+            every theme. `text-inverse` flips dark on dark themes — not usable here. */}
+        <div className="absolute bottom-0 inset-x-0 bg-scrim-strong backdrop-blur-sm px-3 py-1.5 flex items-center justify-between">
           <span className="text-sm font-medium text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
             {activeScheme.name}
           </span>
@@ -559,23 +563,26 @@ export function ThemeBrowser() {
         )}
       </div>
 
-      {/* Sticky action bar */}
-      <div className="flex items-center justify-end gap-2 px-2.5 py-2 border-t border-daintree-border shrink-0">
-        <button
-          type="button"
-          onClick={handleCancel}
-          className="px-3 py-1.5 text-xs text-daintree-text/70 hover:text-daintree-text transition-colors rounded-[var(--radius-md)]"
-        >
+      {/* Bottom action bar (the conventional, always-visible spot for a commit
+          CTA — Material 3 / Apple HIG; the close ✕ stays top-right on the hero).
+          It's a non-scrolling flex child — the list above is the scroll area — so
+          it isn't position:sticky; the opaque bg is a belt-and-braces guard.
+          The commit button uses the high-contrast INVERSE `contrast` variant
+          (near-white fill + off-black text on dark themes, near-black fill +
+          off-white text on light) so it's highly visible and never restyles to
+          the previewed accent. */}
+      <div className="flex items-center justify-end gap-2 px-2.5 py-2 border-t border-daintree-border bg-daintree-bg shrink-0">
+        <Button variant="ghost" size="sm" onClick={handleCancel}>
           Cancel
-        </button>
-        <button
+        </Button>
+        <Button
           ref={commitButtonRef}
-          type="button"
+          variant="contrast"
+          size="sm"
           onClick={() => void handleCommit()}
-          className="px-3 py-1.5 text-xs font-medium bg-daintree-accent text-white rounded-[var(--radius-md)] hover:bg-daintree-accent/90 transition-colors"
         >
           Set theme
-        </button>
+        </Button>
       </div>
 
       <div aria-live="polite" aria-atomic="true" className="sr-only">

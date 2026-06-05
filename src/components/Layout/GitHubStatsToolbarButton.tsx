@@ -42,6 +42,7 @@ import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore"
 import type { Project } from "@shared/types";
 import type { GitHubRateLimitDetails, RepositoryStats } from "@shared/types";
 import { freshnessSuffix } from "./FreshnessUtils";
+import { resolveGitHubDisplayCount } from "./githubStatsCountDisplay";
 import {
   formatRateLimitCountdown,
   msUntilNextLabelChange,
@@ -180,6 +181,79 @@ export const GitHubStatsToolbarButton = memo(
     const issueCount = stats?.issueCount ?? null;
     const prCount = stats?.prCount ?? null;
     const commitCount = stats?.commitCount ?? null;
+
+    // List-loaded counts reported by each dropdown's `onCountUpdate`. These
+    // track what the dropdown actually lists (loaded first-page length +
+    // whether more pages exist) so the badge can bind to the visible count
+    // rather than the stats query's `totalCount`, which can be higher than
+    // the loaded page (issue #9693). `null` until the dropdown first loads,
+    // at which point the badge falls back to the stats count.
+    const [issueListCount, setIssueListCount] = useState<number | null>(null);
+    const [issueListHasMore, setIssueListHasMore] = useState(false);
+    const [prListCount, setPrListCount] = useState<number | null>(null);
+    const [prListHasMore, setPrListHasMore] = useState(false);
+
+    // Epoch-ms timestamp of the most recent `onCountUpdate` for each kind, used
+    // to arbitrate recency against the stats poll's `lastUpdated` (issue #9741).
+    // A ref, not state — the timestamp only feeds the display derivation below,
+    // which already re-renders whenever the count state or `lastUpdated` change,
+    // so it needs no re-render of its own. Cleared on project switch alongside
+    // the count state so the previous project's timestamp can't suppress the
+    // new project's first list load.
+    const issueListTimestampRef = useRef<number | null>(null);
+    const prListTimestampRef = useRef<number | null>(null);
+
+    const handleIssueListCountUpdate = useCallback((count: number, hasMore: boolean) => {
+      issueListTimestampRef.current = Date.now();
+      setIssueListCount(count);
+      setIssueListHasMore(hasMore);
+    }, []);
+    const handlePrListCountUpdate = useCallback((count: number, hasMore: boolean) => {
+      prListTimestampRef.current = Date.now();
+      setPrListCount(count);
+      setPrListHasMore(hasMore);
+    }, []);
+
+    // Clear the list-loaded counts and their recency timestamps whenever the
+    // project changes (issue #9741). Keyed directly on the project path rather
+    // than riding on the `lastUpdated == null` reset effect below: on a fast
+    // project switch the stats poll flips `statsLoading` true in the same batch
+    // that nulls `lastUpdated`, and that effect early-returns behind its
+    // `statsLoading` guard — leaving the previous project's counts to win the
+    // recency arbitration until the new project's first poll lands. A
+    // project-scoped effect clears them deterministically on every switch. Runs
+    // once on mount as a no-op (state already null).
+    useEffect(() => {
+      setIssueListCount(null);
+      setIssueListHasMore(false);
+      setPrListCount(null);
+      setPrListHasMore(false);
+      issueListTimestampRef.current = null;
+      prListTimestampRef.current = null;
+    }, [currentProject?.path]);
+
+    // Badge display value: whichever of the list-loaded count (suffixed with
+    // `+` when approximate, e.g. `20+`) and the stats `totalCount` was updated
+    // most recently (issue #9741). Before #9741 the list count won
+    // unconditionally once set, freezing the badge until the dropdown reopened
+    // even when a fresher poll had landed. Stays separate from the numeric
+    // `issueCount` / `prCount` so the digit-pulse delta detection keeps
+    // comparing raw totals. Reads the timestamp refs during render (a ref read
+    // in render is fine — they're only written from event callbacks).
+    const issueDisplayCount: number | string | null = resolveGitHubDisplayCount(
+      issueCount,
+      lastUpdated,
+      issueListCount,
+      issueListHasMore,
+      issueListTimestampRef.current
+    );
+    const prDisplayCount: number | string | null = resolveGitHubDisplayCount(
+      prCount,
+      lastUpdated,
+      prListCount,
+      prListHasMore,
+      prListTimestampRef.current
+    );
 
     // Eagerly resolve the dropdown body components so the click path renders
     // them concretely without going through Suspense. The toolbar is a
@@ -549,6 +623,11 @@ export const GitHubStatsToolbarButton = memo(
         prevLastUpdatedRef.current = null;
         setIssuesPulseAt(null);
         setPrsPulseAt(null);
+        // List-loaded counts and their recency timestamps are reset by the
+        // dedicated project-path effect below — not here — because a fast
+        // project switch can leave `statsLoading` true while `lastUpdated` is
+        // null, and this branch sits behind the `statsLoading` guard above
+        // (issue #9741).
         return;
       }
       if (prevLastUpdatedRef.current != null && lastUpdated > prevLastUpdatedRef.current) {
@@ -632,12 +711,13 @@ export const GitHubStatsToolbarButton = memo(
               buttonRef={issuesButtonRef}
               open={issuesOpen}
               count={issueCount}
+              displayCount={issueDisplayCount}
               animKey={issueAnimKey}
               testId="github-stat-pill-issues"
               ariaLabel={
                 isTokenError
                   ? "Configure GitHub token to see issues"
-                  : `${issueCount ?? "—"} open issues${
+                  : `${issueDisplayCount ?? "—"} open issues${
                       showIssuesChip ? " (new since last view)" : ""
                     }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
               }
@@ -646,7 +726,7 @@ export const GitHubStatsToolbarButton = memo(
                   ? "Configure GitHub token to see issues"
                   : freshnessLevel === "fresh"
                     ? "Browse GitHub Issues"
-                    : `${issueCount ?? "—"} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+                    : `${issueDisplayCount ?? "—"} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
               }
               icon={CircleDot}
               iconClassName={isTokenError ? "text-muted-foreground" : "text-pr-open"}
@@ -667,6 +747,7 @@ export const GitHubStatsToolbarButton = memo(
                     }}
                     initialCount={stats?.issueCount}
                     onFreshFetch={handleListFreshFetch}
+                    onCountUpdate={handleIssueListCountUpdate}
                   />
                 ) : (
                   <Suspense
@@ -688,6 +769,7 @@ export const GitHubStatsToolbarButton = memo(
                       }}
                       initialCount={stats?.issueCount}
                       onFreshFetch={handleListFreshFetch}
+                      onCountUpdate={handleIssueListCountUpdate}
                     />
                   </Suspense>
                 )
@@ -742,12 +824,13 @@ export const GitHubStatsToolbarButton = memo(
               buttonRef={prsButtonRef}
               open={prsOpen}
               count={prCount}
+              displayCount={prDisplayCount}
               animKey={prAnimKey}
               testId="github-stat-pill-prs"
               ariaLabel={
                 isTokenError
                   ? "Configure GitHub token to see pull requests"
-                  : `${prCount ?? "—"} open pull requests${
+                  : `${prDisplayCount ?? "—"} open pull requests${
                       showPrsChip ? " (new since last view)" : ""
                     }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
               }
@@ -756,7 +839,7 @@ export const GitHubStatsToolbarButton = memo(
                   ? "Configure GitHub token to see pull requests"
                   : freshnessLevel === "fresh"
                     ? "Browse GitHub Pull Requests"
-                    : `${prCount ?? "—"} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+                    : `${prDisplayCount ?? "—"} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
               }
               icon={GitPullRequest}
               iconClassName={isTokenError ? "text-muted-foreground" : "text-pr-merged"}
@@ -777,6 +860,7 @@ export const GitHubStatsToolbarButton = memo(
                     }}
                     initialCount={stats?.prCount}
                     onFreshFetch={handleListFreshFetch}
+                    onCountUpdate={handlePrListCountUpdate}
                   />
                 ) : (
                   <Suspense
@@ -794,6 +878,7 @@ export const GitHubStatsToolbarButton = memo(
                       }}
                       initialCount={stats?.prCount}
                       onFreshFetch={handleListFreshFetch}
+                      onCountUpdate={handlePrListCountUpdate}
                     />
                   </Suspense>
                 )
@@ -900,7 +985,11 @@ export const GitHubStatsToolbarButton = memo(
               onTransitionEnd={handleGitHubStatusTransitionEnd}
             />
             {rateLimitActive ? (
-              <Tooltip open={rateLimitTooltipOpen} onOpenChange={setRateLimitTooltipOpen}>
+              <Tooltip
+                open={rateLimitTooltipOpen}
+                onOpenChange={setRateLimitTooltipOpen}
+                autoDismiss={false}
+              >
                 <TooltipTrigger asChild>
                   <div
                     role="status"

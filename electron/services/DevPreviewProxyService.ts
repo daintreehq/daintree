@@ -13,7 +13,13 @@ import {
   parseDevPreviewProxyHost,
 } from "../../shared/utils/devPreviewProxy.js";
 
-const PROXY_HOST = "127.0.0.1";
+// The proxy binds IPv4 loopback only — it should be reachable from this machine, nothing else.
+const PROXY_LISTEN_HOST = "127.0.0.1";
+// Upstream target uses "localhost" (not a fixed IP) so Node's Happy Eyeballs (autoSelectFamily,
+// default since Node 20) tries the dev server on whichever family it bound — IPv6-first with an
+// IPv4 fallback. Vite 8 + macOS resolve `localhost` to [::1] and bind IPv6-only; hardcoding
+// 127.0.0.1 here made every proxied request ECONNREFUSED → 502 (#9747).
+const UPSTREAM_HOST = "localhost";
 // Drop a stalled upstream after this long rather than leaving the webview hanging — a
 // dev server mid-restart (or wedged) should surface a 502, not an indefinite spinner.
 const UPSTREAM_TIMEOUT_MS = 30_000;
@@ -161,11 +167,11 @@ export class DevPreviewProxyService {
         // back to an OS-assigned port; the live port is published via IPC, so callers never
         // assume the fixed value.
         server.once("error", reject);
-        server.listen(0, PROXY_HOST, resolvePort);
+        server.listen(0, PROXY_LISTEN_HOST, resolvePort);
       };
 
       server.once("error", onFirstError);
-      server.listen(DEV_PREVIEW_PROXY_PORT, PROXY_HOST, () => {
+      server.listen(DEV_PREVIEW_PROXY_PORT, PROXY_LISTEN_HOST, () => {
         server.removeListener("error", onFirstError);
         resolvePort();
       });
@@ -177,7 +183,7 @@ export class DevPreviewProxyService {
     // upstream. Gate it before resolving an upstream port so it works even while
     // the dev server is down (restarting), which is one of the cases it exists
     // to survive.
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? PROXY_HOST}`);
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? PROXY_LISTEN_HOST}`);
     if (url.pathname === DEV_PREVIEW_BOOTSTRAP_PATH) {
       this.handleBootstrap(req, res, url);
       return;
@@ -189,7 +195,7 @@ export class DevPreviewProxyService {
       return;
     }
     try {
-      await this.proxy!.web(req, res, { target: `http://${PROXY_HOST}:${port}` });
+      await this.proxy!.web(req, res, { target: `http://${UPSTREAM_HOST}:${port}` });
     } catch {
       this.send502(res, "The dev server isn't responding.");
     }
@@ -211,7 +217,12 @@ export class DevPreviewProxyService {
     try {
       // The 'upgrade' event types the socket as Duplex; httpxy's ws() wants net.Socket, which
       // is exactly the concrete type Node provides here.
-      await this.proxy!.ws(req, socket as Socket, { target: `http://${PROXY_HOST}:${port}` }, head);
+      await this.proxy!.ws(
+        req,
+        socket as Socket,
+        { target: `http://${UPSTREAM_HOST}:${port}` },
+        head
+      );
     } catch {
       socket.destroy();
     }

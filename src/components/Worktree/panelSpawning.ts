@@ -1,7 +1,7 @@
 import { usePanelStore } from "@/store/panelStore";
 import { agentSettingsClient, systemClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
-import { generateAgentCommand } from "@shared/types";
+import { generateAgentCommand, buildAgentLaunchFlags } from "@shared/types";
 import type { RecipeTerminal } from "@shared/types";
 import { preflightSpawnBatchLimit } from "@/store/panelLimitStore";
 import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
@@ -98,6 +98,7 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
               worktreeId,
               exitBehavior: t.exitBehavior,
               devCommand: t.devCommand?.trim() || undefined,
+              location: t.location,
               bypassLimits: true,
             });
           } else if (t.type !== "terminal") {
@@ -108,7 +109,19 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
             const command = generateAgentCommand(baseCommand, entry, agentId, {
               clipboardDirectory,
               modelId: t.agentModelId,
+              recipeArgs: t.args?.trim() || undefined,
             });
+            // Preserve flags the caller already captured (the clone-layout path
+            // projects a live panel's `agentLaunchFlags` onto the recipe). For
+            // disk recipes the field is stripped (undefined), so compute from
+            // live settings instead — persisting these lets restart/resume
+            // reproduce the launch and prevents `--dangerously-skip-permissions`
+            // and recipe args from being dropped on resume (#9650). Recipe args
+            // append as raw tokens.
+            const agentLaunchFlags = t.agentLaunchFlags ?? [
+              ...buildAgentLaunchFlags(entry, agentId, { modelId: t.agentModelId }),
+              ...(t.args?.trim().split(/\s+/).filter(Boolean) ?? []),
+            ];
 
             panelId = await store.addPanel({
               kind: "terminal",
@@ -119,7 +132,8 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
               worktreeId,
               exitBehavior: t.exitBehavior,
               agentModelId: t.agentModelId,
-              agentLaunchFlags: t.agentLaunchFlags,
+              agentLaunchFlags,
+              location: t.location,
               bypassLimits: true,
             });
           } else {
@@ -130,6 +144,7 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
               worktreeId,
               exitBehavior: t.exitBehavior,
               command: t.command?.trim() || undefined,
+              location: t.location,
               bypassLimits: true,
             });
           }
@@ -159,7 +174,10 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
     }
 
     if (outcome.panelId != null) {
-      lastSpawnedId = outcome.panelId;
+      // Dock panels land silently — only grid panels are focus candidates.
+      if (terminals[outcome.index]?.location !== "dock") {
+        lastSpawnedId = outcome.panelId;
+      }
       try {
         onPanelSpawned?.(outcome.index, outcome.panelId);
       } catch {

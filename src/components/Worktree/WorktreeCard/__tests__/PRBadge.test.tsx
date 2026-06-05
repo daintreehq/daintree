@@ -12,7 +12,7 @@ vi.mock("react-dom", async () => {
 });
 
 let mockMissingToken = false;
-let mockFreshnessCause: "stale" | "rate-limit" | "circuit-breaker" | undefined = undefined;
+let mockFreshnessCause: "rate-limit" | "circuit-breaker" | undefined = undefined;
 
 vi.mock("@/hooks/useGitHubTooltip", () => ({
   usePRTooltip: () => ({
@@ -37,7 +37,6 @@ vi.mock("../hooks/useGitHubBadgeFreshness", () => ({
   useGitHubBadgeFreshness: () => ({
     freshnessLevel: mockFreshnessCause ? "aging" : "fresh",
     freshnessCause: mockFreshnessCause,
-    cacheLastUpdatedAt: null,
     rateLimitResetAt: null,
     now: Date.now(),
   }),
@@ -106,19 +105,30 @@ describe("PRBadge freshness glyphs", () => {
     expect(button.querySelector(".lucide-cloud-off")).toBeNull();
   });
 
-  it("shows Clock glyph when freshnessCause is stale", () => {
-    mockFreshnessCause = "stale";
-    renderBadge();
-
-    const button = screen.getByRole("button");
-    expect(button.querySelector(".lucide-clock")).toBeTruthy();
+  it("never shows a Clock glyph on the badge button — plain age is no longer surfaced", () => {
+    for (const cause of [undefined, "rate-limit", "circuit-breaker"] as const) {
+      mockFreshnessCause = cause;
+      const { unmount } = renderBadge();
+      const button = screen.getByRole("button");
+      expect(button.querySelector(".lucide-clock")).toBeNull();
+      unmount();
+    }
   });
 
-  it("does not show Clock glyph when freshnessCause is undefined", () => {
+  it("surfaces the rate-limit freshness as a Clock-iconed tooltip line", () => {
+    mockFreshnessCause = "rate-limit";
     renderBadge();
 
-    const button = screen.getByRole("button");
-    expect(button.querySelector(".lucide-clock")).toBeNull();
+    expect(document.querySelector(".lucide-clock")).toBeTruthy();
+    expect(screen.getAllByText(/rate limited/).length).toBeGreaterThan(0);
+  });
+
+  it("surfaces the circuit-breaker freshness with a PauseCircle, not a Clock", () => {
+    mockFreshnessCause = "circuit-breaker";
+    renderBadge();
+
+    expect(document.querySelector(".lucide-circle-pause")).toBeTruthy();
+    expect(document.querySelector(".lucide-clock")).toBeNull();
   });
 
   it("shows CloudOff when freshnessCause is rate-limit", () => {

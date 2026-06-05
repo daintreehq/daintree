@@ -219,8 +219,10 @@ export const createTerminalBulkActionsSlice = (
 
     bulkTrashByWorktree: (worktreeId) => {
       const terminals = getTerminals();
+      // Overlay panels (the Daintree Assistant) are not worktree sessions and
+      // must be excluded so execution matches the user-facing count (#9699).
       const activeTerminals = terminals.filter(
-        (t) => t.worktreeId === worktreeId && t.location !== "trash"
+        (t) => t.worktreeId === worktreeId && t.location !== "trash" && t.location !== "overlay"
       );
       activeTerminals.forEach((t) => trashPanel(t.id));
     },
@@ -229,7 +231,10 @@ export const createTerminalBulkActionsSlice = (
       const terminals = getTerminals();
       const activeTerminals = terminals.filter(
         (t): t is PtyPanelData =>
-          isPtyPanel(t) && t.worktreeId === worktreeId && t.location !== "trash"
+          isPtyPanel(t) &&
+          t.worktreeId === worktreeId &&
+          t.location !== "trash" &&
+          t.location !== "overlay"
       );
 
       const validationResults = await validateTerminals(activeTerminals);
@@ -253,7 +258,10 @@ export const createTerminalBulkActionsSlice = (
       const terminals = getTerminals();
       const activeTerminals = terminals.filter(
         (t): t is PtyPanelData =>
-          isPtyPanel(t) && t.worktreeId === worktreeId && t.location !== "trash"
+          isPtyPanel(t) &&
+          t.worktreeId === worktreeId &&
+          t.location !== "trash" &&
+          t.location !== "overlay"
       );
       if (activeTerminals.length === 0) return;
 

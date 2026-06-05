@@ -98,7 +98,7 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
                 {term.title}
               </span>
               {!chrome.isAgent && term.activityStatus === "working" && term.lastCommand && (
-                <Tooltip>
+                <Tooltip autoDismiss={false}>
                   <TooltipTrigger asChild>
                     <span className="truncate text-[11px] font-mono text-text-muted">
                       {term.lastCommand}

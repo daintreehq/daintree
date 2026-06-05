@@ -5,6 +5,7 @@ import { useWorktreeFilterStore } from "../worktreeFilterStore";
 function resetWorktreeFilterStore() {
   useWorktreeFilterStore.setState({
     query: "",
+    liveQuery: "",
     orderBy: "created",
     groupByType: false,
     statusFilters: new Set(),
@@ -63,6 +64,114 @@ describe("worktreeFilterStore", () => {
 
     expect(useWorktreeFilterStore.getState().hasActiveFilters()).toBe(false);
     expect(useWorktreeFilterStore.getState().getActiveFilterCount()).toBe(0);
+  });
+
+  it("setLiveQuery updates the transient live query without touching the persisted query", () => {
+    useWorktreeFilterStore.getState().setLiveQuery("draft");
+
+    expect(useWorktreeFilterStore.getState().liveQuery).toBe("draft");
+    // The persisted (debounced) query is independent and stays empty.
+    expect(useWorktreeFilterStore.getState().query).toBe("");
+  });
+
+  it("clearAll resets the live query alongside the persisted query", () => {
+    useWorktreeFilterStore.getState().setLiveQuery("draft");
+    useWorktreeFilterStore.getState().setQuery("committed");
+
+    useWorktreeFilterStore.getState().clearAll();
+
+    expect(useWorktreeFilterStore.getState().liveQuery).toBe("");
+    expect(useWorktreeFilterStore.getState().query).toBe("");
+  });
+
+  describe("per-section clear actions", () => {
+    // Populate every facet section so each clear can be shown to affect only its own.
+    function populateAllSections() {
+      const store = useWorktreeFilterStore.getState();
+      store.toggleStatusFilter("active");
+      store.toggleStatusFilter("dirty");
+      store.toggleTypeFilter("feature");
+      store.togglePrIssueFilter("hasIssue");
+      store.toggleSessionFilter("working");
+      store.toggleActivityFilter("last1h");
+      store.toggleDevServerFilter("running");
+    }
+
+    // Each section is described by a thunk that reads its current Set and a thunk
+    // that invokes its clear action — typed references avoid dynamic string-key
+    // indexing so the isolation assertion stays fully type-checked. `populated`
+    // is the exact count `populateAllSections` leaves in that Set, so bystander
+    // assertions can check exact membership rather than a weak `> 0`.
+    const sections = [
+      {
+        name: "status",
+        populated: 2,
+        size: () => useWorktreeFilterStore.getState().statusFilters.size,
+        clear: () => useWorktreeFilterStore.getState().clearStatusFilters(),
+      },
+      {
+        name: "branch type",
+        populated: 1,
+        size: () => useWorktreeFilterStore.getState().typeFilters.size,
+        clear: () => useWorktreeFilterStore.getState().clearTypeFilters(),
+      },
+      {
+        name: "issues & PRs",
+        populated: 1,
+        size: () => useWorktreeFilterStore.getState().prIssueFilters.size,
+        clear: () => useWorktreeFilterStore.getState().clearPrIssueFilters(),
+      },
+      {
+        name: "sessions",
+        populated: 1,
+        size: () => useWorktreeFilterStore.getState().sessionFilters.size,
+        clear: () => useWorktreeFilterStore.getState().clearSessionFilters(),
+      },
+      {
+        name: "activity",
+        populated: 1,
+        size: () => useWorktreeFilterStore.getState().activityFilters.size,
+        clear: () => useWorktreeFilterStore.getState().clearActivityFilters(),
+      },
+      {
+        name: "dev server",
+        populated: 1,
+        size: () => useWorktreeFilterStore.getState().devServerFilters.size,
+        clear: () => useWorktreeFilterStore.getState().clearDevServerFilters(),
+      },
+    ];
+
+    it.each(sections)("clearing $name empties only its own section", (target) => {
+      populateAllSections();
+
+      target.clear();
+
+      expect(target.size()).toBe(0);
+      for (const other of sections) {
+        if (other.name === target.name) continue;
+        // Bystander sections keep their exact populated count — a clear that
+        // accidentally dropped one entry would still pass a `> 0` check.
+        expect(other.size()).toBe(other.populated);
+      }
+    });
+
+    it.each(sections)("clearing $name is idempotent on an already-empty section", (target) => {
+      target.clear();
+
+      expect(target.size()).toBe(0);
+      expect(useWorktreeFilterStore.getState().hasActiveFilters()).toBe(false);
+    });
+
+    it("preserves the search query when clearing a single section", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setQuery("feature-x");
+      store.toggleStatusFilter("active");
+
+      useWorktreeFilterStore.getState().clearStatusFilters();
+
+      expect(useWorktreeFilterStore.getState().statusFilters.size).toBe(0);
+      expect(useWorktreeFilterStore.getState().query).toBe("feature-x");
+    });
   });
 
   it("shows main worktree by default (hideMainWorktree is false)", () => {
@@ -467,6 +576,60 @@ describe("worktreeFilterStore persistence scoping", () => {
       const parsed = JSON.parse(globalBlob) as { state: Record<string, unknown> };
       expect(parsed.state).not.toHaveProperty("pinnedWorktrees");
     }
+  });
+
+  it("does not serialize the transient liveQuery to the scoped key", async () => {
+    const writes = new Map<string, string>();
+    installLocalStorage({
+      getItem: () => null,
+      setItem: (key, value) => {
+        writes.set(key, value);
+      },
+      removeItem: (key) => {
+        writes.delete(key);
+      },
+    });
+
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    store.getState().setLiveQuery("draft");
+
+    // The in-memory live query updates, but partialize must keep it out of the
+    // persisted blob so it never leaks across sessions.
+    expect(store.getState().liveQuery).toBe("draft");
+    const blob = writes.get(PROJECT_KEY);
+    expect(blob).toBeDefined();
+    const parsed = JSON.parse(blob!) as { state: Record<string, unknown> };
+    expect(parsed.state).not.toHaveProperty("liveQuery");
+  });
+
+  it("seeds liveQuery from the persisted query on hydration", async () => {
+    const scopedBlob = JSON.stringify({
+      state: {
+        query: "restored",
+        statusFilters: [],
+        typeFilters: [],
+        prIssueFilters: [],
+        sessionFilters: [],
+        activityFilters: [],
+        pinnedWorktrees: [],
+        collapsedWorktrees: [],
+        manualOrder: [],
+      },
+      version: 2,
+    });
+    installLocalStorage({
+      getItem: (key) => (key === PROJECT_KEY ? scopedBlob : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
+
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    // A restored search must show in the input/filter immediately, so the
+    // transient live query is seeded from the persisted query at hydrate time.
+    expect(store.getState().query).toBe("restored");
+    expect(store.getState().liveQuery).toBe("restored");
   });
 
   it("persists global preferences to the global key, not the scoped key", async () => {

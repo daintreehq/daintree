@@ -20,6 +20,7 @@ export const CHANNELS = {
   WORKTREE_HOST_DISCONNECTED: "worktree:host-disconnected",
   WORKTREE_RESTART_SERVICE: "worktree:restart-service",
   WORKTREE_RETRY_PROJECT_LOAD: "worktree:retry-project-load",
+  WORKTREE_RETRY_AUTH_FETCH: "worktree:retry-auth-fetch",
   PROJECT_WORKTREE_LOAD_STATUS: "project:worktree-load-status",
 
   TERMINAL_SPAWN: "terminal:spawn",
@@ -173,6 +174,7 @@ export const CHANNELS = {
   APP_CLEAR_QUARANTINED_PANEL: "app:clear-quarantined-panel",
   APP_FIRST_INTERACTIVE: "app:first-interactive",
   APP_VIEW_PAINTED: "app:view-painted",
+  APP_VIEW_WARM_PAINTED: "app:view-warm-painted",
   MENU_ACTION: "menu:action",
   MENU_SHOW_CONTEXT: "menu:show-context",
 
@@ -654,6 +656,18 @@ export const CHANNELS = {
    * grant state is session-scoped and never broadcast.
    */
   MCP_GRANT_LIFECYCLE: "mcp-server:grant-lifecycle",
+  /**
+   * Push channel: an MCP tool dispatch entered the call path for the
+   * help-session pinned to this renderer. Drives the Assistant panel's live
+   * activity strip (#9759). Targeted send — never broadcast.
+   */
+  MCP_TOOL_CALL_STARTED: "mcp-server:tool-call-started",
+  /**
+   * Push channel: an MCP tool dispatch announced via `MCP_TOOL_CALL_STARTED`
+   * settled. Carries the audit-aligned outcome (duration, result, severity)
+   * so the activity strip can dim to a glyph. Targeted send — never broadcast.
+   */
+  MCP_TOOL_CALL_SETTLED: "mcp-server:tool-call-settled",
 
   // Voice Input channels
   VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",

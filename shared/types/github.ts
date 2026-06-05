@@ -238,4 +238,11 @@ export interface GitHubListResponse<T> {
     /** Cursor for next page */
     endCursor: string | null;
   };
+  /**
+   * Server-side total for the requested states (GraphQL `totalCount`). Present
+   * only on the non-search list path; absent for search results, which have no
+   * stable "total open" count. Lets the toolbar badge show the real total
+   * instead of the loaded first-page length (issue #9717).
+   */
+  totalCount?: number;
 }

@@ -7,7 +7,49 @@
  * protanopia / deuteranopia (red-green) and tritanopia (blue-yellow).
  */
 
-export const RED_GREEN_OVERRIDES: Record<string, string> = {
+// Status base token -> its derived surface-wash token. When CVD mode patches a
+// status base color, the pre-baked surface rgba (computed from the *original*
+// hue) would otherwise leak through on banners/pills that consume the surface
+// token directly (e.g. GridNotificationBar's bg-status-*-surface). Re-deriving
+// the surface from the override keeps the wash on-hue.
+const STATUS_SURFACE_TOKENS: Record<string, string> = {
+  "--theme-status-success": "--theme-status-success-surface",
+  "--theme-status-danger": "--theme-status-danger-surface",
+  "--theme-status-warning": "--theme-status-warning-surface",
+  "--theme-status-info": "--theme-status-info-surface",
+};
+
+// Wash alpha for the derived surfaces. The engine uses 0.10 (dark) / 0.08
+// (light); these static overrides apply across both polarities, and the
+// perceptual gap between those alphas on a low-alpha wash is negligible — the
+// hue match is what matters under CVD.
+const CVD_STATUS_SURFACE_ALPHA = 0.1;
+
+function hexToRgba(hex: string, alpha: number): string {
+  const clean = hex.replace("#", "");
+  const expanded =
+    clean.length === 3
+      ? clean
+          .split("")
+          .map((char) => `${char}${char}`)
+          .join("")
+      : clean;
+  const red = parseInt(expanded.slice(0, 2), 16);
+  const green = parseInt(expanded.slice(2, 4), 16);
+  const blue = parseInt(expanded.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function withStatusSurfaces(overrides: Record<string, string>): Record<string, string> {
+  const result = { ...overrides };
+  for (const [baseToken, surfaceToken] of Object.entries(STATUS_SURFACE_TOKENS)) {
+    const hex = overrides[baseToken];
+    if (hex) result[surfaceToken] = hexToRgba(hex, CVD_STATUS_SURFACE_ALPHA);
+  }
+  return result;
+}
+
+export const RED_GREEN_OVERRIDES: Record<string, string> = withStatusSurfaces({
   "--theme-status-success": "#009e73",
   "--theme-status-danger": "#fe6100",
   "--theme-activity-active": "#648fff",
@@ -39,9 +81,9 @@ export const RED_GREEN_OVERRIDES: Record<string, string> = {
   "--theme-category-violet": "#785ef0",
   "--theme-category-indigo": "#648fff",
   "--theme-category-cyan": "#56b4e9",
-};
+});
 
-export const BLUE_YELLOW_OVERRIDES: Record<string, string> = {
+export const BLUE_YELLOW_OVERRIDES: Record<string, string> = withStatusSurfaces({
   "--theme-status-warning": "#94a3b8",
   "--theme-activity-waiting": "#94a3b8",
   "--theme-pr-merged": "#f97316",
@@ -68,7 +110,7 @@ export const BLUE_YELLOW_OVERRIDES: Record<string, string> = {
   "--theme-category-violet": "#785ef0",
   "--theme-category-indigo": "#648fff",
   "--theme-category-cyan": "#228833",
-};
+});
 
 export const ALL_CVD_TOKENS: ReadonlySet<string> = new Set([
   ...Object.keys(RED_GREEN_OVERRIDES),

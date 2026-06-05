@@ -14,6 +14,7 @@ const CRITICAL_THEME_FILES = [
   "src/components/Layout/Toolbar.tsx",
   "src/components/Project/ProjectSwitcher.tsx",
   "src/components/Project/QuickRun.tsx",
+  "src/components/Settings/GeneralTab.tsx",
   "src/components/Terminal/HybridInputBar.tsx",
   "src/components/Terminal/XtermAdapter.tsx",
   "src/components/Worktree/WorktreeCard/WorktreeHeader.tsx",

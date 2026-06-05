@@ -138,11 +138,14 @@ export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsP
     const map = new Map<string, Set<string>>();
     if (!auditRecords) return map;
     for (const r of auditRecords) {
-      if (!r.sessionId) continue;
-      let tools = map.get(r.sessionId);
+      // Turn records carry the HELP session id; audit records carry the MCP
+      // transport id in `sessionId` and the help id in `helpSessionId` —
+      // key on the latter or the rollup join below never matches.
+      if (!r.helpSessionId) continue;
+      let tools = map.get(r.helpSessionId);
       if (!tools) {
         tools = new Set();
-        map.set(r.sessionId, tools);
+        map.set(r.helpSessionId, tools);
       }
       tools.add(r.toolId);
     }

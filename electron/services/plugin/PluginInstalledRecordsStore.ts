@@ -1,3 +1,4 @@
+// eager-import-allow: manages persistent state and user settings for installed plugins on start
 import { store } from "../../store.js";
 import type { InstalledPluginRecord, PluginInstallSource } from "../../../shared/types/plugin.js";
 

@@ -418,6 +418,8 @@ export type WorkspaceHostRequest =
   | { type: "has-resource-config"; requestId: string; rootPath: string }
   // Forge credential propagation
   | { type: "update-forge-credentials"; providerId: string; credentials: Credentials | null }
+  // User-triggered retry of auth-suspended fetches (e.g. clicking the auth-failed sync badge)
+  | { type: "retry-auth-fetch" }
   // Project environment variable propagation
   | { type: "update-project-env"; vars: Record<string, string> }
   // File tree operations

@@ -10,6 +10,8 @@ import React, {
 import { useShallow } from "zustand/react/shallow";
 import { Settings } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
+import { SkeletonHint } from "@/components/ui/Skeleton";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import type {
   TerminalRestartError,
   SpawnError,
@@ -188,22 +190,49 @@ export function BannerSlot({ visible, children }: BannerSlotProps) {
   );
 }
 
-function TerminalStartupPlaceholder({ agentId }: { agentId?: string }) {
+export function TerminalStartupPlaceholder({
+  agentId,
+  onCancel,
+}: {
+  agentId?: string;
+  onCancel?: () => void;
+}) {
   const agentName = agentId ? getAgentConfig(agentId)?.name : undefined;
   const label = agentName ? `Starting ${agentName}…` : "Starting terminal…";
+  // Doherty gate: typical PTY spawns resolve well under the 400ms threshold,
+  // so the common case is no spinner at all — only slow or queued spawns
+  // surface one. Mirrors DevPreviewLoadingState.
+  const showSpinner = useDohertyGate(true);
 
   return (
-    <div
-      className="flex flex-1 min-h-0 w-full items-center justify-center bg-daintree-bg px-4"
-      role="status"
-      aria-live="polite"
-      aria-busy="true"
-    >
-      <span className="sr-only">{label}</span>
-      <div className="flex max-w-[28ch] flex-col items-center gap-3 text-center" aria-hidden="true">
-        <Spinner size="xl" className="text-daintree-text/45" />
-        <p className="text-sm text-daintree-text/60 break-words">{label}</p>
+    <div className="relative flex flex-1 min-h-0 w-full flex-col items-center justify-center bg-daintree-bg px-4">
+      <div
+        className="flex max-w-[28ch] flex-col items-center gap-3 text-center"
+        role="status"
+        aria-busy="true"
+        aria-label={label}
+      >
+        <span className="sr-only">{label}</span>
+
+        {/* Spinner + visible caption gated by the Doherty threshold. The
+            caption is aria-hidden — the role=status wrapper above owns the AT
+            announcement, and an aria-live here would be silenced by its
+            aria-busy="true" anyway. The label also flows through the hint. */}
+        {showSpinner && (
+          <>
+            <Spinner size="xl" className="text-daintree-text/45" />
+            <p aria-hidden="true" className="text-sm text-daintree-text/60 break-words">
+              {label}
+            </p>
+          </>
+        )}
       </div>
+
+      <SkeletonHint
+        className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto"
+        message={label}
+        onCancel={onCancel}
+      />
     </div>
   );
 }
@@ -1029,6 +1058,7 @@ function TerminalPaneComponent({
         t.id !== id &&
         t.location !== "trash" &&
         t.location !== "background" &&
+        t.location !== "overlay" &&
         (t.kind ? panelKindHasPty(t.kind) : true) &&
         (!isPtyPanel(t) || t.hasPty !== false)
       );
@@ -1274,7 +1304,7 @@ function TerminalPaneComponent({
             onRunAnyway={handleRunAnyway}
           />
         ) : spawnStatus === "spawning" ? (
-          <TerminalStartupPlaceholder agentId={agentId} />
+          <TerminalStartupPlaceholder agentId={agentId} onCancel={() => onClose()} />
         ) : spawnStatus === "failed" ? (
           <div className="flex-1 min-h-0 bg-daintree-bg flex items-center justify-center">
             <p className="text-sm text-daintree-text/50">Terminal failed to start</p>

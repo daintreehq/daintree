@@ -190,6 +190,8 @@ const OPENAI_SETTINGS: VoiceInputSettings = {
   organizationId: "",
   projectId: "",
   recordingMode: "toggle",
+  suggestedDictionary: [],
+  learnFromCorrections: true,
 };
 
 const DEEPGRAM_SETTINGS: VoiceInputSettings = {

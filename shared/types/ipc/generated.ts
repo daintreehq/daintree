@@ -1251,6 +1251,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "worktree:retry-auth-fetch": {
+    args: [];
+    result: void;
+  };
   "worktree:retry-project-load": {
     args: [];
     result: void;

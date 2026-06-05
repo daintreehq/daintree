@@ -10,7 +10,6 @@ import {
 } from "react";
 import { ExternalLink, Settings2, ShieldAlert, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { MissingCliGate } from "@/components/Terminal/MissingCliGate";
 import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
@@ -24,6 +23,7 @@ import { HelpPanelHeader } from "./HelpPanelHeader";
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpLaunchingState } from "./HelpLaunchingState";
+import { McpActivityStrip } from "./McpActivityStrip";
 import {
   useHelpPanelStore,
   HELP_PANEL_MIN_WIDTH,
@@ -58,7 +58,6 @@ const LazyHybridInputBar = lazy(() =>
 const RESIZE_STEP = 10;
 const RESIZE_PAGE_STEP = 50;
 
-const DAINTREE_HOME_URL = "https://daintree.org";
 const ASSISTANT_DOCS_URL = "https://daintree.org/assistant";
 
 interface HelpPanelProps {
@@ -837,59 +836,61 @@ export function HelpPanel({
         )}
       </div>
 
-      {/* Bottom info bar */}
+      {/* Bottom info bar — a single status row (#9763). Left: the live/recent
+          tool-call activity element (popover trigger). Right: the pinned
+          worktree·branch binding, then the agent identity anchored at the
+          edge. Raw args, the elapsed ticker, and the marketing link live in
+          the popover / hover titles / header docs button now. */}
       {showTerminal && agentConfig && !isMissingCli && (
-        <div className="flex flex-col gap-1 border-t border-daintree-border shrink-0 px-3 py-1.5 text-[11px] text-daintree-text/40">
-          {pinnedContext && (
-            <span
-              className="flex items-center gap-1.5 min-w-0"
-              title={
-                isPinnedTerminalDead
-                  ? "The terminal this assistant was pinned to has closed — its tool calls can't reach it."
-                  : isPinnedWorktreeDiverged
-                    ? "This assistant is pinned to a different worktree than the one you have focused."
-                    : "Assistant tool calls are pinned to this worktree and terminal."
-              }
-            >
+        <div className="flex items-center justify-between gap-3 border-t border-daintree-border shrink-0 px-3 py-1.5 text-[11px] text-daintree-text/40">
+          <span className="flex items-center min-w-0">
+            <McpActivityStrip sessionId={sessionId} activity={session.mcpActivity} />
+          </span>
+          <span className="flex items-center gap-2 min-w-0 shrink-0 max-w-[70%]">
+            {pinnedContext && (
               <span
-                aria-hidden
                 className={cn(
-                  "w-1.5 h-1.5 rounded-full shrink-0",
+                  "flex items-center gap-1.5 min-w-0",
                   isPinnedTerminalDead
-                    ? "bg-status-danger"
+                    ? "text-status-danger"
                     : isPinnedWorktreeDiverged
-                      ? "bg-status-warning"
-                      : "bg-daintree-text/30"
+                      ? "text-status-warning"
+                      : undefined
                 )}
-              />
-              <span className="truncate">
-                {[pinnedContext.worktreeName, pinnedContext.worktreeBranch]
-                  .filter(Boolean)
-                  .join(" · ") || "Pinned session"}
+                title={
+                  isPinnedTerminalDead
+                    ? "The terminal this assistant was pinned to has closed — its tool calls can't reach it."
+                    : isPinnedWorktreeDiverged
+                      ? "This assistant is pinned to a different worktree than the one you have focused."
+                      : "Assistant tool calls are pinned to this worktree and terminal."
+                }
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    "w-1.5 h-1.5 rounded-full shrink-0",
+                    isPinnedTerminalDead
+                      ? "bg-status-danger"
+                      : isPinnedWorktreeDiverged
+                        ? "bg-status-warning"
+                        : "bg-daintree-text/30"
+                  )}
+                />
+                <span className="truncate">
+                  {[pinnedContext.worktreeName, pinnedContext.worktreeBranch]
+                    .filter(Boolean)
+                    .join(" · ") || "Pinned session"}
+                </span>
               </span>
-            </span>
-          )}
-          <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1">
-              Using
+            )}
+            <span
+              className="flex items-center gap-1 shrink-0"
+              title={`Assistant agent: ${agentConfig.name}`}
+            >
               <agentConfig.icon className="w-3.5 h-3.5" />
               {agentConfig.name}
             </span>
-            <button
-              type="button"
-              onClick={() =>
-                void actionService.dispatch(
-                  "system.openExternal",
-                  { url: DAINTREE_HOME_URL },
-                  { source: "user" }
-                )
-              }
-              className="flex items-center gap-1 hover:text-daintree-text/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-            >
-              <DaintreeIcon className="w-3.5 h-3.5" />
-              Daintree.org
-            </button>
-          </div>
+          </span>
         </div>
       )}
       <ConfirmDialog

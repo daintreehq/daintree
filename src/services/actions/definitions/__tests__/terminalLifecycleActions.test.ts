@@ -154,7 +154,8 @@ describe("terminal.close", () => {
 type AgentPanel = {
   id: string;
   location: "grid" | "dock" | "trash";
-  ephemeral?: boolean;
+  excludeFromPersistence?: boolean;
+  removeOnExit?: boolean;
   detectedAgentId?: string;
   launchAgentId?: string;
   agentState?: string;
@@ -321,12 +322,12 @@ describe("terminal.restart confirm gate", () => {
 });
 
 describe("terminal.killAll confirm gate", () => {
-  it("kills all non-ephemeral panels immediately when no agents are running", async () => {
+  it("kills all user-facing panels immediately when no agents are running", async () => {
     const { removePanel } = setRichPanelState({
       panels: [
         { id: "p1", location: "grid" },
         { id: "p2", location: "grid" },
-        { id: "ephem", location: "dock", ephemeral: true },
+        { id: "ephem", location: "dock", excludeFromPersistence: true },
       ],
     });
     const run = setupActions();
@@ -339,7 +340,24 @@ describe("terminal.killAll confirm gate", () => {
     expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
   });
 
-  it("requests confirmation when any non-ephemeral panel has a running agent", async () => {
+  it("kills removeOnExit-only panels — only excludeFromPersistence is spared (flags independent)", async () => {
+    const { removePanel } = setRichPanelState({
+      panels: [
+        { id: "p1", location: "grid" },
+        { id: "rox", location: "grid", removeOnExit: true, excludeFromPersistence: false },
+        { id: "ephem", location: "dock", excludeFromPersistence: true },
+      ],
+    });
+    const run = setupActions();
+
+    await run("terminal.killAll");
+
+    expect(removePanel).toHaveBeenCalledWith("p1");
+    expect(removePanel).toHaveBeenCalledWith("rox");
+    expect(removePanel).not.toHaveBeenCalledWith("ephem");
+  });
+
+  it("requests confirmation when any user-facing panel has a running agent", async () => {
     const { removePanel } = setRichPanelState({
       panels: [
         { id: "p1", location: "grid" },
@@ -525,7 +543,7 @@ describe("terminal.hibernateAllIdle", () => {
       kind?: string;
       location?: "grid" | "dock" | "trash";
       agentState?: string;
-      ephemeral?: boolean;
+      excludeFromPersistence?: boolean;
     }>
   ) {
     const panelsById: Record<string, unknown> = {};
@@ -535,7 +553,7 @@ describe("terminal.hibernateAllIdle", () => {
         kind: p.kind ?? "terminal",
         location: p.location ?? "grid",
         agentState: p.agentState,
-        ephemeral: p.ephemeral,
+        excludeFromPersistence: p.excludeFromPersistence,
       };
     }
     panelStoreMock.getState.mockImplementation(() => ({
@@ -544,7 +562,7 @@ describe("terminal.hibernateAllIdle", () => {
     }));
   }
 
-  it("hibernates idle and completed terminals; skips working and ephemeral", async () => {
+  it("hibernates idle and completed terminals; skips working and tooling-internal", async () => {
     setPanelsWithStates([
       { id: "idle1" },
       { id: "completed1", agentState: "completed" },
@@ -552,7 +570,7 @@ describe("terminal.hibernateAllIdle", () => {
       { id: "working1", agentState: "working" },
       { id: "waiting1", agentState: "waiting" },
       { id: "directing1", agentState: "directing" },
-      { id: "ephemeral1", ephemeral: true },
+      { id: "ephemeral1", excludeFromPersistence: true },
       { id: "trashed1", location: "trash" },
       { id: "browser1", kind: "browser" },
     ]);
