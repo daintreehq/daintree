@@ -56,3 +56,55 @@ export function collectClosure(
 
   return visited;
 }
+
+// Computes the set of output file names to inject as `<link rel="modulepreload">`
+// for the first-render seed chunks, given a Rolldown OutputBundle's chunks. This
+// is the pure core of the firstRenderModulePreloadPlugin (vite.config.ts),
+// factored out so the seed-matching, entry-subtraction, and eager-only traversal
+// are unit-testable without the Vite build machinery.
+//
+//   • `chunks` — iterable of bundle outputs ({ type, fileName, isEntry,
+//     facadeModuleId, imports[], dynamicImports[] }). Non-"chunk" outputs
+//     (CSS/assets) are ignored, so no asset is ever preloaded as a module.
+//   • `seedSourcePaths` — Set of repo-relative POSIX source paths from the panel
+//     registry (getFirstRenderSeeds). A chunk is a seed when its facadeModuleId,
+//     normalized via `toRelativePosix`, is in this set.
+//   • `toRelativePosix` — maps an absolute facadeModuleId to the repo-relative
+//     POSIX form for comparison against the seeds (kept as a callback so this
+//     module stays free of node:path and cwd).
+//
+// Returns `{ files, matchedSeedCount }`. `files` is the eager static closure of
+// the matched seed chunks MINUS the entry chunks' eager static closure (what
+// Vite already auto-preloads), sorted and deduplicated — never following a
+// dynamicImports[] edge, so deferred subtrees stay off the first-paint path.
+// `matchedSeedCount` lets the caller warn on zero / partial seed resolution.
+export function computeFirstRenderPreloadFiles(chunks, seedSourcePaths, toRelativePosix) {
+  const chunksByFileName = new Map();
+  const seedFileNames = [];
+  const entryFileNames = [];
+
+  for (const output of chunks) {
+    if (output.type !== "chunk") continue;
+    chunksByFileName.set(output.fileName, output);
+    if (output.isEntry) entryFileNames.push(output.fileName);
+    if (output.facadeModuleId && seedSourcePaths.has(toRelativePosix(output.facadeModuleId))) {
+      seedFileNames.push(output.fileName);
+    }
+  }
+
+  if (seedFileNames.length === 0) {
+    return { files: [], matchedSeedCount: 0 };
+  }
+
+  const options = {
+    getNode: (fileName) => chunksByFileName.get(fileName),
+    getStaticImports: (chunk) => chunk.imports,
+    getDynamicImports: (chunk) => chunk.dynamicImports,
+    followDynamic: false,
+  };
+
+  const seedClosure = collectClosure(seedFileNames, options);
+  const entryClosure = collectClosure(entryFileNames, options);
+  const files = [...seedClosure].filter((fileName) => !entryClosure.has(fileName)).sort();
+  return { files, matchedSeedCount: seedFileNames.length };
+}

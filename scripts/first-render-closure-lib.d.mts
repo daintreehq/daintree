@@ -11,3 +11,18 @@ export function collectClosure<Node>(
     followDynamic?: boolean;
   }
 ): Set<string>;
+
+interface PreloadChunkLike {
+  type: string;
+  fileName: string;
+  isEntry?: boolean;
+  facadeModuleId?: string | null;
+  imports?: string[];
+  dynamicImports?: string[];
+}
+
+export function computeFirstRenderPreloadFiles(
+  chunks: Iterable<PreloadChunkLike>,
+  seedSourcePaths: ReadonlySet<string>,
+  toRelativePosix: (facadeModuleId: string) => string
+): { files: string[]; matchedSeedCount: number };

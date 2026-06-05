@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { collectClosure } from "./first-render-closure-lib.mjs";
+import { collectClosure, computeFirstRenderPreloadFiles } from "./first-render-closure-lib.mjs";
 
 // Builds accessor options over a plain adjacency map: { key: { imports, dyn } }.
 // This is intentionally NOT the manifest or bundle shape — the lib is generic
@@ -123,5 +123,190 @@ describe("collectClosure — robustness", () => {
     };
     const closure = collectClosure(["s1", "s2"], graphOptions(graph));
     expect([...closure].sort()).toEqual(["a", "b", "s1", "s2"]);
+  });
+});
+
+// Identity normalizer for the common case where facadeModuleId is already the
+// repo-relative POSIX path. Cross-platform normalization is exercised separately.
+const identity = (id) => id;
+
+describe("computeFirstRenderPreloadFiles", () => {
+  it("subtracts the entry's static closure so Vite-preloaded chunks aren't duplicated", () => {
+    // entry statically imports vendor-react; the seed panel statically imports
+    // both its private vendor and the shared vendor-react. Only the chunks NOT
+    // already in the entry closure should be injected.
+    const chunks = [
+      {
+        type: "chunk",
+        fileName: "entry.js",
+        isEntry: true,
+        facadeModuleId: "src/main.tsx",
+        imports: ["vendor-react.js"],
+        dynamicImports: ["panel.js"],
+      },
+      { type: "chunk", fileName: "vendor-react.js", imports: [], dynamicImports: [] },
+      {
+        type: "chunk",
+        fileName: "panel.js",
+        facadeModuleId: "src/panels/browser/index.tsx",
+        imports: ["vendor-react.js", "vendor-browser.js"],
+        dynamicImports: [],
+      },
+      { type: "chunk", fileName: "vendor-browser.js", imports: [], dynamicImports: [] },
+    ];
+    const { files, matchedSeedCount } = computeFirstRenderPreloadFiles(
+      chunks,
+      new Set(["src/panels/browser/index.tsx"]),
+      identity
+    );
+    expect(matchedSeedCount).toBe(1);
+    // vendor-react is in the entry closure → excluded; panel + its private
+    // vendor are seed-only → injected.
+    expect(files).toEqual(["panel.js", "vendor-browser.js"]);
+    expect(files).not.toContain("vendor-react.js");
+  });
+
+  it("never injects a chunk reachable only through a dynamic import (the domMax guard)", () => {
+    const chunks = [
+      {
+        type: "chunk",
+        fileName: "entry.js",
+        isEntry: true,
+        facadeModuleId: "src/main.tsx",
+        imports: [],
+        dynamicImports: ["panel.js"],
+      },
+      {
+        type: "chunk",
+        fileName: "panel.js",
+        facadeModuleId: "src/panels/browser/index.tsx",
+        imports: ["panel-vendor.js"],
+        dynamicImports: ["dom-max.js"], // deferred subtree
+      },
+      { type: "chunk", fileName: "panel-vendor.js", imports: [], dynamicImports: [] },
+      { type: "chunk", fileName: "dom-max.js", imports: [], dynamicImports: [] },
+    ];
+    const { files } = computeFirstRenderPreloadFiles(
+      chunks,
+      new Set(["src/panels/browser/index.tsx"]),
+      identity
+    );
+    expect(files).toContain("panel.js");
+    expect(files).toContain("panel-vendor.js");
+    expect(files).not.toContain("dom-max.js");
+  });
+
+  it("matches seeds through a platform-specific facadeModuleId normalizer", () => {
+    // Simulate Windows absolute facadeModuleId + a normalizer that maps it to
+    // the repo-relative POSIX seed path.
+    const chunks = [
+      {
+        type: "chunk",
+        fileName: "panel.js",
+        facadeModuleId: "C:\\repo\\src\\panels\\browser\\index.tsx",
+        imports: [],
+        dynamicImports: [],
+      },
+    ];
+    const toPosix = (id) =>
+      id
+        .replace(/^C:\\repo\\/, "")
+        .split("\\")
+        .join("/");
+    const { files, matchedSeedCount } = computeFirstRenderPreloadFiles(
+      chunks,
+      new Set(["src/panels/browser/index.tsx"]),
+      toPosix
+    );
+    expect(matchedSeedCount).toBe(1);
+    expect(files).toEqual(["panel.js"]);
+  });
+
+  it("ignores non-chunk outputs so assets are never preloaded as modules", () => {
+    const chunks = [
+      {
+        type: "chunk",
+        fileName: "panel.js",
+        facadeModuleId: "src/panels/browser/index.tsx",
+        imports: [],
+        dynamicImports: [],
+      },
+      { type: "asset", fileName: "style.css" },
+    ];
+    const { files } = computeFirstRenderPreloadFiles(
+      chunks,
+      new Set(["src/panels/browser/index.tsx"]),
+      identity
+    );
+    expect(files).toEqual(["panel.js"]);
+    expect(files).not.toContain("style.css");
+  });
+
+  it("reports zero matches when no chunk facadeModuleId is a seed", () => {
+    const chunks = [
+      {
+        type: "chunk",
+        fileName: "entry.js",
+        isEntry: true,
+        facadeModuleId: "src/main.tsx",
+        imports: [],
+        dynamicImports: [],
+      },
+    ];
+    const { files, matchedSeedCount } = computeFirstRenderPreloadFiles(
+      chunks,
+      new Set(["src/panels/browser/index.tsx"]),
+      identity
+    );
+    expect(matchedSeedCount).toBe(0);
+    expect(files).toEqual([]);
+  });
+
+  it("reports a partial match count when only some seeds resolve", () => {
+    const chunks = [
+      {
+        type: "chunk",
+        fileName: "browser.js",
+        facadeModuleId: "src/panels/browser/index.tsx",
+        imports: [],
+        dynamicImports: [],
+      },
+      // The review panel seed has no matching chunk facadeModuleId.
+    ];
+    const { matchedSeedCount } = computeFirstRenderPreloadFiles(
+      chunks,
+      new Set(["src/panels/browser/index.tsx", "src/panels/review/ReviewPane.tsx"]),
+      identity
+    );
+    // Caller compares matchedSeedCount (1) against seedSourcePaths.size (2) to
+    // warn on incomplete coverage.
+    expect(matchedSeedCount).toBe(1);
+  });
+
+  it("deduplicates a chunk shared across multiple seeds", () => {
+    const chunks = [
+      {
+        type: "chunk",
+        fileName: "browser.js",
+        facadeModuleId: "src/panels/browser/index.tsx",
+        imports: ["shared.js"],
+        dynamicImports: [],
+      },
+      {
+        type: "chunk",
+        fileName: "review.js",
+        facadeModuleId: "src/panels/review/ReviewPane.tsx",
+        imports: ["shared.js"],
+        dynamicImports: [],
+      },
+      { type: "chunk", fileName: "shared.js", imports: [], dynamicImports: [] },
+    ];
+    const { files } = computeFirstRenderPreloadFiles(
+      chunks,
+      new Set(["src/panels/browser/index.tsx", "src/panels/review/ReviewPane.tsx"]),
+      identity
+    );
+    expect(files).toEqual(["browser.js", "review.js", "shared.js"]);
+    expect(files.filter((f) => f === "shared.js").length).toBe(1);
   });
 });

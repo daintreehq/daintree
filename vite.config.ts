@@ -11,7 +11,7 @@ import { gzipSync } from "node:zlib";
 import { getDevServerConfig } from "./shared/config/devServer";
 import { getDaintreeAppDevCSP, getDaintreeAppProdCSP } from "./shared/config/csp";
 import { getFirstRenderSeeds } from "./shared/config/panelKindRegistry";
-import { collectClosure } from "./scripts/first-render-closure-lib.mjs";
+import { computeFirstRenderPreloadFiles } from "./scripts/first-render-closure-lib.mjs";
 
 const devServerConfig = getDevServerConfig();
 
@@ -532,10 +532,10 @@ function chunkModulesPlugin(): Plugin {
   };
 }
 
-// Minimal view of a Rolldown OutputChunk used by the preload walk. The bundle's
-// `imports[]` / `dynamicImports[]` hold output FILE NAMES (other bundle keys),
-// not the source-path keys the manifest uses — these are JS getters on the
-// native handle, so they're read lazily, never structured-cloned.
+// Minimal view of a Rolldown OutputChunk passed to the preload helper. The
+// bundle's `imports[]` / `dynamicImports[]` hold output FILE NAMES (other bundle
+// keys), not the source-path keys the manifest uses — these are JS getters on
+// the native handle, so they're read lazily, never structured-cloned.
 interface BundleChunkLike {
   type: string;
   fileName: string;
@@ -554,13 +554,13 @@ interface BundleChunkLike {
 // → fetch the chunk → discover its deps → fetch those). Preloading the eager
 // closure of the seeds collapses that first-paint waterfall.
 //
-// Eager-only by construction: the BFS follows `imports[]` and NEVER
+// Eager-only by construction: the closure follows `imports[]` and NEVER
 // `dynamicImports[]`, so deliberately-deferred subtrees (vendor-motion's domMax,
-// #8821) are not pulled onto the first-paint path. It reuses the exact
-// `followDynamic: false` traversal the first-render-chunk budget gates on (via
-// scripts/first-render-closure-lib.mjs), so the injected preload set and the
-// measured budget cannot drift. Chunk membership is untouched — this only adds
-// <link> tags to the HTML.
+// #8821) are not pulled onto the first-paint path. The set-building logic lives
+// in computeFirstRenderPreloadFiles (scripts/first-render-closure-lib.mjs),
+// which shares the exact `followDynamic: false` traversal the first-render-chunk
+// budget gates on, so the injected preload set and the measured budget cannot
+// drift. Chunk membership is untouched — this only adds <link> tags to the HTML.
 function firstRenderModulePreloadPlugin(): Plugin {
   // getFirstRenderSeeds() returns repo-relative POSIX source paths; the bundle
   // keys chunks by hashed file name and tags each lazy seed chunk with an
@@ -568,6 +568,8 @@ function firstRenderModulePreloadPlugin(): Plugin {
   // facadeModuleId back to that same repo-relative POSIX form.
   const seedSourcePaths = new Set(getFirstRenderSeeds());
   const root = process.cwd();
+  const toRelativePosix = (facadeModuleId: string) =>
+    path.relative(root, facadeModuleId).split(path.sep).join("/");
 
   return {
     name: "first-render-modulepreload",
@@ -580,23 +582,14 @@ function firstRenderModulePreloadPlugin(): Plugin {
       // Populated only for production builds — the dev server has no bundle.
       if (!ctx.bundle) return;
 
-      const bundle = ctx.bundle as unknown as Record<string, BundleChunkLike>;
+      const chunks = Object.values(ctx.bundle as unknown as Record<string, BundleChunkLike>);
+      const { files, matchedSeedCount } = computeFirstRenderPreloadFiles(
+        chunks,
+        seedSourcePaths,
+        toRelativePosix
+      );
 
-      const chunksByFileName = new Map<string, BundleChunkLike>();
-      const seedFileNames: string[] = [];
-      const entryFileNames: string[] = [];
-
-      for (const output of Object.values(bundle)) {
-        if (output.type !== "chunk") continue;
-        chunksByFileName.set(output.fileName, output);
-        if (output.isEntry) entryFileNames.push(output.fileName);
-        if (output.facadeModuleId) {
-          const rel = path.relative(root, output.facadeModuleId).split(path.sep).join("/");
-          if (seedSourcePaths.has(rel)) seedFileNames.push(output.fileName);
-        }
-      }
-
-      if (seedFileNames.length === 0) {
+      if (matchedSeedCount === 0) {
         // No seed chunk matched a registry source path — most likely a panel
         // chunk was merged into a facade-less shared chunk by a future refactor.
         // Warn and emit nothing rather than failing the build; the budget gate
@@ -607,27 +600,21 @@ function firstRenderModulePreloadPlugin(): Plugin {
         return;
       }
 
-      const closureOptions = {
-        getNode: (fileName: string) => chunksByFileName.get(fileName),
-        getStaticImports: (chunk: BundleChunkLike) => chunk.imports,
-        getDynamicImports: (chunk: BundleChunkLike) => chunk.dynamicImports,
-        followDynamic: false,
-      };
-
-      // The eager static closure of the first-render seed chunks.
-      const seedClosure = collectClosure(seedFileNames, closureOptions);
-      // What Vite already auto-preloads: every entry chunk plus its eager static
-      // closure. Subtract it so we never emit a duplicate <link> for a chunk
-      // Vite already covers (e.g. the shared vendor-react chunk).
-      const entryClosure = collectClosure(entryFileNames, closureOptions);
-
-      const toInject = [...seedClosure].filter((fileName) => !entryClosure.has(fileName)).sort();
+      if (matchedSeedCount < seedSourcePaths.size) {
+        // Some — but not all — seeds resolved. Partial coverage is otherwise
+        // silent (the zero-match guard above doesn't fire), so the preload set
+        // would quietly miss a panel's closure. Surface it; the budget gate
+        // measures the manifest closure separately and can't catch this.
+        console.warn(
+          `[first-render-modulepreload] only ${matchedSeedCount} of ${seedSourcePaths.size} first-render seeds matched a chunk facadeModuleId — preload coverage is incomplete`
+        );
+      }
 
       // `base` is "./" (relative — required by the Electron app:// protocol) and
       // Vite emits asset hrefs as base + fileName; match that exactly. The
       // `crossorigin` boolean attr mirrors Vite's own modulepreload links so the
       // preload matches the subsequent CORS module fetch instead of double-loading.
-      return toInject.map(
+      return files.map(
         (fileName): HtmlTagDescriptor => ({
           tag: "link",
           attrs: { rel: "modulepreload", crossorigin: true, href: `./${fileName}` },
