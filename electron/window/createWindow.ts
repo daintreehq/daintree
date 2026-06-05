@@ -357,23 +357,29 @@ export function setupBrowserWindow(
     // 5s timeout fallback ensures a hung renderer doesn't leave the window
     // permanently hidden — strictly worse than a brief blank.
     let shown = false;
-    const showOnce = (): void => {
+    const showOnce = (viaFallback = false): void => {
       if (shown) return;
       shown = true;
       if (fallbackTimer) {
         clearTimeout(fallbackTimer);
         fallbackTimer = null;
       }
-      if (!win.isDestroyed()) win.show();
+      if (!win.isDestroyed()) {
+        markPerformance(
+          PERF_MARKS.MAIN_WINDOW_SHOWN,
+          viaFallback ? { fallback: true } : undefined
+        );
+        win.show();
+      }
     };
     let fallbackTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
       fallbackTimer = null;
       console.warn(
         `[MAIN] dom-ready not received after ${SHOW_FALLBACK_MS}ms — showing window anyway`
       );
-      showOnce();
+      showOnce(true);
     }, SHOW_FALLBACK_MS);
-    appWebContents.once("dom-ready", showOnce);
+    appWebContents.once("dom-ready", () => showOnce(false));
     win.once("closed", () => {
       if (fallbackTimer) {
         clearTimeout(fallbackTimer);
