@@ -886,6 +886,15 @@ code.hljs {
     display: none;
   }
 
+  /* Mitigate xterm #5893 / #9812: the DOM renderer applies negative inline
+     letter-spacing to emoji spans because OffscreenCanvas.measureText mismeasures
+     them. Clamp to 0 (container default); author !important wins over the inline
+     style at the same origin. Assumes Chromium serializes `letter-spacing: -Npx`
+     with a space. Remove when on @xterm/xterm >=7.0.0. */
+  .xterm-rows span[style*="letter-spacing: -"] {
+    letter-spacing: 0 !important;
+  }
+
   /* Consistent monospace font stack */
   code,
   kbd,
