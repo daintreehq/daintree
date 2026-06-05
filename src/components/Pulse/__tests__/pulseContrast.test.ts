@@ -230,7 +230,11 @@ describe("PulseHeatmap — legend (issue #9819)", () => {
   it("legend swatches are keyed by data-heat-level 1..4", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
     expect(content).toContain("data-heat-level={level}");
-    expect(content).toContain("var(--pulse-heat-${level}");
+    // Each per-level var is referenced explicitly (not via template literal)
+    // so the EXTENSION_KEYS drift scanner registers all four consumers.
+    for (const level of [1, 2, 3, 4]) {
+      expect(content).toContain(`var(--pulse-heat-${level},`);
+    }
     // The template iterates [1,2,3,4]; verify the array is present so the
     // literal substring check is anchored to the right loop.
     expect(content).toContain("[1, 2, 3, 4]");

@@ -322,6 +322,22 @@ function OfflineHint() {
 
 const HEATMAP_LEGEND_GAP_PX = 3;
 
+// Explicit per-level switch (not a template literal) so the EXTENSION_KEYS
+// drift scanner registers each per-level var consumer individually. Mirrors
+// getHeatCellBackground() in PulseHeatmap.tsx.
+function getLegendSwatchBackground(level: 1 | 2 | 3 | 4): string {
+  switch (level) {
+    case 4:
+      return "var(--pulse-heat-4, var(--pulse-heat-color, var(--color-state-working)))";
+    case 3:
+      return "var(--pulse-heat-3, var(--pulse-heat-color, var(--color-state-working)))";
+    case 2:
+      return "var(--pulse-heat-2, var(--pulse-heat-color, var(--color-state-working)))";
+    default:
+      return "var(--pulse-heat-1, var(--pulse-heat-color, var(--color-state-working)))";
+  }
+}
+
 function PulseHeatmapLegend({
   dayCount,
   descriptionId,
@@ -342,7 +358,7 @@ function PulseHeatmapLegend({
         style={{ width: `${rowWidth}px`, gap: `${HEATMAP_LEGEND_GAP_PX}px` }}
       >
         <span>Less</span>
-        {[1, 2, 3, 4].map((level) => (
+        {([1, 2, 3, 4] as const).map((level) => (
           <span
             key={level}
             className="pulse-heat-cell relative overflow-hidden rounded-[2px] shrink-0"
@@ -350,7 +366,7 @@ function PulseHeatmapLegend({
             style={{
               width: 10,
               height: 10,
-              background: `var(--pulse-heat-${level}, var(--pulse-heat-color, var(--color-state-working)))`,
+              background: getLegendSwatchBackground(level),
             }}
           >
             {/* Inner shape span — display: none in default themes, flipped to
