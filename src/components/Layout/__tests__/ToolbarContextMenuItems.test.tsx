@@ -121,6 +121,20 @@ beforeEach(() => {
 });
 
 describe("ToolbarContextMenuItems", () => {
+  it("uses the U+2026 ellipsis on Customize (not ASCII '...') — issue #9825", () => {
+    // Drift guard: the ellipsis on Customize matches the confirm-tier
+    // pattern in `src/components/ActionPalette/ActionPaletteItem.tsx:126`
+    // and signals "opens a dialog" — the only allowed ellipsis use per
+    // CLAUDE.md microcopy rules. A future rename to ASCII '...' would
+    // silently break the affordance.
+    expect(TOOLBAR_CUSTOMIZE_LABEL).toBe("Customize toolbar…");
+    expect(TOOLBAR_CUSTOMIZE_LABEL).not.toContain("...");
+  });
+
+  it("uses sentence case for the unpin label", () => {
+    expect(TOOLBAR_UNPIN_LABEL).toBe("Unpin from toolbar");
+  });
+
   it("renders the customize and unpin labels in the context variant", () => {
     const { getByText } = render(<ToolbarContextMenuItems buttonId="terminal" side="left" />);
     expect(getByText(TOOLBAR_CUSTOMIZE_LABEL)).toBeTruthy();
@@ -177,5 +191,21 @@ describe("ToolbarContextMenuItems", () => {
     const unpin = getByTestId("dropdown-menu-item");
     fireEvent.click(unpin);
     expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("agent-tray", "left");
+  });
+
+  it("uses the onUnpin override when provided (agent IDs route to setAgentPinned)", () => {
+    // Regression guard for issue #9825 Critical 1: per-agent toolbar
+    // buttons read pin state from agentSettingsStore (tri-state — see
+    // isAgentToolbarVisible / #7673), so the wrapper's default
+    // toggleButtonVisibility writes to the wrong store. AgentButton
+    // passes `onUnpin` to redirect to setAgentPinned.
+    const onUnpinMock = vi.fn();
+    const { getByTestId } = render(
+      <ToolbarContextMenuItems buttonId="claude" side="left" onUnpin={onUnpinMock} />
+    );
+    const unpin = getByTestId("context-menu-item");
+    fireEvent.click(unpin);
+    expect(onUnpinMock).toHaveBeenCalledTimes(1);
+    expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
   });
 });

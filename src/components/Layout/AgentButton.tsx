@@ -158,6 +158,7 @@ export function AgentButton({
   const ariaShortcut = useAriaKeyshortcuts(`agent.${type}`);
   const hover = useShortcutHintHover(`agent.${type}`);
   const agentSettings = useAgentSettingsStore((s) => s.settings);
+  const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
   const ccrPresets = useCcrPresetsStore((s) => s.ccrPresetsByAgent[type]);
   const projectPresets = useProjectPresetsStore((s) => s.presetsByAgent[type]);
 
@@ -324,6 +325,14 @@ export function AgentButton({
     }
   };
 
+  // Per-agent unpin: agent IDs read pin state from agentSettingsStore
+  // (tri-state — see isAgentToolbarVisible / #7673), not from
+  // pinnedButtons. The wrapper's default toggleButtonVisibility writes
+  // to the wrong store, so override it here.
+  const handleUnpinFromToolbar = () => {
+    void setAgentPinned(type, false);
+  };
+
   // Persist the toolbar pick to the worktree-scoped slot so repeated launches
   // on the same worktree stay stable, while other worktrees keep their own
   // defaults. Pass `undefined` to clear the worktree override (returning the
@@ -418,7 +427,7 @@ export function AgentButton({
             </ContextMenuSub>
           )}
           <ContextMenuSeparator />
-          <ToolbarContextMenuItems buttonId={type} side="left" />
+          <ToolbarContextMenuItems buttonId={type} side="left" onUnpin={handleUnpinFromToolbar} />
           <ContextMenuActionItem
             actionId="app.settings.openTab"
             args={{ tab: "agents", subtab: type, sectionId: "agents-presets" }}
@@ -713,7 +722,7 @@ export function AgentButton({
           </ContextMenuSub>
         )}
         <ContextMenuSeparator />
-        <ToolbarContextMenuItems buttonId={type} side="left" />
+        <ToolbarContextMenuItems buttonId={type} side="left" onUnpin={handleUnpinFromToolbar} />
         <ContextMenuActionItem
           actionId="app.settings.openTab"
           args={{ tab: "agents", subtab: type, sectionId: "agents-presets" }}

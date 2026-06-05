@@ -25,6 +25,17 @@ interface ToolbarContextMenuItemsProps {
    * the agent tray dropdown) gets the same Customize + Unpin items.
    */
   variant?: Variant;
+  /**
+   * Optional override for the unpin handler. Default is
+   * `useToolbarPreferencesStore.toggleButtonVisibility(buttonId, side)`, but
+   * built-in agent IDs (`claude` / `gemini` / `codex`) read pin state from
+   * `agentSettingsStore` (tri-state — see #7673 and `isAgentToolbarVisible`),
+   * not from `pinnedButtons`. Pass a callback that calls
+   * `setAgentPinned(id, false)` for those buttons so unpinning actually
+   * hides them. Buttons outside `BUILT_IN_AGENT_IDS` can rely on the
+   * default.
+   */
+  onUnpin?: () => void;
 }
 
 // Single source of truth for the "Customize toolbar…" and "Unpin from toolbar"
@@ -37,8 +48,10 @@ export function ToolbarContextMenuItems({
   buttonId,
   side,
   variant = "context",
+  onUnpin,
 }: ToolbarContextMenuItemsProps) {
   const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
+  const handleUnpin = onUnpin ?? (() => toggleButtonVisibility(buttonId, side));
 
   if (variant === "dropdown") {
     return (
@@ -52,7 +65,7 @@ export function ToolbarContextMenuItems({
           {TOOLBAR_CUSTOMIZE_LABEL}
         </DropdownMenuActionItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => toggleButtonVisibility(buttonId, side)} className="h-7">
+        <DropdownMenuItem onSelect={handleUnpin} className="h-7">
           <Unplug className="mr-2 h-3.5 w-3.5" />
           {TOOLBAR_UNPIN_LABEL}
         </DropdownMenuItem>
@@ -66,7 +79,7 @@ export function ToolbarContextMenuItems({
         {TOOLBAR_CUSTOMIZE_LABEL}
       </ContextMenuActionItem>
       <ContextMenuSeparator />
-      <ContextMenuItem onSelect={() => toggleButtonVisibility(buttonId, side)}>
+      <ContextMenuItem onSelect={handleUnpin}>
         <Unplug className="mr-2 h-3.5 w-3.5" />
         {TOOLBAR_UNPIN_LABEL}
       </ContextMenuItem>
