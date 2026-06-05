@@ -75,6 +75,16 @@ function createAppProtocolHandler(distPath: string) {
       });
     }
 
+    // stat() succeeds on directories, so guard before the 304 short-circuit:
+    // without this a directory URL carrying If-Modified-Since would return 304
+    // instead of falling through to the open/read 404 path.
+    if (!stats.isFile()) {
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildHeaders("text/plain"),
+      });
+    }
+
     const ifModifiedSince = request.headers.get("If-Modified-Since");
     if (isNotModified(ifModifiedSince, stats.mtime)) {
       return new Response(null, {

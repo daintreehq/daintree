@@ -1783,6 +1783,7 @@ describe("createAppProtocolHandler — direct disk read", () => {
     const fs = await import("fs/promises");
     vi.mocked(fs.stat).mockResolvedValue({
       mtime: new Date(0),
+      isFile: () => true,
     } as Awaited<ReturnType<typeof fs.stat>>);
     vi.mocked(fs.open).mockResolvedValue(
       makeFileHandle() as unknown as Awaited<ReturnType<typeof fs.open>>
@@ -1821,7 +1822,9 @@ describe("createAppProtocolHandler — direct disk read", () => {
   it("builds the 200 response headers from the validator stats (Last-Modified / Cache-Control)", async () => {
     const fs = await import("fs/promises");
     const appProtocol = await import("../../utils/appProtocol.js");
-    const stats = { mtime: new Date(1000) } as Awaited<ReturnType<typeof fs.stat>>;
+    const stats = { mtime: new Date(1000), isFile: () => true } as Awaited<
+      ReturnType<typeof fs.stat>
+    >;
     vi.mocked(fs.stat).mockResolvedValue(stats);
 
     const handler = await captureHandler();
@@ -1832,6 +1835,26 @@ describe("createAppProtocolHandler — direct disk read", () => {
       stats,
       filePath: "/tmp/dist/assets/index-abc123.js",
     });
+  });
+
+  it("returns 404 for a directory URL even when the validator matches (no spurious 304)", async () => {
+    const fs = await import("fs/promises");
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(fs.stat).mockResolvedValue({
+      mtime: new Date(0),
+      isFile: () => false,
+    } as Awaited<ReturnType<typeof fs.stat>>);
+    vi.mocked(appProtocol.isNotModified).mockReturnValue(true);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeRequest("/assets/", {
+        headers: { "If-Modified-Since": new Date(0).toUTCString() },
+      })
+    );
+
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
   });
 
   it("short-circuits to 304 without opening the file when the validator matches", async () => {
@@ -1947,6 +1970,18 @@ describe("createAppProtocolHandler — direct disk read", () => {
     expect(response.status).toBe(500);
   });
 
+  it("closes the file handle on the success path", async () => {
+    const fs = await import("fs/promises");
+    const handle = makeFileHandle("bytes");
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(200);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
   it("returns 200 when close() rejects after a successful read (close errors are swallowed)", async () => {
     const fs = await import("fs/promises");
     const handle = {
@@ -1960,5 +1995,6 @@ describe("createAppProtocolHandler — direct disk read", () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("ok");
+    expect(handle.close).toHaveBeenCalledTimes(1);
   });
 });
