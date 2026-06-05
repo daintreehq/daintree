@@ -27,6 +27,7 @@ import { ArtifactOverlay } from "./ArtifactOverlay";
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalScrollIndicator } from "./TerminalScrollIndicator";
 import { useGridScrollRoot } from "./GridScrollRootContext";
+import { isStaleHiddenReading } from "./visibilityReadingGuard";
 import { COMFORTABLE_PANEL_HEIGHT_PX } from "@/lib/terminalLayout";
 import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
 import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
@@ -626,9 +627,27 @@ function TerminalPaneComponent({
     const gen = terminalInstanceService.getAttachGeneration(id);
 
     const observer = new IntersectionObserver(
-      ([entry]) => {
+      (entries) => {
+        // Under load a single callback can batch multiple entries for the same
+        // element; only the most recent reading reflects current geometry.
+        const entry = entries[entries.length - 1];
+
         // Don't update visibility during drag - CSS transforms cause false negatives
         if (isDraggingRef.current || !entry) return;
+
+        // Suppress stale `false` readings that would freeze a visible terminal
+        // at the BACKGROUND tier (#9780). Confirm against fresh element and root
+        // geometry, read before any write to avoid a redundant layout reflow.
+        if (
+          isStaleHiddenReading(
+            entry,
+            () => containerRef.current?.getBoundingClientRect(),
+            () =>
+              gridScrollRoot?.getBoundingClientRect() ??
+              new DOMRect(0, 0, window.innerWidth, window.innerHeight)
+          )
+        )
+          return;
 
         updateVisibility(id, entry.isIntersecting);
         terminalInstanceService.setVisible(id, entry.isIntersecting, gen);
