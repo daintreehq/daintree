@@ -1,10 +1,9 @@
 // eager-import-allow: sets up custom protocols (daintree, plugin) and security headers (CSP) eagerly on startup
-import { app, protocol, net, session } from "electron";
+import { app, protocol, session } from "electron";
 import { getWindowForWebContents, getAppWebContents } from "../window/webContentsRegistry.js";
 import path from "path";
 import fs from "fs/promises";
 import { readFileSync } from "node:fs";
-import { pathToFileURL } from "url";
 import {
   resolveAppUrlToDistPath,
   getMimeType,
@@ -84,31 +83,56 @@ function createAppProtocolHandler(distPath: string) {
       });
     }
 
+    // Read the bytes directly off disk instead of round-tripping through
+    // net.fetch(). Custom-scheme responses never enter Chromium's HTTP disk
+    // cache, so the fetch path added a Chromium network-stack hop plus a second
+    // in-memory copy on every asset load for no caching benefit. No O_NOFOLLOW:
+    // unlike daintree-file:// / plugin://, resolveAppUrlToDistPath does lexical
+    // (path.resolve + startsWith) containment with no realpath, so there is no
+    // realpath/open TOCTOU window for the flag to close — adding it would imply
+    // a defense that isn't set up here. dist assets are application-owned.
+    let fileHandle: Awaited<ReturnType<typeof fs.open>>;
     try {
-      const fileUrl = pathToFileURL(filePath).toString();
-      const response = await net.fetch(fileUrl);
-
-      if (!response.ok) {
+      fileHandle = await fs.open(filePath, fs.constants.O_RDONLY);
+    } catch (err) {
+      const errCode = (err as NodeJS.ErrnoException).code;
+      if (errCode === "ENOENT" || errCode === "EISDIR") {
         return new Response("Not Found", {
           status: 404,
           headers: buildHeaders("text/plain"),
         });
       }
-
-      const mimeType = getMimeType(filePath);
-      const headers = buildHeaders(mimeType, { stats, filePath });
-      const buffer = await response.arrayBuffer();
-
-      return new Response(buffer, {
-        status: 200,
-        headers: headers,
-      });
-    } catch (err) {
       console.error("[MAIN] Error serving file:", filePath, err);
       return new Response("Internal Server Error", {
         status: 500,
         headers: buildHeaders("text/plain"),
       });
+    }
+
+    try {
+      const buffer = await fileHandle.readFile();
+      return new Response(buffer, {
+        status: 200,
+        headers: buildHeaders(getMimeType(filePath), { stats, filePath }),
+      });
+    } catch (err) {
+      // fs.open on a directory succeeds on macOS/Linux; the EISDIR only surfaces
+      // here at readFile. Map it to 404 like the open path so a directory URL
+      // never returns a 500.
+      if ((err as NodeJS.ErrnoException).code === "EISDIR") {
+        return new Response("Not Found", {
+          status: 404,
+          headers: buildHeaders("text/plain"),
+        });
+      }
+      console.error("[MAIN] Error serving file:", filePath, err);
+      return new Response("Internal Server Error", {
+        status: 500,
+        headers: buildHeaders("text/plain"),
+      });
+    } finally {
+      // Swallow close errors so they don't mask a preceding readFile failure.
+      await fileHandle.close().catch(() => {});
     }
   };
 }
