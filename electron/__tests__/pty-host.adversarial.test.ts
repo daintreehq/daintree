@@ -994,15 +994,30 @@ describe("pty-host adversarial", () => {
 
     const tierA = portA.postMessage.mock.calls
       .map((c: unknown[]) => c[0])
-      .filter((m: { type?: string }) => m?.type === "tier-changed");
+      .filter(
+        (m: unknown): m is { type: string } =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as Record<string, unknown>).type === "tier-changed"
+      );
     const tierB = portB.postMessage.mock.calls
       .map((c: unknown[]) => c[0])
-      .filter((m: { type?: string }) => m?.type === "tier-changed");
+      .filter(
+        (m: unknown): m is { type: string } =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as Record<string, unknown>).type === "tier-changed"
+      );
 
     // Window 1 (project-1) is the consumer of t1 — it gets the reconciliation.
     expect(tierA).toContainEqual({ type: "tier-changed", id: "t1", tier: "active" });
     // Window 2 (project-2) is project-filtered away from t1 — nothing leaks to it.
-    expect(tierB.some((m: { id?: string }) => m.id === "t1")).toBe(false);
+    expect(
+      tierB.some(
+        (m: unknown) =>
+          typeof m === "object" && m !== null && (m as Record<string, unknown>).id === "t1"
+      )
+    ).toBe(false);
   });
 
   it("UNDEFINED_PROJECT_TERMINAL_STAYS_ACTIVE_WHEN_PROJECTS_ACTIVE", async () => {
@@ -1063,7 +1078,12 @@ describe("pty-host adversarial", () => {
 
     const tierHealthy = portHealthy.postMessage.mock.calls
       .map((c: unknown[]) => c[0])
-      .filter((m: { type?: string }) => m?.type === "tier-changed");
+      .filter(
+        (m: unknown): m is { type: string } =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as Record<string, unknown>).type === "tier-changed"
+      );
     expect(tierHealthy).toContainEqual({ type: "tier-changed", id: "t1", tier: "active" });
   });
 
