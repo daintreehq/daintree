@@ -380,6 +380,55 @@ describe("built-in themes", () => {
         }
       }
 
+      // Cross-key invariant: on dark, the toolbar-control armed/active fill
+      // must read as MORE prominent than the hover fill (#9827). Without this
+      // the armed and hover fills both fall through to overlay-emphasis
+      // (alpha 0.10) and the only signal separating them is a 1px hairline
+      // — the user can't see the toggle is on. The minimum step is 0.03 to
+      // leave room for the per-theme tint families (daintree/galapagos/etc.)
+      // while still rejecting a future "armed = hover" regression.
+      const toolbarHover = extensions["toolbar-control-hover-bg"];
+      const toolbarArmed = extensions["toolbar-control-armed-bg"];
+      const toolbarActive = extensions["toolbar-control-active-bg"];
+      if (toolbarHover !== undefined && toolbarArmed !== undefined && toolbarActive !== undefined) {
+        const hoverAlpha = parseAlpha(toolbarHover);
+        const armedAlpha = parseAlpha(toolbarArmed);
+        const activeAlpha = parseAlpha(toolbarActive);
+        if (Number.isNaN(hoverAlpha) || Number.isNaN(armedAlpha) || Number.isNaN(activeAlpha)) {
+          failures.push(
+            `${source.id} toolbar-control alpha unparseable; got hover="${toolbarHover}" ` +
+              `armed="${toolbarArmed}" active="${toolbarActive}"`
+          );
+        } else {
+          if (!(armedAlpha > hoverAlpha)) {
+            failures.push(
+              `${source.id} toolbar-control-armed-bg (alpha ${armedAlpha}) must be stronger ` +
+                `than toolbar-control-hover-bg (alpha ${hoverAlpha})`
+            );
+          }
+          if (!(activeAlpha > hoverAlpha)) {
+            failures.push(
+              `${source.id} toolbar-control-active-bg (alpha ${activeAlpha}) must be stronger ` +
+                `than toolbar-control-hover-bg (alpha ${hoverAlpha})`
+            );
+          }
+          if (armedAlpha - hoverAlpha < 0.03) {
+            failures.push(
+              `${source.id} toolbar-control armed-vs-hover alpha step ` +
+                `(${(armedAlpha - hoverAlpha).toFixed(2)}) is below the 0.03 minimum; the ` +
+                `fill separation will be invisible (#9827)`
+            );
+          }
+          if (activeAlpha - hoverAlpha < 0.03) {
+            failures.push(
+              `${source.id} toolbar-control active-vs-hover alpha step ` +
+                `(${(activeAlpha - hoverAlpha).toFixed(2)}) is below the 0.03 minimum; the ` +
+                `fill separation will be invisible (#9827)`
+            );
+          }
+        }
+      }
+
       // Extra-key regression: no built-in source ships an unregistered extension
       // key. TypeScript enforces this at compile time, but a runtime check
       // catches `as unknown as` casts and ad-hoc fixture mutations.
