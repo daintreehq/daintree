@@ -72,6 +72,15 @@ export const PERF_MARKS = {
 
   RENDERER_CLS_SAMPLE: "renderer_cls_sample",
   RENDERER_CLS_FINAL: "renderer_cls_final",
+
+  // Per-WebContentsView preload evaluation cost (#9770). Captured in the
+  // sandboxed preload and flushed via PERF_FLUSH_RENDERER_MARKS at preload
+  // bottom; the main-process handler correlates each pair with its view via
+  // the sender's webContents id.
+  PRELOAD_EVAL_START: "preload.eval:start",
+  PRELOAD_EVAL_END: "preload.eval:end",
+  PRELOAD_EXPOSE_IN_MAIN_WORLD_START: "preload.exposeInMainWorld:start",
+  PRELOAD_EXPOSE_IN_MAIN_WORLD_END: "preload.exposeInMainWorld:end",
 } as const;
 
 export type PerfMarkName = (typeof PERF_MARKS)[keyof typeof PERF_MARKS];
