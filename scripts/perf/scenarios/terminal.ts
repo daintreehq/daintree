@@ -4,6 +4,7 @@ import {
   simulateTerminalOutputPass,
   spinEventLoop,
   createRng,
+  createHeadlessTerminal,
 } from "../lib/workloads";
 
 const BURST_CHUNKS = makeTerminalChunks(6000, 96);
@@ -99,6 +100,78 @@ export const terminalScenarios: PerfScenario[] = [
           checksum: result.checksum + scrollChecksum,
         },
       };
+    },
+  },
+  {
+    id: "PERF-033",
+    name: "Terminal Write-to-Parse (Real @xterm/headless)",
+    description:
+      "Real xterm-headless terminal per iteration: drive a write→parse-done " +
+      "bracket using terminal.write(data, callback) on chunks that exercise " +
+      "the parser at a representative agent-terminal size, including a chunk " +
+      "that crosses INCREMENTAL_RESTORE_CONFIG.chunkBytes (32 KiB). Bracketed " +
+      "by the per-write callback to catch write-to-parse regressions on the " +
+      "floor under all write-to-paint fixes.",
+    tier: "fast",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 8, ci: 14, nightly: 20 },
+    warmups: 1,
+    async run() {
+      const terminal = await createHeadlessTerminal({
+        cols: 120,
+        rows: 30,
+        scrollback: 5000,
+      });
+
+      try {
+        let parseInvocations = 0;
+        terminal.onWriteParsed(() => {
+          parseInvocations += 1;
+        });
+
+        const writeAndWait = (data: string): Promise<void> =>
+          new Promise<void>((resolve) => {
+            terminal.write(data, () => resolve());
+          });
+
+        // 33 KiB crosses the Daintree-side INCREMENTAL_RESTORE_CONFIG.chunkBytes
+        // (32 KiB) boundary. Real parser cost, not synthetic.
+        const crossing = "x".repeat(33 * 1024);
+        // Steady-state size representative of normal log output.
+        const steady = "y".repeat(4 * 1024);
+        // 100 log lines concatenated into a single write — the parser
+        // still sees 100 newlines, but the per-write callback brackets
+        // the whole batch (no Promise overhead per line).
+        const logLines: string[] = [];
+        for (let i = 0; i < 100; i += 1) {
+          logLines.push(`log entry ${i} from agent terminal`);
+        }
+        const logStream = `${logLines.join("\n")}\n`;
+
+        await writeAndWait(crossing);
+        await writeAndWait(steady);
+        await writeAndWait(logStream);
+
+        const bytesWritten = crossing.length + steady.length + logStream.length;
+        const lastLine =
+          terminal.buffer.active
+            .getLine(terminal.buffer.active.baseY - 1)
+            ?.translateToString(true) ?? "";
+
+        return {
+          // Negative durationMs triggers the wall-clock fallback in run.ts
+          // (the parser-done callbacks are awaited inside the bracket, so
+          // wall-clock IS the cumulative write-to-parse latency).
+          durationMs: -1,
+          metrics: {
+            bytesWritten,
+            parseInvocations,
+            lastLineLength: lastLine.length,
+          },
+        };
+      } finally {
+        terminal.dispose();
+      }
     },
   },
 ];

@@ -28,6 +28,7 @@
     "PERF-030": { "p95Ms": 2200, "maxRegressionPct": 15 },
     "PERF-031": { "p95Ms": 2400, "maxRegressionPct": 50 },
     "PERF-032": { "p95Ms": 2600, "maxRegressionPct": 15 },
+    "PERF-033": { "p95Ms": 50, "maxRegressionPct": 25 },
 
     "PERF-040": { "p95Ms": 1400, "maxRegressionPct": 15 },
     "PERF-041": { "p95Ms": 2200, "maxRegressionPct": 15 },

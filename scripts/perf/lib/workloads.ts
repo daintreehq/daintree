@@ -424,3 +424,27 @@ export async function spinEventLoop(ms: number): Promise<void> {
     await Promise.resolve();
   }
 }
+
+export interface HeadlessTerminalConfig {
+  cols: number;
+  rows: number;
+  scrollback?: number;
+}
+
+/**
+ * Constructs a real @xterm/headless Terminal. The headless bundle exposes
+ * the parser/buffer path that the real renderer drives — using it here keeps
+ * the microbench in the parser cost layer (no DOM, no rAF, no WebGL addon
+ * pool). The `tsx` runner resolves the named export from the ESM build.
+ */
+export async function createHeadlessTerminal(
+  config: HeadlessTerminalConfig
+): Promise<import("@xterm/headless").Terminal> {
+  const { Terminal } = await import("@xterm/headless");
+  return new Terminal({
+    cols: config.cols,
+    rows: config.rows,
+    scrollback: config.scrollback ?? 5000,
+    allowProposedApi: true,
+  });
+}
