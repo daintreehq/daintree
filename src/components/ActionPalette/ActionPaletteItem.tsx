@@ -128,7 +128,7 @@ function ActionPaletteItemInner({
   return (
     <div
       className={cn(
-        "group relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] transition-colors",
+        "group relative w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)] transition-colors",
         "border border-transparent text-daintree-text/70",
         "hover:bg-overlay-subtle hover:text-daintree-text",
         "aria-selected:bg-overlay-raised aria-selected:border-overlay aria-selected:text-daintree-text",
@@ -167,24 +167,26 @@ function ActionPaletteItemInner({
         <div className="flex-1 min-w-0">
           <div className="text-sm font-medium truncate">{displayTitle}</div>
           {item.description && (
-            <div className="text-xs text-daintree-text/50 truncate">{item.description}</div>
+            <div className="text-xs leading-snug text-daintree-text/50 truncate">
+              {item.description}
+            </div>
           )}
           {!item.enabled && item.disabledReason && (
-            <div className="text-[10px] text-daintree-text/40 italic truncate">
+            <div className="text-[10px] leading-snug text-daintree-text/50 italic truncate">
               {item.disabledReason}
             </div>
           )}
           {hasRationale && (
             <div
               id={rationaleId}
-              className="hidden group-aria-selected:block text-xs text-daintree-text/50 italic truncate"
+              className="hidden group-aria-selected:block text-xs leading-snug text-daintree-text/50 italic truncate"
             >
               {item.dangerRationale}
             </div>
           )}
           {pinRejected && (
             <div
-              className="text-[10px] text-status-error mt-0.5 truncate"
+              className="text-[10px] leading-snug text-status-error mt-0.5 truncate"
               role="status"
               aria-live="polite"
             >
@@ -194,7 +196,7 @@ function ActionPaletteItemInner({
         </div>
       </button>
 
-      <div className="shrink-0 flex items-center gap-1">
+      <div className="shrink-0 flex items-center gap-1 pt-0.5">
         {canShowHide && (
           <button
             type="button"
@@ -240,7 +242,7 @@ function ActionPaletteItemInner({
         )}
 
         {item.keybinding && (
-          <span className="text-[11px] font-mono text-daintree-text/40 transition-colors group-aria-selected:text-daintree-text/60">
+          <span className="text-[11px] font-mono text-daintree-text/50 transition-colors group-aria-selected:text-daintree-text/70">
             {item.keybinding}
           </span>
         )}

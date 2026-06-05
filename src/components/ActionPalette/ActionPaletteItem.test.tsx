@@ -10,7 +10,7 @@ vi.mock("@/lib/utils", () => ({
 
 vi.mock("@/config/categoryColors", () => ({
   ACTION_CATEGORY_COLORS: {
-    terminal: "bg-cat-blue/15 text-cat-blue",
+    terminal: "bg-category-blue-subtle text-category-blue-text border border-category-blue-border",
   },
   ACTION_CATEGORY_DEFAULT_COLOR: "bg-tint/[0.06] text-daintree-text/50",
 }));

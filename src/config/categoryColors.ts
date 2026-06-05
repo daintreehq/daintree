@@ -2,25 +2,35 @@ import type { EventCategory } from "@shared/types";
 
 /**
  * Action palette category badge colors.
- * Assigns one of 12 --color-cat-* hue tokens to each action category.
+ * Assigns one of 12 engineered category hue tokens to each action category.
  * Some categories intentionally share a hue (e.g. panels/browser both use cyan).
+ *
+ * Uses the `category-{hue}-subtle/-text/-border` token set (the same one Fleet
+ * and recipe chips consume) rather than raw `cat-{hue}/15` opacity tints: the
+ * engineered `-text` token is mixed toward `--theme-text-primary` in OKLCH so
+ * the 10px chip label clears WCAG 4.5:1 in both light and dark themes, where a
+ * flat 15% tint did not.
  */
 export const ACTION_CATEGORY_COLORS: Record<string, string> = {
-  terminal: "bg-cat-blue/15 text-cat-blue",
-  agents: "bg-cat-purple/15 text-cat-purple",
-  panels: "bg-cat-cyan/15 text-cat-cyan",
-  navigation: "bg-cat-green/15 text-cat-green",
-  worktree: "bg-cat-amber/15 text-cat-amber",
-  github: "bg-cat-slate/15 text-cat-slate",
-  git: "bg-cat-orange/15 text-cat-orange",
-  project: "bg-cat-teal/15 text-cat-teal",
-  preferences: "bg-cat-slate/15 text-cat-slate",
-  app: "bg-cat-indigo/15 text-cat-indigo",
-  system: "bg-cat-rose/15 text-cat-rose",
-  logs: "bg-cat-amber/15 text-cat-amber",
-  recipes: "bg-cat-pink/15 text-cat-pink",
-  portal: "bg-cat-violet/15 text-cat-violet",
-  browser: "bg-cat-cyan/15 text-cat-cyan",
+  terminal: "bg-category-blue-subtle text-category-blue-text border border-category-blue-border",
+  agents:
+    "bg-category-purple-subtle text-category-purple-text border border-category-purple-border",
+  panels: "bg-category-cyan-subtle text-category-cyan-text border border-category-cyan-border",
+  navigation:
+    "bg-category-green-subtle text-category-green-text border border-category-green-border",
+  worktree: "bg-category-amber-subtle text-category-amber-text border border-category-amber-border",
+  github: "bg-category-slate-subtle text-category-slate-text border border-category-slate-border",
+  git: "bg-category-orange-subtle text-category-orange-text border border-category-orange-border",
+  project: "bg-category-teal-subtle text-category-teal-text border border-category-teal-border",
+  preferences:
+    "bg-category-slate-subtle text-category-slate-text border border-category-slate-border",
+  app: "bg-category-indigo-subtle text-category-indigo-text border border-category-indigo-border",
+  system: "bg-category-rose-subtle text-category-rose-text border border-category-rose-border",
+  logs: "bg-category-amber-subtle text-category-amber-text border border-category-amber-border",
+  recipes: "bg-category-pink-subtle text-category-pink-text border border-category-pink-border",
+  portal:
+    "bg-category-violet-subtle text-category-violet-text border border-category-violet-border",
+  browser: "bg-category-cyan-subtle text-category-cyan-text border border-category-cyan-border",
 };
 
 export const ACTION_CATEGORY_DEFAULT_COLOR = "bg-tint/[0.06] text-daintree-text/50";
