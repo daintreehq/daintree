@@ -871,49 +871,55 @@ function PanelHeaderComponent({
             five recovery shortcuts (kill, restart, forceResume, redraw, rename)
             without opening the overflow menu. Reveal-on-hover matches the
             `+` add-tab pattern at line 805: visible to keyboard users on focus,
-            hidden from mouse users until they hover the chrome. Pointerdown
+            hidden from mouse users until they hover the chrome. The row is
+            gated on `hasPty` because every action in it requires a PTY; on
+            browser/dev-preview/review panels the same header is mounted and
+            a stray chord press would route through `removePanel(focusedId)`
+            and silently nuke the focused non-terminal panel. Pointerdown
             is stopped so the row never accidentally triggers the header drag
-            surface that owns this `data-pane-chrome` div. When a chord is
-            unbound (Windows, no override) the individual pill is suppressed
-            because KbdChord returns null for an empty combo. */}
-        {(killShortcut ||
-          restartShortcut ||
-          forceResumeShortcut ||
-          redrawShortcut ||
-          renameShortcut) && (
-          <div
-            className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150 ease-out motion-reduce:transition-none data-[reduce-animations=true]:transition-none"
-            onPointerDown={(e) => e.stopPropagation()}
-            aria-hidden="true"
-            data-testid="panel-hint-row"
-          >
-            {killShortcut && (
-              <span data-testid="panel-hint-terminal-kill">
-                <KbdChord shortcut={killShortcut} />
-              </span>
-            )}
-            {restartShortcut && (
-              <span data-testid="panel-hint-terminal-restart">
-                <KbdChord shortcut={restartShortcut} />
-              </span>
-            )}
-            {forceResumeShortcut && (
-              <span data-testid="panel-hint-terminal-force-resume">
-                <KbdChord shortcut={forceResumeShortcut} />
-              </span>
-            )}
-            {redrawShortcut && (
-              <span data-testid="panel-hint-terminal-redraw">
-                <KbdChord shortcut={redrawShortcut} />
-              </span>
-            )}
-            {renameShortcut && (
-              <span data-testid="panel-hint-terminal-rename">
-                <KbdChord shortcut={renameShortcut} />
-              </span>
-            )}
-          </div>
-        )}
+            surface that owns this `data-pane-chrome` div. `pointer-events-none`
+            by default keeps the invisible row from blocking the drag
+            activation area. When a chord is explicitly unbound via
+            setOverride(id, []), `getDisplayCombo` returns "" and KbdChord
+            renders null, so the individual pill is suppressed. */}
+        {hasPty &&
+          (killShortcut ||
+            restartShortcut ||
+            forceResumeShortcut ||
+            redrawShortcut ||
+            renameShortcut) && (
+            <div
+              className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150 ease-out motion-reduce:transition-none data-[reduce-animations=true]:transition-none pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto"
+              onPointerDown={(e) => e.stopPropagation()}
+              data-testid="panel-hint-row"
+            >
+              {killShortcut && (
+                <span data-testid="panel-hint-terminal-kill">
+                  <KbdChord shortcut={killShortcut} />
+                </span>
+              )}
+              {restartShortcut && (
+                <span data-testid="panel-hint-terminal-restart">
+                  <KbdChord shortcut={restartShortcut} />
+                </span>
+              )}
+              {forceResumeShortcut && (
+                <span data-testid="panel-hint-terminal-force-resume">
+                  <KbdChord shortcut={forceResumeShortcut} />
+                </span>
+              )}
+              {redrawShortcut && (
+                <span data-testid="panel-hint-terminal-redraw">
+                  <KbdChord shortcut={redrawShortcut} />
+                </span>
+              )}
+              {renameShortcut && (
+                <span data-testid="panel-hint-terminal-rename">
+                  <KbdChord shortcut={renameShortcut} />
+                </span>
+              )}
+            </div>
+          )}
 
         {/* Overflow menu — panel management actions */}
         {hasOverflowItems && (

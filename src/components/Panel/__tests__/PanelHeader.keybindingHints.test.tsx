@@ -75,8 +75,8 @@ vi.mock("@/store/panelStore", () => ({
 }));
 
 vi.mock("@shared/config/panelKindRegistry", () => ({
-  panelKindCanRestart: () => true,
-  panelKindHasPty: () => true,
+  panelKindCanRestart: () => mockCanRestart,
+  panelKindHasPty: () => mockHasPty,
   getPanelKindConfig: () => ({
     id: "terminal",
     name: "Terminal",
@@ -85,6 +85,9 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
   }),
   getPanelKindColor: () => "#9ca3af",
 }));
+
+let mockCanRestart = true;
+let mockHasPty = true;
 
 const mockDispatch = vi.fn().mockResolvedValue({ ok: true });
 
@@ -195,6 +198,8 @@ describe("PanelHeader terminal recovery chord hints — issue #9803", () => {
       configurable: true,
       writable: true,
     });
+    mockCanRestart = true;
+    mockHasPty = true;
     mockStoreState = {
       watchedPanels: new Set<string>(),
       watchPanel: vi.fn(),
@@ -281,6 +286,23 @@ describe("PanelHeader terminal recovery chord hints — issue #9803", () => {
     expect(screen.getByTestId("panel-hint-row")).toBeDefined();
     expect(screen.queryByTestId("panel-hint-terminal-kill")).toBeNull();
     expect(screen.getByTestId("panel-hint-terminal-restart")).toBeDefined();
+    expect(screen.getByTestId("panel-hint-terminal-redraw")).toBeDefined();
+    expect(screen.getByTestId("panel-hint-terminal-force-resume")).toBeDefined();
     expect(screen.getByTestId("panel-hint-terminal-rename")).toBeDefined();
+  });
+
+  it("does not render the hint row on non-PTY panel kinds (#9803 review)", () => {
+    // Every action in the row requires a PTY. ContentPanel mounts the same
+    // PanelHeader for browser/dev-preview/review panels; without a hasPty
+    // guard, those headers would advertise terminal recovery chords and a
+    // stray press would route through `removePanel(focusedId)`.
+    mockHasPty = false;
+    render(<PanelHeader {...makeProps()} />);
+    expect(screen.queryByTestId("panel-hint-row")).toBeNull();
+    expect(screen.queryByTestId("panel-hint-terminal-kill")).toBeNull();
+    expect(screen.queryByTestId("panel-hint-terminal-restart")).toBeNull();
+    expect(screen.queryByTestId("panel-hint-terminal-force-resume")).toBeNull();
+    expect(screen.queryByTestId("panel-hint-terminal-redraw")).toBeNull();
+    expect(screen.queryByTestId("panel-hint-terminal-rename")).toBeNull();
   });
 });
