@@ -1791,7 +1791,6 @@ describe("createAppProtocolHandler — direct disk read", () => {
     const appProtocol = await import("../../utils/appProtocol.js");
     vi.mocked(appProtocol.resolveAppUrlToDistPath).mockReturnValue({
       filePath: "/tmp/dist/assets/index-abc123.js",
-      error: null,
     } as ReturnType<typeof appProtocol.resolveAppUrlToDistPath>);
     vi.mocked(appProtocol.getMimeType).mockReturnValue("text/javascript");
     vi.mocked(appProtocol.buildHeaders).mockReturnValue({
