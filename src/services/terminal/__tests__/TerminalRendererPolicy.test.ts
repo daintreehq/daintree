@@ -494,6 +494,52 @@ describe("TerminalRendererPolicy", () => {
     });
   });
 
+  // Uses real (faked) timers to prove the flush hook coexists with — and the
+  // flap-back actually cancels — the armed downgrade timer. The sentinel-stub
+  // block above checks the hook fires; this verifies the timer never fires.
+  describe("flap-resolution timer cancellation (#9779)", () => {
+    let onResumeFlush: ReturnType<typeof vi.fn>;
+
+    beforeEach(async () => {
+      vi.useFakeTimers();
+      onResumeFlush = vi.fn();
+      mockDeps.onResumeFlush = onResumeFlush;
+      // The implementation arms timers via window.setTimeout; point window at
+      // the faked global timers so setTimeout/clearTimeout stay consistent.
+      vi.stubGlobal("window", globalThis);
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    });
+
+    it("flushes once and cancels the armed timer so BACKGROUND never applies", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+
+      // Computed tier drops to BACKGROUND: arms the real 500ms downgrade timer.
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.BACKGROUND);
+      expect(mockManagedTerminal.pendingTier).toBe(TerminalRefreshTier.BACKGROUND);
+      expect(mockManagedTerminal.tierChangeTimer).not.toBeUndefined();
+      expect(onResumeFlush).not.toHaveBeenCalled();
+
+      // Flap back to FOCUSED before the timer fires.
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+      expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
+      expect(mockManagedTerminal.pendingTier).toBeUndefined();
+      expect(mockManagedTerminal.tierChangeTimer).toBeUndefined();
+
+      // Advancing past the hysteresis window must NOT apply BACKGROUND — the
+      // timer was cancelled, so the applied tier stays FOCUSED.
+      vi.advanceTimersByTime(1000);
+      expect(mockManagedTerminal.lastAppliedTier).toBe(TerminalRefreshTier.FOCUSED);
+      expect(onResumeFlush).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("clearTierState", () => {
     it("should remove tier state for terminal", () => {
       policy.initializeBackendTier("test-id", "background");
