@@ -369,9 +369,9 @@ export async function setupWindowServices(
   let restorePanelCwds: string[] = [];
   // Merged env (global + project) for the pty-host's non-empty envHash warm
   // (#9810). Computed from the same store reads above; on any failure the warm
-  // path collapses to env-empty, matching pre-#9810 behaviour. We read
-  // settings concurrently because the project state path already calls into
-  // the settings manager.
+  // path falls back to whatever global env we can read; if both reads fail
+  // the env-empty warm path runs. We read settings concurrently because the
+  // project state path already calls into the settings manager.
   let restoreProjectEnv: Record<string, string> | null = null;
 
   try {
@@ -391,7 +391,7 @@ export async function setupWindowServices(
     if (results[2].status === "fulfilled") {
       restorePanelCwds = extractRestorePanelCwds(results[2].value);
     }
-    const globalEnv = store.get("globalEnvironmentVariables") as Record<string, string> | undefined;
+    const globalEnv = store.get("globalEnvironmentVariables") as Record<string, string>;
     const projectEnv =
       results[3].status === "fulfilled"
         ? ((results[3].value?.environmentVariables as Record<string, string> | undefined) ??

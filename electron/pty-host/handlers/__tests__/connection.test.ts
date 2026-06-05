@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createConnectionHandlers } from "../connection.js";
 import { SharedRingBuffer } from "../../../../shared/utils/SharedRingBuffer.js";
+import { computePoolEnvHash } from "../../../services/pty/ptyPoolEnvHash.js";
 import type { HostContext } from "../types.js";
 
 function makeCtx(stateRef: {
@@ -317,6 +318,11 @@ describe("set-active-project non-empty envHash warming (#9810)", () => {
     expect(typeof envHashA).toBe("string");
     expect(envHashA).not.toBe("env-empty");
     expect(envHashA).toBe(envHashB);
+    // Lock down the hash VALUE: the warm must produce the exact same hash
+    // `acquireByKey` will look up at spawn time, so any drift in
+    // `computePoolEnvHash` (forgetting `filterSensitiveOnly`, shadowing the
+    // import, etc.) is caught here.
+    expect(envHashA).toBe(computePoolEnvHash(projectEnv));
   });
 
   it("falls back to env-empty warm (callerEnv undefined) when projectEnv is null", async () => {
@@ -377,6 +383,41 @@ describe("set-active-project non-empty envHash warming (#9810)", () => {
     // `{}` is filtered to nothing by computePoolEnvHash, so the warm collapses
     // to the env-empty path — no point burning a slot on a hash that
     // `acquireByKey` would also produce for the no-caller-env case.
+    expect(pool.warmForKey).toHaveBeenCalledTimes(1);
+    expect(pool.warmForKey.mock.calls[0]?.[1]).toBeUndefined();
+    expect(pool.warmForKey.mock.calls[0]?.[2]).toBe("env-empty");
+  });
+
+  it("collapses to env-empty warm when every projectEnv key is filtered by computePoolEnvHash (#9810)", async () => {
+    const pool = makeFakePool();
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    // SHLVL, PWD, OLDPWD, _ are VOLATILE_ENV_KEYS — excluded from the hash.
+    // DAINTREE_PANE_ID/CWD/PROJECT_ID/WORKTREE_ID are auto-injected — also
+    // excluded. So a payload consisting only of those keys hashes to
+    // env-empty, and the warm must collapse to the env-empty path (callerEnv
+    // undefined) so the slot the next acquire looks up is the right one.
+    const allFilteredEnv = {
+      SHLVL: "1",
+      PWD: "/foo",
+      OLDPWD: "/bar",
+      _: "/usr/bin/env",
+      DAINTREE_PANE_ID: "p-1",
+      DAINTREE_CWD: "/repo",
+      DAINTREE_PROJECT_ID: "proj-a",
+      DAINTREE_WORKTREE_ID: "wt-1",
+    };
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/repo/wt-a"],
+      projectEnv: allFilteredEnv,
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
     expect(pool.warmForKey).toHaveBeenCalledTimes(1);
     expect(pool.warmForKey.mock.calls[0]?.[1]).toBeUndefined();
     expect(pool.warmForKey.mock.calls[0]?.[2]).toBe("env-empty");
