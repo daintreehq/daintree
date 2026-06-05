@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import Module from "module";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const mockExecFileSync = vi.fn();
 const mockSpawnSync = vi.fn();
@@ -42,6 +44,7 @@ const IDENTITY = "Developer ID Application: Greg Priday (ABCDE12345)";
 
 function mockIdentity(value = IDENTITY) {
   mockSpawnSync.mockReturnValue({
+    status: 0,
     stdout: "",
     stderr: `Executable=...\nAuthority=${value}\nAuthority=Developer ID Certification Authority\n`,
   });
@@ -99,10 +102,36 @@ describe("resign-helpers-macos", () => {
 
   it("throws when no Developer ID Application identity is found", async () => {
     mockSpawnSync.mockReturnValue({
+      status: 0,
       stdout: "",
       stderr: "Authority=Apple Development: someone\n",
     });
     await expect(resignHelpers(createContext())).rejects.toThrow(/Developer ID Application/);
+  });
+
+  it("surfaces codesign stderr when inspection exits non-zero (unsigned app)", async () => {
+    mockSpawnSync.mockReturnValue({
+      status: 1,
+      stdout: "",
+      stderr: "code object is not signed at all",
+      error: undefined,
+    });
+    await expect(resignHelpers(createContext())).rejects.toThrow(
+      /codesign -dvv exited 1.*not signed/
+    );
+    // No signing attempted when the identity could not be read.
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+
+  it("does not attempt the bundle reseal when a helper re-sign fails", async () => {
+    mockIdentity();
+    mockExecFileSync.mockImplementationOnce(() => {
+      throw new Error("codesign: helper sign failed");
+    });
+    await expect(resignHelpers(createContext())).rejects.toThrow(/helper sign failed/);
+    // Only the first helper sign was attempted; the second helper and the
+    // reseal must not run on a half-signed bundle.
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
   });
 
   it("re-signs both helpers then repairs the bundle seal, in order", async () => {
@@ -150,5 +179,15 @@ describe("resign-helpers-macos", () => {
     expect(args).toContain("--preserve-metadata=identifier,entitlements,flags");
     // The seal reseal must NOT pass --entitlements (it would override the app's own).
     expect(args).not.toContain("--entitlements");
+  });
+
+  it("ships a helpers entitlements plist with zero entitlement keys", () => {
+    // Guards against the plist silently accruing entitlements — the whole point
+    // is that the helpers carry none, or amfid kills them again on macOS 26.
+    const plist = readFileSync(
+      join(__dirname, "..", "build", "entitlements.helpers.plist"),
+      "utf-8"
+    );
+    expect(plist).not.toMatch(/<key>/);
   });
 });

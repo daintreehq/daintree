@@ -42,7 +42,18 @@ for rel in "${HELPERS[@]}"; do
   # `codesign -d --entitlements -` prints the embedded entitlements as a plist
   # (or nothing when there are none). An empty <dict/> has no <key> elements;
   # any <key> means an entitlement leaked through and amfid will kill the helper.
-  entitlements=$(codesign -d --entitlements - --xml "$helper" 2>/dev/null || true)
+  # Capture the exit code separately so a codesign failure (unsigned/corrupt
+  # binary, unsupported flag) fails closed instead of reading as "no entitlements".
+  set +e
+  entitlements=$(codesign -d --entitlements - --xml "$helper" 2>/dev/null)
+  cs_status=$?
+  set -e
+
+  if [[ $cs_status -ne 0 ]]; then
+    echo "::error::FAIL: codesign could not read entitlements (exit $cs_status): $helper"
+    failed=$((failed + 1))
+    continue
+  fi
 
   if echo "$entitlements" | grep -q "<key>"; then
     echo "::error::FAIL: $helper carries entitlements (expected none):"

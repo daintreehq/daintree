@@ -30,6 +30,12 @@ function detectSigningIdentity(appPath) {
   if (result.error) {
     throw new Error(`${LOG} Failed to inspect signature of ${appPath}: ${result.error.message}`);
   }
+  if (result.status !== 0) {
+    throw new Error(
+      `${LOG} codesign -dvv exited ${result.status} for ${appPath}: ${(result.stderr || "").trim()}. ` +
+        "The .app must be signed before the helpers can be re-signed."
+    );
+  }
   const combined = `${result.stdout || ""}${result.stderr || ""}`;
   const match = combined.match(/^Authority=(Developer ID Application:.*)$/m);
   if (!match) {
