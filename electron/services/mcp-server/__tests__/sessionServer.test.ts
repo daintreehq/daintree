@@ -2132,6 +2132,14 @@ describe("validateDisplayImageUrl (#9828)", () => {
     expect(validateDisplayImageUrl("https://evil.example.com/img.png").valid).toBe(false);
   });
 
+  it("rejects a non-standard port (CSP allows the default 443 only)", () => {
+    expect(validateDisplayImageUrl("https://daintree.org:8443/img.png").valid).toBe(false);
+  });
+
+  it("accepts an explicit default :443 port", () => {
+    expect(validateDisplayImageUrl("https://daintree.org:443/img.png")).toEqual({ valid: true });
+  });
+
   it("rejects a malformed URL", () => {
     expect(validateDisplayImageUrl("not a url").valid).toBe(false);
   });

@@ -1021,6 +1021,33 @@ describe("SessionStore.nextFigureNumber (#9828)", () => {
     expect(store.figureCounters.has("help-2")).toBe(false);
   });
 
+  it("clears the counter on HTTP idle expiry", () => {
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
+    const session = fakeHttpSession();
+    store.httpSessions.set("transport-h", session);
+    store.sessionHelpIdMap.set("transport-h", "help-h");
+    store.nextFigureNumber("help-h");
+
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createHttpIdleTimer("transport-h");
+    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+
+    expect(store.figureCounters.has("help-h")).toBe(false);
+  });
+
+  it("clears the counter on normal transport close via clearFigureCounter", () => {
+    store.sessionHelpIdMap.set("transport-c", "help-c");
+    store.nextFigureNumber("help-c");
+    expect(store.figureCounters.get("help-c")).toBe(1);
+
+    // Mirrors the httpLifecycle transport.onclose path: clearFigureCounter
+    // must run BEFORE the sessionHelpIdMap entry is deleted.
+    store.clearFigureCounter("transport-c");
+    store.sessionHelpIdMap.delete("transport-c");
+
+    expect(store.figureCounters.has("help-c")).toBe(false);
+  });
+
   it("clears all counters on drain()", () => {
     store.nextFigureNumber("help-1");
     store.nextFigureNumber("help-2");

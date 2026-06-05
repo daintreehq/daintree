@@ -113,6 +113,16 @@ export function validateDisplayImageUrl(
       message: `URL host must be daintree.org (or a subdomain); got '${parsed.hostname}'.`,
     };
   }
+  // Reject non-default ports: the CSP `img-src https://daintree.org` matches
+  // port 443 only, so a non-standard port would pass validation here but get
+  // blocked at render time — a success/render mismatch the model can't recover
+  // from. `URL.port` is "" when the default 443 was used.
+  if (parsed.port !== "" && parsed.port !== "443") {
+    return {
+      valid: false,
+      message: `Only the default https port is accepted; got port '${parsed.port}'.`,
+    };
+  }
   return { valid: true };
 }
 

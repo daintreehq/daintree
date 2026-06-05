@@ -298,9 +298,12 @@ export class SessionStore {
   /**
    * Drop a help session's figure counter. Resolve the public help-session id
    * from {@link sessionHelpIdMap} BEFORE that entry is deleted, since the
-   * counter is keyed by the public id, not the transport sessionId.
+   * counter is keyed by the public id, not the transport sessionId. Public so
+   * the inline `transport.onclose` / connect-failure cleanup closures in
+   * `httpLifecycle` can tear it down on a normal disconnect, in lockstep with
+   * the other per-session maps (mirrors {@link clearClientMetadata}).
    */
-  private clearFigureCounter(sessionId: string): void {
+  clearFigureCounter(sessionId: string): void {
     const helpSessionId = this.sessionHelpIdMap.get(sessionId);
     if (helpSessionId !== undefined) {
       this.figureCounters.delete(helpSessionId);

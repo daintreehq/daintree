@@ -925,6 +925,8 @@ export class HttpLifecycle {
         this.deps.sessionStore.grantCache.revokeSession(sessionId, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(sessionId);
         this.deps.sessionStore.sessionContextMap.delete(sessionId);
+        // Resolve the public help-session id before deleting the map entry.
+        this.deps.sessionStore.clearFigureCounter(sessionId);
         this.deps.sessionStore.sessionHelpIdMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
         this.deps.sessionStore.clearRateLimitState(sessionId);
@@ -946,6 +948,8 @@ export class HttpLifecycle {
         this.deps.sessionStore.grantCache.revokeSession(sessionId, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(sessionId);
         this.deps.sessionStore.sessionContextMap.delete(sessionId);
+        // Resolve the public help-session id before deleting the map entry.
+        this.deps.sessionStore.clearFigureCounter(sessionId);
         this.deps.sessionStore.sessionHelpIdMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
         this.deps.sessionStore.clearRateLimitState(sessionId);
@@ -1077,6 +1081,8 @@ export class HttpLifecycle {
       this.deps.sessionStore.grantCache.revokeSession(id, "session-ended");
       this.deps.sessionStore.sessionWebContentsMap.delete(id);
       this.deps.sessionStore.sessionContextMap.delete(id);
+      // Resolve the public help-session id before deleting the map entry.
+      this.deps.sessionStore.clearFigureCounter(id);
       this.deps.sessionStore.sessionHelpIdMap.delete(id);
       this.deps.sessionStore.clearDedupState(id);
       this.deps.sessionStore.clearRateLimitState(id);
@@ -1103,6 +1109,8 @@ export class HttpLifecycle {
         this.deps.sessionStore.grantCache.revokeSession(id, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(id);
         this.deps.sessionStore.sessionContextMap.delete(id);
+        // Resolve the public help-session id before deleting the map entry.
+        this.deps.sessionStore.clearFigureCounter(id);
         this.deps.sessionStore.sessionHelpIdMap.delete(id);
         this.deps.sessionStore.clearDedupState(id);
         this.deps.sessionStore.clearRateLimitState(id);
@@ -1116,6 +1124,8 @@ export class HttpLifecycle {
         this.deps.sessionStore.grantCache.revokeSession(newSessionId, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(newSessionId);
         this.deps.sessionStore.sessionContextMap.delete(newSessionId);
+        // Resolve the public help-session id before deleting the map entry.
+        this.deps.sessionStore.clearFigureCounter(newSessionId);
         this.deps.sessionStore.sessionHelpIdMap.delete(newSessionId);
         this.deps.sessionStore.clearDedupState(newSessionId);
         this.deps.sessionStore.clearRateLimitState(newSessionId);
