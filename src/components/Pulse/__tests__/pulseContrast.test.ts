@@ -126,7 +126,12 @@ describe("PulseSummary — streak flame color fidelity (issue #9820)", () => {
     expect(flameMatches.length).toBe(2);
     for (const snippet of flameMatches) {
       expect(snippet).toContain("dim={false}");
+      // And the dim class must not survive inside the flame Stat's window.
+      expect(snippet).not.toContain("opacity-70");
     }
+    // Symmetric guard: the cn(...) definition still applies opacity-70 to
+    // the other neutral icons (GitCommit, Calendar, FilePenLine).
+    expect(content).toContain("opacity-70");
   });
 });
 
