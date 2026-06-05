@@ -300,13 +300,18 @@ describe("TerminalInstanceService - Activity Tier", () => {
   });
 
   describe("host-pushed tier reconciliation (issue #9778)", () => {
-    it("subscribes to terminalClient.onTierChanged at construction", () => {
-      // The service must register a single global subscription that reconciles
-      // the renderer's dedupe baseline whenever the PTY host rewrites a tier.
+    it("subscribes to terminalClient.onTierChanged on first terminal creation", () => {
+      // The subscription is installed lazily (alongside onData/onExit) so that
+      // merely constructing the singleton never reaches into terminalClient —
+      // keeping it out of unrelated component tests' import graph.
+      service.prewarmTerminal("warm", "terminal", {});
       expect(capturedTierChangedCb).toBeTypeOf("function");
     });
 
     it("re-arms needsWake when the host pushes a background demotion", () => {
+      // Create a terminal so the lazy onTierChanged subscription is installed.
+      service.prewarmTerminal("warm", "terminal", {});
+
       const managed = makeMockManaged({
         lastAppliedTier: TerminalRefreshTier.FOCUSED,
         needsWake: false,
@@ -323,6 +328,8 @@ describe("TerminalInstanceService - Activity Tier", () => {
     });
 
     it("does not force a wake when the host pushes an active tier", () => {
+      service.prewarmTerminal("warm", "terminal", {});
+
       const managed = makeMockManaged({
         lastAppliedTier: TerminalRefreshTier.FOCUSED,
         needsWake: false,

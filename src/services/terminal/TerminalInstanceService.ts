@@ -318,13 +318,19 @@ class TerminalInstanceService {
     // The service is a page-lifetime singleton, so the unsubscribe is intentionally
     // discarded — the subscription is one-shot and never needs teardown.
     onTerminalFontArrivedLate(() => this.repairFontGrid());
+  }
 
-    // Reconcile our renderer-side dedupe baseline when the PTY host rewrites a
-    // terminal's tier on its own (window connect/disconnect/project switch).
-    // initializeBackendTier updates lastBackendTier without echoing back to the
-    // host, so a later applyRendererPolicy correctly re-sends "active" instead
-    // of dedupe-dropping it and leaving the pane frozen (issue #9778, the
-    // same-tier no-op re-arm trap from #8998).
+  // Reconcile our renderer-side dedupe baseline when the PTY host rewrites a
+  // terminal's tier on its own (window connect/disconnect/project switch).
+  // initializeBackendTier updates lastBackendTier without echoing back to the
+  // host, so a later applyRendererPolicy correctly re-sends "active" instead of
+  // dedupe-dropping it and leaving the pane frozen (issue #9778, the same-tier
+  // no-op re-arm trap from #8998). Installed lazily on first terminal creation
+  // — the same point onData/onExit are wired — so merely constructing the
+  // singleton never reaches into terminalClient (keeps it out of the hot import
+  // graph for unrelated component tests).
+  private ensureHostTierSubscription(): void {
+    if (this.unsubTierChanged) return;
     this.unsubTierChanged = terminalClient.onTierChanged((id, tier) => {
       this.rendererPolicy.initializeBackendTier(id, tier);
     });
@@ -1031,6 +1037,9 @@ class TerminalInstanceService {
     const listeners: Array<() => void> = [];
     const exitSubscribers = new Set<(exitCode: number) => void>();
     const agentStateSubscribers = new Set<AgentStateCallback>();
+
+    // Wire the host→renderer tier reconciliation on first terminal creation.
+    this.ensureHostTierSubscription();
 
     const unsubData = terminalClient.onData(id, (data: string | Uint8Array) => {
       if (this.dataBuffer.isPolling()) return;
