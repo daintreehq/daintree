@@ -8,7 +8,7 @@ import React, {
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Settings } from "lucide-react";
+import { Settings, OctagonAlert, RotateCcw } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
@@ -31,6 +31,8 @@ import { isStaleHiddenReading } from "./visibilityReadingGuard";
 import { COMFORTABLE_PANEL_HEIGHT_PX } from "@/lib/terminalLayout";
 import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
 import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
+import { InlineStatusBanner } from "./InlineStatusBanner";
+import { useForceResumeCycleWatchdog } from "@/hooks/terminal/useForceResumeCycleWatchdog";
 import { getRestartBannerVariant } from "./restartStatus";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
@@ -540,6 +542,9 @@ function TerminalPaneComponent({
     removeError,
     restartKey,
   });
+
+  const { showBanner: showForceResumeStall, resetQueue: resetForceResumeQueue } =
+    useForceResumeCycleWatchdog(id);
 
   // Cancel auto-restart if terminal is intentionally trashed/removed
   useEffect(() => {
@@ -1312,6 +1317,21 @@ function TerminalPaneComponent({
           variant={restartBannerVariant}
           onRestart={handleRestart}
           onDismiss={() => setDismissedRestartPrompt(true)}
+        />
+      </BannerSlot>
+
+      <BannerSlot visible={showForceResumeStall}>
+        <InlineStatusBanner
+          icon={OctagonAlert}
+          severity="error"
+          title="Terminal output stalled"
+          description="Output keeps backing up faster than it can render. Reset the queue to recover."
+          action={{
+            id: "reset-force-resume-queue",
+            label: "Reset queue",
+            icon: RotateCcw,
+            onClick: resetForceResumeQueue,
+          }}
         />
       </BannerSlot>
 
