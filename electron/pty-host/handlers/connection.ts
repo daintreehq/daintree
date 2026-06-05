@@ -181,7 +181,17 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       recomputeActivityTiers();
       const pool = ctx.ptyPool;
       if (msg.projectPath && pool) {
-        const panelCwds = msg.panelCwds ?? [];
+        // Bound the warm set to what the pool can hold alongside the root entry
+        // without LRU-evicting the entries we just warmed. The root drain/refill
+        // takes poolSize slots; each panel cwd takes up to poolSize more. Cap
+        // the distinct panel cwds so root + panels never exceed maxEntries —
+        // otherwise warming a low-priority cwd would evict the oldest entry,
+        // which is the high-priority (active-worktree) cwd warmed first (#9774).
+        const maxPanelKeys = Math.max(
+          0,
+          Math.floor(pool.getMaxEntries() / pool.getMaxPoolSize()) - 1
+        );
+        const panelCwds = (msg.panelCwds ?? []).slice(0, maxPanelKeys);
         pool
           .drainAndRefill(msg.projectPath)
           .then(() => {

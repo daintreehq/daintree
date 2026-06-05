@@ -358,10 +358,12 @@ export async function setupWindowServices(
   });
 
   // Read saved panel cwds concurrently with PTY/store init so the warm hint is
-  // ready the instant `setActiveProject` fires — before the renderer hydrates
-  // and starts requesting restore spawns. getProjectState reads directly by
-  // configDir+projectId (no dependency on projectStore.initialize's in-memory
-  // list), so racing it against initialize() is safe.
+  // ready the instant `setActiveProject` fires — typically before the renderer
+  // hydrates and starts requesting restore spawns (best-effort: a spawn that
+  // races ahead simply misses the pool and cold-spawns, as it did pre-fix).
+  // getProjectState reads directly by configDir+projectId (no dependency on
+  // projectStore.initialize's in-memory list), so racing it against
+  // initialize() is safe.
   let restorePanelCwds: string[] = [];
 
   try {
