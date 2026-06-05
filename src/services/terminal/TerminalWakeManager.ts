@@ -24,6 +24,20 @@ export class TerminalWakeManager {
     this.deps = deps;
   }
 
+  hasInFlightWake(id: string): boolean {
+    return this.inFlightWakes.has(id);
+  }
+
+  /**
+   * A wake that has been requested but not yet started: instance-retry
+   * scheduled or coalesced behind the rate limit. Its eventual wakeAndRestore
+   * resets the terminal during replay, so flushing held bytes ahead of it
+   * would feed them into a buffer that's about to be wiped.
+   */
+  hasPendingWake(id: string): boolean {
+    return this.pendingWakes.has(id) || this.pendingRateLimitedWakes.has(id);
+  }
+
   async wakeAndRestore(id: string): Promise<boolean> {
     const inFlight = this.inFlightWakes.get(id);
     if (inFlight) {

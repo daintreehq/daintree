@@ -540,6 +540,65 @@ describe("TerminalRendererPolicy", () => {
     });
   });
 
+  describe("reassertActiveTier (watchdog repair)", () => {
+    beforeEach(async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal("window", globalThis);
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    });
+
+    it("re-sends the active backend tier and runs the wake path", async () => {
+      const { terminalClient } = await import("@/clients");
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.VISIBLE;
+      mockManagedTerminal.needsWake = true;
+      policy.initializeBackendTier("test-id", "background");
+
+      policy.reassertActiveTier("test-id");
+
+      expect(policy.getLastBackendTier("test-id")).toBe("active");
+      expect(terminalClient.setActivityTier).toHaveBeenCalledWith("test-id", "active", 200);
+      expect(mockDeps.wakeAndRestore).toHaveBeenCalledWith("test-id");
+    });
+
+    it("no-ops when the backend tier is already active or the applied tier is BACKGROUND", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.VISIBLE;
+      policy.initializeBackendTier("test-id", "active");
+      policy.reassertActiveTier("test-id");
+      expect(mockDeps.wakeAndRestore).not.toHaveBeenCalled();
+
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+      policy.initializeBackendTier("test-id", "background");
+      policy.reassertActiveTier("test-id");
+      expect(mockDeps.wakeAndRestore).not.toHaveBeenCalled();
+    });
+
+    it("cancels a pending hysteresis downgrade so the repair is not undone", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+
+      // Arm a real BACKGROUND downgrade timer, then simulate a host-side
+      // background rewrite landing while it is pending.
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.BACKGROUND);
+      expect(mockManagedTerminal.tierChangeTimer).not.toBeUndefined();
+      policy.initializeBackendTier("test-id", "background");
+
+      policy.reassertActiveTier("test-id");
+      expect(mockManagedTerminal.pendingTier).toBeUndefined();
+      expect(mockManagedTerminal.tierChangeTimer).toBeUndefined();
+
+      // The stale timer must not fire and re-background the terminal.
+      vi.advanceTimersByTime(1000);
+      expect(mockManagedTerminal.lastAppliedTier).toBe(TerminalRefreshTier.FOCUSED);
+      expect(policy.getLastBackendTier("test-id")).toBe("active");
+    });
+  });
+
   describe("clearTierState", () => {
     it("should remove tier state for terminal", () => {
       policy.initializeBackendTier("test-id", "background");

@@ -346,4 +346,96 @@ describe("TerminalWakeManager", () => {
       }
     });
   });
+
+  describe("hasInFlightWake", () => {
+    it("is true only while a wakeAndRestore is in flight", async () => {
+      let resolveWake!: (value: { state: string }) => void;
+      wakeMock.mockReturnValue(
+        new Promise<{ state: string }>((resolve) => {
+          resolveWake = resolve;
+        })
+      );
+      const managed: MockManagedTerminal = {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+        terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+      };
+      const deps: WakeManagerDeps = {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
+        hasInstance: vi.fn(() => true),
+        restoreFromSerialized: vi.fn(() => true),
+        restoreFromSerializedIncremental: vi.fn(async () => true),
+      };
+      const manager = new TerminalWakeManager(deps);
+
+      expect(manager.hasInFlightWake("term-if")).toBe(false);
+
+      const wake = manager.wakeAndRestore("term-if");
+      expect(manager.hasInFlightWake("term-if")).toBe(true);
+
+      resolveWake({ state: "serialized-state" });
+      await wake;
+      // The in-flight entry is removed in a finally on the wake promise —
+      // give that continuation one microtask turn.
+      await Promise.resolve();
+      expect(manager.hasInFlightWake("term-if")).toBe(false);
+    });
+  });
+
+  describe("hasPendingWake", () => {
+    function makePendingDeps(hasInstance: boolean): WakeManagerDeps {
+      const managed: MockManagedTerminal = {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+        terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+      };
+      return {
+        getInstance: vi.fn(() =>
+          hasInstance ? (managed as unknown as ManagedTerminal) : undefined
+        ),
+        hasInstance: vi.fn(() => hasInstance),
+        restoreFromSerialized: vi.fn(() => true),
+        restoreFromSerializedIncremental: vi.fn(async () => true),
+      };
+    }
+
+    it("reflects a rate-limit-coalesced wake until it fires", async () => {
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValue({ state: "serialized-state" });
+        const manager = new TerminalWakeManager(makePendingDeps(true));
+
+        manager.wake("term-pw");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(manager.hasPendingWake("term-pw")).toBe(false);
+
+        // Second wake inside the 1s rate-limit window is coalesced.
+        manager.wake("term-pw");
+        expect(manager.hasPendingWake("term-pw")).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(manager.hasPendingWake("term-pw")).toBe(false);
+
+        manager.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("reflects an instance-retry wake", () => {
+      vi.useFakeTimers();
+      try {
+        const manager = new TerminalWakeManager(makePendingDeps(false));
+
+        manager.wake("term-pr");
+        expect(manager.hasPendingWake("term-pr")).toBe(true);
+
+        manager.clearWakeState("term-pr");
+        expect(manager.hasPendingWake("term-pr")).toBe(false);
+
+        manager.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });

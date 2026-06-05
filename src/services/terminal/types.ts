@@ -45,6 +45,9 @@ export interface ManagedTerminal {
   // Last time forceXtermReflow() ran for this terminal — used to throttle the
   // IntersectionObserver unpause reflow across write/heartbeat/focus triggers.
   lastReflowAt?: number;
+  // Last time the reconciliation watchdog issued a repair for this terminal —
+  // per-terminal cooldown so a persistently-diverging layer never repair-loops.
+  lastWatchdogRepairAt?: number;
   // Visibility tracking
   isVisible: boolean;
   lastActiveTime: number;
