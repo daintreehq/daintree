@@ -5,6 +5,8 @@ import {
   useDockBlockedState,
   getGroupBlockedAgentState,
   getGroupAmbientAgentState,
+  getDockDisplayAgentState,
+  isDockAgentStateDeprioritized,
   isGroupDeprioritized,
 } from "../useDockBlockedState";
 import type { AgentState } from "@shared/types/agent";
@@ -188,6 +190,37 @@ describe("getGroupAmbientAgentState", () => {
     const panels = [{ agentState: "completed" as const }, { agentState: "working" as const }];
     expect(getGroupAmbientAgentState(panels)).toBe("working");
   });
+});
+
+describe("isDockAgentStateDeprioritized", () => {
+  // States that recede: the pill should dim because nothing is in flight.
+  it.each([undefined, "idle", "completed", "exited"] as const)(
+    "returns true for receding state %s",
+    (state) => {
+      expect(isDockAgentStateDeprioritized(state)).toBe(true);
+    }
+  );
+
+  // Active states keep the pill at full emphasis.
+  it.each(["working", "waiting", "directing"] as const)(
+    "returns false for active state %s",
+    (state) => {
+      expect(isDockAgentStateDeprioritized(state)).toBe(false);
+    }
+  );
+
+  // The shared predicate is the single source of truth for both pill types:
+  // a single-panel group must recede exactly when the underlying state does,
+  // so DockedTerminalItem and DockedTabGroup can never drift apart.
+  it.each(["idle", "completed", "exited", "working", "waiting", "directing"] as const)(
+    "agrees with isGroupDeprioritized for a single panel in state %s",
+    (state) => {
+      const panel = { agentState: state };
+      expect(isGroupDeprioritized([panel])).toBe(
+        isDockAgentStateDeprioritized(getDockDisplayAgentState(panel))
+      );
+    }
+  );
 });
 
 describe("isGroupDeprioritized", () => {

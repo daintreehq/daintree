@@ -143,11 +143,14 @@ export function getGroupAmbientAgentState(
   return undefined;
 }
 
+// Shared recede predicate so single pills (DockedTerminalItem) and group pills
+// (DockedTabGroup) dim under identical conditions and cannot drift apart.
+export function isDockAgentStateDeprioritized(agentState: AgentState | undefined): boolean {
+  if (!agentState) return true;
+  return agentState === "idle" || agentState === "completed" || agentState === "exited";
+}
+
 export function isGroupDeprioritized(panels: ReadonlyArray<AgentStateSource>): boolean {
   if (panels.length === 0) return false;
-  return panels.every((p) => {
-    const state = getDockDisplayAgentState(p);
-    if (!state) return true;
-    return state === "idle" || state === "completed" || state === "exited";
-  });
+  return panels.every((p) => isDockAgentStateDeprioritized(getDockDisplayAgentState(p)));
 }

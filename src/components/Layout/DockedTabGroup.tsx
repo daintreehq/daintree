@@ -517,7 +517,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   showDockAgentHighlights &&
                   blockedState === "waiting" &&
                   "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
-                isDeprioritized && "opacity-50"
+                isDeprioritized && "text-daintree-text/40 border-[var(--dock-item-border)]/50"
               )}
               onClick={(e) => {
                 e.preventDefault();
@@ -572,7 +572,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   <TooltipTrigger asChild>
                     <div
                       className={cn(
-                        "flex items-center shrink-0",
+                        "ml-auto flex items-center shrink-0",
                         getEffectiveStateColor(displayAgentState)
                       )}
                     >
