@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { findPackagedExecutable, launchPackagedAndMeasure } from "./lib/packagedLaunch";
@@ -33,6 +34,8 @@ interface JsonOutput {
     failed?: boolean;
     error?: string;
     degraded?: boolean;
+    cacheKind?: "cold" | "warm";
+    cacheFileCount?: number;
   }>;
   failedRuns: number;
   degradedRuns: number;
@@ -259,6 +262,31 @@ function renderTextReport(
     }
   }
 
+  const { cold, warm } = agg.byCacheKind;
+  if (cold || warm) {
+    const cacheRows = (["cold", "warm"] as const)
+      .map((kind) => ({ kind, stats: agg.byCacheKind[kind] }))
+      .filter((r): r is { kind: "cold" | "warm"; stats: NonNullable<typeof r.stats> } =>
+        Boolean(r.stats)
+      )
+      .map(({ kind, stats }) => ({
+        cacheKind: kind,
+        runs: String(stats.runs),
+        p50: formatMs(stats.p50Ms),
+        p95: stats.runs < MIN_SAMPLES_FOR_P95 ? "n/a (<20 runs)" : formatMs(stats.p95Ms),
+        mean: formatMs(stats.meanMs),
+        cacheFiles: String(stats.medianCacheFileCount),
+      }));
+    lines.push("Boot duration by compile-cache state (headline boot → first_interactive)");
+    lines.push(formatTable(cacheRows, ["cacheKind", "runs", "p50", "p95", "mean", "cacheFiles"]));
+    if (cold && warm) {
+      const delta = round(cold.meanMs - warm.meanMs);
+      const pct = cold.meanMs > 0 ? round((delta / cold.meanMs) * 100, 1) : 0;
+      lines.push(`  warm vs cold mean delta: ${formatMs(delta)} (${pct}% faster warm)`);
+    }
+    lines.push("");
+  }
+
   if (agg.eventLoopLag) {
     const lagSamples = agg.eventLoopLag.samples;
     lines.push(
@@ -303,6 +331,8 @@ function buildJsonOutput(runs: RunData[], agg: Aggregate): JsonOutput {
       failed: r.failed,
       error: r.error,
       degraded: r.degraded,
+      cacheKind: r.cacheKind,
+      cacheFileCount: r.cacheFileCount,
     })),
     failedRuns: runs.length - successful,
     degradedRuns: degraded,
@@ -316,6 +346,7 @@ async function main(): Promise<void> {
     options: {
       runs: { type: "string", short: "n", default: "5" },
       json: { type: "boolean", default: false },
+      warm: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
     strict: true,
@@ -323,13 +354,18 @@ async function main(): Promise<void> {
   });
 
   if (values.help) {
-    console.log(`Usage: npm run perf:cold-start -- [--runs N] [--json]
+    console.log(`Usage: npm run perf:cold-start -- [--runs N] [--warm] [--json]
 
-Launch the packaged Daintree binary N times from a fresh profile dir,
-collect perf marks + IPC samples, and print aggregated p50/p95.
+Launch the packaged Daintree binary N times and print aggregated p50/p95.
+
+By default every run uses a fresh profile dir, so the Node compile cache is
+cold on every launch. With --warm, all runs share one persisted profile dir and
+a single unmeasured warmup boot populates the compile cache first, so the
+measured runs are cache-warm. Results are bucketed cold-vs-warm in the report.
 
 Options:
-  -n, --runs N    Number of launches (default 5)
+  -n, --runs N    Number of measured launches (default 5)
+      --warm      Reuse one profile dir + warmup boot so runs are cache-warm
       --json      Emit structured JSON instead of the text table
   -h, --help      Show this message
 
@@ -346,6 +382,7 @@ Requires a packaged binary under release/. Build one first with:
   }
   const runs = rawRuns;
   const asJson = Boolean(values.json);
+  const warm = Boolean(values.warm);
 
   const projectRoot = process.cwd();
   const executablePath = findPackagedExecutable(projectRoot);
@@ -365,45 +402,84 @@ Requires a packaged binary under release/. Build one first with:
 
   if (!asJson) {
     console.error(`Launching packaged binary at ${path.relative(projectRoot, executablePath)}`);
-    console.error(`Runs: ${runs}`);
+    console.error(`Runs: ${runs}${warm ? " (warm-cache mode)" : ""}`);
+  }
+
+  // In warm mode every run shares one persisted profile dir so the Node
+  // compile cache survives across launches. A single unmeasured warmup boot
+  // populates the cache (and flushes it on quit) before the measured runs.
+  let warmDir: string | null = null;
+  if (warm) {
+    warmDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-perf-warm-"));
+    if (!asJson) console.error(`[warm] persisted profile dir: ${warmDir}`);
+    try {
+      const warmup = await launchPackagedAndMeasure(executablePath, -1, {
+        projectRoot,
+        userDataDir: warmDir,
+      });
+      if (!asJson) {
+        console.error(
+          `[warm] warmup launch complete, cacheFileCount=${warmup.cacheFileCount ?? 0}`
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[warm] warmup launch failed: ${message} — measured runs may be cache-cold`);
+    }
   }
 
   const results: RunData[] = [];
 
-  for (let i = 0; i < runs; i += 1) {
-    if (!asJson) {
-      console.error(`[run ${i + 1}/${runs}] starting...`);
-    }
-
-    try {
-      const result = await launchPackagedAndMeasure(executablePath, i, { projectRoot });
-      const marks = parseNdjson(result.ndjsonPath);
-      // Only true-degraded runs (wall-clock fallback) are excluded from
-      // mark/phase aggregates. A run that fell back from FI → RR still has
-      // valid marks; its `notes` is set but `degraded` is false.
-      results.push({
-        index: i,
-        durationMs: result.durationMs,
-        notes: result.notes,
-        marks,
-        degraded: Boolean(result.degraded),
-      });
-
+  try {
+    for (let i = 0; i < runs; i += 1) {
       if (!asJson) {
-        const suffix = result.notes ? ` (${result.notes})` : "";
-        console.error(`[run ${i + 1}/${runs}] ${formatMs(result.durationMs)}${suffix}`);
+        console.error(`[run ${i + 1}/${runs}] starting...`);
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      results.push({
-        index: i,
-        durationMs: -1,
-        marks: [],
-        failed: true,
-        error: message,
-      });
-      if (!asJson) {
-        console.error(`[run ${i + 1}/${runs}] FAILED: ${message}`);
+
+      try {
+        const result = await launchPackagedAndMeasure(executablePath, i, {
+          projectRoot,
+          ...(warmDir ? { userDataDir: warmDir } : {}),
+        });
+        const marks = parseNdjson(result.ndjsonPath);
+        // Only true-degraded runs (wall-clock fallback) are excluded from
+        // mark/phase aggregates. A run that fell back from FI → RR still has
+        // valid marks; its `notes` is set but `degraded` is false.
+        results.push({
+          index: i,
+          durationMs: result.durationMs,
+          notes: result.notes,
+          marks,
+          degraded: Boolean(result.degraded),
+          cacheKind: result.cacheKind,
+          cacheFileCount: result.cacheFileCount,
+        });
+
+        if (!asJson) {
+          const suffix = result.notes ? ` (${result.notes})` : "";
+          console.error(`[run ${i + 1}/${runs}] ${formatMs(result.durationMs)}${suffix}`);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        results.push({
+          index: i,
+          durationMs: -1,
+          marks: [],
+          failed: true,
+          error: message,
+          cacheKind: warm ? "warm" : "cold",
+        });
+        if (!asJson) {
+          console.error(`[run ${i + 1}/${runs}] FAILED: ${message}`);
+        }
+      }
+    }
+  } finally {
+    if (warmDir) {
+      try {
+        fs.rmSync(warmDir, { recursive: true, force: true });
+      } catch {
+        // Best effort — a leftover temp dir is harmless.
       }
     }
   }

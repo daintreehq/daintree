@@ -17,6 +17,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { PERF_MARKS } from "../shared/perf/marks.js";
 import { getOsToAppBootMs, markPerformance } from "./utils/performance.js";
+import { getCompileCacheMeta } from "./utils/hostPerformance.js";
 import { enforceIpcSenderValidation, setupPermissionLockdown } from "./setup/security.js";
 import {
   registerAppProtocol,
@@ -96,9 +97,16 @@ import { emergencyLogMainFatal } from "./utils/emergencyLog.js";
 enforceIpcSenderValidation();
 {
   const osToAppBootMs = getOsToAppBootMs();
+  // Attach compile-cache state (enabled flag, status, cacheFileCount) so the
+  // cold-start aggregator can tell cache-cold from cache-warm runs and flag a
+  // silently-disabled cache. bootstrap.ts ran enableCompileCache() before this
+  // module evaluated, so the captured status is already available.
+  const compileCacheMeta = getCompileCacheMeta();
+  const bootMeta: Record<string, unknown> = { ...compileCacheMeta };
+  if (osToAppBootMs !== null) bootMeta.osToAppBootMs = osToAppBootMs;
   markPerformance(
     PERF_MARKS.APP_BOOT_START,
-    osToAppBootMs !== null ? { osToAppBootMs } : undefined
+    Object.keys(bootMeta).length > 0 ? bootMeta : undefined
   );
 }
 

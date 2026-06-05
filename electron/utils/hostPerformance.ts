@@ -113,6 +113,35 @@ export function isHostPerformanceCaptureEnabled(): boolean {
   return CAPTURE_ENABLED;
 }
 
+// Result of the main-process `enableCompileCache()` call, captured in
+// bootstrap.ts. Node's `enableCompileCache()` returns `{ status, directory }`
+// but the status is otherwise invisible — there's no getter for it later. We
+// stash it here so `getCompileCacheMeta()` can attach it to the APP_BOOT_START
+// mark, making "cache silently disabled" (status FAILED/DISABLED) detectable
+// from NDJSON without a debug session. Utility-process hosts never call the
+// setter, so their marks omit the status fields (backward compatible).
+let _compileCacheEnableStatus: number | null = null;
+
+// Node's `module.constants.compileCacheStatus` values. Hardcoded here rather
+// than imported so this maps correctly even when `node:module` is mocked in
+// tests (the mock only stubs getCompileCacheDir). These are stable Node API
+// constants — FAILED=0, ENABLED=1, ALREADY_ENABLED=2, DISABLED=3.
+const COMPILE_CACHE_STATUS_NAMES: Record<number, string> = {
+  0: "FAILED",
+  1: "ENABLED",
+  2: "ALREADY_ENABLED",
+  3: "DISABLED",
+};
+
+/**
+ * Record the `status` returned by the main-process `enableCompileCache()` call
+ * so it can be surfaced in the APP_BOOT_START mark. Pass the raw integer status
+ * from the result object. Call once during bootstrap.
+ */
+export function setCompileCacheEnableStatus(status: number): void {
+  _compileCacheEnableStatus = status;
+}
+
 /**
  * Snapshot of the V8 compile-cache state for inclusion in `module_eval_complete`
  * marks. `cacheFileCount > 0` on a second launch confirms `enableCompileCache()`
@@ -135,11 +164,19 @@ export function getCompileCacheMeta(): Record<string, unknown> {
       // Directory might not exist yet on first launch — that's a 0 count.
     }
 
-    return {
+    const meta: Record<string, unknown> = {
       compileCacheEnabled: true,
       compileCacheDir: dir,
       cacheFileCount,
     };
+
+    if (_compileCacheEnableStatus !== null) {
+      meta.compileCacheStatus = _compileCacheEnableStatus;
+      meta.compileCacheStatusName =
+        COMPILE_CACHE_STATUS_NAMES[_compileCacheEnableStatus] ?? "UNKNOWN";
+    }
+
+    return meta;
   } catch {
     return { compileCacheEnabled: false };
   }

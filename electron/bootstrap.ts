@@ -5,21 +5,42 @@
 // the correct directory before main.ts re-imports it (idempotent via ESM cache).
 import "./setup/environment.js";
 
-import { enableCompileCache } from "node:module";
+import { enableCompileCache, flushCompileCache, constants as moduleConstants } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 import { app, dialog } from "electron";
 import { runBootMigrations } from "./boot/migrations/index.js";
 import { isSafeModeActive } from "./services/CrashLoopGuardService.js";
+import { setCompileCacheEnableStatus } from "./utils/hostPerformance.js";
 import { initializeStore, _peekStoreInstance } from "./store.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 
 const cacheDir = path.join(app.getPath("userData"), "compile-cache");
-try {
-  fs.mkdirSync(cacheDir, { recursive: true });
-  enableCompileCache(cacheDir);
-} catch {
-  enableCompileCache();
+{
+  // Capture the enableCompileCache() status. It's the only runtime signal that
+  // the cache is actually active — status FAILED means the directory is
+  // unusable and the app silently runs without caching. We stash it so the
+  // APP_BOOT_START mark can surface it (see getCompileCacheMeta).
+  let result: ReturnType<typeof enableCompileCache> | undefined;
+  try {
+    fs.mkdirSync(cacheDir, { recursive: true });
+    result = enableCompileCache(cacheDir);
+  } catch {
+    try {
+      result = enableCompileCache();
+    } catch {
+      // enableCompileCache is best-effort; the app boots fine without it.
+    }
+  }
+  if (result) {
+    setCompileCacheEnableStatus(result.status);
+    if (result.status === moduleConstants.compileCacheStatus.FAILED) {
+      console.warn(
+        "[Bootstrap] Compile cache enablement failed — main-process modules will not be cached. Directory:",
+        cacheDir
+      );
+    }
+  }
 }
 
 // Run forward-only boot migrations before anything in main.ts touches state.
@@ -62,3 +83,18 @@ try {
 }
 
 await import("./main.js");
+
+// Persist any compile-cache entries written during boot. enableCompileCache()
+// only flushes on a clean process exit, so a crash or SIGKILL before the first
+// graceful quit would leave the cache empty forever — every launch staying
+// cache-cold. Flushing here, after the boot-critical main.js import resolves,
+// guarantees first-run writes survive an unclean exit. flushCompileCache() is
+// synchronous but cheap (one fs write) and runs after boot work, off the hot
+// path. Feature-detected and wrapped so a missing/throwing API can't break boot.
+try {
+  if (typeof flushCompileCache === "function") {
+    flushCompileCache();
+  }
+} catch (err) {
+  console.warn("[Bootstrap] flushCompileCache after boot failed:", err);
+}
