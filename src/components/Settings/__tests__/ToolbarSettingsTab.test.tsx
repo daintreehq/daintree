@@ -368,10 +368,12 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
     expect(moveButtonMock).not.toHaveBeenCalled();
   });
 
-  it("commits a cross-side move via moveButton with the resolved target index", () => {
+  it("commits a cross-side move after the hovered item (right edge past midpoint)", () => {
     render(<ToolbarSettingsTab />);
 
-    // Drag "claude" from the left side onto "settings" (right side, index 1).
+    // Drag "claude" onto "settings" (right side, last at index 1) with its
+    // right edge well past the midpoint → it should land *after* settings,
+    // i.e. at index 2 (the end of the right list).
     fire("onDragStart", { active: { id: "claude" } });
     fire("onDragOver", {
       active: { id: "claude", rect: { current: { translated: { right: 1000 } } } },
@@ -380,7 +382,59 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
     fire("onDragEnd", { active: { id: "claude" }, over: { id: "settings" } });
 
     expect(moveButtonMock).toHaveBeenCalledTimes(1);
-    expect(moveButtonMock).toHaveBeenCalledWith("claude", "left", "right", 1);
+    expect(moveButtonMock).toHaveBeenCalledWith("claude", "left", "right", 2);
+    expect(setLeftButtonsMock).not.toHaveBeenCalled();
+    expect(setRightButtonsMock).not.toHaveBeenCalled();
+  });
+
+  it("commits a cross-side move before the hovered item (right edge before midpoint)", () => {
+    render(<ToolbarSettingsTab />);
+
+    // Drag "claude" onto "copy-tree" (right side, first at index 0) with its
+    // right edge before the midpoint → it should land *before* copy-tree,
+    // i.e. at index 0.
+    fire("onDragStart", { active: { id: "claude" } });
+    fire("onDragOver", {
+      active: { id: "claude", rect: { current: { translated: { right: 0 } } } },
+      over: { id: "copy-tree", rect: { left: 0, width: 100 } },
+    });
+    fire("onDragEnd", { active: { id: "claude" }, over: { id: "copy-tree" } });
+
+    expect(moveButtonMock).toHaveBeenCalledTimes(1);
+    expect(moveButtonMock).toHaveBeenCalledWith("claude", "left", "right", 0);
+  });
+
+  it("moves the only button off a side, leaving it empty", () => {
+    mockToolbarState = makeToolbarState({
+      leftButtons: ["terminal"],
+      rightButtons: ["copy-tree"],
+      pinnedButtons: {},
+    });
+
+    render(<ToolbarSettingsTab />);
+
+    fire("onDragStart", { active: { id: "terminal" } });
+    fire("onDragOver", {
+      active: { id: "terminal", rect: { current: { translated: { right: 1000 } } } },
+      over: { id: "copy-tree", rect: { left: 0, width: 100 } },
+    });
+    fire("onDragEnd", { active: { id: "terminal" }, over: { id: "copy-tree" } });
+
+    expect(moveButtonMock).toHaveBeenCalledTimes(1);
+    expect(moveButtonMock).toHaveBeenCalledWith("terminal", "left", "right", 1);
+    expect(setLeftButtonsMock).not.toHaveBeenCalled();
+    expect(setRightButtonsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not commit a cross-side drop that never ran onDragOver (no speculative state)", () => {
+    // Without an onDragOver pass the dragged button was never relocated into
+    // the target list, so its target index is unresolved — the guard must
+    // skip the commit rather than splice at -1.
+    render(<ToolbarSettingsTab />);
+
+    fire("onDragEnd", { active: { id: "claude" }, over: { id: "settings" } });
+
+    expect(moveButtonMock).not.toHaveBeenCalled();
     expect(setLeftButtonsMock).not.toHaveBeenCalled();
     expect(setRightButtonsMock).not.toHaveBeenCalled();
   });

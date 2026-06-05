@@ -423,27 +423,33 @@ export function ToolbarSettingsTab() {
       return;
     }
 
-    const overItems = live[overContainer];
-    const activeIndex = overItems.indexOf(activeButtonId);
-    const overIndex =
-      over.id === overContainer ? overItems.length - 1 : overItems.indexOf(toButtonId(over.id));
-
-    const finalItems =
-      overIndex !== -1 && activeIndex !== -1 && activeIndex !== overIndex
-        ? arrayMove(overItems, activeIndex, overIndex)
-        : overItems;
-
     if (originalContainer === overContainer) {
-      // Same-side reorder — commit the reordered list directly.
+      // Same-side reorder — `onDragOver` leaves same-side drags untouched, so
+      // the dragged item is still in its original slot here; reorder toward
+      // the hovered item.
+      const items = live[overContainer];
+      const oldIndex = items.indexOf(activeButtonId);
+      const newIndex =
+        over.id === overContainer ? items.length - 1 : items.indexOf(toButtonId(over.id));
+      if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) {
+        clearDrag();
+        return;
+      }
+      const reordered = arrayMove(items, oldIndex, newIndex);
       if (overContainer === "left") {
-        setLeftButtons(finalItems);
+        setLeftButtons(reordered);
       } else {
-        setRightButtons(finalItems);
+        setRightButtons(reordered);
       }
     } else {
-      // Cross-side move — route through `moveButton` so its index fixup runs
-      // against the store's authoritative (un-mutated) arrays.
-      const toIndex = finalItems.indexOf(activeButtonId);
+      // Cross-side move — `onDragOver` already relocated the item into the
+      // target list at its drop position, so its index in `dragState` IS the
+      // final target index. Re-running `arrayMove` here would invert it.
+      const toIndex = live[overContainer].indexOf(activeButtonId);
+      if (toIndex === -1) {
+        clearDrag();
+        return;
+      }
       moveButton(activeButtonId, originalContainer, overContainer, toIndex);
     }
 
