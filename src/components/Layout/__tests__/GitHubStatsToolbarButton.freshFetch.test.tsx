@@ -213,6 +213,22 @@ describe("GitHubStatsToolbarButton corner activity chip wiring", () => {
       source.match(/if\s*\(\s*document\.hidden\s*\)\s*\{[\s\S]{0,200}?return;/g) ?? []
     ).length;
     expect(tickGuardCount).toBeGreaterThanOrEqual(2);
+    // The effect body's post-listener sample must use an if/else (not an
+    // early `return`) so the cleanup at the bottom always registers and
+    // the visibilitychange listener is paired with a removeEventListener
+    // on unmount / dep change. A bare `if (document.hidden) { ...; return; }`
+    // here leaks the listener on every subsequent effect run that commits
+    // while hidden (round-3 review finding).
+    const issuesSample = source.match(
+      /addEventListener\("visibilitychange",\s*onVisibility\);[\s\S]*?\}\s*else\s*\{[\s\S]*?tick\(\);/
+    );
+    expect(issuesSample).not.toBeNull();
+    const prsSample = source
+      .slice(issuesSample!.index! + issuesSample![0].length)
+      .match(
+        /addEventListener\("visibilitychange",\s*onVisibility\);[\s\S]*?\}\s*else\s*\{[\s\S]*?tick\(\);/
+      );
+    expect(prsSample).not.toBeNull();
   });
 
   it("derives showIssuesChip / showPrsChip with open-state and count guards", () => {

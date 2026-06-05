@@ -476,12 +476,14 @@ export const GitHubStatsToolbarButton = memo(
       // addEventListener and the first tick() will be caught by the
       // listener; if the document is already hidden when the effect runs,
       // pause immediately so the restore handler has an anchor to shift.
+      // The cleanup at the bottom runs unconditionally so the listener
+      // is always paired with a removeEventListener on unmount/dep change.
       document.addEventListener("visibilitychange", onVisibility);
       if (document.hidden) {
         pauseForHidden();
-        return;
+      } else {
+        tick();
       }
-      tick();
 
       return () => {
         if (timeoutId !== null) {
@@ -543,9 +545,9 @@ export const GitHubStatsToolbarButton = memo(
       document.addEventListener("visibilitychange", onVisibility);
       if (document.hidden) {
         pauseForHidden();
-        return;
+      } else {
+        tick();
       }
-      tick();
 
       return () => {
         if (timeoutId !== null) {
