@@ -265,12 +265,26 @@ describe("PulseHeatmap — legend (issue #9819)", () => {
     const content = await readFile(CARD_PATH, "utf-8");
     expect(content).toContain("getPulseHeatmapRowWidth");
   });
+
+  it("legend swatches reuse the pulse-heat-cell shape cue so they stay distinguishable in forced-colors", async () => {
+    const content = await readFile(CARD_PATH, "utf-8");
+    // Each swatch is a pulse-heat-cell with an inner shape span, so the
+    // forced-colors size rules in src/index.css size the inner CanvasText
+    // square per level — sighted WHCM users see the same 4-step cue on the
+    // legend as on the grid itself.
+    expect(content).toContain("pulse-heat-cell relative overflow-hidden");
+    expect(content).toMatch(/pulse-heat-cell-shape/);
+  });
 });
 
 describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
   it("PulseHeatmap tags non-empty cells with data-heat-level and a shape span", async () => {
     const content = await readFile(HEATMAP_PATH, "utf-8");
-    expect(content).toContain("data-heat-level={cell.count > 0 ? cell.level : undefined}");
+    // Clamp to >=1 so a future renderer emitting (count > 0, level: 0) doesn't
+    // produce a 0-sized CanvasText shape under forced-colors. The current
+    // ProjectPulseService never emits this combination; the clamp is
+    // defensive.
+    expect(content).toContain("cell.count > 0 && cell.level > 0");
     expect(content).toContain("pulse-heat-cell-shape");
     expect(content).toContain('"pulse-heat-cell');
   });

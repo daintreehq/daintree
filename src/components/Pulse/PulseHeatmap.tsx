@@ -165,7 +165,11 @@ function PulseHeatmapCell({
           type="button"
           role="gridcell"
           data-cell-date={cell.date}
-          data-heat-level={cell.count > 0 ? cell.level : undefined}
+          // Clamp to >=1 for the CSS-level cue so a future renderer that emits
+          // a positive-count cell with level: 0 doesn't render a 0-sized
+          // CanvasText shape under forced-colors. The data layer currently
+          // never produces this combination, but the input type permits it.
+          data-heat-level={cell.count > 0 && cell.level > 0 ? Math.min(4, cell.level) : undefined}
           style={{
             width: `${cellSize}px`,
             height: `${cellSize}px`,

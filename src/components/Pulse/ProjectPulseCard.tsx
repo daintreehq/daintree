@@ -345,14 +345,20 @@ function PulseHeatmapLegend({
         {[1, 2, 3, 4].map((level) => (
           <span
             key={level}
-            className="rounded-[2px] shrink-0"
+            className="pulse-heat-cell relative overflow-hidden rounded-[2px] shrink-0"
             data-heat-level={level}
             style={{
               width: 10,
               height: 10,
               background: `var(--pulse-heat-${level}, var(--pulse-heat-color, var(--color-state-working)))`,
             }}
-          />
+          >
+            {/* Inner shape span — display: none in default themes, flipped to
+                block by the @media (forced-colors: active) rule in
+                src/index.css. Reuses the cell-level size cue so the 4 swatches
+                stay distinguishable when the UA strips theme backgrounds. */}
+            <span aria-hidden="true" className="pulse-heat-cell-shape" />
+          </span>
         ))}
         <span>More</span>
       </div>
