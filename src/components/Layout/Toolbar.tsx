@@ -16,12 +16,12 @@ import {
   PinOff,
   Clipboard,
   Square,
-  Unplug,
   X,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Folders, McpServerIcon } from "@/components/icons";
 import { TOOLBAR_BUTTON_METADATA, isToolbarButtonVisible } from "./toolbarButtonMetadata";
+import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { cn } from "@/lib/utils";
 import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { isMac, isLinux, isWindows } from "@/lib/platform";
@@ -142,7 +142,6 @@ export function PluginToolbarButton({
 }) {
   const hover = useShortcutHintHover(config.actionId);
   const ariaShortcut = useAriaKeyshortcuts(config.actionId);
-  const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
   return (
     <ContextMenu>
@@ -172,10 +171,7 @@ export function PluginToolbarButton({
         </Tooltip>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-        <ContextMenuItem onSelect={() => toggleButtonVisibility(pluginId, "right")}>
-          <Unplug className="mr-2 h-3.5 w-3.5" />
-          Unpin from Toolbar
-        </ContextMenuItem>
+        <ToolbarContextMenuItems buttonId={pluginId} side="right" />
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -242,9 +238,6 @@ export function Toolbar({
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
   const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
-  const toggleButtonVisibility = useToolbarPreferencesStore(
-    (state) => state.toggleButtonVisibility
-  );
   // Live subscription so pin/unpin toggles from the AgentTrayButton immediately
   // update per-agent toolbar button visibility. The `agentSettings` prop is
   // sourced from `useAgentLauncher()`'s local useState which does not react to
@@ -590,21 +583,18 @@ export function Toolbar({
                         actionService.dispatch("devServer.start", undefined, { source: "user" })
                       }
                       className={toolbarIconButtonClass}
-                      aria-label="Open Dev Preview"
+                      aria-label="Open dev preview"
                     >
                       <MonitorPlay />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    {createTooltipContent("Open Dev Preview", devServerShortcut)}
+                    {createTooltipContent("Open dev preview", devServerShortcut)}
                   </TooltipContent>
                 </Tooltip>
               </ContextMenuTrigger>
               <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-                <ContextMenuItem onSelect={() => toggleButtonVisibility("dev-server", "left")}>
-                  <Unplug className="mr-2 h-3.5 w-3.5" />
-                  Unpin from Toolbar
-                </ContextMenuItem>
+                <ToolbarContextMenuItems buttonId="dev-server" side="left" />
               </ContextMenuContent>
             </ContextMenu>
           ) : (
@@ -661,7 +651,7 @@ export function Toolbar({
                       "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                     )}
                     aria-label={
-                      isCopyingTree ? "Copying…" : treeCopied ? "Context copied" : "Copy Context"
+                      isCopyingTree ? "Copying…" : treeCopied ? "Context copied" : "Copy context"
                     }
                     aria-keyshortcuts={copyTreeAriaShortcut}
                   >
@@ -678,16 +668,13 @@ export function Toolbar({
                   ) : !activeWorktree ? (
                     "Open a worktree first"
                   ) : (
-                    createTooltipContent("Copy Context", copyTreeShortcut)
+                    createTooltipContent("Copy context", copyTreeShortcut)
                   )}
                 </TooltipContent>
               </Tooltip>
             </ContextMenuTrigger>
             <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-              <ContextMenuItem onSelect={() => toggleButtonVisibility("copy-tree", "right")}>
-                <Unplug className="mr-2 h-3.5 w-3.5" />
-                Unpin from Toolbar
-              </ContextMenuItem>
+              <ToolbarContextMenuItems buttonId="copy-tree" side="right" />
             </ContextMenuContent>
           </ContextMenu>
         ),
@@ -776,7 +763,6 @@ export function Toolbar({
       pluginConfigs,
       devServerShortcut,
       devServerHintHover,
-      toggleButtonVisibility,
     ]
   );
 

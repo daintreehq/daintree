@@ -1,17 +1,15 @@
 import { Button } from "@/components/ui/button";
-import { SlidersHorizontal, Unplug } from "lucide-react";
+import { SlidersHorizontal } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   ContextMenu,
   ContextMenuActionItem,
   ContextMenuContent,
-  ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
-import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 
 const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative";
 
@@ -38,7 +36,6 @@ export function ToolbarSettingsButton({
   const settingsShortcut = useKeybindingDisplay("app.settings");
   const settingsAriaShortcut = useAriaKeyshortcuts("app.settings");
   const settingsHover = useShortcutHintHover("app.settings");
-  const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
   return (
     <ContextMenu>
@@ -66,7 +63,7 @@ export function ToolbarSettingsButton({
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {createTooltipContent("Open Settings", settingsShortcut)}
+            {createTooltipContent("Open settings", settingsShortcut)}
           </TooltipContent>
         </Tooltip>
       </ContextMenuTrigger>
@@ -77,17 +74,13 @@ export function ToolbarSettingsButton({
           </ContextMenuActionItem>
         ))}
         <ContextMenuSeparator />
-        <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
-          Customize Toolbar…
-        </ContextMenuActionItem>
         <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "troubleshooting" }}>
           Troubleshooting
         </ContextMenuActionItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => toggleButtonVisibility("settings", "right")}>
-          <Unplug className="mr-2 h-3.5 w-3.5" />
-          Unpin from Toolbar
-        </ContextMenuItem>
+        <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
+          Customize toolbar…
+        </ContextMenuActionItem>
       </ContextMenuContent>
     </ContextMenu>
   );
