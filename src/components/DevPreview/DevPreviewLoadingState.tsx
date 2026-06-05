@@ -1,6 +1,7 @@
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { Spinner } from "@/components/ui/Spinner";
+import { cn } from "@/lib/utils";
 
 interface DevPreviewLoadingStateProps {
   variant: "full" | "overlay";
@@ -106,7 +107,7 @@ export function DevPreviewLoadingState({
   }
 
   return (
-    <div className={className}>
+    <div className={cn("h-full", className)}>
       <FullSkeleton phaseLabel={phaseLabel} isLoading={isLoading} onCancel={onCancel} />
     </div>
   );
