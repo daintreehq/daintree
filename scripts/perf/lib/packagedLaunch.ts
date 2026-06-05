@@ -272,6 +272,10 @@ export async function launchPackagedAndMeasure(
     // skip the post-run cleanup (the caller owns the dir's lifecycle). This is
     // how warm-cache runs reuse a populated compile cache across launches.
     userDataDir?: string;
+    // Absolute path for the GPU/compositor trace. When set, the packaged app
+    // self-starts `contentTracing` (DAINTREE_PERF_TRACE) and writes the trace
+    // here on quit. Lives outside userDataDir so it survives the cleanup below.
+    traceFile?: string;
   } = {}
 ): Promise<PackagedLaunchResult> {
   const timeoutMs = options.timeoutMs ?? 30_000;
@@ -307,6 +311,11 @@ export async function launchPackagedAndMeasure(
     DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS: "1",
     NODE_ENV: "production",
   };
+
+  if (options.traceFile) {
+    env.DAINTREE_PERF_TRACE = "1";
+    env.DAINTREE_PERF_TRACE_FILE = options.traceFile;
+  }
 
   if (process.env.CI) {
     env.DAINTREE_DISABLE_WEBGL = "1";

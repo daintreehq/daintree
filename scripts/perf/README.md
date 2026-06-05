@@ -48,6 +48,17 @@ Requires a packaged binary under `release/` — build one first with `npm run pa
 npm run perf:cold-start                   # 5 runs, text table
 npm run perf:cold-start -- --runs 10      # custom run count
 npm run perf:cold-start -- --json         # structured JSON for diffing
+npm run perf:cold-start -- --trace        # capture GPU/compositor traces
 ```
 
 IPC sampling is forced to 100% for this command so per-channel stats are meaningful across a small number of runs.
+
+The `main_window_shown` mark records the moment `win.show()` is called (when the OS is asked to map the window). It surfaces as the `boot → main_window_shown` and `main_window_created → main_window_shown` phase pairs, exposing the dom-ready-gated window-reveal wait the harness was previously blind to. A mark carries `meta: { fallback: true }` when the 5s dom-ready fallback timer fired instead of the normal dom-ready signal.
+
+## GPU/compositor traces (`--trace`)
+
+`--trace` makes the packaged app self-start Electron's `contentTracing` (categories `viz,gpu,cc,blink,toplevel,startup`) for the full startup-to-quit window, writing one trace per run to `.tmp/perf-results/trace-run-N.json`. This is the way to see why the compositor takes time between `main_window_shown` and the first painted frame.
+
+The output is Chromium's JSON Trace Event Format — open it directly at https://ui.perfetto.dev (drag-and-drop the `.json` file, no conversion needed).
+
+Tracing adds measurable overhead to the traced process, so `--trace` is opt-in and gated behind a second env flag (`DAINTREE_PERF_TRACE`) that normal runs never set. **Do not mix `--trace` runs into baseline timing numbers** — capture traces in a separate session. Trace files can be large (tens of MB) and are transient build artifacts under `.tmp/`.

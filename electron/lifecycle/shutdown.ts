@@ -49,6 +49,7 @@ import {
 import { closeSharedDb } from "../services/persistence/db.js";
 import { closeTelemetry } from "../services/TelemetryService.js";
 import { isSmokeTest } from "../setup/environment.js";
+import { stopPerformanceTraceIfActive } from "../utils/performanceTrace.js";
 import { isSignalShutdown, clearSafetyBeltTimer } from "./signalShutdownState.js";
 import { CLEANUP_TIMEOUT_MS } from "./shutdownConfig.js";
 
@@ -498,6 +499,11 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         } catch (err) {
           console.warn("[MAIN] closeTelemetry failed:", err);
         }
+        // Flush the perf trace (if --trace was active) while the GPU/renderer
+        // child processes are still alive. app.exit() bypasses will-quit, so
+        // this is the only reliable point to stop tracing before exit; no-op
+        // for normal runs. Awaited so the trace file isn't truncated.
+        await stopPerformanceTraceIfActive();
         app.exit(0);
       })
       .catch(async (error) => {
@@ -515,6 +521,9 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         } catch (err) {
           console.warn("[MAIN] closeTelemetry failed:", err);
         }
+        // Best-effort trace flush on the error path too — a partial trace is
+        // still useful, and the call is a no-op when tracing is off.
+        await stopPerformanceTraceIfActive();
         app.exit(1);
       });
   });

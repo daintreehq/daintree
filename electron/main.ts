@@ -18,6 +18,7 @@ import { fileURLToPath } from "url";
 import { PERF_MARKS } from "../shared/perf/marks.js";
 import { getOsToAppBootMs, markPerformance } from "./utils/performance.js";
 import { getCompileCacheMeta } from "./utils/hostPerformance.js";
+import { startPerformanceTraceIfEnabled } from "./utils/performanceTrace.js";
 import { enforceIpcSenderValidation, setupPermissionLockdown } from "./setup/security.js";
 import {
   registerAppProtocol,
@@ -473,6 +474,11 @@ if (!gotTheLock) {
 
   app.whenReady().then(async () => {
     try {
+      // Self-start GPU/compositor tracing when the cold-start harness asked
+      // for it (DAINTREE_PERF_TRACE=1). No-op for every normal run. Must run
+      // first inside whenReady so the trace covers the full window-reveal
+      // pipeline; the matching stop runs on `will-quit` below.
+      await startPerformanceTraceIfEnabled();
       // Fire-and-forget the user-PATH refresh. Runs concurrently with the
       // rest of startup; the PtyClient creation site awaits it before
       // spawning the PTY host (#8625). Kicked off inside whenReady() so the

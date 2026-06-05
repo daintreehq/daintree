@@ -27,6 +27,35 @@ describe("cold-start aggregate", () => {
     expect(agg.loaf).toEqual({});
   });
 
+  it("computes the window-show phase pairs from main_window_shown", () => {
+    const agg = aggregate([
+      makeRun({
+        marks: [
+          { mark: PERF_MARKS.APP_BOOT_START, timestamp: "t", elapsedMs: 0 },
+          { mark: PERF_MARKS.MAIN_WINDOW_CREATED, timestamp: "t", elapsedMs: 100 },
+          { mark: PERF_MARKS.MAIN_WINDOW_SHOWN, timestamp: "t", elapsedMs: 350 },
+        ],
+      }),
+    ]);
+
+    expect(agg.phaseDurations["boot → main_window_shown"].p50Ms).toBe(350);
+    expect(agg.phaseDurations["main_window_created → main_window_shown"].p50Ms).toBe(250);
+  });
+
+  it("omits the window-show phase pairs when main_window_shown is absent", () => {
+    const agg = aggregate([
+      makeRun({
+        marks: [
+          { mark: PERF_MARKS.APP_BOOT_START, timestamp: "t", elapsedMs: 0 },
+          { mark: PERF_MARKS.MAIN_WINDOW_CREATED, timestamp: "t", elapsedMs: 100 },
+        ],
+      }),
+    ]);
+
+    expect(agg.phaseDurations["boot → main_window_shown"]).toBeUndefined();
+    expect(agg.phaseDurations["main_window_created → main_window_shown"]).toBeUndefined();
+  });
+
   it("groups long-animation-frame blocking time by topScripts[0].sourceURL", () => {
     const agg = aggregate([
       makeRun({

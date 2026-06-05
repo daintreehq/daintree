@@ -9,6 +9,15 @@ export const PERF_MARKS = {
   EARLY_PATH_REFRESH_START: "early_path_refresh_start",
   EARLY_PATH_REFRESH_COMPLETE: "early_path_refresh_complete",
   MAIN_WINDOW_CREATED: "main_window_created",
+  /**
+   * Recorded the moment `win.show()` is called from the dom-ready-gated
+   * `showOnce()` path in `createWindow.ts` — i.e. when the OS is asked to map
+   * the window on screen. Pairs with `MAIN_WINDOW_CREATED` and `APP_BOOT_START`
+   * to expose the window-reveal phase the cold-start harness was previously
+   * blind to. Carries `meta: { fallback: true }` when the 5s fallback timer
+   * fired instead of dom-ready.
+   */
+  MAIN_WINDOW_SHOWN: "main_window_shown",
   RENDERER_READY: "renderer_ready",
   RENDERER_FIRST_INTERACTIVE: "renderer_first_interactive",
 

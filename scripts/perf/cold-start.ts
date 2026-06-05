@@ -347,6 +347,7 @@ async function main(): Promise<void> {
       runs: { type: "string", short: "n", default: "5" },
       json: { type: "boolean", default: false },
       warm: { type: "boolean", default: false },
+      trace: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
     strict: true,
@@ -354,7 +355,7 @@ async function main(): Promise<void> {
   });
 
   if (values.help) {
-    console.log(`Usage: npm run perf:cold-start -- [--runs N] [--warm] [--json]
+    console.log(`Usage: npm run perf:cold-start -- [--runs N] [--warm] [--json] [--trace]
 
 Launch the packaged Daintree binary N times and print aggregated p50/p95.
 
@@ -367,6 +368,9 @@ Options:
   -n, --runs N    Number of measured launches (default 5)
       --warm      Reuse one profile dir + warmup boot so runs are cache-warm
       --json      Emit structured JSON instead of the text table
+      --trace     Capture a GPU/compositor contentTracing trace per run into
+                  .tmp/perf-results/trace-run-N.json (open in ui.perfetto.dev).
+                  Adds tracing overhead — do NOT mix with baseline runs.
   -h, --help      Show this message
 
 Requires a packaged binary under release/. Build one first with:
@@ -383,8 +387,15 @@ Requires a packaged binary under release/. Build one first with:
   const runs = rawRuns;
   const asJson = Boolean(values.json);
   const warm = Boolean(values.warm);
+  const trace = Boolean(values.trace);
 
   const projectRoot = process.cwd();
+  // Trace files land next to the existing NDJSON metrics convention, outside
+  // the per-run userDataDir so they survive its cleanup.
+  const traceResultsDir = path.join(projectRoot, ".tmp", "perf-results");
+  if (trace) {
+    fs.mkdirSync(traceResultsDir, { recursive: true });
+  }
   const executablePath = findPackagedExecutable(projectRoot);
   if (!executablePath) {
     console.error(
@@ -450,6 +461,7 @@ Requires a packaged binary under release/. Build one first with:
         const result = await launchPackagedAndMeasure(executablePath, i, {
           projectRoot,
           ...(warmDir ? { userDataDir: warmDir } : {}),
+          traceFile: trace ? path.join(traceResultsDir, `trace-run-${i + 1}.json`) : undefined,
         });
         const marks = parseNdjson(result.ndjsonPath);
         // Only true-degraded runs (wall-clock fallback) are excluded from

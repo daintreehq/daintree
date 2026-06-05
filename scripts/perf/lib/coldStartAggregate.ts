@@ -114,6 +114,15 @@ export const PHASE_PAIRS: Array<[string, string, string]> = [
   // is kept as a sub-phase signal to distinguish hydration cost.
   [PERF_MARKS.APP_BOOT_START, PERF_MARKS.RENDERER_FIRST_INTERACTIVE, "boot → first_interactive"],
   [PERF_MARKS.APP_BOOT_START, PERF_MARKS.RENDERER_READY, "boot → renderer_ready (pre-hydration)"],
+  // Window-reveal phase (#9773): when the OS is asked to map the window. The
+  // boot-relative pair frames it against startup; the created→shown pair
+  // isolates the dom-ready gate wait inside the window lifecycle.
+  [PERF_MARKS.APP_BOOT_START, PERF_MARKS.MAIN_WINDOW_SHOWN, "boot → main_window_shown"],
+  [
+    PERF_MARKS.MAIN_WINDOW_CREATED,
+    PERF_MARKS.MAIN_WINDOW_SHOWN,
+    "main_window_created → main_window_shown",
+  ],
   [PERF_MARKS.SERVICE_INIT_START, PERF_MARKS.SERVICE_INIT_COMPLETE, "service_init"],
   [PERF_MARKS.HYDRATE_START, PERF_MARKS.HYDRATE_COMPLETE, "hydrate"],
   [
