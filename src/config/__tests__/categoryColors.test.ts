@@ -8,6 +8,26 @@ import { ACTION_CATEGORY_COLORS, ACTION_CATEGORY_DEFAULT_COLOR } from "@/config/
  * raw `cat-{hue}/15` tints to the engineered `category-{hue}-*` set, so the
  * chip label keeps its WCAG-compliant contrast.
  */
+/**
+ * The hues with engineered `--color-category-{hue}-*` tokens defined in
+ * `src/index.css`. A chip class referencing any other hue would compile to a
+ * dead Tailwind utility, so entries must draw from this set.
+ */
+const VALID_HUES = new Set([
+  "blue",
+  "purple",
+  "cyan",
+  "green",
+  "amber",
+  "slate",
+  "orange",
+  "teal",
+  "indigo",
+  "rose",
+  "pink",
+  "violet",
+]);
+
 describe("ACTION_CATEGORY_COLORS", () => {
   const entries = Object.entries(ACTION_CATEGORY_COLORS);
 
@@ -29,6 +49,22 @@ describe("ACTION_CATEGORY_COLORS", () => {
         /\bborder-category-[a-z]+-border\b/.test(classes),
         `${category} missing border-category-*-border: ${classes}`
       ).toBe(true);
+      // The border-color token is invisible without the bare `border` width
+      // utility; guard against an entry that sets the colour but no width.
+      expect(
+        /\bborder\b(?!-)/.test(classes),
+        `${category} missing bare border width: ${classes}`
+      ).toBe(true);
+    }
+  });
+
+  it("only references hues with engineered tokens", () => {
+    for (const [category, classes] of entries) {
+      for (const [, hue] of classes.matchAll(/-category-([a-z]+)-(?:subtle|text|border)\b/g)) {
+        expect(VALID_HUES.has(hue), `${category} references unknown hue '${hue}': ${classes}`).toBe(
+          true
+        );
+      }
     }
   });
 
