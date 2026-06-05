@@ -45,6 +45,7 @@ import { cn, getBaseTitle } from "@/lib/utils";
 import { formatShortcutForTooltip } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { KbdChord } from "@/components/ui/Kbd";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { BellDot, FolderGit2 } from "@/components/icons";
@@ -274,6 +275,11 @@ function PanelHeaderComponent({
   const moveToDockShortcut = useKeybindingDisplay("terminal.moveToDock");
   const maximizeShortcut = useKeybindingDisplay("terminal.maximize");
   const closeShortcut = useKeybindingDisplay("terminal.close");
+  const killShortcut = useKeybindingDisplay("terminal.kill");
+  const restartShortcut = useKeybindingDisplay("terminal.restart");
+  const forceResumeShortcut = useKeybindingDisplay("terminal.forceResume");
+  const redrawShortcut = useKeybindingDisplay("terminal.redraw");
+  const renameShortcut = useKeybindingDisplay("terminal.rename");
   const duplicateAriaShortcut = useAriaKeyshortcuts("terminal.duplicate");
   const moveToDockAriaShortcut = useAriaKeyshortcuts("terminal.moveToDock");
   const maximizeAriaShortcut = useAriaKeyshortcuts("terminal.maximize");
@@ -861,6 +867,54 @@ function PanelHeaderComponent({
       )}
 
       <div className="flex items-center gap-1">
+        {/* Terminal recovery chord hints — surfaced so the user can see the
+            five recovery shortcuts (kill, restart, forceResume, redraw, rename)
+            without opening the overflow menu. Reveal-on-hover matches the
+            `+` add-tab pattern at line 805: visible to keyboard users on focus,
+            hidden from mouse users until they hover the chrome. Pointerdown
+            is stopped so the row never accidentally triggers the header drag
+            surface that owns this `data-pane-chrome` div. When a chord is
+            unbound (Windows, no override) the individual pill is suppressed
+            because KbdChord returns null for an empty combo. */}
+        {(killShortcut ||
+          restartShortcut ||
+          forceResumeShortcut ||
+          redrawShortcut ||
+          renameShortcut) && (
+          <div
+            className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150 ease-out motion-reduce:transition-none data-[reduce-animations=true]:transition-none"
+            onPointerDown={(e) => e.stopPropagation()}
+            aria-hidden="true"
+            data-testid="panel-hint-row"
+          >
+            {killShortcut && (
+              <span data-testid="panel-hint-terminal-kill">
+                <KbdChord shortcut={killShortcut} />
+              </span>
+            )}
+            {restartShortcut && (
+              <span data-testid="panel-hint-terminal-restart">
+                <KbdChord shortcut={restartShortcut} />
+              </span>
+            )}
+            {forceResumeShortcut && (
+              <span data-testid="panel-hint-terminal-force-resume">
+                <KbdChord shortcut={forceResumeShortcut} />
+              </span>
+            )}
+            {redrawShortcut && (
+              <span data-testid="panel-hint-terminal-redraw">
+                <KbdChord shortcut={redrawShortcut} />
+              </span>
+            )}
+            {renameShortcut && (
+              <span data-testid="panel-hint-terminal-rename">
+                <KbdChord shortcut={renameShortcut} />
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Overflow menu — panel management actions */}
         {hasOverflowItems && (
           <DropdownMenu
