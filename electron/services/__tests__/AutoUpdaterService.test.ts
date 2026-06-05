@@ -65,7 +65,7 @@ const markCleanExitMock = vi.hoisted(() => vi.fn());
 const markCleanLaunchMock = vi.hoisted(() => vi.fn());
 
 const fsMock = vi.hoisted(() => ({
-  existsSync: vi.fn(() => false),
+  existsSync: vi.fn((_p: unknown) => false),
   readFileSync: vi.fn(() => ""),
 }));
 
@@ -134,7 +134,12 @@ describe("AutoUpdaterService", () => {
       value: "/mock/resources",
       configurable: true,
     });
-    fsMock.existsSync.mockReturnValue(false);
+    // app-update.yml exists by default (distributable build); the Linux
+    // package-type marker does not. Tests for the local-package guard override
+    // this per-path.
+    fsMock.existsSync
+      .mockReset()
+      .mockImplementation((p: unknown) => String(p).endsWith("app-update.yml"));
     fsMock.readFileSync.mockReturnValue("");
     autoUpdaterMock.checkForUpdatesAndNotify.mockResolvedValue(undefined);
     autoUpdaterMock.checkForUpdates.mockResolvedValue(undefined);
@@ -651,13 +656,15 @@ describe("AutoUpdaterService", () => {
       expect(fsMock.existsSync).toHaveBeenCalledWith(path.join("/mock/resources", "package-type"));
     });
 
-    it("skips filesystem probe when APPIMAGE is set", () => {
+    it("skips the package-type probe when APPIMAGE is set", () => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
       process.env.APPIMAGE = "/path/to/app.AppImage";
 
       autoUpdaterService.initialize();
 
-      expect(fsMock.existsSync).not.toHaveBeenCalled();
+      expect(fsMock.existsSync).not.toHaveBeenCalledWith(
+        path.join("/mock/resources", "package-type")
+      );
     });
 
     it("does not affect macOS", () => {
@@ -668,6 +675,48 @@ describe("AutoUpdaterService", () => {
 
       expect(autoUpdaterMock.on).toHaveBeenCalled();
       expect(autoUpdaterMock.checkForUpdatesAndNotify).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("local-package guard (missing app-update.yml)", () => {
+    it("skips initialization when app-update.yml is absent", () => {
+      fsMock.existsSync.mockReturnValue(false);
+
+      autoUpdaterService.initialize();
+      vi.advanceTimersByTime(STARTUP_JITTER_MAX_MS);
+
+      expect(fsMock.existsSync).toHaveBeenCalledWith(
+        path.join("/mock/resources", "app-update.yml")
+      );
+      expect(autoUpdaterMock.on).not.toHaveBeenCalled();
+      expect(autoUpdaterMock.checkForUpdatesAndNotify).not.toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining("app-update.yml not found"));
+
+      autoUpdaterService.checkForUpdatesManually();
+      expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled();
+    });
+
+    it("still registers channel-preference IPC handlers when blocked", () => {
+      fsMock.existsSync.mockReturnValue(false);
+
+      autoUpdaterService.initialize();
+
+      const registeredChannels = (ipcMainMock.handle as Mock).mock.calls.map((args) => args[0]);
+      expect(registeredChannels).toContain(CHANNELS.UPDATE_GET_CHANNEL);
+      expect(registeredChannels).toContain(CHANNELS.UPDATE_SET_CHANNEL);
+      expect(registeredChannels).not.toContain(CHANNELS.UPDATE_QUIT_AND_INSTALL);
+      expect(registeredChannels).not.toContain(CHANNELS.UPDATE_CHECK_FOR_UPDATES);
+    });
+
+    it("still consumes the pendingUpdateVersion marker when blocked", () => {
+      fsMock.existsSync.mockReturnValue(false);
+      storeMock.get.mockImplementation((key: string) =>
+        key === "pendingUpdateVersion" ? "2.0.0" : undefined
+      );
+
+      autoUpdaterService.initialize();
+
+      expect(storeMock.delete).toHaveBeenCalledWith("pendingUpdateVersion");
     });
   });
 
