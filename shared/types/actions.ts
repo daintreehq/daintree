@@ -221,7 +221,9 @@ export type ActionErrorCode =
   | "CONFIRMATION_TIMEOUT"
   | "ELICITATION_FAILED"
   | "BINDING_STALE"
-  | "PLUGIN_UNLOADED";
+  | "PLUGIN_UNLOADED"
+  | "TIER_NOT_PERMITTED"
+  | "INVALID_URL";
 
 export interface ActionError {
   code: ActionErrorCode;
