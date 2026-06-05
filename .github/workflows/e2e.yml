@@ -232,12 +232,13 @@ jobs:
     # Sharding shrinks most full-* buckets, so a hung shard should fail fast
     # and re-run cheaply rather than burn the old 180min ceiling (the "core
     # (Windows) hung past 53min" failure mode from #8053). Windows
-    # full-terminal still contains a single serial recipes spec that Playwright
-    # cannot split across shards, so it keeps the standard 90min E2E window.
+    # full-terminal and full-worktree still contain serial files that
+    # Playwright cannot split across shards, so Windows keeps the standard
+    # 90min E2E window for those buckets.
     # nightly is unsharded and its serialized leak suite legitimately runs
     # long, so it keeps the generous ceiling; `full` (meta — all seven buckets on
     # one runner) gets a wider window than a single full-* shard.
-    timeout-minutes: ${{ (inputs.suite == 'nightly' && 180) || (inputs.suite == 'full' && 120) || (inputs.suite == 'full-terminal' && matrix.name == 'Windows' && 90) || (startsWith(inputs.suite, 'full-') && 45) || 90 }}
+    timeout-minutes: ${{ (inputs.suite == 'nightly' && 180) || (inputs.suite == 'full' && 120) || ((inputs.suite == 'full-terminal' || inputs.suite == 'full-worktree') && matrix.name == 'Windows' && 90) || (startsWith(inputs.suite, 'full-') && 45) || 90 }}
 
     steps:
       - name: Harden Windows for Electron E2E
@@ -406,7 +407,7 @@ jobs:
             WATCHDOG_TIMEOUT_MINUTES=170
           elif [ "$SUITE" = "full" ]; then
             WATCHDOG_TIMEOUT_MINUTES=110
-          elif [ "$SUITE" = "full-terminal" ] && [ "${{ matrix.name }}" = "Windows" ]; then
+          elif [ "${{ matrix.name }}" = "Windows" ] && { [ "$SUITE" = "full-terminal" ] || [ "$SUITE" = "full-worktree" ]; }; then
             WATCHDOG_TIMEOUT_MINUTES=80
           elif [[ "$SUITE" == full-* ]]; then
             WATCHDOG_TIMEOUT_MINUTES=40

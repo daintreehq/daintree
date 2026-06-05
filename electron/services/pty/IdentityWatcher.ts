@@ -43,6 +43,9 @@ const UNAMBIGUOUS_SHELL_PROMPT_PATTERNS = [
   POWERSHELL_PROMPT_PATTERN,
 ] as const;
 
+const ACTIVE_AGENT_PROMPT_PATTERN =
+  /(?:welcome to claude code|claude code v\d|tips for getting started|\?\s+for\s+shortcuts|welcome\s+back!)/i;
+
 // Locale-independent fallback signals for "command not found" detection. POSIX
 // exit code 127 is invisible to node-pty.onExit while the shell is alive
 // (interactive case), so output parsing remains the only viable signal here.
@@ -290,14 +293,17 @@ export class IdentityWatcher {
     const visibleTail = [this.delegate.getCursorLine(), ...lines]
       .filter((line): line is string => typeof line === "string" && line.trim().length > 0)
       .join("\n");
+    const knownAgentPrompt =
+      /(?:accessing workspace|yes,\s*i trust this folder|enter to confirm|quick safety check|\?\s+for\s+shortcuts|tips\s+for\s+getting\s+started|welcome\s+back!|claude code v\d)/i;
+    if (ACTIVE_AGENT_PROMPT_PATTERN.test(visibleTail)) {
+      return true;
+    }
     const currentLineIsUnambiguousShellPrompt =
       currentVisibleLine !== undefined &&
       UNAMBIGUOUS_SHELL_PROMPT_PATTERNS.some((pattern) => pattern.test(currentVisibleLine));
     if (!hasPtyDescendants && currentLineIsUnambiguousShellPrompt) {
       return false;
     }
-    const knownAgentPrompt =
-      /(?:accessing workspace|yes,\s*i trust this folder|enter to confirm|quick safety check|\?\s+for\s+shortcuts|tips\s+for\s+getting\s+started|welcome\s+back!|claude code v\d)/i;
     return (
       knownAgentPrompt.test(recent) ||
       knownAgentPrompt.test(visibleTail) ||
