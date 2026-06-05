@@ -20,18 +20,12 @@ import {
   useErrors,
   useReEntrySummary,
 } from "./hooks";
-import { useHibernationNotifications } from "./hooks/useHibernationNotifications";
-import { useIdleTerminalNotifications } from "./hooks/useIdleTerminalNotifications";
-import { useDiskSpaceWarnings } from "./hooks/useDiskSpaceWarnings";
-import { useGitHubTokenHealth } from "./hooks/useGitHubTokenHealth";
-import { useGitHubRateLimit } from "./hooks/useGitHubRateLimit";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { usePluginActions } from "./hooks/usePluginActions";
 import { usePluginPanelKinds } from "./hooks/usePluginPanelKinds";
 import { usePluginAgents } from "./hooks/usePluginAgents";
 import { usePluginKeybindings } from "./hooks/usePluginKeybindings";
 import { useUpdateListener } from "./hooks/useUpdateListener";
-import { useStoreUpdateListener } from "./hooks/useStoreUpdateListener";
 import { useMainProcessToastListener } from "./hooks/useMainProcessToastListener";
 
 import { useActionPalette } from "./hooks/useActionPalette";
@@ -43,7 +37,6 @@ import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
 import { useMcpBridge } from "./hooks/useMcpBridge";
 import { usePluginBridge } from "./hooks/usePluginBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
-import { useSoundPlaybackListener } from "./hooks/useSoundPlaybackListener";
 import { notifyViewPainted, removeStartupSkeleton } from "./utils/removeStartupSkeleton";
 // Attaches the notification E2E backdoor when launched with DAINTREE_E2E_MODE=1.
 // The installer self-gates on `__DAINTREE_E2E_MODE__`, so this is inert in
@@ -65,7 +58,6 @@ import {
   useFocusOnActivateIntent,
   usePluginDeepLink,
   useNotificationHistoryPruning,
-  useRecipeFocusReload,
   useUnloadCleanup,
   useHomeDir,
   usePerformanceMonitors,
@@ -75,10 +67,10 @@ import {
   useThemeBrowserSettingsBridge,
   useErrorRetry,
   useActiveWorktreeSync,
-  useWorktreeDevServerStateSync,
 } from "./hooks/app";
 import { useResourceProfile } from "./hooks/useResourceProfile";
 import { AppLayout } from "./components/Layout";
+import { PostHydrationListeners } from "./components/PostHydrationListeners";
 import { ContentGrid } from "./components/Terminal";
 import { PanelTransitionOverlay } from "./components/Panel";
 
@@ -352,15 +344,8 @@ const loadMotionFeatures = () => import("./lib/motionFeatures").then((mod) => mo
 
 function AppInner() {
   useErrors();
-  useHibernationNotifications();
-  useIdleTerminalNotifications();
-  useDiskSpaceWarnings();
-  useGitHubTokenHealth();
-  useGitHubRateLimit();
   useUnloadCleanup();
   useResourceProfile();
-  useRecipeFocusReload();
-  useWorktreeDevServerStateSync();
 
   useEffect(() => {
     window.__DAINTREE_E2E_ERROR_STORE__ = () =>
@@ -460,7 +445,6 @@ function AppInner() {
 
   useMcpBridge();
   usePluginBridge();
-  useSoundPlaybackListener();
   const { homeDir } = useHomeDir();
 
   // Grid navigation hook for directional terminal switching
@@ -614,7 +598,6 @@ function AppInner() {
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
   const onboardingOverlayActive = gettingStarted.visible || gettingStarted.showCelebration;
   useUpdateListener(onboardingOverlayActive);
-  useStoreUpdateListener();
   useOrchestrationMilestones(isStateLoaded);
   useAgentWaitingNudge(isStateLoaded);
   useNotificationHistoryPruning();
@@ -1482,6 +1465,9 @@ function AppInner() {
             <Toaster />
             <ShortcutHint />
             <ReEntrySummary state={reEntrySummary} />
+            {/* Listener hooks deferred out of the first commit flush — mount once
+                hydration settles so their effects stay off the first effect flush (#9769). */}
+            {isStateLoaded && <PostHydrationListeners />}
             {isStateLoaded && (
               <ErrorBoundary
                 variant="component"

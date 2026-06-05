@@ -20,6 +20,14 @@ export const PERF_MARKS = {
   MAIN_WINDOW_SHOWN: "main_window_shown",
   RENDERER_READY: "renderer_ready",
   RENDERER_FIRST_INTERACTIVE: "renderer_first_interactive",
+  /**
+   * The post-hydration listener set (notification/GitHub/store/sound/dev-server
+   * hooks) mounts once `isStateLoaded` flips true, after the startup skeleton
+   * fades. Staging these out of `AppInner`'s first commit keeps their effects
+   * off the first flush; this mark anchors the staged mount so LoAF attribution
+   * windows stay readable (#9769).
+   */
+  POST_HYDRATION_LISTENERS_MOUNT: "post_hydration_listeners_mount",
 
   SERVICE_INIT_START: "service_init_start",
   WINDOW_SERVICES_START: "window_services_start",
