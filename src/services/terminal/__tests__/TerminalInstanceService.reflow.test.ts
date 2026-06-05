@@ -204,11 +204,14 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     expect(history2).toBeGreaterThan(history1);
   });
 
-  it("skips agent terminals (WebGL — immune)", () => {
+  it("reflows agent terminals — the xterm pause gate is renderer-agnostic", () => {
     const managed = makeManaged({ kind: "terminal", launchAgentId: "claude" });
+    expect(managed.runtimeAgentId).toBe("claude");
+
     service.maybeReflowTerminal(managed);
-    expect(paddingHistory(managed).length).toBe(0);
-    expect(managed.lastReflowAt).toBe(0);
+
+    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(managed.lastReflowAt).toBeGreaterThan(0);
   });
 
   it("skips hibernated terminals", () => {

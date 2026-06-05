@@ -1858,10 +1858,11 @@ class TerminalInstanceService {
       if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
         this.resizeController.sendPtyResize(id, cols, rows);
       }
-      // Clear throttle so any subsequent write triggers an immediate reflow;
-      // settled-strategy agents are WebGL so maybeReflowTerminal itself is a
-      // no-op, but the clear is cheap and keeps the post-wake contract
-      // uniform across paths.
+      // Clear throttle so the next write — or the 3s heartbeat — triggers an
+      // immediate reflow. We don't call maybeReflowTerminal() inline here
+      // because the deferred PTY resize above hasn't landed yet; reflowing
+      // mid-resize would jitter against the pending dimension change. The
+      // heartbeat and focus paths cover any IO unpause within 3s.
       managed.lastReflowAt = 0;
       return;
     }

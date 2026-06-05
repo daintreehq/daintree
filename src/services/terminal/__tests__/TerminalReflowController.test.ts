@@ -369,4 +369,21 @@ describe("TerminalReflowController dispose / listener cleanup", () => {
 
     controller.dispose();
   });
+
+  it("visibilitychange listener reflows agent terminals too", () => {
+    const managed = makeManaged({ launchAgentId: "claude" });
+    instances = [managed];
+
+    controller = new TerminalReflowController({ getInstances: () => instances });
+
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "visible",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    expect(paddingHistory(managed)).toContain("0.01px");
+
+    controller.dispose();
+  });
 });
