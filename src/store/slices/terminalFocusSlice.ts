@@ -91,6 +91,23 @@ export interface TerminalFocusSlice {
   pingSeq: number;
   preMaximizeLayout: PreMaximizeLayoutSnapshot | null;
   setFocused: (id: string | null, shouldPing?: boolean) => void;
+  /**
+   * Synthetic boot-time focus: lands an initial `focusedId` without
+   * corrupting persistence. Mirrors the grid branch of `setFocused` (the
+   * post-hydration picker only ever targets grid panels) but skips
+   * `stampLastActive` (which would overwrite the per-panel recency that
+   * `panelRestorePhase` uses to promote each worktree's most-recently-
+   * focused panel) and skips `terminalInstanceService.wake` (the panel
+   * is already woken by the restore pipeline). The orchestrator's
+   * `trackTerminalFocus` and `selectWorktree({ source: "focus" })`
+   * subscriptions still fire — `lastFocusedTerminalByWorktree` is
+   * runtime-only and has no other writer, so the boot pick must seed it
+   * for future worktree switches to restore last-focus. Callers MUST wrap
+   * this in `suppressMruRecording(true)/(false)` if the MRU subscription
+   * should not re-prepend the boot pick to `mruList` (see
+   * `useAppHydration`).
+   */
+  setBootFocus: (id: string) => void;
   pingTerminal: (id: string) => void;
   toggleMaximize: (
     id: string,
@@ -220,6 +237,24 @@ export const createTerminalFocusSlice =
         } else {
           set({ focusedId: null, activeDockTerminalId: null });
         }
+      },
+
+      setBootFocus: (id) => {
+        // Bare focus commit — the boot pick is always a grid panel (the picker
+        // in `useAppHydration` filters `location === "grid"`), so the dock
+        // branch of `setFocused` is unreachable here. Skips `stampLastActive`
+        // (no disk write to per-panel recency), `terminalInstanceService.wake`
+        // (the restore pipeline already woke it), and `pingTerminal` (no
+        // user intent to visualize). `previousFocusedId` only moves when focus
+        // actually changes — the `null → bootPick` transition preserves the
+        // existing `previousFocusedId: null` (no real prior focus existed).
+        const previousFocusedId = get().focusedId;
+        const focusActuallyChanged = id !== previousFocusedId;
+        set({
+          focusedId: id,
+          activeDockTerminalId: null,
+          ...(focusActuallyChanged && { previousFocusedId }),
+        });
       },
 
       pingTerminal: (id) => {

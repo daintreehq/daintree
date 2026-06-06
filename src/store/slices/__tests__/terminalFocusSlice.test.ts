@@ -1543,3 +1543,105 @@ describe("TerminalFocusSlice - lastActiveAt stamping (issue #8703)", () => {
     expect(mockStampLastActive).not.toHaveBeenCalled();
   });
 });
+
+// Issue #9933 — the post-hydration focus pick must not corrupt persistence
+// (`lastActiveAt`, MRU). `setBootFocus` is the bare commit used by the boot
+// picker: it lands an initial `focusedId` but does NOT stamp activity, wake
+// the terminal, or ping it. Callers are responsible for wrapping the call in
+// `suppressMruRecording` if the orchestrator's MRU subscription must be
+// gated.
+describe("TerminalFocusSlice - boot focus (issue #9933)", () => {
+  const makeTerminal = (id: string): PtyPanelData =>
+    ({
+      id,
+      title: id,
+      cwd: "/test",
+      location: "grid",
+      agentState: "idle",
+      isVisible: true,
+      cols: 80,
+      rows: 24,
+      worktreeId: "worktree-1",
+    }) as PtyPanelData;
+
+  let terminals: PtyPanelData[];
+  let state: TerminalFocusSlice;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    terminals = [makeTerminal("a"), makeTerminal("b")];
+    const getTerminals = vi.fn(() => terminals);
+    const getState = vi.fn((): TerminalFocusSlice => state);
+    const setState = vi.fn(
+      (
+        updater:
+          | Partial<TerminalFocusSlice>
+          | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+      ) => {
+        const currentState = getState();
+        const updates = typeof updater === "function" ? updater(currentState) : updater;
+        state = { ...currentState, ...updates };
+      }
+    );
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId, mockStampLastActive)(
+      setState as never,
+      getState as never,
+      {} as never
+    );
+  });
+
+  it("setBootFocus sets focusedId and clears activeDockTerminalId", () => {
+    state.focusedId = null;
+    state.activeDockTerminalId = "stale-dock";
+
+    state.setBootFocus("a");
+
+    expect(state.focusedId).toBe("a");
+    expect(state.activeDockTerminalId).toBeNull();
+  });
+
+  it("setBootFocus does NOT call stampLastActive", () => {
+    // The whole point of the new setter: persistence must not be touched.
+    // If this fires, the per-panel recency that `panelRestorePhase` uses
+    // to promote each worktree's most-recently-focused panel gets
+    // overwritten on every boot (#9933).
+    state.setBootFocus("a");
+    expect(mockStampLastActive).not.toHaveBeenCalled();
+  });
+
+  it("setBootFocus does NOT call terminalInstanceService.wake", () => {
+    // The boot pick targets a panel the restore pipeline already woke.
+    // Waking it again would be wasted work and could race with the
+    // restore-batch PTY spawn.
+    state.setBootFocus("a");
+    expect(terminalInstanceService.wake).not.toHaveBeenCalled();
+  });
+
+  it("setBootFocus updates previousFocusedId only when focus actually changes", () => {
+    // null → "a" changes focus: previousFocusedId should be preserved
+    // (the prior value was null, so it stays null — no real prior
+    // focus existed).
+    state.focusedId = null;
+    state.previousFocusedId = null;
+    state.setBootFocus("a");
+    expect(state.previousFocusedId).toBeNull();
+
+    // "a" → "b" changes focus: previousFocusedId should become "a".
+    state.setBootFocus("b");
+    expect(state.previousFocusedId).toBe("a");
+
+    // "b" → "b" is a no-op: previousFocusedId must NOT move to "b"
+    // (the toggle-anchor would lose its real prior value).
+    state.setBootFocus("b");
+    expect(state.previousFocusedId).toBe("a");
+  });
+
+  it("setBootFocus does NOT trigger pingTerminal (no user intent to visualize)", () => {
+    // Defensive: even though `setBootFocus` doesn't directly call
+    // pingTerminal, this guards against future regressions where
+    // someone adds an unconditional ping to the grid branch.
+    state.setBootFocus("a");
+    expect(state.pingedId).toBeNull();
+    expect(state.pingSeq).toBe(0);
+  });
+});
