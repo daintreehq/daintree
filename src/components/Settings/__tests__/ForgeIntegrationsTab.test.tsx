@@ -214,8 +214,10 @@ describe("ForgeIntegrationsTab", () => {
     render(<ForgeIntegrationsTab />);
 
     await waitFor(() => {
-      // The informational note remains visible…
-      expect(screen.getByText(/No forge plugins are installed\./i)).toBeTruthy();
+      // The informational note remains visible in the routing panel. Match the
+      // phrase unique to it — the default-provider section also says "No forge
+      // plugins are installed yet." which getByText would otherwise conflate.
+      expect(screen.getByText(/Each remote shows as unmatched/i)).toBeTruthy();
       // …and the remote row with its "No match" badge is now rendered too,
       // instead of being hidden behind a text-only early return (#9990).
       expect(screen.getByText("origin")).toBeTruthy();
@@ -311,8 +313,11 @@ describe("ForgeIntegrationsTab source guards", () => {
     expect(source).not.toMatch(/loading=\{remotesLoading\}/);
   });
 
-  it("passes the raw remotesLoading flag as the pending prop to suppress the sub-400ms empty state", () => {
-    expect(source).toMatch(/pending=\{remotesLoading\}/);
+  it("passes a raw pending flag to suppress the empty state during in-flight loads", () => {
+    expect(source).toMatch(/pending=\{remotesPending\}/);
+    // pending covers the active load AND the pre-effect frame on a project switch.
+    expect(source).toMatch(/remotesPending\s*=\s*\n?\s*remotesLoading\s*\|\|/);
+    expect(source).toMatch(/remotesLoadedForRef\.current\s*!==\s*activeProjectId/);
     // The panel returns null during the in-flight window before the Doherty gate fires.
     expect(source).toMatch(/if\s*\(\s*pending\s*&&\s*!loading\s*&&\s*remotes\.length === 0\s*\)/);
   });

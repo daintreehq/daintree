@@ -71,9 +71,22 @@ export function ForgeIntegrationsTab() {
   useEffect(() => {
     remotesRef.current = remotes;
   }, [remotes]);
+  // Records the project whose remotes the current state reflects. Set inside the
+  // load effect, so during the render frame *before* that effect commits
+  // `remotesLoading=true` it still holds the previous project's id. That frame —
+  // on initial mount and on every project switch — is exactly when `remotes` is
+  // `[]` but no load flag is set yet; comparing it to `activeProjectId` lets us
+  // treat the pre-effect window as pending and avoid painting a false empty
+  // state for the freshly selected project (#9990).
+  const remotesLoadedForRef = useRef<string | undefined>(undefined);
   // Defer the "Loading remotes…" text past the Doherty threshold so fast IPC
   // resolutions don't flash a loading state for sub-400ms work.
   const showRemotesLoading = useDohertyGate(remotesLoading);
+  // Raw, un-gated "a load is or is about to be in flight" signal. Covers both
+  // the active load (`remotesLoading`) and the pre-effect render frame where the
+  // active project just changed but the load effect hasn't committed yet.
+  const remotesPending =
+    remotesLoading || (activeProjectId != null && remotesLoadedForRef.current !== activeProjectId);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,11 +116,13 @@ export function ForgeIntegrationsTab() {
   // flag could fire out of expected order.
   useEffect(() => {
     if (!activeProjectId || !activeProjectPath) {
+      remotesLoadedForRef.current = activeProjectId;
       setRemotes([]);
       setRemotesLoading(false);
       setRemotesError(null);
       return;
     }
+    remotesLoadedForRef.current = activeProjectId;
     let cancelled = false;
     setRemotesLoading(true);
     setRemotesError(null);
@@ -277,9 +292,10 @@ export function ForgeIntegrationsTab() {
           activeProjectName={activeProject?.name}
           activeProjectId={activeProjectId}
           providersInstalled={providers.length}
+          providersLoading={loading}
           remotes={remotes}
           loading={showRemotesLoading}
-          pending={remotesLoading}
+          pending={remotesPending}
           error={remotesError}
         />
       </SettingsSection>
@@ -291,6 +307,9 @@ interface ProjectRoutingPanelProps {
   activeProjectName: string | undefined;
   activeProjectId: string | undefined;
   providersInstalled: number;
+  // Whether the top-level provider/settings load is still in flight. Used to
+  // avoid asserting "no plugins installed" before the provider list resolves.
+  providersLoading: boolean;
   remotes: RemoteRouting[];
   loading: boolean;
   // Raw (un-gated) loading flag. `loading` is the Doherty-gated flag that only
@@ -305,6 +324,7 @@ function ProjectRoutingPanel({
   activeProjectName,
   activeProjectId,
   providersInstalled,
+  providersLoading,
   remotes,
   loading,
   pending,
@@ -342,7 +362,7 @@ function ProjectRoutingPanel({
 
   return (
     <div className="space-y-2">
-      {providersInstalled === 0 && (
+      {providersInstalled === 0 && !providersLoading && (
         <p className="text-xs text-daintree-text/50">
           No forge plugins are installed. Each remote shows as unmatched until a provider plugin is
           installed.
