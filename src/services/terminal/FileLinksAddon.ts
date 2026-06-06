@@ -33,6 +33,16 @@ export const FILE_LINK_ACTIVATION_COALESCE_KEY = "filelink-activate-fail";
  * readable and so we don't echo long absolute paths into the persistent
  * inbox. The full path is only exposed via the clipboard, on explicit user
  * action.
+ *
+ * Coalesce caveat: when multiple failures fire inside the 1500ms window,
+ * the `buildMessage`/`buildTitle` callbacks only know the *current* call's
+ * body, so a coalesced toast can't honestly mix per-failure reasons. The
+ * coalesced branch deliberately drops the per-failure body and shows a
+ * generic "see inbox for details" message — every coalesced failure still
+ * lands as its own inbox row carrying the real reason. The first-failure
+ * Copy-path callback is preserved on the live toast (notify() patches with
+ * the original `payload.action`), so it always copies a path the user
+ * actually clicked.
  */
 export function reportFileLinkFailure(reason: string, error: unknown, absolutePath: string): void {
   const code = isClientAppError(error) ? error.code : undefined;
@@ -62,11 +72,17 @@ export function reportFileLinkFailure(reason: string, error: unknown, absolutePa
       windowMs: 1500,
       buildTitle: (count) =>
         count <= 1 ? "Couldn't open file link" : `Couldn't open ${count} file links`,
-      buildMessage: (count) => (count <= 1 ? singleMessage : `${body} (${count} files)`),
+      // Per-failure bodies don't compose on coalesce: each call only sees one
+      // error, so the first failure's reason would otherwise leak across the
+      // whole batch. Drop the body in the batch case; the per-failure inbox
+      // row carries the real reason.
+      buildMessage: (count) =>
+        count <= 1 ? singleMessage : `Couldn't open ${count} file links — see inbox for details`,
     },
     action: {
       label: "Copy path",
       onClick: () => {
+        if (!navigator.clipboard) return;
         void navigator.clipboard.writeText(absolutePath).catch(() => {
           /* clipboard unavailable — sticky toast is the durable surface */
         });

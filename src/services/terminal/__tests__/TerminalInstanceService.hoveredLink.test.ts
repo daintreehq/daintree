@@ -112,7 +112,7 @@ describe("TerminalInstanceService hovered link API", () => {
     await expect(service.openHoveredLink("t1")).resolves.toBeUndefined();
   });
 
-  it("openHoveredLink swallows errors thrown by activate()", async () => {
+  it("openHoveredLink surfaces sync throws from activate() via notify() (#9925)", async () => {
     const link = {
       text: "x",
       range: {},
@@ -121,7 +121,17 @@ describe("TerminalInstanceService hovered link API", () => {
       }),
     };
     service.instances.set("t1", { hoveredLink: link });
+
     await expect(service.openHoveredLink("t1")).resolves.toBeUndefined();
+    expect(notify).toHaveBeenCalledTimes(1);
+    const payload = vi.mocked(notify).mock.calls[0]?.[0] as {
+      type: string;
+      title: string;
+      message: string;
+    };
+    expect(payload.type).toBe("error");
+    expect(payload.title).toBe("Couldn't open file link");
+    expect(payload.message).toContain("boom");
   });
 
   it("openHoveredLink surfaces async rejections from activate() via notify() (#9925)", async () => {

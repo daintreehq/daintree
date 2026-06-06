@@ -523,12 +523,12 @@ describe("FileLinksAddon", () => {
       expect(payload.message).toContain("no editor configured");
     });
 
-    it("copy-path action button writes the absolute path to the clipboard", async () => {
+    it("copy-path action button writes the resolved absolute path (line/col stripped) to the clipboard", async () => {
       const terminal = createMockTerminal();
       const link = await buildLink(
         terminal,
         () => "/home/user/project",
-        "/home/user/project/src/App.tsx"
+        "/home/user/project/src/App.tsx:10:2"
       );
       expect(link).toBeDefined();
 
@@ -547,7 +547,50 @@ describe("FileLinksAddon", () => {
       };
       payload.action?.onClick?.();
 
+      // Must be the resolved absolute path, NOT link.text (which includes
+      // :10:2). The user's clipboard should never have line/col noise.
       expect(writeText).toHaveBeenCalledWith("/home/user/project/src/App.tsx");
+      expect(writeText).not.toHaveBeenCalledWith("/home/user/project/src/App.tsx:10:2");
+    });
+
+    it("surfaces rejections from actionService.dispatch itself (distinct from ok:false path)", async () => {
+      const terminal = createMockTerminal();
+      const link = await buildLink(terminal, () => "/home/user/project");
+      expect(link).toBeDefined();
+
+      vi.mocked(actionService.dispatch).mockRejectedValue(new Error("dispatch threw"));
+      vi.mocked(systemClient.openPath).mockResolvedValue(undefined);
+
+      link!.activate(makeClick(), link!.text);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(notify).toHaveBeenCalledTimes(1);
+      const payload = vi.mocked(notify).mock.calls[0]?.[0] as { message: string };
+      expect(payload.message).toContain("dispatch threw");
+      // dispatch rejected, so the systemClient fallback should never run.
+      expect(systemClient.openPath).not.toHaveBeenCalled();
+    });
+
+    it("modified-click path (openInEditor) routes AppError(INVALID_PATH) into the code-aware body", async () => {
+      const terminal = createMockTerminal();
+      const link = await buildLink(terminal, () => "/home/user/project");
+      expect(link).toBeDefined();
+
+      vi.mocked(actionService.dispatch).mockResolvedValue({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: "openInEditor failed" },
+      });
+      vi.mocked(systemClient.openInEditor).mockRejectedValue(
+        new Error("[AppError|INVALID_PATH|Path is not a valid file] Path is not a valid file")
+      );
+
+      link!.activate(makeClick({ metaKey: true }), link!.text);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(systemClient.openInEditor).toHaveBeenCalledTimes(1);
+      expect(notify).toHaveBeenCalledTimes(1);
+      const payload = vi.mocked(notify).mock.calls[0]?.[0] as { message: string };
+      expect(payload.message).toContain("Path is not a valid file");
     });
   });
 });

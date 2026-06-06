@@ -422,10 +422,11 @@ class TerminalInstanceService {
    * OSC 8 links route through TerminalLinkHandler (localhost → browser panel
    * when modifier pressed, external open otherwise).
    *
-   * Async because `ILink.activate()` may return a rejected Promise (e.g. a
-   * `FileLink` whose actionService + systemClient fallback chain both fail)
-   * — a sync try/catch misses async rejections, so the right-click path
-   * would still silently fail after the leaf was fixed (#9925).
+   * Async defensively: today's `FileLink.activate` returns void and owns
+   * its own `.then/.catch` (so the leaf-level notify() fires there), but
+   * a future `ILink` implementation may return a Promise — a sync
+   * try/catch would silently drop that rejection, so we wrap with await
+   * to keep the contract future-proof (#9925).
    */
   async openHoveredLink(id: string, event?: MouseEvent): Promise<void> {
     const managed = this.instances.get(id);
