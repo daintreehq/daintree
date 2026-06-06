@@ -806,6 +806,7 @@ export const CHANNELS = {
   FORGE_GET_ISSUE: "forge:get-issue",
   FORGE_GET_PR: "forge:get-pr",
   FORGE_GET_REPO_METADATA: "forge:get-repo-metadata",
+  FORGE_GET_CURRENT_USER: "forge:get-current-user",
   FORGE_CLASSIFY_PUSH_ERROR: "forge:classify-push-error",
 
   // Forge audit log channels — separate prefix from `forge:*` so the codegen

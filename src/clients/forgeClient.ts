@@ -1,5 +1,6 @@
 import type {
   AuthValidation,
+  ForgeUser,
   PushErrorClassification,
   Issue,
   PR,
@@ -59,6 +60,10 @@ export const forgeClient = {
 
   getRepoMetadata: (cwd: string): Promise<RepoMetadata> => {
     return window.electron.forge.getRepoMetadata({ cwd });
+  },
+
+  getCurrentUser: (cwd: string): Promise<ForgeUser | null> => {
+    return window.electron.forge.getCurrentUser({ cwd });
   },
 
   classifyPushError: (

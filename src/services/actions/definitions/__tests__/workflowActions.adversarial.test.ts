@@ -16,6 +16,11 @@ const githubClientMock = vi.hoisted(() => ({
   getConfig: vi.fn(),
 }));
 
+const forgeClientMock = vi.hoisted(() => ({
+  getCurrentUser: vi.fn(),
+  assignIssue: vi.fn(),
+}));
+
 const projectClientMock = vi.hoisted(() => ({
   detectRunners: vi.fn(),
 }));
@@ -42,6 +47,7 @@ vi.mock("@/utils/recipeNotify", () => ({
 vi.mock("@/clients", () => ({
   worktreeClient: worktreeClientMock,
   githubClient: githubClientMock,
+  forgeClient: forgeClientMock,
   projectClient: projectClientMock,
   copyTreeClient: copyTreeClientMock,
 }));
@@ -107,9 +113,7 @@ function setMainWorktree(branch: string | null) {
 }
 
 function setGithubUser(username: string | null) {
-  githubClientMock.getConfig.mockResolvedValue(
-    username ? { hasToken: true, username } : { hasToken: false }
-  );
+  forgeClientMock.getCurrentUser.mockResolvedValue(username ? { login: username } : null);
 }
 
 function setAssignPreference(value: boolean) {
@@ -163,6 +167,7 @@ beforeEach(() => {
   worktreeClientMock.create.mockResolvedValue("wt-new");
   worktreeClientMock.fetchPRBranch.mockResolvedValue(undefined);
   githubClientMock.assignIssue.mockResolvedValue(undefined);
+  forgeClientMock.assignIssue.mockResolvedValue(undefined);
   copyTreeClientMock.injectToTerminal.mockResolvedValue(undefined);
   setProject({ id: "p1", path: "/repo" });
   setMainWorktree("main");
@@ -713,7 +718,7 @@ describe("workflow.startWorkOnIssue", () => {
       { issueNumber: 6609, agentId: "claude", assignToSelf: true },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6609, "ada");
+    expect(forgeClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6609, "ada");
     expect(result.assignedToSelf).toBe(true);
     expect(result.assignmentError).toBeNull();
   });
@@ -721,7 +726,7 @@ describe("workflow.startWorkOnIssue", () => {
   it("assignToSelf is best-effort — failure surfaces in assignmentError without aborting the macro", async () => {
     githubClientMock.getIssueByNumber.mockResolvedValue({ number: 6609, title: "t", url: "u" });
     setGithubUser("ada");
-    githubClientMock.assignIssue.mockRejectedValue(new Error("403 Forbidden"));
+    forgeClientMock.assignIssue.mockRejectedValue(new Error("403 Forbidden"));
     const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
     const result = (await def.run(
       { issueNumber: 6609, agentId: "claude", assignToSelf: true },
@@ -741,7 +746,7 @@ describe("workflow.startWorkOnIssue", () => {
       string,
       unknown
     >;
-    expect(githubClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6609, "ada");
+    expect(forgeClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6609, "ada");
     expect(result.assignedToSelf).toBe(true);
     expect(result.assignmentError).toBeNull();
   });
@@ -755,7 +760,7 @@ describe("workflow.startWorkOnIssue", () => {
       string,
       unknown
     >;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBeNull();
   });
@@ -769,7 +774,7 @@ describe("workflow.startWorkOnIssue", () => {
       { issueNumber: 6609, agentId: "claude", assignToSelf: false },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBeNull();
   });
@@ -782,7 +787,7 @@ describe("workflow.startWorkOnIssue", () => {
       { issueNumber: 6609, agentId: "claude", assignToSelf: true },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBe("No GitHub username configured");
     expect(result.terminalId).toBe("term-1");
@@ -797,7 +802,7 @@ describe("workflow.startWorkOnIssue", () => {
       string,
       unknown
     >;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBe("No GitHub username configured");
   });
@@ -805,7 +810,7 @@ describe("workflow.startWorkOnIssue", () => {
   it("assignment failure does not clobber other result fields", async () => {
     githubClientMock.getIssueByNumber.mockResolvedValue({ number: 6609, title: "t", url: "u" });
     setGithubUser("ada");
-    githubClientMock.assignIssue.mockRejectedValue(new Error("rate limit"));
+    forgeClientMock.assignIssue.mockRejectedValue(new Error("rate limit"));
     const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
     const result = (await def.run(
       { issueNumber: 6609, agentId: "claude", assignToSelf: true },
@@ -818,15 +823,15 @@ describe("workflow.startWorkOnIssue", () => {
     expect(result.assignmentError).toBe("rate limit");
   });
 
-  it("getConfig() rejection surfaces in assignmentError, worktree still returned", async () => {
+  it("getCurrentUser() rejection surfaces in assignmentError, worktree still returned", async () => {
     githubClientMock.getIssueByNumber.mockResolvedValue({ number: 6609, title: "t", url: "u" });
-    githubClientMock.getConfig.mockRejectedValue(new Error("IPC unavailable"));
+    forgeClientMock.getCurrentUser.mockRejectedValue(new Error("IPC unavailable"));
     const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
     const result = (await def.run(
       { issueNumber: 6609, agentId: "claude", assignToSelf: true },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.worktreeId).toBe("wt-new");
     expect(result.terminalId).toBe("term-1");
     expect(result.assignedToSelf).toBe(false);
@@ -857,7 +862,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
     >;
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBeNull();
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
   });
 
   it("explicit assignToSelf: true with issueNumber assigns and returns null error", async () => {
@@ -867,7 +872,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
       { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6625, "ada");
+    expect(forgeClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6625, "ada");
     expect(result.assignedToSelf).toBe(true);
     expect(result.assignedUsername).toBe("ada");
     expect(result.assignmentError).toBeNull();
@@ -886,7 +891,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
 
   it("assignedUsername is null when assignment fails", async () => {
     setGithubUser("ada");
-    githubClientMock.assignIssue.mockRejectedValue(new Error("403 Forbidden"));
+    forgeClientMock.assignIssue.mockRejectedValue(new Error("403 Forbidden"));
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
       { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
@@ -905,7 +910,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
       { branchName: "feature/foo", issueNumber: 6625 },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6625, "ada");
+    expect(forgeClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6625, "ada");
     expect(result.assignedToSelf).toBe(true);
     expect(result.assignmentError).toBeNull();
   });
@@ -918,7 +923,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
       { branchName: "feature/foo", issueNumber: 6625 },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBeNull();
   });
@@ -931,14 +936,14 @@ describe("worktree.createWithRecipe — issue assignment", () => {
       { branchName: "feature/foo", issueNumber: 6625, assignToSelf: false },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBeNull();
   });
 
   it("assignment failure surfaces in assignmentError but worktree still succeeds", async () => {
     setGithubUser("ada");
-    githubClientMock.assignIssue.mockRejectedValue(new Error("403 Forbidden"));
+    forgeClientMock.assignIssue.mockRejectedValue(new Error("403 Forbidden"));
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
       { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
@@ -956,7 +961,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
       { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBe("No GitHub username configured");
   });
@@ -968,19 +973,19 @@ describe("worktree.createWithRecipe — issue assignment", () => {
       { branchName: "feature/foo", assignToSelf: true },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBeNull();
   });
 
-  it("getConfig() rejection during assignment surfaces in assignmentError, worktree still created", async () => {
-    githubClientMock.getConfig.mockRejectedValue(new Error("IPC unavailable"));
+  it("getCurrentUser() rejection during assignment surfaces in assignmentError, worktree still created", async () => {
+    forgeClientMock.getCurrentUser.mockRejectedValue(new Error("IPC unavailable"));
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
       { branchName: "feature/foo", issueNumber: 6609, assignToSelf: true },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.worktreeId).toBe("wt-new");
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBe("IPC unavailable");

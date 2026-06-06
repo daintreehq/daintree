@@ -214,5 +214,21 @@ export function registerForgeDataHandlers(): () => void {
     })
   );
 
+  // Read probe — no audit envelope. Mirrors `getRateLimit` (a probe, not a
+  // mutation): the audit ring should record meaningful lookups, not the
+  // renderer's identity probe fired on every worktree dialog open. The
+  // `ForgeProviderMethodName` union still carries the name so the
+  // `summarizeForgeArgs` switch stays exhaustive.
+  cleanups.push(
+    typedHandle(CHANNELS.FORGE_GET_CURRENT_USER, async (payload: { cwd: string }) => {
+      if (!payload || typeof payload !== "object") {
+        throw new Error("Invalid payload");
+      }
+      const cwd = requireCwd(payload.cwd);
+      const { impl } = await resolveForCwd(cwd);
+      return impl.identity ? impl.identity.getCurrentUser() : null;
+    })
+  );
+
   return () => cleanups.forEach((c) => c());
 }

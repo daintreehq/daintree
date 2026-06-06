@@ -83,6 +83,9 @@ export function summarizeForgeArgs(
       return "";
     case "getRepoMetadata":
       return "";
+    case "getCurrentUser":
+      // Read probe — takes no args worth summarizing.
+      return "";
     default:
       return "";
   }

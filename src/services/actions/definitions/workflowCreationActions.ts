@@ -3,7 +3,7 @@ import { defineAction } from "../defineAction";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 // eslint-disable-next-line no-restricted-imports
-import { worktreeClient, githubClient, copyTreeClient } from "@/clients";
+import { worktreeClient, githubClient, copyTreeClient, forgeClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
@@ -242,12 +242,12 @@ export function registerWorkflowCreationActions(
         let assignmentError: string | null = null;
         if (issueNumber && effectiveAssignToSelf) {
           try {
-            const username = (await githubClient.getConfig()).username;
-            if (username) {
+            const user = await forgeClient.getCurrentUser(rootPath);
+            if (user) {
               try {
-                await githubClient.assignIssue(rootPath, issueNumber, username);
+                await forgeClient.assignIssue(rootPath, issueNumber, user.login);
                 assignedToSelf = true;
-                assignedUsername = username;
+                assignedUsername = user.login;
               } catch (err) {
                 assignmentError = formatErrorMessage(err, "Failed to assign issue");
               }
@@ -527,12 +527,12 @@ export function registerWorkflowCreationActions(
         let assignmentError: string | null = null;
         if (effectiveAssignToSelf) {
           try {
-            const username = (await githubClient.getConfig()).username;
-            if (username) {
+            const user = await forgeClient.getCurrentUser(rootPath);
+            if (user) {
               try {
-                await githubClient.assignIssue(rootPath, issue.number, username);
+                await forgeClient.assignIssue(rootPath, issue.number, user.login);
                 assignedToSelf = true;
-                assignedUsername = username;
+                assignedUsername = user.login;
               } catch (err) {
                 assignmentError = formatErrorMessage(err, "Failed to assign issue");
               }

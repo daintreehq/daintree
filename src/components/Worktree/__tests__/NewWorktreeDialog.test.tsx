@@ -26,6 +26,8 @@ const mockGetDefaultPath = vi.fn();
 const mockListBranches = vi.fn();
 const mockFetchPRBranch = vi.fn();
 const mockGetRecentBranches = vi.fn();
+const mockGetCurrentUser = vi.fn();
+const mockAssignIssue = vi.fn();
 
 const mockAgentSettingsGet = vi.fn().mockResolvedValue({ agents: {} });
 vi.mock("@/clients", () => ({
@@ -37,8 +39,9 @@ vi.mock("@/clients", () => ({
     getRecentBranches: (...args: unknown[]) => mockGetRecentBranches(...args),
     hasResourceConfig: vi.fn().mockResolvedValue({ hasConfig: false }),
   },
-  githubClient: {
-    assignIssue: vi.fn(),
+  forgeClient: {
+    getCurrentUser: (...args: unknown[]) => mockGetCurrentUser(...args),
+    assignIssue: (...args: unknown[]) => mockAssignIssue(...args),
   },
   agentSettingsClient: {
     get: (...args: unknown[]) => mockAgentSettingsGet(...args),
@@ -69,13 +72,17 @@ vi.mock("@/store/panelStore", () => ({
 
 const mockGenerateRecipeFromActiveTerminals = vi.fn().mockReturnValue([]);
 vi.mock("@/store/recipeStore", () => ({
-  useRecipeStore: Object.assign(() => ({ recipes: [], runRecipe: vi.fn() }), {
-    getState: () => ({
-      runRecipeWithResults: vi.fn(),
-      getRecipeById: () => null,
-      generateRecipeFromActiveTerminals: mockGenerateRecipeFromActiveTerminals,
-    }),
-  }),
+  useRecipeStore: Object.assign(
+    () => ({ recipes: [], runRecipeWithResults: vi.fn() }),
+    {
+      getState: () => ({
+        runRecipeWithResults: vi.fn(),
+        getRecipeById: () => null,
+        generateRecipeFromActiveTerminals: mockGenerateRecipeFromActiveTerminals,
+      }),
+    }
+  ),
+}));
 }));
 
 vi.mock("@/store/preferencesStore", () => ({
@@ -86,14 +93,6 @@ vi.mock("@/store/preferencesStore", () => ({
       lastSelectedWorktreeRecipeIdByProject: {},
       setLastSelectedWorktreeRecipeIdByProject: vi.fn(),
     }),
-}));
-
-vi.mock("@github-renderer/stores/githubConfigStore", () => ({
-  useGitHubConfigStore: Object.assign(
-    (selector: (s: Record<string, unknown>) => unknown) =>
-      selector({ config: null, initialize: vi.fn(), refresh: vi.fn() }),
-    { getState: () => ({ config: null }) }
-  ),
 }));
 
 vi.mock("@/store/projectStore", () => ({
@@ -292,6 +291,11 @@ describe("NewWorktreeDialog — existing branch mode", () => {
       Promise.resolve(`/test/root-worktrees/${branch}`)
     );
     mockDispatch.mockResolvedValue({ ok: true, result: "new-wt-id" });
+    // Default: no authenticated viewer. Existing-branch tests don't exercise
+    // self-assignment, and the render effect awaiting an unresolved promise
+    // keeps `canAssignIssue` false without leaking toasts/state.
+    mockGetCurrentUser.mockResolvedValue(null);
+    mockAssignIssue.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -485,6 +489,8 @@ describe("NewWorktreeDialog — pending creation wiring", () => {
     mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
       Promise.resolve(`/test/root-worktrees/${branch}`)
     );
+    mockGetCurrentUser.mockResolvedValue(null);
+    mockAssignIssue.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -572,6 +578,8 @@ describe("NewWorktreeDialog — ARIA validation wiring", () => {
       Promise.resolve(`/test/root-worktrees/${branch}`)
     );
     mockDispatch.mockResolvedValue({ ok: true, result: "new-wt-id" });
+    mockGetCurrentUser.mockResolvedValue(null);
+    mockAssignIssue.mockResolvedValue(undefined);
   });
 
   afterEach(() => {

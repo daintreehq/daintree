@@ -441,6 +441,19 @@ export interface BatchLookupCapability {
 }
 
 /**
+ * Optional viewer-identity probe. Lets the renderer resolve "who am I" through
+ * the active forge provider instead of reading the GitHub token's username
+ * directly, so non-GitHub forges (GitLab, Gitea, Bitbucket) can wire the same
+ * "assign issue to me" flow against their own identity. Returns `null` when
+ * no authenticated viewer is available (no token, token rejected, or the
+ * provider doesn't carry viewer info) — callers treat that as "skip
+ * self-assignment" rather than an error.
+ */
+export interface IdentityCapability {
+  getCurrentUser(): Promise<ForgeUser | null>;
+}
+
+/**
  * Runtime contract a forge plugin implements and registers via
  * `host.registerForgeProvider`. Every provider implements the base methods;
  * optional capabilities are sibling fields the host probes at runtime.
@@ -544,6 +557,7 @@ export interface ForgeProviderImpl {
   projectBoards?: ProjectBoardCapability;
   milestones?: MilestoneCapability;
   batchLookups?: BatchLookupCapability;
+  identity?: IdentityCapability;
 }
 
 /**
@@ -567,6 +581,7 @@ export type ForgeCapabilityHint =
   | "project-boards"
   | "milestones"
   | "batch-branch-prs"
+  | "identity"
   | (string & {});
 
 /**
