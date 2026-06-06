@@ -463,15 +463,41 @@ export class CrashRecoveryService {
         }
       }
       if (parseableBackupPath) {
-        try {
-          backupTimestamp = fs.statSync(parseableBackupPath).mtimeMs;
-        } catch {
-          // best-effort: backup timestamp is informational only
+        // Read the timestamp from the parsed snapshot's `capturedAt` rather
+        // than the file's disk mtime. On the Windows/EPERM copy-fallback
+        // path in preserveBackupForRecovery, the new crashed-* file's mtime
+        // is the relaunch time — feeding that into the priority chain
+        // would win over the heartbeat and re-introduce the #10062 bug we
+        // just fixed. `capturedAt` is the pre-crash write time stamped
+        // by captureSessionSnapshot, which is exactly what we want.
+        if (this.cachedBackupSnapshot) {
+          backupTimestamp = this.cachedBackupSnapshot.capturedAt;
+        } else {
+          try {
+            backupTimestamp = fs.statSync(parseableBackupPath).mtimeMs;
+          } catch {
+            // best-effort: backup timestamp is informational only
+          }
         }
       }
 
       const logPath = marker.crashLogPath ?? null;
-      const entry = logPath ? this.readCrashLog(logPath) : this.buildCrashEntryFromMarker(marker);
+      // Compute the best available estimate of when the previous session
+      // actually died. Marker-only entries (no crashLogPath) had no in-process
+      // recorder to stamp a real crash time, so without this they'd inherit
+      // the relaunch time and mislead the recovery dialog, GitHub crash
+      // report, and 30s panel-suspect window. Existing crash logs already
+      // carry their own timestamp from the recorder path and are unaffected.
+      const nowMs = Date.now();
+      const crashTimestamp = this.resolveMarkerCrashTimestamp(
+        marker,
+        watchdogAnnotation,
+        backupTimestamp,
+        nowMs
+      );
+      const entry = logPath
+        ? this.readCrashLog(logPath)
+        : this.buildCrashEntryFromMarker(marker, crashTimestamp);
       entry.crashCause = this.classifyCrashCause(marker);
       if (watchdogAnnotation) {
         entry.cause = "watchdog-deadlock";
@@ -621,14 +647,19 @@ export class CrashRecoveryService {
         // would pass a bare `typeof === "number"` check and produce a
         // misleading attribution. Real values from buildWatchdogKillPayload
         // are always positive (killedAt = Date.now(), missedBeats >= 1,
-        // mainPid > 0).
+        // mainPid > 0). `JSON.parse('{"killedAt":1e309}')` returns
+        // `Infinity` which passes `> 0` but corrupts the report
+        // ("Infinity" in the GitHub crash URL), so finiteness is required.
         if (
           typeof parsed.killedAt === "number" &&
           parsed.killedAt > 0 &&
+          Number.isFinite(parsed.killedAt) &&
           typeof parsed.missedBeats === "number" &&
           parsed.missedBeats >= 1 &&
+          Number.isFinite(parsed.missedBeats) &&
           typeof parsed.mainPid === "number" &&
-          parsed.mainPid > 0
+          parsed.mainPid > 0 &&
+          Number.isFinite(parsed.mainPid)
         ) {
           annotation = {
             killedAt: parsed.killedAt,
@@ -794,22 +825,64 @@ export class CrashRecoveryService {
     return entry;
   }
 
-  private buildCrashEntryFromMarker(marker: MarkerFile): CrashLogEntry {
+  private buildCrashEntryFromMarker(marker: MarkerFile, crashTimestamp: number): CrashLogEntry {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const entry: CrashLogEntry = {
       id,
-      timestamp: Date.now(),
+      timestamp: crashTimestamp,
       appVersion: marker.appVersion ?? app.getVersion(),
       platform: marker.platform ?? process.platform,
       osVersion: os.release(),
       arch: os.arch(),
-      sessionDurationMs: marker.sessionStartMs ? Date.now() - marker.sessionStartMs : undefined,
+      sessionDurationMs: marker.sessionStartMs
+        ? Math.max(0, crashTimestamp - marker.sessionStartMs)
+        : undefined,
     };
 
     this.enrichWithEnvironmentMetadata(entry);
     this.enrichWithPanelData(entry, this.readCrashedBackupAppState());
 
     return entry;
+  }
+
+  /**
+   * Pick the best available estimate of when the previous session actually
+   * died, for entries synthesized from a marker with no crash log.
+   *
+   * Priority chain (strongest signal first):
+   *   1. watchdogAnnotation.killedAt — exact SIGKILL time the watchdog wrote
+   *   2. marker.lastSuspendStart — power loss during sleep
+   *   3. backupTimestamp — last parseable backup mtime, a floor on
+   *      "what state was on disk when death occurred"
+   *   4. marker.lastHeartbeatMs — the heartbeat we tick every backup
+   *      interval; a marker with no heartbeat would have to be from a code
+   *      path that pre-dates this service, so it's effectively unreachable.
+   *
+   * The chosen value is clamped to [sessionStartMs, nowMs] so it can never
+   * precede the session (negative `sessionDurationMs` would break
+   * `formatDuration` in the dialog) and never exceed the relaunch time
+   * (would mislead the 30s suspect window and produce a future-dated crash
+   * report). When no candidate is valid the fallback is the clamped
+   * relaunch time — the only honest answer in that pathological case.
+   */
+  private resolveMarkerCrashTimestamp(
+    marker: MarkerFile,
+    watchdogAnnotation: WatchdogKillAnnotation | null,
+    backupTimestamp: number | undefined,
+    nowMs: number
+  ): number {
+    const candidates: Array<number | null | undefined> = [
+      watchdogAnnotation?.killedAt,
+      marker.lastSuspendStart,
+      backupTimestamp,
+      marker.lastHeartbeatMs,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
+        return Math.max(marker.sessionStartMs, Math.min(candidate, nowMs));
+      }
+    }
+    return Math.max(marker.sessionStartMs, nowMs);
   }
 
   private readCrashedBackupAppState(): unknown {
@@ -1117,6 +1190,8 @@ function isValidMarker(value: unknown): value is MarkerFile {
     typeof value === "object" &&
     value !== null &&
     typeof (value as MarkerFile).sessionStartMs === "number" &&
+    Number.isFinite((value as MarkerFile).sessionStartMs) &&
+    (value as MarkerFile).sessionStartMs > 0 &&
     typeof (value as MarkerFile).appVersion === "string"
   );
 }
