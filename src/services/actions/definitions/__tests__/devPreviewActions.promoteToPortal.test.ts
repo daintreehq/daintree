@@ -10,8 +10,10 @@ const portalStoreMock = vi.hoisted(() => ({ getState: vi.fn(), setState: vi.fn()
 vi.mock("@/store/portalStore", () => ({ usePortalStore: portalStoreMock }));
 
 const getPortalBoundsWithRetryMock = vi.hoisted(() => vi.fn());
+const showPortalTabIfNoOverlayMock = vi.hoisted(() => vi.fn());
 vi.mock("../portalHelpers", () => ({
   getPortalBoundsWithRetry: getPortalBoundsWithRetryMock,
+  showPortalTabIfNoOverlay: showPortalTabIfNoOverlayMock,
 }));
 
 const logErrorMock = vi.hoisted(() => vi.fn());
@@ -79,6 +81,11 @@ beforeEach(() => {
   order = [];
   portalState = { isOpen: false, tabs: [], activeTabId: null };
   getPortalBoundsWithRetryMock.mockResolvedValue(BOUNDS);
+  // Default: no overlay — the helper forwards to portal.show so the existing
+  // show assertions hold. Overlay-guard cases override this per test.
+  showPortalTabIfNoOverlayMock.mockImplementation(async (tabId: string, bounds: typeof BOUNDS) => {
+    await showMock({ tabId, bounds });
+  });
   panelStoreMock.getState.mockReturnValue({
     focusedId: "panel-1",
     getTerminal: vi.fn(() => devPreviewPanel()),
@@ -137,6 +144,20 @@ describe("devPreview.promoteToPortal", () => {
       },
     ]);
     expect(showMock).toHaveBeenCalledWith({ tabId: createArgs.tabId, bounds: BOUNDS });
+  });
+
+  it("routes the show through the overlay guard and still creates the tab when suppressed", async () => {
+    // Simulate an open overlay: the guard helper skips the WebContentsView show.
+    showPortalTabIfNoOverlayMock.mockImplementation(async () => {});
+    const { run } = setupActions();
+    await run("devPreview.promoteToPortal", undefined, { projectId: "proj" });
+
+    const createArgs = createMock.mock.calls[0]?.[0] as unknown as { tabId: string };
+    // Tab is still created and inserted in the store — only the show is suppressed.
+    expect(markTabCreatedMock).toHaveBeenCalledWith(createArgs.tabId);
+    expect(portalState.activeTabId).toBe(createArgs.tabId);
+    expect(showPortalTabIfNoOverlayMock).toHaveBeenCalledWith(createArgs.tabId, BOUNDS);
+    expect(showMock).not.toHaveBeenCalled();
   });
 
   it("does not reopen the portal when already open", async () => {

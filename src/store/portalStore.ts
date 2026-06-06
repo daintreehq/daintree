@@ -99,6 +99,10 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       return;
     }
 
+    // Don't surface the portal over an open modal; PortalVisibilityController's
+    // overlay-clear effect re-shows the active tab once the overlay closes.
+    if (useUIStore.getState().overlayStack.length > 0) return;
+
     window.electron.portal.show({ tabId, bounds });
   };
 
