@@ -93,7 +93,7 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
       ],
     });
 
-    render(<CodeForgeSettingsTab activeSubtab="gitea" onSubtabChange={vi.fn()} />);
+    render(<CodeForgeSettingsTab activeSubtab="acme.gitea" onSubtabChange={vi.fn()} />);
 
     await waitFor(() => {
       expect(screen.getByTestId("forge-credential-form")).toBeTruthy();
@@ -114,7 +114,7 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
       setCredentialResult: { valid: true },
     });
 
-    render(<CodeForgeSettingsTab activeSubtab="gitea" onSubtabChange={vi.fn()} />);
+    render(<CodeForgeSettingsTab activeSubtab="acme.gitea" onSubtabChange={vi.fn()} />);
 
     const input = (await screen.findByLabelText("API token")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "secret-token" } });
@@ -142,7 +142,7 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
       setCredentialResult: { valid: false, error: "Bad token" },
     });
 
-    render(<CodeForgeSettingsTab activeSubtab="gitea" onSubtabChange={vi.fn()} />);
+    render(<CodeForgeSettingsTab activeSubtab="acme.gitea" onSubtabChange={vi.fn()} />);
 
     const input = (await screen.findByLabelText("API token")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "nope" } });
@@ -169,7 +169,7 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
       hasCredential: true,
     });
 
-    render(<CodeForgeSettingsTab activeSubtab="gitea" onSubtabChange={vi.fn()} />);
+    render(<CodeForgeSettingsTab activeSubtab="acme.gitea" onSubtabChange={vi.fn()} />);
 
     const clearButton = await screen.findByRole("button", { name: "Clear" });
     fireEvent.click(clearButton);
@@ -184,7 +184,7 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
       providers: [makeProvider("acme", "plain", "Plain Forge")],
     });
 
-    render(<CodeForgeSettingsTab activeSubtab="plain" onSubtabChange={vi.fn()} />);
+    render(<CodeForgeSettingsTab activeSubtab="acme.plain" onSubtabChange={vi.fn()} />);
 
     await waitFor(() => {
       expect(screen.getByText("No configuration needed")).toBeTruthy();
@@ -205,17 +205,115 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
     });
 
     const { rerender } = render(
-      <CodeForgeSettingsTab activeSubtab="gitea" onSubtabChange={vi.fn()} />
+      <CodeForgeSettingsTab activeSubtab="acme.gitea" onSubtabChange={vi.fn()} />
     );
 
     await waitFor(() => {
       expect(getCredentialStatus).toHaveBeenCalledWith("acme.gitea");
     });
 
-    rerender(<CodeForgeSettingsTab activeSubtab="gitlab" onSubtabChange={vi.fn()} />);
+    rerender(<CodeForgeSettingsTab activeSubtab="acme.gitlab" onSubtabChange={vi.fn()} />);
 
     await waitFor(() => {
       expect(getCredentialStatus).toHaveBeenCalledWith("acme.gitlab");
     });
+  });
+});
+
+describe("CodeForgeSettingsTab — canonical subtab routing", () => {
+  it("routes each provider by canonical id when two plugins share a contribution id", async () => {
+    const { getCredentialStatus } = installForgeMocks({
+      providers: [
+        makeProvider("acme", "forge", "Acme Forge", [
+          { id: "token", label: "API token", type: "password" },
+        ]),
+        makeProvider("globex", "forge", "Globex Forge", [
+          { id: "token", label: "API token", type: "password" },
+        ]),
+      ],
+    });
+
+    const { rerender } = render(
+      <CodeForgeSettingsTab activeSubtab="acme.forge" onSubtabChange={vi.fn()} />
+    );
+
+    await waitFor(() => {
+      expect(getCredentialStatus).toHaveBeenCalledWith("acme.forge");
+    });
+    expect(screen.getByText("Acme Forge settings")).toBeTruthy();
+
+    rerender(<CodeForgeSettingsTab activeSubtab="globex.forge" onSubtabChange={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(getCredentialStatus).toHaveBeenCalledWith("globex.forge");
+    });
+    expect(screen.getByText("Globex Forge settings")).toBeTruthy();
+  });
+
+  it("does not route a third-party 'github' contribution to the built-in GitHub card", async () => {
+    const { getCredentialStatus } = installForgeMocks({
+      providers: [
+        makeProvider("acme", "github", "Acme GitHub", [
+          { id: "token", label: "API token", type: "password" },
+        ]),
+      ],
+    });
+
+    render(<CodeForgeSettingsTab activeSubtab="acme.github" onSubtabChange={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(getCredentialStatus).toHaveBeenCalledWith("acme.github");
+    });
+    expect(screen.getByTestId("forge-credential-form")).toBeTruthy();
+    expect(screen.queryByTestId("github-settings-tab")).toBeNull();
+  });
+
+  it("routes the built-in GitHub card and a third-party 'github' contribution independently", async () => {
+    const { getCredentialStatus } = installForgeMocks({
+      providers: [
+        makeProvider("daintree.github", "github", "GitHub"),
+        makeProvider("acme", "github", "Acme GitHub", [
+          { id: "token", label: "API token", type: "password" },
+        ]),
+      ],
+    });
+
+    const { rerender } = render(
+      <CodeForgeSettingsTab activeSubtab="daintree.github.github" onSubtabChange={vi.fn()} />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("github-settings-tab")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("forge-credential-form")).toBeNull();
+
+    rerender(<CodeForgeSettingsTab activeSubtab="acme.github" onSubtabChange={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(getCredentialStatus).toHaveBeenCalledWith("acme.github");
+    });
+    expect(screen.getByTestId("forge-credential-form")).toBeTruthy();
+    expect(screen.queryByTestId("github-settings-tab")).toBeNull();
+  });
+
+  it("falls back to the GitHub subtab for an unrecognized bare subtab id", async () => {
+    installForgeMocks({
+      providers: [
+        makeProvider("acme", "gitea", "Gitea", [
+          { id: "token", label: "API token", type: "password" },
+        ]),
+      ],
+    });
+
+    const onSubtabChange = vi.fn();
+    render(<CodeForgeSettingsTab activeSubtab="gitea" onSubtabChange={onSubtabChange} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("github-settings-tab")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("forge-credential-form")).toBeNull();
+    // The fallback is display-only — the component must not rewrite the
+    // caller's subtab state.
+    expect(onSubtabChange).not.toHaveBeenCalled();
   });
 });

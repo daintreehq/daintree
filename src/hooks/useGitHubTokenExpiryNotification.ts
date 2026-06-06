@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { useGitHubTokenHealthStore } from "@/store/githubTokenHealthStore";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 
 const GITHUB_TOKEN_SUPERSEDE_KEY = "github.token";
 
@@ -43,11 +44,15 @@ export function useGitHubTokenExpiryNotification(isTokenError: boolean): void {
         action: {
           label: "Open GitHub settings",
           actionId: "app.settings.openTab",
-          actionArgs: { tab: "code-forge", subtab: "github", sectionId: "github-token" },
+          actionArgs: {
+            tab: "code-forge",
+            subtab: BUILTIN_GITHUB_PROVIDER_ID,
+            sectionId: "github-token",
+          },
           onClick: () => {
             void actionService.dispatch(
               "app.settings.openTab",
-              { tab: "code-forge", subtab: "github", sectionId: "github-token" },
+              { tab: "code-forge", subtab: BUILTIN_GITHUB_PROVIDER_ID, sectionId: "github-token" },
               { source: "user" }
             );
           },

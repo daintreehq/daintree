@@ -1,6 +1,7 @@
 import { AlertTriangle } from "lucide-react";
 import { useGitHubTokenHealthStore } from "@/store/githubTokenHealthStore";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 
 export function GitHubTokenBanner() {
   const isUnhealthy = useGitHubTokenHealthStore((s) => s.isUnhealthy);
@@ -10,7 +11,7 @@ export function GitHubTokenBanner() {
   const handleReconnect = () => {
     window.dispatchEvent(
       new CustomEvent("daintree:open-settings-tab", {
-        detail: { tab: "code-forge", subtab: "github" },
+        detail: { tab: "code-forge", subtab: BUILTIN_GITHUB_PROVIDER_ID },
       })
     );
   };
