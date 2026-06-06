@@ -7,6 +7,7 @@ import {
   FORBIDDEN,
   STRIPPED_BY_BUILD,
   collectMainBundles,
+  runGate,
   scanBundleForForbidden,
 } from "./check-preload-backdoors.mjs";
 
@@ -73,6 +74,47 @@ describe("collectMainBundles", () => {
   });
 });
 
+describe("runGate", () => {
+  let dir;
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "backdoor-gate-run-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("passes when required bundles are present and clean", () => {
+    writeFileSync(path.join(dir, "preload.cjs"), "const x = 1;");
+    writeFileSync(path.join(dir, "main.js"), "const y = 2;");
+    const result = runGate({ electronDir: dir });
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it("fails and names the provided dir when a required bundle is missing", () => {
+    writeFileSync(path.join(dir, "main.js"), "const y = 2;");
+    const result = runGate({ electronDir: dir });
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("preload.cjs") && e.includes("not found"))).toBe(
+      true
+    );
+  });
+
+  it("detects a forbidden string in a nested split chunk", () => {
+    writeFileSync(path.join(dir, "preload.cjs"), "const x = 1;");
+    writeFileSync(path.join(dir, "main.js"), "const y = 2;");
+    mkdirSync(path.join(dir, "chunks"));
+    writeFileSync(path.join(dir, "chunks", "shared-abc.js"), "const k = '__DAINTREE_E2E_IPC__';");
+    const result = runGate({ electronDir: dir });
+    expect(result.ok).toBe(false);
+    expect(
+      result.errors.some((e) => e.includes("__DAINTREE_E2E_IPC__") && e.includes("shared-abc.js"))
+    ).toBe(true);
+  });
+});
+
 describe("policy sync (#10026 regression guard)", () => {
   it("every build-stripped E2E var is in the gate FORBIDDEN list", () => {
     for (const name of STRIPPED_BY_BUILD) {
@@ -98,7 +140,7 @@ describe("policy sync (#10026 regression guard)", () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const buildScript = readFileSync(path.resolve(here, "../build-main.mjs"), "utf8");
     const defineKeys = new Set(
-      [...buildScript.matchAll(/"process\.env\.(DAINTREE_E2E_[A-Z0-9_]+)"/g)].map((m) => m[1])
+      [...buildScript.matchAll(/["']process\.env\.(DAINTREE_E2E_[A-Z0-9_]+)["']/g)].map((m) => m[1])
     );
     expect([...defineKeys].sort()).toEqual([...STRIPPED_BY_BUILD].sort());
   });

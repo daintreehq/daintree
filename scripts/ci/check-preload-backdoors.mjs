@@ -23,8 +23,6 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
 
 const ELECTRON_DIR = path.join(root, "dist-electron/electron");
-const PRELOAD_BUNDLE = path.join(ELECTRON_DIR, "preload.cjs");
-const MAIN_BUNDLE = path.join(ELECTRON_DIR, "main.js");
 
 // The `DAINTREE_E2E_*` env reads that scripts/build-main.mjs replaces with ""
 // in production via esbuild `define`. Single source of truth: the companion
@@ -82,10 +80,11 @@ export function collectMainBundles(dir) {
 export function runGate({ electronDir = ELECTRON_DIR } = {}) {
   const errors = [];
 
-  for (const required of [PRELOAD_BUNDLE, MAIN_BUNDLE]) {
-    if (!existsSync(required)) {
+  const required = [path.join(electronDir, "preload.cjs"), path.join(electronDir, "main.js")];
+  for (const file of required) {
+    if (!existsSync(file)) {
       errors.push(
-        `${path.relative(root, required)} not found. Run a production build ` +
+        `${path.relative(root, file)} not found. Run a production build ` +
           `(\`npm run build\`) before \`npm run check:preload-backdoors\`.`
       );
     }
