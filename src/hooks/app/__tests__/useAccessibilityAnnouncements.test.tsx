@@ -2,7 +2,7 @@
 import { renderHook, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { AgentState } from "@shared/types/agent";
-import type { PanelLocation, PersistableFlowStatus } from "@shared/types/panel";
+import type { PanelLocation, TerminalFlowStatus } from "@shared/types/panel";
 
 interface Terminal {
   id: string;
@@ -10,7 +10,12 @@ interface Terminal {
   kind?: string;
   agentState?: AgentState;
   stateChangeConfidence?: number;
-  flowStatus?: PersistableFlowStatus;
+  // FUTURE_SAB: widened to `TerminalFlowStatus` (not `PersistableFlowStatus`)
+  // so the suspended-flow tests can drive the formatter with a skeleton
+  // value (#9900). In production the panel's flowStatus is always
+  // `PersistableFlowStatus`; the wider type here is purely so the test
+  // fixture matches the formatter's accepted input.
+  flowStatus?: TerminalFlowStatus;
   exitCode?: number;
   location?: PanelLocation;
 }
@@ -269,7 +274,11 @@ describe("useAccessibilityAnnouncements — badge-state announcements (#9204)", 
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: output paused, memory pressure");
   });
 
-  it("announces flow status entering 'suspended'", () => {
+  // FUTURE_SAB: `suspended` is a skeleton value with no production
+  // producer (#9900). The formatter accepts the full union and emits the
+  // message; in production the formatter never sees this value because
+  // the lifecycle listener drops it at the boundary.
+  it("announces flow status entering 'suspended' (FUTURE_SAB; #9900)", () => {
     const { rerender } = renderHook(() => useAccessibilityAnnouncements());
 
     act(() => {
@@ -318,7 +327,9 @@ describe("useAccessibilityAnnouncements — badge-state announcements (#9204)", 
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: output resumed");
   });
 
-  it("announces resume from 'suspended' to 'running'", () => {
+  // FUTURE_SAB: `suspended` is a skeleton value (#9900); the resume
+  // edge in the formatter is exercised here for the future state.
+  it("announces resume from 'suspended' to 'running' (FUTURE_SAB; #9900)", () => {
     const { rerender } = renderHook(() => useAccessibilityAnnouncements());
 
     act(() => {

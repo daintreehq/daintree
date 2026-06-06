@@ -721,7 +721,11 @@ describe("TerminalHeaderContent — paused / suspended tooltips", () => {
     expect(primary!.textContent).toBe("Buffer overflow");
   });
 
-  it("suspended tooltip shows two-tier copy with stative title", () => {
+  // FUTURE_SAB: `suspended` is a skeleton value with no production producer
+  // (#9900). This test exercises the forward-looking UI; the badge never
+  // renders in production. When the SAB transport path is revived, the
+  // tooltip body should be reviewed for accuracy.
+  it("suspended tooltip shows two-tier copy with stative title (FUTURE_SAB; #9900)", () => {
     mockTerminal = { id: "t1" };
 
     render(<TerminalHeaderContent id="t1" flowStatus="suspended" />);
@@ -783,7 +787,9 @@ describe("TerminalHeaderContent — per-pane badges silence implicit live region
     expect(badge!.textContent).toContain("memory");
   });
 
-  it("suspended badge sets aria-live='off'", () => {
+  // FUTURE_SAB: see Suspended pill (#9900). The badge never renders in
+  // production; this test locks in the future aria semantics.
+  it("suspended badge sets aria-live='off' (FUTURE_SAB; #9900)", () => {
     mockTerminal = { id: "t1" };
     const { container } = render(<TerminalHeaderContent id="t1" flowStatus="suspended" />);
     const badge = container.querySelector('[role="status"][aria-live="off"]');
@@ -839,7 +845,11 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
     expect(first.getAttribute("aria-label")).toMatch(/^Agent state:/);
   });
 
+  // FUTURE_SAB: `suspended` is a skeleton value (#9900). The test
+  // exercises the chip-row vocabulary for all three flow pills; the
+  // suspended case never renders in production.
   it.each(["paused-backpressure", "paused-resource-governor", "suspended"] as const)(
+    // FUTURE_SAB: see above.
     "%s flow pill is rendered with neutral overlay, not status-warning",
     (status) => {
       mockTerminal = { id: "t1" };

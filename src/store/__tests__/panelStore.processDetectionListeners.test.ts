@@ -687,10 +687,14 @@ describe("terminalStore process detection listeners", () => {
         mod.terminalInstanceService as unknown as typeof terminalInstanceService;
     });
 
-    it("calls wake on suspended status", () => {
+    // FUTURE_SAB: `suspended` is no longer a wake-triggering status as of
+    // #9900 — the listener drops it at the boundary (it has no production
+    // producer; see `lifecycle.ts`). This test now locks in the new
+    // behavior: suspended must not wake.
+    it("does not call wake on suspended status (FUTURE_SAB; #9900)", () => {
       const cleanup = setupTerminalStoreListeners();
       handlers.status?.({ id: "term-1", status: "suspended", timestamp: Date.now() });
-      expect(terminalInstanceService.wake).toHaveBeenCalledWith("term-1");
+      expect(terminalInstanceService.wake).not.toHaveBeenCalled();
       cleanup();
     });
 
@@ -701,7 +705,9 @@ describe("terminalStore process detection listeners", () => {
       cleanup();
     });
 
-    it("does not call wake on paused-user status", () => {
+    // FUTURE_SAB: `paused-user` has no producer (#9900); the listener drops
+    // it at the boundary. This test continues to assert no wake.
+    it("does not call wake on paused-user status (FUTURE_SAB; #9900)", () => {
       const cleanup = setupTerminalStoreListeners();
       handlers.status?.({ id: "term-1", status: "paused-user", timestamp: Date.now() });
       expect(terminalInstanceService.wake).not.toHaveBeenCalled();

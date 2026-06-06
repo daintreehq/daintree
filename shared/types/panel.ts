@@ -110,22 +110,51 @@ export enum TerminalRefreshTier {
 /** Flow-control states emitted by the PTY host. `data-loss` is a transient
  *  pulse fired when the IPC fallback queue discards bytes — it is not a
  *  durable state, must not be persisted as `flowStatus`, and is consumed
- *  by the renderer to inject a discontinuity marker into the xterm buffer. */
+ *  by the renderer to inject a discontinuity marker into the xterm buffer.
+ *
+ *  `suspended` and `paused-user` are FUTURE_SAB skeleton statuses: `suspended`
+ *  is only produced by the SharedArrayBuffer transport path, which is
+ *  disabled in production (SharedArrayBuffer is not supported in Electron
+ *  UtilityProcess — see PR #7724 / issue #7653); `paused-user` has no producer
+ *  anywhere. They are kept in the type union so the renderer-side
+ *  Suspended pill, the a11y formatter, and the future-sab wake guard
+ *  remain type-safe forward-looking code, but they are excluded from
+ *  `PersistableFlowStatus` so the buffer/store paths never persist them
+ *  as durable state. See issue #9900. */
 export type TerminalFlowStatus =
   | "running"
   | "paused-backpressure"
   | "paused-resource-governor"
+  // FUTURE_SAB: see note above — no production producer.
   | "paused-user"
+  // FUTURE_SAB: see note above — only emitted by the disabled SAB path.
   | "suspended"
   | "data-loss";
 
+/** Future-state SharedArrayBuffer flow statuses. Defined as a named carve-out
+ *  so the `Exclude<…, FutureSABFlowStatus>` pattern below is readable and
+ *  matches the existing `data-loss` exclusion (#7590). The renderer side
+ *  of these statuses is preserved as a forward-looking skeleton — see
+ *  `TerminalHeaderContent.tsx` (Suspended pill) and the a11y formatter in
+ *  `useAccessibilityAnnouncements.ts` (case "suspended"). The narrowing
+ *  in `PersistableFlowStatus` is the load-bearing change: a worker-thread
+ *  migration that revives the SAB transport will update the type to add
+ *  the new statuses back, restore the `lifecycle.ts` wake branch, and
+ *  remove the FUTURE_SAB: markers at every site. */
+export type FutureSABFlowStatus = "suspended" | "paused-user";
+
 /** Subset of `TerminalFlowStatus` that is safe to persist as the durable
- *  flow state of a terminal. `data-loss` is excluded because it is a pulse,
- *  not a state — persisting it would freeze the runtime status indefinitely. */
-export type PersistableFlowStatus = Exclude<TerminalFlowStatus, "data-loss">;
+ *  flow state of a terminal. Two carve-outs:
+ *  - `data-loss` is excluded because it is a pulse, not a state (#7590).
+ *  - The `FutureSABFlowStatus` set (`suspended` | `paused-user`) is excluded
+ *    because the renderer is being rationalized to mark these as forward-looking
+ *    code (#9900). Persisting either would freeze the runtime status on a
+ *    state that has no production producer. */
+export type PersistableFlowStatus = Exclude<TerminalFlowStatus, "data-loss" | FutureSABFlowStatus>;
 
 /** Runtime lifecycle status for terminals (visibility + flow + exit/error).
- *  Derived from a `PersistableFlowStatus`, so `data-loss` never appears here. */
+ *  Derived from a `PersistableFlowStatus`, so `data-loss` and the
+ *  `FutureSABFlowStatus` set never appear here. */
 export type TerminalRuntimeStatus = PersistableFlowStatus | "background" | "exited" | "error";
 
 /** Origin that spawned a terminal */
@@ -319,7 +348,9 @@ export interface PtyPanelData extends BasePanelData {
   /** Error that occurred when spawning the PTY process */
   spawnError?: import("./pty-host.js").SpawnError;
   /** Flow control status - indicates if terminal is paused/suspended due to backpressure or safety policy.
-   *  Excludes `data-loss` (transient pulse only — never persisted as state). */
+   *  Excludes `data-loss` (transient pulse only — never persisted as state)
+   *  and the `FutureSABFlowStatus` set (`suspended` | `paused-user`,
+   *  no production producer — see #9900). */
   flowStatus?: PersistableFlowStatus;
   /** Combined lifecycle status for UI + diagnostics */
   runtimeStatus?: TerminalRuntimeStatus;

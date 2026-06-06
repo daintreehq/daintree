@@ -10,16 +10,16 @@ This document describes the runtime lifecycle state for terminals across rendere
 - `background`: terminal is alive but not visible (dock or inactive worktree).
 - `paused-backpressure`: PTY host paused output due to SAB backpressure.
 - `paused-resource-governor`: PTY host paused output under memory/resource-governor pressure (auto-recovers when pressure eases).
-- `paused-user`: user-initiated pause.
-- `suspended`: PTY host suspended visual streaming after a stall.
+- `paused-user` (**FUTURE_SAB skeleton**, #9900): declared in the type union but has no producer. Kept as a forward-looking value; the listener at `src/store/listeners/panel/lifecycle.ts` drops it at the boundary so the buffer never persists it.
+- `suspended` (**FUTURE_SAB skeleton**, #9900): only emitted by the SharedArrayBuffer transport path (`BackpressureManager.suspendVisualStream`, `electron/pty-host/backpressure.ts:277`). The SAB path is disabled in production (SharedArrayBuffer is not supported in Electron UtilityProcess — see PR #7724 / issue #7653). The renderer-side Suspended pill and a11y formatter in `src/components/Terminal/TerminalHeaderContent.tsx` and `src/hooks/app/useAccessibilityAnnouncements.ts` remain as forward-looking code, but the status is never produced in production.
 - `exited`: terminal process exited (used for post-mortem review).
 - `error`: terminal hit a terminal-level error (future use).
 
-`TerminalFlowStatus` is a subset of the above that comes from PTY host flow-control events.
+`TerminalFlowStatus` is a subset of the above that comes from PTY host flow-control events. The `FutureSABFlowStatus` set (`suspended` | `paused-user`) is carved out of `PersistableFlowStatus` at the type level (`shared/types/panel.ts`) so the buffer and store paths cannot persist a skeleton value as durable state.
 
 ## Transition sources
 
-- PTY host emits `terminal-status` for flow control (`running`, `paused-backpressure`, `paused-resource-governor`, `paused-user`, `suspended`).
+- PTY host emits `terminal-status` for flow control (`running`, `paused-backpressure`, `paused-resource-governor`; the `suspended` and `paused-user` members of the union are FUTURE_SAB and not emitted in production — see #9900).
 - Renderer visibility updates (`isVisible`) convert `running` to `background` when a terminal is not visible.
 - PTY exit events set `runtimeStatus` to `exited` before trashing or preserving the terminal.
 

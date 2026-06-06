@@ -51,6 +51,7 @@ export type {
   TerminalScrollbackRestoreError,
   TerminalRuntimeStatus,
   PersistableFlowStatus,
+  FutureSABFlowStatus,
   TerminalSpawnSource,
   AddPanelFocusPolicy,
   TerminalInstance,

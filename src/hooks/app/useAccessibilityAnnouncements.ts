@@ -4,12 +4,18 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import type { AgentState } from "@shared/types/agent";
 import { isPtyPanel } from "@shared/types/panel";
-import type { PanelLocation, PersistableFlowStatus } from "@shared/types/panel";
+import type { PanelLocation, TerminalFlowStatus } from "@shared/types/panel";
 
+// FUTURE_SAB: `flowStatus` in the snapshot is typed as `TerminalFlowStatus`
+// (not `PersistableFlowStatus`) so the formatter below can handle the
+// `suspended` and `paused-user` future-sab statuses. In production only
+// `PersistableFlowStatus` values arrive (the buffer is the persistence
+// boundary and excludes future-sab); the wider type here is purely so the
+// formatter's switch remains exhaustive against the full union (#9900).
 interface TerminalStateSnapshot {
   agentState?: AgentState;
   stateChangeConfidence?: number;
-  flowStatus?: PersistableFlowStatus;
+  flowStatus?: TerminalFlowStatus;
   exitCode?: number;
   hasExited?: boolean;
   queueCount?: number;
@@ -36,19 +42,35 @@ function getAgentStateMessage(
   }
 }
 
-function isPausedFlow(status: PersistableFlowStatus | undefined): boolean {
+// FUTURE_SAB: the `status` parameter is `TerminalFlowStatus | undefined` so
+// this pure check can recognize the `suspended` / `paused-user` future-sab
+// statuses. In practice the `flowStatus` field on a panel is
+// `PersistableFlowStatus`, so this branch is unreachable in production. Kept
+// for symmetry with the formatter below — when the SAB transport is revived
+// and a panel's `flowStatus` field is widened, this check will return true
+// for the new values automatically (#9900).
+function isPausedFlow(status: TerminalFlowStatus | undefined): boolean {
   return (
     status === "paused-backpressure" ||
     status === "paused-resource-governor" ||
+    // FUTURE_SAB: no production producer.
     status === "paused-user" ||
+    // FUTURE_SAB: only emitted by the disabled SAB path.
     status === "suspended"
   );
 }
 
+// FUTURE_SAB: parameter types are `TerminalFlowStatus | undefined` (not
+// `PersistableFlowStatus | undefined`) so the switch below remains
+// exhaustive against the full union. The `suspended` case is the only
+// future-sab branch that produces a message; `paused-user` falls through
+// to `default` (silent). The wider type here is purely so the switch is
+// type-safe with the full union — when the SAB transport is revived and
+// the persistence boundary widens, no formatter change is required (#9900).
 function getFlowStatusMessage(
   title: string,
-  prev: PersistableFlowStatus | undefined,
-  next: PersistableFlowStatus | undefined
+  prev: TerminalFlowStatus | undefined,
+  next: TerminalFlowStatus | undefined
 ): string | null {
   if (prev === next) return null;
   switch (next) {
@@ -56,6 +78,9 @@ function getFlowStatusMessage(
       return `${title}: output paused`;
     case "paused-resource-governor":
       return `${title}: output paused, memory pressure`;
+    // FUTURE_SAB: `suspended` is only emitted by the SAB transport path
+    // (`BackpressureManager.suspendVisualStream`); no production producer.
+    // Kept so the formatter stays type-safe forward-looking code.
     case "suspended":
       return `${title}: output suspended`;
     case "running":
@@ -64,6 +89,8 @@ function getFlowStatusMessage(
       // store paths transiently clear `flowStatus` to undefined. Both mean
       // "no longer paused", but only announce if we were actually paused.
       return isPausedFlow(prev) ? `${title}: output resumed` : null;
+    // FUTURE_SAB: `paused-user` has no producer; falls through silently.
+    case "paused-user":
     default:
       return null;
   }

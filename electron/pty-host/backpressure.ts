@@ -274,6 +274,14 @@ export class BackpressureManager {
     return { totalPendingBytes: this.totalPendingVisualBytes, perTerminal };
   }
 
+  // FUTURE_SAB: the only producer of the `suspended` `flowStatus`. This
+  // method is reachable only via the `visualBuffers.length > 0` branch in
+  // `electron/pty-host.ts:669`/`:726`, which the disabled SAB transport
+  // path never enters in production (PR #7724 / issue #7653). The
+  // renderer-side `Suspended` pill (`TerminalHeaderContent.tsx`), a11y
+  // formatter (`useAccessibilityAnnouncements.ts`), and the lifecycle
+  // listener's wake branch (`lifecycle.ts`) are all marked with // FUTURE_SAB:
+  // annotations and treated as forward-looking code; see #9900.
   suspendVisualStream(
     id: string,
     reason: string,

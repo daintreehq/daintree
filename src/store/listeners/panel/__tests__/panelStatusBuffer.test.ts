@@ -151,17 +151,17 @@ describe("panelStatusBuffer — flow-status batching", () => {
     const setSpy = vi.spyOn(usePanelStore, "setState");
 
     for (let i = 0; i < 5; i++) {
-      enqueueFlowStatusUpdate(`term-${i}`, "suspended", 1000 + i);
+      enqueueFlowStatusUpdate(`term-${i}`, "paused-resource-governor", 1000 + i);
     }
 
     raf.flushAll();
     expect(setSpy).toHaveBeenCalledTimes(1);
     for (let i = 0; i < 5; i++) {
       const t = getPtyPanel(`term-${i}`);
-      expect(t?.flowStatus).toBe("suspended");
+      expect(t?.flowStatus).toBe("paused-resource-governor");
       expect(t?.flowStatusTimestamp).toBe(1000 + i);
-      // deriveRuntimeStatus(isVisible=true, flowStatus="suspended", "running") -> "suspended"
-      expect(t?.runtimeStatus).toBe("suspended");
+      // deriveRuntimeStatus(isVisible=true, flowStatus="paused-resource-governor", "running") -> "paused-resource-governor"
+      expect(t?.runtimeStatus).toBe("paused-resource-governor");
     }
   });
 
@@ -191,7 +191,7 @@ describe("panelStatusBuffer — flow-status batching", () => {
     // persisted-store guard which can't see other in-buffer patches.
     seedPanel("term-1", { isVisible: true });
     enqueueFlowStatusUpdate("term-1", "running", 200);
-    enqueueFlowStatusUpdate("term-1", "suspended", 100);
+    enqueueFlowStatusUpdate("term-1", "paused-resource-governor", 100);
     raf.flushAll();
     const t = getPtyPanel("term-1");
     expect(t?.flowStatus).toBe("running");
@@ -205,7 +205,7 @@ describe("panelStatusBuffer — flow-status batching", () => {
       runtimeStatus: "running",
       isVisible: true,
     });
-    enqueueFlowStatusUpdate("term-1", "suspended", 400);
+    enqueueFlowStatusUpdate("term-1", "paused-resource-governor", 400);
     raf.flushAll();
     const t = getPtyPanel("term-1");
     expect(t?.flowStatus).toBe("running");
@@ -214,7 +214,7 @@ describe("panelStatusBuffer — flow-status batching", () => {
 
   it("last-write-wins within a frame for the same terminal", () => {
     seedPanel("term-1", { isVisible: true });
-    enqueueFlowStatusUpdate("term-1", "suspended", 100);
+    enqueueFlowStatusUpdate("term-1", "paused-resource-governor", 100);
     enqueueFlowStatusUpdate("term-1", "paused-backpressure", 200);
     raf.flushAll();
     const t = getPtyPanel("term-1");
@@ -230,13 +230,13 @@ describe("panelStatusBuffer — combined flush", () => {
     const setSpy = vi.spyOn(usePanelStore, "setState");
 
     enqueueActivityUpdate("term-1", "Doing", "working", "interactive", 100, undefined);
-    enqueueFlowStatusUpdate("term-2", "suspended", 100);
+    enqueueFlowStatusUpdate("term-2", "paused-resource-governor", 100);
 
     raf.flushAll();
     expect(setSpy).toHaveBeenCalledTimes(1);
 
     expect(getPtyPanel("term-1")?.activityHeadline).toBe("Doing");
-    expect(getPtyPanel("term-2")?.flowStatus).toBe("suspended");
+    expect(getPtyPanel("term-2")?.flowStatus).toBe("paused-resource-governor");
   });
 
   it("same terminal: activity + flow-status patches do not clobber each other", () => {
@@ -245,15 +245,15 @@ describe("panelStatusBuffer — combined flush", () => {
     // the activity-merged draft, not the original state snapshot.
     seedPanel("term-1", { isVisible: true, runtimeStatus: "running" });
     enqueueActivityUpdate("term-1", "Compiling", "working", "interactive", 100, "npm run dev");
-    enqueueFlowStatusUpdate("term-1", "suspended", 100);
+    enqueueFlowStatusUpdate("term-1", "paused-resource-governor", 100);
     raf.flushAll();
     const t = getPtyPanel("term-1");
     expect(t?.activityHeadline).toBe("Compiling");
     expect(t?.activityStatus).toBe("working");
     expect(t?.lastCommand).toBe("npm run dev");
-    expect(t?.flowStatus).toBe("suspended");
+    expect(t?.flowStatus).toBe("paused-resource-governor");
     expect(t?.flowStatusTimestamp).toBe(100);
-    expect(t?.runtimeStatus).toBe("suspended");
+    expect(t?.runtimeStatus).toBe("paused-resource-governor");
   });
 });
 
@@ -290,7 +290,7 @@ describe("panelStatusBuffer — lifecycle", () => {
 
     enqueueActivityUpdate("term-1", "A", "working", "interactive", 100, undefined);
     enqueueActivityUpdate("term-2", "B", "working", "interactive", 100, undefined);
-    enqueueFlowStatusUpdate("term-1", "suspended", 100);
+    enqueueFlowStatusUpdate("term-1", "paused-resource-governor", 100);
 
     expect(raf.callbacks).toHaveLength(1);
   });
