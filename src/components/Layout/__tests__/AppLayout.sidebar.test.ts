@@ -324,15 +324,75 @@ describe("AppLayout CSS layout containment — issue #9014", () => {
 
   it("preserves the sidebar wrapper's overflow-clip-margin alongside containment", () => {
     // `contain: paint` converts overflow:visible to overflow:clip at used-value
-    // time and honors overflow-clip-margin per spec — the existing 6px margin
-    // must stay intact so the sidebar's edge decorations aren't clipped tight.
-    expect(source).toContain('overflowClipMargin: "6px"');
+    // time and honors overflow-clip-margin per spec — the 6px margin must stay
+    // intact (while visible/animating) so the sidebar's resize-handle overhang
+    // isn't clipped tight. Issue #9864 made it a ternary that drops to 0px once
+    // fully hidden, so the margin literal now lives in the ternary, adjacent to
+    // the containment declaration.
+    expect(source).toContain('"0px" : "6px"');
     expect(source).toMatch(
-      /overflowClipMargin:\s*"6px",[\s\S]{0,40}contain:\s*"layout paint"|contain:\s*"layout paint",[\s\S]{0,40}overflowClipMargin:\s*"6px"/
+      /overflowClipMargin:\s*sidebarFullyHidden \? "0px" : "6px",[\s\S]{0,200}contain:\s*"layout paint"/
     );
   });
 
   it("applies contain: layout paint to the resizable assistant wrapper", () => {
     expect(source).toMatch(/width:\s*effectiveAssistantWidth,\s*contain:\s*"layout paint"/);
+  });
+});
+
+describe("AppLayout sidebar clip-margin state machine — issue #9864", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
+  });
+
+  it("initializes sidebarFullyHidden from !showSidebar so no 6px strip flashes on startup", () => {
+    // overflow-clip-margin is discrete, so a wrong initial value paints a 6px
+    // strip on the first frame when the app boots with the sidebar hidden.
+    expect(source).toContain(
+      "const [sidebarFullyHidden, setSidebarFullyHidden] = useState(() => !showSidebar)"
+    );
+  });
+
+  it("drives the wrapper's overflowClipMargin from sidebarFullyHidden, not a static literal", () => {
+    expect(source).toContain('overflowClipMargin: sidebarFullyHidden ? "0px" : "6px"');
+    // The old unconditional 6px must not linger — that was the bug.
+    expect(source).not.toMatch(/overflowClipMargin:\s*"6px",/);
+  });
+
+  it("clears sidebarFullyHidden immediately on show so the handle overhang precedes the reveal", () => {
+    // The clip margin must be restored before the open animation, not after it,
+    // otherwise the resize handle is clipped off during the reveal.
+    expect(source).toMatch(
+      /if \(showSidebar\)\s*\{\s*\n[\s\S]{0,200}setSidebarFullyHidden\(false\)/
+    );
+  });
+
+  it("zeroes the clip margin only after the width transition ends, filtered to the wrapper's own width", () => {
+    // overflow-clip-margin is discrete — zeroing it at transition start would
+    // snap the handle off mid-slide. onTransitionEnd is the canonical
+    // completion signal (past lessons #4170/#6982/#7826). It must filter on
+    // propertyName === "width" and target === currentTarget to ignore bubbled
+    // child transitions, and re-check !showSidebar to ignore a reversed hide.
+    expect(source).toContain("onTransitionEnd={handleSidebarTransitionEnd}");
+    expect(source).toMatch(/event\.propertyName === "width"/);
+    expect(source).toMatch(/event\.target === event\.currentTarget/);
+    expect(source).toMatch(
+      /handleSidebarTransitionEnd = useCallback\([\s\S]{0,700}!showSidebar[\s\S]{0,120}setSidebarFullyHidden\(true\)/
+    );
+  });
+
+  it("flushes sidebarFullyHidden synchronously when no transition will fire transitionend", () => {
+    // With reduceAnimations, an active drag-resize, or OS-level reduced motion
+    // (motion-reduce:transition-none), the width transition never runs, so
+    // transitionend never fires. The hide path must flush the state directly,
+    // else the 6px strip persists for reduced-motion users until re-show.
+    expect(source).toMatch(/window\.matchMedia\("\(prefers-reduced-motion: reduce\)"\)/);
+    expect(source).toMatch(
+      /reduceAnimations \|\| isSidebarResizing \|\| prefersReducedMotion[\s\S]{0,80}setSidebarFullyHidden\(true\)/
+    );
+    // The guard effect must depend on all three inputs that gate the transition.
+    expect(source).toMatch(/\[showSidebar, reduceAnimations, isSidebarResizing\]/);
   });
 });
