@@ -64,9 +64,10 @@ const LazyDemoCaptureBridge = lazy(() =>
   import("../Demo/DemoCaptureBridge").then((m) => ({ default: m.DemoCaptureBridge }))
 );
 // Preload only in demo mode so the chunks resolve before first mount (no
-// Suspense flash). Stripped from production builds, where the gate is statically
-// absent and the components never render.
-if (window.electron?.demo) {
+// Suspense flash). In production the gate is false, so this block never runs and
+// the (still-emitted) demo chunks are never fetched. The `typeof window` guard
+// keeps module evaluation safe under a non-DOM test environment.
+if (typeof window !== "undefined" && window.electron?.demo) {
   void import("../Demo/DemoOverlay");
   void import("../Demo/DemoCursor");
   void import("../Demo/DemoCaptureBridge");
