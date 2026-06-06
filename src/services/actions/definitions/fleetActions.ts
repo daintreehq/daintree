@@ -21,7 +21,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { projectClient, terminalClient } from "@/clients";
-import { broadcastFleetLiteralPaste } from "@/components/Fleet/fleetExecution";
+import { executeFleetBroadcast, filterEligibleIds } from "@/components/Fleet/fleetExecution";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -339,9 +339,28 @@ export function registerFleetActions(actions: ActionRegistry): void {
       if (payload == null || failedIds.size === 0) return;
       // Snapshot once — `failedIds` mutates as dismissId fires inside the loop.
       const targets = Array.from(failedIds);
+      // Re-check eligibility at dispatch time: a pane that died or was trashed
+      // since the failure was recorded must not receive bytes. The primary
+      // broadcast gates this in its caller (tryFleetBroadcastFromEditor), not
+      // inside executeFleetBroadcast — so the retry path owns the filter too.
+      const eligibleTargets = filterEligibleIds(targets);
+      if (eligibleTargets.length === 0) return;
       retryInFlight = true;
       try {
-        const result = await broadcastFleetLiteralPaste(payload, targets);
+        // The stored payload is already fully substituted (it's the verbatim
+        // literal the user originally broadcast), so route it through
+        // perTargetOverrides to bypass executeFleetBroadcast's recipe-variable
+        // substitution — the empty draft is never resolved when every target
+        // has an override. A fresh controller keeps the retry independent of
+        // the ribbon Cancel button's activeBroadcastController.
+        const perTargetOverrides = Object.fromEntries(eligibleTargets.map((id) => [id, payload]));
+        const controller = new AbortController();
+        const result = await executeFleetBroadcast(
+          "",
+          eligibleTargets,
+          perTargetOverrides,
+          controller.signal
+        );
         // Permanent failures (dead PTYs) auto-disarm so a future retry doesn't
         // keep firing into the same dead pipes. The retry chip clears for them
         // too — the user already saw them once; surfacing the same id again

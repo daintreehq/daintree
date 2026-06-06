@@ -12,7 +12,6 @@ import {
   FLEET_LARGE_PASTE_BATCH_SIZE,
   FLEET_LARGE_PASTE_BYTE_THRESHOLD,
   getFleetBroadcastByteLength,
-  resolveFleetBroadcastTargetIds,
 } from "./fleetBroadcast";
 
 export interface FleetTargetPreview {
@@ -284,62 +283,4 @@ export async function executeFleetBroadcast(
       useFleetBroadcastProgressStore.getState().finish();
     }
   }
-}
-
-/**
- * Literal broadcast for pasted text — routes each target through
- * `terminalClient.submit` so the backend wraps the payload in bracketed paste
- * (`\e[200~…\e[201~`) when the PTY supports it. Skips recipe-variable
- * substitution because paste is a verbatim keyboard event, not a composed
- * prompt template.
- */
-export async function broadcastFleetLiteralPaste(
-  text: string,
-  targetIds?: string[]
-): Promise<FleetExecutionResult> {
-  const ids = targetIds ? filterEligibleIds(targetIds) : resolveFleetBroadcastTargetIds();
-  const submissions: Promise<void>[] = [];
-  const collected: string[] = [];
-
-  for (const id of ids) {
-    collected.push(id);
-    submissions.push(terminalClient.submit(id, text));
-  }
-
-  const results = await Promise.allSettled(submissions);
-  const perTarget: FleetExecutionResult["perTarget"] = results.map((r, i) => {
-    if (r.status === "fulfilled") {
-      return { terminalId: collected[i]!, status: "fulfilled" };
-    }
-    const reason = String(r.reason);
-    return {
-      terminalId: collected[i]!,
-      status: "rejected",
-      reason,
-      kind: classifyFleetRejectionReason(reason),
-    };
-  });
-
-  const successCount = results.filter((r) => r.status === "fulfilled").length;
-  const failedIds: string[] = [];
-  const permanentlyFailedIds: string[] = [];
-  const transientlyFailedIds: string[] = [];
-  for (const t of perTarget) {
-    if (t.status !== "rejected") continue;
-    failedIds.push(t.terminalId);
-    if (t.kind === "transient") transientlyFailedIds.push(t.terminalId);
-    else permanentlyFailedIds.push(t.terminalId);
-  }
-
-  return {
-    total: results.length,
-    successCount,
-    failureCount: results.length - successCount,
-    perTarget,
-    failedIds,
-    permanentlyFailedIds,
-    transientlyFailedIds,
-    cancelled: false,
-    skippedCount: 0,
-  };
 }
