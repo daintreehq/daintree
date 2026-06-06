@@ -1431,7 +1431,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               variant="zero-data"
               scale="sidebar"
               icon={<FolderOpen />}
-              title="Open a Git repository to get started"
+              title="Open a Git repository"
               action={
                 <span className="text-xs text-daintree-text/50">
                   Use{" "}

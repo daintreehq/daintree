@@ -70,19 +70,33 @@ function renderInner(
 ) {
   const icon = props.variant === "filtered-empty" ? null : props.icon;
   const action = props.variant === "user-cleared" ? null : props.action;
+  // Canvas scale carries extra visual weight so a single empty state can hold
+  // its own on a full panel-grid canvas (issue #9813). The `@max-[280px]`
+  // named-container collapse brings the canvas treatment back down to the
+  // popover/sidebar register in narrow bounded cards (NotificationCenter
+  // 360px panel-style surface, McpServerSettingsTab dashed card, etc.) so
+  // the heavier default doesn't overflow. Popover and sidebar scales are
+  // intentionally unchanged.
+  const isCanvas = props.scale === "canvas";
+  const iconClass = isCanvas
+    ? "text-daintree-text/30 [&_svg]:h-10 [&_svg]:w-10 @max-[280px]/empty-state:[&_svg]:h-6 @max-[280px]/empty-state:[&_svg]:w-6"
+    : "text-daintree-text/30 [&_svg]:h-6 [&_svg]:w-6 @max-[280px]/empty-state:[&_svg]:h-4 @max-[280px]/empty-state:[&_svg]:w-4";
+  const titleClass = isCanvas
+    ? "text-lg font-semibold text-daintree-text/70 @max-[280px]/empty-state:text-sm @max-[280px]/empty-state:font-medium"
+    : "text-sm font-medium text-daintree-text/70";
+  const descriptionClass = isCanvas
+    ? "text-sm text-daintree-text/50 max-w-xs @max-[280px]/empty-state:text-xs"
+    : "text-xs text-daintree-text/50 max-w-xs";
   return (
     <>
       {icon ? (
-        <div
-          className="text-daintree-text/30 [&_svg]:h-6 [&_svg]:w-6 @max-[280px]/empty-state:[&_svg]:h-4 @max-[280px]/empty-state:[&_svg]:w-4"
-          aria-hidden="true"
-        >
+        <div className={iconClass} aria-hidden="true">
           {icon}
         </div>
       ) : null}
-      <p className="text-sm font-medium text-daintree-text/70">{props.title}</p>
+      <p className={titleClass}>{props.title}</p>
       {hasDescription ? (
-        <p id={descriptionId} className="text-xs text-daintree-text/50 max-w-xs">
+        <p id={descriptionId} className={descriptionClass}>
           {rawDescription}
         </p>
       ) : null}
@@ -178,7 +192,10 @@ export function EmptyState(props: EmptyStateProps) {
       <div className="grid">
         <div
           key={`current-${generation}`}
-          className="[grid-area:1/1] flex flex-col items-center gap-2 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
+          className={cn(
+            "[grid-area:1/1] flex flex-col items-center motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150",
+            props.scale === "canvas" ? "gap-3 @max-[280px]/empty-state:gap-2" : "gap-2"
+          )}
         >
           {renderInner(props, descriptionId, hasDescription, rawDescription)}
         </div>
@@ -191,7 +208,10 @@ export function EmptyState(props: EmptyStateProps) {
             // "Clear search") can't take focus during the 100–250ms exit.
             // `aria-hidden` alone leaves it focusable via keyboard.
             inert
-            className="[grid-area:1/1] flex flex-col items-center gap-2 pointer-events-none motion-safe:animate-out motion-safe:fade-out motion-safe:duration-[100ms]"
+            className={cn(
+              "[grid-area:1/1] flex flex-col items-center pointer-events-none motion-safe:animate-out motion-safe:fade-out motion-safe:duration-[100ms]",
+              outgoing.scale === "canvas" ? "gap-3 @max-[280px]/empty-state:gap-2" : "gap-2"
+            )}
             onAnimationEnd={handleExitEnd}
           >
             {renderInner(
