@@ -111,4 +111,13 @@ describe("rendererStoreOrchestrator — MRU flush on hide (#9914)", () => {
 
     expect(flushSpy).not.toHaveBeenCalled();
   });
+
+  it("flushes immediately when the document is already hidden at init", () => {
+    // beforeEach init'd while visible; re-init with the document already hidden.
+    destroyStoreOrchestrator();
+    setHidden(true);
+    initStoreOrchestrator();
+
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+  });
 });

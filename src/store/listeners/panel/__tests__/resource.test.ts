@@ -71,12 +71,23 @@ describe("setupResourceListeners — persistence flush on hide (#9914)", () => {
     expect(flushPanelPersistenceMock).not.toHaveBeenCalled();
   });
 
-  it("does not register a beforeunload handler (the unreliable signal it replaced)", () => {
-    const addSpy = vi.spyOn(window, "addEventListener");
+  it("flushes immediately when the document is already hidden at registration", () => {
+    setHidden(true);
     const d = setupResourceListeners();
 
-    expect(addSpy.mock.calls.some(([type]) => type === "beforeunload")).toBe(false);
+    expect(flushPanelPersistenceMock).toHaveBeenCalledTimes(1);
     d.dispose();
-    addSpy.mockRestore();
+  });
+
+  it("does not register a beforeunload handler (the unreliable signal it replaced)", () => {
+    const windowSpy = vi.spyOn(window, "addEventListener");
+    const documentSpy = vi.spyOn(document, "addEventListener");
+    const d = setupResourceListeners();
+
+    expect(windowSpy.mock.calls.some(([type]) => type === "beforeunload")).toBe(false);
+    expect(documentSpy.mock.calls.some(([type]) => type === "beforeunload")).toBe(false);
+    d.dispose();
+    windowSpy.mockRestore();
+    documentSpy.mockRestore();
   });
 });

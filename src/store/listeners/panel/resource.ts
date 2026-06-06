@@ -55,6 +55,9 @@ export function setupResourceListeners(): DisposableStore {
   d.add(
     toDisposable(() => document.removeEventListener("visibilitychange", handleVisibilityChange))
   );
+  // Cover the race where the document is already hidden when listeners
+  // register (e.g. a fast project switch between render and this effect).
+  if (document.hidden) flushPanelPersistence();
 
   return d;
 }

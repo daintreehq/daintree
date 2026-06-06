@@ -331,6 +331,8 @@ export function initStoreOrchestrator(): () => void {
     disposables.add(
       toDisposable(() => document.removeEventListener("visibilitychange", handleVisibilityChange))
     );
+    // Cover the race where the document is already hidden at init time.
+    if (document.hidden) void debouncedPersistMruList.flush();
   }
 
   cleanupFn = () => {
