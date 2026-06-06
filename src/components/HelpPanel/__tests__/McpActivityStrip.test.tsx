@@ -140,6 +140,26 @@ describe("McpActivityStrip", () => {
     expect(screen.getByText("beta-tool")).toBeTruthy();
   });
 
+  it("labels the unassociated group so null-turn calls are explained (#10067)", async () => {
+    getAuditRecords.mockResolvedValue([
+      makeRecord({ id: "1", toolId: "no-turn-tool", helpSessionId: "session-a" }),
+    ]);
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    expect(await screen.findByText("no-turn-tool")).toBeTruthy();
+    expect(screen.getByText(/not tied to a turn/i)).toBeTruthy();
+  });
+
+  it("omits the unassociated label when every call has a turn (#10067)", async () => {
+    getAuditRecords.mockResolvedValue([
+      makeRecord({ id: "1", toolId: "turn-tool", helpSessionId: "session-a", turnId: "t1" }),
+    ]);
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    expect(await screen.findByText("turn-tool")).toBeTruthy();
+    expect(screen.queryByText(/not tied to a turn/i)).toBeNull();
+  });
+
   it("filters out records from other sessions", async () => {
     getAuditRecords.mockResolvedValue([
       makeRecord({ id: "1", toolId: "mine", helpSessionId: "session-a" }),

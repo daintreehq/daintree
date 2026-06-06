@@ -148,6 +148,14 @@ export interface SessionServerDeps {
     outcome: AuditOutcome;
     confirmationDecision?: import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision;
     bannerSuppressed?: boolean;
+    /**
+     * Turn id snapshotted once at dispatch start (#10067). Forwarded so the
+     * audit record is stamped with the same turn the live activity strip's
+     * started/settled events carry — never re-read at write time, where an
+     * active→passive FSM transition could have cleared it and split one call
+     * across two groupings.
+     */
+    capturedTurnId?: string | null;
   }) => void;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   getFullToolSurface: () => boolean;
@@ -195,6 +203,15 @@ export interface SessionServerDeps {
    */
   clearDenialState?: (sessionId: string) => void;
   /**
+   * Resolve the help-session turn id live (#10067). Called exactly once per
+   * dispatch — at the top of the CallTool handler — so a single snapshot feeds
+   * the started event, the settled event, and the audit record. Returns `null`
+   * for sessions with no help binding (external/api-key) or no active turn.
+   * Implemented by httpLifecycle (it closes over the help-session id); absent
+   * in test fixtures that don't exercise turn correlation.
+   */
+  getCurrentTurnId?: () => string | null;
+  /**
    * Optional renderer notifier fired when an MCP tool dispatch enters the call
    * path (after tier/rate/dedup guards pass and the manifest entry resolves).
    * Drives the Assistant panel's live activity strip (#9759). Implemented by
@@ -209,6 +226,8 @@ export interface SessionServerDeps {
     startedAt: number;
     /** True when the resolved manifest entry is `danger: "confirm"`. */
     danger: boolean;
+    /** Turn id snapshotted at dispatch start (#10067); see {@link SessionServerDeps.getCurrentTurnId}. */
+    capturedTurnId: string | null;
   }) => void;
   /**
    * Optional renderer notifier fired when a dispatch announced via
@@ -221,6 +240,8 @@ export interface SessionServerDeps {
     toolId: string;
     durationMs: number;
     outcome: AuditOutcome;
+    /** Turn id snapshotted at dispatch start (#10067); matches the started event's value. */
+    capturedTurnId: string | null;
   }) => void;
   /**
    * Optional renderer notifier fired when the assistant invokes
@@ -254,6 +275,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     recordDenial,
     notifySessionRevoked,
     clearDenialState,
+    getCurrentTurnId,
     notifyToolCallStarted,
     notifyToolCallSettled,
     notifyDisplayImage,
@@ -303,6 +325,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const startedAt = Date.now();
     const tier = sessionStore.getTier(sessionId);
     const fullToolSurface = getFullToolSurface();
+    // Snapshot the turn id once, at dispatch start, before any guard or await
+    // can yield to an active→passive FSM transition that would clear it (#10067).
+    // Every consumer below — the started/settled strip events and all audit
+    // records — receives this same value so one tool call can never split
+    // across two turn groupings in the Assistant panel.
+    const capturedTurnId: string | null = getCurrentTurnId?.() ?? null;
 
     // Layered authorization (#8442):
     //   1. Static tier floor (`TIER_ALLOWLISTS`) — workbench/action/system
@@ -337,6 +365,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             durationMs: Date.now() - startedAt,
             outcome: { kind: "unauthorized" },
             bannerSuppressed: suppressBanner ? true : undefined,
+            capturedTurnId,
           });
         } catch (err) {
           console.error("[MCP] Failed to append audit record:", err);
@@ -400,6 +429,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           args,
           durationMs: Date.now() - startedAt,
           outcome: { kind: "rate_limited", retryAfter: rateLimit.retryAfter },
+          capturedTurnId,
         });
       } catch (err) {
         console.error("[MCP] Failed to append audit record:", err);
@@ -435,6 +465,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 args,
                 durationMs: Date.now() - startedAt,
                 outcome: { kind: "collision" },
+                capturedTurnId,
               });
             } catch (err) {
               console.error("[MCP] Failed to append audit record:", err);
@@ -454,6 +485,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               args,
               durationMs: Date.now() - startedAt,
               outcome: { kind: "dedup" },
+              capturedTurnId,
             });
           } catch (err) {
             console.error("[MCP] Failed to append audit record:", err);
@@ -474,6 +506,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               args,
               durationMs: Date.now() - startedAt,
               outcome: { kind: "collision" },
+              capturedTurnId,
             });
           } catch (err) {
             console.error("[MCP] Failed to append audit record:", err);
@@ -493,6 +526,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             args,
             durationMs: Date.now() - startedAt,
             outcome: { kind: "dedup" },
+            capturedTurnId,
           });
         } catch (err) {
           console.error("[MCP] Failed to append audit record:", err);
@@ -517,7 +551,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const emitToolCallStarted = (danger: boolean): void => {
       if (!notifyToolCallStarted) return;
       try {
-        notifyToolCallStarted({ sessionId, toolId: actionId, args, startedAt, danger });
+        notifyToolCallStarted({
+          sessionId,
+          toolId: actionId,
+          args,
+          startedAt,
+          danger,
+          capturedTurnId,
+        });
         toolCallStartedEmitted = true;
       } catch (err) {
         console.error("[MCP] Failed to notify tool-call-started:", err);
@@ -769,6 +810,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             durationMs,
             outcome: settledOutcome,
             confirmationDecision,
+            capturedTurnId,
           });
         } catch (err) {
           console.error("[MCP] Failed to append audit record:", err);
@@ -783,6 +825,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               toolId: actionId,
               durationMs,
               outcome: settledOutcome,
+              capturedTurnId,
             });
           } catch (err) {
             console.error("[MCP] Failed to notify tool-call-settled:", err);

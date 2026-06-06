@@ -1125,6 +1125,62 @@ describe("CallTool live activity notifications (#9759)", () => {
     expect(started.mock.invocationCallOrder[0]).toBeLessThan(settled.mock.invocationCallOrder[0]);
   });
 
+  it("threads one captured turn id into started, settled, and the audit record (#10067)", async () => {
+    const started = vi.fn();
+    const settled = vi.fn();
+    const appendAuditRecord = vi.fn();
+    // getCurrentTurnId is read once at dispatch start. Returning a fresh value
+    // on a second call would prove a leak; this asserts a single snapshot.
+    const getCurrentTurnId = vi.fn().mockReturnValue("turn-xyz");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const deps = fakeDeps({
+      getCurrentTurnId,
+      notifyToolCallStarted: started,
+      notifyToolCallSettled: settled,
+      appendAuditRecord,
+      dispatchAction,
+    });
+    const server = createSessionServer("session-T", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.list", arguments: {} });
+
+    // One read, threaded to all three consumers end-to-end — none re-reads the
+    // register, so the strip's started/settled rows and the audit record can
+    // never disagree on which turn the call belongs to.
+    expect(getCurrentTurnId).toHaveBeenCalledTimes(1);
+    expect(started).toHaveBeenCalledWith(expect.objectContaining({ capturedTurnId: "turn-xyz" }));
+    expect(settled).toHaveBeenCalledWith(expect.objectContaining({ capturedTurnId: "turn-xyz" }));
+    expect(appendAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ capturedTurnId: "turn-xyz" })
+    );
+  });
+
+  it("snapshots the turn id at start so started/settled agree across an FSM clear (#10067)", async () => {
+    const started = vi.fn();
+    const settled = vi.fn();
+    // Mirror the active→passive race: the turn id is live at dispatch start but
+    // a later read would return null. Both events must still carry the snapshot.
+    const getCurrentTurnId = vi.fn().mockReturnValueOnce("turn-T1").mockReturnValue(null);
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const deps = fakeDeps({
+      getCurrentTurnId,
+      notifyToolCallStarted: started,
+      notifyToolCallSettled: settled,
+      dispatchAction,
+    });
+    const server = createSessionServer("session-T2", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.list", arguments: {} });
+
+    const startedTurn = started.mock.calls[0]?.[0]?.capturedTurnId;
+    const settledTurn = settled.mock.calls[0]?.[0]?.capturedTurnId;
+    expect(startedTurn).toBe("turn-T1");
+    expect(settledTurn).toBe("turn-T1");
+    expect(startedTurn).toBe(settledTurn);
+  });
+
   it("does not emit started/settled for a pre-dispatch tier rejection", async () => {
     const started = vi.fn();
     const settled = vi.fn();

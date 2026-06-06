@@ -90,6 +90,11 @@ export function RecentCallsPopover({ records, loading, error }: RecentCallsPopov
           <ul className="divide-y divide-daintree-border/60">
             {groups.map((group, index) => (
               <li key={group.turnId ?? `unassociated-${index}`} className="py-1">
+                {group.turnId === null && (
+                  <div className="px-2 pb-0.5 text-[10px] text-daintree-text/40">
+                    Not tied to a turn
+                  </div>
+                )}
                 <ul className="space-y-0.5">
                   {group.records.map((record) => (
                     <RecentCallRow key={record.id} record={record} />
