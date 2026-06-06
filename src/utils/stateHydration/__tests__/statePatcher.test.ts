@@ -568,8 +568,35 @@ describe("buildArgsForRespawn", () => {
         false,
         "/tmp"
       );
+      // The resume-latest fallback must have been consulted before the
+      // fresh-launch fallthrough flips the signal — guards against a regression
+      // that flags the session lost without trying to recover it first.
+      expect(buildResumeLatestCommandMock).toHaveBeenCalledWith("claude", undefined);
       expect(result.command).toBe("claude --generated");
       expect(result.sessionLostOnRestore).toBe(true);
+    });
+
+    it("is left unset when agent settings are unavailable (no fresh launch produced)", () => {
+      // IPC hydrate failure: agentSettings undefined, no persisted flags. The
+      // respawn falls back to the saved command rather than generating a fresh
+      // one, so we don't claim the session was lost. Documents a known gap.
+      buildResumeCommandMock.mockReturnValue(undefined);
+      const result = buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "claude",
+          cwd: "/p",
+          location: "grid",
+          agentSessionId: "sess-expired",
+        },
+        "terminal",
+        "/p",
+        undefined,
+        false,
+        "/tmp"
+      );
+      expect(result.sessionLostOnRestore).toBeUndefined();
     });
 
     it("is not set when resume-latest succeeds as a fallback", () => {
