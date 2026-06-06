@@ -144,12 +144,19 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
+const { mockSanitizeSvg } = vi.hoisted(() => ({
+  mockSanitizeSvg: vi.fn(
+    (
+      content: string
+    ): { ok: true; svg: string; modified: boolean } | { ok: false; error: string } => ({
+      ok: true,
+      svg: content,
+      modified: false,
+    })
+  ),
+}));
 vi.mock("@shared/utils/svgSanitizer", () => ({
-  sanitizeSvg: (content: string) => ({
-    ok: true,
-    svg: content,
-    modified: false,
-  }),
+  sanitizeSvg: mockSanitizeSvg,
 }));
 
 const scrollIntoViewCalls: HTMLElement[] = [];
@@ -245,6 +252,67 @@ describe("FileViewerModal", () => {
     expect(mockCreateTrustedHTML).toHaveBeenCalledWith(svg);
     expect(screen.getByLabelText("Open in image viewer")).toBeTruthy();
     expect(screen.queryByLabelText("Open in editor")).toBeNull();
+  });
+
+  it("shows the sanitizer's error message when SVG sanitization fails", async () => {
+    mockRead.mockResolvedValue({ content: "not an svg" });
+    mockSanitizeSvg.mockReturnValueOnce({
+      ok: false,
+      error: "Content does not appear to be a valid SVG",
+    });
+
+    render(<FileViewerModal {...defaultProps} filePath="/project/icon.svg" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Content does not appear to be a valid SVG")).toBeTruthy();
+    });
+
+    expect(screen.queryByText("Invalid file path")).toBeNull();
+    expect(screen.getAllByText("Open in image viewer").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Open in Image Viewer")).toBeNull();
+  });
+
+  it("shows a generic error when an image fails to load", async () => {
+    render(<FileViewerModal {...defaultProps} filePath="/project/photo.png" />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("img")).toBeTruthy();
+    });
+
+    fireEvent.error(screen.getByRole("img"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Unable to display image")).toBeTruthy();
+    });
+
+    expect(screen.queryByText("File no longer exists")).toBeNull();
+  });
+
+  it("clears a stale SVG sanitization error when navigating to another file", async () => {
+    mockRead.mockResolvedValue({ content: "not an svg" });
+    mockSanitizeSvg.mockReturnValueOnce({
+      ok: false,
+      error: "Content does not appear to be a valid SVG",
+    });
+
+    const { rerender, container } = render(
+      <FileViewerModal {...defaultProps} filePath="/project/bad.svg" />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Content does not appear to be a valid SVG")).toBeTruthy();
+    });
+
+    mockRead.mockResolvedValue({
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><circle r="10"/></svg>',
+    });
+
+    rerender(<FileViewerModal {...defaultProps} filePath="/project/good.svg" />);
+
+    await waitFor(() => {
+      expect(container.querySelector("svg")).toBeTruthy();
+    });
+    expect(screen.queryByText("Content does not appear to be a valid SVG")).toBeNull();
   });
 
   it("shows binary error with Open in Editor for non-image binaries", async () => {
