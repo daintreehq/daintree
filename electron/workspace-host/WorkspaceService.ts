@@ -1617,11 +1617,7 @@ export class WorkspaceService {
     });
   }
 
-  setActiveWorktree(
-    requestId: string,
-    worktreeId: string,
-    options?: { silent?: boolean }
-  ): void {
+  setActiveWorktree(requestId: string, worktreeId: string, options?: { silent?: boolean }): void {
     // Reject unknown worktree ids with success:false. Pre-PR, an unknown id
     // would mutate `this.activeWorktreeId` to a value the renderer could not
     // resolve; the new `worktree-activated` emit would propagate that miss

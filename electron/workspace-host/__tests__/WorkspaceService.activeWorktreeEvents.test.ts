@@ -213,7 +213,10 @@ describe("WorkspaceService active-worktree event emission (#9945)", () => {
       path: pathResolve("/test/main"),
       isMainWorktree: true,
     });
-    createAndRegisterMonitor({ id: pathResolve("/test/active"), path: pathResolve("/test/active") });
+    createAndRegisterMonitor({
+      id: pathResolve("/test/active"),
+      path: pathResolve("/test/active"),
+    });
     service["activeWorktreeId"] = null;
 
     service["setActiveWorktree"]("port-1", pathResolve("/test/main"));
@@ -250,9 +253,7 @@ describe("WorkspaceService active-worktree event emission (#9945)", () => {
 
     // Default (no options) leaves silent undefined.
     service["setActiveWorktree"]("port-2", pathResolve("/test/main"));
-    const activatedDefault = sentEvents
-      .filter((e) => e.type === "worktree-activated")
-      .at(-1);
+    const activatedDefault = sentEvents.filter((e) => e.type === "worktree-activated").at(-1);
     expect(activatedDefault?.silent).toBeUndefined();
   });
 

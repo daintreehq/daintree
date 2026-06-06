@@ -108,14 +108,18 @@ describe("WorktreeStoreProvider worktree-activated handler (#9945)", () => {
     const store = await renderProvider();
     // Seed two worktrees so the activated id exists in the store map.
     act(() => {
-      store.getState().applyUpdate(
-        makeWorktree("wt-main", { isMainWorktree: true, branch: "main" }),
-        { epoch: "test", seq: 1 }
-      );
-      store.getState().applyUpdate(
-        makeWorktree("wt-active", { isMainWorktree: false, branch: "feature/test" }),
-        { epoch: "test", seq: 2 }
-      );
+      store
+        .getState()
+        .applyUpdate(makeWorktree("wt-main", { isMainWorktree: true, branch: "main" }), {
+          epoch: "test",
+          seq: 1,
+        });
+      store
+        .getState()
+        .applyUpdate(makeWorktree("wt-active", { isMainWorktree: false, branch: "feature/test" }), {
+          epoch: "test",
+          seq: 2,
+        });
     });
     // Mark the active worktree as the user-visible active.
     act(() => {
@@ -135,14 +139,18 @@ describe("WorktreeStoreProvider worktree-activated handler (#9945)", () => {
   it("recovers activeWorktreeId to main in the same tick as a worktree-removed (#9945 flicker fix)", async () => {
     const store = await renderProvider();
     act(() => {
-      store.getState().applyUpdate(
-        makeWorktree("wt-main", { isMainWorktree: true, branch: "main" }),
-        { epoch: "test", seq: 1 }
-      );
-      store.getState().applyUpdate(
-        makeWorktree("wt-active", { isMainWorktree: false, branch: "feature/test" }),
-        { epoch: "test", seq: 2 }
-      );
+      store
+        .getState()
+        .applyUpdate(makeWorktree("wt-main", { isMainWorktree: true, branch: "main" }), {
+          epoch: "test",
+          seq: 1,
+        });
+      store
+        .getState()
+        .applyUpdate(makeWorktree("wt-active", { isMainWorktree: false, branch: "feature/test" }), {
+          epoch: "test",
+          seq: 2,
+        });
     });
     act(() => {
       useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-active" });
@@ -188,18 +196,24 @@ describe("WorktreeStoreProvider worktree-activated handler (#9945)", () => {
   it("does not break the worktree-removed guard when the removed worktree is not active", async () => {
     const store = await renderProvider();
     act(() => {
-      store.getState().applyUpdate(
-        makeWorktree("wt-main", { isMainWorktree: true, branch: "main" }),
-        { epoch: "test", seq: 1 }
-      );
-      store.getState().applyUpdate(
-        makeWorktree("wt-active", { isMainWorktree: false, branch: "feature/test" }),
-        { epoch: "test", seq: 2 }
-      );
-      store.getState().applyUpdate(
-        makeWorktree("wt-other", { isMainWorktree: false, branch: "feature/other" }),
-        { epoch: "test", seq: 3 }
-      );
+      store
+        .getState()
+        .applyUpdate(makeWorktree("wt-main", { isMainWorktree: true, branch: "main" }), {
+          epoch: "test",
+          seq: 1,
+        });
+      store
+        .getState()
+        .applyUpdate(makeWorktree("wt-active", { isMainWorktree: false, branch: "feature/test" }), {
+          epoch: "test",
+          seq: 2,
+        });
+      store
+        .getState()
+        .applyUpdate(makeWorktree("wt-other", { isMainWorktree: false, branch: "feature/other" }), {
+          epoch: "test",
+          seq: 3,
+        });
     });
     act(() => {
       useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-active" });
@@ -228,10 +242,12 @@ describe("WorktreeStoreProvider worktree-activated handler (#9945)", () => {
     // preserves the already-active path.
     const store = await renderProvider();
     act(() => {
-      store.getState().applyUpdate(
-        makeWorktree("wt-main", { isMainWorktree: true, branch: "main" }),
-        { epoch: "test", seq: 1 }
-      );
+      store
+        .getState()
+        .applyUpdate(makeWorktree("wt-main", { isMainWorktree: true, branch: "main" }), {
+          epoch: "test",
+          seq: 1,
+        });
     });
     // Mark wt-main as active AND as the current restore target — the
     // host's echo must not perturb either.
