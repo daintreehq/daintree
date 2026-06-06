@@ -288,6 +288,103 @@ describe("palette distinguishability", () => {
     });
   });
 
+  describe("status token internal distinguishability", () => {
+    // STATUS_TOKENS (success/warning/danger/info) carry safety-critical signals:
+    // banners, toasts, and the diff viewer insert/delete backgrounds. The
+    // category-status cross-group block above verifies STATUS_TOKENS stay
+    // apart from category tokens, but says nothing about the status set's
+    // own internal structure — historically the closest pair (e.g. arashiyama
+    // status-success vs status-danger under deuteranopia at ~0.0061) sits
+    // barely above the 0.005 floor, so a one-LSB re-tune would collapse the
+    // pair for protanopic/deuteranopic users. This block guards the 6
+    // internal pairs (4 choose 2) of the status set under all three CVD
+    // deficiencies. Activity tokens are intentionally excluded:
+    // activity-active and activity-working alias by design, and
+    // activity-completed derives from status-success.
+    function collectStatusPairFailures(deficiency: Deficiency): string[] {
+      const failures: string[] = [];
+
+      for (const scheme of BUILT_IN_APP_SCHEMES) {
+        const values = resolveTokens(scheme, [...STATUS_TOKENS]);
+        if (values.length !== STATUS_TOKENS.length) {
+          failures.push(
+            `${scheme.id}: only ${values.length}/${STATUS_TOKENS.length} status tokens present`
+          );
+          continue;
+        }
+
+        const { distances, skipped } = computePairwiseDistances(values, deficiency);
+        if (skipped.length > 0) {
+          failures.push(`${scheme.id} ${deficiency}: could not parse: ${skipped.join(", ")}`);
+          continue;
+        }
+
+        let pairIdx = 0;
+        for (let i = 0; i < STATUS_TOKENS.length; i++) {
+          for (let j = i + 1; j < STATUS_TOKENS.length; j++) {
+            const d = distances[pairIdx++]!;
+            if (d < JND_FLOOR) {
+              failures.push(
+                `${scheme.id} ${deficiency}: ${STATUS_TOKENS[i]}-${STATUS_TOKENS[j]} = ${d.toFixed(4)} (below JND floor ${JND_FLOOR})`
+              );
+            }
+          }
+        }
+      }
+
+      return failures;
+    }
+
+    for (const deficiency of DEFICIENCIES) {
+      it(`no two status tokens collapse to identity under ${deficiency} (JND floor)`, () => {
+        const failures = collectStatusPairFailures(deficiency);
+        expect(
+          failures,
+          `${failures.length} status pairs collapsed to near-identity under ${deficiency}\n${failures.join("\n")}`
+        ).toHaveLength(0);
+      });
+    }
+
+    it("reports minimum status-pair distance per scheme vs Okabe-Ito reference", () => {
+      // Informational: surfaces the closest status pair per (scheme,
+      // deficiency) so a hand-tune that nudges the closest pair toward the
+      // JND floor is visible before it pushes the hard gate above. The
+      // success/danger canary is reported separately under red-green
+      // deficiencies — that's the safety-critical pair (banners, diff
+      // insert/delete backgrounds) and historically the closest in hand-
+      // tuned schemes (e.g. arashiyama ~0.0061).
+      for (const scheme of BUILT_IN_APP_SCHEMES) {
+        const values = resolveTokens(scheme, [...STATUS_TOKENS]);
+        if (values.length !== STATUS_TOKENS.length) continue;
+
+        for (const deficiency of DEFICIENCIES) {
+          const minDist = minPairwiseDistance(values, deficiency);
+          const oi = OI_THRESHOLDS[deficiency]!;
+          expect(minDist, `${scheme.id} ${deficiency} minimum`).toBeGreaterThan(0);
+          if (minDist !== null) {
+            expect(
+              minDist,
+              `${scheme.id} ${deficiency}: status min ${minDist.toFixed(4)} (Okabe-Ito ref: ${oi.toFixed(4)})`
+            ).toBeGreaterThan(0);
+          }
+        }
+
+        // Success/danger canary under red-green deficiencies.
+        const success = values[STATUS_TOKENS.indexOf("status-success")]!;
+        const danger = values[STATUS_TOKENS.indexOf("status-danger")]!;
+        for (const deficiency of ["protanopia", "deuteranopia"] as const) {
+          const sdDist = minPairwiseDistance([success, danger], deficiency);
+          if (sdDist !== null) {
+            expect(
+              sdDist,
+              `${scheme.id} ${deficiency}: status-success vs status-danger = ${sdDist.toFixed(4)}`
+            ).toBeGreaterThan(0);
+          }
+        }
+      }
+    });
+  });
+
   describe("CVD override maps internal distinguishability", () => {
     // Only the opaque signal colors must be mutually distinguishable. The
     // derived status-*-surface and diff-*-background washes are translucent
