@@ -135,7 +135,7 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
           onUnpin={runner.handleUnpin}
           onDelete={runner.handleDelete}
           onCreate={runner.handleCreate}
-          onKeyDown={runner.handleKeyDown}
+          setFocusedIndex={runner.setFocusedIndex}
         />
       )}
       {deleteDialog}
