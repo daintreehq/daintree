@@ -57,6 +57,52 @@ describe("buildStoredCredentials", () => {
     });
   });
 
+  it("selects the password-typed field even when it is not declared first", () => {
+    registryMock.getRegisteredForgeProviders.mockReturnValue([
+      {
+        pluginId: "acme",
+        contribution: {
+          id: "gitea",
+          name: "Gitea",
+          matches: ["gitea.example.com"],
+          // Password field deliberately second so a `fields[0]`-always bug fails.
+          credentialFields: [
+            { id: "baseUrl", label: "Base URL", type: "text" },
+            { id: "token", label: "API token", type: "password" },
+          ],
+        },
+      },
+    ]);
+    storeMock._data["forgeCredentials"] = {
+      "acme.gitea": JSON.stringify({ baseUrl: "https://gitea.example.com", token: "secret-token" }),
+    };
+    expect(buildStoredCredentials("acme.gitea")).toEqual({
+      kind: "bearer",
+      value: "secret-token",
+    });
+  });
+
+  it("falls back to the first declared field when none is a password field", () => {
+    registryMock.getRegisteredForgeProviders.mockReturnValue([
+      {
+        pluginId: "acme",
+        contribution: {
+          id: "gitea",
+          name: "Gitea",
+          matches: ["gitea.example.com"],
+          credentialFields: [
+            { id: "user", label: "User", type: "text" },
+            { id: "host", label: "Host", type: "text" },
+          ],
+        },
+      },
+    ]);
+    storeMock._data["forgeCredentials"] = {
+      "acme.gitea": JSON.stringify({ user: "alice", host: "gitea.example.com" }),
+    };
+    expect(buildStoredCredentials("acme.gitea")).toEqual({ kind: "bearer", value: "alice" });
+  });
+
   it("falls back to the first record value when the provider declares no fields", () => {
     registryMock.getRegisteredForgeProviders.mockReturnValue([]);
     storeMock._data["forgeCredentials"] = {

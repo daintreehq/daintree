@@ -386,6 +386,37 @@ describe("registerForgeSettingsHandlers", () => {
     expect(result).toEqual({ valid: true, scopes: ["repo"] });
   });
 
+  it("setCredential delivers the password-typed field even when it is declared second", async () => {
+    registryMock.getRegisteredForgeProviders.mockReturnValue([
+      {
+        pluginId: "acme",
+        contribution: {
+          id: "gitea",
+          name: "Gitea",
+          matches: ["gitea.example.com"],
+          // Password field second so a `fields[0]`-always bug would validate/deliver the URL.
+          credentialFields: [
+            { id: "baseUrl", label: "Base URL", type: "text" },
+            { id: "token", label: "API token", type: "password" },
+          ],
+        },
+      },
+    ]);
+    const validateToken = vi.fn().mockResolvedValue({ valid: true });
+    const setCredentials = vi.fn();
+    registryMock.getForgeProviderImpl.mockReturnValue({ validateToken, setCredentials });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    await setCredential(null, "acme.gitea", {
+      baseUrl: "https://gitea.example.com",
+      token: "secret-token",
+    });
+
+    expect(validateToken).toHaveBeenCalledWith("secret-token");
+    expect(setCredentials).toHaveBeenCalledWith({ kind: "bearer", value: "secret-token" });
+  });
+
   it("setCredential succeeds when the impl does not implement the optional setCredentials", async () => {
     registerGiteaProvider();
     const validateToken = vi.fn().mockResolvedValue({ valid: true });

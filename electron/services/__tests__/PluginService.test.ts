@@ -142,6 +142,7 @@ import {
 } from "../../../shared/config/toolbarButtonRegistry.js";
 import { registerPluginMenuItem, unregisterPluginMenuItems } from "../pluginMenuRegistry.js";
 import {
+  getRegisteredForgeProviders,
   registerForgeProviderImpl,
   registerForgeProviders,
   unregisterForgeProviderImpl,
@@ -4067,6 +4068,43 @@ describe("createHost — registerForgeProvider", () => {
 
     const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
       "acme.forge-replay"
+    );
+
+    const setCredentials = vi.fn();
+    host.registerForgeProvider({ id: "github" }, { setCredentials });
+
+    expect(setCredentials).toHaveBeenCalledWith({ kind: "bearer", value: "stored-secret" });
+  });
+
+  it("replays the password-typed field (not the first field) on bind (#9983)", async () => {
+    await writePlugin("forge-replayfield", forgeManifest("acme.forge-replayfield"));
+    storeMock._state.set("forgeCredentials", {
+      "acme.forge-replayfield.github": JSON.stringify({
+        baseUrl: "https://github.example",
+        token: "stored-secret",
+      }),
+    });
+    // Provider declares the password field second, so a `fields[0]`-always bug
+    // would replay the base URL instead of the token.
+    vi.mocked(getRegisteredForgeProviders).mockReturnValueOnce([
+      {
+        pluginId: "acme.forge-replayfield",
+        contribution: {
+          id: "github",
+          name: "github",
+          matches: ["github.example"],
+          credentialFields: [
+            { id: "baseUrl", label: "Base URL", type: "text" },
+            { id: "token", label: "API token", type: "password" },
+          ],
+        },
+      },
+    ]);
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.forge-replayfield"
     );
 
     const setCredentials = vi.fn();
