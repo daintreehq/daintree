@@ -410,41 +410,53 @@ describe("opValidated", () => {
   // silently nested inside security.ts's success envelope, so it must be a
   // compile error at the opValidated() call site — not just inside the wrapper.
   describe("envelope-key guard (type-level)", () => {
-    // A channel whose result union carries the `ok` discriminator, so its
-    // guarded result type collapses to the violation brand.
-    const IMPORT_SCHEME = "terminal-config:import-color-scheme" as const;
-    const NoopSchema = z.object({});
+    // A payload-validating channel whose result carries the `success`
+    // discriminator, so its guarded result type collapses to the violation
+    // brand. Has a real arg, matching how opValidated() is actually used.
+    const REMOVE_AGENT = "user-agent-registry:remove" as const;
+    const RemoveAgentSchema = z.string().min(1);
 
     it("guards the validated channel's result type (anchors the @ts-expect-error below)", () => {
       // If this channel's result stopped containing a forbidden key, the
       // negative assertions below would pass for the wrong reason. This keeps
       // them honest: the guard genuinely brands this channel's result.
       expectTypeOf<
-        ForbidIpcEnvelopeKeys<IpcInvokeMap[typeof IMPORT_SCHEME]["result"]>
+        ForbidIpcEnvelopeKeys<IpcInvokeMap[typeof REMOVE_AGENT]["result"]>
       >().toEqualTypeOf<IpcHandlerEnvelopeViolation>();
     });
 
-    it("rejects a plain handler returning an {ok|success} envelope shape", () => {
+    it("rejects a plain handler returning a {success}-shaped envelope", () => {
       const declare = () =>
         opValidated(
-          IMPORT_SCHEME,
-          NoopSchema,
+          REMOVE_AGENT,
+          RemoveAgentSchema,
           // @ts-expect-error #9882 — returning {ok|success} must fail the envelope guard
-          async () => ({ ok: false, errors: ["boom"] })
+          async (_id) => ({ success: false, error: "boom" })
         );
       // Referenced so the closure isn't unused; never invoked — the assertion
       // is purely the @ts-expect-error above.
       expect(typeof declare).toBe("function");
     });
 
-    it("rejects a withContext handler returning an {ok|success} envelope shape", () => {
+    it("rejects a withContext handler returning a {success}-shaped envelope", () => {
       const declare = () =>
         opValidated(
-          IMPORT_SCHEME,
-          NoopSchema,
+          REMOVE_AGENT,
+          RemoveAgentSchema,
           // @ts-expect-error #9882 — returning {ok|success} must fail the envelope guard
-          async (_ctx) => ({ ok: false, errors: ["boom"] }),
+          async (_ctx, _id) => ({ success: false, error: "boom" }),
           { withContext: true }
+        );
+      expect(typeof declare).toBe("function");
+    });
+
+    it("rejects a handler returning an {ok}-shaped envelope (other forbidden key)", () => {
+      const declare = () =>
+        opValidated(
+          "terminal-config:import-color-scheme",
+          z.void(),
+          // @ts-expect-error #9882 — returning {ok|success} must fail the envelope guard
+          async () => ({ ok: false, errors: ["boom"] })
         );
       expect(typeof declare).toBe("function");
     });
