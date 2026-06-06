@@ -198,6 +198,17 @@ describe("summarizeForgeArgs redaction", () => {
     expect(summarizeForgeArgs("validateToken", "ghp_secrettoken")).toBe("");
   });
 
+  it("returns empty string for validateToken with the { providerId, token } payload shape (#9985)", () => {
+    // The handler now passes the full payload object; the redaction must
+    // continue to drop both the token and the provider id.
+    expect(
+      summarizeForgeArgs("validateToken", {
+        providerId: "daintree.github.github",
+        token: "ghp_secrettoken",
+      })
+    ).toBe("");
+  });
+
   it("includes only the number for getIssue/getPR", () => {
     expect(summarizeForgeArgs("getIssue", 42)).toBe('{"number":42}');
     expect(summarizeForgeArgs("getPR", 7)).toBe('{"number":7}');

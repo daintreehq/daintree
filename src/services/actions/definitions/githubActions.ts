@@ -198,15 +198,22 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({ token: z.string() }),
+      argsSchema: z.object({
+        // `providerId` carries the canonical `{pluginId}.{contributionId}`
+        // id of the forge to validate against, so the Test button in a
+        // provider-specific settings tab can never silently route to the
+        // wrong forge (#9985).
+        providerId: z.string().min(1).describe("Canonical forge provider id"),
+        token: z.string(),
+      }),
       resultSchema: z.object({
         valid: z.boolean(),
         scopes: z.array(z.string()).optional(),
         expiresAt: z.number().nullable().optional(),
         error: z.string().optional(),
       }),
-      run: async ({ token }) => {
-        return await forgeClient.validateToken(token);
+      run: async ({ providerId, token }) => {
+        return await forgeClient.validateToken(providerId, token);
       },
     })
   );

@@ -2377,7 +2377,8 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.FORGE_ASSIGN_ISSUE, payload),
     unassignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
       _unwrappingInvoke(CHANNELS.FORGE_UNASSIGN_ISSUE, payload),
-    validateToken: (token: string) => _unwrappingInvoke(CHANNELS.FORGE_VALIDATE_TOKEN, token),
+    validateToken: (payload: { providerId: string; token: string }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_VALIDATE_TOKEN, payload),
     setCredential: (providerId: string, credentials: Record<string, string>) =>
       _unwrappingInvoke(CHANNELS.FORGE_SET_CREDENTIAL, providerId, credentials),
     getCredentialStatus: (providerId: string) =>

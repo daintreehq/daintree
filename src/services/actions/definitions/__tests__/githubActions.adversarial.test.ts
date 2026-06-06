@@ -122,10 +122,13 @@ describe("forge.* primaries adversarial", () => {
     expect(forgeClientMock.openIssue).toHaveBeenCalledWith("/repo", 7);
   });
 
-  it("validateToken forwards the token unchanged (including whitespace)", async () => {
+  it("validateToken forwards providerId + token positionally (including whitespace)", async () => {
     const def = setupActions()("forge.validateToken");
-    await def.run({ token: "  ghp_123  " }, {} as never);
-    expect(forgeClientMock.validateToken).toHaveBeenCalledWith("  ghp_123  ");
+    await def.run({ providerId: "daintree.github.github", token: "  ghp_123  " }, {} as never);
+    expect(forgeClientMock.validateToken).toHaveBeenCalledWith(
+      "daintree.github.github",
+      "  ghp_123  "
+    );
   });
 
   it("assignIssue forwards cwd, issueNumber, and username positionally", async () => {
@@ -162,7 +165,10 @@ describe("forge.* primaries adversarial", () => {
       { issueNumber: 1, username: "bob" },
       { activeWorktreePath: "/repo" }
     );
-    await runAction("forge.validateToken", { token: "ghp_test" });
+    await runAction("forge.validateToken", {
+      providerId: "daintree.github.github",
+      token: "ghp_test",
+    });
 
     expect(githubClientMock.openIssues).not.toHaveBeenCalled();
     expect(githubClientMock.openPRs).not.toHaveBeenCalled();

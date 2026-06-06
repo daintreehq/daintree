@@ -1167,7 +1167,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
   "forge:validate-token": {
-    args: [token: string];
+    args: [payload: { providerId: string; token: string }];
     result: AuthValidation;
   };
   "forge:set-credential": {

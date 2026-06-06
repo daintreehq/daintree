@@ -38,8 +38,8 @@ export const forgeClient = {
     return window.electron.forge.unassignIssue({ cwd, issueNumber, username });
   },
 
-  validateToken: (token: string): Promise<AuthValidation> => {
-    return window.electron.forge.validateToken(token);
+  validateToken: (providerId: string, token: string): Promise<AuthValidation> => {
+    return window.electron.forge.validateToken({ providerId, token });
   },
 
   listIssues: (cwd: string, opts?: ListOptions): Promise<Page<Issue>> => {
