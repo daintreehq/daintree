@@ -35,7 +35,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     })),
     markChecked: vi.fn(),
     updateObservedTitle: vi.fn(),
-    transitionState: vi.fn(() => ({ success: true as const })),
+    transitionState: vi.fn(() => true),
     trimScrollback: vi.fn(),
     setActivityMonitorTier: vi.fn(),
     setProcessTreeCache: vi.fn(),
@@ -241,88 +241,5 @@ describe("lifecycle kill handlers — trackKilledPid", () => {
     await dispatch({ type: "graceful-kill-by-project", projectId: "empty", requestId: "r1" });
 
     expect(ctx.resourceGovernor.trackKilledPid).not.toHaveBeenCalled();
-  });
-
-  // #9868 — `transition-state` reads the discriminated `{ success, reason? }`
-  // shape from `PtyManager.transitionState` and forwards `reason` on the
-  // `transition-result` wire. The `success: true` path carries no `reason`;
-  // the dropped path carries the precise discriminator.
-  describe("transition-state wires the reason (#9868)", () => {
-    it("forwards reason on a hysteresis drop", () => {
-      const ctx = makeCtx();
-      (ctx.ptyManager.transitionState as ReturnType<typeof vi.fn>).mockReturnValue({
-        success: false,
-        reason: "hysteresis",
-      });
-      const dispatch = createPtyHostMessageDispatcher(ctx);
-
-      dispatch({
-        type: "transition-state",
-        id: "t1",
-        requestId: "r-tr",
-        event: { type: "prompt" },
-        trigger: "heuristic",
-        confidence: 0.6,
-      });
-
-      expect(ctx.sendEvent).toHaveBeenCalledWith({
-        type: "transition-result",
-        id: "t1",
-        requestId: "r-tr",
-        success: false,
-        reason: "hysteresis",
-      });
-    });
-
-    it("forwards reason on a stale-session drop", () => {
-      const ctx = makeCtx();
-      (ctx.ptyManager.transitionState as ReturnType<typeof vi.fn>).mockReturnValue({
-        success: false,
-        reason: "stale-session",
-      });
-      const dispatch = createPtyHostMessageDispatcher(ctx);
-
-      dispatch({
-        type: "transition-state",
-        id: "t1",
-        requestId: "r-tr",
-        event: { type: "busy" },
-        trigger: "output",
-        confidence: 1,
-        spawnedAt: 999,
-      });
-
-      expect(ctx.sendEvent).toHaveBeenCalledWith({
-        type: "transition-result",
-        id: "t1",
-        requestId: "r-tr",
-        success: false,
-        reason: "stale-session",
-      });
-    });
-
-    it("omits reason on a successful transition", () => {
-      const ctx = makeCtx();
-      (ctx.ptyManager.transitionState as ReturnType<typeof vi.fn>).mockReturnValue({
-        success: true,
-      });
-      const dispatch = createPtyHostMessageDispatcher(ctx);
-
-      dispatch({
-        type: "transition-state",
-        id: "t1",
-        requestId: "r-tr",
-        event: { type: "busy" },
-        trigger: "output",
-        confidence: 1,
-      });
-
-      expect(ctx.sendEvent).toHaveBeenCalledWith({
-        type: "transition-result",
-        id: "t1",
-        requestId: "r-tr",
-        success: true,
-      });
-    });
   });
 });

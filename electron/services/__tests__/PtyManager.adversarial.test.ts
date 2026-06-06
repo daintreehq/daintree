@@ -267,7 +267,7 @@ describe("PtyManager adversarial", () => {
       args: ["-l"],
     });
     shared.acquirePtyProcess.mockImplementation(() => createPtyProcess());
-    shared.agentTransitionState.mockReturnValue({ success: true as const });
+    shared.agentTransitionState.mockReturnValue(true);
     shared.deleteSessionFile.mockResolvedValue(undefined);
     shared.persistAgentSession.mockResolvedValue(undefined);
   });
@@ -388,7 +388,7 @@ describe("PtyManager adversarial", () => {
     const spawnedAt = 4242;
     const event = { type: "busy" } as const;
 
-    shared.agentTransitionState.mockReturnValueOnce(false as const);
+    shared.agentTransitionState.mockReturnValueOnce(false);
     manager.spawn(
       "agent-1",
       spawnOptions({
@@ -401,7 +401,7 @@ describe("PtyManager adversarial", () => {
 
     const result = manager.transitionState("agent-1", event, "output", 0.37, spawnedAt);
 
-    expect(result).toEqual({ success: false, reason: "no-op" });
+    expect(result).toBe(false);
     expect(shared.agentTransitionState).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "agent-1",

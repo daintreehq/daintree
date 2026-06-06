@@ -16,11 +16,15 @@ import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js
 export type { TerminalFlowStatus };
 
 /**
- * Discriminator for `agent:state-transition-dropped` and the optional `reason`
- * on `transition-result`. Lives in this file (rather than the schema) because
- * it crosses the pty-host wire protocol — every reason must be representable
- * as a serializable string. Mirrors `AgentStateTransitionDropReasonSchema` in
+ * Discriminator for the wire-level `agent-state-transition-dropped` event.
+ * Lives in this file (rather than the schema) because it crosses the pty-host
+ * wire protocol — every reason must be representable as a serializable
+ * string. Mirrors `AgentStateTransitionDropReasonSchema` in
  * `electron/schemas/agent.ts`; keep the two in lockstep.
+ *
+ * Note: the bus event (`agent:state-transition-dropped` after the bridge)
+ * is the source of truth for diagnostics — the `transition-result` wire
+ * does NOT carry this discriminator; it only carries `success: boolean`.
  */
 export type AgentStateTransitionDropReason =
   | "no-op"
@@ -263,6 +267,8 @@ export type PtyHostEvent =
   | {
       type: "agent-state-transition-dropped";
       id: string;
+      agentId?: AgentId;
+      worktreeId?: string;
       outcome: AgentStateTransitionDropReason;
       currentState: AgentState;
       attemptedState?: AgentState;
@@ -306,7 +312,7 @@ export type PtyHostEvent =
   | { type: "terminal-pid"; id: string; pid: number }
   | { type: "snapshot"; id: string; requestId: string; snapshot: PtyHostTerminalSnapshot | null }
   | { type: "all-snapshots"; requestId: string; snapshots: PtyHostTerminalSnapshot[] }
-  | { type: "transition-result"; id: string; requestId: string; success: boolean; reason?: AgentStateTransitionDropReason }
+  | { type: "transition-result"; id: string; requestId: string; success: boolean }
   | { type: "pong" }
   | { type: "ready" }
   | { type: "terminals-for-project"; requestId: string; terminalIds: string[] }

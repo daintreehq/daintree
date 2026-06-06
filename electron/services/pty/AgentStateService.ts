@@ -83,6 +83,7 @@ export class AgentStateService {
       attemptedState?: AgentState;
       trigger?: AgentStateChangeTrigger;
       confidence?: number;
+      cwd?: string;
       spawnedAt?: number;
       terminalSpawnedAt?: number;
       reason?: string;

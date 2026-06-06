@@ -35,7 +35,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     })),
     markChecked: vi.fn(),
     updateObservedTitle: vi.fn(),
-    transitionState: vi.fn(() => ({ success: true as const })),
+    transitionState: vi.fn(() => true),
     trimScrollback: vi.fn(),
     setActivityMonitorTier: vi.fn(),
     setProcessTreeCache: vi.fn(),

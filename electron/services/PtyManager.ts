@@ -642,13 +642,14 @@ export class PtyManager extends EventEmitter {
   /**
    * Transition agent state from external observer.
    *
-   * Returns the discriminated `{ success, reason? }` shape so the pty-host
-   * lifecycle handler (`electron/pty-host/handlers/lifecycle.ts`) can include
-   * the precise `reason` on the `transition-result` wire message. The renderer-
-   * facing `PtyClient.transitionState` resolver continues to be `Promise<boolean>`
-   * — only the `success` field crosses that boundary. The `reason` is also
-   * captured in the bus event emitted by `AgentStateService.transitionState`,
-   * so the bus remains the source of truth for diagnostics.
+   * Returns `boolean` — preserved as the load-bearing contract for the
+   * `Promise<boolean>` resolver on the main-side `PtyClient.transitionState`
+   * and the production caller at `electron/ipc/handlers/terminal/io.ts:225`.
+   *
+   * The precise drop reason (hysteresis / stale-session / schema-invalid /
+   * no-op) is emitted on the bus as `agent:state-transition-dropped` from
+   * inside `AgentStateService`. The bus is the source of truth for
+   * diagnostics; the wire carries only the boolean.
    */
   transitionState(
     id: string,
@@ -656,36 +657,18 @@ export class PtyManager extends EventEmitter {
     trigger: AgentStateChangeTrigger,
     confidence: number,
     spawnedAt?: number
-  ): { success: boolean; reason?: import("../../../shared/types/pty-host.js").AgentStateTransitionDropReason } {
+  ): boolean {
     const terminal = this.registry.get(id);
     if (!terminal) {
-      return { success: false, reason: "stale-session" };
+      return false;
     }
-    const info = terminal.getInfo();
-    // Derive the stale-session reason up front so the wire can carry it; the
-    // bus emit inside `agentStateService.transitionState` is still the source
-    // of truth for the full dropped-event payload.
-    if (spawnedAt !== undefined && info.spawnedAt !== spawnedAt) {
-      const success = this.agentStateService.transitionState(
-        info,
-        event,
-        trigger,
-        confidence,
-        spawnedAt
-      );
-      return { success, reason: "stale-session" };
-    }
-    const success = this.agentStateService.transitionState(
-      info,
+    return this.agentStateService.transitionState(
+      terminal.getInfo(),
       event,
       trigger,
       confidence,
       spawnedAt
     );
-    // No-op vs hysteresis are both `updateAgentState` returning `false`; the
-    // bus event has already captured the precise discriminator. Leave `reason`
-    // undefined on success paths; main-side bus emission carries the rest.
-    return { success, ...(success ? {} : { reason: "no-op" as const }) };
   }
 
   /**

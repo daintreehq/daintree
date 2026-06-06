@@ -941,6 +941,8 @@ events.on("agent:state-transition-dropped", (payload) => {
     sendEvent({
       type: "agent-state-transition-dropped",
       id: payload.terminalId,
+      ...(payload.agentId ? { agentId: payload.agentId } : {}),
+      ...(payload.worktreeId ? { worktreeId: payload.worktreeId } : {}),
       outcome: payload.outcome,
       currentState: payload.currentState,
       ...(payload.attemptedState !== undefined ? { attemptedState: payload.attemptedState } : {}),

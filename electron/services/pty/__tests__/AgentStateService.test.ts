@@ -817,28 +817,42 @@ describe("AgentStateService", () => {
 
     it("emits agent:state-transition-dropped with validationErrors for schema-invalid payloads", () => {
       const service = new AgentStateService();
-      const terminal = createTerminal({ agentState: "idle" });
+      const terminal = createTerminal({ agentState: "working" });
       const dropped: Array<Record<string, unknown>> = [];
+      const stateChanges: unknown[] = [];
 
-      // Sanity: an obviously broken `confidence` of 5 (out of [0, 1] range)
-      // hits the schema-invalid drop path. We call `updateAgentState` directly
-      // with a confidence of 5 — the service normalises that to 1, so instead
-      // we patch a *valid* confidence to force a different validation failure
-      // path. The cleanest way to reach schema-invalid in this test is to
-      // stub the schema: we exercise the path indirectly by injecting a
-      // terminal whose `cwd` becomes a non-string. Easier — just verify the
-      // helper emits on `confidence` out-of-range by patching the schema.
-      // For this unit test we assert the "happy-path" (valid payload emits
-      // state-changed, no dropped event) and the structurally-broken path is
-      // covered by the integration smoke in `lifecycle.test.ts`.
       events.on("agent:state-transition-dropped", (payload) => {
         dropped.push(payload as unknown as Record<string, unknown>);
       });
+      events.on("agent:state-changed", (payload) => {
+        stateChanges.push(payload);
+      });
 
-      // A perfectly valid transition produces no dropped event.
-      const changed = service.updateAgentState(terminal, { type: "input" });
-      expect(changed).toBe(true);
-      expect(dropped).toHaveLength(0);
+      // Trigger a real Zod validation failure: `sessionCost: -1` fails the
+      // `.nonnegative()` schema on the new payload. The state transition
+      // itself is valid (working → completed) but the built payload is not,
+      // so the build path hits the schema-invalid branch.
+      const changed = service.updateAgentState(
+        terminal,
+        { type: "completion" },
+        "activity",
+        1.0,
+        undefined,
+        -1
+      );
+
+      expect(changed).toBe(false);
+      expect(stateChanges).toHaveLength(0);
+      expect(terminal.agentState).toBe("working");
+      expect(dropped).toHaveLength(1);
+      expect(dropped[0]).toMatchObject({
+        terminalId: "term-1",
+        outcome: "schema-invalid",
+        currentState: "working",
+        attemptedState: "completed",
+      });
+      expect(Array.isArray(dropped[0]?.validationErrors)).toBe(true);
+      expect((dropped[0]?.validationErrors as string[]).length).toBeGreaterThan(0);
     });
 
     it("includes temperature/heatAdded/changedChars on accepted agent:state-changed when observation is provided", () => {
