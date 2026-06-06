@@ -119,6 +119,15 @@ export interface AddPanelOptionsBase {
    * cleared on the next restart. See `serializePtyPanel` (intentionally omitted).
    */
   sessionLostOnRestore?: boolean;
+  /**
+   * User-initiated focus timestamp from the saved snapshot, propagated
+   * from the hydration boundary (`statePatcher.ts:buildArgsFor*` →
+   * `sanitizeLastActiveAt`) to the live panel. Read by
+   * `useAppHydration`'s post-hydration focus picker so the active
+   * worktree's most-recently-focused panel wins the boot pick (#9933).
+   * Not used for fresh spawns — only hydration paths set it.
+   */
+  lastActiveAt?: number;
 }
 
 /**
