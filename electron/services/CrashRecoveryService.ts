@@ -463,10 +463,21 @@ export class CrashRecoveryService {
         }
       }
       if (parseableBackupPath) {
-        try {
-          backupTimestamp = fs.statSync(parseableBackupPath).mtimeMs;
-        } catch {
-          // best-effort: backup timestamp is informational only
+        // Read the timestamp from the parsed snapshot's `capturedAt` rather
+        // than the file's disk mtime. On the Windows/EPERM copy-fallback
+        // path in preserveBackupForRecovery, the new crashed-* file's mtime
+        // is the relaunch time — feeding that into the priority chain
+        // would win over the heartbeat and re-introduce the #10062 bug we
+        // just fixed. `capturedAt` is the pre-crash write time stamped
+        // by captureSessionSnapshot, which is exactly what we want.
+        if (this.cachedBackupSnapshot) {
+          backupTimestamp = this.cachedBackupSnapshot.capturedAt;
+        } else {
+          try {
+            backupTimestamp = fs.statSync(parseableBackupPath).mtimeMs;
+          } catch {
+            // best-effort: backup timestamp is informational only
+          }
         }
       }
 
@@ -636,14 +647,19 @@ export class CrashRecoveryService {
         // would pass a bare `typeof === "number"` check and produce a
         // misleading attribution. Real values from buildWatchdogKillPayload
         // are always positive (killedAt = Date.now(), missedBeats >= 1,
-        // mainPid > 0).
+        // mainPid > 0). `JSON.parse('{"killedAt":1e309}')` returns
+        // `Infinity` which passes `> 0` but corrupts the report
+        // ("Infinity" in the GitHub crash URL), so finiteness is required.
         if (
           typeof parsed.killedAt === "number" &&
           parsed.killedAt > 0 &&
+          Number.isFinite(parsed.killedAt) &&
           typeof parsed.missedBeats === "number" &&
           parsed.missedBeats >= 1 &&
+          Number.isFinite(parsed.missedBeats) &&
           typeof parsed.mainPid === "number" &&
-          parsed.mainPid > 0
+          parsed.mainPid > 0 &&
+          Number.isFinite(parsed.mainPid)
         ) {
           annotation = {
             killedAt: parsed.killedAt,
@@ -1174,6 +1190,8 @@ function isValidMarker(value: unknown): value is MarkerFile {
     typeof value === "object" &&
     value !== null &&
     typeof (value as MarkerFile).sessionStartMs === "number" &&
+    Number.isFinite((value as MarkerFile).sessionStartMs) &&
+    (value as MarkerFile).sessionStartMs > 0 &&
     typeof (value as MarkerFile).appVersion === "string"
   );
 }

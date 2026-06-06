@@ -2376,11 +2376,17 @@ describe("CrashRecoveryService", () => {
       expect(pending!.entry.crashCause).toBe("suspended-then-lost");
     });
 
-    it("prefers backup mtime over the heartbeat when suspend/watchdog are absent", () => {
+    it("prefers backup capturedAt over the heartbeat when suspend/watchdog are absent", () => {
       const heartbeat = T0 + 30 * 60_000;
-      const backupMtime = T0 + 40 * 60_000;
+      const capturedAt = T0 + 40 * 60_000;
       const backupPath = writeBackup([{ id: "t1", createdAt: T0 }]);
-      fs.utimesSync(backupPath, new Date(backupMtime), new Date(backupMtime));
+      // Override capturedAt — it's the in-snapshot timestamp the resolver
+      // reads, not the on-disk mtime. (See the Windows/EPERM regression
+      // test below for why we trust capturedAt over the file mtime.)
+      const raw = JSON.parse(fs.readFileSync(backupPath, "utf-8"));
+      raw.capturedAt = capturedAt;
+      fs.writeFileSync(backupPath, JSON.stringify(raw));
+      fs.utimesSync(backupPath, new Date(T0 + 50 * 60_000), new Date(T0 + 50 * 60_000));
 
       writeMarkerWithHeartbeat(heartbeat);
 
@@ -2389,7 +2395,7 @@ describe("CrashRecoveryService", () => {
 
       const pending = svc.getPendingCrash();
       expect(pending).not.toBeNull();
-      expect(pending!.entry.timestamp).toBe(backupMtime);
+      expect(pending!.entry.timestamp).toBe(capturedAt);
     });
 
     it("clamps a heartbeat in the future down to the relaunch time", () => {
@@ -2458,10 +2464,15 @@ describe("CrashRecoveryService", () => {
         { id: "near", createdAt: heartbeat - 5_000 },
         { id: "far", createdAt: heartbeat + 3 * 60_000 },
       ]);
-      // Pin the backup mtime to the heartbeat so the priority chain picks
-      // the heartbeat-derived estimate (the file's natural mtime would
-      // be the relaunch time, which would win over the heartbeat by
-      // priority and re-introduce the bug we just fixed).
+      // Pin the backup's capturedAt to the heartbeat. The resolver reads
+      // capturedAt (not disk mtime) per the Windows/EPERM fix, so this
+      // is the value that wins the priority chain. Make it equal to the
+      // heartbeat so the heartbeat is the chosen estimate; set
+      // heartbeat a hair after capturedAt so the "near" panel lands
+      // inside the 30s window.
+      const raw = JSON.parse(fs.readFileSync(backupPath, "utf-8"));
+      raw.capturedAt = heartbeat - 1_000; // just before heartbeat
+      fs.writeFileSync(backupPath, JSON.stringify(raw));
       fs.utimesSync(backupPath, new Date(heartbeat), new Date(heartbeat));
       writeMarkerWithHeartbeat(heartbeat);
 
@@ -2527,6 +2538,100 @@ describe("CrashRecoveryService", () => {
       expect(pending!.entry.timestamp).toBe(recorderTimestamp);
       expect(pending!.entry.errorMessage).toBe("uncaught exception");
       expect(pending!.entry.cause).toBe("watchdog-deadlock");
+    });
+
+    it("uses the snapshot capturedAt as backup mtime (not the disk mtime of the copied crashed-* file)", () => {
+      // Windows/EPERM copy-fallback regression: when preserveBackupForRecovery
+      // falls back to copy-then-unlink, the new crashed-* file's disk mtime
+      // is the relaunch time. Reading capturedAt from the parsed snapshot
+      // (in-memory, set by the backup write itself) preserves the pre-crash
+      // mtime, so the priority chain picks the heartbeat-derived estimate
+      // instead of the relaunch time.
+      const heartbeat = T0 + 5 * 60_000;
+      const capturedAt = T0 + 4 * 60_000; // snapshot's capturedAt (older than heartbeat)
+      const backupPath = writeBackup([{ id: "t1", createdAt: T0 }]);
+      // Simulate the snapshot's capturedAt being the pre-crash write time.
+      const raw = JSON.parse(fs.readFileSync(backupPath, "utf-8"));
+      raw.capturedAt = capturedAt;
+      fs.writeFileSync(backupPath, JSON.stringify(raw));
+      writeMarkerWithHeartbeat(heartbeat);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      // capturedAt (T0+4m) wins over the heartbeat (T0+5m) per the
+      // priority chain. Without the capturedAt fix, the on-disk mtime
+      // (≈T0+DEAD_MS) would win and reproduce #10062.
+      expect(pending!.entry.timestamp).toBe(capturedAt);
+    });
+
+    it("rejects Infinity in the watchdog killedAt payload", () => {
+      // JSON.parse('{"killedAt":1e309}') returns Infinity, which passes
+      // `typeof === "number" && > 0`. Without the Number.isFinite guard
+      // the report would render "Crashed at: Infinity" and the dialog
+      // would show "Invalid Date".
+      const sessionStartMs = T0;
+      const flagMtime = T0 + 5 * 60_000;
+      writeMarkerWithHeartbeat(sessionStartMs);
+      const flagPath = path.join(userData, "watchdog-kill.flag");
+      fs.writeFileSync(
+        flagPath,
+        JSON.stringify({ killedAt: 1e309, missedBeats: 3, mainPid: 4242 }),
+        "utf8"
+      );
+      fs.utimesSync(flagPath, new Date(flagMtime), new Date(flagMtime));
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.cause).toBeUndefined();
+      expect(pending!.entry.watchdogKilledAt).toBeUndefined();
+      // The resolver should still surface a real crash time from the
+      // heartbeat — Infinity must not poison the priority chain.
+      expect(pending!.entry.timestamp).toBe(T0);
+    });
+
+    it("clamps an out-of-range suspendStart to the relaunch time (not the heartbeat)", () => {
+      // The clamp is applied to every priority source, not just the
+      // heartbeat. A future suspendStart (e.g. clock-skewed file) must
+      // clamp to nowMs.
+      const heartbeat = T0 + 5 * 60_000;
+      const futureSuspend = T0 + DEAD_MS + 60_000;
+      writeMarkerWithHeartbeat(heartbeat, { lastSuspendStart: futureSuspend });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.timestamp).toBe(T0 + DEAD_MS);
+    });
+
+    it("ignores a marker with a non-finite or non-positive sessionStartMs", () => {
+      // isValidMarker was tightened to require finite positive sessionStartMs.
+      // Infinity, -1, NaN, or 0 in sessionStartMs would let the resolver
+      // clamp to zero / produce a negative sessionDurationMs.
+      for (const bad of [Number.POSITIVE_INFINITY, -1, Number.NaN, 0]) {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: bad,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: T0 + 5 * 60_000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        // Corrupt marker is rejected — no pending crash, no entry built.
+        expect(svc.getPendingCrash()).toBeNull();
+      }
     });
   });
 });
