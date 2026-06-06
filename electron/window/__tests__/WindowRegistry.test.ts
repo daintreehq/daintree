@@ -637,5 +637,55 @@ describe("WindowRegistry", () => {
       );
       warnSpy.mockRestore();
     });
+
+    it("unregister swallows a synchronous throw from inside the revoke .then callback", async () => {
+      // A sync throw inside a `.then` callback becomes a rejected promise and
+      // lands in `.catch` — but a future refactor to `await` would surface it
+      // synchronously. Pin the current behavior so the warn-and-continue
+      // contract is regression-proof.
+      mockRevokeByWindowId.mockImplementationOnce(() => {
+        throw new Error("sync boom");
+      });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const registry = new WindowRegistry();
+      const win = makeMockWindow(33, 100);
+      registry.register(win);
+
+      expect(() => registry.unregister(33)).not.toThrow();
+
+      await new Promise((r) => setTimeout(r, 0));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[WindowRegistry] revokeByWindowId failed during unregister:",
+        expect.any(Error)
+      );
+      warnSpy.mockRestore();
+    });
+
+    it("two concurrent window closes each fire their own revokeByWindowId with the right windowId", async () => {
+      // Defends against a stale-closure refactor: each close path must
+      // resolve its own windowId, not capture an outer one.
+      const registry = new WindowRegistry();
+      const win1 = makeMockWindow(101, 200);
+      const win2 = makeMockWindow(202, 201);
+      registry.register(win1);
+      registry.register(win2);
+
+      mockRevokeByWindowId.mockClear();
+      registry.unregister(101);
+      await new Promise((r) => setTimeout(r, 0));
+      await Promise.resolve();
+      // After the first chain fully drains, fire the second close.
+      registry.unregister(202);
+      await new Promise((r) => setTimeout(r, 0));
+      await Promise.resolve();
+
+      expect(mockRevokeByWindowId).toHaveBeenCalledTimes(2);
+      expect(mockRevokeByWindowId).toHaveBeenCalledWith(101);
+      expect(mockRevokeByWindowId).toHaveBeenCalledWith(202);
+    });
   });
 });
