@@ -4,14 +4,14 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import type { SettingsTab } from "./SettingsDialog";
 
 interface ValidationRegistryApi {
-  setTabHasError: (tab: SettingsTab, hasError: boolean) => void;
-  clearTab: (tab: SettingsTab) => void;
+  setPublisherHasError: (tab: SettingsTab, publisher: symbol, hasError: boolean) => void;
   tabsWithErrors: ReadonlySet<SettingsTab>;
 }
 
@@ -24,32 +24,45 @@ interface ProviderProps {
 
 export function SettingsValidationProvider({ children }: ProviderProps) {
   const [tabsWithErrors, setTabsWithErrors] = useState<Set<SettingsTab>>(new Set());
+  // A tab has an error while at least one publisher reports one. Tracking
+  // publishers individually keeps multiple hooks sharing a tab key (e.g.
+  // CodeForgeSettingsTab + nested GitHubSettingsTab) from clobbering each other.
+  const publishersByTab = useRef(new Map<SettingsTab, Set<symbol>>());
 
-  const setTabHasError = useCallback((tab: SettingsTab, hasError: boolean) => {
-    setTabsWithErrors((prev) => {
-      if (prev.has(tab) === hasError) return prev;
-      const next = new Set(prev);
+  const setPublisherHasError = useCallback(
+    (tab: SettingsTab, publisher: symbol, hasError: boolean) => {
+      const publishers = publishersByTab.current.get(tab);
       if (hasError) {
-        next.add(tab);
-      } else {
-        next.delete(tab);
+        if (publishers) {
+          publishers.add(publisher);
+        } else {
+          publishersByTab.current.set(tab, new Set([publisher]));
+        }
+      } else if (publishers) {
+        publishers.delete(publisher);
+        if (publishers.size === 0) {
+          publishersByTab.current.delete(tab);
+        }
       }
-      return next;
-    });
-  }, []);
 
-  const clearTab = useCallback((tab: SettingsTab) => {
-    setTabsWithErrors((prev) => {
-      if (!prev.has(tab)) return prev;
-      const next = new Set(prev);
-      next.delete(tab);
-      return next;
-    });
-  }, []);
+      const tabHasError = publishersByTab.current.has(tab);
+      setTabsWithErrors((prev) => {
+        if (prev.has(tab) === tabHasError) return prev;
+        const next = new Set(prev);
+        if (tabHasError) {
+          next.add(tab);
+        } else {
+          next.delete(tab);
+        }
+        return next;
+      });
+    },
+    []
+  );
 
   const value = useMemo(
-    () => ({ setTabHasError, clearTab, tabsWithErrors }),
-    [setTabHasError, clearTab, tabsWithErrors]
+    () => ({ setPublisherHasError, tabsWithErrors }),
+    [setPublisherHasError, tabsWithErrors]
   );
 
   return <ValidationContext.Provider value={value}>{children}</ValidationContext.Provider>;
@@ -57,10 +70,12 @@ export function SettingsValidationProvider({ children }: ProviderProps) {
 
 /**
  * Hook for tabs to report their validation error state to the settings sidebar.
- * Automatically clears the error state when the component unmounts.
+ * Multiple components may report for the same tab; the sidebar shows an error
+ * while any of them does. Each hook instance only ever clears its own
+ * contribution, including on unmount.
  *
  * @param tab - The tab ID to report errors for
- * @param hasError - Whether the tab currently has validation errors
+ * @param hasError - Whether the caller currently has validation errors
  */
 export function useSettingsTabValidation(tab: SettingsTab, hasError: boolean) {
   const context = useContext(ValidationContext);
@@ -69,12 +84,15 @@ export function useSettingsTabValidation(tab: SettingsTab, hasError: boolean) {
     throw new Error("useSettingsTabValidation must be used within a SettingsValidationProvider");
   }
 
-  const { setTabHasError, clearTab } = context;
+  // Stable per-instance identity; deliberately not useId(), which can change
+  // across Strict Mode renders (react#27103).
+  const [publisherId] = useState(() => Symbol("settings-tab-validation"));
+  const { setPublisherHasError } = context;
 
   useEffect(() => {
-    setTabHasError(tab, hasError);
+    setPublisherHasError(tab, publisherId, hasError);
     return () => {
-      clearTab(tab);
+      setPublisherHasError(tab, publisherId, false);
     };
-  }, [setTabHasError, clearTab, tab, hasError]);
+  }, [setPublisherHasError, tab, publisherId, hasError]);
 }
