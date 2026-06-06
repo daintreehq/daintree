@@ -20,10 +20,49 @@ import {
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { Button } from "@/components/ui/button";
 import { APP_THEME_PREVIEW_KEYS } from "@shared/theme";
-import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
+import type {
+  AppColorScheme,
+  AppThemeValidationWarning,
+  AppThemeWarningKind,
+} from "@shared/types/appTheme";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
 import { useImageError } from "@/hooks/useImageError";
+
+// Plain-language summary per warning kind. Engine diagnostics (contrast ratios,
+// WCAG clause numbers, token-key names) are written for theme authors, not end
+// users — they stay behind the "Technical details" disclosure. The Record forces
+// every AppThemeWarningKind to have copy (a missing key is a compile error).
+const WARNING_KIND_COPY: Record<AppThemeWarningKind, string> = {
+  "type-inferred": "Theme mode was guessed from the colors",
+  "unknown-tokens": "Some values in this theme weren't recognized",
+  "low-contrast": "Some colors may be hard to see",
+  "terminal-legibility": "Some terminal colors may be hard to read",
+  unevaluable: "Some colors couldn't be checked",
+  "accent-rgb-fallback": "Accent tint colors may not render correctly",
+  "overlay-contrast": "Hover highlights may be hard to see",
+};
+
+// Collapse the flat warning list to one entry per kind (first-seen order), so the
+// import result reads as a short scannable list instead of N near-identical rows.
+// Raw messages are grouped under their kind for the technical-details disclosure.
+function groupWarningsByKind(
+  warnings: AppThemeValidationWarning[]
+): Array<{ kind: AppThemeWarningKind; messages: string[] }> {
+  const order: AppThemeWarningKind[] = [];
+  const byKind = new Map<AppThemeWarningKind, string[]>();
+  for (const warning of warnings) {
+    let messages = byKind.get(warning.kind);
+    if (!messages) {
+      messages = [];
+      byKind.set(warning.kind, messages);
+      order.push(warning.kind);
+    }
+    messages.push(warning.message);
+  }
+  return order.map((kind) => ({ kind, messages: byKind.get(kind)! }));
+}
 
 function shuffleArray<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -200,6 +239,15 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     }
   };
 
+  // The import result block mounts after an async resolve, so screen-reader users
+  // get no announcement from it appearing. Route the summary through the shared
+  // announcer (AppDialog mounts AccessibilityAnnouncer in-subtree, handling the
+  // Chromium aria-modal filter and document.ariaNotify).
+  const announceImportResult = (message: string) => {
+    setImportMessage(message);
+    useAnnouncerStore.getState().announce(message);
+  };
+
   const handleImport = async () => {
     setImportMessage(null);
     setImportWarnings([]);
@@ -208,7 +256,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
       const result = await appThemeClient.importTheme();
       if (!result.ok) {
         if (!result.errors.includes("Import cancelled")) {
-          setImportMessage(result.errors[0] ?? "Failed to import app theme.");
+          announceImportResult(result.errors[0] ?? "Failed to import app theme.");
         }
         return;
       }
@@ -219,15 +267,15 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
 
       if (result.warnings.length > 0) {
         setImportWarnings(result.warnings);
-        setImportMessage(
+        announceImportResult(
           `Imported "${result.scheme.name}" with ${result.warnings.length} warning${result.warnings.length === 1 ? "" : "s"}.`
         );
       } else {
-        setImportMessage(`Imported "${result.scheme.name}".`);
+        announceImportResult(`Imported "${result.scheme.name}".`);
       }
     } catch (error) {
       logError("Failed to import app theme", error);
-      setImportMessage("Failed to import app theme.");
+      announceImportResult("Failed to import app theme.");
     }
   };
 
@@ -238,7 +286,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
       await appThemeClient.exportTheme(effectiveScheme);
     } catch (error) {
       logError("Failed to export app theme", error);
-      setImportMessage("Failed to export app theme.");
+      announceImportResult("Failed to export app theme.");
     }
   };
 
@@ -290,7 +338,10 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
       )}
 
       {importMessage && (
-        <div className="rounded-[var(--radius-md)] border border-overlay bg-surface-panel px-3 py-2">
+        <div
+          role="status"
+          className="rounded-[var(--radius-md)] border border-overlay bg-surface-panel px-3 py-2"
+        >
           <div className="flex items-start gap-2">
             <AlertTriangle
               className={cn(
@@ -301,13 +352,22 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
             <div className="min-w-0">
               <p className="text-xs text-daintree-text">{importMessage}</p>
               {importWarnings.length > 0 && (
-                <ul className="mt-1 space-y-1">
-                  {importWarnings.map((warning, index) => (
-                    <li
-                      key={`${warning.message}-${index}`}
-                      className="text-[11px] text-daintree-text/60"
-                    >
-                      {warning.message}
+                <ul className="mt-1 space-y-1.5">
+                  {groupWarningsByKind(importWarnings).map(({ kind, messages }) => (
+                    <li key={kind} className="text-[11px] text-daintree-text/60">
+                      {WARNING_KIND_COPY[kind]}
+                      <details className="mt-0.5">
+                        <summary className="cursor-pointer text-daintree-text/40 transition-colors hover:text-daintree-text/70">
+                          Technical details
+                        </summary>
+                        <ul className="mt-1 space-y-0.5 pl-3">
+                          {messages.map((message, index) => (
+                            <li key={index} className="break-words text-daintree-text/40">
+                              {message}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
                     </li>
                   ))}
                 </ul>
