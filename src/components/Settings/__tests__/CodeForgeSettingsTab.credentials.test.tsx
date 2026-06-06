@@ -171,7 +171,7 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
 
     render(<CodeForgeSettingsTab activeSubtab="acme.gitea" onSubtabChange={vi.fn()} />);
 
-    const clearButton = await screen.findByRole("button", { name: "Clear" });
+    const clearButton = await screen.findByRole("button", { name: /clear credentials/i });
     fireEvent.click(clearButton);
 
     await waitFor(() => {

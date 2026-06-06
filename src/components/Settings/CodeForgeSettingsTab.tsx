@@ -549,9 +549,10 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
             onClick={handleClear}
             variant="outline"
             size="sm"
+            aria-label="Clear credentials"
             className="text-status-error border-daintree-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
           >
-            Clear
+            Clear credentials
           </Button>
         )}
       </div>

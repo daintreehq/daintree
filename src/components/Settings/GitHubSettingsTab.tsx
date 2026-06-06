@@ -119,7 +119,7 @@ export function GitHubSettingsTab() {
     } catch (error) {
       logError("Failed to save GitHub token", error);
       setValidationResult("error");
-      setErrorMessage("Failed to save token");
+      setErrorMessage("Couldn't save token");
     } finally {
       setIsValidating(false);
     }
@@ -147,7 +147,7 @@ export function GitHubSettingsTab() {
     } catch (error) {
       logError("Failed to clear GitHub token", error);
       setValidationResult("error");
-      setErrorMessage("Failed to clear token");
+      setErrorMessage("Couldn't clear token");
     }
   };
 
@@ -175,7 +175,7 @@ export function GitHubSettingsTab() {
     } catch (error) {
       logError("Failed to test GitHub token", error);
       setValidationResult("test-error");
-      setErrorMessage("Failed to validate token");
+      setErrorMessage("Couldn't validate token");
     } finally {
       setIsTesting(false);
     }
@@ -250,9 +250,10 @@ export function GitHubSettingsTab() {
               onClick={handleClearToken}
               variant="outline"
               size="sm"
+              aria-label="Clear token"
               className="text-status-error border-daintree-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
             >
-              Clear
+              Clear token
             </Button>
           )}
         </div>
@@ -266,19 +267,19 @@ export function GitHubSettingsTab() {
         {validationResult === "test-success" && (
           <p className="text-xs text-status-success flex items-center gap-1">
             <Check className="w-3 h-3" />
-            Token is valid! Click Save to store it.
+            Token valid — click Save to store it
           </p>
         )}
         {validationResult === "error" && (
           <p className="text-xs text-status-error flex items-center gap-1">
             <AlertCircle className="w-3 h-3" />
-            {errorMessage || "Invalid token. Please check and try again."}
+            {errorMessage || "Invalid token"}
           </p>
         )}
         {validationResult === "test-error" && (
           <p className="text-xs text-status-error flex items-center gap-1">
             <AlertCircle className="w-3 h-3" />
-            {errorMessage || "Token test failed. Please check your token."}
+            {errorMessage || "Invalid token"}
           </p>
         )}
       </ForgeSettingBlock>
@@ -295,7 +296,7 @@ export function GitHubSettingsTab() {
           className="text-daintree-text border-daintree-border hover:bg-daintree-border"
         >
           <ExternalLink />
-          Create Token on GitHub
+          Create token on GitHub
         </Button>
         <div className="space-y-1">
           <p className="text-xs text-daintree-text/50">Required scopes:</p>
