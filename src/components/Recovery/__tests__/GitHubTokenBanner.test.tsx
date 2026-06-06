@@ -53,6 +53,7 @@ describe("GitHubTokenBanner", () => {
 
   it("routes reconnect through the settings action with the token sectionId", () => {
     useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+    const dispatchEventSpy = vi.spyOn(window, "dispatchEvent");
 
     render(<GitHubTokenBanner />);
     fireEvent.click(screen.getByRole("button", { name: /Reconnect to GitHub/i }));
@@ -63,6 +64,12 @@ describe("GitHubTokenBanner", () => {
       { tab: "code-forge", subtab: BUILTIN_GITHUB_PROVIDER_ID, sectionId: "github-token" },
       { source: "user" }
     );
+    // The legacy raw CustomEvent path must be gone — no settings event fired.
+    expect(
+      dispatchEventSpy.mock.calls.some(([event]) => event.type === "daintree:open-settings-tab")
+    ).toBe(false);
+
+    dispatchEventSpy.mockRestore();
   });
 
   it("hides automatically when store transitions back to healthy", () => {

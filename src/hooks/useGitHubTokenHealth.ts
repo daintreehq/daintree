@@ -35,12 +35,15 @@ export function useGitHubTokenHealth(): void {
         // case where the toolbar's `useGitHubTokenExpiryNotification` isn't
         // mounted. Shares `supersedeKey` with that hook so whichever fires
         // second archives the first — one active row per token-expiry event.
+        // No `correlationId`: it would only thread this row so that a second
+        // expiry cycle (after the toolbar archived the first row) re-promotes
+        // the backstop into an unwanted toast via the un-snooze re-toast path.
+        // The supersede dedup runs on `supersedeKey` alone.
         notify({
           type: "warning",
           priority: "low",
           title: "GitHub token expired",
           message: "GitHub token expired — reconnect to restore GitHub features.",
-          correlationId: "github-token-health",
           supersedeKey: "github.token",
           countable: false,
         });
