@@ -14,7 +14,7 @@ const shared = vi.hoisted(() => ({
     kind: string;
     agentState?: string;
     cwd?: string;
-    isExited: boolean;
+    hasPty?: boolean;
   }>,
   storeValues: new Map<string, unknown>(),
 }));
@@ -77,12 +77,6 @@ vi.mock("../LogBuffer.js", () => ({
   },
 }));
 
-vi.mock("../PtyManager.js", () => ({
-  getPtyManager: vi.fn(() => ({
-    getAll: () => shared.terminals,
-  })),
-}));
-
 vi.mock("../../store.js", () => ({
   store: {
     get: vi.fn((key: string) => shared.storeValues.get(key)),
@@ -98,7 +92,10 @@ type DiagnosticsCollectorModule = typeof import("../DiagnosticsCollector.js");
 function createDeps(eventBuffer?: { getAll: () => unknown[] }) {
   return {
     eventBuffer,
-  } as import("../../ipc/types.js").HandlerDependencies;
+    ptyClient: {
+      getAllTerminalsAsync: async () => shared.terminals,
+    },
+  } as unknown as import("../../ipc/types.js").HandlerDependencies;
 }
 
 function setDefaultExecFile(): void {
@@ -131,6 +128,40 @@ describe("DiagnosticsCollector adversarial", () => {
     shared.storeValues.set("appState", { recentProject: "/Users/alice/project" });
     setDefaultExecFile();
     diagnostics = await import("../DiagnosticsCollector.js");
+  });
+
+  it("TERMINALS_POPULATED_FROM_PTY_CLIENT (#10054)", async () => {
+    // Regression: the bundle read the never-populated main-process PtyManager
+    // singleton, so terminals was always []. It must now reflect the pty-host
+    // registry surfaced via ptyClient.getAllTerminalsAsync().
+    shared.terminals = [
+      { id: "t1", kind: "agent", agentState: "working", cwd: "/Users/alice/p", hasPty: true },
+      { id: "t2", kind: "terminal", cwd: "/Users/alice/p", hasPty: false },
+    ];
+
+    const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+      terminals: Array<{ id: string; agentState?: string; isExited: boolean; cwd: string | null }>;
+    };
+
+    expect(payload.terminals).toHaveLength(2);
+    expect(payload.terminals[0]).toMatchObject({
+      id: "t1",
+      agentState: "working",
+      isExited: false,
+    });
+    // hasPty:false maps to isExited:true.
+    expect(payload.terminals[1]).toMatchObject({ id: "t2", isExited: true });
+    // Path sanitized via the TelemetryService mock.
+    expect(payload.terminals[0].cwd).toBe("/Users/<redacted>/p");
+  });
+
+  it("TERMINALS_EMPTY_WHEN_PTY_CLIENT_ABSENT (#10054)", async () => {
+    const payload = (await diagnostics.collectDiagnostics({
+      eventBuffer: undefined,
+    } as unknown as import("../../ipc/types.js").HandlerDependencies)) as {
+      terminals: unknown[];
+    };
+    expect(payload.terminals).toEqual([]);
   });
 
   it("LOG_HISTORY_BOUNDED_TO_100", async () => {

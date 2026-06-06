@@ -129,10 +129,6 @@ vi.mock("../../services/ProcessMemoryMonitor.js", () => ({
   forgetEluSample: vi.fn(),
 }));
 
-vi.mock("../../services/PtyManager.js", () => ({
-  getPtyManager: vi.fn(() => ({ getAll: () => [] })),
-}));
-
 vi.mock("../../ipc/errorHandlers.js", () => ({
   notifyError: vi.fn(),
 }));

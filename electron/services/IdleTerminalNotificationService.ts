@@ -5,6 +5,8 @@ import type {
   IdleTerminalNotifyPayload,
   IdleTerminalProjectEntry,
 } from "../../shared/types/ipc/idleTerminals.js";
+import type { PtyClient } from "./PtyClient.js";
+import { getPtyClient } from "../window/serviceRefs.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
@@ -22,17 +24,6 @@ const MAX_THRESHOLD_MINUTES = 1440; // 24h
 const MIN_COOLDOWN_MINUTES = 60;
 
 const ACTIVE_AGENT_STATES: ReadonlySet<AgentState> = new Set(["working", "waiting", "directing"]);
-
-interface PtyManagerLike {
-  getAll: () => Array<{
-    id: string;
-    projectId?: string;
-    agentState?: AgentState;
-    lastInputTime: number;
-    lastOutputTime: number;
-    hasPty?: boolean;
-  }>;
-}
 
 /**
  * IdleTerminalNotificationService — Notifies users when background-project terminals
@@ -64,6 +55,16 @@ export class IdleTerminalNotificationService {
   private readonly INITIAL_CHECK_DELAY_MS = 5_000;
   private readonly WAKE_QUIET_MS = 30_000;
   private currentCheckIntervalMs = this.CHECK_INTERVAL_MS;
+  private ptyClient: PtyClient | null = null;
+
+  /**
+   * Inject the live PtyClient so idle checks read the real terminal registry
+   * in the pty-host process. The main-process `getPtyManager()` singleton is
+   * never populated (#10054). Passing `null` clears the reference on shutdown.
+   */
+  setPtyClient(client: PtyClient | null): void {
+    this.ptyClient = client;
+  }
 
   private normalizeThreshold(value: unknown, fallback: number): number {
     if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -118,6 +119,11 @@ export class IdleTerminalNotificationService {
 
   start(): void {
     if (this.checkInterval) return;
+
+    // Re-acquire the PtyClient on (re)start — stop() clears it, so a Settings
+    // toggle off→on would otherwise leave checkAndNotify() guarded-out forever.
+    this.ptyClient ??= getPtyClient();
+
     const config = this.getConfig();
     if (!config.enabled) {
       logInfo("idle-terminal-notify-disabled");
@@ -192,6 +198,10 @@ export class IdleTerminalNotificationService {
       this.removeWakeListener();
       this.removeWakeListener = null;
     }
+
+    // Clear the injected PtyClient ref on shutdown so we don't pin a stale
+    // host client across a restart (lesson #8637).
+    this.ptyClient = null;
   }
 
   updatePollInterval(ms: number): void {
@@ -309,9 +319,8 @@ export class IdleTerminalNotificationService {
     const projects = projectStore.getAllProjects();
     if (projects.length === 0) return;
 
-    const { getPtyManager } = await import("./PtyManager.js");
-    const ptyManager = getPtyManager() as unknown as PtyManagerLike;
-    const allTerminals = ptyManager.getAll();
+    if (!this.ptyClient) return;
+    const allTerminals = await this.ptyClient.getAllTerminalsAsync();
 
     const qualifying: IdleTerminalProjectEntry[] = [];
 
@@ -387,6 +396,7 @@ export function getIdleTerminalNotificationService(): IdleTerminalNotificationSe
 
 export function initializeIdleTerminalNotificationService(): IdleTerminalNotificationService {
   const service = getIdleTerminalNotificationService();
+  service.setPtyClient(getPtyClient());
   service.start();
   return service;
 }

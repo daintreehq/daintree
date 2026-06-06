@@ -102,7 +102,9 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
         const pid = ptyManager.getTerminal(id)?.ptyProcess.pid;
         if (pid !== undefined) pids.push(pid);
       }
-      const results = await ptyManager.gracefulKillByProject(msg.projectId);
+      const results = await ptyManager.gracefulKillByProject(msg.projectId, {
+        preserveSession: msg.preserveSession,
+      });
       for (const pid of pids) {
         resourceGovernor.trackKilledPid(pid);
       }

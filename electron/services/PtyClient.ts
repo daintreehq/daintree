@@ -87,6 +87,8 @@ interface TerminalInfoResponse {
   agentState?: AgentState;
   waitingReason?: string;
   lastStateChange?: number;
+  lastInputTime?: number;
+  lastOutputTime?: number;
   spawnedAt: number;
   isTrashed?: boolean;
   trashExpiresAt?: number;
@@ -895,7 +897,8 @@ export class PtyClient extends EventEmitter {
   }
 
   async gracefulKillByProject(
-    projectId: string
+    projectId: string,
+    options?: { preserveSession?: boolean }
   ): Promise<Array<{ id: string; agentSessionId: string | null }>> {
     const requestId = this.broker.generateId(`graceful-kill-by-project-${projectId}`);
     const promise = this.broker.register<Array<{ id: string; agentSessionId: string | null }>>(
@@ -905,7 +908,14 @@ export class PtyClient extends EventEmitter {
         timeoutMs: PTY_TIMEOUTS["graceful-kill-by-project"],
       }
     );
-    this.send({ type: "graceful-kill-by-project", projectId, requestId });
+    this.send({
+      type: "graceful-kill-by-project",
+      projectId,
+      requestId,
+      ...(options?.preserveSession !== undefined
+        ? { preserveSession: options.preserveSession }
+        : {}),
+    });
     return promise.catch(() => []);
   }
 

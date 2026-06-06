@@ -49,6 +49,8 @@ function makeTerminal(overrides: Record<string, unknown> = {}) {
     agentState: "idle",
     waitingReason: undefined,
     lastStateChange: 0,
+    lastInputTime: 0,
+    lastOutputTime: 0,
     spawnedAt: 0,
     isTrashed: undefined,
     trashExpiresAt: undefined,
@@ -131,6 +133,16 @@ describe("mapTerminalInfo", () => {
 
     expect(result.activityTier).toBe("background");
     expect(getActivityTier).toHaveBeenCalledWith("term-42");
+  });
+
+  it("forwards lastInputTime/lastOutputTime so idle detection can run (#10054)", () => {
+    // IdleTerminalNotificationService reads these off get-all-terminals; if the
+    // mapper drops them, idle computation falls back to "unknown activity" and
+    // notifications never fire.
+    const ctx = createCtx();
+    const result = mapTerminalInfo(makeTerminal({ lastInputTime: 111, lastOutputTime: 222 }), ctx);
+    expect(result.lastInputTime).toBe(111);
+    expect(result.lastOutputTime).toBe(222);
   });
 
   it("narrows detectedAgentId to BuiltInAgentId, dropping unknown values", () => {
