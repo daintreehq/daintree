@@ -104,12 +104,16 @@ function clampToDisplay(bounds: { x: number; y: number; width: number; height: n
 } {
   const display = screen.getDisplayMatching(bounds as Electron.Rectangle);
   if (!display) return bounds;
-  const wa = display.workArea;
-  const clampedWidth = Math.round(Math.min(bounds.width, wa.width));
-  const clampedHeight = Math.round(Math.min(bounds.height, wa.height));
+  // Some Wayland/GNOME compositors report a zero-dimension workArea; fall back to
+  // the display's full bounds so the clamp math never produces a 0x0 window.
+  const safeWorkArea = display.workArea.width > 0 && display.workArea.height > 0
+    ? display.workArea
+    : display.bounds;
+  const clampedWidth = Math.round(Math.min(bounds.width, safeWorkArea.width));
+  const clampedHeight = Math.round(Math.min(bounds.height, safeWorkArea.height));
   return {
-    x: Math.max(wa.x, Math.min(bounds.x, wa.x + wa.width - clampedWidth)),
-    y: Math.max(wa.y, Math.min(bounds.y, wa.y + wa.height - clampedHeight)),
+    x: Math.max(safeWorkArea.x, Math.min(bounds.x, safeWorkArea.x + safeWorkArea.width - clampedWidth)),
+    y: Math.max(safeWorkArea.y, Math.min(bounds.y, safeWorkArea.y + safeWorkArea.height - clampedHeight)),
     width: clampedWidth,
     height: clampedHeight,
   };
@@ -186,7 +190,13 @@ export function createWindowWithState(
     ? screen.getDisplayMatching(bounds)
     : screen.getPrimaryDisplay();
 
-  if (!display || bounds.width <= 0 || bounds.height <= 0) {
+  if (
+    !display ||
+    !Number.isFinite(bounds.width) ||
+    !Number.isFinite(bounds.height) ||
+    bounds.width <= 0 ||
+    bounds.height <= 0
+  ) {
     win.center();
   } else {
     const workArea = display.workArea;
