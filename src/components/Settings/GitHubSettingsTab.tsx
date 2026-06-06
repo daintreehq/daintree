@@ -279,7 +279,7 @@ export function GitHubSettingsTab() {
         {validationResult === "test-error" && (
           <p className="text-xs text-status-error flex items-center gap-1">
             <AlertCircle className="w-3 h-3" />
-            {errorMessage || "Token invalid"}
+            {errorMessage || "Invalid token"}
           </p>
         )}
       </ForgeSettingBlock>
