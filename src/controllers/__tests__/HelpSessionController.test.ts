@@ -890,19 +890,34 @@ describe("HelpSessionController — launch error routing", () => {
           action: expect.objectContaining({
             label: "Open installer page",
             actionId: "system.openExternal",
+            actionArgs: { url: "https://daintree.org/download" },
           }),
         })
       );
     });
     expect(ctrl.getSnapshot().launchError).toBeNull();
-    // Toast body must not promise a Retry the click can't deliver.
+    // Toast body must not promise a Retry the click can't deliver, and must
+    // keep the same jargon-free contract the banner enforces.
     const call = (notify as ReturnType<typeof vi.fn>).mock.calls.find(
       (c) =>
         typeof c[0] === "object" &&
         c[0] !== null &&
         (c[0] as { title?: string }).title === "Assistant files missing"
     );
-    expect(call?.[0]?.message).not.toMatch(/Try again/i);
+    const payload = call?.[0] as { message: string; action: { onClick: () => void } };
+    expect(payload.message).not.toMatch(/Try again/i);
+    expect(payload.message).not.toMatch(/\bMCP\b/i);
+    expect(payload.message).not.toMatch(/\btoken\b/i);
+    expect(payload.message).not.toMatch(/\bbearer\b/i);
+    // Clicking the toast action must fire the same action the banner's
+    // Open installer page button does — locked to the same URL and source.
+    (actionService.dispatch as ReturnType<typeof vi.fn>).mockClear();
+    payload.action.onClick();
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://daintree.org/download" },
+      { source: "user" }
+    );
     ctrl.stop();
   });
 

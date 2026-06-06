@@ -130,6 +130,39 @@ describe("HelpPanelBanners — launch error", () => {
     expect(onOpenAssistantSettings).toHaveBeenCalledTimes(1);
   });
 
+  it("renders the exact CTA matrix per kind (label + variant + order)", () => {
+    const cases: { kind: LaunchErrorKind; labels: string[] }[] = [
+      { kind: "mcp-server-not-started", labels: ["Retry", "Open settings"] },
+      { kind: "mcp-probe-failed", labels: ["Retry", "Open settings"] },
+      { kind: "spawn-failed", labels: ["Retry"] },
+      { kind: "folder-unavailable", labels: ["Open logs", "Open installer page"] },
+    ];
+    for (const { kind, labels } of cases) {
+      const { getByTestId, queryAllByRole, unmount } = render(
+        <HelpPanelBanners {...baseProps()} launchError={{ agentId: "claude", kind }} />
+      );
+      const banner = getByTestId("help-launch-error-banner");
+      const actionRow = banner.querySelector(".flex.items-center.gap-2.flex-wrap.pl-5");
+      expect(actionRow).not.toBeNull();
+      const buttons = Array.from(actionRow!.querySelectorAll("button"));
+      const actualLabels = buttons.map((b) => b.textContent?.trim() ?? "");
+      expect(actualLabels).toEqual(labels);
+      // folder-unavailable: "Open installer page" is the primary CTA, so it
+      // carries the bg-daintree-text/10 fill — keep the visual rank honest.
+      if (kind === "folder-unavailable") {
+        const primary = buttons.find((b) => b.textContent?.trim() === "Open installer page");
+        expect(primary?.className).toMatch(/font-medium/);
+        expect(primary?.className).toMatch(/bg-daintree-text\/10/);
+        const secondary = buttons.find((b) => b.textContent?.trim() === "Open logs");
+        expect(secondary?.className).not.toMatch(/font-medium/);
+      }
+      // Sanity: no orphaned buttons beyond the dismiss × and the CTAs above.
+      const allButtons = queryAllByRole("button");
+      expect(allButtons.length).toBe(labels.length + 1);
+      unmount();
+    }
+  });
+
   it("wires the folder-unavailable Open logs and Open installer page buttons", () => {
     const onOpenLogs = vi.fn();
     const onOpenInstallerPage = vi.fn();
