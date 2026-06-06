@@ -12,6 +12,17 @@ const mocks = vi.hoisted(() => {
   let keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
   let exitHandler: ((exitCode: number) => void) | null = null;
 
+  const defaultAppearance = {
+    fontSize: 14,
+    fontFamily: "JetBrains Mono",
+    performanceMode: false,
+    scrollbackLines: 1_000,
+    projectScrollback: undefined as number | undefined,
+    wrapperBackground: "rgb(0, 0, 0)",
+    screenReaderMode: false,
+  };
+  const appearance = { ...defaultAppearance, effectiveTheme: {} as object };
+
   const managed = {
     terminal: {
       rows: 24,
@@ -51,6 +62,7 @@ const mocks = vi.hoisted(() => {
     get: vi.fn(() => managed),
     flushResize: vi.fn(),
     detach: vi.fn(),
+    updateOptions: vi.fn(),
     updateRefreshTierProvider: vi.fn(),
     applyRendererPolicy: vi.fn(),
     boostRefreshRate: vi.fn(),
@@ -61,7 +73,7 @@ const mocks = vi.hoisted(() => {
   };
 
   return {
-    effectiveTheme: {},
+    appearance,
     managed,
     terminalInstanceService,
     writeTerminalInputOrFleet: vi.fn(),
@@ -74,6 +86,7 @@ const mocks = vi.hoisted(() => {
       managed.isInputLocked = false;
       managed.isAttaching = false;
       (managed as { keyHandlerInstalled?: boolean }).keyHandlerInstalled = false;
+      Object.assign(appearance, defaultAppearance, { effectiveTheme: {} });
     },
   };
 });
@@ -91,20 +104,28 @@ vi.mock("../useTerminalFileTransfer", () => ({
 }));
 
 vi.mock("@/hooks/useTerminalAppearance", () => ({
-  useTerminalAppearance: () => ({
-    fontSize: 14,
-    fontFamily: "JetBrains Mono",
-    performanceMode: false,
-    scrollbackLines: 1_000,
-    projectScrollback: undefined,
-    effectiveTheme: mocks.effectiveTheme,
-    wrapperBackground: "rgb(0, 0, 0)",
-    screenReaderMode: false,
-  }),
+  // Reads the mutable appearance object so tests can change appearance values
+  // between rerenders (#9929 regression coverage).
+  useTerminalAppearance: () => ({ ...mocks.appearance }),
 }));
 
 vi.mock("@/config/xtermConfig", () => ({
-  getXtermOptions: vi.fn(() => ({ cursorBlink: true })),
+  getXtermOptions: vi.fn(
+    (config: {
+      fontSize: number;
+      fontFamily: string;
+      scrollback: number;
+      theme?: object;
+      screenReaderMode?: boolean;
+    }) => ({
+      cursorBlink: true,
+      fontSize: config.fontSize,
+      fontFamily: config.fontFamily,
+      theme: config.theme,
+      scrollback: config.scrollback,
+      screenReaderMode: config.screenReaderMode ?? false,
+    })
+  ),
 }));
 
 vi.mock("@/config/terminalFont", () => ({
@@ -450,5 +471,143 @@ describe("XtermAdapter lifecycle", () => {
       )
     );
     expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies theme changes in-place without detaching or reattaching (#9929)", async () => {
+    const view = renderAdapter();
+
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
+    // Mount applies options through getOrCreate — no redundant updateOptions
+    // call. (The real getOrCreate routes existing instances through
+    // updateOptions internally; the adapter records what it passed to
+    // getOrCreate as applied, which is what keeps this assertion valid with
+    // the simplified mock.)
+    expect(mocks.terminalInstanceService.updateOptions).not.toHaveBeenCalled();
+
+    const newTheme = { background: "#ff0000" };
+    mocks.appearance.effectiveTheme = newTheme;
+
+    view.rerender(
+      <Suspense fallback={null}>
+        <XtermAdapter
+          terminalId="term-1"
+          launchAgentId="claude"
+          onReady={vi.fn()}
+          onExit={vi.fn()}
+          onInput={vi.fn()}
+          getRefreshTier={() => TerminalRefreshTier.FOCUSED}
+          cwd="/repo/initial"
+        />
+      </Suspense>
+    );
+
+    // Theme-only change forwards exactly the theme key — including unchanged
+    // fontSize/fontFamily would trigger a refit of every mounted terminal.
+    await waitFor(() =>
+      expect(mocks.terminalInstanceService.updateOptions).toHaveBeenCalledWith("term-1", {
+        theme: newTheme,
+      })
+    );
+    expect(mocks.terminalInstanceService.updateOptions).toHaveBeenCalledTimes(1);
+
+    // The attach lifecycle must not re-run: no detach (which blurs the focused
+    // terminal), no re-attach, no visibility flicker, no instance re-creation.
+    expect(mocks.terminalInstanceService.detach).not.toHaveBeenCalled();
+    expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1);
+    expect(mocks.terminalInstanceService.getOrCreate).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.terminalInstanceService.setVisible.mock.calls.some(([, visible]) => visible === false)
+    ).toBe(false);
+
+    // Real unmount still tears down through detach exactly once.
+    view.unmount();
+    expect(mocks.terminalInstanceService.detach).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies font size changes via updateOptions without an attach cycle (#9929)", async () => {
+    const view = renderAdapter();
+
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
+
+    mocks.appearance.fontSize = 16;
+
+    view.rerender(
+      <Suspense fallback={null}>
+        <XtermAdapter
+          terminalId="term-1"
+          launchAgentId="claude"
+          onReady={vi.fn()}
+          onExit={vi.fn()}
+          onInput={vi.fn()}
+          getRefreshTier={() => TerminalRefreshTier.FOCUSED}
+          cwd="/repo/initial"
+        />
+      </Suspense>
+    );
+
+    await waitFor(() =>
+      expect(mocks.terminalInstanceService.updateOptions).toHaveBeenCalledWith("term-1", {
+        fontSize: 16,
+      })
+    );
+    expect(mocks.terminalInstanceService.detach).not.toHaveBeenCalled();
+    expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call updateOptions when appearance is unchanged across rerenders (#9929)", async () => {
+    const view = renderAdapter();
+
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
+
+    view.rerender(
+      <Suspense fallback={null}>
+        <XtermAdapter
+          terminalId="term-1"
+          launchAgentId="claude"
+          onReady={vi.fn()}
+          onExit={vi.fn()}
+          onInput={vi.fn()}
+          getRefreshTier={() => TerminalRefreshTier.FOCUSED}
+          cwd="/repo/next"
+        />
+      </Suspense>
+    );
+
+    expect(mocks.terminalInstanceService.updateOptions).not.toHaveBeenCalled();
+    expect(mocks.terminalInstanceService.detach).not.toHaveBeenCalled();
+    expect(mocks.terminalInstanceService.getOrCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("batches simultaneous appearance changes into a single delta call (#9929)", async () => {
+    const view = renderAdapter();
+
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
+
+    const newTheme = { background: "#00ff00" };
+    mocks.appearance.effectiveTheme = newTheme;
+    mocks.appearance.fontSize = 18;
+
+    view.rerender(
+      <Suspense fallback={null}>
+        <XtermAdapter
+          terminalId="term-1"
+          launchAgentId="claude"
+          onReady={vi.fn()}
+          onExit={vi.fn()}
+          onInput={vi.fn()}
+          getRefreshTier={() => TerminalRefreshTier.FOCUSED}
+          cwd="/repo/initial"
+        />
+      </Suspense>
+    );
+
+    await waitFor(() =>
+      expect(mocks.terminalInstanceService.updateOptions).toHaveBeenCalledWith("term-1", {
+        theme: newTheme,
+        fontSize: 18,
+      })
+    );
+    expect(mocks.terminalInstanceService.updateOptions).toHaveBeenCalledTimes(1);
+    expect(mocks.terminalInstanceService.detach).not.toHaveBeenCalled();
   });
 });
