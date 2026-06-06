@@ -221,3 +221,15 @@ describe("ContextTab test-config button", () => {
     });
   });
 });
+
+describe("ContextTab — DOM anchors for settings deep-links", () => {
+  it("exposes the project-excluded-paths anchor for settings deep-links", () => {
+    const { container } = renderTab();
+    expect(container.querySelector("#project-excluded-paths")).not.toBeNull();
+  });
+
+  it("exposes the project-copy-tree anchor for settings deep-links", () => {
+    const { container } = renderTab();
+    expect(container.querySelector("#project-copy-tree")).not.toBeNull();
+  });
+});

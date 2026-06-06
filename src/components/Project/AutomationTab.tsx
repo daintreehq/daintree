@@ -90,7 +90,7 @@ export function AutomationTab({
 
   return (
     <>
-      <div className="mb-6 pb-6 border-b border-daintree-border">
+      <div id="project-run-commands" className="mb-6 pb-6 border-b border-daintree-border">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <SquareTerminal className="h-4 w-4" />
           Run Commands
@@ -262,7 +262,7 @@ export function AutomationTab({
         </div>
       </div>
 
-      <div className="pt-2">
+      <div id="project-branch-prefix" className="pt-2">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <GitBranch className="h-4 w-4" />
           Branch Prefix
@@ -392,7 +392,7 @@ export function AutomationTab({
         </div>
       </div>
 
-      <div className="mt-6 pt-6 border-t border-daintree-border">
+      <div id="project-terminal-settings" className="mt-6 pt-6 border-t border-daintree-border">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <SquareTerminal className="h-4 w-4" />
           Terminal Defaults
