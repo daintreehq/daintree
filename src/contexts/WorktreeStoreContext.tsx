@@ -583,10 +583,11 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             action: {
               label: "Reconcile now",
               actionId: "worktree.reconcileTopology",
-              onClick: () =>
-                actionService.dispatch("worktree.reconcileTopology", undefined, {
+              onClick: () => {
+                void actionService.dispatch("worktree.reconcileTopology", undefined, {
                   source: "user",
-                }),
+                });
+              },
             },
             supersedeKey: projectId
               ? `topology-watcher-dark:${projectId}`

@@ -481,6 +481,7 @@ describe("destructive-action danger metadata", () => {
       isReconnecting: false,
       reconnectingAt: null,
       watcherDegraded: false,
+      topologyWatcherDark: false,
       applySnapshot: () => {},
       applyUpdate: () => {},
       applyRemove: () => {},
@@ -500,6 +501,7 @@ describe("destructive-action danger metadata", () => {
       setFatalError: () => {},
       setReconnecting: () => {},
       setWatcherDegraded: () => {},
+      setTopologyWatcherDark: () => {},
       applyIssueNotFound: () => {},
     }));
     setCurrentViewStore(viewStore);
