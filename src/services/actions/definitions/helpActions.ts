@@ -54,7 +54,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     id: "help.displayImage",
     title: "Display documentation image",
     description:
-      "Display a Daintree documentation image inline in the assistant panel so it can be referenced as `[image #N]`. Args: `url` is an `https://daintree.org` image URL (data:/blob:/non-daintree URLs are rejected); `caption` and `altText` are optional. Returns { imageId, figureNumber, figureLabel } — the figure number is assigned by the app sequentially per session; never pick your own.",
+      "Display a Daintree documentation image inline in the assistant panel so it can be referenced as `[image #N]`. Call this when a `daintree-docs` search result includes an image URL that directly illustrates your answer; skip images that are decorative or tangential rather than displaying every image a result contains. Reference the returned `figureLabel` as plain text at the insertion point (e.g. `[image #2]`) — never markdown image syntax (`![](...)`), which CLI renderers strip. Args: `url` is an `https://daintree.org` image URL (data:/blob:/non-daintree URLs are rejected); `caption` and `altText` are optional. Returns { imageId, figureNumber, figureLabel } — the figure number is assigned by the app sequentially per session; never pick your own.",
     category: "help",
     kind: "command",
     danger: "safe",
@@ -82,6 +82,21 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       idempotentHint: false,
       destructiveHint: false,
     },
+    examples: [
+      {
+        args: {
+          url: "https://daintree.org/img/docs/worktree-dashboard.png",
+          caption: "The worktree dashboard",
+        },
+        description:
+          "A daintree-docs result returned this screenshot and it directly illustrates the answer — pin it, then write `[image #1]` at the relevant point in the reply.",
+      },
+      {
+        args: { url: "https://daintree.org/img/docs/terminal-grid.png" },
+        description:
+          "Only call this for images that genuinely help — if a result's image is decorative or tangential to the question, do not display it.",
+      },
+    ],
     run: async () => {
       throw new Error(
         "help.displayImage must be invoked through the MCP main-process path, not renderer dispatch."
