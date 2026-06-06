@@ -80,6 +80,8 @@ class CopyTreeService {
         );
       }
 
+      this.throwIfAborted(controller.signal);
+
       const sdkOptions: SdkCopyOptions = {
         signal: controller.signal,
         display: false,
@@ -182,6 +184,8 @@ class CopyTreeService {
           { error }
         );
       }
+
+      this.throwIfAborted(controller.signal);
 
       const sdkOptions: SdkCopyOptions = {
         signal: controller.signal,

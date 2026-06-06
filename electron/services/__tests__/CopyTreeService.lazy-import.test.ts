@@ -56,9 +56,10 @@ describe("CopyTreeService lazy copytree import", () => {
   });
 
   it("returns a structured error when the copytree import fails", async () => {
-    vi.doMock("copytree", () => {
+    const factory = vi.fn(() => {
       throw new Error("module load failed");
     });
+    vi.doMock("copytree", factory);
 
     const { copyTreeService } = await import("../CopyTreeService.js");
 
@@ -68,6 +69,26 @@ describe("CopyTreeService lazy copytree import", () => {
     expect(result.fileCount).toBe(0);
     expect(result.error).toMatch(/^CopyTree Error: /);
     expect(copyTreeService.cancel("trace-import-fail")).toBe(false);
+
+    const retry = await copyTreeService.generate(tempDir);
+
+    expect(retry.error).toMatch(/^CopyTree Error: /);
+    expect(factory).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a structured testConfig error when the copytree import fails", async () => {
+    vi.doMock("copytree", () => {
+      throw new Error("module load failed");
+    });
+
+    const { copyTreeService } = await import("../CopyTreeService.js");
+
+    const result = await copyTreeService.testConfig(tempDir, {}, "trace-test-config-fail");
+
+    expect(result.includedFiles).toBe(0);
+    expect(result.includedSize).toBe(0);
+    expect(result.error).toBeTruthy();
+    expect(copyTreeService.cancel("trace-test-config-fail")).toBe(false);
   });
 
   it("treats cancellation during the copytree import as cancelled", async () => {
