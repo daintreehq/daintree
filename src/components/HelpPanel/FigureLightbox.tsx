@@ -75,6 +75,12 @@ export function FigureLightbox({
         <AppDialog.Title>Figure {figure.figureNumber}</AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
+      {/* Resolves AppDialog's always-on aria-describedby to a real element. Kept
+          generic (not the caption, which is announced via the visible frame and
+          the live region) so it doesn't double-read. */}
+      <AppDialog.Description className="sr-only">
+        Documentation figure {figure.figureNumber} from Daintree docs
+      </AppDialog.Description>
       <AppDialog.BodyScroll className="flex flex-col gap-4">
         <div className="relative flex items-center justify-center bg-overlay-subtle rounded-[var(--radius-md)] min-h-[200px] overflow-hidden">
           {status === "failed" ? (

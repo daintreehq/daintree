@@ -426,6 +426,22 @@ describe("helpPanelStore persistence migration", () => {
     expect(store.getState().conversationTouched).toBe(false);
   });
 
+  it("clearTerminal drops figures so a crash/hibernate teardown can't leak them into the next session (#9829)", async () => {
+    installLocalStorage({});
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+    store.getState().addFigure({
+      imageId: "img-1",
+      figureNumber: 1,
+      figureLabel: "image #1",
+      url: "https://daintree.org/figure-1.png",
+    });
+    expect(store.getState().figures).toHaveLength(1);
+
+    store.getState().clearTerminal();
+    expect(store.getState().figures).toEqual([]);
+  });
+
   it("conversationTouched is NOT persisted", async () => {
     const backing = installLocalStorage({});
 

@@ -71,14 +71,23 @@ describe("FigureRail", () => {
     render(<FigureRail figures={[makeFigure(1)]} />);
     fireEvent.error(screen.getByAltText("Alt 1"));
 
-    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry figure 1" })).toBeTruthy();
     // Failed state unmounts the <img>.
     expect(screen.queryByAltText("Alt 1")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry figure 1" }));
     // Retry returns to pending: the <img> remounts and the retry button is gone.
     expect(screen.getByAltText("Alt 1")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry figure 1" })).toBeNull();
+  });
+
+  it("gives each failed thumbnail a figure-scoped retry label", () => {
+    render(<FigureRail figures={[makeFigure(1), makeFigure(2)]} />);
+    fireEvent.error(screen.getByAltText("Alt 1"));
+    fireEvent.error(screen.getByAltText("Alt 2"));
+
+    expect(screen.getByRole("button", { name: "Retry figure 1" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry figure 2" })).toBeTruthy();
   });
 
   it("sets referrerPolicy=no-referrer on thumbnail images", () => {
@@ -120,6 +129,18 @@ describe("FigureRail", () => {
     // Clamp at the end: ArrowRight on the last figure is a no-op.
     fireEvent.keyDown(window, { key: "ArrowRight" });
     expect(within(lightbox).getByText("Viewing figure 2 of 2")).toBeTruthy();
+  });
+
+  it("auto-closes the lightbox when its figure disappears (session reset / eviction)", () => {
+    const { rerender } = render(<FigureRail figures={[makeFigure(1), makeFigure(2)]} />);
+    fireEvent.load(screen.getByAltText("Alt 2"));
+    fireEvent.click(screen.getByRole("button", { name: "Figure 2: Caption 2" }));
+    expect(screen.getByTestId("figure-lightbox")).toBeTruthy();
+
+    // Figure 2 is gone in the next render — the lightbox must not linger on a
+    // stale selection.
+    rerender(<FigureRail figures={[makeFigure(1)]} />);
+    expect(screen.queryByTestId("figure-lightbox")).toBeNull();
   });
 
   it("closes the lightbox via its close button", () => {

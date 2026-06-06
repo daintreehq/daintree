@@ -26,6 +26,17 @@ export function FigureRail({ figures }: { figures: HelpFigure[] }) {
     if (el) el.scrollLeft = el.scrollWidth;
   }, [figureCount]);
 
+  // Close the lightbox if the figure it's showing disappears (session reset or
+  // future memory-pressure eviction, #9830) so stale selection can't reopen it.
+  useEffect(() => {
+    if (
+      selectedFigureNumber !== null &&
+      !figures.some((f) => f.figureNumber === selectedFigureNumber)
+    ) {
+      setSelectedFigureNumber(null);
+    }
+  }, [figures, selectedFigureNumber]);
+
   if (figureCount === 0) return null;
 
   const newestFigureNumber = figures.reduce((max, f) => Math.max(max, f.figureNumber), -Infinity);
@@ -88,6 +99,7 @@ function FigureThumbnail({ figure, isNewest, onClick }: FigureThumbnailProps) {
           <button
             type="button"
             onClick={handleRetry}
+            aria-label={`Retry figure ${figure.figureNumber}`}
             className="flex items-center gap-1 text-[10px] text-daintree-text/60 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent rounded"
           >
             <RotateCw className="w-2.5 h-2.5" aria-hidden="true" />
