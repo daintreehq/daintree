@@ -930,5 +930,86 @@ describe("persistence boundary hardening", () => {
 
       vi.useRealTimers();
     });
+
+    it("getItem returns null when both the primary and backup are corrupt", async () => {
+      installLocalStorage(
+        createStorageMock({
+          getItem: (key) =>
+            key === "both-corrupt" ? "{corrupt" : key === "both-corrupt.__bak" ? "{also-bad" : null,
+        })
+      );
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+
+      expect(storage.getItem("both-corrupt")).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[safeStorage] corrupt persisted state, resetting to defaults",
+        expect.objectContaining({ key: "both-corrupt" })
+      );
+    });
+
+    it("writes the backup on a getItem-triggered flush, not just the timer path", async () => {
+      const backing = new Map<string, string>();
+      installLocalStorage(
+        createStorageMock({
+          getItem: (key) => backing.get(key) ?? null,
+          setItem: (key, value) => {
+            backing.set(key, value);
+          },
+        })
+      );
+      vi.useFakeTimers();
+
+      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+
+      storage.setItem("flush-read-key", { state: { value: 3 }, version: 1 });
+      // No timer advance — the read forces a synchronous flush, which must also
+      // advance the backup just like the timer-driven flush does.
+      storage.getItem("flush-read-key");
+
+      expect(backing.get("flush-read-key.__bak")).toBe(
+        JSON.stringify({ state: { value: 3 }, version: 1 })
+      );
+
+      vi.useRealTimers();
+    });
+
+    it("keeps using localStorage after a transient quota error (no permanent fallback)", async () => {
+      const backing = new Map<string, string>();
+      let primaryWrites = 0;
+      installLocalStorage(
+        createStorageMock({
+          getItem: (key) => backing.get(key) ?? null,
+          setItem: (key, value) => {
+            // Transient quota error on the very first primary write only.
+            if (key === "q1") {
+              primaryWrites += 1;
+              if (primaryWrites === 1) {
+                throw new DOMException("Quota exceeded", "QuotaExceededError");
+              }
+            }
+            backing.set(key, value);
+          },
+        })
+      );
+      vi.useFakeTimers();
+
+      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+
+      storage.setItem("q1", { state: { value: 1 }, version: 1 });
+      vi.advanceTimersByTime(300);
+      // Second write to a different key must still reach localStorage — a
+      // transient quota error must not flip the resilient storage to memory.
+      storage.setItem("q2", { state: { value: 2 }, version: 1 });
+      vi.advanceTimersByTime(300);
+
+      expect(backing.get("q2")).toBe(JSON.stringify({ state: { value: 2 }, version: 1 }));
+
+      vi.useRealTimers();
+    });
   });
 });
