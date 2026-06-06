@@ -38,10 +38,10 @@ import { useMcpBridge } from "./hooks/useMcpBridge";
 import { usePluginBridge } from "./hooks/usePluginBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { notifyViewPainted, removeStartupSkeleton } from "./utils/removeStartupSkeleton";
-// Attaches the notification E2E backdoor when launched with DAINTREE_E2E_MODE=1.
-// The installer self-gates on `__DAINTREE_E2E_MODE__`, so this is inert in
-// production sessions.
-import { installE2ENotificationBackdoor } from "./lib/e2eNotificationBackdoor";
+// Imported for its module side-effect: the module self-installs the notification
+// E2E backdoor at eval time, gated on `__DAINTREE_E2E_MODE__`, so it is inert in
+// production sessions. No symbol is referenced — the import is load-bearing.
+import "./lib/e2eNotificationBackdoor";
 import { useAppBoot } from "./hooks/app/useAppBoot";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
 import {
@@ -348,46 +348,49 @@ function AppInner() {
   useResourceProfile();
 
   useEffect(() => {
-    window.__DAINTREE_E2E_ERROR_STORE__ = () =>
-      useErrorStore.getState().errors.map((e) => ({
-        id: e.id,
-        source: e.source,
-        message: e.message,
-        fromPreviousSession: e.fromPreviousSession,
-      }));
-    window.__DAINTREE_E2E_ADD_ERROR__ = (message: string) => {
-      useErrorStore.getState().addError({
-        type: "unknown",
-        message,
-        retryability: "none",
-        source: "e2e-test",
-      });
-    };
-    window.__DAINTREE_E2E_CLEAR_ERRORS__ = () => {
-      useErrorStore.getState().reset();
-    };
-    // Refreshes the GitHub config store from the main process. Used by
-    // fault-mode tests to pick up a token seeded via __daintreeSeedGitHubToken
-    // so the no-token empty state doesn't short-circuit IPC fault paths.
-    window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__ = () => useGitHubConfigStore.getState().refresh();
-    // Parks a synthetic in-repo recipe stale-write conflict so E2E can exercise
-    // the RecipeConflictDialog without racing a real on-disk file mutation. The
-    // returned promise resolves with the user's choice; tests don't await it —
-    // they assert the dialog renders and that reload/overwrite dismiss it.
-    window.__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__ = (recipeName: string) => {
-      void useRecipeConflictStore.getState().requestConflict({
-        recipeId: `inrepo-${recipeName}`,
-        recipeName,
-        updates: { name: recipeName },
-      });
-    };
-
-    // Per-window store accessors for the multi-window isolation spec (#9599).
-    // Each project view is its own V8 context, so these Zustand singletons are
-    // per-window — mutating one window's store must not leak into another's.
-    // Gated on the preload-injected __DAINTREE_E2E_MODE__ flag (set only under
-    // DAINTREE_E2E_MODE=1) so the accessors never attach in production.
+    // All E2E renderer backdoors are gated on the preload-injected
+    // __DAINTREE_E2E_MODE__ flag (set only under DAINTREE_E2E_MODE=1 on
+    // non-packaged builds) so none of these store accessors attach in
+    // production sessions.
     if (window.__DAINTREE_E2E_MODE__ === true) {
+      window.__DAINTREE_E2E_ERROR_STORE__ = () =>
+        useErrorStore.getState().errors.map((e) => ({
+          id: e.id,
+          source: e.source,
+          message: e.message,
+          fromPreviousSession: e.fromPreviousSession,
+        }));
+      window.__DAINTREE_E2E_ADD_ERROR__ = (message: string) => {
+        useErrorStore.getState().addError({
+          type: "unknown",
+          message,
+          retryability: "none",
+          source: "e2e-test",
+        });
+      };
+      window.__DAINTREE_E2E_CLEAR_ERRORS__ = () => {
+        useErrorStore.getState().reset();
+      };
+      // Refreshes the GitHub config store from the main process. Used by
+      // fault-mode tests to pick up a token seeded via __daintreeSeedGitHubToken
+      // so the no-token empty state doesn't short-circuit IPC fault paths.
+      window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__ = () =>
+        useGitHubConfigStore.getState().refresh();
+      // Parks a synthetic in-repo recipe stale-write conflict so E2E can exercise
+      // the RecipeConflictDialog without racing a real on-disk file mutation. The
+      // returned promise resolves with the user's choice; tests don't await it —
+      // they assert the dialog renders and that reload/overwrite dismiss it.
+      window.__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__ = (recipeName: string) => {
+        void useRecipeConflictStore.getState().requestConflict({
+          recipeId: `inrepo-${recipeName}`,
+          recipeName,
+          updates: { name: recipeName },
+        });
+      };
+
+      // Per-window store accessors for the multi-window isolation spec (#9599).
+      // Each project view is its own V8 context, so these Zustand singletons are
+      // per-window — mutating one window's store must not leak into another's.
       window.__DAINTREE_E2E_DIAGNOSTICS_STATE__ = () => ({
         isOpen: useDiagnosticsStore.getState().isOpen,
       });
@@ -822,7 +825,7 @@ function AppInner() {
             skipDelayDuration={UI_TOOLTIP_SKIP_DELAY_DURATION}
             disableHoverableContent
           >
-            <E2EFaultInjector />
+            {window.__DAINTREE_E2E_MODE__ === true && <E2EFaultInjector />}
             <DndProvider>
               <VoiceRecordingAnnouncer />
               <AccessibilityAnnouncer />
@@ -1527,10 +1530,6 @@ function AppInner() {
 // the cold-start `#startup-skeleton` (a sibling of `#root`) visible during the
 // flight — it's removed by `removeStartupSkeleton()` once hydration completes.
 function App() {
-  useEffect(() => {
-    installE2ENotificationBackdoor();
-  }, []);
-
   // Signal the main process that React has committed its first frame so
   // ProjectViewManager can release the outgoing view of a cold project switch.
   // This lives in the Suspense *parent* (not `AppInner`) so it fires the moment

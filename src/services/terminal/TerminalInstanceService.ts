@@ -2972,10 +2972,13 @@ class TerminalInstanceService {
 
 export const terminalInstanceService = new TerminalInstanceService();
 
-// Expose terminal buffer reader for E2E tests (WebGL renderer has no DOM text).
-// Registered unconditionally but gated at call time — the function is harmless
-// in production and avoids import-time env var timing issues.
-if (typeof window !== "undefined") {
+// Expose terminal introspection/control bridges for E2E tests (the WebGL
+// renderer has no DOM text, so specs read the buffer through these). Gated on
+// the preload-injected __DAINTREE_E2E_MODE__ flag (set only under
+// DAINTREE_E2E_MODE=1 on non-packaged builds), so none of these globals attach
+// in production sessions. The flag is injected via contextBridge before this
+// module evaluates, so the gate is reliable at import time.
+if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
   (window as unknown as Record<string, unknown>).__daintreeReadTerminalBuffer = (
     panelId: string
   ): string => {
