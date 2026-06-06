@@ -647,23 +647,27 @@ jobs:
 
       # Classification regex table — keep in sync with CLASSIFICATION_RULES in
       # scripts/ci/classify-e2e-failures.mjs. Rules are ordered; the first match
-      # wins. Specific patterns (spawn EPERM) must precede broad ones (bare
-      # EPERM) so the more actionable bucket is chosen.
+      # wins. Product-Logic (crashes) precedes Test-Logic (stale refs / timing)
+      # so a crash outranks the stale-ref noise it drags along, and specific
+      # patterns (spawn EPERM) precede broad ones (bare EPERM).
       #
       # Infrastructure (OS / CI runner resource contention):
       #   spawn EPERM           -> AV on-access scan
       #   EBUSY on .tmp paths   -> indexer contention
       #   EPERM / EACCES / ENOSPC -> permission / disk
+      #   worker process exited unexpectedly -> Playwright worker death
+      #
+      # Product-Logic (renderer crashes, actual bugs):
+      #   Page crashed / Navigation failed because page crashed / Target crashed
+      #                                                       -> Playwright crash surface
+      #   WebContents crashed / renderer process crash        -> renderer (Electron-internal)
+      #   GPU process crash / utility process crash           -> GPU/utility
       #
       # Test-Logic (handshake / timing / stale references):
       #   CDP target not found / Target.targetCreated timeout -> handshake
       #   Target/Browser/Page has been closed                -> stale ref
       #   Protocol error (Target.closeTarget)                -> target close
       #   Selector timeout / Test timeout                     -> timing
-      #
-      # Product-Logic (renderer crashes, actual bugs):
-      #   WebContents crashed / renderer process crash        -> renderer
-      #   GPU process crash / utility process crash           -> GPU/utility
       #
       # Unmatched errors land in Unclassified.
       # Reads the same `test-results/report.json` that the retry-path and

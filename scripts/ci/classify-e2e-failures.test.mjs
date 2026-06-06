@@ -110,6 +110,37 @@ describe("classifyError", () => {
     expect(result.bucket).toBe("Infrastructure");
     expect(result.label).toContain("indexer contention");
   });
+
+  it("classifies Playwright 'Page crashed' as Product-Logic", () => {
+    const result = classifyError("page.goto: Page crashed");
+    expect(result.bucket).toBe("Product-Logic");
+  });
+
+  it("classifies navigation crash as Product-Logic", () => {
+    const result = classifyError("Navigation failed because page crashed!");
+    expect(result.bucket).toBe("Product-Logic");
+  });
+
+  it("classifies Target crashed as Product-Logic", () => {
+    const result = classifyError("locator.click: Target crashed");
+    expect(result.bucket).toBe("Product-Logic");
+  });
+
+  it("routes a crash to Product-Logic even when stale-ref text is also present", () => {
+    // A crash often drags stale-ref noise along; the crash must win.
+    const result = classifyError("page.goto: Page crashed\npage has been closed");
+    expect(result.bucket).toBe("Product-Logic");
+  });
+
+  it("keeps plain 'Page has been closed.' in Test-Logic (not a crash)", () => {
+    const result = classifyError("Page has been closed.");
+    expect(result.bucket).toBe("Test-Logic");
+  });
+
+  it("classifies Playwright worker death as Infrastructure", () => {
+    const result = classifyError("Error: worker process exited unexpectedly (code=1, signal=null)");
+    expect(result.bucket).toBe("Infrastructure");
+  });
 });
 
 describe("extractFailures", () => {
@@ -316,6 +347,57 @@ describe("extractFailures", () => {
     const failures = extractFailures(report);
     expect(failures).toHaveLength(1);
     expect(failures[0].bucket).toBe("Product-Logic");
+  });
+
+  it("includes interrupted results with an error", () => {
+    const report = {
+      suites: [
+        {
+          specs: [
+            {
+              title: "crashed mid-run",
+              tests: [
+                {
+                  projectName: "core",
+                  results: [
+                    {
+                      status: "interrupted",
+                      error: { message: "page.goto: Page crashed" },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const failures = extractFailures(report);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].bucket).toBe("Product-Logic");
+  });
+
+  it("includes interrupted results without an error as Unclassified", () => {
+    const report = {
+      suites: [
+        {
+          specs: [
+            {
+              title: "cancelled test",
+              tests: [
+                {
+                  projectName: "core",
+                  results: [{ status: "interrupted" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const failures = extractFailures(report);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].bucket).toBe("Unclassified");
   });
 
   it("handles multiple errors in result.errors array", () => {
