@@ -630,7 +630,11 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     // that received the data on their own port (issue #9891). So account the
     // loss and deliver a `data-loss` pulse on each starved window's own port,
     // FIFO-ordered with its data, letting the next wake snapshot resync it.
-    if (visualWritten && saturated.length > 0) {
+    //
+    // Skip mirrored terminals: the IPC data mirror below broadcasts the chunk to
+    // every window (the renderer's onData also listens on IPC), so a starved
+    // window still receives it — a pulse here would be a spurious discontinuity.
+    if (visualWritten && saturated.length > 0 && !ipcDataMirrorTerminals.has(id)) {
       for (const conn of saturated) {
         // Counter is unconditional — regression detection must work even when
         // metrics are gated off (mirrors the IPC at-capacity path).

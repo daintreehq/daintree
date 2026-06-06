@@ -425,6 +425,94 @@ describe("terminalClient MessagePort data routing", () => {
     });
   });
 
+  it("dispatches MessagePort terminal-status (data-loss) to onStatus callbacks", () => {
+    // Per-window data-loss pulse for a saturated fan-out window (#9891) rides the
+    // port, not the IPC broadcast, so it reaches only the affected window.
+    const port = acquirePort();
+    const received: Array<Record<string, unknown>> = [];
+
+    terminalClient.onStatus((data) => received.push(data as unknown as Record<string, unknown>));
+
+    port.postMessage({
+      type: "terminal-status",
+      id: "term-1",
+      status: "data-loss",
+      droppedBytes: 40,
+      timestamp: 123,
+    });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        expect(received).toHaveLength(1);
+        expect(received[0]).toMatchObject({
+          id: "term-1",
+          status: "data-loss",
+          droppedBytes: 40,
+          timestamp: 123,
+        });
+        resolve();
+      }, 50);
+    });
+  });
+
+  it("onStatus subscribes to BOTH the IPC broadcast and the port, and cleanup detaches both", () => {
+    const port = acquirePort();
+    const received: Array<Record<string, unknown>> = [];
+
+    const unsub = terminalClient.onStatus((data) =>
+      received.push(data as unknown as Record<string, unknown>)
+    );
+    // Dual-registration: the IPC broadcast path is still wired up.
+    expect(mockElectronTerminal.onStatus).toHaveBeenCalledTimes(1);
+
+    unsub();
+    // After unsubscribe the port path must no longer dispatch to the callback.
+    port.postMessage({
+      type: "terminal-status",
+      id: "term-1",
+      status: "data-loss",
+      droppedBytes: 5,
+      timestamp: 1,
+    });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        expect(received).toEqual([]);
+        resolve();
+      }, 50);
+    });
+  });
+
+  it("does NOT ack or buffer terminal-status messages (no byte accounting)", () => {
+    const port = acquirePort();
+
+    terminalClient.onStatus(() => {});
+
+    // Like tier-changed, a terminal-status pulse carries no consumable bytes and
+    // must never enter the ACK loop (which would emit a spurious early-buffer ack).
+    port.postMessage({
+      type: "terminal-status",
+      id: "term-1",
+      status: "data-loss",
+      droppedBytes: 9,
+      timestamp: 2,
+    });
+
+    return new Promise<void>((resolve) => {
+      const acks: Record<string, unknown>[] = [];
+      port.addEventListener("message", (event: MessageEvent) => {
+        const msg = event.data as Record<string, unknown>;
+        if (msg?.type === "ack") acks.push(msg);
+      });
+      port.start();
+
+      setTimeout(() => {
+        expect(acks).toEqual([]);
+        resolve();
+      }, 100);
+    });
+  });
+
   it("ignores unknown message types without throwing or emitting acks", () => {
     const port = acquirePort();
     const tierReceived: string[] = [];

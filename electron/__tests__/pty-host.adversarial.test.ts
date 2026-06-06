@@ -1527,4 +1527,155 @@ describe("pty-host adversarial", () => {
       dataLossCountDelta: 1,
     });
   });
+
+  it("FAN_OUT_THREE_WINDOWS_TWO_SATURATED_EACH_GET_A_PULSE", async () => {
+    // With three windows fanning out, one accepting and two saturated, BOTH
+    // starved windows must each get exactly one pulse — a regression that only
+    // pulsed the first saturated connection would silently strand the rest.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+
+    const portA = createRendererPort();
+    const portB = createRendererPort();
+    const portC = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 3 }, ports: [portC] });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true); // A accepts
+    hostState.batchers[1].write.mockReturnValue(false); // B saturated
+    hostState.batchers[2].write.mockReturnValue(false); // C saturated
+    portA.postMessage.mockClear();
+    portB.postMessage.mockClear();
+    portC.postMessage.mockClear();
+
+    const payload = "a".repeat(20);
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", payload);
+    await flushMicrotasks();
+
+    expect(portStatusMessages(portA)).toHaveLength(0);
+    expect(portStatusMessages(portB)).toHaveLength(1);
+    expect(portStatusMessages(portC)).toHaveLength(1);
+    expect(hostState.resourceGovernorDeps?.getDropSnapshot()).toEqual({
+      droppedBytesDelta: payload.length * 2,
+      dataLossCountDelta: 2,
+    });
+  });
+
+  it("FAN_OUT_SATURATED_BEFORE_ACCEPTED_STILL_PULSES", async () => {
+    // The pulse decision is post-loop, so it must not depend on whether the
+    // saturated window is iterated before or after the accepting one. Here the
+    // first-connected window is saturated and the second accepts.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+
+    const portSaturated = createRendererPort();
+    const portAccepting = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1 },
+      ports: [portSaturated],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2 },
+      ports: [portAccepting],
+    });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(false); // first window saturated
+    hostState.batchers[1].write.mockReturnValue(true); // second window accepts
+    portSaturated.postMessage.mockClear();
+    portAccepting.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "a".repeat(12));
+    await flushMicrotasks();
+
+    expect(portStatusMessages(portSaturated)).toHaveLength(1);
+    expect(portStatusMessages(portAccepting)).toHaveLength(0);
+    expect(hostState.resourceGovernorDeps?.getDropSnapshot()).toEqual({
+      droppedBytesDelta: 12,
+      dataLossCountDelta: 1,
+    });
+  });
+
+  it("FAN_OUT_IPC_MIRRORED_TERMINAL_GETS_NO_PULSE", async () => {
+    // IPC-mirrored terminals (dev-preview consoles) broadcast every chunk via the
+    // IPC data mirror whenever visualWritten is true, so a saturated window still
+    // receives the data over IPC. Emitting a data-loss pulse there would mark a
+    // discontinuity that never happened.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+
+    const portA = createRendererPort();
+    const portB = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    parentPort.emit("message", { type: "set-ipc-data-mirror", id: "t1", enabled: true });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    hostState.batchers[1].write.mockReturnValue(false);
+    portA.postMessage.mockClear();
+    portB.postMessage.mockClear();
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "a".repeat(18));
+    await flushMicrotasks();
+
+    // No per-port pulse, no drop accounting — the IPC mirror covers the window.
+    expect(portStatusMessages(portB)).toHaveLength(0);
+    expect(hostState.resourceGovernorDeps?.getDropSnapshot()).toEqual({
+      droppedBytesDelta: 0,
+      dataLossCountDelta: 0,
+    });
+    // The mirror broadcast did fire (the data reaches every window via IPC).
+    expect(dataPayloads(parentPort)).toHaveLength(1);
+  });
+
+  it("FAN_OUT_PULSE_RESPECTS_PROJECT_FILTER", async () => {
+    // Only windows that own (or globally view) the terminal's project are fan-out
+    // targets, so only a saturated TARGET window may get a pulse — a project-
+    // filtered window is never a target and must never be pulsed.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const portOwner = createRendererPort(); // window 1 → project-1 (target, saturated)
+    const portViewer = createRendererPort(); // window 2 → project-1 (target, accepts)
+    const portForeign = createRendererPort(); // window 3 → project-2 (filtered out)
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portOwner] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2 },
+      ports: [portViewer],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 3 },
+      ports: [portForeign],
+    });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-active-project", windowId: 3, projectId: "project-2" });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: { projectId: "project-1" } });
+    await flushMicrotasks();
+
+    // batchers[0]=window1 (owner), [1]=window2 (viewer), [2]=window3 (foreign).
+    hostState.batchers[0].write.mockReturnValue(false); // owner saturated
+    hostState.batchers[1].write.mockReturnValue(true); // viewer accepts
+    portOwner.postMessage.mockClear();
+    portViewer.postMessage.mockClear();
+    portForeign.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "a".repeat(22));
+    await flushMicrotasks();
+
+    expect(portStatusMessages(portOwner)).toHaveLength(1); // saturated target → pulse
+    expect(portStatusMessages(portViewer)).toHaveLength(0); // accepted → no pulse
+    expect(portStatusMessages(portForeign)).toHaveLength(0); // filtered out → never a target
+    expect(hostState.resourceGovernorDeps?.getDropSnapshot()).toEqual({
+      droppedBytesDelta: 22,
+      dataLossCountDelta: 1,
+    });
+  });
 });
