@@ -1609,6 +1609,55 @@ describe("KeybindingService", () => {
     });
   });
 
+  describe("terminal recovery chords — issue #9803", () => {
+    // The five per-pane recovery actions (kill, restart, forceResume, redraw,
+    // rename) ship with default 3-part Cmd+K Cmd+<letter> chords. Each test
+    // pins one chord and asserts (a) the display combo resolves to the
+    // expected key glyphs on Mac, and (b) the chord has no exact or prefix
+    // shadow against any other registered binding. The chord family matches
+    // the existing terminal bulk-action convention (closeAll/killAll/
+    // restartAll use the same Cmd+K Cmd+<letter> shape).
+    const RECOVERY_CHORDS: Array<{ actionId: string; combo: string; letter: string }> = [
+      { actionId: "terminal.kill", combo: "Cmd+K Cmd+Q", letter: "Q" },
+      { actionId: "terminal.restart", combo: "Cmd+K Cmd+E", letter: "E" },
+      { actionId: "terminal.forceResume", combo: "Cmd+K Cmd+U", letter: "U" },
+      { actionId: "terminal.redraw", combo: "Cmd+K Cmd+D", letter: "D" },
+      { actionId: "terminal.rename", combo: "Cmd+K Cmd+L", letter: "L" },
+    ];
+
+    for (const { actionId, combo, letter } of RECOVERY_CHORDS) {
+      it(`resolves the display combo for ${actionId} (${combo})`, () => {
+        setPlatform("MacIntel");
+        const service = new KeybindingService();
+        const display = service.getDisplayCombo(actionId);
+        expect(display).not.toBe("");
+        expect(display).toContain("⌘");
+        expect(display.toUpperCase()).toContain("K");
+        expect(display.toUpperCase()).toContain(letter.toUpperCase());
+      });
+
+      it(`finds no other-binding conflicts for ${actionId} (${combo})`, () => {
+        setPlatform("MacIntel");
+        const service = new KeybindingService();
+        // Exclude the actionId under test so the chord's own registration
+        // doesn't count as a self-conflict; the rest of the registry must
+        // have nothing at the same combo.
+        const conflicts = service.findConflicts(combo, actionId, "global");
+        expect(conflicts.filter((c) => c.kind === "conflict")).toEqual([]);
+        expect(conflicts.filter((c) => c.kind === "shadowed")).toEqual([]);
+      });
+    }
+
+    it("registers the five recovery chords in CORE_KEYBINDINGS", () => {
+      const actionIds = RECOVERY_CHORDS.map((c) => c.actionId);
+      for (const id of actionIds) {
+        const entries = DEFAULT_KEYBINDINGS.filter((b) => b.actionId === id);
+        expect(entries).toHaveLength(1);
+        expect(entries[0]?.combo).toBe(RECOVERY_CHORDS.find((c) => c.actionId === id)?.combo);
+      }
+    });
+  });
+
   describe("window.zoomIn discoverability alias — issue #7304", () => {
     it("registers both Cmd+= and Cmd+Shift+= as defaults for window.zoomIn", () => {
       const combos = DEFAULT_KEYBINDINGS.filter((b) => b.actionId === "window.zoomIn").map(
