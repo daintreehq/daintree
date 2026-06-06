@@ -164,6 +164,7 @@ interface McpServerApi {
   getConfigSnippet: ReturnType<typeof vi.fn>;
   onRuntimeStateChanged: ReturnType<typeof vi.fn>;
   getAuditRecords: ReturnType<typeof vi.fn>;
+  getLogRecords: ReturnType<typeof vi.fn>;
   getAuditStats: ReturnType<typeof vi.fn>;
   getTurnOutcomeRecords: ReturnType<typeof vi.fn>;
   clearAuditLog: ReturnType<typeof vi.fn>;
