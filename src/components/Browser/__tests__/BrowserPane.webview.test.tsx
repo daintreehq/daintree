@@ -1658,4 +1658,52 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("Page process crashed");
     });
   });
+
+  describe("src binding regression (#9940)", () => {
+    it("seeds src once at mount", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("does not re-bind src or re-load after an in-page guest navigation", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      // A guest SPA navigation (pushState) is reported via did-navigate-in-page.
+      // The resulting history update must NOT feed back into the src attribute
+      // (which Electron's SrcAttribute observer would turn into a full reload).
+      webview.loadURL.mockClear();
+      const setAttributeSpy = vi.spyOn(webview, "setAttribute");
+
+      act(() => {
+        emitWebviewEvent(webview, "did-navigate-in-page", {
+          url: "http://localhost:5173/spa/route",
+          isMainFrame: true,
+        });
+      });
+
+      expect(webview.loadURL).not.toHaveBeenCalled();
+      expect(setAttributeSpy.mock.calls.filter(([name]) => name === "src")).toHaveLength(0);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("does not re-bind src or re-load after a full guest navigation", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      webview.loadURL.mockClear();
+      const setAttributeSpy = vi.spyOn(webview, "setAttribute");
+
+      act(() => {
+        emitWebviewEvent(webview, "did-navigate", {
+          url: "http://localhost:5173/page-2",
+        });
+      });
+
+      expect(webview.loadURL).not.toHaveBeenCalled();
+      expect(setAttributeSpy.mock.calls.filter(([name]) => name === "src")).toHaveLength(0);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+    });
+  });
 });

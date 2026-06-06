@@ -2148,4 +2148,70 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(container.textContent).not.toContain("Dev server unavailable");
     });
   });
+
+  describe("src binding regression (#9940)", () => {
+    it("seeds src once at mount", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("does not issue a redundant loadURL on first ready when the seed matches history", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      // Let the ready probe run. Because lastSetUrlRef is seeded to the mount
+      // URL, the isWebviewReady navigation effect must not re-load the same URL.
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(webview.loadURL).not.toHaveBeenCalled();
+    });
+
+    it("does not re-bind src or re-load after an in-page guest navigation", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      webview.loadURL.mockClear();
+      const setAttributeSpy = vi.spyOn(webview, "setAttribute");
+
+      act(() => {
+        emitWebviewEvent(webview, "did-navigate-in-page", {
+          url: "http://localhost:5173/spa/route",
+          isMainFrame: true,
+        });
+      });
+
+      expect(webview.loadURL).not.toHaveBeenCalled();
+      expect(setAttributeSpy.mock.calls.filter(([name]) => name === "src")).toHaveLength(0);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("does not re-bind src or re-load after a full guest navigation", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      webview.loadURL.mockClear();
+      const setAttributeSpy = vi.spyOn(webview, "setAttribute");
+
+      act(() => {
+        emitWebviewEvent(webview, "did-navigate", {
+          url: "http://localhost:5173/page-2",
+        });
+      });
+
+      expect(webview.loadURL).not.toHaveBeenCalled();
+      expect(setAttributeSpy.mock.calls.filter(([name]) => name === "src")).toHaveLength(0);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+    });
+  });
 });

@@ -180,6 +180,12 @@ export function BrowserPane({
   const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
   // Track the last URL we set on the webview to detect in-webview navigation
   const lastSetUrlRef = useRef<string>(history.present);
+  // Seed value for the webview `src` attribute, captured once at mount. We never
+  // re-bind `src` to navigation-driven state: Electron's SrcAttribute observer
+  // treats any same-or-different value write as a fresh loadURL, turning guest
+  // navigations into redundant full reloads (#9940). All post-mount navigation
+  // goes through imperative loadURL calls instead.
+  const initialUrlRef = useRef<string>(history.present);
   // Track if webview has been mounted and is ready
   const [isWebviewReady, setIsWebviewReady] = useState(false);
 
@@ -1005,7 +1011,9 @@ export function BrowserPane({
                 // seeded only via ?projectId= where the store resolves later) so the
                 // webview never keeps a stale cross-project session (#9965).
                 key={webviewPartition}
-                src={currentUrl}
+                // Seed-only: never re-bind to navigation state (#9940). On a
+                // key-driven remount the ref re-initializes to the current URL.
+                src={initialUrlRef.current}
                 partition={webviewPartition}
                 // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
                 allowpopups=""
