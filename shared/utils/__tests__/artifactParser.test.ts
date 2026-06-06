@@ -90,10 +90,11 @@ describe("artifactParser", () => {
     expect(patches[0]).toContain("+++ b/file.txt");
   });
 
-  it("accepts git format-patch envelope followed by diff body", () => {
-    // The `From <sha>` envelope is a Tier 1 trigger. The header line opens
-    // a candidate block that closes on `Subject:` (not a body line), then
-    // the real diff is opened by the `diff --git` line further down.
+  it("extracts diff body that follows a git format-patch envelope", () => {
+    // The `From <sha>` envelope line is not a Tier 1 trigger on its own —
+    // the downstream `diff --git` opens the patch block. The test pins the
+    // behavior so a future change to the parser doesn't accidentally make
+    // envelope lines alone emit a patch artifact.
     const input = [
       "From abcdef1234567890abcdef1234567890abcdef12 Mon Sep 17 00:00:00 2001",
       "Subject: [PATCH] Fix thing",
@@ -114,7 +115,9 @@ describe("artifactParser", () => {
 
   it("accepts combined diff with @@@ hunk header", () => {
     // `git diff -c` / `--cc` produces combined diffs with `@@@` (3+ `@`) hunk
-    // headers and multiple `---` source headers before the target.
+    // headers and multiple `---` source headers before the target. The
+    // `diff --combined` preamble is dropped (it doesn't match a body line)
+    // and the block restarts on the first `--- a/<file>`.
     const input = [
       "diff --combined file.txt",
       "index abc,def..ghi",
@@ -130,6 +133,8 @@ describe("artifactParser", () => {
     ].join("\n");
     const patches = extractPatches(input);
     expect(patches).toHaveLength(1);
+    expect(patches[0]).toContain("--- a/file.txt");
+    expect(patches[0]).toContain("+++ b/file.txt");
     expect(patches[0]).toContain("@@@ -1,1 -1,1 +1,1 @@@");
   });
 
@@ -152,6 +157,83 @@ describe("artifactParser", () => {
       "+ another body line",
     ].join("\n");
     expect(extractPatches(input)).toEqual([]);
+  });
+
+  it("preserves \\ No newline at end of file marker (#9998)", () => {
+    // `git diff` emits `\ No newline at end of file` after the last line of
+    // a file that lacks a trailing newline. `git apply` requires this marker
+    // and will reject a patch that drops it. The parser must treat the `\`-
+    // prefixed line as a body line, not as prose that closes the block.
+    const input = [
+      "--- a/file",
+      "+++ b/file",
+      "@@ -1 +1 @@",
+      "-line1",
+      "\\ No newline at end of file",
+      "+line2",
+      "\\ No newline at end of file",
+    ].join("\n");
+    const patches = extractPatches(input);
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).toContain("\\ No newline at end of file");
+    expect(patches[0]).toContain("+line2");
+  });
+
+  it("extracts multiple back-to-back diff blocks", () => {
+    // Two `diff --git` hunks separated by a single line break — both must
+    // be emitted as independent patches, in order.
+    const input = [
+      "diff --git a/x b/x",
+      "--- a/x",
+      "+++ b/x",
+      "@@ -1 +1 @@",
+      "-old1",
+      "+new1",
+      "diff --git a/y b/y",
+      "--- a/y",
+      "+++ b/y",
+      "@@ -1 +1 @@",
+      "-old2",
+      "+new2",
+    ].join("\n");
+    const patches = extractPatches(input);
+    expect(patches).toHaveLength(2);
+    expect(patches[0]).toContain("+new1");
+    expect(patches[1]).toContain("+new2");
+  });
+
+  it("extracts a new file diff with --- /dev/null", () => {
+    // `git diff` for a newly added file shows `--- /dev/null` as the source
+    // header. The opener is `--- /dev/null` (passes `isUnifiedOpener` — the
+    // path-like token is `/`), and `+++ b/new` corroborates it.
+    const input = [
+      "--- /dev/null",
+      "+++ b/new.txt",
+      "@@ -0,0 +1,3 @@",
+      "+line1",
+      "+line2",
+      "+line3",
+    ].join("\n");
+    const patches = extractPatches(input);
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).toContain("--- /dev/null");
+    expect(patches[0]).toContain("+++ b/new.txt");
+  });
+
+  it("extracts a deleted file diff with +++ /dev/null", () => {
+    // Mirror of the new-file case: `+++ /dev/null` marks a deleted file.
+    const input = [
+      "--- a/old.txt",
+      "+++ /dev/null",
+      "@@ -1,3 +0,0 @@",
+      "-line1",
+      "-line2",
+      "-line3",
+    ].join("\n");
+    const patches = extractPatches(input);
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).toContain("--- a/old.txt");
+    expect(patches[0]).toContain("+++ /dev/null");
   });
 
   it("extracts patch filename from +++ line", () => {

@@ -34,10 +34,10 @@ export function extractCodeBlocks(text: string): CodeBlock[] {
 // were emitted as patch artifacts and handed to `git apply` (which rejected
 // them noisily). The helpers below form a three-tier classifier:
 //
-//   Tier 1 — trigger:  `diff --git ...`, `From <sha> ...`, or `--- a/<file>`
+//   Tier 1 — trigger:  `diff --git ...` or `--- a/<file>`
 //   Tier 2 — corroborate: a `+++ b/<file>` target header within a few lines
 //                            (only required for the `--- a/<file>` opener;
-//                            `diff --git` and `From <sha>` are unambiguous)
+//                            `diff --git` is unambiguous)
 //   Tier 3 — commit:  at least one `@@` / `@@@` hunk header in the block
 //
 // A block is only emitted when all three tiers are satisfied. Bare `---` and
@@ -49,24 +49,19 @@ function isDiffStart(line: string): boolean {
   return line.startsWith("diff ");
 }
 
-// Tier 1 trigger: the `git format-patch` envelope header. Default `git
-// format-patch` always uses a full 40-char SHA-1; SHA-256 (64 hex chars) is
-// also accepted.
-const FROM_ENVELOPE_REGEX = /^From [0-9a-f]{40,}\b/;
-function isFromEnvelope(line: string): boolean {
-  return FROM_ENVELOPE_REGEX.test(line);
-}
-
 // Tier 1 trigger (with corroboration): a `--- a/<file>` source header.
 // Bare `---` (Markdown HR, YAML front-matter) does NOT match — it needs
-// whitespace AND a non-whitespace token after the `--- `.
+// whitespace AND a non-whitespace token after the `--- `. `--- /dev/null`
+// (new-file diff) and `---` followed by a custom path (e.g. `--- foo` from
+// `git diff --no-prefix`) both pass.
 const UNIFIED_OPENER_REGEX = /^---\s+\S/;
 function isUnifiedOpener(line: string): boolean {
   return UNIFIED_OPENER_REGEX.test(line);
 }
 
 // The `+++ b/<file>` target header that must corroborate a `--- a/<file>`
-// opener. The path prefix is not enforced (`git diff --no-prefix` omits `b/`).
+// opener. The path prefix is not enforced (`git diff --no-prefix` omits `b/`,
+// and `+++ /dev/null` marks a deleted file).
 const TARGET_HEADER_REGEX = /^\+\+\+\s+\S/;
 function isTargetHeader(line: string): boolean {
   return TARGET_HEADER_REGEX.test(line);
@@ -74,9 +69,10 @@ function isTargetHeader(line: string): boolean {
 
 // Walk forward from a `--- a/<file>` opener and confirm a `+++ b/<file>`
 // target header appears in the next few lines. Blank lines and additional
-// `---` headers are skipped (combined diffs list one source header per
-// parent before the target). Bounded to keep the scan cheap.
-const TARGET_HEADER_LOOKAHEAD = 3;
+// `---` headers are skipped (combined diffs and octopus merges list one
+// source header per parent before the target). Bounded to keep the scan
+// cheap — 4 covers 3-parent octopus merges (`git merge-octopus`).
+const TARGET_HEADER_LOOKAHEAD = 4;
 function findTargetHeader(lines: string[], openerIndex: number): boolean {
   for (
     let j = openerIndex + 1;
@@ -106,7 +102,9 @@ function hasHunkHeader(patch: string[]): boolean {
 }
 
 // A line that is part of a diff body (in-block continuation). Same set as
-// before so existing well-formed diffs still parse unchanged.
+// before so existing well-formed diffs still parse unchanged, with one
+// addition: the `\` prefix is the `git diff` `\ No newline at end of file`
+// marker, which `git apply` requires to avoid "corrupt patch" errors.
 function isBlockBodyLine(line: string): boolean {
   return (
     line.startsWith("+++") ||
@@ -114,6 +112,7 @@ function isBlockBodyLine(line: string): boolean {
     line.startsWith("+") ||
     line.startsWith("-") ||
     line.startsWith(" ") ||
+    line.startsWith("\\") ||
     line.trim() === ""
   );
 }
@@ -141,7 +140,7 @@ export function extractPatches(text: string): string[] {
 
     if (!inPatch) {
       // Tier 1: unambiguous openers — no corroboration needed.
-      if (isDiffStart(line) || isFromEnvelope(line)) {
+      if (isDiffStart(line)) {
         currentPatch = [line];
         inPatch = true;
       } else if (isUnifiedOpener(line) && findTargetHeader(lines, i)) {
