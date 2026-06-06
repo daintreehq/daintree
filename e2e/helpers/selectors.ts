@@ -176,6 +176,7 @@ export const SEL = {
   },
   pulse: {
     heatmap: '[data-testid="pulse-heatmap"]',
+    legend: '[data-testid="pulse-heatmap-legend"]',
     rangeTrigger: '[aria-label="Activity range"]',
     refreshButton: '[aria-label="Refresh"]',
     lastUpdated: '[data-testid="pulse-last-updated"]',

@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef, useState } from "react";
+import { useEffect, useCallback, useId, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { PulseRangeDays, ProjectPulse, ProjectHealthData } from "@shared/types";
@@ -22,7 +22,7 @@ import {
 import { Spinner } from "@/components/ui/Spinner";
 import { Activity } from "@/components/icons";
 import { GitHubIcon } from "@/components/icons/brands";
-import { PulseHeatmap } from "./PulseHeatmap";
+import { PulseHeatmap, getPulseHeatmapRowWidth } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
 import { useProjectHealth } from "@/hooks/useProjectHealth";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
@@ -320,6 +320,68 @@ function OfflineHint() {
   );
 }
 
+const HEATMAP_LEGEND_GAP_PX = 3;
+
+// Explicit per-level switch (not a template literal) so the EXTENSION_KEYS
+// drift scanner registers each per-level var consumer individually. Mirrors
+// getHeatCellBackground() in PulseHeatmap.tsx.
+function getLegendSwatchBackground(level: 1 | 2 | 3 | 4): string {
+  switch (level) {
+    case 4:
+      return "var(--pulse-heat-4, var(--pulse-heat-color, var(--color-state-working)))";
+    case 3:
+      return "var(--pulse-heat-3, var(--pulse-heat-color, var(--color-state-working)))";
+    case 2:
+      return "var(--pulse-heat-2, var(--pulse-heat-color, var(--color-state-working)))";
+    default:
+      return "var(--pulse-heat-1, var(--pulse-heat-color, var(--color-state-working)))";
+  }
+}
+
+function PulseHeatmapLegend({
+  dayCount,
+  descriptionId,
+}: {
+  dayCount: number;
+  descriptionId: string;
+}) {
+  const rowWidth = getPulseHeatmapRowWidth({ dayCount, compact: false });
+  return (
+    <>
+      <span id={descriptionId} className="sr-only">
+        Heat intensity from few to many commits
+      </span>
+      <div
+        aria-hidden="true"
+        data-testid="pulse-heatmap-legend"
+        className="flex items-center justify-end text-[10px] text-daintree-text/55 select-none"
+        style={{ width: `${rowWidth}px`, gap: `${HEATMAP_LEGEND_GAP_PX}px` }}
+      >
+        <span>Less</span>
+        {([1, 2, 3, 4] as const).map((level) => (
+          <span
+            key={level}
+            className="pulse-heat-cell relative overflow-hidden rounded-[2px] shrink-0"
+            data-heat-level={level}
+            style={{
+              width: 10,
+              height: 10,
+              background: getLegendSwatchBackground(level),
+            }}
+          >
+            {/* Inner shape span — display: none in default themes, flipped to
+                block by the @media (forced-colors: active) rule in
+                src/index.css. Reuses the cell-level size cue so the 4 swatches
+                stay distinguishable when the UA strips theme backgrounds. */}
+            <span aria-hidden="true" className="pulse-heat-cell-shape" />
+          </span>
+        ))}
+        <span>More</span>
+      </div>
+    </>
+  );
+}
+
 export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProps) {
   const projectName = useProjectStore((s) => s.currentProject?.name);
   const { health, loading: healthLoading, refresh: refreshHealth } = useProjectHealth();
@@ -337,6 +399,11 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     );
 
   const title = projectName ? `${projectName} Project Pulse` : "Project Pulse";
+  // Stable id pair for the legend (aria-describedby link from the heatmap grid
+  // to a screen-reader description; the visual legend is aria-hidden because
+  // each cell already exposes its value via aria-label).
+  const baseId = useId();
+  const heatmapDescriptionId = `${baseId}-desc`;
 
   // Announce silent-refresh completion exactly once via a polite live region.
   // aria-busy alone does not satisfy WCAG 4.1.3 — assistive tech only re-reads
@@ -574,7 +641,13 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       </div>
 
       <div className="p-4 space-y-4">
-        <PulseHeatmap cells={pulse.heatmap} rangeDays={pulse.rangeDays} />
+        <PulseHeatmap
+          cells={pulse.heatmap}
+          rangeDays={pulse.rangeDays}
+          describedBy={heatmapDescriptionId}
+        />
+
+        <PulseHeatmapLegend dayCount={pulse.heatmap.length} descriptionId={heatmapDescriptionId} />
 
         <p className="text-xs text-daintree-text/80">{getCoachLine(pulse)}</p>
 

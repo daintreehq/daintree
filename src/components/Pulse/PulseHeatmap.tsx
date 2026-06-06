@@ -8,6 +8,20 @@ interface PulseHeatmapProps {
   cells: HeatCell[];
   rangeDays: PulseRangeDays;
   compact?: boolean;
+  describedBy?: string;
+}
+
+export function getPulseHeatmapRowWidth({
+  dayCount,
+  compact,
+}: {
+  dayCount: number;
+  compact: boolean;
+}): number {
+  const columns = compact ? Math.min(COLUMNS_PER_ROW, dayCount) : COLUMNS_PER_ROW;
+  const cellSize = compact ? COMPACT_CELL_SIZE_PX : CELL_SIZE_PX;
+  const gap = compact ? COMPACT_GAP_PX : GAP_PX;
+  return columns > 0 ? cellSize * columns + gap * (columns - 1) : 0;
 }
 
 interface RenderCell extends HeatCell {
@@ -151,6 +165,11 @@ function PulseHeatmapCell({
           type="button"
           role="gridcell"
           data-cell-date={cell.date}
+          // Clamp to >=1 for the CSS-level cue so a future renderer that emits
+          // a positive-count cell with level: 0 doesn't render a 0-sized
+          // CanvasText shape under forced-colors. The data layer currently
+          // never produces this combination, but the input type permits it.
+          data-heat-level={cell.count > 0 && cell.level > 0 ? Math.min(4, cell.level) : undefined}
           style={{
             width: `${cellSize}px`,
             height: `${cellSize}px`,
@@ -158,13 +177,15 @@ function PulseHeatmapCell({
             ...ringStyle,
           }}
           className={cn(
-            "rounded-[2px] shrink-0 border-0 p-0 cursor-default transition-[transform,background-color,box-shadow] duration-150",
+            "pulse-heat-cell relative overflow-hidden rounded-[2px] shrink-0 border-0 p-0 cursor-default transition-[transform,background-color,box-shadow] duration-150",
             cell.isMissedDay && "pulse-heat-cell-missed",
             cell.isMostRecentActive && "ring-1 ring-daintree-text/25 ring-offset-1"
           )}
           aria-label={`${formatted}: ${getTooltipText(cell)}`}
           tabIndex={isActive ? 0 : -1}
-        />
+        >
+          {cell.count > 0 && <span aria-hidden="true" className="pulse-heat-cell-shape" />}
+        </button>
       </TooltipTrigger>
       <TooltipContent side="top" className="text-xs">
         <span className="font-medium">{formatted}</span>
@@ -174,7 +195,12 @@ function PulseHeatmapCell({
   );
 }
 
-export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmapProps) {
+export function PulseHeatmap({
+  cells,
+  rangeDays,
+  compact = false,
+  describedBy,
+}: PulseHeatmapProps) {
   const rows = useMemo(() => {
     const normalizedCells = [...cells]
       .filter((cell) => !Number.isNaN(new Date(cell.date).getTime()))
@@ -206,7 +232,7 @@ export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmap
   const gap = compact ? COMPACT_GAP_PX : GAP_PX;
   const totalCells = rows.reduce((sum, r) => sum + r.length, 0);
   const columns = compact ? Math.min(COLUMNS_PER_ROW, totalCells) : COLUMNS_PER_ROW;
-  const rowWidth = columns > 0 ? cellSize * columns + gap * (columns - 1) : 0;
+  const rowWidth = getPulseHeatmapRowWidth({ dayCount: totalCells, compact });
 
   const cellRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const initialFocusKey = useMemo(() => {
@@ -349,6 +375,7 @@ export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmap
       style={{ gap: `${gap}px`, width: `${rowWidth}px` }}
       role="grid"
       aria-label={`Activity over the last ${rangeDays} days`}
+      aria-describedby={describedBy}
       aria-rowcount={rows.length}
       aria-colcount={columns}
       data-testid="pulse-heatmap"

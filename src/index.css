@@ -2936,6 +2936,41 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   [role="switch"][data-state] span[data-state="unchecked"] {
     background-color: ButtonText;
   }
+
+  /* Project Pulse heatmap (issue #9819). Theme-authored backgrounds collapse
+   * to Canvas under forced-colors, so the four heat levels + missed-day cell
+   * become indistinguishable. Use a system-paint + size-coded inner square
+   * (GitHub's 2023+ contribution-graph approach) keyed off data-heat-level,
+   * and a solid fill for the missed-day streak-break signal. The shape span
+   * is rendered always (display: none baseline) so theme switches don't
+   * reflow; the !important on the heat cell background is required to beat
+   * the inline author style set in PulseHeatmap.getCellStyle. */
+  .pulse-heat-cell {
+    background: Canvas !important;
+  }
+  .pulse-heat-cell-shape {
+    display: block;
+    background: CanvasText !important;
+  }
+  .pulse-heat-cell[data-heat-level="1"] .pulse-heat-cell-shape {
+    width: 35%;
+    height: 35%;
+  }
+  .pulse-heat-cell[data-heat-level="2"] .pulse-heat-cell-shape {
+    width: 55%;
+    height: 55%;
+  }
+  .pulse-heat-cell[data-heat-level="3"] .pulse-heat-cell-shape {
+    width: 75%;
+    height: 75%;
+  }
+  .pulse-heat-cell[data-heat-level="4"] .pulse-heat-cell-shape {
+    width: 90%;
+    height: 90%;
+  }
+  .pulse-heat-cell-missed {
+    background: CanvasText !important;
+  }
 }
 
 /* Increased contrast mode — heavier borders for visibility.
@@ -2988,6 +3023,16 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
    * utility rule has equal specificity (0,1,0) and wins on source order. */
   [class*="text-daintree-text/"] {
     color: var(--color-daintree-text) !important;
+  }
+
+  /* Project Pulse heatmap (issue #9819). On macOS Increase Contrast the theme
+   * backgrounds still render, but low-alpha heat cells can wash out. A 1px
+   * theme-text border (overriding `border-0` in PulseHeatmap) gives every
+   * cell a visible boundary so the four levels stay distinguishable. */
+  .pulse-heat-cell {
+    border-width: 1px;
+    border-style: solid;
+    border-color: var(--color-daintree-text);
   }
 }
 
