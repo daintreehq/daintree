@@ -124,17 +124,15 @@ function isStaticSkipDeclaration(node) {
 }
 
 /**
- * Walk backward through the block body statements before `skipIndex` and
- * collect every annotation-push call.
+ * Returns the annotation from the statement immediately preceding `skipIndex`,
+ * or null when that statement is not an annotation push. The push must be the
+ * direct predecessor so that each test.skip() carries its own annotation — a
+ * backward scan would let a later skip borrow an earlier skip's annotation.
  */
 function findPrecedingAnnotation(body, skipIndex) {
-  for (let i = skipIndex - 1; i >= 0; i--) {
-    const stmt = body[i];
-    if (isAnnotationPush(stmt)) {
-      return extractAnnotation(stmt);
-    }
-  }
-  return null;
+  if (skipIndex <= 0) return null;
+  const prev = body[skipIndex - 1];
+  return isAnnotationPush(prev) ? extractAnnotation(prev) : null;
 }
 
 export default {
