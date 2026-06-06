@@ -10,16 +10,20 @@ let migrationCurrentVersion = 1;
 let migrationShouldThrow = false;
 let mockLogRetentionDays: number | undefined = 30;
 const { pruneOldLogs } = vi.hoisted(() => ({ pruneOldLogs: vi.fn() }));
-const { pluginMcpHydrate, getPluginMcpAuditService, getPluginMcpConsentService } = vi.hoisted(
-  () => {
-    const pluginMcpHydrate = vi.fn();
-    return {
-      pluginMcpHydrate,
-      getPluginMcpAuditService: vi.fn(() => ({ hydrate: pluginMcpHydrate })),
-      getPluginMcpConsentService: vi.fn(),
-    };
-  }
-);
+const {
+  pluginMcpHydrate,
+  getPluginMcpAuditService,
+  getPluginMcpConsentService,
+  getPluginMcpConsentStore,
+} = vi.hoisted(() => {
+  const pluginMcpHydrate = vi.fn();
+  return {
+    pluginMcpHydrate,
+    getPluginMcpAuditService: vi.fn(() => ({ hydrate: pluginMcpHydrate })),
+    getPluginMcpConsentService: vi.fn(),
+    getPluginMcpConsentStore: vi.fn(),
+  };
+});
 
 vi.mock("../../utils/performance.js", () => ({
   markPerformance: vi.fn(),
@@ -109,6 +113,7 @@ vi.mock("../../services/ActionBreadcrumbService.js", () => ({
 vi.mock("../../services/plugin-mcp/instances.js", () => ({
   getPluginMcpAuditService,
   getPluginMcpConsentService,
+  getPluginMcpConsentStore,
 }));
 
 vi.mock("../../services/HibernationService.js", () => ({
@@ -243,6 +248,7 @@ describe("initGlobalServices task ordering", () => {
     pluginMcpHydrate.mockClear();
     getPluginMcpAuditService.mockClear();
     getPluginMcpConsentService.mockClear();
+    getPluginMcpConsentStore.mockClear();
     (app.exit as ReturnType<typeof vi.fn>).mockReset();
     migrationCurrentVersion = 1;
     migrationShouldThrow = false;
@@ -365,7 +371,8 @@ describe("initGlobalServices task ordering", () => {
     // path — neither getter may fire until the deferred queue drains.
     expect(getPluginMcpAuditService).not.toHaveBeenCalled();
     expect(getPluginMcpConsentService).not.toHaveBeenCalled();
-    expect(registeredTaskNames).toContain("plugin-mcp-audit-warm");
+    expect(getPluginMcpConsentStore).not.toHaveBeenCalled();
+    expect(registeredTaskNames.filter((n) => n === "plugin-mcp-audit-warm")).toHaveLength(1);
   });
 
   it("plugin-mcp-audit-warm task hydrates the audit service when run (#10073)", async () => {
@@ -377,9 +384,10 @@ describe("initGlobalServices task ordering", () => {
     await run!();
 
     expect(pluginMcpHydrate).toHaveBeenCalledTimes(1);
-    // Consent service stays purely on-demand — the warm task must not
-    // allocate it (PluginInstaller constructs it lazily at first real use).
+    // Consent service/store stay purely on-demand — the warm task must not
+    // allocate them (PluginInstaller constructs them lazily at first real use).
     expect(getPluginMcpConsentService).not.toHaveBeenCalled();
+    expect(getPluginMcpConsentStore).not.toHaveBeenCalled();
   });
 
   it("registers prune-old-logs as a deferred task so it doesn't block cold start (#8622)", async () => {
