@@ -390,9 +390,17 @@ describe("AppLayout sidebar clip-margin state machine — issue #9864", () => {
     // else the 6px strip persists for reduced-motion users until re-show.
     expect(source).toMatch(/window\.matchMedia\("\(prefers-reduced-motion: reduce\)"\)/);
     expect(source).toMatch(
-      /reduceAnimations \|\| isSidebarResizing \|\| prefersReducedMotion[\s\S]{0,80}setSidebarFullyHidden\(true\)/
+      /reduceAnimations \|\|\s*isSidebarResizing \|\|\s*prefersReducedMotion \|\|\s*layout\.performanceMode[\s\S]{0,80}setSidebarFullyHidden\(true\)/
     );
-    // The guard effect must depend on all three inputs that gate the transition.
-    expect(source).toMatch(/\[showSidebar, reduceAnimations, isSidebarResizing\]/);
+  });
+
+  it("includes performanceMode in the synchronous-flush guard and its deps", () => {
+    // data-performance-mode narrows transition-property to exclude width
+    // (src/index.css), so the width transitionend never fires. Without this the
+    // 6px strip persists in performance mode — the original #9864 regression.
+    expect(source).toMatch(/\|\|\s*layout\.performanceMode/);
+    expect(source).toMatch(
+      /\[showSidebar, reduceAnimations, isSidebarResizing, layout\.performanceMode\]/
+    );
   });
 });

@@ -127,16 +127,22 @@ export function AppLayout({
       return;
     }
     // Hiding: when no width transition will actually run, transitionend never
-    // fires, so flush synchronously. Transitions are suppressed by the in-app
-    // reduceAnimations toggle, an active drag-resize, or OS-level reduced
-    // motion (the motion-reduce:transition-none variant on the wrapper).
+    // fires, so flush directly. The width transition is suppressed by the
+    // in-app reduceAnimations toggle, an active drag-resize, OS-level reduced
+    // motion (the motion-reduce:transition-none variant), or performance mode
+    // (data-performance-mode narrows transition-property to exclude width).
     const prefersReducedMotion =
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduceAnimations || isSidebarResizing || prefersReducedMotion) {
+    if (
+      reduceAnimations ||
+      isSidebarResizing ||
+      prefersReducedMotion ||
+      layout.performanceMode
+    ) {
       setSidebarFullyHidden(true);
     }
-  }, [showSidebar, reduceAnimations, isSidebarResizing]);
+  }, [showSidebar, reduceAnimations, isSidebarResizing, layout.performanceMode]);
 
   const handleSidebarTransitionEnd = useCallback(
     (event: React.TransitionEvent<HTMLDivElement>) => {
