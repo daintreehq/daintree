@@ -77,6 +77,10 @@ describe("TerminalInstanceService detach blur", () => {
       isVisible: true,
       lastDetachAt: 0,
       hoveredLink: null as unknown,
+      latestCols: 0,
+      latestRows: 0,
+      targetCols: undefined as number | undefined,
+      targetRows: undefined as number | undefined,
     };
   };
 
@@ -161,5 +165,70 @@ describe("TerminalInstanceService detach blur", () => {
     service.detachForProjectSwitch("t4");
 
     expect(managed.hoveredLink).toBeNull();
+  });
+
+  it("detachForProjectSwitch() backfills target dims from latest geometry when unset (#10070)", () => {
+    const managed = makeMockManaged("t5");
+    managed.latestCols = 120;
+    managed.latestRows = 40;
+    const parent = document.createElement("div");
+    parent.appendChild(managed.hostElement);
+    service.instances.set("t5", managed);
+
+    vi.spyOn(service.offscreenManager, "ensureHiddenContainer").mockReturnValue(
+      document.createElement("div")
+    );
+    vi.spyOn(service.resizeController, "clearResizeJob").mockImplementation(() => {});
+    vi.spyOn(service.resizeController, "clearSettledTimer").mockImplementation(() => {});
+
+    service.detachForProjectSwitch("t5");
+
+    // Background-tier resizes only update latest dims; the warm-attach path
+    // needs target dims, so detach must seed them so reattach paints at size.
+    expect(managed.targetCols).toBe(120);
+    expect(managed.targetRows).toBe(40);
+  });
+
+  it("detachForProjectSwitch() preserves existing target dims (#10070)", () => {
+    const managed = makeMockManaged("t6");
+    managed.latestCols = 120;
+    managed.latestRows = 40;
+    managed.targetCols = 100;
+    managed.targetRows = 30;
+    const parent = document.createElement("div");
+    parent.appendChild(managed.hostElement);
+    service.instances.set("t6", managed);
+
+    vi.spyOn(service.offscreenManager, "ensureHiddenContainer").mockReturnValue(
+      document.createElement("div")
+    );
+    vi.spyOn(service.resizeController, "clearResizeJob").mockImplementation(() => {});
+    vi.spyOn(service.resizeController, "clearSettledTimer").mockImplementation(() => {});
+
+    service.detachForProjectSwitch("t6");
+
+    // An explicit saved target (e.g. from setTargetSize) must not be clobbered.
+    expect(managed.targetCols).toBe(100);
+    expect(managed.targetRows).toBe(30);
+  });
+
+  it("detachForProjectSwitch() leaves target dims unset when no geometry was measured (#10070)", () => {
+    const managed = makeMockManaged("t7");
+    // latestCols/latestRows stay 0 — terminal was never measured.
+    const parent = document.createElement("div");
+    parent.appendChild(managed.hostElement);
+    service.instances.set("t7", managed);
+
+    vi.spyOn(service.offscreenManager, "ensureHiddenContainer").mockReturnValue(
+      document.createElement("div")
+    );
+    vi.spyOn(service.resizeController, "clearResizeJob").mockImplementation(() => {});
+    vi.spyOn(service.resizeController, "clearSettledTimer").mockImplementation(() => {});
+
+    service.detachForProjectSwitch("t7");
+
+    // A 0-width backfill would poison the cold-seed resize before open().
+    expect(managed.targetCols).toBeUndefined();
+    expect(managed.targetRows).toBeUndefined();
   });
 });

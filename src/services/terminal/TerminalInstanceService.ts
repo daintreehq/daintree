@@ -874,20 +874,20 @@ class TerminalInstanceService {
     if (!current) return;
     if (!current.isOpened) return;
 
-    // Attach is in progress — running the wake now would race the attach's own
-    // post-rAF reconciliation. That reconciliation path does NOT run the full
-    // visibility-restore sequence, so we can't simply defer to it: mark the
-    // terminal so notifyAttachSettledWaiters re-runs this wake once attach
-    // settles (#9702).
-    if (current.isAttaching) {
-      current.pendingVisibilityWake = true;
-      return;
-    }
+    // Set the deferred-wake flag before the geometry sync so an unexpected
+    // throw from applyDeferredResize (e.g. a terminal disposed between the
+    // unhibernate re-fetch above and here) can't strand it: while attaching the
+    // async wake must re-run once attach settles, so the flag has to survive a
+    // throw. On the proceed path we clear it again below.
+    current.pendingVisibilityWake = current.isAttaching === true;
 
-    // We're proceeding with the full wake now, so clear any stale deferred-wake
-    // flag (e.g. a prior skip whose deferred re-run we are now satisfying).
-    current.pendingVisibilityWake = false;
-
+    // Geometry sync runs synchronously even while attaching (#10070).
+    // applyDeferredResize only calls terminal.resize() — no buffer reset, no
+    // async — so it is safe mid-attach and corrects the grid before the warm
+    // paint gate releases the bridge view. Without this, an attaching terminal
+    // stays at the default 80x24 until the deferred wake re-runs after the
+    // bridge has already dropped, producing the visible render-small-then-snap.
+    //
     // Unlock symmetrically with the relock in the finally below: bypass the
     // lock whenever resize is suppressed, even if the suppression end time was
     // already cleared (the timer can fire between switch-back and this deferred
@@ -908,6 +908,20 @@ class TerminalInstanceService {
         this.resizeController.lockResize(id, true, remainingMs);
       }
     }
+
+    // Attach is in progress — running the async wake now would race the
+    // attach's own post-rAF reconciliation, which calls terminal.reset()
+    // during buffer restore. The geometry sync above is safe to keep, but the
+    // async wake must defer: pendingVisibilityWake was already set true above
+    // so notifyAttachSettledWaiters re-runs this wake once attach settles
+    // (#9702).
+    if (current.isAttaching) {
+      return;
+    }
+
+    // We're proceeding with the full wake now, so clear any stale deferred-wake
+    // flag (e.g. a prior skip whose deferred re-run we are now satisfying).
+    current.pendingVisibilityWake = false;
 
     const termEl = current.terminal.element;
     if (termEl) {
@@ -1852,6 +1866,19 @@ class TerminalInstanceService {
 
     this.resizeController.clearResizeJob(managed);
     this.resizeController.clearSettledTimer(id);
+
+    // Seed the warm-attach target dims from the last measured geometry (#10070).
+    // Background-tier resizes only update latestCols/latestRows, never
+    // targetCols/targetRows, so a terminal that was only ever resized while
+    // backgrounded reattaches with no saved targets — the synchronous
+    // warm-attach resize (and the cold-seed before open()) is skipped and the
+    // grid flashes 80x24. Backfill here, at the lifecycle boundary where we
+    // know the terminal is about to be reattached warm, only when targets are
+    // unset and the measured size is real.
+    if (!managed.targetCols && managed.latestCols > 0) {
+      managed.targetCols = managed.latestCols;
+      managed.targetRows = managed.latestRows;
+    }
 
     if (managed.hostElement.parentElement) {
       const hiddenContainer = this.offscreenManager.ensureHiddenContainer();
