@@ -62,10 +62,13 @@ const PREFETCH_FRESHNESS_MS = 10_000;
 // the cache and let the existing 30s poll keep things fresh in background.
 const OPEN_FORCE_REFRESH_STALENESS_MS = 2 * 60 * 1000;
 
-// Lifetime of the corner activity chip after the most recent count increase.
-// The chip is a glanceable "something new arrived" cue, not a persistent
-// unread-state badge — three minutes is long enough for a user to notice it
-// during normal task flow without lingering past the moment of relevance.
+// Lifetime of the corner activity chip after the most recent count increase,
+// measured in visible time. The chip is a glanceable "something new arrived"
+// cue, not a persistent unread-state badge — three minutes is long enough for
+// a user to notice it during normal task flow without lingering past the
+// moment of relevance. The chip's auto-clear pauses while the page is hidden
+// (see the useEffect below) so a chip earned just before a tab/window switch
+// doesn't burn its TTL unseen.
 const ACTIVITY_CHIP_TTL_MS = 3 * 60 * 1000;
 
 // Re-exported for external consumers (tests, rate-limit math)
@@ -363,6 +366,13 @@ export const GitHubStatsToolbarButton = memo(
     const issuesPrefetchInFlightRef = useRef(false);
     const prsPrefetchInFlightRef = useRef(false);
 
+    // Wall-clock anchor for the moment the document went hidden, per chip.
+    // Used by the auto-clear effects below to shift the chip's `pulseAt`
+    // forward by the hidden duration on restore, so the TTL measures
+    // *visible* time rather than wall-clock time.
+    const issuesHiddenAtRef = useRef<number | null>(null);
+    const prsHiddenAtRef = useRef<number | null>(null);
+
     // Mirror open state into refs so the trailing-edge timer can re-check at
     // fire time. The guard inside `handlePrefetchPointerEnter` is evaluated at
     // schedule time; if the user clicks during the 150ms debounce window the
@@ -397,30 +407,155 @@ export const GitHubStatsToolbarButton = memo(
     const showPrsChip = !isTokenError && prsPulseAt !== null && !prsOpen && (prCount ?? 0) > 0;
 
     // Auto-clear each chip ACTIVITY_CHIP_TTL_MS after the most recent count
-    // increase. The dependency on `*PulseAt` re-arms the timer whenever a
-    // newer increase resets the timestamp; the cleanup cancels any pending
-    // timer if the user opens the dropdown (which sets pulseAt → null) or
-    // a fresher pulse takes its place.
+    // increase, measured in *visible* time — a chip earned just before the
+    // user switches away shouldn't burn its TTL unseen. On hide, we record
+    // the wall-clock anchor; on restore, we shift `pulseAt` forward by the
+    // hidden duration so the next `remaining` math reflects elapsed visible
+    // time only. The listener is subscribed before sampling `document.hidden`
+    // so a hide that lands between effect-run and first tick is caught, and
+    // the effect pauses synchronously when it commits during a hidden window
+    // (e.g. a `setIssuesPulseAt` shift's re-render landing while hidden).
     useEffect(() => {
-      if (issuesPulseAt === null) return;
-      const remaining = ACTIVITY_CHIP_TTL_MS - (Date.now() - issuesPulseAt);
-      if (remaining <= 0) {
-        setIssuesPulseAt(null);
+      if (issuesPulseAt === null) {
+        // Clear the ref defensively so a future pulse that arrives while
+        // hidden starts from a clean anchor, not a leftover from a prior
+        // chip's hide cycle.
+        issuesHiddenAtRef.current = null;
         return;
       }
-      const id = window.setTimeout(() => setIssuesPulseAt(null), remaining);
-      return () => window.clearTimeout(id);
+      let timeoutId: number | null = null;
+
+      const pauseForHidden = () => {
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        issuesHiddenAtRef.current = Date.now();
+      };
+
+      const tick = () => {
+        timeoutId = null;
+        if (document.hidden) {
+          // Race guard: a timer that fires while the document is in the
+          // middle of going hidden shouldn't make a state decision — the
+          // visibilitychange handler owns that path.
+          return;
+        }
+        const remaining = ACTIVITY_CHIP_TTL_MS - (Date.now() - issuesPulseAt);
+        if (remaining <= 0) {
+          setIssuesPulseAt(null);
+          return;
+        }
+        timeoutId = window.setTimeout(tick, remaining);
+      };
+
+      const onVisibility = () => {
+        if (document.hidden) {
+          pauseForHidden();
+          return;
+        }
+        // Document went visible. If we have a hidden anchor, shift pulseAt
+        // forward by the hidden duration; the resulting state change will
+        // re-run this effect with a fresh tick. Otherwise just re-arm.
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        if (issuesHiddenAtRef.current !== null) {
+          const hiddenMs = Date.now() - issuesHiddenAtRef.current;
+          issuesHiddenAtRef.current = null;
+          if (hiddenMs > 0) {
+            setIssuesPulseAt((prev) => (prev === null ? null : prev + hiddenMs));
+            return;
+          }
+        }
+        tick();
+      };
+
+      // Subscribe first, then sample. A hide that lands between
+      // addEventListener and the first tick() will be caught by the
+      // listener; if the document is already hidden when the effect runs,
+      // pause immediately so the restore handler has an anchor to shift.
+      // The cleanup at the bottom runs unconditionally so the listener
+      // is always paired with a removeEventListener on unmount/dep change.
+      document.addEventListener("visibilitychange", onVisibility);
+      if (document.hidden) {
+        pauseForHidden();
+      } else {
+        tick();
+      }
+
+      return () => {
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        document.removeEventListener("visibilitychange", onVisibility);
+      };
     }, [issuesPulseAt]);
 
     useEffect(() => {
-      if (prsPulseAt === null) return;
-      const remaining = ACTIVITY_CHIP_TTL_MS - (Date.now() - prsPulseAt);
-      if (remaining <= 0) {
-        setPrsPulseAt(null);
+      if (prsPulseAt === null) {
+        prsHiddenAtRef.current = null;
         return;
       }
-      const id = window.setTimeout(() => setPrsPulseAt(null), remaining);
-      return () => window.clearTimeout(id);
+      let timeoutId: number | null = null;
+
+      const pauseForHidden = () => {
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        prsHiddenAtRef.current = Date.now();
+      };
+
+      const tick = () => {
+        timeoutId = null;
+        if (document.hidden) {
+          return;
+        }
+        const remaining = ACTIVITY_CHIP_TTL_MS - (Date.now() - prsPulseAt);
+        if (remaining <= 0) {
+          setPrsPulseAt(null);
+          return;
+        }
+        timeoutId = window.setTimeout(tick, remaining);
+      };
+
+      const onVisibility = () => {
+        if (document.hidden) {
+          pauseForHidden();
+          return;
+        }
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        if (prsHiddenAtRef.current !== null) {
+          const hiddenMs = Date.now() - prsHiddenAtRef.current;
+          prsHiddenAtRef.current = null;
+          if (hiddenMs > 0) {
+            setPrsPulseAt((prev) => (prev === null ? null : prev + hiddenMs));
+            return;
+          }
+        }
+        tick();
+      };
+
+      document.addEventListener("visibilitychange", onVisibility);
+      if (document.hidden) {
+        pauseForHidden();
+      } else {
+        tick();
+      }
+
+      return () => {
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        document.removeEventListener("visibilitychange", onVisibility);
+      };
     }, [prsPulseAt]);
 
     useEffect(() => {

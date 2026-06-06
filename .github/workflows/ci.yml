@@ -26,6 +26,13 @@ concurrency:
 
 env:
   NODE_VERSION: "22"
+  # onnxruntime-node (transitive via avr-vad for CPU-only Silero VAD) tries
+  # to download optional CUDA/TensorRT GPU binaries from api.nuget.org on
+  # postinstall. Daintree's VAD runs on CPU; the GPU binaries are never
+  # loaded. The CI runner pool can't reliably reach nuget.org, so skip the
+  # GPU download and let the bundled CPU runtime + binding node module
+  # (already in the npm tarball) do the work.
+  ONNXRUNTIME_NODE_INSTALL: "skip"
 
 jobs:
   # Typecheck + lint + format. These are whole-repo operations that can't be
