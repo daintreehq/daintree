@@ -42,3 +42,28 @@ export const DEV_PREVIEW_PARTITION_PATTERN =
 export function isDevPreviewPartition(value: unknown): value is string {
   return typeof value === "string" && DEV_PREVIEW_PARTITION_PATTERN.test(value);
 }
+
+/**
+ * Build the per-project `persist:browser-*` partition for a Browser panel.
+ *
+ * Browser sessions are scoped by project (cookies/localStorage/IndexedDB for a
+ * site like `localhost:3000` or `github.com` belong to the project context, not
+ * a single worktree or panel instance), so this needs only `projectId`. A
+ * missing id sanitizes to `persist:browser-default`.
+ */
+export function buildBrowserPartition(projectId: string | undefined): string {
+  return `persist:browser-${sanitizePartitionToken(projectId)}`;
+}
+
+/**
+ * Matches a Browser panel partition. Accepts both the scoped
+ * `persist:browser-{token}` form produced by `buildBrowserPartition` and the
+ * legacy bare `persist:browser` string so sessions created by older builds (or
+ * still cached by Electron) keep being classified and locked down correctly.
+ */
+export const BROWSER_PARTITION_PATTERN = /^persist:browser(-[a-z0-9_-]+)?$/;
+
+/** True when `value` is a syntactically valid Browser panel partition. */
+export function isBrowserPartition(value: unknown): value is string {
+  return typeof value === "string" && BROWSER_PARTITION_PATTERN.test(value);
+}

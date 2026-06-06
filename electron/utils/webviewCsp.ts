@@ -1,5 +1,6 @@
 import type { OnHeadersReceivedListenerDetails } from "electron";
 import { getDaintreeAppCSP } from "../../shared/config/csp.js";
+import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 
 export { getDaintreeAppCSP };
 
@@ -18,7 +19,7 @@ export function isDevPreviewPartition(partition: string): boolean {
  * Used to apply appropriate CSP policies to different webview partitions.
  */
 export function classifyPartition(partition: string): WebviewPartitionType {
-  if (partition === "persist:browser") {
+  if (isBrowserPartition(partition)) {
     return "browser";
   }
   if (partition === "persist:portal") {

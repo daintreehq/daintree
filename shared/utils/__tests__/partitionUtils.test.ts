@@ -3,6 +3,8 @@ import {
   sanitizePartitionToken,
   buildDevPreviewPartition,
   isDevPreviewPartition,
+  buildBrowserPartition,
+  isBrowserPartition,
 } from "../partitionUtils.js";
 
 describe("sanitizePartitionToken", () => {
@@ -81,5 +83,52 @@ describe("isDevPreviewPartition", () => {
   it("rejects non-string values", () => {
     expect(isDevPreviewPartition(undefined)).toBe(false);
     expect(isDevPreviewPartition(123)).toBe(false);
+  });
+});
+
+describe("buildBrowserPartition", () => {
+  it("composes the per-project persist:browser-* partition", () => {
+    expect(buildBrowserPartition("proj")).toBe("persist:browser-proj");
+  });
+
+  it("sanitizes the project token", () => {
+    expect(buildBrowserPartition("Pro/J #1")).toBe("persist:browser-pro-j-1");
+  });
+
+  it("falls back to a default token when the project id is missing", () => {
+    expect(buildBrowserPartition(undefined)).toBe("persist:browser-default");
+    expect(buildBrowserPartition("")).toBe("persist:browser-default");
+  });
+
+  it("always produces a scoped partition, never the legacy bare string", () => {
+    expect(buildBrowserPartition(undefined)).not.toBe("persist:browser");
+  });
+});
+
+describe("isBrowserPartition", () => {
+  it("accepts a well-formed scoped browser partition", () => {
+    expect(isBrowserPartition("persist:browser-my-project")).toBe(true);
+    expect(isBrowserPartition(buildBrowserPartition("proj"))).toBe(true);
+  });
+
+  it("accepts the legacy bare browser partition", () => {
+    expect(isBrowserPartition("persist:browser")).toBe(true);
+  });
+
+  it("rejects over-matching near-misses", () => {
+    expect(isBrowserPartition("persist:browserish")).toBe(false);
+    expect(isBrowserPartition("persist:browser/evil")).toBe(false);
+    expect(isBrowserPartition("persist:dev-preview-browser-a")).toBe(false);
+  });
+
+  it("rejects other partition families", () => {
+    expect(isBrowserPartition("persist:dev-preview-a-b-c")).toBe(false);
+    expect(isBrowserPartition("persist:portal")).toBe(false);
+    expect(isBrowserPartition("persist:daintree")).toBe(false);
+  });
+
+  it("rejects non-string values", () => {
+    expect(isBrowserPartition(undefined)).toBe(false);
+    expect(isBrowserPartition(123)).toBe(false);
   });
 });

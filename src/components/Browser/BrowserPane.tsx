@@ -34,6 +34,7 @@ import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useFindInPage } from "@/hooks/useFindInPage";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { logError } from "@/utils/logger";
+import { buildBrowserPartition } from "@shared/utils/partitionUtils";
 
 export interface BrowserPaneProps extends BasePanelProps {
   initialUrl: string;
@@ -108,6 +109,9 @@ export function BrowserPane({
   const setBrowserZoom = usePanelStore((state) => state.setBrowserZoom);
   const isDragging = useIsDragging();
   const projectId = useProjectStore((state) => state.currentProject?.id);
+  // Per-project Chromium session partition so cookies/localStorage/IndexedDB are
+  // isolated between projects sharing an origin (e.g. localhost:3000) (#9965).
+  const webviewPartition = useMemo(() => buildBrowserPartition(projectId), [projectId]);
   const devServerLoadTimeout = useProjectSettingsStore(
     (state) => state.settings?.devServerLoadTimeout
   );
@@ -971,7 +975,7 @@ export function BrowserPane({
               <webview
                 ref={setWebviewNode}
                 src={currentUrl}
-                partition="persist:browser"
+                partition={webviewPartition}
                 // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
                 allowpopups=""
                 className={cn(

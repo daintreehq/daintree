@@ -765,6 +765,60 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       expect(mockSend).not.toHaveBeenCalled();
     });
   });
+
+  describe("browser-panel navigation (per-project partition)", () => {
+    function createBrowserWebContents(partition: string): MockWebContents {
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { session: { partition: string } }).session = { partition };
+      return contents;
+    }
+
+    it("allows cross-origin navigation for a per-project browser partition", () => {
+      const contents = createBrowserWebContents("persist:browser-proj-a");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "https://github.com/login");
+
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    });
+
+    it("still blocks unsafe URLs for a browser partition", () => {
+      const contents = createBrowserWebContents("persist:browser-proj-a");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "javascript:alert(1)");
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats distinct per-project browser partitions independently as browser panels", () => {
+      const contentsB = createBrowserWebContents("persist:browser-proj-b");
+      simulateWebContentsCreated(contentsB);
+
+      const handler = getEventHandlers(contentsB, "will-redirect")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "https://accounts.google.com/oauth");
+
+      // Browser partitions allow cross-origin http/https (OAuth flows), unlike
+      // dev-preview which is localhost-only.
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    });
+
+    it("restricts a dev-preview partition to localhost (cross-origin blocked)", () => {
+      const contents = createBrowserWebContents("persist:dev-preview-proj-a-main-panel");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "https://github.com/login");
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 describe("setupWebviewCSP — partition CSP wiring", () => {
@@ -773,15 +827,17 @@ describe("setupWebviewCSP — partition CSP wiring", () => {
     webContentsCreatedListeners.length = 0;
   });
 
-  it("registers CSP on persist:browser and persist:daintree", async () => {
+  it("registers CSP on persist:daintree and does not eagerly open a browser session", async () => {
     const { session } = await import("electron");
     const fromPartition = vi.mocked(session.fromPartition);
 
     setupWebviewCSP();
 
     const partitions = fromPartition.mock.calls.map((call) => call[0]);
-    expect(partitions).toContain("persist:browser");
     expect(partitions).toContain("persist:daintree");
+    // Browser sessions are per-project and created lazily; setup no longer opens a
+    // singleton persist:browser session for identity comparison (#9965).
+    expect(partitions).not.toContain("persist:browser");
   });
 
   it("uses the daintree app CSP for persist:daintree (and skips localhost dev CSP for browser)", async () => {
