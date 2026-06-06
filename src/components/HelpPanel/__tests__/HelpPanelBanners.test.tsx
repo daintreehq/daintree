@@ -62,10 +62,7 @@ describe("HelpPanelBanners — launch error", () => {
   });
 
   it("shows Open settings for both MCP failure kinds and only those", () => {
-    const kindsWithSettings: LaunchErrorKind[] = [
-      "mcp-server-not-started",
-      "mcp-probe-failed",
-    ];
+    const kindsWithSettings: LaunchErrorKind[] = ["mcp-server-not-started", "mcp-probe-failed"];
     for (const kind of kindsWithSettings) {
       const { queryByText, unmount } = render(
         <HelpPanelBanners {...baseProps()} launchError={{ agentId: "claude", kind }} />
@@ -94,7 +91,8 @@ describe("HelpPanelBanners — launch error", () => {
     expect(queryByText("Retry")).toBeNull();
     expect(getByText("Open logs")).toBeTruthy();
     expect(getByText("Open installer page")).toBeTruthy();
-    const text = getByText("Open logs").closest('[data-testid="help-launch-error-banner"]')?.textContent ?? "";
+    const text =
+      getByText("Open logs").closest('[data-testid="help-launch-error-banner"]')?.textContent ?? "";
     expect(text).not.toMatch(/Try again/i);
   });
 
