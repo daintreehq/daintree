@@ -75,7 +75,13 @@ vi.mock("electron", () => {
     return { webContents: wc, setBounds: vi.fn(), setBackgroundColor: vi.fn() };
   }
   return {
-    app: { isPackaged: false, commandLine: { appendSwitch: vi.fn() }, getAppMetrics: () => [] },
+    app: {
+      isPackaged: false,
+      commandLine: { appendSwitch: vi.fn() },
+      getAppMetrics: () => [],
+      getPath: vi.fn(() => "/tmp/daintree-test-appdata"),
+      setPath: vi.fn(),
+    },
     BrowserWindow: vi.fn(),
     WebContentsView: MockWebContentsView,
     session: { fromPartition: vi.fn(() => ({ protocol: { handle: vi.fn() } })) },
