@@ -34,6 +34,7 @@ import {
   type AssistantTurnRecord,
   type McpAuditStats,
   type ActiveBearerRecord,
+  type McpRuntimeSnapshot,
   MCP_AUDIT_DEFAULT_MAX_RECORDS,
   MCP_AUDIT_MAX_RECORDS,
   MCP_AUDIT_MIN_RECORDS,
@@ -51,6 +52,13 @@ const STATUS_LOAD_TIMEOUT_MS = 10_000;
 
 const MASKED_KEY = "•".repeat(24);
 
+const INITIAL_RUNTIME_SNAPSHOT: McpRuntimeSnapshot = {
+  enabled: false,
+  state: "disabled",
+  port: null,
+  lastError: null,
+};
+
 export function McpServerSettingsTab() {
   const [status, setStatus] = useState<McpServerStatus>({
     enabled: false,
@@ -58,6 +66,11 @@ export function McpServerSettingsTab() {
     configuredPort: null,
     apiKey: "",
   });
+  // Runtime readiness (state + lastError + bound port) is carried by a
+  // separate snapshot from the persisted config above; the section is gated
+  // on `status.enabled` so the `disabled` branch is unreachable here.
+  const [runtimeSnapshot, setRuntimeSnapshot] =
+    useState<McpRuntimeSnapshot>(INITIAL_RUNTIME_SNAPSHOT);
   const [loading, setLoading] = useState(true);
   // Gate the "Loading…" copy past the Doherty threshold so fast IPC resolutions
   // don't flash a loading state for sub-400ms work.
@@ -164,14 +177,16 @@ export function McpServerSettingsTab() {
 
     Promise.all([
       window.electron.mcpServer.getStatus(),
+      window.electron.mcpServer.getRuntimeState(),
       window.electron.mcpServer.getAuditConfig(),
       window.electron.mcpServer.getAuditRecords(),
       window.electron.mcpServer.getTurnOutcomeRecords(),
       window.electron.mcpServer.getAuditStats(),
     ])
-      .then(([s, auditCfg, records, turns, stats]) => {
+      .then(([s, runtime, auditCfg, records, turns, stats]) => {
         if (settled) return;
         setStatus(s);
+        setRuntimeSnapshot(runtime);
         setPortInput(s.configuredPort?.toString() ?? "");
         portDirtyRef.current = false;
         setAuditEnabled(auditCfg.enabled);
@@ -197,8 +212,11 @@ export function McpServerSettingsTab() {
     void refreshActiveBearers();
     void refreshAssistantControl();
 
-    const unsub = window.electron.mcpServer.onRuntimeStateChanged(() => {
+    const unsub = window.electron.mcpServer.onRuntimeStateChanged((next) => {
       if (!settled) return;
+      // Apply the runtime push directly so the Connection section reflects
+      // the new state without waiting for a config refetch.
+      setRuntimeSnapshot(next);
       window.electron.mcpServer
         .getStatus()
         .then((s) => {
@@ -472,7 +490,13 @@ export function McpServerSettingsTab() {
     }
   };
 
-  const sseUrl = status.port ? `http://127.0.0.1:${status.port}/sse` : null;
+  // Prefer the runtime-snapshot port for the ready branch so a push that
+  // transitions starting→ready renders the URL without waiting for the
+  // follow-up `getStatus()` refetch. Fall back to `status.port` when the
+  // snapshot hasn't caught up yet (matches the assistant tab precedent at
+  // DaintreeAssistantSettingsTab.tsx:740).
+  const boundPort = runtimeSnapshot.port ?? status.port;
+  const sseUrl = boundPort ? `http://127.0.0.1:${boundPort}/sse` : null;
 
   // Rotation is the revoke-all primitive — it invalidates every external
   // client holding the current key in one shot (Tier D3). Gate it behind
@@ -523,13 +547,24 @@ export function McpServerSettingsTab() {
               showInlineLoading ? (
                 <p className="text-xs text-daintree-text/50">Loading…</p>
               ) : null
-            ) : status.port ? (
+            ) : runtimeSnapshot.state === "starting" ? (
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-daintree-text/30 shrink-0" />
+                <span className="text-xs text-daintree-text/60">Server is starting…</span>
+              </div>
+            ) : runtimeSnapshot.state === "failed" ? (
+              <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
+                <AlertCircle className="w-4 h-4 text-status-danger shrink-0 mt-0.5" />
+                <p className="text-xs text-status-danger leading-relaxed select-text">
+                  MCP server failed to start.{" "}
+                  {runtimeSnapshot.lastError ?? "Check the logs for details."}
+                </p>
+              </div>
+            ) : (
               <div className="contents">
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-status-success shrink-0" />
-                  <span className="text-xs text-daintree-text/60">
-                    Running on port {status.port}
-                  </span>
+                  <span className="text-xs text-daintree-text/60">Running on port {boundPort}</span>
                 </div>
 
                 <div className="flex items-center gap-2 p-2.5 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border font-mono text-xs text-daintree-text/80 select-all">
@@ -607,8 +642,6 @@ export function McpServerSettingsTab() {
                   </div>
                 )}
               </div>
-            ) : (
-              <p className="text-xs text-daintree-text/50">Server is starting…</p>
             )}
           </SettingsSection>
 
