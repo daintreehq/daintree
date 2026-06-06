@@ -13,9 +13,8 @@ export const FLEET_BROADCAST_HISTORY_KEY = "fleet-broadcast" as const;
  * Shared by both fleet broadcast paths:
  *   - Raw-input (`fleetRawInputBroadcast`) reads `result.error.code` from the
  *     `broadcast-write-result` IPC payload.
- *   - Structured-submit (`fleetExecution.buildResult` /
- *     `broadcastFleetLiteralPaste`) extracts the code from the rejection's
- *     stringified message — Electron's structured-clone serialization strips
+ *   - Structured-submit (`fleetExecution.buildResult`) extracts the code from
+ *     the rejection's stringified message — Electron's structured-clone serialization strips
  *     `NodeJS.ErrnoException.code`, so `handleTerminalSubmit` embeds the code
  *     as a leading `"CODE: …"` token in the thrown error's message.
  */
