@@ -110,7 +110,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -167,11 +167,11 @@ jobs:
       # available to run locally on demand.
 
       - name: Smoke test
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: xvfb-run --auto-servernum npm run test:smoke
         env:
           NODE_ENV: production
           ELECTRON_ENABLE_LOGGING: "1"
+          DBUS_SESSION_BUS_ADDRESS: /dev/null
           SMOKE_RUNS: "1"
           SMOKE_TIMEOUT_MS: "210000"
           SMOKE_RETRIES: "1"
