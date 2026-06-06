@@ -207,6 +207,20 @@ describe("summarizeForgeArgs redaction", () => {
     expect(summarizeForgeArgs("assignIssue", 99)).toBe('{"number":99}');
   });
 
+  it("redacts createIssue title/body, keeping only the label count", () => {
+    expect(
+      summarizeForgeArgs("createIssue", {
+        title: "Security issue",
+        body: "token abc123",
+        labels: ["bug", "security"],
+      })
+    ).toBe('{"labels":2}');
+  });
+
+  it("emits an empty object for createIssue with no labels", () => {
+    expect(summarizeForgeArgs("createIssue", { title: "No labels" })).toBe("{}");
+  });
+
   it("summarizes list filters as safe metadata only", () => {
     const summary = summarizeForgeArgs("listIssues", {
       state: "open",

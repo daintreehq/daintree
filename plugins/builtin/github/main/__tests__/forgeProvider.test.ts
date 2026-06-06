@@ -1017,3 +1017,171 @@ describe("getReviewThreads", () => {
     expect(result).toHaveLength(MAX_REVIEW_THREAD_PAGES);
   });
 });
+
+describe("createIssue", () => {
+  const restIssueResponse = {
+    number: 7,
+    title: "Add dark mode",
+    body: "Body text",
+    state: "open",
+    html_url: "https://github.com/owner/repo/issues/7",
+    user: { login: "octocat", avatar_url: "https://avatars/u" },
+    assignees: [{ login: "octocat", avatar_url: "https://avatars/u" }],
+    labels: [{ name: "enhancement", color: "a2eeef" }],
+    created_at: "2025-01-02T03:04:05Z",
+    updated_at: "2025-01-02T03:04:05Z",
+    closed_at: null,
+  };
+
+  function mockFetchOk(body: unknown = restIssueResponse) {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: vi.fn().mockResolvedValue(body),
+    });
+    (globalThis as unknown as { fetch: typeof fetchMock }).fetch = fetchMock;
+    return fetchMock;
+  }
+
+  beforeEach(() => {
+    vi.mocked(GitHubAuth.getToken).mockReturnValue("test-token");
+  });
+
+  it("POSTs to the issues endpoint with bearer auth and API version headers", async () => {
+    const fetchMock = mockFetchOk();
+
+    await githubForgeProvider.createIssue(repo, { title: "Add dark mode" });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.github.com/repos/owner/repo/issues");
+    expect(init.method).toBe("POST");
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer test-token");
+    expect(headers.Accept).toBe("application/vnd.github+json");
+    expect(headers["X-GitHub-Api-Version"]).toBe("2022-11-28");
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("normalizes the REST response into a forge Issue", async () => {
+    mockFetchOk();
+
+    const issue = await githubForgeProvider.createIssue(repo, { title: "Add dark mode" });
+
+    expect(issue).toMatchObject({
+      number: 7,
+      title: "Add dark mode",
+      body: "Body text",
+      state: "open",
+      url: "https://github.com/owner/repo/issues/7",
+      author: { login: "octocat", avatarUrl: "https://avatars/u" },
+      assignees: [{ login: "octocat", avatarUrl: "https://avatars/u" }],
+      labels: [{ name: "enhancement", color: "a2eeef" }],
+    });
+    expect(issue.createdAt).toBe(Date.parse("2025-01-02T03:04:05Z"));
+    expect(issue.closedAt).toBeNull();
+  });
+
+  it("only sends body and labels when provided", async () => {
+    const fetchMock = mockFetchOk();
+
+    await githubForgeProvider.createIssue(repo, {
+      title: "With labels",
+      body: "Explanation",
+      labels: ["bug", "ui"],
+    });
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toEqual({
+      title: "With labels",
+      body: "Explanation",
+      labels: ["bug", "ui"],
+    });
+  });
+
+  it("omits empty body and label arrays from the request", async () => {
+    const fetchMock = mockFetchOk();
+
+    await githubForgeProvider.createIssue(repo, { title: "Bare", labels: [] });
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toEqual({ title: "Bare" });
+  });
+
+  it("throws when no token is configured", async () => {
+    // getToken returns "" / null when unset; either is falsy for the guard.
+    vi.mocked(GitHubAuth.getToken).mockReturnValue("");
+
+    await expect(githubForgeProvider.createIssue(repo, { title: "x" })).rejects.toThrow(
+      /token not configured/i
+    );
+  });
+
+  it("throws when the title is blank", async () => {
+    mockFetchOk();
+
+    await expect(githubForgeProvider.createIssue(repo, { title: "   " })).rejects.toThrow(
+      /title is required/i
+    );
+  });
+
+  it("surfaces a dedicated message when issues are disabled (HTTP 410)", async () => {
+    (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+      .fn()
+      .mockResolvedValue({
+        ok: false,
+        status: 410,
+        text: vi.fn().mockResolvedValue("Issues are disabled"),
+      });
+
+    await expect(githubForgeProvider.createIssue(repo, { title: "x" })).rejects.toThrow(
+      /issues are disabled/i
+    );
+  });
+
+  it("includes the HTTP status in the error for other failures", async () => {
+    (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+      .fn()
+      .mockResolvedValue({
+        ok: false,
+        status: 422,
+        text: vi.fn().mockResolvedValue('{"message":"Validation failed"}'),
+      });
+
+    await expect(githubForgeProvider.createIssue(repo, { title: "x" })).rejects.toThrow(/HTTP 422/);
+  });
+
+  it("rejects when the response body cannot be parsed as JSON", async () => {
+    (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        status: 201,
+        json: vi.fn().mockRejectedValue(new Error("invalid json")),
+      });
+
+    await expect(githubForgeProvider.createIssue(repo, { title: "x" })).rejects.toThrow(
+      /invalid json/i
+    );
+  });
+
+  it("rejects a malformed success body missing number or html_url", async () => {
+    mockFetchOk({ title: "only a title" });
+
+    await expect(githubForgeProvider.createIssue(repo, { title: "x" })).rejects.toThrow(
+      /missing issue number or URL/i
+    );
+  });
+
+  it("propagates a TimeoutError from the transport", async () => {
+    const timeoutError = new Error("aborted");
+    timeoutError.name = "TimeoutError";
+    (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+      .fn()
+      .mockRejectedValue(timeoutError);
+
+    await expect(githubForgeProvider.createIssue(repo, { title: "x" })).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
+  });
+});
