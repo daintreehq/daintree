@@ -1,3 +1,4 @@
+// eager-import-allow: multi-window service initialization
 import { app, BrowserWindow, dialog, webContents } from "electron";
 import os from "os";
 import { registerIpcHandlers, sendToRenderer } from "../ipc/handlers.js";

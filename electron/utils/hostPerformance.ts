@@ -1,3 +1,4 @@
+// eager-import-allow: utility-process-safe perf helper for pty-host/workspace-host
 import fs from "node:fs";
 import { getCompileCacheDir } from "node:module";
 import path from "node:path";
