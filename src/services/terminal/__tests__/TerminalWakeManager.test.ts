@@ -1,12 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
 
-const { wakeMock } = vi.hoisted(() => ({
+const { wakeMock, setScrollbackRestoreErrorMock } = vi.hoisted(() => ({
   wakeMock: vi.fn(),
+  setScrollbackRestoreErrorMock: vi.fn(),
 }));
 
 vi.mock("@/clients", () => ({
   terminalClient: {
     wake: wakeMock,
+  },
+}));
+
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: {
+    getState: () => ({
+      setScrollbackRestoreError: setScrollbackRestoreErrorMock,
+    }),
   },
 }));
 
@@ -17,11 +27,13 @@ type MockManagedTerminal = Pick<ManagedTerminal, "terminal" | "isAltBuffer"> & {
   isOpened?: boolean;
   isAttaching?: boolean;
   isHibernated?: boolean;
+  lastScrollbackRestoreError?: TerminalScrollbackRestoreError;
 };
 
 describe("TerminalWakeManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setScrollbackRestoreErrorMock.mockReset();
   });
 
   it("returns false when wake request fails instead of rejecting", async () => {
@@ -431,6 +443,146 @@ describe("TerminalWakeManager", () => {
 
         manager.clearWakeState("term-pr");
         expect(manager.hasPendingWake("term-pr")).toBe(false);
+
+        manager.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("replay failure surfaces classified error (#9896)", () => {
+    const longState = "x".repeat(2_000_000); // > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes
+
+    function makeFailureDeps(managed: MockManagedTerminal, options: {
+      smallOk: boolean;
+      incrementalOk: boolean;
+    }): WakeManagerDeps {
+      return {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
+        hasInstance: vi.fn(() => true),
+        restoreFromSerialized: vi.fn(() => options.smallOk),
+        restoreFromSerializedIncremental: vi.fn(async () => options.incrementalOk),
+      };
+    }
+
+    it("returns false and publishes the classified error to the panel store on small-path replay failure", async () => {
+      wakeMock.mockResolvedValueOnce({ state: "small-state" });
+      const restoreError: TerminalScrollbackRestoreError = {
+        type: "parse",
+        message: "Parser error at offset 0",
+        timestamp: 123,
+      };
+      const managed: MockManagedTerminal = {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+        terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+        isAltBuffer: false,
+        lastScrollbackRestoreError: restoreError,
+      };
+      const manager = new TerminalWakeManager(
+        makeFailureDeps(managed, { smallOk: false, incrementalOk: true })
+      );
+
+      const result = await manager.wakeAndRestore("term-fail-small");
+
+      expect(result).toBe(false);
+      expect(setScrollbackRestoreErrorMock).toHaveBeenCalledTimes(1);
+      expect(setScrollbackRestoreErrorMock).toHaveBeenCalledWith("term-fail-small", restoreError);
+      // The buffer refresh that success would perform is skipped on failure.
+      expect(managed.terminal.refresh).not.toHaveBeenCalled();
+    });
+
+    it("returns false and publishes the classified error on incremental-path replay failure", async () => {
+      wakeMock.mockResolvedValueOnce({ state: longState });
+      const restoreError: TerminalScrollbackRestoreError = {
+        type: "timeout",
+        message: "Write timeout",
+        timestamp: 456,
+      };
+      const managed: MockManagedTerminal = {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+        terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+        isAltBuffer: false,
+        lastScrollbackRestoreError: restoreError,
+      };
+      const manager = new TerminalWakeManager(
+        makeFailureDeps(managed, { smallOk: true, incrementalOk: false })
+      );
+
+      const result = await manager.wakeAndRestore("term-fail-incr");
+
+      expect(result).toBe(false);
+      expect(setScrollbackRestoreErrorMock).toHaveBeenCalledTimes(1);
+      expect(setScrollbackRestoreErrorMock).toHaveBeenCalledWith("term-fail-incr", restoreError);
+    });
+
+    it("does not call setScrollbackRestoreError when the restore succeeds", async () => {
+      wakeMock.mockResolvedValueOnce({ state: "serialized-state" });
+      const managed: MockManagedTerminal = {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+        terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+        isAltBuffer: false,
+      };
+      const manager = new TerminalWakeManager(
+        makeFailureDeps(managed, { smallOk: true, incrementalOk: true })
+      );
+
+      const result = await manager.wakeAndRestore("term-success");
+
+      expect(result).toBe(true);
+      expect(setScrollbackRestoreErrorMock).not.toHaveBeenCalled();
+      expect(managed.terminal.refresh).toHaveBeenCalledWith(0, 23);
+    });
+
+    it("returns false without touching the panel store if no classified error was stashed", async () => {
+      // Defensive: a restore method returning false with no lastScrollbackRestoreError
+      // shouldn't crash or publish a banner — just fail the wake.
+      wakeMock.mockResolvedValueOnce({ state: "serialized-state" });
+      const managed: MockManagedTerminal = {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+        terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+        isAltBuffer: false,
+      };
+      const manager = new TerminalWakeManager(
+        makeFailureDeps(managed, { smallOk: false, incrementalOk: true })
+      );
+
+      const result = await manager.wakeAndRestore("term-fail-no-error");
+
+      expect(result).toBe(false);
+      expect(setScrollbackRestoreErrorMock).not.toHaveBeenCalled();
+    });
+
+    it("does not record lastWakeTime when the wake fails (rate limit window stays open)", async () => {
+      // The downstream `triggerWake` records `lastWakeTime.set(id, startedAt)` only
+      // on success. A failed wake must leave the entry deleted so a follow-up
+      // wake (e.g. a tab switch) can retry immediately.
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValue({ state: "serialized-state" });
+        const restoreError: TerminalScrollbackRestoreError = {
+          type: "error",
+          message: "boom",
+          timestamp: 1,
+        };
+        const managed: MockManagedTerminal = {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+          terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+          isAltBuffer: false,
+          lastScrollbackRestoreError: restoreError,
+        };
+        const manager = new TerminalWakeManager(
+          makeFailureDeps(managed, { smallOk: false, incrementalOk: true })
+        );
+
+        manager.wake("term-rate-fail");
+        await vi.advanceTimersByTimeAsync(0);
+        // No trailing-edge schedule should be queued — the failure kept the
+        // window open, so the next wake fires immediately.
+        manager.wake("term-rate-fail");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(wakeMock).toHaveBeenCalledTimes(2);
 
         manager.dispose();
       } finally {

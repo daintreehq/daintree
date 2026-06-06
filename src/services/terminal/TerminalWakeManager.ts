@@ -1,4 +1,6 @@
 import { terminalClient } from "@/clients";
+import { usePanelStore } from "@/store/panelStore";
+import { logWarn } from "@/utils/logger";
 import type { ManagedTerminal } from "./types";
 import { INCREMENTAL_RESTORE_CONFIG } from "./types";
 
@@ -72,10 +74,22 @@ export class TerminalWakeManager {
           return false;
         }
 
-        if (state.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
-          await this.deps.restoreFromSerializedIncremental(id, state);
-        } else {
-          this.deps.restoreFromSerialized(id, state);
+        const restoreOk =
+          state.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes
+            ? await this.deps.restoreFromSerializedIncremental(id, state)
+            : this.deps.restoreFromSerialized(id, state);
+
+        // Surface replay failures (write timeout, parse error) to the same
+        // banner the hydration path uses (#8535). The restore methods swallow
+        // internal errors and stash a classified error on the managed
+        // terminal; the boolean return is the source of truth.
+        if (!restoreOk) {
+          const restoreError = managed.lastScrollbackRestoreError;
+          if (restoreError) {
+            usePanelStore.getState().setScrollbackRestoreError(id, restoreError);
+            logWarn(`Scrollback restore failed for wake of ${id}`, { error: restoreError });
+          }
+          return false;
         }
 
         if (this.deps.getInstance(id) === managed) {
