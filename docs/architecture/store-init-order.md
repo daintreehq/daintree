@@ -1,17 +1,29 @@
 # Cross-Store Accessor Module and Renderer Init Order
 
-This document describes how renderer store modules read each other's state without forming ESM import cycles. Cross-store reads route through a single dependency-free leaf module (`src/store/storeAccessors.ts`), and the live closures are registered inside `initStoreOrchestrator()` rather than at module-evaluation time. This pattern is **load-bearing**—changing it back to module-bottom setter injection will re-introduce the TDZ and silent-failure classes documented below.
+This document describes how renderer store modules read each other's state without crashing on boot or returning stale data. The safety rule is mechanistic: a store may never dereference a partner store's binding at **module-evaluation time**—reads must happen inside function bodies that run after the ESM live bindings have resolved. Most cross-store reads satisfy this by routing through a single dependency-free leaf module (`src/store/storeAccessors.ts`) whose live closures are registered inside `initStoreOrchestrator()` rather than at module-evaluation time. One sanctioned pair (`panelStore` ↔ `worktreeStore`) instead imports each other directly because both honour the same eval-time rule; see "Sanctioned exception" below. This pattern is **load-bearing**—violating the eval-time rule (e.g. reverting to module-bottom setter injection, or reading a partner's state during `create()`) re-introduces the TDZ and silent-failure classes documented below.
 
 ## Why This Matters
 
 Renderer stores in Daintree are independent Zustand `create()` calls. Several stores (`panelStore`, `projectStore`, `worktreeStore`, `fleetArmingStore`) need to read each other in narrow places—e.g., `projectStore.buildOutgoingState()` snapshots panel state during a project switch, and `worktreeStore.applyWorktreeTerminalPolicy()` reads the fleet-armed set to keep cross-worktree terminals visible while fleet scope is active.
 
-Direct top-level imports between any pair of these stores form an ESM cycle. Cycles produce two failure modes:
+A direct top-level import between a pair of these stores forms an ESM cycle, but the cycle is **not** the hazard by itself. The hazard is **dereferencing a partner store's binding while modules are still evaluating**. ESM live bindings are not resolved until both modules in a cycle have finished evaluating, so the rule is precise:
 
-1. **TDZ crash on boot.** `ReferenceError: Cannot access 'X' before initialization` when a module references a non-hoisted binding (`let`/`const`/`class`) from a partner that has started evaluating but not finished.
-2. **Silent stale-state failure.** If the cycle is "patched" with a getter that defaults to `null`, an inverted evaluation order leaves the closure unset—and call sites like `buildOutgoingState()` quietly return incomplete data instead of crashing.
+> A direct static import between two stores is safe **if and only if** neither store reads the partner's binding at module-evaluation time—every read happens inside a function body that runs later (an action, a selector, a closure registered at init), after both modules have finished evaluating.
 
-The accessor-module pattern eliminates both classes by routing all cross-store references through a leaf module that imports no other store module, and by deferring closure registration to a single explicit init point.
+Violating that rule produces two failure modes:
+
+1. **TDZ crash on boot.** `ReferenceError: Cannot access 'X' before initialization` when a module references a non-hoisted binding (`let`/`const`/`class`) from a partner that has started evaluating but not finished—e.g. reading the partner inside top-level code or inside a `create()` initializer that runs during evaluation.
+2. **Silent stale-state failure.** If a cycle is "patched" with a getter that defaults to `null`, an inverted evaluation order leaves the closure unset—and call sites like `buildOutgoingState()` quietly return incomplete data instead of crashing.
+
+Two mechanisms keep cross-store reads on the safe side of that rule. The accessor-module pattern routes references through a leaf module that imports no other store module and defers closure registration to a single explicit init point—this is required whenever an eval-time read is otherwise unavoidable (notably during persisted-store hydration, which runs at evaluation time) or when the cycle spans more than the one sanctioned pair. The sanctioned direct-import pair (`panelStore` ↔ `worktreeStore`) instead relies on every cross-store read living inside a function body; see the next section.
+
+## Sanctioned exception: `panelStore` ↔ `worktreeStore`
+
+PR #8402 deliberately introduced a mutual **static** import between these two stores: `worktreeStore.ts` imports `usePanelStore` from `@/store/panelStore`, and `panelStore.ts` imports `useWorktreeSelectionStore` from `./worktreeStore`. This is a genuine ESM cycle, and it is safe—because both stores honour the eval-time rule above. Every cross-store read sits inside a function body and reaches the partner through `getState()`/`setState()` (e.g. `worktreeStore.applyWorktreeTerminalPolicy()` reads `usePanelStore.getState()`, and `panelStore`'s `getActiveWorktreeId` closure reads `useWorktreeSelectionStore.getState()`); neither store touches the other during module evaluation or inside its `create()` initializer. Because no eval-time dereference exists, the live bindings always resolve before any action runs, in either evaluation order.
+
+The regression gate is `src/store/__tests__/worktreeStore.circularInit.test.ts`. It imports the two stores in both orders (and via the `panelRegistrySlice` cold-graph entry point), forces each zustand state-creator to run, and asserts none of them throw—plus that a synchronous `selectWorktree()` → `applyWorktreeTerminalPolicy()` read of `usePanelStore.getState()` succeeds from a cold module graph. The two stores are never mocked; only their leaf dependencies are. If either evaluation order ever throws, the direct-import approach has become unsafe and the read must move back behind `storeAccessors.ts`.
+
+This carve-out is scoped to this one pair. Other cross-store references still route through the accessor module—`worktreeStore.applyWorktreeTerminalPolicy()` reads the fleet-armed set via `getFleetArmedIds()` (worktreeStore.ts), not a direct `fleetArmingStore` import—so adding a new direct store↔store import is not licensed by this exception. A new pair earns a direct import only with its own equivalent cold-graph regression gate.
 
 ## Architecture
 
@@ -87,6 +99,8 @@ if (!terminalState) {
 
 **DON'T:**
 
+- Dereference a partner store's binding at module-evaluation time—in top-level code, or inside a `create()` initializer that runs during evaluation. This, not the static import statement, is what causes the TDZ crash. (A static import whose reads all live inside later-running function bodies is fine; that is exactly the sanctioned `panelStore` ↔ `worktreeStore` pair.)
+- Add a new direct store↔store import on the strength of the `panelStore` ↔ `worktreeStore` carve-out. Route the read through `storeAccessors.ts` unless you ship an equivalent cold-graph regression gate proving both evaluation orders are init-safe.
 - Call lazy accessor readers at module top level. They will be `null` during module evaluation.
 - Add module-bottom side effects (`setXxxGetter(...)`, `store.subscribe(...)`) for cross-store wiring. The orchestrator owns lifecycle.
 - Add module-scope `store.subscribe()` calls for cross-store reactions. Use the orchestrator's `DisposableStore` instead (lesson #4754).
@@ -94,7 +108,7 @@ if (!terminalState) {
 
 **Red Flags:**
 
-- `ReferenceError: Cannot access 'X' before initialization` — you re-introduced a direct cycle.
+- `ReferenceError: Cannot access 'X' before initialization` — you dereferenced a partner store's binding at module-evaluation time (top-level code or a `create()` initializer). The fix is to move the read into a later-running function body, or behind `storeAccessors.ts`—not necessarily to delete the import.
 - Test mocks needing to stub `setXxxGetter` exports on `projectStore`/`worktreeStore` — those exports are gone; mock the accessor reader instead, or call the setter from the accessor module directly.
 
 ## Multi-Renderer Context
@@ -109,7 +123,7 @@ Each `WebContentsView` has an independent V8 context due to Site Isolation. Modu
 ReferenceError: Cannot access 'usePanelStore' before initialization
 ```
 
-Caused by directly importing `usePanelStore` at module level in a cyclic dependency graph. Fix by reading through `storeAccessors.ts`.
+Caused by reading a partner store's binding (here `usePanelStore`) **at module-evaluation time** in a cyclic dependency graph—top-level module code, or a `create()` initializer that runs during evaluation, executing before the partner module has finished evaluating. The static import statement itself is not the cause: the sanctioned `panelStore` ↔ `worktreeStore` pair imports each other directly and never crashes, because every read sits inside a later-running function body. Fix by moving the read into a function body that runs after init, or—if an eval-time read is genuinely unavoidable (e.g. during hydration)—route it through `storeAccessors.ts`.
 
 **Silent failure in `buildOutgoingState()`:**
 
