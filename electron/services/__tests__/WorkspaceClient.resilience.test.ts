@@ -59,6 +59,7 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
     });
 
     setLogLevelOverrides = vi.fn();
+    relayFetchThrottle = vi.fn();
 
     // Test helpers
     simulateReady(): void {

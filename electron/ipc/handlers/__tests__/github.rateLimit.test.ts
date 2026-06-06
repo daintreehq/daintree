@@ -40,6 +40,7 @@ const gitHubServiceMock = vi.hoisted(() => ({
 
 const workspaceClientMock = vi.hoisted(() => ({
   updateForgeCredentials: vi.fn(),
+  relayFetchThrottle: vi.fn(),
 }));
 
 const gitHubAuthMock = vi.hoisted(() => ({
@@ -176,6 +177,33 @@ describe("github handlers — rate limiting", () => {
       avatarUrl: null,
     });
     registerGithubHandlers({} as never);
+  });
+
+  describe("rate-limit state relay to workspace hosts", () => {
+    async function getStateChangeCallback(): Promise<(state: Record<string, unknown>) => void> {
+      const { gitHubRateLimitService } = await import("../../../services/github/index.js");
+      const calls = (gitHubRateLimitService.onStateChange as Mock).mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      return calls[0][0] as (state: Record<string, unknown>) => void;
+    }
+
+    it("relays throttleMultiplier to the workspace hosts on state change", async () => {
+      const callback = await getStateChangeCallback();
+      callback({ blocked: false, kind: null, throttleMultiplier: 4 });
+
+      await vi.waitFor(() => {
+        expect(workspaceClientMock.relayFetchThrottle).toHaveBeenCalledWith(4);
+      });
+    });
+
+    it("falls back to multiplier 1 when the state omits throttleMultiplier", async () => {
+      const callback = await getStateChangeCallback();
+      callback({ blocked: false, kind: null });
+
+      await vi.waitFor(() => {
+        expect(workspaceClientMock.relayFetchThrottle).toHaveBeenCalledWith(1);
+      });
+    });
   });
 
   describe("read family (github:list-issues)", () => {

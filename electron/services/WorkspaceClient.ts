@@ -334,6 +334,12 @@ export class WorkspaceClient extends EventEmitter {
     this.pool.setLogLevelOverrides(overrides);
   }
 
+  // ── Fetch throttle ──
+
+  relayFetchThrottle(multiplier: number): void {
+    this.pool.relayFetchThrottle(multiplier);
+  }
+
   // ── State queries ──
 
   getAllStatesAsync(windowId?: number): Promise<WorktreeSnapshot[]> {

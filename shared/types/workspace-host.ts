@@ -377,6 +377,9 @@ export type WorkspaceHostRequest =
   // Background/foreground lifecycle
   | { type: "background" }
   | { type: "foreground" }
+  // GitHub rate-limit fetch-throttle multiplier relayed from main, where the
+  // forge HTTP calls (and thus rate-limit observations) live post-#8870.
+  | { type: "apply-fetch-throttle"; multiplier: number }
   // Health check
   | { type: "health-check" }
   // Lifecycle

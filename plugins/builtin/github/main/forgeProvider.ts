@@ -1067,13 +1067,19 @@ async function getReviewThreadsImpl(repo: RepoRef, prNumber: number): Promise<Re
 function getRateLimitImpl(): Promise<RateLimitInfo> {
   const state = gitHubRateLimitService.getState();
   if (!state.blocked) {
-    return Promise.resolve({ limit: null, remaining: null, resetAt: null });
+    return Promise.resolve({
+      limit: null,
+      remaining: null,
+      resetAt: null,
+      throttleMultiplier: state.throttleMultiplier ?? 1,
+    });
   }
   return Promise.resolve({
     limit: null,
     remaining: 0,
     resetAt: state.resetAt ?? null,
     ...(state.kind === "secondary" ? { secondaryThrottled: true } : {}),
+    throttleMultiplier: state.throttleMultiplier ?? 1,
   });
 }
 
