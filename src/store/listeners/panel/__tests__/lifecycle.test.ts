@@ -609,12 +609,22 @@ describe("onExit — stale flow state cleared (#9899)", () => {
   it("evicting one terminal's buffer leaves another terminal's pending patch intact", () => {
     usePanelStore.setState({
       panelsById: {
-        "term-1": { id: "term-1", kind: "terminal", title: "T1", cwd: "/tmp", location: "grid" },
+        "term-1": {
+          id: "term-1",
+          kind: "terminal",
+          title: "T1",
+          cwd: "/tmp",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
         "term-2": {
           id: "term-2",
           kind: "terminal",
           title: "T2",
           cwd: "/tmp",
+          cols: 80,
+          rows: 24,
           location: "grid",
           isVisible: true,
         },

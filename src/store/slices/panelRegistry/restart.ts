@@ -203,29 +203,32 @@ export const createRestartActions = (
     const ptyPanel = get().panelsById[id] as import("@shared/types/panel").PtyPanelData | undefined; // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- narrow to PtyPanelData for spawnStatus access
     const wasFailed = ptyPanel?.spawnStatus === "failed";
     set((state) =>
-      updateTerminal(state, id, (t) => ({
-        ...t,
-        restartError: undefined,
-        reconnectError: undefined,
-        spawnError: undefined,
-        scrollbackRestoreError: undefined,
-        // A restart spins up a fresh PTY process; flow state from the previous
-        // process must not survive into it or the paused pill would linger
-        // (#9899). The host only re-emits flow status on a pause/resume
-        // transition, so without this the stale value persists indefinitely.
-        // Re-derive runtimeStatus too — dock pills and tab labels read it, and
-        // it would otherwise keep folding the now-cleared paused flow status.
-        flowStatus: undefined,
-        flowStatusTimestamp: undefined,
-        heldDurationMs: undefined,
-        runtimeStatus: deriveRuntimeStatus(t.isVisible, undefined, t.runtimeStatus),
-        isRestarting: true,
-        // The user is explicitly starting a fresh session, so the
-        // session-lost restore signal has been acknowledged — clear it so the
-        // banner doesn't linger across the restart (issue #9802).
-        sessionLostOnRestore: undefined,
-        ...(wasFailed ? { spawnStatus: undefined } : {}),
-      }))
+      updateTerminal(state, id, (t) => {
+        const ptyPanel = t as import("@shared/types/panel").PtyPanelData; // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- guarded by isPtyPanel check above
+        return {
+          ...t,
+          restartError: undefined,
+          reconnectError: undefined,
+          spawnError: undefined,
+          scrollbackRestoreError: undefined,
+          // A restart spins up a fresh PTY process; flow state from the previous
+          // process must not survive into it or the paused pill would linger
+          // (#9899). The host only re-emits flow status on a pause/resume
+          // transition, so without this the stale value persists indefinitely.
+          // Re-derive runtimeStatus too — dock pills and tab labels read it, and
+          // it would otherwise keep folding the now-cleared paused flow status.
+          flowStatus: undefined,
+          flowStatusTimestamp: undefined,
+          heldDurationMs: undefined,
+          runtimeStatus: deriveRuntimeStatus(ptyPanel.isVisible, undefined, ptyPanel.runtimeStatus),
+          isRestarting: true,
+          // The user is explicitly starting a fresh session, so the
+          // session-lost restore signal has been acknowledged — clear it so the
+          // banner doesn't linger across the restart (issue #9802).
+          sessionLostOnRestore: undefined,
+          ...(wasFailed ? { spawnStatus: undefined } : {}),
+        };
+      })
     );
 
     // Validate configuration before attempting restart
