@@ -408,6 +408,22 @@ describe("sanitizeEvent", () => {
     expect(JSON.stringify(result)).not.toContain(secret);
   });
 
+  it("documents the depth-cap invariant: containers beyond the cap pass through unscrubbed", () => {
+    const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456";
+    const event: SentryEvent = {
+      extra: {
+        a: { b: { c: { d: { e: { f: { g: { h: { i: { j: { k: { token: secret } } } } } } } } } } },
+      },
+    };
+    const result = sanitizeEvent(event);
+    // The container at depth 11 is returned unchanged — only scalar strings
+    // scrub past the cap. This shape is unreachable in production: Sentry's
+    // normalizeDepth (pinned to MAX_DEEP_SANITIZE_DEPTH in init) flattens
+    // deeper containers into "[Object]"/"[Array]" strings before beforeSend
+    // fires. If this assertion starts failing, the cap semantics changed.
+    expect(JSON.stringify(result)).toContain(secret);
+  });
+
   it("returns null when sanitization throws (fail-closed)", () => {
     const event = {
       // Getter that throws — forces the outer try/catch to kick in. If
@@ -524,6 +540,18 @@ describe("sanitizeEvent", () => {
     expect(result?.request?.url).not.toContain("alice");
   });
 
+  it("scrubs token-shaped path segments from parsed request.url", () => {
+    const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456";
+    const event: SentryEvent = {
+      request: {
+        url: `https://api.example.com/download/${secret}/artifact`,
+      },
+    };
+    const result = sanitizeEvent(event);
+    expect(result?.request?.url).not.toContain(secret);
+    expect(result?.request?.url).toContain("[REDACTED]");
+  });
+
   it("scrubs secret values in event.tags and preserves non-string values", () => {
     const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456";
     const event: SentryEvent = {
@@ -534,6 +562,22 @@ describe("sanitizeEvent", () => {
     expect(tags.token).toBe("[REDACTED]");
     expect(tags.source).toBe("react-uncaught");
     expect(tags.count).toBe(3);
+  });
+
+  it("preserves non-string leaves in tags and reaches nested sub-objects in user", () => {
+    const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456";
+    const event: SentryEvent = {
+      tags: { count: 42, flag: true, name: null },
+      user: { profile: { home: "/Users/alice/Projects", pat: secret } },
+    };
+    const result = sanitizeEvent(event);
+    const tags = result?.tags as Record<string, unknown>;
+    expect(tags.count).toBe(42);
+    expect(tags.flag).toBe(true);
+    expect(tags.name).toBeNull();
+    const profile = (result?.user as { profile: Record<string, unknown> }).profile;
+    expect(profile.home).toBe("/Users/USER/Projects");
+    expect(profile.pat).toBe("[REDACTED]");
   });
 
   it("scrubs home paths in event.user and passes null user through unchanged", () => {
