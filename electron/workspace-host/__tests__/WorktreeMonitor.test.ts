@@ -612,7 +612,18 @@ describe("WorktreeMonitor", () => {
           state: "declined",
         },
       });
-      expect(monitor.getSnapshot().prState).toBe("closed");
+      const snapshot = monitor.getSnapshot();
+      expect(snapshot.prState).toBe("closed");
+      // The canonical projection keeps the full provider state.
+      expect(snapshot.linked?.pr?.state).toBe("declined");
+    });
+
+    it("collapses a declined legacy flat prState to closed when linked is unset (#9981)", () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      monitor.setPRInfo({ prNumber: 5, prUrl: "u", prState: "declined" });
+      const snapshot = monitor.getSnapshot();
+      expect(snapshot.linked).toBeUndefined();
+      expect(snapshot.prState).toBe("closed");
     });
 
     it("falls back to legacy flat fields when linked is unset", () => {

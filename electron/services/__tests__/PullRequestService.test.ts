@@ -290,6 +290,76 @@ describe("PullRequestService", () => {
     pullRequestService.destroy();
   });
 
+  it("preserves the declined PR state through detection (#9981)", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+    mockForgeProviderResolved(async () =>
+      makeMockForgePR({ state: "declined", rawState: "DECLINED" })
+    );
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/declined" })
+    );
+
+    await pullRequestService.refresh();
+
+    expect(detected).toHaveLength(1);
+    expect(detected[0].prState).toBe("declined");
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
+  it("re-emits a declined state when revalidation finds the PR declined (#9981)", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+    const mockImpl = mockForgeProviderResolved(async () => makeMockForgePR({ state: "open" }));
+    const findPRsByNumbers = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+      const map = new Map<number, ForgePR | null>();
+      for (const n of prNumbers) {
+        map.set(n, makeMockForgePR({ number: n, state: "declined", rawState: "DECLINED" }));
+      }
+      return map;
+    });
+    mockImpl.batchLookups = { findPRsByNumbers };
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+
+    await pullRequestService.refresh();
+    // Detection (and the fire-and-forget CI enrichment re-emit) carry "open".
+    expect(detected.length).toBeGreaterThanOrEqual(1);
+    expect(detected.every((p) => p.prState === "open")).toBe(true);
+    const countBeforeRevalidation = detected.length;
+
+    // The open → declined transition must surface — previously the collapse
+    // meant the declined state itself never reached the event.
+    await (
+      pullRequestService as unknown as { revalidateResolvedPRs: () => Promise<void> }
+    ).revalidateResolvedPRs();
+
+    const reemits = detected.slice(countBeforeRevalidation);
+    expect(reemits.map((p) => p.prState)).toContain("declined");
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
   it("clears provider PR caches through the forge bridge on manual refresh", async () => {
     mockForgeProviderResolved();
 

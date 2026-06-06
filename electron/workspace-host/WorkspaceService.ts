@@ -22,7 +22,7 @@ import type {
   PluginWorktreeLinkedIssue,
   PluginWorktreeLinkedPR,
 } from "../../shared/types/plugin.js";
-import type { CIStatus } from "../../shared/types/forge.js";
+import type { CIStatus, NormalizedPRState } from "../../shared/types/forge.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
 import { detectWslPath, getDefaultWslDistro } from "../utils/wsl.js";
 import {
@@ -293,7 +293,9 @@ export class WorkspaceService {
           worktreeId,
           prNumber: data.prNumber,
           prUrl: data.prUrl,
-          prState: data.prState,
+          // Legacy flat field stays narrow; `linked.pr.state` carries the
+          // full NormalizedPRState including "declined".
+          prState: data.prState === "declined" ? "closed" : data.prState,
           prCiStatus: resolvedPrCiStatus,
           prTitle: data.prTitle,
           issueNumber: data.issueNumber,
@@ -1066,7 +1068,7 @@ export class WorkspaceService {
       number: number;
       title?: string;
       url: string;
-      state: "open" | "merged" | "closed";
+      state: NormalizedPRState;
       ciStatus?: CIStatus;
       baseRef?: string;
     };
