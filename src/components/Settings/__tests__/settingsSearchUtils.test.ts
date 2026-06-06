@@ -892,35 +892,37 @@ describe("Resources section ranking (#10044)", () => {
   // on the Resources entry, the ranker now correctly classifies it as a
   // content section and applies no penalty.
   //
-  // The fixtures below are constructed to be byte-identical in every other
-  // field (title, description, keywords, tab, tabLabel, scope) and differ
-  // ONLY in `kind` and `id` — so the -3 penalty is the only possible
-  // differentiator. The tab-nav entry is listed first in the array so that
-  // under the broken `id.startsWith` discriminator (which penalises both),
-  // input-order tie-breaking would put the tab-nav first and the assertion
-  // would fail. Under the fixed `kind` discriminator, only the tab-nav
-  // entry is penalised, so the section outranks it and the assertion passes.
-  const sharedFields = {
+  // The fixtures below are constructed to be byte-identical in EVERY indexed
+  // field (title, description, keywords, tab, tabLabel, section) and in
+  // `scope` — so the only differentiator in the ranker is the -3 penalty
+  // applied to `kind: "tab-nav"`. The tab-nav entry is listed first in the
+  // array so that under the broken `id.startsWith` discriminator (which
+  // penalises both), input-order tie-breaking would put the tab-nav first
+  // and the assertion would fail. Under the fixed `kind` discriminator, only
+  // the tab-nav entry is penalised, so the section outranks it and the
+  // assertion passes.
+  const sectionFixture = {
+    id: "tab-nav-project:environments",
     tab: "project:automation" as const,
     scope: "project" as const,
+    kind: "section" as const,
     tabLabel: "Worktree Setup",
+    section: "Resource Environments",
     title: "Resource Environments",
     description: "Remote resource definitions and default worktree mode",
     keywords: ["resources", "remote", "docker", "akash"],
   };
 
-  const sectionFixture = {
-    ...sharedFields,
-    id: "tab-nav-project:environments",
-    kind: "section" as const,
-    section: "Resource Environments",
-  };
-
   const tabNavFixture = {
-    ...sharedFields,
     id: "tab-nav-project:automation",
+    tab: "project:automation" as const,
+    scope: "project" as const,
     kind: "tab-nav" as const,
-    section: "Settings Navigation",
+    tabLabel: "Worktree Setup",
+    section: "Resource Environments",
+    title: "Resource Environments",
+    description: "Remote resource definitions and default worktree mode",
+    keywords: ["resources", "remote", "docker", "akash"],
   };
 
   // Use `as never` to satisfy the strict SettingsTab union without importing
