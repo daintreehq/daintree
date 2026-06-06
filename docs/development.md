@@ -159,18 +159,18 @@ The flag is gated on `app.isPackaged === false` (forwarded to the pty host as `D
 
 ## Compiler bailout tooling
 
-React Compiler bailouts are tracked with two complementary tools:
+React Compiler bailouts are tracked with two complementary tools. These run locally on demand — like the other budget scripts, the compiler budget is intentionally not wired into CI pre-1.0 (see the dormancy note in `.github/workflows/ci.yml`); the "gate" framing below describes how the check behaves when run and how it is designed to gate CI once budgets are reintroduced post-1.0.
 
 ```bash
-npm run compiler-budget:check     # Gate: diffs build report against baseline (catches ALL regressions)
+npm run compiler-budget:check     # Check: diffs build report against baseline (catches ALL regressions)
 npm run compiler-budget:critical  # Triage: re-runs compiler with severity:"Error" filter (surfaces real bailouts only)
 npm run compiler-budget:update    # Accept: refreshes baseline after intentional regressions
 ```
 
-The **budget gate** (`compiler-budget:check`) is severity-aware. Severity is derived dynamically from the plugin's exported `LintRules` registry (1 `Hint` category `Todo`, 2 `Warning`, 23 `Error` as of `babel-plugin-react-compiler` 1.0.0), so a plugin upgrade that recategorizes a rule reflows the gate automatically. Per `CompileError` event, the gate buckets by severity:
+The **budget check** (`compiler-budget:check`) is severity-aware. Severity is derived dynamically from the plugin's exported `LintRules` registry (1 `Hint` category `Todo`, 2 `Warning`, 23 `Error` as of `babel-plugin-react-compiler` 1.0.0), so a plugin upgrade that recategorizes a rule reflows the gate automatically. Per `CompileError` event, the gate buckets by severity:
 
 - **`Hint` (cosmetic `Todo` noise — try/catch lowering, dynamic-import arrows):** collapsed to a single per-file `hintCount`, not stored verbatim. This keeps `compiler-bailout-baseline.json` compact — a shifting Todo count is a one-line diff instead of dozens of repeated reason strings. Gated only by a **global Hint budget**: per-file churn moves freely (a refactor shifting noise between files nets to zero), but the whole-repo total may not grow.
-- **`Error` + `Warning` (load-bearing rule-of-React violations):** tracked verbatim in `errorBailouts` (with `category`, `severity`, `reason`) and protected by a **strict zero-regression gate** — any per-file increase, any new file with a strict bailout, or any growth in the whole-repo strict total fails CI.
+- **`Error` + `Warning` (load-bearing rule-of-React violations):** tracked verbatim in `errorBailouts` (with `category`, `severity`, `reason`) and protected by a **strict zero-regression gate** — any per-file increase, any new file with a strict bailout, or any growth in the whole-repo strict total fails the check (and will fail CI once budgets gate CI post-1.0).
 
 The raw `error` count is kept per file for diagnostics but no longer gates directly. The **critical-errors script** (`compiler-budget:critical`) re-runs the React Compiler directly on `src/` and filters to `severity: "Error"`, isolating the small subset of diagnostics that actually affect optimization. Run it when the budget gate fires to determine whether the new bailout is cosmetic noise or needs attention.
 

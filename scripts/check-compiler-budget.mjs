@@ -24,7 +24,7 @@
 //   npm run compiler-budget:update
 //
 // Usage:
-//   node scripts/check-compiler-budget.mjs                    # check mode (CI)
+//   node scripts/check-compiler-budget.mjs                    # check mode (local, not wired to CI pre-1.0)
 //   node scripts/check-compiler-budget.mjs --update           # write current report as new baseline
 //   node scripts/check-compiler-budget.mjs --update --force   # bypass the shrinkage guard
 
