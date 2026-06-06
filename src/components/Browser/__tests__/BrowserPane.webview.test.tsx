@@ -13,6 +13,10 @@ type MockWebviewElement = HTMLElement & {
   isLoading: ReturnType<typeof vi.fn>;
   getWebContentsId: ReturnType<typeof vi.fn>;
   capturePage: ReturnType<typeof vi.fn>;
+  canGoBack: ReturnType<typeof vi.fn>;
+  canGoForward: ReturnType<typeof vi.fn>;
+  goBack: ReturnType<typeof vi.fn>;
+  goForward: ReturnType<typeof vi.fn>;
   setMockLoading: (value: boolean) => void;
 };
 
@@ -44,6 +48,11 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   webview.capturePage = vi.fn(() =>
     Promise.resolve({ toPNG: () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]) })
   );
+  // Default to no navigable history; tests override via mockReturnValue.
+  webview.canGoBack = vi.fn(() => false);
+  webview.canGoForward = vi.fn(() => false);
+  webview.goBack = vi.fn();
+  webview.goForward = vi.fn();
   webview.setMockLoading = (value: boolean) => {
     loading = value;
   };
@@ -240,6 +249,10 @@ describe("BrowserPane webview lifecycle regression", () => {
         onNavigationBlocked: vi.fn(() => vi.fn()),
         onUnresponsive: vi.fn(() => vi.fn()),
         onResponsive: vi.fn(() => vi.fn()),
+        getNavigationHistory: vi.fn(() =>
+          Promise.resolve({ entries: [], activeIndex: 0, canGoBack: false, canGoForward: false })
+        ),
+        goToHistoryIndex: vi.fn(() => Promise.resolve()),
       },
       window: {
         onDestroyHiddenWebviews: vi.fn(() => vi.fn()),
@@ -441,6 +454,231 @@ describe("BrowserPane webview lifecycle regression", () => {
 
     expect(webview.reload).not.toHaveBeenCalled();
     expect(webview.stop).not.toHaveBeenCalled();
+  });
+
+  describe("back/forward navigation guard (#9942)", () => {
+    function getLoadingOverlay(container: HTMLElement): Element | null {
+      return container.querySelector(".bg-daintree-bg.z-10");
+    }
+
+    function settleLoaded(webview: MockWebviewElement) {
+      // dom-ready arms isWebviewReady; did-stop-loading clears the initial
+      // isLoading so the Doherty overlay isn't already showing.
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+        webview.setMockLoading(false);
+        emitWebviewEvent(webview, "did-stop-loading");
+      });
+    }
+
+    it("does not enter a stuck loading state when back is pressed with no history", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settleLoaded(webview);
+      webview.canGoBack.mockReturnValue(false);
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-back", { detail: { id: "browser-panel-1" } })
+        );
+      });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+
+      expect(webview.goBack).not.toHaveBeenCalled();
+      // No navigation fired, so no load event would ever clear the spinner —
+      // the overlay must never appear in the first place.
+      expect(getLoadingOverlay(container)).toBeNull();
+    });
+
+    it("does not enter a stuck loading state when forward is pressed with no history", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settleLoaded(webview);
+      webview.canGoForward.mockReturnValue(false);
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-forward", { detail: { id: "browser-panel-1" } })
+        );
+      });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+
+      expect(webview.goForward).not.toHaveBeenCalled();
+      expect(getLoadingOverlay(container)).toBeNull();
+    });
+
+    it("navigates and shows the loading overlay when back is possible", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settleLoaded(webview);
+      webview.canGoBack.mockReturnValue(true);
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-back", { detail: { id: "browser-panel-1" } })
+        );
+      });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+
+      expect(webview.goBack).toHaveBeenCalledTimes(1);
+      expect(getLoadingOverlay(container)).not.toBeNull();
+    });
+
+    it("navigates and shows the loading overlay when forward is possible", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settleLoaded(webview);
+      webview.canGoForward.mockReturnValue(true);
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-forward", { detail: { id: "browser-panel-1" } })
+        );
+      });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+
+      expect(webview.goForward).toHaveBeenCalledTimes(1);
+      expect(getLoadingOverlay(container)).not.toBeNull();
+    });
+
+    it("does not dismiss the blocked-navigation banner when back is a no-op", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settleLoaded(webview);
+      webview.canGoBack.mockReturnValue(false);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const onBlocked = (window as any).electron.webview.onNavigationBlocked.mock.calls.at(-1)![0];
+      act(() => {
+        onBlocked({
+          panelId: "browser-panel-1",
+          url: "https://oauth.example.com/authorize",
+          canOpenExternal: true,
+        });
+        vi.advanceTimersByTime(150);
+      });
+      expect(container.textContent).toContain("oauth.example.com");
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-back", { detail: { id: "browser-panel-1" } })
+        );
+      });
+
+      // A no-op Back must not clear the banner — setBlockedNav(null) is gated.
+      expect(webview.goBack).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("oauth.example.com");
+    });
+  });
+
+  describe("history dropdown navigation (#9942)", () => {
+    // The mock webview reports an already-loaded URL at mount, so BrowserPane
+    // settles isWebviewReady/!isLoading immediately and fires its history-refresh
+    // effect once. Stub getNavigationHistory BEFORE render so that mount-time
+    // refresh captures the snapshot, then flush the async chain.
+    async function renderWithSnapshot(snapshot: {
+      entries: Array<{ index: number; url: string; title: string }>;
+      activeIndex: number;
+      canGoBack: boolean;
+      canGoForward: boolean;
+    }) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).electron.webview.getNavigationHistory.mockImplementation(() =>
+        Promise.resolve(snapshot)
+      );
+      let result!: ReturnType<typeof render>;
+      await act(async () => {
+        result = render(<BrowserPane {...baseProps} />);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      return result;
+    }
+
+    function getOnGoToHistoryIndex(): (index: number) => Promise<void> {
+      const props = browserToolbarPropsSpy.mock.calls.at(-1)![0] as Record<string, unknown>;
+      return props.onGoToHistoryIndex as (index: number) => Promise<void>;
+    }
+
+    it("resolves the entry by its Chromium index field, not array position", async () => {
+      // Sparse history: entries filtered upstream keep their original Chromium
+      // .index (0,3,6). Positional lookup of index 3 would read entries[3]
+      // (undefined) and no-op; find-by-field must resolve entries[1].
+      await renderWithSnapshot({
+        entries: [
+          { index: 0, url: "http://localhost:5173/a", title: "A" },
+          { index: 3, url: "http://localhost:5173/b", title: "B" },
+          { index: 6, url: "http://localhost:5173/c", title: "C" },
+        ],
+        activeIndex: 6,
+        canGoBack: true,
+        canGoForward: false,
+      });
+
+      const goTo = getOnGoToHistoryIndex();
+      await act(async () => {
+        await goTo(3);
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const goToHistoryIndex = (window as any).electron.webview.goToHistoryIndex;
+      expect(goToHistoryIndex).toHaveBeenCalledWith(42, 3);
+    });
+
+    it("does not navigate to a history entry whose URL fails normalization", async () => {
+      const { container } = await renderWithSnapshot({
+        entries: [
+          { index: 0, url: "http://localhost:5173/a", title: "A" },
+          { index: 1, url: "chrome://settings", title: "Settings" },
+        ],
+        activeIndex: 0,
+        canGoBack: false,
+        canGoForward: true,
+      });
+
+      const goTo = getOnGoToHistoryIndex();
+      await act(async () => {
+        await goTo(1);
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const goToHistoryIndex = (window as any).electron.webview.goToHistoryIndex;
+      expect(goToHistoryIndex).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain("Allow");
+    });
+
+    it("requires host approval before navigating to an unapproved history entry", async () => {
+      const { container } = await renderWithSnapshot({
+        entries: [
+          { index: 0, url: "http://localhost:5173/a", title: "A" },
+          { index: 1, url: "https://example.com/page", title: "Example" },
+        ],
+        activeIndex: 0,
+        canGoBack: false,
+        canGoForward: true,
+      });
+
+      const goTo = getOnGoToHistoryIndex();
+      await act(async () => {
+        await goTo(1);
+      });
+
+      // Unapproved host: surface the approval prompt, do not navigate yet.
+      expect(container.textContent).toContain("example.com");
+      expect(container.textContent).toContain("Allow browser panel to load");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const goToHistoryIndex = (window as any).electron.webview.goToHistoryIndex;
+      expect(goToHistoryIndex).not.toHaveBeenCalled();
+    });
   });
 
   it("renders drag protection overlay and hides webview when isDragging is true", () => {
