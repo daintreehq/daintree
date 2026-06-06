@@ -89,6 +89,8 @@ import {
   unregisterForgeProviderImpls,
   unregisterForgeProviders,
 } from "./forgeProviderRegistry.js";
+import { buildStoredCredentials } from "./forge/forgeCredentialUtils.js";
+import { makeForgeProviderId } from "../../shared/utils/forgeProviderIds.js";
 import {
   registerFileDecorationProviderImpl,
   registerFileDecorationProviders,
@@ -1754,6 +1756,25 @@ export class PluginService {
         }
 
         registerForgeProviderImpl(pluginId, contributionId, impl);
+
+        // Replay the persisted credential into the freshly bound impl so a
+        // cold start, plugin reload, or dev-mode rescan reaches the provider
+        // authenticated (#9983) — the store is the durable source of truth but
+        // nothing pushed it back into the impl on bind. Synchronous (the
+        // revoked guard above already holds), and wrapped in try/catch because
+        // a plugin's `setCredentials` throwing must not abort activation.
+        const replayId = makeForgeProviderId(pluginId, contributionId);
+        const storedCredentials = buildStoredCredentials(replayId);
+        if (storedCredentials) {
+          try {
+            impl.setCredentials?.(storedCredentials);
+          } catch (err) {
+            console.warn(
+              `[PluginService] registerForgeProvider: setCredentials replay failed for "${replayId}":`,
+              err
+            );
+          }
+        }
 
         let disposed = false;
         const dispose = (): void => {

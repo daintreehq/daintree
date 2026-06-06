@@ -197,6 +197,14 @@ export function registerForgeSettingsHandlers(): () => void {
         const existing = store.get("forgeCredentials") ?? {};
         store.set("forgeCredentials", { ...existing, [providerId]: JSON.stringify(record) });
 
+        // Deliver the credential to the live impl so forge API calls run
+        // authenticated. Without this the token only ever reached the store —
+        // the impl stayed unauthenticated despite the UI showing "connected"
+        // (#9983). `setCredentials` is optional; a synchronous throw here is a
+        // plugin bug that should surface, so it is intentionally uncaught,
+        // mirroring `validateToken` above.
+        impl.setCredentials?.({ kind: "bearer", value: primaryValue });
+
         await syncWorkspaceCredential(providerId, primaryValue);
 
         return validation;
@@ -225,6 +233,12 @@ export function registerForgeSettingsHandlers(): () => void {
         delete next[providerId];
         store.set("forgeCredentials", next);
       }
+      // Clear in-memory auth state on the live impl for symmetry with SET
+      // (#9983). The impl may be unbound here — a user can clear a credential
+      // without the provider plugin being active — so guard the lookup.
+      const impl = getForgeProviderImpl(providerId);
+      if (impl) impl.setCredentials?.(null);
+
       await syncWorkspaceCredential(providerId, null);
     })
   );
