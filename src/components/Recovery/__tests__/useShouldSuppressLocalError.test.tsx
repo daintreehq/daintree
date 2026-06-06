@@ -284,5 +284,53 @@ describe("useShouldSuppressLocalError", () => {
       const { result } = renderHook(() => useShouldSuppressLocalError("backend-dependent"));
       expect(result.current).toBe(false);
     });
+
+    it("un-suppresses immediately when the backend recovers into an advisory-only cause", () => {
+      // Regression for #10038: the recovery→advisory transition must NOT keep
+      // the settle-window tail alive. The tail only absorbs recovering↔connected
+      // flicker (true no-cause); an advisory cause means the backend is already
+      // connected, so the pane error is actionable now — no timer advance needed.
+      const { result } = renderHook(() => useShouldSuppressLocalError("backend-dependent"));
+
+      act(() => {
+        usePanelStore.setState({ backendStatus: "recovering" });
+        useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+      });
+      expect(result.current).toBe(true); // host-crash (recovery) wins; suppressed
+
+      act(() => {
+        usePanelStore.setState({ backendStatus: "connected" });
+      });
+      // Slot is now github-token (advisory). Suppression drops without advancing
+      // the settle timer.
+      expect(result.current).toBe(false);
+    });
+
+    it("escalates to suppression immediately when a recovery cause supersedes an advisory one", () => {
+      const { result } = renderHook(() => useShouldSuppressLocalError("backend-dependent"));
+
+      act(() => {
+        useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+      });
+      expect(result.current).toBe(false); // advisory, not suppressed
+
+      act(() => {
+        usePanelStore.setState({ watchdogStatus: "disabled" });
+      });
+      // watchdog-disabled (recovery) outranks github-token; sticky-on is sync.
+      expect(result.current).toBe(true);
+    });
+
+    it("suppresses when a recovery and an advisory cause are active simultaneously", () => {
+      const { result } = renderHook(() => useShouldSuppressLocalError("backend-dependent"));
+
+      act(() => {
+        useRestoreConfirmationStore.setState({ visible: true, suspectCount: 1, crashCount: 1 });
+        useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+      });
+      // restore-confirmation outranks github-token in priority and is a recovery
+      // slot, so suppression holds — precedence can't flip to advisory-first.
+      expect(result.current).toBe(true);
+    });
   });
 });
