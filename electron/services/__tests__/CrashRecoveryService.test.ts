@@ -1495,6 +1495,31 @@ describe("CrashRecoveryService", () => {
 
       expect(svc.getBackupPanelCount(true)).toBeNull();
     });
+
+    it("returns null when on-disk snapshot is from a prior session (freshness gate)", () => {
+      // The freshness gate prevents a previous session's snapshot from
+      // surfacing on a fresh boot that happens to crash the renderer
+      // immediately. Mirrors the watchdog freshness pattern at
+      // consumeWatchdogKillFlag (line 637).
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const svc = makeService();
+      const sessionStart = Date.now();
+      // Service constructor already called Date.now() once for sessionStartMs;
+      // make the snapshot strictly older.
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: sessionStart - 5_000,
+          appState: {
+            terminals: [{ id: "t1", kind: "terminal" }],
+          },
+        })
+      );
+      svc.initialize();
+
+      expect(svc.getBackupPanelCount(true)).toBeNull();
+    });
   });
 
   describe("resetToFresh", () => {

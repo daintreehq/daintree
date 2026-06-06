@@ -125,6 +125,10 @@ export class CrashRecoveryService {
     if (!info.exists || !info.path) return null;
     const snapshot = this.readBackupFile(info.path);
     if (!snapshot) return null;
+    // Freshness gate: a snapshot from a previous session must not surface a
+    // panel count on the current session's recovery page. Mirrors the
+    // watchdog freshness check at consumeWatchdogKillFlag (line 637).
+    if (snapshot.capturedAt < this.sessionStartMs) return null;
     const fallbackState = snapshot.appState as Record<string, unknown> | undefined;
     const terminals = fallbackState?.terminals;
     return Array.isArray(terminals) ? terminals.length : null;
