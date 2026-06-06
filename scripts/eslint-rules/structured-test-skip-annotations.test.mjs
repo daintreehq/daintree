@@ -112,5 +112,19 @@ ruleTester.run("structured-test-skip-annotations", rule, {
       `,
       errors: [{ messageId: "quarantineMissingDate" }],
     },
+    {
+      name: "static skip declaration with no annotation in details",
+      code: `
+        test.skip("static one", async () => {});
+      `,
+      errors: [{ messageId: "missingAnnotation" }],
+    },
+    {
+      name: "static skip quarantine annotation missing the YYYY-MM-DD prefix",
+      code: `
+        test.skip("static one", { annotation: { type: "quarantine", description: "flaky on CI" } }, async () => {});
+      `,
+      errors: [{ messageId: "quarantineMissingDate" }],
+    },
   ],
 });
