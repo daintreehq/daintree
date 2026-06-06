@@ -138,12 +138,7 @@ function makeMockManagedTerminal(id: string) {
   const hostElement = document.createElement("div");
   return {
     id,
-    scrollbackRestoreState: "none" as
-      | "none"
-      | "pending"
-      | "lazy-pending"
-      | "in-progress"
-      | "done",
+    scrollbackRestoreState: "none" as "none" | "pending" | "lazy-pending" | "in-progress" | "done",
     scrollbackRestoreDisposable: undefined as { dispose: () => void } | undefined,
     hostElement,
     listeners: [] as Array<() => void>,
