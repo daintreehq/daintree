@@ -9,6 +9,7 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import {
   getEffectiveStateIcon,
   getEffectiveStateColor,
+  getEffectiveStateLabel,
 } from "@/components/Worktree/terminalStateConfig";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
@@ -341,6 +342,12 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
             >
               {title}
             </span>
+          )}
+
+          {/* Visually-hidden state text so the agent state icon (aria-hidden, decorative)
+              is announced as part of the tab's accessible name. */}
+          {displayAgentState && (
+            <span className="sr-only">Agent {getEffectiveStateLabel(displayAgentState)}</span>
           )}
 
           {document.body.dataset.performanceMode === "true" ? (

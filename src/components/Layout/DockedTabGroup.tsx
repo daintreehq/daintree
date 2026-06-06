@@ -38,6 +38,7 @@ import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState"
 import {
   getEffectiveStateIcon,
   getEffectiveStateColor,
+  getEffectiveStateLabel,
 } from "@/components/Worktree/terminalStateConfig";
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -535,7 +536,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 const moved = moveTerminalToGrid(activePanel.id);
                 if (moved) closeDockTerminal();
               }}
-              aria-label={`${activePanel.title} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
+              aria-label={`${activePanel.title}${displayAgentState ? ` — agent ${getEffectiveStateLabel(displayAgentState)}` : ""} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
             >
               <div className="flex items-center justify-center shrink-0">
                 <TerminalIcon
