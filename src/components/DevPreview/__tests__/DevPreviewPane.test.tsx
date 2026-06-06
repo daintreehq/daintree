@@ -3,10 +3,7 @@ import type { BrowserHistory } from "@shared/types/browser";
 import type { DevPreviewStatus } from "@/hooks/useDevServer";
 import { normalizeBrowserUrl } from "../../Browser/browserUtils";
 import { computeDevServerUrl } from "../urlSync";
-import {
-  webviewLoadErrorHeading,
-  type WebviewLoadErrorCode,
-} from "../useDevPreviewLoadLifecycle";
+import { webviewLoadErrorHeading, type WebviewLoadErrorCode } from "../useDevPreviewLoadLifecycle";
 
 // ─── Browser History Logic ──────────────────────────────────────────
 // Extracted from DevPreviewPane to enable pure-function testing
