@@ -42,7 +42,11 @@ vi.mock("@/store/persistence/panelPersistence", () => ({
 }));
 
 vi.mock("@/components/Fleet/fleetExecution", () => ({
-  executeFleetBroadcast: vi.fn().mockResolvedValue({
+  filterEligibleIds: vi.fn((ids: string[]) => ids),
+}));
+
+vi.mock("@/components/Fleet/fleetEnterBroadcast", () => ({
+  runManagedFleetBroadcast: vi.fn().mockResolvedValue({
     total: 0,
     successCount: 0,
     failureCount: 0,
@@ -53,7 +57,6 @@ vi.mock("@/components/Fleet/fleetExecution", () => ({
     cancelled: false,
     skippedCount: 0,
   }),
-  filterEligibleIds: vi.fn((ids: string[]) => ids),
 }));
 
 const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
@@ -61,8 +64,8 @@ const { useFleetPendingActionStore } = await import("@/store/fleetPendingActionS
 const { useFleetFailureStore } = await import("@/store/fleetFailureStore");
 const { usePanelStore } = await import("@/store/panelStore");
 const { terminalClient } = await import("@/clients");
-const { executeFleetBroadcast, filterEligibleIds } =
-  await import("@/components/Fleet/fleetExecution");
+const { filterEligibleIds } = await import("@/components/Fleet/fleetExecution");
+const { runManagedFleetBroadcast } = await import("@/components/Fleet/fleetEnterBroadcast");
 const { registerFleetActions } = await import("../fleetActions");
 
 type ActionRegistry = Awaited<
@@ -589,7 +592,7 @@ describe("fleet.retryFailures", () => {
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
-    expect(executeFleetBroadcast).not.toHaveBeenCalled();
+    expect(runManagedFleetBroadcast).not.toHaveBeenCalled();
   });
 
   it("no-ops when failedIds is empty", async () => {
@@ -599,33 +602,27 @@ describe("fleet.retryFailures", () => {
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
-    expect(executeFleetBroadcast).not.toHaveBeenCalled();
+    expect(runManagedFleetBroadcast).not.toHaveBeenCalled();
   });
 
-  it("routes the recorded payload through executeFleetBroadcast as per-target overrides", async () => {
+  it("routes the recorded payload through the managed broadcast as per-target overrides", async () => {
     // #9950: the retry must run through the primary broadcast path so it gets
-    // batching, progress, directing-state, and cancellation — passing the
-    // already-substituted payload as overrides (empty draft) bypasses recipe
-    // substitution without re-resolving a verbatim literal.
+    // batching, progress, directing-state, and a working Cancel button —
+    // passing the already-substituted payload as overrides (empty draft)
+    // bypasses recipe substitution without re-resolving a verbatim literal.
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
       payload: "ls\r",
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
-    expect(executeFleetBroadcast).toHaveBeenCalledTimes(1);
-    const call = (executeFleetBroadcast as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
+    const call = (runManagedFleetBroadcast as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(call).toBeDefined();
-    const [draft, targets, overrides, signal] = call as [
-      string,
-      string[],
-      Record<string, string>,
-      AbortSignal,
-    ];
+    const [draft, targets, overrides] = call as [string, string[], Record<string, string>];
     expect(draft).toBe("");
     expect(targets.slice().sort()).toEqual(["t1", "t2"]);
     expect(overrides).toEqual({ t1: "ls\r", t2: "ls\r" });
-    expect(signal).toBeInstanceOf(AbortSignal);
   });
 
   it("filters out targets that went ineligible before dispatch", async () => {
@@ -640,8 +637,8 @@ describe("fleet.retryFailures", () => {
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
-    expect(executeFleetBroadcast).toHaveBeenCalledTimes(1);
-    const call = (executeFleetBroadcast as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
+    const call = (runManagedFleetBroadcast as ReturnType<typeof vi.fn>).mock.calls[0];
     const [, targets, overrides] = call as [string, string[], Record<string, string>];
     expect(targets).toEqual(["t1"]);
     expect(overrides).toEqual({ t1: "ls\r" });
@@ -658,7 +655,7 @@ describe("fleet.retryFailures", () => {
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
-    expect(executeFleetBroadcast).not.toHaveBeenCalled();
+    expect(runManagedFleetBroadcast).not.toHaveBeenCalled();
     // Store is untouched — nothing was retried.
     const s = useFleetFailureStore.getState();
     expect(s.failedIds.size).toBe(2);
@@ -666,7 +663,7 @@ describe("fleet.retryFailures", () => {
   });
 
   it("dismisses targets that succeeded on retry and preserves the ones that still fail", async () => {
-    (executeFleetBroadcast as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    (runManagedFleetBroadcast as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       total: 3,
       successCount: 2,
       failureCount: 1,
@@ -689,7 +686,7 @@ describe("fleet.retryFailures", () => {
   });
 
   it("clears the store entirely when every target succeeds on retry", async () => {
-    (executeFleetBroadcast as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    (runManagedFleetBroadcast as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       total: 2,
       successCount: 2,
       failureCount: 0,
@@ -726,7 +723,7 @@ describe("fleet.retryFailures", () => {
   it("disarms permanent failures and dismisses them from the retry chip", async () => {
     // Dead PTYs auto-disarm so a future retry doesn't keep firing into the
     // same dead pipes, and the chip clears for them too.
-    (executeFleetBroadcast as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    (runManagedFleetBroadcast as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       total: 2,
       successCount: 0,
       failureCount: 2,
@@ -760,7 +757,7 @@ describe("fleet.retryFailures", () => {
       permanentlyFailedIds: string[];
     };
     let resolveBroadcast: ((value: BroadcastResult) => void) | null = null;
-    (executeFleetBroadcast as ReturnType<typeof vi.fn>).mockImplementationOnce(
+    (runManagedFleetBroadcast as ReturnType<typeof vi.fn>).mockImplementationOnce(
       () =>
         new Promise<BroadcastResult>((resolve) => {
           resolveBroadcast = resolve;
@@ -774,7 +771,7 @@ describe("fleet.retryFailures", () => {
     const first = run(registry, "fleet.retryFailures");
     // Second call happens while the first is awaiting the broadcast.
     await run(registry, "fleet.retryFailures");
-    expect(executeFleetBroadcast).toHaveBeenCalledTimes(1);
+    expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
     (resolveBroadcast as ((value: BroadcastResult) => void) | null)?.({
       failedIds: [],
       transientlyFailedIds: [],

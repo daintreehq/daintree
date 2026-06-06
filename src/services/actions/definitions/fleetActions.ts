@@ -21,7 +21,8 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { projectClient, terminalClient } from "@/clients";
-import { executeFleetBroadcast, filterEligibleIds } from "@/components/Fleet/fleetExecution";
+import { filterEligibleIds } from "@/components/Fleet/fleetExecution";
+import { runManagedFleetBroadcast } from "@/components/Fleet/fleetEnterBroadcast";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -351,16 +352,11 @@ export function registerFleetActions(actions: ActionRegistry): void {
         // literal the user originally broadcast), so route it through
         // perTargetOverrides to bypass executeFleetBroadcast's recipe-variable
         // substitution — the empty draft is never resolved when every target
-        // has an override. A fresh controller keeps the retry independent of
-        // the ribbon Cancel button's activeBroadcastController.
+        // has an override. `runManagedFleetBroadcast` runs it through the shared
+        // single-flight controller so the retry gains batching, progress, and a
+        // working ribbon Cancel button just like the primary Enter path.
         const perTargetOverrides = Object.fromEntries(eligibleTargets.map((id) => [id, payload]));
-        const controller = new AbortController();
-        const result = await executeFleetBroadcast(
-          "",
-          eligibleTargets,
-          perTargetOverrides,
-          controller.signal
-        );
+        const result = await runManagedFleetBroadcast("", eligibleTargets, perTargetOverrides);
         // Permanent failures (dead PTYs) auto-disarm so a future retry doesn't
         // keep firing into the same dead pipes. The retry chip clears for them
         // too — the user already saw them once; surfacing the same id again
