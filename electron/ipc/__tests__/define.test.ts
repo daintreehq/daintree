@@ -1,5 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { z } from "zod";
+import type { IpcInvokeMap } from "../../types/index.js";
+import type {
+  ForbidIpcEnvelopeKeys,
+  IpcHandlerEnvelopeViolation,
+} from "../../../shared/types/ipc/errors.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -398,5 +403,50 @@ describe("opValidated", () => {
     const channels = ipcMainMock.handle.mock.calls.map((call) => call[0]);
     expect(channels).toContain("clipboard:write-text");
     expect(channels).toContain(SLASH_LIST);
+  });
+
+  // Regression for #9882: opValidated() must apply the same ForbidIpcEnvelopeKeys
+  // guard as op(). A handler returning an {ok|success}-shaped object would be
+  // silently nested inside security.ts's success envelope, so it must be a
+  // compile error at the opValidated() call site — not just inside the wrapper.
+  describe("envelope-key guard (type-level)", () => {
+    // A channel whose result union carries the `ok` discriminator, so its
+    // guarded result type collapses to the violation brand.
+    const IMPORT_SCHEME = "terminal-config:import-color-scheme" as const;
+    const NoopSchema = z.object({});
+
+    it("guards the validated channel's result type (anchors the @ts-expect-error below)", () => {
+      // If this channel's result stopped containing a forbidden key, the
+      // negative assertions below would pass for the wrong reason. This keeps
+      // them honest: the guard genuinely brands this channel's result.
+      expectTypeOf<
+        ForbidIpcEnvelopeKeys<IpcInvokeMap[typeof IMPORT_SCHEME]["result"]>
+      >().toEqualTypeOf<IpcHandlerEnvelopeViolation>();
+    });
+
+    it("rejects a plain handler returning an {ok|success} envelope shape", () => {
+      const declare = () =>
+        opValidated(
+          IMPORT_SCHEME,
+          NoopSchema,
+          // @ts-expect-error #9882 — returning {ok|success} must fail the envelope guard
+          async () => ({ ok: false, errors: ["boom"] })
+        );
+      // Referenced so the closure isn't unused; never invoked — the assertion
+      // is purely the @ts-expect-error above.
+      expect(typeof declare).toBe("function");
+    });
+
+    it("rejects a withContext handler returning an {ok|success} envelope shape", () => {
+      const declare = () =>
+        opValidated(
+          IMPORT_SCHEME,
+          NoopSchema,
+          // @ts-expect-error #9882 — returning {ok|success} must fail the envelope guard
+          async (_ctx) => ({ ok: false, errors: ["boom"] }),
+          { withContext: true }
+        );
+      expect(typeof declare).toBe("function");
+    });
   });
 });
