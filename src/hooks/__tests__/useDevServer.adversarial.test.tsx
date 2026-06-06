@@ -6,6 +6,7 @@ import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 const { projectState, useProjectStoreMock } = vi.hoisted(() => {
   const projectState = {
     currentProject: { id: "project-1" } as { id: string } | null,
+    lastSwitchId: null as string | null,
   };
 
   const useProjectStoreMock = vi.fn((selector: (state: typeof projectState) => unknown) =>
@@ -59,6 +60,7 @@ describe("useDevServer adversarial races", () => {
     vi.clearAllMocks();
     _resetPersistedEnsureCacheForTests();
     projectState.currentProject = { id: "project-1" };
+    projectState.lastSwitchId = null;
 
     ensureMock = vi.fn(async (request: { projectId: string }) =>
       buildState({
@@ -1675,6 +1677,37 @@ describe("useDevServer adversarial races", () => {
       });
 
       expect(ensureMock).toHaveBeenCalledTimes(1);
+      expect(ensureMock).toHaveBeenCalledWith(
+        expect.objectContaining({ projectId: "project-1", devCommand: "npm run dev" })
+      );
+    });
+
+    it("auto-ensures a restored-stopped panel on the first mid-session switch (#9859)", async () => {
+      // A non-null lastSwitchId means the current project was reached via an
+      // explicit in-session switch, not cold launch — so the dev server the user
+      // had running should come back automatically instead of stalling on the
+      // restart CTA. The #9094 contract (no respawn on relaunch) is preserved by
+      // the cold-launch test above, where lastSwitchId stays null.
+      projectState.lastSwitchId = "switch-abc123";
+      getStateMock.mockImplementation(async (request: { projectId: string }) =>
+        buildState({
+          panelId: "panel-1",
+          projectId: request.projectId,
+          status: "restored-stopped",
+        })
+      );
+
+      renderHook(() =>
+        useDevServer({
+          panelId: "panel-1",
+          devCommand: "npm run dev",
+          cwd: "/repo",
+        })
+      );
+
+      await waitFor(() => {
+        expect(ensureMock).toHaveBeenCalledTimes(1);
+      });
       expect(ensureMock).toHaveBeenCalledWith(
         expect.objectContaining({ projectId: "project-1", devCommand: "npm run dev" })
       );

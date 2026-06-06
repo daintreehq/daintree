@@ -100,6 +100,14 @@ interface ProjectState {
    * — never persisted, cleared on the next switch start or a successful retry.
    */
   worktreeLoadError: string | null;
+  /**
+   * The `switchId` of the most recent in-session project switch, or `null` when
+   * the current project was reached via cold launch (no switch event fired yet).
+   * Distinguishes app launch from a live mid-session switch so a `restored-stopped`
+   * dev preview auto-starts on first activation (#9859) without re-spawning on
+   * relaunch (#9094). Transient — never persisted, set only by the `onSwitch` IPC.
+   */
+  lastSwitchId: string | null;
   gitInitDialogOpen: boolean;
   gitInitDirectoryPath: string | null;
   createFolderDialogOpen: boolean;
@@ -161,6 +169,7 @@ interface ProjectStoreListenerState {
   updatedRegistered: boolean;
   removedRegistered: boolean;
   worktreeLoadStatusRegistered: boolean;
+  switchRegistered: boolean;
 }
 
 const PROJECT_STORE_LISTENER_STATE_KEY = "__daintreeProjectStoreListenerState";
@@ -246,6 +255,7 @@ function getProjectStoreListenerState(): ProjectStoreListenerState {
     updatedRegistered: false,
     removedRegistered: false,
     worktreeLoadStatusRegistered: false,
+    switchRegistered: false,
   };
   target[PROJECT_STORE_LISTENER_STATE_KEY] = created;
   return created;
@@ -325,6 +335,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   cloneRepoDialogOpen: false,
   error: null,
   worktreeLoadError: null,
+  lastSwitchId: null,
 
   addProjectByPath: async (path, options) => {
     set({ isLoading: true, error: null });
@@ -907,6 +918,16 @@ if (typeof window !== "undefined" && window.electron?.project) {
     listenerState.worktreeLoadStatusRegistered = true;
     projectClient.onWorktreeLoadStatus((payload) => {
       listenerState.applyWorktreeLoadStatus?.(payload);
+    });
+  }
+  // Record the switchId of every live project switch. `lastSwitchId` stays null
+  // on cold launch (no switch event fires), which is what lets a restored-stopped
+  // dev preview auto-start on first mid-session activation (#9859) while still
+  // honoring the no-auto-spawn-on-relaunch contract (#9094).
+  if (typeof projectClient.onSwitch === "function" && !listenerState.switchRegistered) {
+    listenerState.switchRegistered = true;
+    projectClient.onSwitch((payload) => {
+      useProjectStore.setState({ lastSwitchId: payload.switchId });
     });
   }
 }
