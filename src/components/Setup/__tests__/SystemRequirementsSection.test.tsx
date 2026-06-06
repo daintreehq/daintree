@@ -100,4 +100,29 @@ describe("SystemRequirementsSection collapsed panel inert", () => {
     renderSection();
     expect(getPanel().hasAttribute("inert")).toBe(false);
   });
+
+  it("removes inert when a fatal failure arrives after mount", () => {
+    const { container, rerender } = renderSection();
+    expect(getPanel().hasAttribute("inert")).toBe(true);
+
+    healthCheckState.hasFatalFailure = true;
+    rerender(
+      <SystemRequirementsSection onFatalFailureChange={vi.fn()} onCheckingChange={vi.fn()} />
+    );
+    expect(getPanel().hasAttribute("inert")).toBe(false);
+    expect(getToggle(container).getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("restores inert when a fatal failure clears and the user never expanded", () => {
+    healthCheckState.hasFatalFailure = true;
+    const { container, rerender } = renderSection();
+    expect(getPanel().hasAttribute("inert")).toBe(false);
+
+    healthCheckState.hasFatalFailure = false;
+    rerender(
+      <SystemRequirementsSection onFatalFailureChange={vi.fn()} onCheckingChange={vi.fn()} />
+    );
+    expect(getPanel().hasAttribute("inert")).toBe(true);
+    expect(getToggle(container).getAttribute("aria-expanded")).toBe("false");
+  });
 });
