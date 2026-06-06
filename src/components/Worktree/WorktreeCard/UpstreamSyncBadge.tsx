@@ -13,7 +13,7 @@ interface UpstreamSyncBadgeProps {
   lastFetchedAt: number | null | undefined;
   fetchAuthFailed: boolean;
   fetchNetworkFailed: boolean;
-  isGitHubProvider: boolean;
+  hasAuthFailedSignIn: boolean;
   containerGapClass: string;
   baseBranchName?: string | null;
   baseAheadCount?: number | null;
@@ -31,7 +31,7 @@ export function UpstreamSyncBadge({
   lastFetchedAt,
   fetchAuthFailed,
   fetchNetworkFailed,
-  isGitHubProvider,
+  hasAuthFailedSignIn,
   containerGapClass,
   baseBranchName,
   baseAheadCount,
@@ -106,7 +106,7 @@ export function UpstreamSyncBadge({
     );
   }, []);
 
-  if (fetchAuthFailed && isGitHubProvider) {
+  if (fetchAuthFailed && hasAuthFailedSignIn) {
     return (
       <Tooltip>
         <TooltipTrigger asChild>

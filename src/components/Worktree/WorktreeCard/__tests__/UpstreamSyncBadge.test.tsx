@@ -30,7 +30,7 @@ const baseProps: Props = {
   lastFetchedAt: Date.now(),
   fetchAuthFailed: false,
   fetchNetworkFailed: false,
-  isGitHubProvider: true,
+  hasAuthFailedSignIn: false,
   containerGapClass: "gap-1.5",
   baseBranchName: null,
   baseAheadCount: null,
@@ -231,5 +231,31 @@ describe("UpstreamSyncBadge — value-change flash", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("UpstreamSyncBadge — auth-failed sign-in branch (issue #9982)", () => {
+  it("renders the dimmed placeholder when fetchAuthFailed + hasAuthFailedSignIn and no counts", () => {
+    renderBadge({
+      aheadCount: 0,
+      behindCount: 0,
+      fetchAuthFailed: true,
+      hasAuthFailedSignIn: true,
+    });
+    const indicator = screen.getByTestId("upstream-sync-indicator");
+    expect(indicator).toBeDefined();
+    expect(indicator.getAttribute("data-fetch-auth-failed")).toBe("true");
+    expect(indicator.textContent).toContain("—");
+  });
+
+  it("does not render the sign-in branch when hasAuthFailedSignIn is false even with auth-failed fetch", () => {
+    renderBadge({
+      aheadCount: 0,
+      behindCount: 0,
+      fetchAuthFailed: true,
+      hasAuthFailedSignIn: false,
+    });
+    // No counts + no auth-failed-sign-in affordance + no base divergence → null
+    expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
   });
 });

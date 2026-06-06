@@ -1374,6 +1374,27 @@ describe("WorktreeHeader upstream sync indicator", () => {
     expect(indicator.textContent).toContain("—");
   });
 
+  it("renders the sign-in affordance when isGitHubRemote and no linked data (#9982)", () => {
+    // Reproduces the exact bug path: fetchAuthFailed + isGitHubRemote but no
+    // linked data (e.g. the main worktree on develop, or a token-expired
+    // worktree). The header's union predicate must still raise the alarm tier
+    // and the badge must still render the sign-in branch — the badge used to
+    // fall through to null because it only checked the linked-only providerId.
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        aheadCount: 0,
+        behindCount: 0,
+        fetchAuthFailed: true,
+        isGitHubRemote: true,
+      },
+    });
+    const indicator = screen.getByTestId("upstream-sync-indicator");
+    expect(indicator).toBeDefined();
+    expect(indicator.getAttribute("data-fetch-auth-failed")).toBe("true");
+    expect(indicator.textContent).toContain("—");
+  });
+
   it("falls through to regular count display for non-GitHub auth failures", () => {
     renderHeader({
       worktree: {
