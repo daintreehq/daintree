@@ -39,6 +39,29 @@ describe("evaluateScenarioBudget — absolute p95 budget", () => {
   });
 });
 
+describe("evaluateScenarioBudget — non-finite measurements fail closed", () => {
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "fails when p95 is %p",
+    (p95Ms) => {
+      const result = evaluateScenarioBudget(
+        makeParams({ p95Ms, budget: { p95Ms: 100 }, baselineP95: 50 })
+      );
+      expect(result.failedBudget).toBe(true);
+    }
+  );
+
+  it("fails a non-finite metric value that would otherwise slip past its ceiling", () => {
+    const result = evaluateScenarioBudget(
+      makeParams({
+        budget: { p95Ms: 1000, maxMetricValues: { lag: 100 } },
+        baselineP95: 50,
+        metricAverages: { lag: Number.NaN },
+      })
+    );
+    expect(result.failedBudget).toBe(true);
+  });
+});
+
 describe("evaluateScenarioBudget — metric ceilings", () => {
   it("fails only the metric that exceeds its ceiling", () => {
     const budget: ScenarioBudget = {
@@ -93,6 +116,18 @@ describe("evaluateScenarioBudget — percentage gate above the noise floor", () 
     const withinBudget = baselineP95 * 1.1; // +10% < 15%
     const result = evaluateScenarioBudget(makeParams({ p95Ms: withinBudget, budget, baselineP95 }));
     expect(result.failedBudget).toBe(false);
+  });
+
+  it("treats the regression gate as strict at the exact budget boundary", () => {
+    const budget: ScenarioBudget = { p95Ms: 10000, maxRegressionPct: 15 };
+    const atBoundary = baselineP95 * 1.15; // exactly +15%, strict > → passes
+    const justOver = baselineP95 * 1.15 + baselineP95 * 0.0001; // marginally over → fails
+    expect(
+      evaluateScenarioBudget(makeParams({ p95Ms: atBoundary, budget, baselineP95 })).failedBudget
+    ).toBe(false);
+    expect(
+      evaluateScenarioBudget(makeParams({ p95Ms: justOver, budget, baselineP95 })).failedBudget
+    ).toBe(true);
   });
 });
 

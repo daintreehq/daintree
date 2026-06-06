@@ -5,7 +5,7 @@ import { loadBudgetConfig, getScenarioBudget } from "./lib/budgets";
 import { compareSamples } from "./lib/comparison";
 import { evaluateScenarioBudget } from "./lib/gate";
 import { appendJsonLine, readJson, writeJson, writeText, ensureDir } from "./lib/io";
-import { mean, percentile, round, stdDev } from "./lib/stats";
+import { averageMetrics, mean, percentile, round, stdDev } from "./lib/stats";
 import { buildMarkdownReport } from "./report/generate";
 import { assertMatrixCoverage, getScenariosForMode } from "./scenarios";
 import type {
@@ -196,15 +196,7 @@ async function run(): Promise<void> {
     const meanMs = mean(aggregate.durations);
     const stdDevMs = stdDev(aggregate.durations);
 
-    const metricAverages: Record<string, number> = {};
-    for (const sampleMetrics of aggregate.metrics) {
-      for (const [key, value] of Object.entries(sampleMetrics)) {
-        metricAverages[key] = (metricAverages[key] ?? 0) + value;
-      }
-    }
-    for (const key of Object.keys(metricAverages)) {
-      metricAverages[key] = metricAverages[key] / aggregate.metrics.length;
-    }
+    const metricAverages = averageMetrics(aggregate.metrics);
 
     const budget = getScenarioBudget(budgetConfig, scenarioId);
     const baselineP95 = baseline?.p95ByScenario?.[scenarioId];
@@ -248,9 +240,28 @@ async function run(): Promise<void> {
   // A/B comparison mode: run baseline arm and compare statistically
   let comparisonAggregates: ComparisonAggregate[] = [];
   if (cli.compare) {
+    const expectedComparisons = [...aggregateById.keys()].filter(
+      (id) => getScenarioBudget(budgetConfig, id).comparison !== undefined
+    );
+    const failComparison = (reason: string) => {
+      console.error(`[perf:compare] FAIL ${reason}`);
+      for (const id of expectedComparisons) {
+        if (!failedScenarios.includes(id)) {
+          failedScenarios.push(id);
+        }
+      }
+    };
+
     const mergeBase = getMergeBase(cli.compareBase);
     if (!mergeBase) {
       console.warn("[perf:compare] Could not determine merge-base — skipping comparison");
+      // A requested comparison that can't run is not a pass. Fail closed when any
+      // scenario in this run carries a comparison budget.
+      if (expectedComparisons.length > 0) {
+        failComparison(
+          `merge-base unresolved — ${expectedComparisons.length} scenario(s) with comparison budgets left unenforced`
+        );
+      }
     } else {
       console.log(`[perf:compare] Baseline ref: ${mergeBase.slice(0, 12)}`);
 
@@ -261,31 +272,28 @@ async function run(): Promise<void> {
 
       comparisonAggregates = computeComparisons(aggregateById, baseArmData, budgetConfig);
 
-      const expectedComparisons = [...aggregateById.keys()].filter(
-        (id) => getScenarioBudget(budgetConfig, id).comparison !== undefined
-      );
       if (expectedComparisons.length > 0 && comparisonAggregates.length === 0) {
-        console.error(
-          `[perf:compare] FAIL comparison arm produced no data for ${expectedComparisons.length} scenario(s) with comparison budgets — baseline arm did not run`
+        failComparison(
+          `comparison arm produced no data for ${expectedComparisons.length} scenario(s) with comparison budgets — baseline arm did not run`
         );
-        for (const id of expectedComparisons) {
-          if (!failedScenarios.includes(id)) {
-            failedScenarios.push(id);
-          }
-        }
       }
 
+      const aggregateByIdForReport = new Map(aggregates.map((agg) => [agg.id, agg]));
       for (const comp of comparisonAggregates) {
         if (comp.comparison.regression) {
-          const headAgg = comp.head;
-          if (!failedScenarios.includes(headAgg.id)) {
-            failedScenarios.push(headAgg.id);
+          if (!failedScenarios.includes(comp.head.id)) {
+            failedScenarios.push(comp.head.id);
           }
-          headAgg.failedBudget = true;
-          headAgg.budgetReason =
-            (headAgg.budgetReason ?? "")
-              ? `${headAgg.budgetReason}; A/B regression (p=${round(comp.comparison.pValue)}, d=${round(comp.comparison.effectSize)})`
-              : `A/B regression (p=${round(comp.comparison.pValue)}, d=${round(comp.comparison.effectSize)})`;
+          // Mutate the aggregate that gets serialized into the summary/report,
+          // not comp.head (a detached copy built by computeComparisons).
+          const reportAgg = aggregateByIdForReport.get(comp.head.id);
+          if (reportAgg) {
+            const abReason = `A/B regression (p=${round(comp.comparison.pValue)}, d=${round(comp.comparison.effectSize)})`;
+            reportAgg.failedBudget = true;
+            reportAgg.budgetReason = reportAgg.budgetReason
+              ? `${reportAgg.budgetReason}; ${abReason}`
+              : abReason;
+          }
         }
       }
 

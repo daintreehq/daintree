@@ -38,3 +38,27 @@ export function round(value: number, digits = 3): number {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
 }
+
+/**
+ * Average each metric across the samples that actually reported it. A metric
+ * present in only some samples is divided by its own occurrence count, not the
+ * total sample count — otherwise a sparse-but-large metric is diluted toward
+ * zero and can slip under its budget ceiling.
+ */
+export function averageMetrics(samples: Array<Record<string, number>>): Record<string, number> {
+  const sums: Record<string, number> = {};
+  const counts: Record<string, number> = {};
+
+  for (const sample of samples) {
+    for (const [key, value] of Object.entries(sample)) {
+      sums[key] = (sums[key] ?? 0) + value;
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+  }
+
+  const averages: Record<string, number> = {};
+  for (const key of Object.keys(sums)) {
+    averages[key] = sums[key] / counts[key];
+  }
+  return averages;
+}

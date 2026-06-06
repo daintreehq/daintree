@@ -48,6 +48,16 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
   let failedBudget = false;
   const reasons: string[] = [];
 
+  // A non-finite measurement (NaN/Infinity) means the scenario is broken. NaN
+  // comparisons are always false in JS, so without this guard every gate below
+  // would silently pass — fail closed instead.
+  if (!Number.isFinite(p95Ms)) {
+    return {
+      failedBudget: true,
+      reasons: [`non-finite p95 measurement (${p95Ms}) - failing closed`],
+    };
+  }
+
   if (budget.p95Ms !== undefined && p95Ms > budget.p95Ms) {
     failedBudget = true;
     reasons.push(`p95 ${round(p95Ms)}ms > budget ${budget.p95Ms}ms`);
@@ -56,7 +66,9 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
   if (budget.maxMetricValues) {
     for (const [metricName, maxValue] of Object.entries(budget.maxMetricValues)) {
       const actual = metricAverages[metricName];
-      if (actual !== undefined && actual > maxValue) {
+      // Treat a non-finite metric as a breach: NaN > maxValue is false, which
+      // would otherwise let a broken metric slip past its ceiling.
+      if (actual !== undefined && (!Number.isFinite(actual) || actual > maxValue)) {
         failedBudget = true;
         reasons.push(`${metricName} ${round(actual)} > max ${maxValue}`);
       }
