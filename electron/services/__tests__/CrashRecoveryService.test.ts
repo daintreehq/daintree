@@ -1767,6 +1767,119 @@ describe("CrashRecoveryService", () => {
     });
   });
 
+  describe("marker-only persistence", () => {
+    function osUptimeSpy(returnValue: number): ReturnType<typeof vi.spyOn> {
+      return vi.spyOn(os, "uptime").mockReturnValue(returnValue);
+    }
+
+    it("writes crash-{id}.json to crashesDir when marker has no crashLogPath (external-kill)", () => {
+      const uptime = osUptimeSpy(24 * 60 * 60);
+      try {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: Date.now() - 10 * 60 * 1000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: Date.now() - 5 * 60 * 1000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        const pending = svc.getPendingCrash();
+        expect(pending).not.toBeNull();
+        expect(pending!.entry.crashCause).toBe("external-kill");
+
+        // The on-disk log file is now real and lives under userData/crashes/.
+        const crashesDir = path.join(userData, "crashes");
+        const logFile = path.join(crashesDir, `crash-${pending!.entry.id}.json`);
+        expect(fs.existsSync(logFile)).toBe(true);
+        expect(pending!.logPath).toBe(logFile);
+
+        // Round-trip the JSON and verify the cause survives.
+        const persisted = JSON.parse(fs.readFileSync(logFile, "utf-8"));
+        expect(persisted.id).toBe(pending!.entry.id);
+        expect(persisted.crashCause).toBe("external-kill");
+      } finally {
+        uptime.mockRestore();
+      }
+    });
+
+    it("PendingCrash.logPath points at the persisted file for power-loss (marker-only)", () => {
+      const uptime = osUptimeSpy(10);
+      try {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: Date.now() - 5 * 60 * 1000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: Date.now() - 60_000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        const pending = svc.getPendingCrash();
+        expect(pending!.entry.crashCause).toBe("power-loss");
+        expect(fs.existsSync(pending!.logPath)).toBe(true);
+      } finally {
+        uptime.mockRestore();
+      }
+    });
+
+    it("falls back to the synthetic path without throwing when writeCrashLog fails", () => {
+      const uptime = osUptimeSpy(24 * 60 * 60);
+      // Force the atomic write to throw — the dialog's defensive openPath
+      // handler covers the missing-file case, but the path field must stay
+      // stable so the renderer never sees `undefined`.
+      utilsMock.resilientAtomicWriteFileSync.mockImplementationOnce(() => {
+        throw new Error("ENOSPC: disk full");
+      });
+      try {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: Date.now() - 10 * 60 * 1000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: Date.now() - 5 * 60 * 1000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        const pending = svc.getPendingCrash();
+        expect(pending).not.toBeNull();
+        expect(pending!.entry.crashCause).toBe("external-kill");
+        // Falls back to the synthetic path so the renderer always gets a string.
+        expect(pending!.logPath).toBe(
+          path.join(userData, "crashes", `crash-${pending!.entry.id}.json`)
+        );
+      } finally {
+        uptime.mockRestore();
+      }
+    });
+  });
+
+  describe("recordCrash crashCause default", () => {
+    it("persists crashCause: 'uncaught-exception' on the entry", () => {
+      const svc = makeService();
+      svc.recordCrash(new Error("boom"));
+
+      const crashesDir = path.join(userData, "crashes");
+      const files = fs.readdirSync(crashesDir).filter((f) => f.startsWith("crash-"));
+      expect(files.length).toBe(1);
+      const persisted = JSON.parse(fs.readFileSync(path.join(crashesDir, files[0]!), "utf-8"));
+      expect(persisted.crashCause).toBe("uncaught-exception");
+      expect(persisted.errorMessage).toBe("boom");
+    });
+  });
+
   describe("heartbeat and suspend stamping", () => {
     it("writes lastHeartbeatMs on initialize", () => {
       const before = Date.now();

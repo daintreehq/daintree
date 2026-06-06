@@ -135,17 +135,33 @@ export class CrashRecoveryService {
     this.crashRecorded = true;
 
     try {
-      fs.mkdirSync(this.crashesDir, { recursive: true });
-
       const entry = this.buildCrashEntry(error);
-      const logPath = path.join(this.crashesDir, `crash-${entry.id}.json`);
-      resilientAtomicWriteFileSync(logPath, JSON.stringify(entry, null, 2), "utf-8");
+      // The only call site is the uncaughtException handler, so the cause is
+      // always "uncaught-exception" — but the field is additive, default only
+      // when absent so a future caller passing a more specific cause is honored.
+      if (entry.crashCause === undefined) entry.crashCause = "uncaught-exception";
+      const logPath = this.writeCrashLog(entry);
       this.writeMarker(entry);
       this.pruneOldLogs();
       console.log("[CrashRecovery] Crash recorded:", logPath);
     } catch (err) {
       console.error("[CrashRecovery] Failed to record crash:", err);
     }
+  }
+
+  /**
+   * Persist a crash log to `crashesDir/crash-{id}.json` using the same
+   * `resilientAtomicWriteFileSync` channel as `recordCrash` (handles Windows
+   * AV/indexer lock retries). Shared by `recordCrash` and the marker-only
+   * branch of `consumeMarker` so both call sites produce a real on-disk
+   * artifact and the dialog's "Open log file" affordance always points at a
+   * file that exists.
+   */
+  private writeCrashLog(entry: CrashLogEntry): string {
+    fs.mkdirSync(this.crashesDir, { recursive: true });
+    const logPath = path.join(this.crashesDir, `crash-${entry.id}.json`);
+    resilientAtomicWriteFileSync(logPath, JSON.stringify(entry, null, 2), "utf-8");
+    return logPath;
   }
 
   startBackupTimer(): void {
@@ -516,12 +532,33 @@ export class CrashRecoveryService {
           }
         }
       }
+
+      // For marker-only crashes (no original crashLogPath — e.g. external kill,
+      // power loss, native crash), synthesize a real on-disk log so the
+      // recovery dialog's "Open log file" affordance points at a file that
+      // actually exists. Persist BEFORE returning the PendingCrash so the
+      // dialog can openPath it immediately on mount. Failure is non-fatal —
+      // the in-memory entry is the source of truth and the dialog falls back
+      // to a softer warning if the file later can't be opened.
+      let resolvedLogPath = logPath;
+      if (!resolvedLogPath) {
+        try {
+          resolvedLogPath = this.writeCrashLog(entry);
+        } catch (writeErr) {
+          console.error("[CrashRecovery] Failed to persist synthesized crash log:", writeErr);
+          // Fall back to the synthetic path so PendingCrash.logPath is stable
+          // for the renderer; the dialog's defensive openPath handler covers
+          // the missing-file case.
+          resolvedLogPath = path.join(this.crashesDir, `crash-${entry.id}.json`);
+        }
+      }
+
       const panels = parseableBackupPath
         ? this.extractPanelSummaries(entry.timestamp, parseableBackupPath)
         : undefined;
 
       return {
-        logPath: logPath ?? path.join(this.crashesDir, `crash-${entry.id}.json`),
+        logPath: resolvedLogPath,
         entry,
         hasBackup: parseableBackupPath !== null,
         backupTimestamp,
@@ -841,6 +878,7 @@ export class CrashRecoveryService {
 
     this.enrichWithEnvironmentMetadata(entry);
     this.enrichWithPanelData(entry, this.readCrashedBackupAppState());
+    this.enrichWithRecentActions(entry);
 
     return entry;
   }

@@ -1,6 +1,7 @@
 import type { ActionBreadcrumb, CrashLogEntry } from "../types/ipc/crashRecovery.js";
 import { scrubReportText } from "./reportScrubbers.js";
 import { URL_BODY_BUDGET, capForBudget, makeUrl, truncateStackMiddle } from "./githubIssueUrl.js";
+import { getCrashCauseReportLabel, getCrashCauseTitle } from "./crashCauseCopy.js";
 
 export interface CrashReportResult {
   url: string;
@@ -138,6 +139,12 @@ function formatCrashBody(
       causeParts.push(`main PID ${e.watchdogMainPid}`);
     }
     lines.push(`- ${causeParts.join(" — ")}`);
+  } else if (e.crashCause && e.crashCause !== "uncaught-exception") {
+    // The `**Error**:` line right below already names the uncaught exception
+    // message, so adding `**Cause**: Uncaught JavaScript exception` would be
+    // redundant noise. For every other cause, surface the heuristic so the
+    // report is searchable for "power-loss", "external-kill", etc.
+    lines.push(`- **Cause**: ${getCrashCauseReportLabel(e.crashCause)}`);
   }
 
   if (e.errorMessage) {
@@ -182,8 +189,17 @@ function buildStubBody(entry: CrashLogEntry): string {
 function makeCrashTitle(entry: CrashLogEntry): string {
   // Scrub the title too — it carries the error message, which can contain user
   // paths or secrets that would otherwise leak in the URL's `title=` param.
+  // Fallback order: error message (most specific) → precise `cause` code
+  // (e.g. "watchdog-deadlock") wins over the heuristic `crashCause` title
+  // because the precise attribution is the load-bearing signal in the title;
+  // the heuristic title fills in when only a heuristic is available.
   return scrubReportText(
-    `Crash: ${entry.errorMessage || entry.cause || "Daintree closed unexpectedly"}`
+    `Crash: ${
+      entry.errorMessage ||
+      entry.cause ||
+      getCrashCauseTitle(entry.crashCause) ||
+      "Daintree closed unexpectedly"
+    }`
   );
 }
 

@@ -231,6 +231,41 @@ describe("CrashRecoveryDialog", () => {
     expect(screen.getByText("Daintree closed unexpectedly")).toBeTruthy();
   });
 
+  describe("cause-aware copy", () => {
+    it("shows a power-loss specific title and description", () => {
+      setup({ crash: { entry: { ...mockCrash.entry, crashCause: "power-loss" } } });
+      expect(screen.getByText("Power was interrupted")).toBeTruthy();
+      expect(screen.getByText(/lost power or rebooted/i)).toBeTruthy();
+    });
+
+    it("shows an external-kill specific title", () => {
+      setup({ crash: { entry: { ...mockCrash.entry, crashCause: "external-kill" } } });
+      expect(screen.getByText("Daintree was forced to close")).toBeTruthy();
+    });
+
+    it("shows a suspended-then-lost specific title", () => {
+      setup({
+        crash: { entry: { ...mockCrash.entry, crashCause: "suspended-then-lost" } },
+      });
+      expect(screen.getByText("Daintree didn't come back from sleep")).toBeTruthy();
+    });
+
+    it("shows a native-crash specific title", () => {
+      setup({ crash: { entry: { ...mockCrash.entry, crashCause: "native-crash" } } });
+      expect(screen.getByText("Daintree crashed unexpectedly")).toBeTruthy();
+    });
+
+    it("falls back to the generic title when crashCause is undefined (V1 log compat)", () => {
+      setup({ crash: { entry: { ...mockCrash.entry, crashCause: undefined } } });
+      expect(screen.getByText("Daintree closed unexpectedly")).toBeTruthy();
+    });
+
+    it("falls back to the generic title for the unknown cause", () => {
+      setup({ crash: { entry: { ...mockCrash.entry, crashCause: "unknown" } } });
+      expect(screen.getByText("Daintree closed unexpectedly")).toBeTruthy();
+    });
+  });
+
   describe("with panels (selective restore)", () => {
     it("renders panel list with checkboxes", () => {
       setup();
@@ -637,7 +672,7 @@ describe("CrashRecoveryDialog", () => {
     expect(window.electron.system.openPath).toHaveBeenCalledWith(mockCrash.logPath);
   });
 
-  it("shows error notification when openPath fails", async () => {
+  it("shows soft notification when openPath fails", async () => {
     (window.electron.system.openPath as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new Error("ENOENT")
     );
@@ -649,7 +684,7 @@ describe("CrashRecoveryDialog", () => {
       expect(notifyMock).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "error",
-          title: "Couldn't open log file",
+          title: "Log file isn't available",
         })
       );
     });
