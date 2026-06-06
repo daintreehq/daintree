@@ -472,6 +472,79 @@ describe("DemoCursor", () => {
     }
   });
 
+  it("overshoot peak lies forward along the travel vector", async () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.05);
+    try {
+      render(<DemoCursor />);
+      // (500,400) → (1000,0): travel vector (dx, dy) = (500, -400)
+      emit("demo:exec-move-to", { x: 100, y: 0, durationMs: 800, requestId: "req-dir" });
+      await new Promise((r) => setTimeout(r, 10));
+
+      const cursorCalls = animateSpy.mock.calls.filter((call) => {
+        const keyframes = call[0] as Array<{ transform: string }>;
+        return Array.isArray(keyframes) && keyframes[0]?.transform?.includes("translate(");
+      });
+      const overshoot = cursorCalls[cursorCalls.length - 1]![0] as Array<{ transform: string }>;
+      const m = overshoot[1]!.transform.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/)!;
+      const peakX = parseFloat(m[1]!);
+      const peakY = parseFloat(m[2]!);
+      // Dot product of overshoot peak with travel vector must be positive (forward, not backward).
+      const dot = peakX * 500 + peakY * -400;
+      expect(dot).toBeGreaterThan(0);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it("after overshoot, a click reads the real target — not the overshoot peak", async () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.05);
+    const origElementFromPoint = document.elementFromPoint;
+    const efp = vi.fn(() => null);
+    document.elementFromPoint = efp as unknown as typeof document.elementFromPoint;
+    try {
+      render(<DemoCursor />);
+      // Move to a mid-viewport target so settle jitter stays in range: (1000*0.7, 800*0.5) = (700, 400)
+      emit("demo:exec-move-to", { x: 70, y: 50, durationMs: 800, requestId: "req-posref" });
+      await new Promise((r) => setTimeout(r, 10));
+
+      emit("demo:exec-click", { requestId: "req-posref-click" });
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Click position (posRef + ≤1.5px settle) must be the committed target, not the overshoot peak.
+      const [clickX, clickY] = efp.mock.calls[efp.mock.calls.length - 1]!;
+      expect(clickX).toBeCloseTo(700, -1);
+      expect(clickY).toBeCloseTo(400, -1);
+    } finally {
+      randomSpy.mockRestore();
+      document.elementFromPoint = origElementFromPoint;
+    }
+  });
+
+  it("a cosmetic overshoot failure does not fail the move command", async () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.05);
+    // Make only the overshoot animation (keyframes carry an `offset`) reject its finished promise.
+    animateSpy.mockImplementation(((keyframes: Array<{ offset?: number }>) => {
+      const isOvershoot = Array.isArray(keyframes) && keyframes[0]?.offset === 0;
+      return {
+        finished: isOvershoot ? Promise.reject(new Error("aborted")) : Promise.resolve(),
+        cancel: vi.fn(),
+        pause: vi.fn(),
+        play: vi.fn(),
+      };
+    }) as unknown as typeof animateSpy.getMockImplementation);
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-move-to", { x: 100, y: 0, durationMs: 800, requestId: "req-cosmetic-fail" });
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Cosmetic failure swallowed — command still reports success.
+      expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-cosmetic-fail", undefined);
+    } finally {
+      randomSpy.mockRestore();
+      animateSpy.mockImplementation((() => createMockAnimation()) as never);
+    }
+  });
+
   it("click includes settle animation on cursor element", async () => {
     render(<DemoCursor />);
 

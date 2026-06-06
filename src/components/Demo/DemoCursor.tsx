@@ -273,12 +273,19 @@ export function DemoCursor() {
         posRef.current = { x: targetX, y: targetY };
 
         if (shouldOvershoot(dist)) {
+          // The overshoot is purely cosmetic — the logical move already landed on the real
+          // target above. If the animation is aborted mid-flight, swallow it so a cosmetic
+          // failure never poisons the command result.
           const overshootAnim = el.animate(computeOvershootKeyframes(dx, dy, dist), {
             duration: OVERSHOOT_DURATION_MS,
             easing: "ease-in-out",
             fill: "forwards",
           });
-          await overshootAnim.finished;
+          try {
+            await overshootAnim.finished;
+          } catch {
+            // animation cancelled — position is already committed, nothing to recover
+          }
           el.style.transform = "";
           overshootAnim.cancel();
         }
