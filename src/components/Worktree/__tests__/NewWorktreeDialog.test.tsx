@@ -72,17 +72,13 @@ vi.mock("@/store/panelStore", () => ({
 
 const mockGenerateRecipeFromActiveTerminals = vi.fn().mockReturnValue([]);
 vi.mock("@/store/recipeStore", () => ({
-  useRecipeStore: Object.assign(
-    () => ({ recipes: [], runRecipeWithResults: vi.fn() }),
-    {
-      getState: () => ({
-        runRecipeWithResults: vi.fn(),
-        getRecipeById: () => null,
-        generateRecipeFromActiveTerminals: mockGenerateRecipeFromActiveTerminals,
-      }),
-    }
-  ),
-}));
+  useRecipeStore: Object.assign(() => ({ recipes: [], runRecipeWithResults: vi.fn() }), {
+    getState: () => ({
+      runRecipeWithResults: vi.fn(),
+      getRecipeById: () => null,
+      generateRecipeFromActiveTerminals: mockGenerateRecipeFromActiveTerminals,
+    }),
+  }),
 }));
 
 vi.mock("@/store/preferencesStore", () => ({
