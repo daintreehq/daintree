@@ -360,19 +360,26 @@ describe("DemoCursor", () => {
   });
 
   it("moveTo long-distance move calls animate twice (ballistic + acquisition)", async () => {
-    render(<DemoCursor />);
-    // cursor starts at (500, 400). Move to (100, 0) = (1000, 0). Distance ~500+px > 300px threshold
-    emit("demo:exec-move-to", { x: 100, y: 0, durationMs: 800, requestId: "req-twophase" });
+    // Pin random above both overshoot probabilities so the cosmetic overshoot never fires,
+    // isolating the two-phase ballistic + acquisition structure.
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.99);
+    try {
+      render(<DemoCursor />);
+      // cursor starts at (500, 400). Move to (100, 0) = (1000, 0). Distance ~500+px > 300px threshold
+      emit("demo:exec-move-to", { x: 100, y: 0, durationMs: 800, requestId: "req-twophase" });
 
-    await new Promise((r) => setTimeout(r, 10));
+      await new Promise((r) => setTimeout(r, 10));
 
-    // Two phases = two animate calls on the cursor element
-    const cursorCalls = animateSpy.mock.calls.filter((call) => {
-      const keyframes = call[0] as Array<{ transform: string }>;
-      return Array.isArray(keyframes) && keyframes[0]?.transform?.includes("translate(");
-    });
-    expect(cursorCalls.length).toBe(2);
-    expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-twophase", undefined);
+      // Two phases = two animate calls on the cursor element
+      const cursorCalls = animateSpy.mock.calls.filter((call) => {
+        const keyframes = call[0] as Array<{ transform: string }>;
+        return Array.isArray(keyframes) && keyframes[0]?.transform?.includes("translate(");
+      });
+      expect(cursorCalls.length).toBe(2);
+      expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-twophase", undefined);
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 
   it("moveTo short move calls animate once", async () => {
@@ -388,6 +395,81 @@ describe("DemoCursor", () => {
     });
     expect(cursorCalls.length).toBe(1);
     expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-onephase", undefined);
+  });
+
+  it("moveTo short move accelerates from rest (bell-shaped easing, not ease-out)", async () => {
+    render(<DemoCursor />);
+    // Short move: (500,400) → (550,400), 50px < 300px threshold
+    emit("demo:exec-move-to", { x: 55, y: 50, durationMs: 200, requestId: "req-easing" });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    const cursorCall = animateSpy.mock.calls.find((call) => {
+      const keyframes = call[0] as Array<{ transform: string }>;
+      return Array.isArray(keyframes) && keyframes[0]?.transform?.includes("translate(");
+    })!;
+    const options = cursorCall[1] as KeyframeAnimationOptions;
+    // Easing must have zero slope at t=0 (accelerate from rest), i.e. a cubic-bezier whose
+    // first control-point x-handle starts the curve in — not "ease-out" which begins at full speed.
+    expect(options.easing).not.toBe("ease-out");
+    expect(String(options.easing)).toMatch(/^cubic-bezier\(/);
+    expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-easing", undefined);
+  });
+
+  it("moveTo long move overshoots and corrects when the probability roll triggers", async () => {
+    // Pin random below the overshoot probability so the cosmetic overshoot fires.
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.05);
+    try {
+      render(<DemoCursor />);
+      // (500,400) → (1000,0), distance ~640px > 300px threshold
+      emit("demo:exec-move-to", { x: 100, y: 0, durationMs: 800, requestId: "req-overshoot" });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      const cursorCalls = animateSpy.mock.calls.filter((call) => {
+        const keyframes = call[0] as Array<{ transform: string }>;
+        return Array.isArray(keyframes) && keyframes[0]?.transform?.includes("translate(");
+      });
+      // ballistic + acquisition + overshoot = 3 cursor animate calls
+      expect(cursorCalls.length).toBe(3);
+
+      // The overshoot is the final cursor call: starts and ends settled on target, peaks past it.
+      const overshoot = cursorCalls[cursorCalls.length - 1]![0] as Array<{
+        transform: string;
+        offset: number;
+      }>;
+      expect(overshoot.length).toBe(3);
+      expect(overshoot[0]!.transform).toBe("translate(0px, 0px)");
+      expect(overshoot[0]!.offset).toBe(0);
+      expect(overshoot[1]!.offset).toBeGreaterThan(0);
+      expect(overshoot[1]!.offset).toBeLessThan(1);
+      expect(overshoot[1]!.transform).not.toBe("translate(0px, 0px)");
+      expect(overshoot[2]!.transform).toBe("translate(0px, 0px)");
+      expect(overshoot[2]!.offset).toBe(1);
+      expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-overshoot", undefined);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it("moveTo long move skips overshoot when the probability roll does not trigger", async () => {
+    // Pin random above the overshoot probability so no overshoot phase is added.
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-move-to", { x: 100, y: 0, durationMs: 800, requestId: "req-no-overshoot" });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      const cursorCalls = animateSpy.mock.calls.filter((call) => {
+        const keyframes = call[0] as Array<{ transform: string }>;
+        return Array.isArray(keyframes) && keyframes[0]?.transform?.includes("translate(");
+      });
+      expect(cursorCalls.length).toBe(2);
+      expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-no-overshoot", undefined);
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 
   it("click includes settle animation on cursor element", async () => {
