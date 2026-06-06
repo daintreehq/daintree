@@ -229,7 +229,7 @@ vi.mock("../services/PtyManager.js", () => {
     setAnalysisEnabled = vi.fn();
     trimScrollback = vi.fn();
     getAllTerminalSnapshots = vi.fn(() => []);
-    transitionState = vi.fn(() => false);
+    transitionState = vi.fn(() => ({ success: false as const }));
     getTerminalsForProject = vi.fn(() => []);
     getProjectStats = vi.fn(() => ({ terminalCount: 0, processIds: [], terminalTypes: {} }));
     getAvailableTerminals = vi.fn(() => []);

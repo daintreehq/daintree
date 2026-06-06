@@ -124,7 +124,7 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
     },
 
     "transition-state": (msg) => {
-      const success = ptyManager.transitionState(
+      const result = ptyManager.transitionState(
         msg.id,
         msg.event as AgentEvent,
         msg.trigger as
@@ -138,7 +138,13 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
         msg.confidence,
         msg.spawnedAt
       );
-      sendEvent({ type: "transition-result", id: msg.id, requestId: msg.requestId, success });
+      sendEvent({
+        type: "transition-result",
+        id: msg.id,
+        requestId: msg.requestId,
+        success: result.success,
+        ...(result.reason ? { reason: result.reason } : {}),
+      });
     },
   };
 }

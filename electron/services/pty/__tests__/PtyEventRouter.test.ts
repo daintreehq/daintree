@@ -219,6 +219,35 @@ describe("routeHostEvent", () => {
     ]);
   });
 
+  // #9868 — The transition-result event now carries an optional `reason`
+  // describing why the transition was dropped (hysteresis, stale-session,
+  // schema-invalid, no-op). The renderer-facing `PtyClient.transitionState`
+  // resolver continues to be `Promise<boolean>`, so the router must keep
+  // resolving the broker with `event.success` regardless of `reason`.
+  it("resolves broker for transition-result with reason using event.success (#9868)", () => {
+    const { deps, brokerCalls } = makeDeps();
+    routeHostEvent(
+      {
+        type: "transition-result",
+        id: "t1",
+        requestId: "req-tr",
+        success: false,
+        reason: "hysteresis",
+      },
+      deps
+    );
+    expect(brokerCalls).toEqual([{ requestId: "req-tr", result: false }]);
+  });
+
+  it("resolves broker for transition-result without reason using event.success", () => {
+    const { deps, brokerCalls } = makeDeps();
+    routeHostEvent(
+      { type: "transition-result", id: "t1", requestId: "req-tr2", success: true },
+      deps
+    );
+    expect(brokerCalls).toEqual([{ requestId: "req-tr2", result: true }]);
+  });
+
   it("preserves the legacy terminalTypes fallback shape on missing project-stats", () => {
     const { deps, brokerCalls } = makeDeps();
     routeHostEvent(

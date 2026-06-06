@@ -25,6 +25,7 @@ import type {
 import type { TerminalActivityPayload } from "./terminal.js";
 import type {
   AgentStateChangePayload,
+  AgentStateTransitionDroppedPayload,
   AgentDetectedPayload,
   AgentExitedPayload,
   AgentFallbackTriggeredPayload,
@@ -1555,6 +1556,7 @@ export interface IpcEventMap {
 
   // Agent events
   "agent:state-changed": AgentStateChangePayload;
+  "agent:state-transition-dropped": AgentStateTransitionDroppedPayload;
   "agent:all-clear": { timestamp: number };
   "agent:detected": AgentDetectedPayload;
   "agent:exited": AgentExitedPayload;
@@ -2007,6 +2009,7 @@ export type IpcEventBusMap = Pick<
   IpcEventMap,
   // Agent lifecycle (global broadcast)
   | "agent:state-changed"
+  | "agent:state-transition-dropped"
   | "agent:all-clear"
   | "agent:detected"
   | "agent:exited"

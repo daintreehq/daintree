@@ -15,6 +15,19 @@ import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js
 
 export type { TerminalFlowStatus };
 
+/**
+ * Discriminator for `agent:state-transition-dropped` and the optional `reason`
+ * on `transition-result`. Lives in this file (rather than the schema) because
+ * it crosses the pty-host wire protocol — every reason must be representable
+ * as a serializable string. Mirrors `AgentStateTransitionDropReasonSchema` in
+ * `electron/schemas/agent.ts`; keep the two in lockstep.
+ */
+export type AgentStateTransitionDropReason =
+  | "no-op"
+  | "hysteresis"
+  | "stale-session"
+  | "schema-invalid";
+
 /** Options for spawning a new PTY process (matches PtyManager interface) */
 export interface PtyHostSpawnOptions {
   cwd: string;
@@ -234,6 +247,34 @@ export type PtyHostEvent =
       waitingReason?: WaitingReason;
       sessionCost?: number;
       sessionTokens?: number;
+      /**
+       * Live activity-temperature reading at the moment the transition was
+       * committed. Present only for transitions that flow through the activity
+       * detector. The resize `suppressed` flag is intentionally NOT carried —
+       * it is a different signal and would conflate transition-level decisions
+       * with resize-quiet observation in the diagnostics view.
+       */
+      temperature?: number;
+      /** Heat impulse that drove the live temperature sample. */
+      heatAdded?: number;
+      /** Number of changed characters in the most recent sample. */
+      changedChars?: number;
+    }
+  | {
+      type: "agent-state-transition-dropped";
+      id: string;
+      outcome: AgentStateTransitionDropReason;
+      currentState: AgentState;
+      attemptedState?: AgentState;
+      trigger?: string;
+      confidence?: number;
+      cwd?: string;
+      spawnedAt?: number;
+      terminalSpawnedAt?: number;
+      reason?: string;
+      validationErrors?: string[];
+      traceId?: string;
+      timestamp: number;
     }
   | {
       type: "agent-detected";
@@ -265,7 +306,7 @@ export type PtyHostEvent =
   | { type: "terminal-pid"; id: string; pid: number }
   | { type: "snapshot"; id: string; requestId: string; snapshot: PtyHostTerminalSnapshot | null }
   | { type: "all-snapshots"; requestId: string; snapshots: PtyHostTerminalSnapshot[] }
-  | { type: "transition-result"; id: string; requestId: string; success: boolean }
+  | { type: "transition-result"; id: string; requestId: string; success: boolean; reason?: AgentStateTransitionDropReason }
   | { type: "pong" }
   | { type: "ready" }
   | { type: "terminals-for-project"; requestId: string; terminalIds: string[] }

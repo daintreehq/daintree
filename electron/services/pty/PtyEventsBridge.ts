@@ -79,6 +79,37 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         waitingReason: event.waitingReason,
         sessionCost: event.sessionCost,
         sessionTokens: event.sessionTokens,
+        // Live temperature fields, only present when the activity detector
+        // drove the transition. Spread conditionally to keep the bus payload
+        // minimal when the activity path didn't fire.
+        ...(event.temperature !== undefined ? { temperature: event.temperature } : {}),
+        ...(event.heatAdded !== undefined ? { heatAdded: event.heatAdded } : {}),
+        ...(event.changedChars !== undefined ? { changedChars: event.changedChars } : {}),
+      });
+      return true;
+
+    case "agent-state-transition-dropped":
+      events.emit("agent:state-transition-dropped", {
+        terminalId: event.id,
+        ...(event.agentId ? { agentId: event.agentId } : {}),
+        outcome: event.outcome,
+        currentState: event.currentState,
+        ...(event.attemptedState !== undefined ? { attemptedState: event.attemptedState } : {}),
+        ...(event.trigger !== undefined ? { trigger: normalizeAgentTrigger(event.trigger) } : {}),
+        ...(event.confidence !== undefined
+          ? { confidence: normalizeConfidence(event.confidence) }
+          : {}),
+        ...(event.cwd !== undefined ? { cwd: event.cwd } : {}),
+        ...(event.spawnedAt !== undefined ? { spawnedAt: event.spawnedAt } : {}),
+        ...(event.terminalSpawnedAt !== undefined
+          ? { terminalSpawnedAt: event.terminalSpawnedAt }
+          : {}),
+        ...(event.reason !== undefined ? { reason: event.reason } : {}),
+        ...(event.validationErrors !== undefined
+          ? { validationErrors: event.validationErrors }
+          : {}),
+        ...(event.traceId !== undefined ? { traceId: event.traceId } : {}),
+        timestamp: event.timestamp,
       });
       return true;
 
