@@ -24,7 +24,8 @@ export function registerWorktreeForgeActions(
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         if (!targetWorktreeId) throw new Error("No active worktree");
         const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
-        if (!worktree?.issueNumber) throw new Error("Worktree has no associated issue");
+        if (!worktree) throw new Error("Worktree not found");
+        if (!worktree.issueNumber) throw new Error("Worktree has no associated issue");
         await forgeClient.openIssue(worktree.path, worktree.issueNumber);
       },
     })
@@ -45,7 +46,8 @@ export function registerWorktreeForgeActions(
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         if (!targetWorktreeId) throw new Error("No active worktree");
         const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
-        if (!worktree?.linked?.pr?.url) {
+        if (!worktree) throw new Error("Worktree not found");
+        if (!worktree.linked?.pr?.url) {
           throw new Error("Worktree has no associated pull request");
         }
 

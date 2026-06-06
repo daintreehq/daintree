@@ -92,6 +92,13 @@ describe("worktree forge actions", () => {
       );
       expect(forgeClientMock.openIssue).not.toHaveBeenCalled();
     });
+
+    it("throws when explicit worktreeId does not exist in the view", async () => {
+      await expect(
+        get("worktree.openIssue").run?.({ worktreeId: "wt-missing" }, ctx)
+      ).rejects.toThrow(/Worktree not found/);
+      expect(forgeClientMock.openIssue).not.toHaveBeenCalled();
+    });
   });
 
   describe("worktree.openPR", () => {
@@ -126,6 +133,13 @@ describe("worktree forge actions", () => {
       mockWorktrees.set("wt1", { path: "/repo", linked: {} });
       await expect(get("worktree.openPR").run?.(undefined, ctx)).rejects.toThrow(
         /Worktree has no associated pull request/
+      );
+      expect(systemClientMock.openExternal).not.toHaveBeenCalled();
+    });
+
+    it("throws when explicit worktreeId does not exist in the view", async () => {
+      await expect(get("worktree.openPR").run?.({ worktreeId: "wt-missing" }, ctx)).rejects.toThrow(
+        /Worktree not found/
       );
       expect(systemClientMock.openExternal).not.toHaveBeenCalled();
     });
