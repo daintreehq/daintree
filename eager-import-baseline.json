@@ -1,6 +1,6 @@
 {
-  "count": 1314,
-  "moduleCount": 1314,
+  "count": 1318,
+  "moduleCount": 1318,
   "allowlist": [
     "electron/ipc/errorHandlers.ts",
     "electron/ipc/handlers/agentCapabilities.ts",
@@ -86,6 +86,7 @@
     "electron/utils/git.ts",
     "electron/utils/gitRepoOperationState.ts",
     "electron/utils/gpuDetection.ts",
+    "electron/utils/hostPerformance.ts",
     "electron/utils/logger.ts",
     "electron/utils/performance.ts",
     "electron/utils/worktreePattern.ts",
@@ -93,6 +94,7 @@
     "electron/window/createWindow.ts",
     "electron/window/globalServicesInit.ts",
     "electron/window/skeletonCss.ts",
+    "electron/window/windowServices.ts",
     "plugins/builtin/github/main/GitHubRateLimitService.ts"
   ],
   "syncViolations": [
@@ -183,7 +185,7 @@
     },
     {
       "file": "electron/ipc/handlers/forgeResolution.ts",
-      "line": 45,
+      "line": 60,
       "pattern": "sync-store-get"
     },
     {
@@ -298,12 +300,12 @@
     },
     {
       "file": "electron/ipc/handlers/pluginMcp.ts",
-      "line": 35,
+      "line": 36,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/ipc/handlers/pluginMcp.ts",
-      "line": 100,
+      "line": 101,
       "pattern": "sync-store-get"
     },
     {
@@ -388,17 +390,17 @@
     },
     {
       "file": "electron/lifecycle/appLifecycle.ts",
-      "line": 83,
+      "line": 84,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/main.ts",
-      "line": 170,
+      "line": 179,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/main.ts",
-      "line": 251,
+      "line": 260,
       "pattern": "sync-store-get"
     },
     {
@@ -478,7 +480,12 @@
     },
     {
       "file": "electron/services/AutoUpdaterService.ts",
-      "line": 604,
+      "line": 606,
+      "pattern": "sync-fs"
+    },
+    {
+      "file": "electron/services/AutoUpdaterService.ts",
+      "line": 616,
       "pattern": "sync-store-get"
     },
     {
@@ -1103,22 +1110,22 @@
     },
     {
       "file": "electron/services/plugin/PluginInstalledRecordsStore.ts",
-      "line": 18,
+      "line": 19,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/plugin/PluginInstalledRecordsStore.ts",
-      "line": 29,
+      "line": 30,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/plugin/PluginInstalledRecordsStore.ts",
-      "line": 46,
+      "line": 47,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/plugin/PluginInstalledRecordsStore.ts",
-      "line": 84,
+      "line": 85,
       "pattern": "sync-store-get"
     },
     {
@@ -1463,7 +1470,7 @@
     },
     {
       "file": "electron/setup/protocols.ts",
-      "line": 547,
+      "line": 582,
       "pattern": "sync-fs"
     },
     {
@@ -1619,6 +1626,21 @@
     {
       "file": "electron/utils/gpuDetection.ts",
       "line": 51,
+      "pattern": "sync-fs"
+    },
+    {
+      "file": "electron/utils/hostPerformance.ts",
+      "line": 59,
+      "pattern": "sync-fs"
+    },
+    {
+      "file": "electron/utils/hostPerformance.ts",
+      "line": 60,
+      "pattern": "sync-fs"
+    },
+    {
+      "file": "electron/utils/hostPerformance.ts",
+      "line": 161,
       "pattern": "sync-fs"
     },
     {
@@ -1779,6 +1801,11 @@
     {
       "file": "electron/window/skeletonCss.ts",
       "line": 106,
+      "pattern": "sync-store-get"
+    },
+    {
+      "file": "electron/window/windowServices.ts",
+      "line": 394,
       "pattern": "sync-store-get"
     },
     {
