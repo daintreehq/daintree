@@ -2,6 +2,7 @@ import { markPerformance } from "../utils/performance.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { trackEvent } from "../services/TelemetryService.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 export type DeferredTask = {
   name: string;
@@ -130,7 +131,7 @@ function reportDeferredTaskFailure(taskName: string, err: unknown): void {
   // value (`String(err)`) or a store-write failure inside `notifyError` must not
   // break failure isolation.
   try {
-    const message = err instanceof Error ? err.message : String(err ?? "unknown error");
+    const message = formatErrorMessage(err, "unknown error");
     console.error(`[DeferredInit] Task "${taskName}" failed:`, err);
     notifyError(new Error(`Deferred task "${taskName}" failed: ${message}`, { cause: err }), {
       source: "deferred-init",
