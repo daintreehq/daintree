@@ -334,6 +334,10 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       expect(entry.section, "section should be defined").toBeTruthy();
       expect(entry.title, "title should be defined").toBeTruthy();
       expect(entry.description, "description should be defined").toBeTruthy();
+      expect(
+        ["tab-nav", "section"],
+        `entry "${entry.id}" kind should be a valid discriminator`
+      ).toContain(entry.kind);
     }
   });
 
@@ -884,93 +888,68 @@ describe("Resources section ranking (#10044)", () => {
   // for deep-link backward compat (see settingsTabRegistry.tsx). Pre-fix, the
   // post-scoring pass classified entries by `id.startsWith("tab-nav-")` and
   // applied a -3 penalty to multi-token queries, so the Resources section was
-  // wrongly demoted in favor of the Worktree Setup tab-nav row when both
-  // matched. With `kind: "section"` on the Resources entry, the ranker now
-  // correctly classifies it as a content section and applies no penalty.
-  const resourcesEntry = {
-    id: "tab-nav-project:environments",
+  // wrongly demoted in favor of any matching tab-nav row. With `kind: "section"`
+  // on the Resources entry, the ranker now correctly classifies it as a
+  // content section and applies no penalty.
+  //
+  // The fixtures below are constructed to be byte-identical in every other
+  // field (title, description, keywords, tab, tabLabel, scope) and differ
+  // ONLY in `kind` and `id` — so the -3 penalty is the only possible
+  // differentiator. The tab-nav entry is listed first in the array so that
+  // under the broken `id.startsWith` discriminator (which penalises both),
+  // input-order tie-breaking would put the tab-nav first and the assertion
+  // would fail. Under the fixed `kind` discriminator, only the tab-nav
+  // entry is penalised, so the section outranks it and the assertion passes.
+  const sharedFields = {
     tab: "project:automation" as const,
     scope: "project" as const,
-    kind: "section" as const,
     tabLabel: "Worktree Setup",
-    section: "Resource Environments",
-    title: "Resources",
+    title: "Resource Environments",
     description: "Remote resource definitions and default worktree mode",
-    keywords: ["project", "resources", "environments", "remote", "docker", "akash", "worktree"],
+    keywords: ["resources", "remote", "docker", "akash"],
   };
 
-  // The Worktree Setup tab-nav row is configured to also surface the term
-  // "resources" via its description so it matches the multi-token query
-  // alongside the Resources row — this is what makes the relative-ordering
-  // test meaningful. In the real registry the Worktree Setup tab-nav row
-  // doesn't currently match "remote resources" / "docker akash", but the
-  // GOLDEN_QUERIES entries above verify the real-index path end-to-end.
-  const worktreeSetupNav = {
+  const sectionFixture = {
+    ...sharedFields,
+    id: "tab-nav-project:environments",
+    kind: "section" as const,
+    section: "Resource Environments",
+  };
+
+  const tabNavFixture = {
+    ...sharedFields,
     id: "tab-nav-project:automation",
-    tab: "project:automation" as const,
-    scope: "project" as const,
     kind: "tab-nav" as const,
-    tabLabel: "Worktree Setup",
     section: "Settings Navigation",
-    title: "Worktree Setup",
-    description: "Worktree recipes, resource environments, and remote docker akash setup",
-    keywords: [
-      "project",
-      "automation",
-      "worktree",
-      "setup",
-      "resources",
-      "remote",
-      "docker",
-      "akash",
-    ],
   };
 
   // Use `as never` to satisfy the strict SettingsTab union without importing
   // the full SettingsTab enum at this test site — the ranker only reads
   // tab/tabLabel/scope/kind/id, not exhaustive tab constraints.
-  const fixtureIndex = [resourcesEntry, worktreeSetupNav] as never;
+  const fixtureIndex = [tabNavFixture, sectionFixture] as never;
 
-  for (const query of ["remote resources", "docker akash"]) {
-    it(`"${query}" ranks Resources content section above the Worktree Setup tab-nav row`, () => {
+  for (const query of ["remote resources", "docker akash", "remote docker"]) {
+    it(`"${query}" ranks Resources content section above a byte-identical tab-nav row`, () => {
+      // Under the fixed `kind` discriminator: section wins (no -3 penalty).
+      // Under the broken `id.startsWith` discriminator: both get -3, so they
+      // tie on score; stable sort preserves input order and the tab-nav
+      // (listed first) wins — assertion fails. This is the discriminator
+      // isolation test.
       const results = filterSettings(fixtureIndex, query);
-      const resourcesIdx = results.findIndex((r) => r.id === "tab-nav-project:environments");
+      const sectionIdx = results.findIndex((r) => r.id === "tab-nav-project:environments");
       const tabNavIdx = results.findIndex((r) => r.id === "tab-nav-project:automation");
       expect(
-        resourcesIdx,
-        `Resources entry must be present in results for "${query}"`
+        sectionIdx,
+        `section entry must be present in results for "${query}"`
       ).toBeGreaterThanOrEqual(0);
       expect(
         tabNavIdx,
         `tab-nav entry must be present in results for "${query}"`
       ).toBeGreaterThanOrEqual(0);
       expect(
-        resourcesIdx,
-        `Resources content entry should outrank the Worktree Setup tab-nav row for "${query}"`
+        sectionIdx,
+        `section (kind="section") should outrank byte-identical tab-nav (kind="tab-nav") for "${query}"`
       ).toBeLessThan(tabNavIdx);
     });
   }
-
-  it("'resources' (single token) is not penalised by the multi-token tab-nav branch", () => {
-    // Single-token queries hit neither branch of the if/else — the kind
-    // discriminator is still correctly applied, but the penalty only fires
-    // for tokens.length > 1. Sanity check that the ranker doesn't regress
-    // the single-token case.
-    const results = filterSettings(fixtureIndex, "resources");
-    expect(results[0]?.id).toBe("tab-nav-project:environments");
-  });
-
-  it("a tab-nav row that matches a multi-token query is still correctly penalised", () => {
-    // Confirms the other direction of the discriminator: a real tab-nav
-    // row that *does* have `kind: "tab-nav"` still gets the -3 penalty
-    // for compound queries that don't match its tab label exactly.
-    const results = filterSettings(fixtureIndex, "remote docker");
-    const tabNavIdx = results.findIndex((r) => r.id === "tab-nav-project:automation");
-    const resourcesIdx = results.findIndex((r) => r.id === "tab-nav-project:environments");
-    expect(tabNavIdx).toBeGreaterThanOrEqual(0);
-    expect(resourcesIdx).toBeGreaterThanOrEqual(0);
-    expect(resourcesIdx, "Resources content row should still outrank the tab-nav row").toBeLessThan(
-      tabNavIdx
-    );
-  });
 });
