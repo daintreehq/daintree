@@ -1486,6 +1486,23 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("No internet connection");
     });
 
+    it("surfaces ERR_FILE_NOT_FOUND (-6) as a load failure", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -6,
+          errorDescription: "ERR_FILE_NOT_FOUND",
+          isMainFrame: true,
+          validatedURL: "http://localhost:5173/missing",
+        });
+      });
+
+      expect(container.textContent).toContain("Page load failed");
+      expect(container.textContent).toContain("ERR_FILE_NOT_FOUND");
+    });
+
     it("retry-exhausted error includes URL", () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       const webview = getWebviewElement(container);

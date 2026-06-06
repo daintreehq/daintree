@@ -343,8 +343,6 @@ export function useDevPreviewLoadLifecycle({
     const handleDidFailLoad = (e: Electron.DidFailLoadEvent) => {
       // Ignore aborted loads (e.g., navigation interrupted by another navigation)
       if (e.errorCode === -3) return;
-      // Ignore cancellations
-      if (e.errorCode === -6) return;
       // Ignore subframe failures — they don't affect the main-frame load state
       if (!e.isMainFrame) return;
 
