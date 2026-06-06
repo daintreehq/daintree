@@ -153,6 +153,64 @@ describe("AppThemePicker import feedback — plain-language warnings", () => {
     expect(screen.getByText('Imported "Imported Theme" with 1 warning.')).toBeTruthy();
   });
 
+  it("summarises the deduplicated category count, not the raw diagnostic count", async () => {
+    vi.mocked(appThemeClient.importTheme).mockResolvedValue(
+      importResultWith([
+        { kind: "low-contrast", message: "a on b is 1.0:1; target is 4.5:1" },
+        { kind: "low-contrast", message: "c on d is 2.0:1; target is 4.5:1" },
+        { kind: "low-contrast", message: "e on f is 3.0:1; target is 4.5:1" },
+        { kind: "type-inferred", message: 'Theme type was inferred as dark. Add "type".' },
+      ])
+    );
+
+    const { container } = render(<AppThemePicker />);
+    clickImport();
+
+    // 4 raw diagnostics span 2 kinds → "2 warnings" and 2 visible rows.
+    await screen.findByText('Imported "Imported Theme" with 2 warnings.');
+    const list = container.querySelector('[role="status"] ul');
+    expect(list?.querySelectorAll(":scope > li")).toHaveLength(2);
+  });
+
+  it("preserves every raw message inside the details when a kind is deduplicated", async () => {
+    const first = "first-low-contrast-diagnostic on surface is 1.1:1; target is 4.5:1";
+    const second = "second-low-contrast-diagnostic on surface is 2.2:1; target is 4.5:1";
+    vi.mocked(appThemeClient.importTheme).mockResolvedValue(
+      importResultWith([
+        { kind: "low-contrast", message: first },
+        { kind: "low-contrast", message: second },
+      ])
+    );
+
+    const { container } = render(<AppThemePicker />);
+    clickImport();
+
+    await screen.findByText("Some colors may be hard to see");
+    // Single friendly row, single disclosure, but both raw messages retained.
+    expect(container.querySelectorAll("details")).toHaveLength(1);
+    expect(screen.getByText(first)).toBeTruthy();
+    expect(screen.getByText(second)).toBeTruthy();
+  });
+
+  it("falls back to non-empty copy for an unrecognised warning kind", async () => {
+    vi.mocked(appThemeClient.importTheme).mockResolvedValue(
+      importResultWith([
+        {
+          kind: "future-unknown-kind" as AppThemeValidationWarning["kind"],
+          message: "some new diagnostic the renderer has no copy for yet",
+        },
+      ])
+    );
+
+    const { container } = render(<AppThemePicker />);
+    clickImport();
+
+    await screen.findByText('Imported "Imported Theme" with 1 warning.');
+    const row = container.querySelector('[role="status"] ul > li');
+    // The friendly line (text before the <details>) must not be blank.
+    expect(row?.firstChild?.textContent?.trim()).toBeTruthy();
+  });
+
   it("renders the result block as an aria status live region", async () => {
     vi.mocked(appThemeClient.importTheme).mockResolvedValue(importResultWith([]));
 

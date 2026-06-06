@@ -267,8 +267,12 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
 
       if (result.warnings.length > 0) {
         setImportWarnings(result.warnings);
+        // Count the deduplicated kind rows the user actually sees, not the raw
+        // diagnostic count (those live under "Technical details") — otherwise
+        // "12 warnings" next to 2 visible rows reads as missing content.
+        const warningCount = groupWarningsByKind(result.warnings).length;
         announceImportResult(
-          `Imported "${result.scheme.name}" with ${result.warnings.length} warning${result.warnings.length === 1 ? "" : "s"}.`
+          `Imported "${result.scheme.name}" with ${warningCount} warning${warningCount === 1 ? "" : "s"}.`
         );
       } else {
         announceImportResult(`Imported "${result.scheme.name}".`);
@@ -355,7 +359,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
                 <ul className="mt-1 space-y-1.5">
                   {groupWarningsByKind(importWarnings).map(({ kind, messages }) => (
                     <li key={kind} className="text-[11px] text-daintree-text/60">
-                      {WARNING_KIND_COPY[kind]}
+                      {WARNING_KIND_COPY[kind] ?? "Some theme values may need attention"}
                       <details className="mt-0.5">
                         <summary className="cursor-pointer text-daintree-text/40 transition-colors hover:text-daintree-text/70">
                           Technical details
