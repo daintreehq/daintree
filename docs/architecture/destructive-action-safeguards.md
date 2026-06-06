@@ -133,12 +133,12 @@ Columns:
 
 ### GitHub-side
 
-The current GitHub action set is read-only (`openIssues`, `listPullRequests`, etc.) plus token management. No PR merge, no issue close, no comment-post is wired through `ActionService` yet.
+The current GitHub action set is read-only (`forge.openIssues`, `github.listPullRequests`, etc.) plus token management. No PR merge, no issue close, no comment-post is wired through `ActionService` yet.
 
 | Action / call site | Current | UI confirm | Consent in breadcrumb | Reversibility | Blast | Tier | Recommendation | Follow-up |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `github.setToken` / `github.clearToken` | safe | n/a | n/a | reversible (re-enter) | local credential | D0 | Leave | — |
-| `github.openIssue` / `github.openPR` / `github.openCommits` / list / get queries | safe | n/a | n/a | reversible (navigation only) | navigation | D0 | Leave | — |
+| `github.openPR` / `forge.openIssue` / `forge.openCommits` / list / get queries | safe | n/a | n/a | reversible (navigation only) | navigation | D0 | Leave | — |
 | Merge PR / close issue / dismiss review (future) | n/a — not yet exposed via UI | n/a | n/a | shared-state | one PR or issue on origin | D2 | When wired, must be `danger:"confirm"` from day one and ship with target-naming preview | open as needed |
 
 ### Recipes / plugins
