@@ -510,6 +510,71 @@ describe("sanitizeEvent", () => {
     expect(frame?.post_context).toBeUndefined();
     expect(frame?.vars).toBeUndefined();
   });
+
+  it("scrubs user paths from parsed request.url path segments", () => {
+    const event: SentryEvent = {
+      request: {
+        url: "https://api.example.com/Users/alice/repos",
+      },
+    };
+    const result = sanitizeEvent(event);
+    // URL() parses fine, so the try branch runs — the path segment must
+    // still go through sanitizeString, not just the search/hash clears.
+    expect(result?.request?.url).toBe("https://api.example.com/Users/USER/repos");
+    expect(result?.request?.url).not.toContain("alice");
+  });
+
+  it("scrubs secret values in event.tags and preserves non-string values", () => {
+    const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456";
+    const event: SentryEvent = {
+      tags: { source: "react-uncaught", token: secret, count: 3 },
+    };
+    const result = sanitizeEvent(event);
+    const tags = result?.tags as Record<string, unknown>;
+    expect(tags.token).toBe("[REDACTED]");
+    expect(tags.source).toBe("react-uncaught");
+    expect(tags.count).toBe(3);
+  });
+
+  it("scrubs home paths in event.user and passes null user through unchanged", () => {
+    const event: SentryEvent = {
+      user: { id: "abc123", lastProjectPath: "/Users/alice/Projects/daintree" },
+    };
+    const result = sanitizeEvent(event);
+    const user = result?.user as Record<string, unknown>;
+    expect(user.lastProjectPath).toBe("/Users/USER/Projects/daintree");
+    expect(user.id).toBe("abc123");
+
+    const nullUserEvent = { user: null } as unknown as SentryEvent;
+    expect(() => sanitizeEvent(nullUserEvent)).not.toThrow();
+    expect(sanitizeEvent(nullUserEvent)?.user).toBeNull();
+  });
+
+  it("scrubs home paths from event.contexts (React componentStack)", () => {
+    const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456";
+    const event: SentryEvent = {
+      contexts: {
+        react: {
+          componentStack: `at App (/Users/alice/Projects/daintree/src/App.tsx:10:5) token=${secret}`,
+        },
+      },
+    };
+    const result = sanitizeEvent(event);
+    const contexts = result?.contexts as { react: { componentStack: string } };
+    expect(contexts.react.componentStack).toContain("/Users/USER/");
+    expect(contexts.react.componentStack).not.toContain("alice");
+    expect(contexts.react.componentStack).not.toContain(secret);
+    expect(contexts.react.componentStack).toContain("[REDACTED]");
+  });
+
+  it("leaves events without tags, user, or contexts unchanged", () => {
+    const event: SentryEvent = { message: "plain message" };
+    const result = sanitizeEvent(event);
+    expect(result).not.toBeNull();
+    expect(result?.tags).toBeUndefined();
+    expect(result?.user).toBeUndefined();
+    expect(result?.contexts).toBeUndefined();
+  });
 });
 
 describe("getTelemetryLevel", () => {
