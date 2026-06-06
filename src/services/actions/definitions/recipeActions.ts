@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { useRecipeStore } from "@/store/recipeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import {
   TerminalSpawnSourceSchema,
   RecipeSummarySchema,
@@ -67,6 +68,14 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         spawnedBy: TerminalSpawnSourceSchema.optional(),
         focusPolicy: AddPanelFocusPolicySchema.optional(),
       }),
+      resultSchema: z.object({
+        spawnedCount: z.number().int().nonnegative(),
+        failedCount: z.number().int().nonnegative(),
+        failedTerminals: z.array(
+          z.object({ index: z.number().int().nonnegative(), reason: z.string() })
+        ),
+      }),
+      mcpOutputSchema: true,
       run: async ({ recipeId, worktreeId, spawnedBy, focusPolicy }, ctx: ActionContext) => {
         const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId ?? undefined;
         const worktree = targetWorktreeId
@@ -87,13 +96,33 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         // Always forward dispatchSource so runRecipeWithResults can apply the
         // agent-source terminal cap. ActionService sets ctx.dispatchSource on
         // every dispatch, so this is the live path for all real invocations.
-        await useRecipeStore
+        const recipeName = useRecipeStore.getState().getRecipeById(recipeId)?.name;
+        const results = await useRecipeStore
           .getState()
-          .runRecipe(recipeId, worktreePath, targetWorktreeId, recipeContext, {
+          .runRecipeWithResults(recipeId, worktreePath, targetWorktreeId, recipeContext, {
             spawnedBy,
             focusPolicy,
             dispatchSource: ctx.dispatchSource,
           });
+
+        // Toast/inbox first so palette users see the failure even though the
+        // dispatch below also rejects (the rejection only reaches MCP callers).
+        notifyRecipeSpawnFailures(results, {
+          recipeName,
+          projectId: ctx.projectId,
+          worktreeId: targetWorktreeId,
+        });
+
+        if (results.spawned.length === 0 && results.failed.length > 0) {
+          const reasons = Array.from(new Set(results.failed.map((f) => f.error))).join("; ");
+          throw new Error(`Recipe launch failed: ${reasons}`);
+        }
+
+        return {
+          spawnedCount: results.spawned.length,
+          failedCount: results.failed.length,
+          failedTerminals: results.failed.map((f) => ({ index: f.index, reason: f.error })),
+        };
       },
     })
   );

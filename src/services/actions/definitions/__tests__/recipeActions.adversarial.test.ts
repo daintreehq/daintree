@@ -9,8 +9,13 @@ const createWorktreeStoreMock = vi.hoisted(() => ({
   getCurrentViewStore: vi.fn(),
 }));
 
+const notifySpawnFailuresMock = vi.hoisted(() => vi.fn());
+
 vi.mock("@/store/recipeStore", () => ({ useRecipeStore: recipeStoreMock }));
 vi.mock("@/store/createWorktreeStore", () => createWorktreeStoreMock);
+vi.mock("@/utils/recipeNotify", () => ({
+  notifyRecipeSpawnFailures: notifySpawnFailuresMock,
+}));
 
 import { registerRecipeActions } from "../recipeActions";
 
@@ -64,6 +69,8 @@ afterEach(() => {
   Object.defineProperty(globalThis, "window", { value: undefined, configurable: true });
 });
 
+const OK_SPAWN_RESULTS = { spawned: [{ index: 0, terminalId: "term-1" }], failed: [] };
+
 function setRecipeState(state: {
   recipes?: Array<{
     id: string;
@@ -74,7 +81,7 @@ function setRecipeState(state: {
   }>;
   isLoading?: boolean;
   currentProjectId?: string | null;
-  runRecipe?: ReturnType<typeof vi.fn>;
+  runRecipeWithResults?: ReturnType<typeof vi.fn>;
   saveToRepo?: ReturnType<typeof vi.fn>;
   deleteRecipe?: ReturnType<typeof vi.fn>;
   generateRecipeFromActiveTerminals?: (id: string) => unknown[];
@@ -83,7 +90,8 @@ function setRecipeState(state: {
     recipes: state.recipes ?? [],
     isLoading: state.isLoading ?? false,
     currentProjectId: "currentProjectId" in state ? state.currentProjectId : "proj-1",
-    runRecipe: state.runRecipe ?? vi.fn().mockResolvedValue(undefined),
+    getRecipeById: vi.fn((id: string) => (state.recipes ?? []).find((r) => r.id === id)),
+    runRecipeWithResults: state.runRecipeWithResults ?? vi.fn().mockResolvedValue(OK_SPAWN_RESULTS),
     saveToRepo: state.saveToRepo ?? vi.fn().mockResolvedValue(undefined),
     deleteRecipe: state.deleteRecipe ?? vi.fn().mockResolvedValue(undefined),
     generateRecipeFromActiveTerminals: state.generateRecipeFromActiveTerminals ?? vi.fn(() => []),
@@ -98,8 +106,8 @@ function setWorktreeMap(map: Map<string, Worktree>) {
 
 describe("recipeActions adversarial", () => {
   it("recipe.run prefers explicit worktreeId over ctx.activeWorktreeId", async () => {
-    const runRecipe = vi.fn().mockResolvedValue(undefined);
-    setRecipeState({ runRecipe });
+    const runRecipeWithResults = vi.fn().mockResolvedValue(OK_SPAWN_RESULTS);
+    setRecipeState({ runRecipeWithResults });
     setWorktreeMap(
       new Map([
         ["wt-arg", { path: "/repo/arg", branch: "feat/a", issueNumber: 1 }],
@@ -114,7 +122,7 @@ describe("recipeActions adversarial", () => {
       { activeWorktreeId: "wt-ctx", projectPath: "/repo" }
     );
 
-    expect(runRecipe).toHaveBeenCalledWith(
+    expect(runRecipeWithResults).toHaveBeenCalledWith(
       "r1",
       "/repo/arg",
       "wt-arg",
@@ -129,8 +137,8 @@ describe("recipeActions adversarial", () => {
   });
 
   it("recipe.run threads ctx.dispatchSource into the run options", async () => {
-    const runRecipe = vi.fn().mockResolvedValue(undefined);
-    setRecipeState({ runRecipe });
+    const runRecipeWithResults = vi.fn().mockResolvedValue(OK_SPAWN_RESULTS);
+    setRecipeState({ runRecipeWithResults });
     setWorktreeMap(new Map([["wt-1", { path: "/repo/wt", branch: "feat/x" }]]));
 
     const run = setupActions();
@@ -140,7 +148,7 @@ describe("recipeActions adversarial", () => {
       { dispatchSource: "agent", projectPath: "/repo" }
     );
 
-    expect(runRecipe).toHaveBeenCalledWith(
+    expect(runRecipeWithResults).toHaveBeenCalledWith(
       "r1",
       "/repo/wt",
       "wt-1",
@@ -150,8 +158,8 @@ describe("recipeActions adversarial", () => {
   });
 
   it("recipe.run falls back to ctx.projectPath when the target worktree is missing from the view store", async () => {
-    const runRecipe = vi.fn().mockResolvedValue(undefined);
-    setRecipeState({ runRecipe });
+    const runRecipeWithResults = vi.fn().mockResolvedValue(OK_SPAWN_RESULTS);
+    setRecipeState({ runRecipeWithResults });
     setWorktreeMap(new Map());
 
     const run = setupActions();
@@ -161,7 +169,7 @@ describe("recipeActions adversarial", () => {
       { activeWorktreeId: "wt-missing", projectPath: "/repo/main" }
     );
 
-    expect(runRecipe).toHaveBeenCalledWith(
+    expect(runRecipeWithResults).toHaveBeenCalledWith(
       "r1",
       "/repo/main",
       "wt-missing",
@@ -176,8 +184,8 @@ describe("recipeActions adversarial", () => {
   });
 
   it("recipe.run throws when no path source exists", async () => {
-    const runRecipe = vi.fn().mockResolvedValue(undefined);
-    setRecipeState({ runRecipe });
+    const runRecipeWithResults = vi.fn().mockResolvedValue(OK_SPAWN_RESULTS);
+    setRecipeState({ runRecipeWithResults });
     setWorktreeMap(new Map());
 
     const run = setupActions();
@@ -185,7 +193,74 @@ describe("recipeActions adversarial", () => {
     await expect(run("recipe.run", { recipeId: "r1" }, {})).rejects.toThrow(
       /No worktree or project path/
     );
-    expect(runRecipe).not.toHaveBeenCalled();
+    expect(runRecipeWithResults).not.toHaveBeenCalled();
+  });
+
+  it("recipe.run returns structured spawn counts on full success", async () => {
+    const runRecipeWithResults = vi.fn().mockResolvedValue({
+      spawned: [
+        { index: 0, terminalId: "t-0" },
+        { index: 1, terminalId: "t-1" },
+      ],
+      failed: [],
+    });
+    setRecipeState({ runRecipeWithResults });
+    setWorktreeMap(new Map([["wt-1", { path: "/repo/wt" }]]));
+
+    const run = setupActions();
+    const result = await run("recipe.run", { recipeId: "r1", worktreeId: "wt-1" }, {});
+
+    expect(result).toEqual({ spawnedCount: 2, failedCount: 0, failedTerminals: [] });
+  });
+
+  it("recipe.run resolves with failure details on partial spawn and notifies", async () => {
+    const results = {
+      spawned: [{ index: 0, terminalId: "t-0" }],
+      failed: [{ index: 1, error: "Panel limit reached" }],
+    };
+    const runRecipeWithResults = vi.fn().mockResolvedValue(results);
+    setRecipeState({
+      recipes: [{ id: "r1", name: "My recipe", terminals: [] }],
+      runRecipeWithResults,
+    });
+    setWorktreeMap(new Map([["wt-1", { path: "/repo/wt" }]]));
+
+    const run = setupActions();
+    const result = await run(
+      "recipe.run",
+      { recipeId: "r1", worktreeId: "wt-1" },
+      { projectId: "proj-1" }
+    );
+
+    expect(result).toEqual({
+      spawnedCount: 1,
+      failedCount: 1,
+      failedTerminals: [{ index: 1, reason: "Panel limit reached" }],
+    });
+    expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, {
+      recipeName: "My recipe",
+      projectId: "proj-1",
+      worktreeId: "wt-1",
+    });
+  });
+
+  it("recipe.run throws when no terminals spawned but still notifies first", async () => {
+    const results = {
+      spawned: [],
+      failed: [
+        { index: 0, error: "Panel limit reached" },
+        { index: 1, error: "Panel limit reached" },
+      ],
+    };
+    setRecipeState({ runRecipeWithResults: vi.fn().mockResolvedValue(results) });
+    setWorktreeMap(new Map([["wt-1", { path: "/repo/wt" }]]));
+
+    const run = setupActions();
+
+    await expect(run("recipe.run", { recipeId: "r1", worktreeId: "wt-1" }, {})).rejects.toThrow(
+      /Recipe launch failed: Panel limit reached/
+    );
+    expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, expect.any(Object));
   });
 
   it("recipe.list with worktreeId includes global recipes (no worktreeId) and worktree-scoped recipes", async () => {

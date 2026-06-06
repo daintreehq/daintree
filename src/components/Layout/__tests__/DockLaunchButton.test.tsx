@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 let mockRecipes: Array<{
@@ -9,7 +9,8 @@ let mockRecipes: Array<{
   worktreeId?: string;
 }> = [];
 let mockMruEntries: Array<{ id: string; score: number; lastAccessedAt: number }> = [];
-const runRecipeMock = vi.fn();
+const runRecipeWithResultsMock = vi.fn();
+const notifySpawnFailuresMock = vi.fn();
 const actionDispatchMock = vi.fn();
 const recordActionMruMock = vi.fn();
 let dropdownCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
@@ -20,9 +21,13 @@ vi.mock("@/store/recipeStore", () => ({
     (selector: (s: { recipes: typeof mockRecipes }) => unknown) =>
       selector({ recipes: mockRecipes }),
     {
-      getState: () => ({ runRecipe: runRecipeMock }),
+      getState: () => ({ runRecipeWithResults: runRecipeWithResultsMock }),
     }
   ),
+}));
+
+vi.mock("@/utils/recipeNotify", () => ({
+  notifyRecipeSpawnFailures: (...args: unknown[]) => notifySpawnFailuresMock(...args),
 }));
 
 vi.mock("@/store/actionMruStore", () => ({
@@ -108,7 +113,11 @@ const AGENTS: DockLaunchAgent[] = [
 beforeEach(() => {
   mockRecipes = [];
   mockMruEntries = [];
-  runRecipeMock.mockReset();
+  runRecipeWithResultsMock.mockReset().mockResolvedValue({
+    spawned: [{ index: 0, terminalId: "t-0" }],
+    failed: [],
+  });
+  notifySpawnFailuresMock.mockReset();
   actionDispatchMock.mockReset();
   recordActionMruMock.mockReset();
   dropdownCloseAutoFocusSpy = null;
@@ -468,7 +477,7 @@ describe("DockLaunchButton", () => {
     expect(resetPreventDefault).not.toHaveBeenCalled();
   });
 
-  it("invokes runRecipe with cwd, worktreeId, and recipe context when a recipe is selected", () => {
+  it("invokes runRecipeWithResults with cwd, worktreeId, and recipe context when a recipe is selected", async () => {
     mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
 
     const recipeContext = {
@@ -490,7 +499,46 @@ describe("DockLaunchButton", () => {
     );
 
     fireEvent.click(getByText("My recipe"));
-    expect(runRecipeMock).toHaveBeenCalledWith("r-1", "/path/to/wt", "wt-1", recipeContext);
+    expect(runRecipeWithResultsMock).toHaveBeenCalledWith(
+      "r-1",
+      "/path/to/wt",
+      "wt-1",
+      recipeContext
+    );
+    // Spawn results route through the failure notifier (which no-ops on success).
+    await waitFor(() =>
+      expect(notifySpawnFailuresMock).toHaveBeenCalledWith(
+        { spawned: [{ index: 0, terminalId: "t-0" }], failed: [] },
+        { recipeName: "My recipe", worktreeId: "wt-1" }
+      )
+    );
+  });
+
+  it("surfaces spawn failures from dock-launched recipes via the notifier", async () => {
+    mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
+    const results = {
+      spawned: [],
+      failed: [{ index: 0, error: "Panel limit reached" }],
+    };
+    runRecipeWithResultsMock.mockResolvedValue(results);
+
+    const { getByText } = render(
+      <DockLaunchButton
+        agents={AGENTS}
+        hasDevPreview={false}
+        onLaunchAgent={vi.fn()}
+        activeWorktreeId={null}
+        cwd="/tmp"
+      />
+    );
+
+    fireEvent.click(getByText("My recipe"));
+    await waitFor(() =>
+      expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, {
+        recipeName: "My recipe",
+        worktreeId: undefined,
+      })
+    );
   });
 
   describe("Recently launched band", () => {

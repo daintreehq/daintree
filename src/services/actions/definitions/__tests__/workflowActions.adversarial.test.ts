@@ -34,7 +34,11 @@ const selectorMock = vi.hoisted(() => ({
 }));
 
 const gitGetStagingStatusMock = vi.hoisted(() => vi.fn());
+const notifySpawnFailuresMock = vi.hoisted(() => vi.fn());
 
+vi.mock("@/utils/recipeNotify", () => ({
+  notifyRecipeSpawnFailures: notifySpawnFailuresMock,
+}));
 vi.mock("@/clients", () => ({
   worktreeClient: worktreeClientMock,
   githubClient: githubClientMock,
@@ -112,13 +116,25 @@ function setAssignPreference(value: boolean) {
   preferencesStoreMock.getState.mockReturnValue({ assignWorktreeToSelf: value });
 }
 
-function setRecipe(recipeId: string | null, runImpl?: () => Promise<void>) {
-  const runRecipe = vi.fn().mockImplementation(runImpl ?? (async () => {}));
+type SpawnResults = {
+  spawned: Array<{ index: number; terminalId: string }>;
+  failed: Array<{ index: number; error: string }>;
+};
+
+const OK_SPAWN_RESULTS: SpawnResults = {
+  spawned: [{ index: 0, terminalId: "term-recipe" }],
+  failed: [],
+};
+
+function setRecipe(recipeId: string | null, runImpl?: () => Promise<SpawnResults>) {
+  const runRecipeWithResults = vi
+    .fn()
+    .mockImplementation(runImpl ?? (async () => OK_SPAWN_RESULTS));
   recipeStoreMock.getState.mockReturnValue({
-    getRecipeById: vi.fn().mockReturnValue(recipeId ? { id: recipeId } : null),
-    runRecipe,
+    getRecipeById: vi.fn().mockReturnValue(recipeId ? { id: recipeId, name: "Recipe" } : null),
+    runRecipeWithResults,
   });
-  return runRecipe;
+  return runRecipeWithResults;
 }
 
 function setPanelTerminals(
@@ -281,27 +297,28 @@ describe("worktree.createWithRecipe", () => {
       url: "u",
     });
     worktreeClientMock.getDefaultPath.mockResolvedValue("/repo/contrib/feature-x");
-    const runRecipe = vi.fn().mockResolvedValue(undefined);
-    recipeStoreMock.getState.mockReturnValue({
-      getRecipeById: vi.fn().mockReturnValue({ id: "recipe-1" }),
-      runRecipe,
-    });
+    const runRecipeWithResults = setRecipe("recipe-1");
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
       { pullRequestNumber: 42, recipeId: "recipe-1" },
       {} as never
     )) as Record<string, unknown>;
-    expect(runRecipe).toHaveBeenCalledWith("recipe-1", "/repo/contrib/feature-x", "wt-new", {
-      worktreePath: "/repo/contrib/feature-x",
-      branchName: "contrib/feature-x",
-      issueNumber: undefined,
-      prNumber: 42,
-    });
+    expect(runRecipeWithResults).toHaveBeenCalledWith(
+      "recipe-1",
+      "/repo/contrib/feature-x",
+      "wt-new",
+      {
+        worktreePath: "/repo/contrib/feature-x",
+        branchName: "contrib/feature-x",
+        issueNumber: undefined,
+        prNumber: 42,
+      }
+    );
     expect(result.recipeLaunched).toBe(true);
   });
 
   it("passes spawnedBy through to recipes launched from MCP-created worktrees", async () => {
-    const runRecipe = setRecipe("recipe-1");
+    const runRecipeWithResults = setRecipe("recipe-1");
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
 
     await def.run(
@@ -309,7 +326,7 @@ describe("worktree.createWithRecipe", () => {
       {} as never
     );
 
-    expect(runRecipe).toHaveBeenCalledWith(
+    expect(runRecipeWithResults).toHaveBeenCalledWith(
       "recipe-1",
       "/repo/feature/issue-6609-add-tools",
       "wt-new",
@@ -317,7 +334,7 @@ describe("worktree.createWithRecipe", () => {
         worktreePath: "/repo/feature/issue-6609-add-tools",
         branchName: "feature/issue-6609-add-tools",
       }),
-      { spawnedBy: "mcp" }
+      { spawnedBy: "mcp", focusPolicy: undefined }
     );
   });
 
@@ -338,6 +355,69 @@ describe("worktree.createWithRecipe", () => {
       expect(payload.partialResult.recipeLaunched).toBe(false);
     }
     expect(worktreeClientMock.create).toHaveBeenCalled();
+  });
+
+  it("reports recipeLaunched: false when every recipe terminal fails to spawn", async () => {
+    const results = {
+      spawned: [],
+      failed: [
+        { index: 0, error: "Panel limit reached" },
+        { index: 1, error: "Panel limit reached" },
+      ],
+    };
+    setRecipe("recipe-1", async () => results);
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    const result = (await def.run(
+      { branchName: "feature/foo", recipeId: "recipe-1" },
+      {} as never
+    )) as Record<string, unknown>;
+
+    expect(result.recipeLaunched).toBe(false);
+    expect(result.spawnedTerminalCount).toBe(0);
+    expect(result.failedTerminalCount).toBe(2);
+    expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, {
+      recipeName: "Recipe",
+      projectId: "p1",
+      worktreeId: "wt-new",
+    });
+  });
+
+  it("reports recipeLaunched: true with failure counts on partial spawn", async () => {
+    setRecipe("recipe-1", async () => ({
+      spawned: [{ index: 0, terminalId: "t-0" }],
+      failed: [{ index: 1, error: "Panel limit reached" }],
+    }));
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    const result = (await def.run(
+      { branchName: "feature/foo", recipeId: "recipe-1" },
+      {} as never
+    )) as Record<string, unknown>;
+
+    expect(result.recipeLaunched).toBe(true);
+    expect(result.spawnedTerminalCount).toBe(1);
+    expect(result.failedTerminalCount).toBe(1);
+  });
+
+  it("does not notify spawn failures when all recipe terminals spawn", async () => {
+    setRecipe("recipe-1");
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    const result = (await def.run(
+      { branchName: "feature/foo", recipeId: "recipe-1" },
+      {} as never
+    )) as Record<string, unknown>;
+
+    expect(result.recipeLaunched).toBe(true);
+    expect(result.spawnedTerminalCount).toBe(1);
+    expect(result.failedTerminalCount).toBe(0);
+    // The helper itself no-ops on zero failures; the action still routes
+    // results through it so the gate lives in one place.
+    expect(notifySpawnFailuresMock).toHaveBeenCalledWith(
+      OK_SPAWN_RESULTS,
+      expect.objectContaining({ worktreeId: "wt-new" })
+    );
   });
 
   it("treats empty-string headRefName the same as missing", async () => {
@@ -488,6 +568,48 @@ describe("workflow.startWorkOnIssue", () => {
     ).rejects.toThrow(/PARTIAL_SUCCESS:/);
     expect(worktreeClientMock.create).toHaveBeenCalled();
     expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("reports recipeLaunched: false when every recipe terminal fails to spawn", async () => {
+    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 1, title: "t", url: "u" });
+    const results = {
+      spawned: [],
+      failed: [{ index: 0, error: "Panel limit reached" }],
+    };
+    setRecipe("recipe-1", async () => results);
+    const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
+
+    const result = (await def.run(
+      { issueNumber: 1, agentId: "claude", recipeId: "recipe-1" },
+      {} as never
+    )) as Record<string, unknown>;
+
+    expect(result.recipeLaunched).toBe(false);
+    expect(result.spawnedTerminalCount).toBe(0);
+    expect(result.failedTerminalCount).toBe(1);
+    expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, {
+      recipeName: "Recipe",
+      projectId: "p1",
+      worktreeId: "wt-new",
+    });
+  });
+
+  it("reports recipeLaunched: true with failure counts on partial spawn", async () => {
+    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 1, title: "t", url: "u" });
+    setRecipe("recipe-1", async () => ({
+      spawned: [{ index: 0, terminalId: "t-0" }],
+      failed: [{ index: 1, error: "PTY spawn failed" }],
+    }));
+    const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
+
+    const result = (await def.run(
+      { issueNumber: 1, agentId: "claude", recipeId: "recipe-1" },
+      {} as never
+    )) as Record<string, unknown>;
+
+    expect(result.recipeLaunched).toBe(true);
+    expect(result.spawnedTerminalCount).toBe(1);
+    expect(result.failedTerminalCount).toBe(1);
   });
 
   it("agent.launch throwing (not just returning null) becomes PARTIAL_SUCCESS", async () => {
