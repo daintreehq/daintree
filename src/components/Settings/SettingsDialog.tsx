@@ -62,6 +62,8 @@ import {
   type ProjectSettingsFormContext,
 } from "@/hooks/useProjectSettingsForm";
 import { useFlushOnHide } from "@/hooks/useFlushOnHide";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import {
   SettingsValidationProvider,
   SettingsValidationContext,
@@ -346,6 +348,7 @@ function SettingsDialogInner({
   ]);
 
   const projectForm = useProjectSettingsForm({ projectId: projectId ?? null, isOpen });
+  const showProjectLoading = useDohertyGate(projectForm.projectIsLoading);
   const projectLabel =
     projectForm.currentProject?.name ?? projectForm.currentProject?.id ?? "project";
 
@@ -796,18 +799,14 @@ function SettingsDialogInner({
                 {/* Project settings panels */}
                 {activeScope === "project" && projectId && (
                   <>
-                    {projectForm.projectIsLoading && (
-                      <div className="text-sm text-daintree-text/60 text-center py-8">
-                        Loading settings...
-                      </div>
-                    )}
                     {projectForm.projectError && (
-                      <div
-                        className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
-                        role="alert"
-                      >
-                        Failed to load settings: {projectForm.projectError}
-                      </div>
+                      <SettingsLoadErrorBanner
+                        message={`Failed to load settings: ${projectForm.projectError}`}
+                        onRetry={projectForm.refreshProjectSettings}
+                      />
+                    )}
+                    {showProjectLoading && (
+                      <p className="text-sm text-daintree-text/60 py-2">Loading settings…</p>
                     )}
                     {projectForm.projectAutoSaveError && (
                       <div
@@ -817,39 +816,37 @@ function SettingsDialogInner({
                         {projectForm.projectAutoSaveError}
                       </div>
                     )}
-                    {!projectForm.projectIsLoading &&
-                      !projectForm.projectError &&
-                      SETTINGS_REGISTRY.filter((e) => e.scope === "project").map((entry) => {
-                        const tabId = entry.id as SettingsTab;
-                        const isActive = activeTab === tabId;
-                        return (
-                          <div
-                            key={entry.id}
-                            role="tabpanel"
-                            id={`settings-panel-${entry.id}`}
-                            aria-labelledby={`settings-tab-${entry.id}`}
-                            tabIndex={0}
-                            className={isActive ? "" : "hidden"}
-                          >
-                            {visitedTabs.has(tabId) && (
-                              <Suspense fallback={null}>
-                                <ProjectFormTabContent
-                                  entry={entry as LazySettingsTabEntry}
-                                  projectForm={projectForm}
-                                  projectId={projectId}
-                                  isOpen={isOpen}
-                                  globalEnvVars={globalEnvVars}
-                                  globalScrollbackLines={scrollbackLines}
-                                  projectLabel={projectLabel}
-                                  isActive={isActive && !isSearching}
-                                  scrollToSectionId={scrollToSection}
-                                  onScrollToSectionHandled={handleScrollToSectionHandled}
-                                />
-                              </Suspense>
-                            )}
-                          </div>
-                        );
-                      })}
+                    {SETTINGS_REGISTRY.filter((e) => e.scope === "project").map((entry) => {
+                      const tabId = entry.id as SettingsTab;
+                      const isActive = activeTab === tabId;
+                      return (
+                        <div
+                          key={entry.id}
+                          role="tabpanel"
+                          id={`settings-panel-${entry.id}`}
+                          aria-labelledby={`settings-tab-${entry.id}`}
+                          tabIndex={0}
+                          className={isActive ? "" : "hidden"}
+                        >
+                          {visitedTabs.has(tabId) && (
+                            <Suspense fallback={null}>
+                              <ProjectFormTabContent
+                                entry={entry as LazySettingsTabEntry}
+                                projectForm={projectForm}
+                                projectId={projectId}
+                                isOpen={isOpen}
+                                globalEnvVars={globalEnvVars}
+                                globalScrollbackLines={scrollbackLines}
+                                projectLabel={projectLabel}
+                                isActive={isActive && !isSearching}
+                                scrollToSectionId={scrollToSection}
+                                onScrollToSectionHandled={handleScrollToSectionHandled}
+                              />
+                            </Suspense>
+                          )}
+                        </div>
+                      );
+                    })}
                   </>
                 )}
               </>
