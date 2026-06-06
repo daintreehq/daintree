@@ -26,6 +26,7 @@ import { existsSync } from "fs";
 import os from "os";
 import { isLinuxWaylandHybridGpu } from "../utils/gpuDetection.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { isDemoMode, isSmokeTest, smokeTestStart } from "./runtimeFlags.js";
 // Side-effect import: registers the macOS `daintree://` `open-url` listener on
 // the early-load path (#9559). environment.ts is imported first in main.ts, so
 // the listener is live before `app.whenReady()` resolves — see deepLinkUrlQueue.
@@ -608,9 +609,12 @@ export function getEarlyPathRefreshPromise(): Promise<void> | null {
   return earlyPathRefreshPromise;
 }
 
-export const isDemoMode = !app.isPackaged && process.argv.includes("--demo-mode");
-export const isSmokeTest = process.argv.includes("--smoke-test");
-export const smokeTestStart = isSmokeTest ? Date.now() : 0;
+// Re-exported from the lightweight runtimeFlags module so existing importers
+// keep working; consumers that don't need the rest of environment.ts (e.g.
+// ProjectViewManager) should import from ./runtimeFlags.js directly. Imported
+// as local bindings (not a bare `export ... from`) because environment.ts uses
+// isSmokeTest internally below.
+export { isDemoMode, isSmokeTest, smokeTestStart };
 
 if (isSmokeTest) {
   console.error("[SMOKE] Smoke test mode enabled");

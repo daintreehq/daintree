@@ -35,7 +35,7 @@ import {
   INITIAL_COLOR_SCHEME_ARG,
   INITIAL_PROJECT_ID_ARG,
 } from "./skeletonCss.js";
-import { isDemoMode } from "../setup/environment.js";
+import { isDemoMode } from "../setup/runtimeFlags.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { CHANNELS } from "../ipc/channels.js";
 import {
