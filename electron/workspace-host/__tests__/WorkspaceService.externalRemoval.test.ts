@@ -769,6 +769,39 @@ describe("WorkspaceService external worktree removal", () => {
       expect(recoveredEventCount()).toBe(0);
     });
 
+    it("goes dark when the watcher callback reports a runtime error", async () => {
+      service["startTopologyWatcher"]();
+      await vi.waitFor(() => expect(parcelWatcherCallbacks.length).toBeGreaterThanOrEqual(1));
+
+      // An established subscription firing an error callback is as unreliable
+      // as a failed subscribe — surface the dark state.
+      parcelWatcherCallbacks.at(-1)!(new Error("watcher backend error"), []);
+
+      expect(darkEventCount()).toBe(1);
+      expect(service.isTopologyWatcherDark()).toBe(true);
+    });
+
+    it("can re-dark after a stop/resume cycle clears the guard", async () => {
+      vi.useFakeTimers();
+      try {
+        service["handleTopologyWatcherDark"]();
+        expect(darkEventCount()).toBe(1);
+
+        // Stop clears the guard (emits recovered); a fresh valve expiry after
+        // resume must be able to signal dark again.
+        service["stopTopologyWatcher"]();
+        expect(service.isTopologyWatcherDark()).toBe(false);
+
+        service["topologyMarkPending"]("again-wt", service["topologyPendingDelete"]);
+        await vi.advanceTimersByTimeAsync(5001);
+
+        expect(darkEventCount()).toBe(2);
+        expect(service.isTopologyWatcherDark()).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("isTopologyWatcherDark() defaults to false", () => {
       expect(service.isTopologyWatcherDark()).toBe(false);
     });

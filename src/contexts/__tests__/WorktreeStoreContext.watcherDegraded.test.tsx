@@ -233,6 +233,34 @@ describe("WorktreeStoreProvider — topology-watcher-dark indicator (#9908)", ()
     expect(notifyMock).not.toHaveBeenCalled();
   });
 
+  it("arms the 30s escalation when a view mounts while already dark (hydration path)", async () => {
+    vi.useFakeTimers();
+    initialTopologyWatcherDark = true;
+    const store = await renderProvider();
+    expect(store.getState().topologyWatcherDark).toBe(true);
+    expect(notifyMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to an unscoped supersedeKey when no project is loaded", async () => {
+    vi.useFakeTimers();
+    setCurrentProject(null);
+    await renderProvider();
+
+    act(() => emit("topology-watcher-dark", { type: "topology-watcher-dark" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    const payload = notifyMock.mock.calls[0]![0] as { supersedeKey?: string };
+    expect(payload.supersedeKey).toBe("topology-watcher-dark");
+  });
+
   it("dispatches worktree.reconcileTopology when the escalation action fires", async () => {
     vi.useFakeTimers();
     await renderProvider();

@@ -1291,7 +1291,15 @@ export class WorkspaceService {
     const drain = () => this.drainTopologyEventBuffer();
 
     parcelWatcher
-      .subscribe(metadataDir, (_err, events) => {
+      .subscribe(metadataDir, (err, events) => {
+        if (err) {
+          // A runtime error on an established subscription means the watcher is
+          // no longer reliably reporting changes — same consequence as a
+          // subscribe-reject. Go dark; the periodic safety net reconciles.
+          if (generation === this.topologyWatcherGeneration) {
+            this.handleTopologyWatcherDark();
+          }
+        }
         if (Array.isArray(events)) {
           for (const ev of events) {
             const e = ev as { path?: unknown; type?: unknown } | null;
