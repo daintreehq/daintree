@@ -1618,7 +1618,10 @@ export class ProjectViewManager {
     const onStateChanged = (payload: { terminalId?: string; state: AgentState }) => {
       // No projectId on this event — the seed map owns the terminal→project
       // link. Skip terminals we haven't seeded yet (a spawn-result reseed will
-      // pick them up).
+      // pick them up). On terminal exit the state machine emits exited/completed
+      // (neither in ACTIVE_AGENT_STATES), so a killed terminal self-heals to
+      // unprotected here; a missed final event is corrected by the next
+      // spawn-result/host-crash reseed.
       if (!payload.terminalId) return;
       this.agentStateByTerminal.set(payload.terminalId, payload.state);
     };

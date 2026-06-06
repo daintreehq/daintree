@@ -153,6 +153,10 @@ export class HibernationService {
   start(): void {
     if (this.checkInterval) return;
 
+    // Re-acquire the PtyClient on (re)start — stop() clears it, so a Settings
+    // toggle off→on would otherwise leave checkAndHibernate() guarded-out forever.
+    this.ptyClient ??= getPtyClient();
+
     const config = this.getConfig();
     if (!config.enabled) {
       logInfo("auto-hibernation-disabled");

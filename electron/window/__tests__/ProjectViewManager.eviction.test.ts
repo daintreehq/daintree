@@ -153,9 +153,15 @@ vi.mock("../../utils/logger.js", () => ({
 const mockGetAllTerminals = vi.fn<
   () => Promise<Array<{ id: string; projectId?: string; agentState?: string }>>
 >(async () => []);
+// Capture the latest handler per event so reseed tests can invoke them
+// (spawn-result / host-crash). initAgentStateCache overwrites per call, so the
+// map holds the current manager's handlers.
+const ptyClientHandlers = new Map<string, (...args: unknown[]) => void>();
 const mockPtyClient = {
   getAllTerminalsAsync: mockGetAllTerminals,
-  on: vi.fn(),
+  on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+    ptyClientHandlers.set(event, handler);
+  }),
   off: vi.fn(),
 };
 
@@ -356,6 +362,60 @@ describe("ProjectViewManager — eviction safety", () => {
     expect(remaining).not.toContain("proj-b");
     expect(wcA.close).not.toHaveBeenCalled();
     expect(wcB?.close).toHaveBeenCalled();
+  });
+
+  it("host-crash reseed clears a stale active-agent entry (#10054)", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 2,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+    await managerWithLimit.switchTo("proj-b", "/path/b");
+
+    // Seed proj-a as working, then simulate a host crash that comes back with an
+    // empty registry — the reseed must drop the stale "working" entry so proj-a
+    // is no longer protected.
+    mockGetAllTerminals.mockResolvedValue([
+      { id: "t-a", projectId: "proj-a", agentState: "working" },
+    ]);
+    await managerWithLimit.initAgentStateCache(mockPtyClient as never);
+
+    mockGetAllTerminals.mockResolvedValue([]);
+    await ptyClientHandlers.get("host-crash")?.();
+
+    await managerWithLimit.switchTo("proj-c", "/path/c");
+
+    // proj-a is the LRU and no longer protected, so it is evicted.
+    const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+    expect(remaining).not.toContain("proj-a");
+    expect(wcA.close).toHaveBeenCalled();
+  });
+
+  it("re-invoking initAgentStateCache tears down prior listeners (#10054)", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 2,
+    });
+
+    await managerWithLimit.initAgentStateCache(mockPtyClient as never);
+    mockPtyClient.off.mockClear();
+    await managerWithLimit.initAgentStateCache(mockPtyClient as never);
+
+    // The second call must unsubscribe the first call's PtyClient listeners
+    // before re-subscribing, so it doesn't leak or double-fire.
+    expect(mockPtyClient.off).toHaveBeenCalledWith("spawn-result", expect.any(Function));
+    expect(mockPtyClient.off).toHaveBeenCalledWith("host-crash", expect.any(Function));
   });
 
   it("falls back to evicting an active-agent view when all candidates are protected", async () => {

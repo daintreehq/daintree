@@ -22,6 +22,7 @@ const ptyManagerMock = vi.hoisted(() => ({
   off: vi.fn(),
 }));
 
+vi.mock("../../window/serviceRefs.js", () => ({ getPtyClient: () => ptyManagerMock }));
 vi.mock("../../store.js", () => ({ store: storeMock }));
 vi.mock("../ProjectStore.js", () => ({ projectStore: projectStoreMock }));
 
@@ -140,6 +141,30 @@ describe("IdleTerminalNotificationService", () => {
       service.updateConfig({ enabled: true });
       service.updateConfig({ enabled: false });
       expect((service as unknown as { checkInterval: unknown }).checkInterval).toBeNull();
+    });
+
+    it("re-acquires PtyClient after a toggle off→on (#10054)", async () => {
+      // stop() clears the injected PtyClient; start() must re-acquire it via
+      // getPtyClient() or checkAndNotify() stays guarded-out forever.
+      storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 60 };
+      projectStoreMock.getCurrentProjectId.mockReturnValue("active");
+      projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1")]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([]);
+
+      const service = makeService();
+      service.start();
+      service.updateConfig({ enabled: false }); // → stop(), clears ptyClient
+      service.updateConfig({ enabled: true }); // → start(), must re-acquire
+
+      // Bypass the startup/wake quiet windows so the check body runs.
+      (service as unknown as { quietUntil: number | null }).quietUntil = null;
+      (service as unknown as { wakeQuietUntil: number | null }).wakeQuietUntil = null;
+
+      ptyManagerMock.getAllTerminalsAsync.mockClear();
+      await runCheck(service);
+
+      expect(ptyManagerMock.getAllTerminalsAsync).toHaveBeenCalled();
+      service.stop();
     });
   });
 

@@ -119,6 +119,11 @@ export class IdleTerminalNotificationService {
 
   start(): void {
     if (this.checkInterval) return;
+
+    // Re-acquire the PtyClient on (re)start — stop() clears it, so a Settings
+    // toggle off→on would otherwise leave checkAndNotify() guarded-out forever.
+    this.ptyClient ??= getPtyClient();
+
     const config = this.getConfig();
     if (!config.enabled) {
       logInfo("idle-terminal-notify-disabled");

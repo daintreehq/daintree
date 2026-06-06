@@ -28,6 +28,10 @@ const ptyManagerMock = vi.hoisted(() => ({
   off: vi.fn(),
 }));
 
+vi.mock("../../window/serviceRefs.js", () => ({
+  getPtyClient: () => ptyManagerMock,
+}));
+
 vi.mock("../../store.js", () => ({
   store: storeMock,
 }));
@@ -151,6 +155,25 @@ describe("HibernationService", () => {
       enabled: true,
       inactiveThresholdHours: 72,
     });
+  });
+
+  it("re-acquires PtyClient after a Settings toggle off→on (#10054)", async () => {
+    // stop() clears the injected PtyClient; start() must re-acquire it via
+    // getPtyClient() or checkAndHibernate() stays guarded-out forever.
+    (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+    ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([]);
+    projectStoreMock.getAllProjects.mockReturnValue([]);
+
+    const service = makeService();
+    service.start();
+    service.updateConfig({ enabled: false }); // → stop(), clears ptyClient
+    service.updateConfig({ enabled: true }); // → start(), must re-acquire
+
+    ptyManagerMock.getAllTerminalsAsync.mockClear();
+    await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
+
+    expect(ptyManagerMock.getAllTerminalsAsync).toHaveBeenCalled();
+    service.stop();
   });
 
   it("does not call clearProjectState during hibernation", async () => {
