@@ -35,6 +35,7 @@ import { useFindInPage } from "@/hooks/useFindInPage";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { logError } from "@/utils/logger";
 import { buildBrowserPartition } from "@shared/utils/partitionUtils";
+import { notify } from "@/lib/notify";
 
 export interface BrowserPaneProps extends BasePanelProps {
   initialUrl: string;
@@ -197,6 +198,7 @@ export function BrowserPane({
   const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isSlowLoad, setIsSlowLoad] = useState(false);
   const slowLoadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const screenshotInFlightRef = useRef(false);
 
   const hasBeenVisible = useHasBeenVisible(id, location);
 
@@ -514,7 +516,7 @@ export function BrowserPane({
         // Webview detached
       }
     }
-    setLoadError({ kind: "cancelled", message: "Load cancelled." });
+    setLoadError({ kind: "cancelled", message: "Load cancelled" });
   }, []);
 
   const handleRetryFromError = useCallback(() => {
@@ -558,12 +560,21 @@ export function BrowserPane({
       return;
     }
     if (!url || url === "about:blank") return;
+    if (screenshotInFlightRef.current) return;
+    screenshotInFlightRef.current = true;
     try {
       const image = await webview.capturePage();
       const pngData = new Uint8Array(image.toPNG());
       await window.electron.clipboard.writeImage(pngData);
-    } catch (err) {
-      logError("[BrowserPane] Screenshot capture failed", err);
+    } catch {
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+      notify({
+        type: "error",
+        title: "Screenshot failed",
+        message: "Couldn't copy the screenshot to clipboard",
+      });
+    } finally {
+      screenshotInFlightRef.current = false;
     }
   }, [isWebviewReady]);
 
@@ -840,14 +851,14 @@ export function BrowserPane({
                 <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
                 <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
                   {loadError.kind === "timeout"
-                    ? "Page Load Timed Out"
+                    ? "Page load timed out"
                     : loadError.kind === "cancelled"
-                      ? "Load Cancelled"
+                      ? "Load cancelled"
                       : loadError.kind === "cert"
-                        ? "Certificate Error"
+                        ? "Certificate error"
                         : loadError.kind === "network"
-                          ? "Connection Failed"
-                          : "Unable to Display Page"}
+                          ? "Connection failed"
+                          : "Unable to display page"}
                 </h3>
                 <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">
                   {loadError.message}
