@@ -73,7 +73,7 @@ describe("copyTree handlers", () => {
 
     await expect(handler(mockEvent, null as never)).resolves.toEqual(
       expect.objectContaining({
-        error: expect.stringContaining("Invalid payload"),
+        error: expect.stringMatching(/^Invalid payload$/),
       })
     );
   });
@@ -83,7 +83,7 @@ describe("copyTree handlers", () => {
 
     await expect(handler(mockEvent, null as never)).resolves.toEqual(
       expect.objectContaining({
-        error: expect.stringContaining("Invalid payload"),
+        error: expect.stringMatching(/^Invalid payload$/),
       })
     );
   });
@@ -93,7 +93,7 @@ describe("copyTree handlers", () => {
 
     await expect(handler(mockEvent, null as never)).resolves.toEqual(
       expect.objectContaining({
-        error: expect.stringContaining("Invalid payload"),
+        error: expect.stringMatching(/^Invalid payload$/),
       })
     );
   });
@@ -103,7 +103,7 @@ describe("copyTree handlers", () => {
 
     await expect(handler(mockEvent, null as never)).resolves.toEqual(
       expect.objectContaining({
-        error: expect.stringContaining("Invalid payload"),
+        error: expect.stringMatching(/^Invalid payload$/),
       })
     );
   });
@@ -121,6 +121,23 @@ describe("copyTree handlers", () => {
         error: expect.not.stringContaining("Invalid payload"),
       })
     );
+  });
+
+  it("throws a sanitized ValidationError without Zod detail for invalid file tree requests", async () => {
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GET_FILE_TREE);
+
+    // copyTree channels share the "fileOps" rate-limit bucket; earlier handler
+    // calls in this suite exhaust the window. Advance past it so the rate
+    // limiter doesn't preempt the validation path under test.
+    vi.useFakeTimers();
+    try {
+      vi.advanceTimersByTime(11_000);
+      await expect(handler(mockEvent, null as never)).rejects.toThrow(
+        `IPC validation failed: ${CHANNELS.COPYTREE_GET_FILE_TREE}`
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

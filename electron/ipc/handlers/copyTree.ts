@@ -6,6 +6,7 @@ import { chmod, mkdir, writeFile } from "fs/promises";
 import { pathToFileURL } from "url";
 import { z } from "zod";
 import { CHANNELS } from "../channels.js";
+import { ValidationError } from "../validationError.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   broadcastToRenderer,
@@ -230,7 +231,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       return {
         content: "",
         fileCount: 0,
-        error: `Invalid payload: ${parseResult.error.message}`,
+        error: "Invalid payload",
       };
     }
 
@@ -293,7 +294,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       return {
         content: "",
         fileCount: 0,
-        error: `Invalid payload: ${parseResult.error.message}`,
+        error: "Invalid payload",
       };
     }
 
@@ -443,7 +444,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       return {
         content: "",
         fileCount: 0,
-        error: `Invalid payload: ${parseResult.error.message}`,
+        error: "Invalid payload",
       };
     }
 
@@ -589,7 +590,8 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     checkRateLimit(CHANNELS.COPYTREE_GET_FILE_TREE, 5, 10_000);
     const parseResult = CopyTreeGetFileTreePayloadSchema.safeParse(payload);
     if (!parseResult.success) {
-      throw new Error(`Invalid file tree request: ${parseResult.error.message}`);
+      console.error("Invalid CopyTree file tree request:", z.prettifyError(parseResult.error));
+      throw new ValidationError(CHANNELS.COPYTREE_GET_FILE_TREE);
     }
 
     const validated = parseResult.data;
@@ -637,7 +639,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         includedFiles: 0,
         includedSize: 0,
         excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
-        error: `Invalid payload: ${parseResult.error.message}`,
+        error: "Invalid payload",
       };
     }
 
