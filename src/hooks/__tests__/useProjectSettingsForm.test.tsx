@@ -347,6 +347,20 @@ describe("useProjectSettingsForm", () => {
     expect(typeof result.current.refreshProjectSettings).toBe("function");
   });
 
+  it("stays uninitialized while loading with no settings yet (backs the Doherty loader)", async () => {
+    mockIsLoading.value = true;
+    mockSettings.value = null;
+    const { result, rerender } = renderHook(
+      ({ isOpen, projectId }: FormProps) => useProjectSettingsForm({ projectId, isOpen }),
+      { initialProps: { isOpen: false, tick: 0, projectId: "proj-1" } }
+    );
+    rerender({ isOpen: true, tick: 1, projectId: "proj-1" });
+
+    expect(result.current.projectIsLoading).toBe(true);
+    expect(result.current.projectIsInitialized).toBe(false);
+    expect(mockSaveSettings).not.toHaveBeenCalled();
+  });
+
   it("exposes refreshProjectSettings that delegates to useProjectSettings.refresh", async () => {
     const { result } = renderOpenForm("proj-1");
     await waitFor(() => {

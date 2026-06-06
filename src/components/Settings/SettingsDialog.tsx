@@ -806,7 +806,9 @@ function SettingsDialogInner({
                       />
                     )}
                     {showProjectLoading && (
-                      <p className="text-sm text-daintree-text/60 py-2">Loading settings…</p>
+                      <p className="text-sm text-daintree-text/60 py-2" aria-live="polite">
+                        Loading settings…
+                      </p>
                     )}
                     {projectForm.projectAutoSaveError && (
                       <div
