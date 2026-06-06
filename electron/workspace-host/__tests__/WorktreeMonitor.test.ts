@@ -1987,6 +1987,7 @@ describe("WorktreeMonitor", () => {
         path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
         isWslPath: true,
         wslDistro: "Ubuntu",
+        wslPosixPath: "/home/user/repo",
         wslGitEligible: true,
         wslGitOptIn: false,
       };
@@ -2012,6 +2013,7 @@ describe("WorktreeMonitor", () => {
           path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
           isWslPath: true,
           wslDistro: "Ubuntu",
+          wslPosixPath: "/home/user/repo",
           wslGitEligible: true,
           wslGitOptIn: true,
         };
@@ -2044,6 +2046,7 @@ describe("WorktreeMonitor", () => {
           path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
           isWslPath: true,
           wslDistro: "Ubuntu",
+          wslPosixPath: "/home/user/repo",
           wslGitEligible: true,
           wslGitOptIn: false,
         };

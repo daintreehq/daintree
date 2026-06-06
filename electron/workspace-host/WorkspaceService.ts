@@ -737,6 +737,7 @@ export class WorkspaceService {
       ...wt,
       isWslPath: true,
       wslDistro: detected.distro,
+      wslPosixPath: detected.posixPath,
       wslGitEligible: eligible,
       wslGitOptIn: Boolean(persisted?.enabled),
       wslGitDismissed: Boolean(persisted?.dismissed),

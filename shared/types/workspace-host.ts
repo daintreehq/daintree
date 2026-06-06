@@ -236,6 +236,9 @@ export interface WorktreeSnapshot {
   /** User dismissed the WSL git suggestion banner without opting in. */
   wslGitDismissed?: boolean;
 
+  /** POSIX path inside the WSL distro (mirrors `Worktree.wslPosixPath`). */
+  wslPosixPath?: string;
+
   /** Current in-progress git operation (REBASING, MERGING, CHERRY_PICKING, REVERTING). Absent when no blocking operation is in progress. */
   repoState?: RepoState;
 

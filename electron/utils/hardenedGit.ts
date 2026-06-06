@@ -1,6 +1,7 @@
 import path from "path";
 import { simpleGit } from "simple-git";
 import type { SimpleGit, SimpleGitProgressEvent } from "simple-git";
+import { detectWslPath } from "./wsl.js";
 
 const SAFE_GIT_CONFIG = [
   "core.fsmonitor=false",
@@ -209,8 +210,8 @@ export function createWslHardenedGit(
   if (typeof posixPath !== "string" || !posixPath.startsWith("/")) {
     throw new Error("WSL posix path must start with /");
   }
-  if (typeof uncPath !== "string" || !uncPath.startsWith("\\\\wsl")) {
-    throw new Error("WSL UNC path must start with \\\\wsl");
+  if (typeof uncPath !== "string" || detectWslPath(uncPath) === null) {
+    throw new Error("WSL UNC path is not a valid WSL UNC");
   }
 
   return simpleGit({

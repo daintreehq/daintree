@@ -1544,6 +1544,7 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.resourceConnectCommand === b.resourceConnectCommand &&
     a.isWslPath === b.isWslPath &&
     a.wslDistro === b.wslDistro &&
+    a.wslPosixPath === b.wslPosixPath &&
     a.wslGitEligible === b.wslGitEligible &&
     a.wslGitOptIn === b.wslGitOptIn &&
     a.wslGitDismissed === b.wslGitDismissed &&

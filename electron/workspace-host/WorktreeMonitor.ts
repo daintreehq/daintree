@@ -406,14 +406,10 @@ export class WorktreeMonitor {
 
     this._isWslPath = Boolean(worktree.isWslPath);
     this._wslDistro = worktree.wslDistro;
+    this._wslPosixPath = worktree.wslPosixPath;
     this._wslGitEligible = Boolean(worktree.wslGitEligible);
     this._wslGitOptIn = Boolean(worktree.wslGitOptIn);
     this._wslGitDismissed = Boolean(worktree.wslGitDismissed);
-    if (this._isWslPath && this._wslDistro) {
-      const m = /^\\\\wsl(?:\$|\.localhost)\\[^\\]+(.*)/i.exec(worktree.path);
-      const remainder = m ? (m[1] ?? "") : "";
-      this._wslPosixPath = remainder.replace(/\\/g, "/") || "/";
-    }
   }
 
   /**
@@ -1141,6 +1137,7 @@ export class WorktreeMonitor {
       isGitHubRemote: this._isGitHubRemote || undefined,
       isWslPath: this._isWslPath || undefined,
       wslDistro: this._wslDistro,
+      wslPosixPath: this._wslPosixPath,
       wslGitEligible: this._wslGitEligible || undefined,
       wslGitOptIn: this._wslGitOptIn || undefined,
       wslGitDismissed: this._wslGitDismissed || undefined,
