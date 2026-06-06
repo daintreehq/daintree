@@ -46,10 +46,20 @@ describe("getStreakColor — tier boundaries", () => {
     expect(mod.getStreakColor(239)).toBe("#C026D3");
   });
 
-  it("returns accent CSS var for days 240+", async () => {
+  it("returns a distinct celebratory hex for days 240+ (issue #9820)", async () => {
     const mod = await import("../StreakFlame");
-    expect(mod.getStreakColor(240)).toBe("var(--color-accent-primary)");
-    expect(mod.getStreakColor(10000)).toBe("var(--color-accent-primary)");
+    // The 240+ tier must read at full color fidelity in PulseSummary.Stat —
+    // not borrow --color-accent-primary, which the release chip in the same
+    // region already spends. A plain hex keeps it consistent with the other
+    // six tiers and avoids a second accent in one focus region.
+    const top240 = mod.getStreakColor(240);
+    const top10k = mod.getStreakColor(10000);
+    expect(top240).toMatch(/^#[0-9A-Fa-f]{6}$/);
+    expect(top10k).toBe(top240);
+    expect(top240).not.toContain("var(");
+    expect(top240).not.toBe("var(--color-accent-primary)");
+    expect(top240).not.toBe(mod.getStreakColor(120));
+    expect(top240).not.toBe(mod.getStreakColor(239));
   });
 
   it("returns amber for 0 days (fallback)", async () => {
