@@ -230,6 +230,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             message:
               "The full crash report was copied to your clipboard — paste it into the issue body.",
             transient: true,
+            priority: "high",
             context: { eventKind: "uiFeedback" },
           });
         } else {
@@ -239,6 +240,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             message:
               "Couldn't copy the full report. Quote the Error ID shown above when filing the issue.",
             inboxMessage: "Couldn't copy crash report to clipboard.",
+            priority: "high",
             context: { eventKind: "uiFeedback" },
           });
         }

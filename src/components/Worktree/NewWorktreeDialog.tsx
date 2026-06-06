@@ -612,6 +612,7 @@ export function NewWorktreeDialog({
               title: "Issue assigned",
               message: `#${snapIssue.number} assigned to you`,
               correlationId: worktreeId,
+              priority: "high",
               context: { eventKind: "uiFeedback" },
               action: {
                 label: "Undo",

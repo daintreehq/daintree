@@ -453,6 +453,7 @@ function RowOptionsMenu({
             message:
               "The full notification report was copied to your clipboard — paste it into the issue body.",
             transient: true,
+            priority: "high",
             context: { eventKind: "uiFeedback" },
           });
         } else {
@@ -462,6 +463,7 @@ function RowOptionsMenu({
             message:
               "Couldn't copy the full report. Quote the correlation ID when filing the issue.",
             inboxMessage: "Couldn't copy notification report to clipboard.",
+            priority: "high",
             context: { eventKind: "uiFeedback" },
           });
         }

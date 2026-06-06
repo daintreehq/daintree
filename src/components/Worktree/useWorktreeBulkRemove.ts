@@ -126,6 +126,7 @@ export function useWorktreeBulkRemove({
           type: "info",
           title: "Nothing to remove",
           message: "The main worktree can't be removed from the overview.",
+          priority: "high",
           context: { eventKind: "uiFeedback" },
         });
         clearSelection();
@@ -226,6 +227,7 @@ export function useWorktreeBulkRemove({
           title: successTitle,
           message: successMessage,
           transient: true,
+          priority: "high",
           context: { eventKind: "uiFeedback" },
         });
         announce(successTitle);
