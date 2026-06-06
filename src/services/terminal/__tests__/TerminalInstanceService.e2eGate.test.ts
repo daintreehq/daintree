@@ -134,4 +134,17 @@ describe("TerminalInstanceService E2E terminal-bridge gate", () => {
       expect(typeof windowProp(name), name).toBe("function");
     }
   });
+
+  it("leaves no __daintree*Terminal* bridge on window in production (guards bridges added outside the gate)", async () => {
+    // Scoped to the terminal-bridge naming convention rather than every
+    // __daintree* key: unrelated modules in the import graph attach their own
+    // (separately gated) E2E globals to the shared jsdom window, so a blanket
+    // scan would false-positive on those. Every bridge in this module's block
+    // contains "Terminal", so this still catches a new one added outside the gate.
+    await importServiceWithMode(undefined);
+    const leaked = Object.getOwnPropertyNames(window).filter((key) =>
+      /^__daintree.*Terminal/.test(key)
+    );
+    expect(leaked).toEqual([]);
+  });
 });
