@@ -80,7 +80,7 @@ import {
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
 import { isPtyPanel } from "@shared/types/panel";
 import { notify } from "@/lib/notify";
-import type { CliAvailability, AgentSettings, AgentState } from "@shared/types";
+import type { CliAvailability, AgentSettings, AgentState, RepositoryStats } from "@shared/types";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
@@ -245,6 +245,16 @@ function OverflowMenu({
   shortcutById,
 }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
+  // Snapshot of the GitHub stats taken when the menu opens. The stats live in
+  // GitHubStatsToolbarButton's hook and are exposed through its imperative
+  // handle, so they can't be read during render (refs aren't reactive — the
+  // menu wouldn't re-render on updates anyway). Reading in the open handler
+  // captures them at the only moment they're about to become visible.
+  const [ghStats, setGhStats] = useState<RepositoryStats | null>(null);
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (nextOpen) setGhStats(githubStatsRef.current?.stats ?? null);
+    setOpen(nextOpen);
+  };
   const isEmpty = overflowIds.length === 0;
 
   // Keep the controlled `open` state in sync when the menu empties: Radix
@@ -284,7 +294,7 @@ function OverflowMenu({
   };
 
   return (
-    <DropdownMenu open={isEmpty ? false : open} onOpenChange={setOpen}>
+    <DropdownMenu open={isEmpty ? false : open} onOpenChange={handleOpenChange}>
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
@@ -328,7 +338,6 @@ function OverflowMenu({
       >
         {overflowIds.flatMap((id, idx) => {
           if (id === "github-stats") {
-            const ghStats = githubStatsRef.current?.stats;
             const isLast = idx === overflowIds.length - 1;
             return [
               <DropdownMenuGroup key="gh-group">
