@@ -527,19 +527,6 @@ describe("HttpLifecycle", () => {
   });
 
   describe("buildSessionServerDeps — appendAuditRecord resultMeta for rate_limited (#10014)", () => {
-    function captureAppendInput(sessionId: string) {
-      const deps = fakeDeps();
-      const lc = new HttpLifecycle(deps);
-      const deps_ = (
-        lc as unknown as {
-          buildSessionServerDeps: (sessionId: string) => {
-            appendAuditRecord: (input: Record<string, unknown>) => void;
-          };
-        }
-      ).buildSessionServerDeps(sessionId);
-      return { deps, deps_, appendInput: (input: Record<string, unknown>) => void 0 };
-    }
-
     it("forwards resultMeta.retryAfter on rate_limited outcomes and omits resultSummary", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
