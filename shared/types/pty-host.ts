@@ -537,7 +537,8 @@ export interface TerminalReliabilityMetricPayload {
     | "wake-latency"
     | "pending-byte-cap-hit"
     | "pending-bytes-gauge"
-    | "throughput-rate";
+    | "throughput-rate"
+    | "tier-transition";
   timestamp: number;
   durationMs?: number;
   bufferUtilization?: number;
@@ -553,6 +554,14 @@ export interface TerminalReliabilityMetricPayload {
     bytesPerSecond: number;
     avgPacketSizeBytes: number;
   }>;
+  /** Previous activity tier — only set when metricType is "tier-transition". */
+  tierTransitionFrom?: PtyHostActivityTier;
+  /** New activity tier — only set when metricType is "tier-transition". */
+  tierTransitionTo?: PtyHostActivityTier;
+  /** Call-site label identifying which path drove the transition. */
+  tierTransitionReason?: string;
+  /** Snapshot of pause-coordinator holds at transition time (sorted, possibly empty). */
+  tierTransitionHeldTokens?: string[];
 }
 
 /**

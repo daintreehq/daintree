@@ -253,6 +253,111 @@ describe("BackpressureManager adversarial", () => {
     );
   });
 
+  it("emits a tier-transition metric on a real tier change carrying from/to/reason/heldTokens", () => {
+    const backpressure = manager();
+
+    backpressure.setActivityTier("term-1", "background", "set-activity-tier");
+
+    expect(sendEvent).toHaveBeenCalledTimes(1);
+    expect(sendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "terminal-reliability-metric",
+        payload: expect.objectContaining({
+          terminalId: "term-1",
+          metricType: "tier-transition",
+          tierTransitionFrom: "active",
+          tierTransitionTo: "background",
+          tierTransitionReason: "set-activity-tier",
+          tierTransitionHeldTokens: [],
+        }),
+      })
+    );
+    expect(backpressure.getActivityTier("term-1")).toBe("background");
+  });
+
+  it("suppresses the tier-transition metric when the tier does not change (from === to)", () => {
+    const backpressure = manager();
+
+    // First write active→background emits once.
+    backpressure.setActivityTier("term-1", "background", "set-activity-tier");
+    sendEvent.mockReset();
+
+    // Redundant write at the same tier must not emit (recomputeActivityTiers hot loop).
+    backpressure.setActivityTier("term-1", "background", "recompute-activity-tiers");
+
+    expect(sendEvent).not.toHaveBeenCalled();
+    expect(backpressure.getActivityTier("term-1")).toBe("background");
+  });
+
+  it("tracks the from-tier across a background→active round-trip", () => {
+    const backpressure = manager();
+
+    backpressure.setActivityTier("term-1", "background", "r1");
+    sendEvent.mockReset();
+
+    backpressure.setActivityTier("term-1", "active", "r2");
+
+    expect(sendEvent).toHaveBeenCalledTimes(1);
+    expect(sendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "terminal-reliability-metric",
+        payload: expect.objectContaining({
+          metricType: "tier-transition",
+          tierTransitionFrom: "background",
+          tierTransitionTo: "active",
+          tierTransitionReason: "r2",
+        }),
+      })
+    );
+  });
+
+  it("applies the tier write even when metric emission throws", () => {
+    sendEvent.mockImplementation(() => {
+      throw new Error("port detached");
+    });
+    const backpressure = manager();
+
+    expect(() =>
+      backpressure.setActivityTier("term-1", "background", "set-activity-tier")
+    ).not.toThrow();
+    expect(backpressure.getActivityTier("term-1")).toBe("background");
+  });
+
+  it("mutates the tier map but emits nothing when metrics are disabled", () => {
+    const backpressure = new BackpressureManager({
+      getTerminal: vi.fn(),
+      getPauseCoordinator: () => undefined,
+      sendEvent,
+      metricsEnabled: () => false,
+    });
+
+    backpressure.setActivityTier("term-1", "background", "set-activity-tier");
+
+    expect(sendEvent).not.toHaveBeenCalled();
+    expect(backpressure.getActivityTier("term-1")).toBe("background");
+  });
+
+  it("snapshots and sorts the coordinator's held tokens into the tier-transition metric", () => {
+    const coordinator = {
+      ...createCoordinator(),
+      heldTokens: new Set(["system-sleep", "resource-governor"]),
+    };
+    coordinators.set("term-1", coordinator as unknown as CoordinatorLike);
+
+    const backpressure = manager();
+    backpressure.setActivityTier("term-1", "background", "recompute-activity-tiers");
+
+    expect(sendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "terminal-reliability-metric",
+        payload: expect.objectContaining({
+          metricType: "tier-transition",
+          tierTransitionHeldTokens: ["resource-governor", "system-sleep"],
+        }),
+      })
+    );
+  });
+
   it.todo(
     "safety-timeout force-resume behavior is orchestrated in electron/pty-host.ts rather than BackpressureManager"
   );
