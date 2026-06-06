@@ -1227,10 +1227,6 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { rootPath: string; branchName: string }];
     result: string;
   };
-  "worktree:get-issue-association": {
-    args: [worktreeId: string];
-    result: import("./worktree.js").IssueAssociation | null;
-  };
   "worktree:get-recent-branches": {
     args: [payload: { rootPath: string }];
     result: string[];

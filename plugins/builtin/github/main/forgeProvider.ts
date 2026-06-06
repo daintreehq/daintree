@@ -527,14 +527,73 @@ function buildNumberBatchInflightKey(repo: RepoRef, numbers: number[]): string {
   return `${repo.owner}/${repo.repo}:${[...numbers].sort((a, b) => a - b).join(",")}`;
 }
 
+/**
+ * Text-search path for `listIssues` — routes through GitHub's search API
+ * instead of the repository issues connection. Results are typed-input
+ * ephemera: they use a `search:`-prefixed in-flight dedupe key and are never
+ * written to `forgeIssueListCache`, so a search response can't be served
+ * later as the unfiltered background-poll list. `runQuery`'s short-TTL
+ * response cache still coalesces identical search terms.
+ */
+async function searchIssuesImpl(
+  repo: RepoRef,
+  search: string,
+  opts: ListOptions
+): Promise<Page<Issue>> {
+  const state = listCacheState(opts);
+  const bypass = opts.bypassCache === true;
+  const limit = opts.perPage ?? 20;
+  // Free text is appended unquoted — GitHub search tokenizes it as keywords,
+  // matching what its own search box does (see findPRByBranchImpl, which only
+  // quotes because branch refs must not parse as separate operators). GitHub
+  // caps search queries at 256 chars, so the term is truncated to the budget
+  // left after the qualifiers rather than letting the whole query be rejected.
+  const stateQualifier = state === "all" ? "" : ` state:${state}`;
+  const sortQualifier = opts.sort === "updated" ? "sort:updated-desc" : "sort:created-desc";
+  const prefix = `repo:${repo.owner}/${repo.repo} is:issue${stateQualifier} ${sortQualifier} `;
+  const available = 256 - prefix.length;
+  const searchQuery = `${prefix}${available > 0 ? search.slice(0, available) : ""}`.trim();
+  const dedupeKey = `search:${searchQuery}:${opts.cursor ?? ""}:${limit}`;
+
+  return dedupe(listIssuesInflight, dedupeKey, bypass, async () => {
+    const response = await runQuery(
+      SEARCH_QUERY,
+      {
+        searchQuery,
+        type: "ISSUE",
+        cursor: opts.cursor ?? null,
+        limit,
+      },
+      "SEARCH_QUERY",
+      bypass
+    );
+
+    const result = response?.search as
+      | {
+          nodes?: unknown[];
+          pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+          issueCount?: number;
+        }
+      | undefined;
+    const nodes = (result?.nodes ?? []) as Array<Record<string, unknown>>;
+    return {
+      items: nodes.filter(Boolean).map(toForgeIssue),
+      nextCursor: result?.pageInfo?.endCursor ?? null,
+      hasMore: result?.pageInfo?.hasNextPage ?? false,
+      ...(typeof result?.issueCount === "number" ? { totalCount: result.issueCount } : {}),
+    };
+  });
+}
+
 async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<Page<Issue>> {
+  const searchTerm = opts.search?.trim();
+  if (searchTerm) return searchIssuesImpl(repo, searchTerm, opts);
+
   const state = listCacheState(opts);
   const sortOrder = opts.sort === "updated" ? "updated" : "created";
   const bypass = opts.bypassCache === true;
-  // The GitHub forge list path issues the unfiltered repository query and
-  // ignores `opts.search` (advisory — see ListOptions). Keep `search` out of
-  // the cache key so it reflects what the query actually varies on; wiring
-  // search would mean routing to SEARCH_QUERY and re-adding it here together.
+  // The unfiltered list path keeps `search` out of the cache key — search
+  // routes through `searchIssuesImpl` above and never touches this cache.
   const cacheKey = buildListCacheKey(
     "issue",
     repo.owner,
@@ -599,8 +658,9 @@ async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Page<PR>> 
   const state = listCacheState(opts);
   const sortOrder = opts.sort === "updated" ? "updated" : "created";
   const bypass = opts.bypassCache === true;
-  // See listIssuesImpl: the forge list query ignores `opts.search`, so it's
-  // kept out of the cache key.
+  // The PR list query ignores `opts.search` (advisory — see ListOptions), so
+  // it's kept out of the cache key. Wiring it would mean routing to
+  // SEARCH_QUERY like `searchIssuesImpl` does for issues.
   const cacheKey = buildListCacheKey(
     "pr",
     repo.owner,

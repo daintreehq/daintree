@@ -30,7 +30,7 @@ export function registerWorktreePullRequestHandlers(deps: HandlerDependencies): 
       throw new Error("Invalid payload for worktree:attach-issue");
     }
 
-    const { worktreeId, issueNumber, issueTitle, issueState, issueUrl } = payload;
+    const { worktreeId, issueNumber, issueTitle } = payload;
 
     if (typeof worktreeId !== "string" || !worktreeId.trim()) {
       throw new Error("Invalid worktreeId: must be a non-empty string");
@@ -41,18 +41,10 @@ export function registerWorktreePullRequestHandlers(deps: HandlerDependencies): 
     if (typeof issueTitle !== "string") {
       throw new Error("Invalid issueTitle: must be a string");
     }
-    if (issueState !== "OPEN" && issueState !== "CLOSED") {
-      throw new Error("Invalid issueState: must be 'OPEN' or 'CLOSED'");
-    }
-    if (typeof issueUrl !== "string" || !issueUrl.trim()) {
-      throw new Error("Invalid issueUrl: must be a non-empty string");
-    }
 
     const association: IssueAssociation = {
       issueNumber,
       issueTitle,
-      issueState,
-      issueUrl,
     };
 
     const currentMap = store.get("worktreeIssueMap") ?? {};
@@ -75,17 +67,6 @@ export function registerWorktreePullRequestHandlers(deps: HandlerDependencies): 
     store.set("worktreeIssueMap", rest);
   };
 
-  const handleWorktreeGetIssueAssociation = async (
-    worktreeId: string
-  ): Promise<IssueAssociation | null> => {
-    if (typeof worktreeId !== "string" || !worktreeId.trim()) {
-      throw new Error("Invalid worktreeId: must be a non-empty string");
-    }
-
-    const currentMap = store.get("worktreeIssueMap") ?? {};
-    return currentMap[worktreeId] ?? null;
-  };
-
   const handleWorktreeGetAllIssueAssociations = async (): Promise<
     Record<string, IssueAssociation>
   > => {
@@ -99,10 +80,6 @@ export function registerWorktreePullRequestHandlers(deps: HandlerDependencies): 
       prStatus: op(CHANNELS.WORKTREE_PR_STATUS, handleWorktreePRStatus),
       attachIssue: op(CHANNELS.WORKTREE_ATTACH_ISSUE, handleWorktreeAttachIssue),
       detachIssue: op(CHANNELS.WORKTREE_DETACH_ISSUE, handleWorktreeDetachIssue),
-      getIssueAssociation: op(
-        CHANNELS.WORKTREE_GET_ISSUE_ASSOCIATION,
-        handleWorktreeGetIssueAssociation
-      ),
       getAllIssueAssociations: op(
         CHANNELS.WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS,
         handleWorktreeGetAllIssueAssociations

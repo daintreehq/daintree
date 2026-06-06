@@ -5,9 +5,8 @@ import { CircleDot, Search, Link, Unlink, CircleCheck } from "lucide-react";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { cn } from "@/lib/utils";
-// eslint-disable-next-line no-restricted-imports
-import { githubClient } from "@/clients";
-import type { GitHubIssue } from "@shared/types/github";
+import { forgeClient } from "@/clients";
+import type { Issue } from "@shared/types/forge";
 import type { WorktreeState } from "@/types";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
@@ -18,14 +17,14 @@ interface IssuePickerDialogProps {
   onClose: () => void;
   worktree: WorktreeState;
   currentIssueNumber?: number;
-  onAttach: (issue: GitHubIssue) => void;
+  onAttach: (issue: Issue) => void;
   onDetach: () => void;
 }
 
 type StateFilter = "open" | "closed" | "all";
 
 interface IssueOptionRowProps {
-  issue: GitHubIssue;
+  issue: Issue;
   isSelected: boolean;
   isCurrentlyAttached: boolean;
   onClick: () => void;
@@ -49,7 +48,7 @@ function IssueOptionRow({ issue, isSelected, isCurrentlyAttached, onClick }: Iss
           isCurrentlyAttached && "ring-1 ring-status-success/30"
         )}
       >
-        {issue.state === "OPEN" ? (
+        {issue.state === "open" ? (
           <CircleDot className="w-4 h-4 text-pr-open shrink-0 mt-0.5" />
         ) : (
           <CircleCheck className="w-4 h-4 text-pr-merged shrink-0 mt-0.5" />
@@ -82,7 +81,7 @@ export function IssuePickerDialog({
 }: IssuePickerDialogProps) {
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState<StateFilter>("open");
-  const [issues, setIssues] = useState<GitHubIssue[]>([]);
+  const [issues, setIssues] = useState<Issue[]>([]);
   const [fetchedQuery, setFetchedQuery] = useState("");
   const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -98,8 +97,7 @@ export function IssuePickerDialog({
       const id = ++fetchIdRef.current;
       setIsPending(true);
       try {
-        const result = await githubClient.listIssues({
-          cwd: worktree.path,
+        const result = await forgeClient.listIssues(worktree.path, {
           search: trimmed || undefined,
           state,
         });
@@ -180,7 +178,7 @@ export function IssuePickerDialog({
   }, [selectedIndex]);
 
   const handleSelectIssue = useCallback(
-    (issue: GitHubIssue) => {
+    (issue: Issue) => {
       onAttach(issue);
       onClose();
     },

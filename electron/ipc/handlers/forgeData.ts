@@ -86,6 +86,7 @@ function listOptionsKey(opts: ListOptions): string {
     opts.assignee ?? null,
     opts.sort ?? null,
     opts.direction ?? null,
+    opts.search ?? null,
   ]);
 }
 
