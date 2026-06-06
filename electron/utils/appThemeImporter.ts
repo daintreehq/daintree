@@ -9,6 +9,7 @@ import {
   normalizeAppColorScheme,
   validateImportedThemeData,
   type AppThemeImportResult,
+  type AppThemeValidationWarning,
   type ThemePalette,
 } from "../../shared/theme/index.js";
 
@@ -146,10 +147,11 @@ export function parseAppThemeContent(content: string, filename: string): AppThem
     getBuiltInAppSchemeForType(resolvedType)
   );
 
-  const warnings = [];
+  const warnings: AppThemeValidationWarning[] = [];
 
   if (!rawTheme.type) {
     warnings.push({
+      kind: "type-inferred",
       message: `Theme type was inferred as ${resolvedType}. Add "type" to make the file explicit.`,
     });
   }
@@ -160,6 +162,7 @@ export function parseAppThemeContent(content: string, filename: string): AppThem
       .sort();
     if (unknownTokens.length > 0) {
       warnings.push({
+        kind: "unknown-tokens",
         message: `Ignored unknown tokens: ${unknownTokens.join(", ")}`,
       });
     }

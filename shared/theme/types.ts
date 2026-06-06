@@ -366,7 +366,23 @@ export interface AppThemeConfig {
   accentColorOverride?: string | null;
 }
 
+/**
+ * Categorises a theme-import warning so the UI can show one plain-language line
+ * per kind instead of the raw engine diagnostic. The raw `message` is retained
+ * for theme authors behind a technical-details disclosure.
+ */
+export type AppThemeWarningKind =
+  | "type-inferred"
+  | "unknown-tokens"
+  | "low-contrast"
+  | "terminal-legibility"
+  | "unevaluable"
+  | "accent-rgb-fallback"
+  | "overlay-contrast";
+
 export interface AppThemeValidationWarning {
+  kind: AppThemeWarningKind;
+  /** Raw engine diagnostic — developer-facing, shown only under a details affordance. */
   message: string;
 }
 
