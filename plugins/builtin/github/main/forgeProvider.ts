@@ -1156,27 +1156,21 @@ export const githubForgeProvider: ForgeProviderImpl = {
 
   buildIssuesUrl(repo: RepoRef, options?: { query?: string; state?: string }): string {
     const base = `https://github.com/${repo.owner}/${repo.repo}/issues`;
+    const qParts: string[] = [];
+    if (options?.query) qParts.push(options.query);
+    if (options?.state && options.state !== "all") qParts.push(`is:${options.state}`);
     const params = new URLSearchParams();
-    if (options?.query) {
-      const qParts: string[] = [options.query];
-      if (options.state && options.state !== "all") {
-        qParts.push(`is:${options.state}`);
-      }
-      params.set("q", qParts.join(" "));
-    }
+    if (qParts.length > 0) params.set("q", qParts.join(" "));
     return params.toString() ? `${base}?${params.toString()}` : base;
   },
 
   buildPRsUrl(repo: RepoRef, options?: { query?: string; state?: string }): string {
     const base = `https://github.com/${repo.owner}/${repo.repo}/pulls`;
+    const qParts: string[] = [];
+    if (options?.query) qParts.push(options.query);
+    if (options?.state && options.state !== "all") qParts.push(`is:${options.state}`);
     const params = new URLSearchParams();
-    if (options?.query) {
-      const qParts: string[] = [options.query];
-      if (options.state && options.state !== "all") {
-        qParts.push(`is:${options.state}`);
-      }
-      params.set("q", qParts.join(" "));
-    }
+    if (qParts.length > 0) params.set("q", qParts.join(" "));
     return params.toString() ? `${base}?${params.toString()}` : base;
   },
 
