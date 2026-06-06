@@ -866,7 +866,7 @@ function PanelHeaderComponent({
         </div>
       )}
 
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1.5">
         {/* Terminal recovery chord hints — surfaced so the user can see the
             five recovery shortcuts (kill, restart, forceResume, redraw, rename)
             without opening the overflow menu. Reveal-on-hover matches the
