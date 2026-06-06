@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, afterEach, beforeAll, vi } from "vitest";
 import { act, render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
-import type { GitHubIssue } from "@shared/types/github";
+import type { Issue } from "@shared/types/forge";
 import type { WorktreeState } from "@/types";
 import { IssuePickerDialog } from "../IssuePickerDialog";
 
@@ -18,7 +18,7 @@ const { listIssuesMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/clients", () => ({
-  githubClient: {
+  forgeClient: {
     listIssues: listIssuesMock,
   },
 }));
@@ -86,7 +86,7 @@ describe("IssuePickerDialog empty states", () => {
 
     await waitFor(
       () => {
-        expect(listIssuesMock.mock.calls.some((call) => call[0]?.search === undefined)).toBe(true);
+        expect(listIssuesMock.mock.calls.some((call) => call[1]?.search === undefined)).toBe(true);
       },
       { timeout: 2000 }
     );
@@ -120,16 +120,20 @@ describe("IssuePickerDialog empty states", () => {
   });
 });
 
-function makeIssue(number: number, title: string): GitHubIssue {
+function makeIssue(number: number, title: string): Issue {
   return {
     number,
     title,
+    body: "",
     url: `https://example.test/${number}`,
-    state: "OPEN",
-    updatedAt: "2026-01-01T00:00:00Z",
-    author: { login: "tester", avatarUrl: "" },
+    state: "open",
+    rawState: "open",
+    updatedAt: Date.parse("2026-01-01T00:00:00Z"),
+    createdAt: Date.parse("2026-01-01T00:00:00Z"),
+    author: { login: "tester", avatarUrl: "", rawData: null },
     assignees: [],
-    commentCount: 0,
+    labels: [],
+    rawData: null,
   };
 }
 
@@ -140,8 +144,8 @@ describe("IssuePickerDialog stale behavior", () => {
       const issueA = makeIssue(1, "Issue A");
       const issueB = makeIssue(2, "Issue B");
 
-      let resolveSlow: ((value: { items: GitHubIssue[] }) => void) | undefined;
-      const slowPromise = new Promise<{ items: GitHubIssue[] }>((r) => {
+      let resolveSlow: ((value: { items: Issue[] }) => void) | undefined;
+      const slowPromise = new Promise<{ items: Issue[] }>((r) => {
         resolveSlow = r;
       });
 
@@ -193,8 +197,8 @@ describe("IssuePickerDialog stale behavior", () => {
       const issueX = makeIssue(2, "Issue X");
       const issueY = makeIssue(3, "Issue Y");
 
-      let resolveX: ((value: { items: GitHubIssue[] }) => void) | undefined;
-      const xPromise = new Promise<{ items: GitHubIssue[] }>((r) => {
+      let resolveX: ((value: { items: Issue[] }) => void) | undefined;
+      const xPromise = new Promise<{ items: Issue[] }>((r) => {
         resolveX = r;
       });
 
@@ -246,8 +250,8 @@ describe("IssuePickerDialog stale behavior", () => {
     try {
       const issueA = makeIssue(1, "Issue A");
 
-      let resolveSecond: ((value: { items: GitHubIssue[] }) => void) | undefined;
-      const secondOpenPromise = new Promise<{ items: GitHubIssue[] }>((r) => {
+      let resolveSecond: ((value: { items: Issue[] }) => void) | undefined;
+      const secondOpenPromise = new Promise<{ items: Issue[] }>((r) => {
         resolveSecond = r;
       });
 
@@ -311,8 +315,8 @@ describe("IssuePickerDialog stale behavior", () => {
     try {
       const stale = makeIssue(1, "Stale foo result");
 
-      let resolveFoo: ((value: { items: GitHubIssue[] }) => void) | undefined;
-      const fooPromise = new Promise<{ items: GitHubIssue[] }>((r) => {
+      let resolveFoo: ((value: { items: Issue[] }) => void) | undefined;
+      const fooPromise = new Promise<{ items: Issue[] }>((r) => {
         resolveFoo = r;
       });
 
