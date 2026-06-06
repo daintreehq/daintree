@@ -336,7 +336,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     expect(wakeAndRestore).not.toHaveBeenCalled();
   });
 
-  it("bails when terminal is currently attaching and marks it for a deferred wake (#9702)", async () => {
+  it("syncs geometry but defers the async wake when terminal is attaching (#9702, #10070)", async () => {
     const id = "fw-6";
     const instance = makeInstance({ isAttaching: true });
     service.instances.set(id, instance);
@@ -348,9 +348,44 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
 
     await service.fullWakeForVisibilityRestore(id);
 
-    expect(applyDeferredResize).not.toHaveBeenCalled();
+    // Geometry sync is safe mid-attach and must run so the grid is corrected
+    // before the warm paint gate drops the bridge (#10070).
+    expect(applyDeferredResize).toHaveBeenCalledWith(id);
+    // The async wake (which calls terminal.reset()) must still defer to avoid
+    // racing the attach's own post-rAF reconciliation (#9702).
     expect(wakeAndRestore).not.toHaveBeenCalled();
     // The skipped wake must leave a flag so it re-runs once attach settles.
+    expect(instance.pendingVisibilityWake).toBe(true);
+  });
+
+  it("bypasses the resize lock for the geometry sync even while attaching (#10070)", async () => {
+    const id = "fw-6b";
+    const instance = makeInstance({
+      isAttaching: true,
+      isResizeSuppressed: true,
+      resizeSuppressionEndTime: Date.now() + 1500,
+    });
+    service.instances.set(id, instance);
+
+    const calls: string[] = [];
+    const lockResize = vi
+      .spyOn(service.resizeController, "lockResize")
+      .mockImplementation((_id, locked) => {
+        calls.push(locked ? "lock" : "unlock");
+      });
+    vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {
+      calls.push("applyDeferredResize");
+    });
+    const wakeAndRestore = vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    // The lock-bypass dance still wraps the geometry sync even on the attach
+    // defer path, so a suppressed-resize terminal isn't left at stale geometry.
+    expect(calls).toEqual(["unlock", "applyDeferredResize", "lock"]);
+    expect(lockResize).toHaveBeenNthCalledWith(1, id, false);
+    expect(lockResize).toHaveBeenNthCalledWith(2, id, true, expect.any(Number));
+    expect(wakeAndRestore).not.toHaveBeenCalled();
     expect(instance.pendingVisibilityWake).toBe(true);
   });
 
