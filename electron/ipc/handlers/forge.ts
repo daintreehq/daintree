@@ -197,6 +197,9 @@ export function registerForgeHandlers(): () => void {
         if (typeof payload.token !== "string" || !payload.token.trim()) {
           return { valid: false as const, error: "Token is required" };
         }
+        // Narrow the token once after the guard so downstream uses are
+        // type-safe without per-call casts.
+        const token = payload.token.trim();
         const providerId = normalizeProviderId(payload.providerId);
         if (!providerId) {
           return { valid: false as const, error: "Provider id is required" };
@@ -228,7 +231,7 @@ export function registerForgeHandlers(): () => void {
         }
         return auditForgeCall(
           { providerId: namespaceId, methodName: "validateToken", argsSummary: "" },
-          () => impl.validateToken(payload.token.trim()),
+          () => impl.validateToken(token),
           // A rejected credential ({ valid: false }) is a resolved call but a
           // failed outcome — record it as an error so a burst of bad-token
           // responses is visible to the failure-cluster detector.
