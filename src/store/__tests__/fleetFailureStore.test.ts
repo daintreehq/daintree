@@ -6,7 +6,7 @@ import { usePanelStore } from "../panelStore";
 import type { PtyPanelData } from "@shared/types/panel";
 
 function resetStores() {
-  useFleetFailureStore.setState({ failedIds: new Set(), payload: null, recordedAt: null });
+  useFleetFailureStore.setState({ failedIds: new Set(), payload: null });
   useFleetArmingStore.setState({
     armedIds: new Set<string>(),
     armOrder: [],
@@ -43,15 +43,13 @@ describe("useFleetFailureStore", () => {
     const s = useFleetFailureStore.getState();
     expect(s.failedIds.size).toBe(0);
     expect(s.payload).toBeNull();
-    expect(s.recordedAt).toBeNull();
   });
 
-  it("recordFailure populates ids, payload, and timestamp", () => {
+  it("recordFailure populates ids and payload", () => {
     useFleetFailureStore.getState().recordFailure("hello", ["a", "b"]);
     const s = useFleetFailureStore.getState();
     expect(s.failedIds).toEqual(new Set(["a", "b"]));
     expect(s.payload).toBe("hello");
-    expect(s.recordedAt).toBeGreaterThan(0);
   });
 
   it("recordFailure with empty ids resets state", () => {
@@ -60,7 +58,6 @@ describe("useFleetFailureStore", () => {
     const s = useFleetFailureStore.getState();
     expect(s.failedIds.size).toBe(0);
     expect(s.payload).toBeNull();
-    expect(s.recordedAt).toBeNull();
   });
 
   it("recordFailure accepts a null payload for non-replayable failures", () => {
@@ -71,7 +68,6 @@ describe("useFleetFailureStore", () => {
     const s = useFleetFailureStore.getState();
     expect(s.failedIds).toEqual(new Set(["a", "b"]));
     expect(s.payload).toBeNull();
-    expect(s.recordedAt).toBeGreaterThan(0);
   });
 
   it("dismissId removes a single id and preserves the rest", () => {
@@ -87,7 +83,6 @@ describe("useFleetFailureStore", () => {
     const s = useFleetFailureStore.getState();
     expect(s.failedIds.size).toBe(0);
     expect(s.payload).toBeNull();
-    expect(s.recordedAt).toBeNull();
   });
 
   it("clear resets everything", () => {
@@ -96,7 +91,6 @@ describe("useFleetFailureStore", () => {
     const s = useFleetFailureStore.getState();
     expect(s.failedIds.size).toBe(0);
     expect(s.payload).toBeNull();
-    expect(s.recordedAt).toBeNull();
   });
 
   it("auto-clears when the whole fleet drains", () => {

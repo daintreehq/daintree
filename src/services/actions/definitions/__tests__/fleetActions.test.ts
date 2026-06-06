@@ -89,7 +89,7 @@ function resetStores(): void {
     lastArmedId: null,
   });
   useFleetPendingActionStore.setState({ pending: null });
-  useFleetFailureStore.setState({ failedIds: new Set(), payload: null, recordedAt: null });
+  useFleetFailureStore.setState({ failedIds: new Set(), payload: null });
   usePanelStore.setState({
     panelsById: {},
     panelIds: [],
@@ -576,7 +576,6 @@ describe("fleet.retryFailures", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
       payload: null,
-      recordedAt: Date.now(),
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
@@ -587,7 +586,6 @@ describe("fleet.retryFailures", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(),
       payload: "ls\r",
-      recordedAt: Date.now(),
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
@@ -598,7 +596,6 @@ describe("fleet.retryFailures", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
       payload: "ls\r",
-      recordedAt: Date.now(),
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
@@ -619,7 +616,6 @@ describe("fleet.retryFailures", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2", "t3"]),
       payload: "ls\r",
-      recordedAt: Date.now(),
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
@@ -637,21 +633,18 @@ describe("fleet.retryFailures", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
       payload: "ls\r",
-      recordedAt: Date.now(),
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
     const s = useFleetFailureStore.getState();
     expect(s.failedIds.size).toBe(0);
     expect(s.payload).toBeNull();
-    expect(s.recordedAt).toBeNull();
   });
 
   it("leaves the banner intact when invoked with a null payload (no silent clear)", async () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1"]),
       payload: null,
-      recordedAt: Date.now(),
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
@@ -676,7 +669,6 @@ describe("fleet.retryFailures", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1"]),
       payload: "ls\r",
-      recordedAt: Date.now(),
     });
     const registry = await buildRegistry();
     const first = run(registry, "fleet.retryFailures");
