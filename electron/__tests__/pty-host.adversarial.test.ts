@@ -130,6 +130,7 @@ interface InspectableIpcQueueManager {
   isAtCapacity: TestMock;
   addBytes: TestMock;
   getUtilization: TestMock;
+  applyBackpressure: TestMock;
   dispose: TestMock;
 }
 
@@ -160,10 +161,14 @@ const hostState = vi.hoisted(() => ({
   ipcQueueManagers: [] as InspectableIpcQueueManager[],
   portQueueManagers: [] as InspectablePortQueueManager[],
   batchers: [] as InspectablePortBatcher[],
+  resourceGovernorDeps: null as {
+    getDropSnapshot: () => { droppedBytesDelta: number; dataLossCountDelta: number };
+  } | null,
   reset() {
     this.currentParentPort = null;
     this.terminals.clear();
     this.currentPtyManager = null;
+    this.resourceGovernorDeps = null;
     this.coordinators.length = 0;
     this.backpressureManagers.length = 0;
     this.ipcQueueManagers.length = 0;
@@ -502,6 +507,7 @@ vi.mock("../pty-host/index.js", async () => {
       this.queuedBytes.set(id, (this.queuedBytes.get(id) ?? 0) + bytes);
     });
     getUtilization = vi.fn(() => 0);
+    applyBackpressure = vi.fn();
     dispose = vi.fn();
 
     constructor() {
@@ -561,6 +567,12 @@ vi.mock("../pty-host/index.js", async () => {
   class MockResourceGovernor {
     start = vi.fn();
     dispose = vi.fn();
+
+    constructor(deps: {
+      getDropSnapshot: () => { droppedBytesDelta: number; dataLossCountDelta: number };
+    }) {
+      hostState.resourceGovernorDeps = deps;
+    }
   }
 
   return {
@@ -1345,5 +1357,174 @@ describe("pty-host adversarial", () => {
     // back to active.
     expect(backpressure.getActivityTier("t-a")).toBe("active");
     expect(backpressure.getActivityTier("t-b")).toBe("active");
+  });
+
+  // Helper: terminal-status messages posted directly on a renderer MessagePort.
+  function portStatusMessages(port: MockRendererPort): Array<Record<string, unknown>> {
+    return port.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown): m is Record<string, unknown> =>
+          typeof m === "object" && m !== null && (m as { type?: string }).type === "terminal-status"
+      );
+  }
+
+  it("FAN_OUT_SATURATED_WINDOW_GETS_DATA_LOSS_PULSE", async () => {
+    // The #9891 core: with two windows fanning out the same terminal, one
+    // window's batcher accepts the chunk (visualWritten flips true, suppressing
+    // the shared IPC fallback) while the other's is saturated. The starved
+    // window must receive a per-port data-loss pulse — not a broadcast, which
+    // would falsely flag the window that received its data — and the global
+    // drop counter must account exactly the dropped chunk.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+
+    const portA = createRendererPort();
+    const portB = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    await flushMicrotasks();
+
+    // No active project on either window → windowProjectMap empty → both windows
+    // are fan-out targets. batchers are created per connect-port in order.
+    const batcherA = hostState.batchers[0];
+    const batcherB = hostState.batchers[1];
+    batcherA.write.mockReturnValue(true); // window A accepts
+    batcherB.write.mockReturnValue(false); // window B saturated
+
+    portA.postMessage.mockClear();
+    portB.postMessage.mockClear();
+    parentPort.postMessage.mockClear();
+
+    const payload = "a".repeat(40);
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", payload);
+    await flushMicrotasks();
+
+    // Starved window B gets exactly one data-loss pulse on its own port.
+    const statusB = portStatusMessages(portB);
+    expect(statusB).toHaveLength(1);
+    expect(statusB[0]).toMatchObject({
+      type: "terminal-status",
+      id: "t1",
+      status: "data-loss",
+      droppedBytes: payload.length,
+    });
+    expect(typeof statusB[0].timestamp).toBe("number");
+
+    // Window A received its data on its own port — it must NOT be told of a loss.
+    expect(portStatusMessages(portA)).toHaveLength(0);
+
+    // The IPC broadcast path must NOT emit a data-loss for this chunk — that
+    // would falsely reach window A (and every other window).
+    const ipcDataLoss = terminalStatusPayloads(parentPort).filter((p) => p.status === "data-loss");
+    expect(ipcDataLoss).toHaveLength(0);
+
+    // The global drop counter accounts exactly the starved window's chunk once.
+    const drops = hostState.resourceGovernorDeps?.getDropSnapshot();
+    expect(drops).toEqual({ droppedBytesDelta: payload.length, dataLossCountDelta: 1 });
+  });
+
+  it("FAN_OUT_DATA_LOSS_USES_UTF8_BYTE_COUNT", async () => {
+    // The dropped-byte accounting must report UTF-8 bytes, not JS string length,
+    // or non-ASCII output (CJK, emoji) silently mis-reports the gap size.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+
+    const portA = createRendererPort();
+    const portB = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    hostState.batchers[1].write.mockReturnValue(false);
+    portB.postMessage.mockClear();
+
+    const payload = "⚠".repeat(10); // 10 chars, 30 UTF-8 bytes
+    expect(payload.length).toBe(10);
+    expect(Buffer.byteLength(payload, "utf8")).toBe(30);
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", payload);
+    await flushMicrotasks();
+
+    const statusB = portStatusMessages(portB);
+    expect(statusB).toHaveLength(1);
+    expect(statusB[0].droppedBytes).toBe(30);
+    expect(hostState.resourceGovernorDeps?.getDropSnapshot()).toEqual({
+      droppedBytesDelta: 30,
+      dataLossCountDelta: 1,
+    });
+  });
+
+  it("FAN_OUT_ALL_SATURATED_FALLS_THROUGH_TO_IPC_WITHOUT_PULSE", async () => {
+    // When EVERY window's batcher rejects, visualWritten stays false and the
+    // shared IPC fallback broadcasts the chunk to all windows (the renderer's
+    // onData listens on both the port and IPC). Nothing is lost, so no per-port
+    // data-loss pulse must fire — the regression would double-signal a loss that
+    // didn't happen.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+
+    const portA = createRendererPort();
+    const portB = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    await flushMicrotasks();
+
+    // Both batchers reject (mock default is false) — leave them as-is.
+    portA.postMessage.mockClear();
+    portB.postMessage.mockClear();
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "a".repeat(25));
+    await flushMicrotasks();
+
+    // IPC fallback delivered the chunk (queue not at capacity by default).
+    expect(dataPayloads(parentPort)).toHaveLength(1);
+    // No window was starved, so no data-loss pulse on either port and no drop.
+    expect(portStatusMessages(portA)).toHaveLength(0);
+    expect(portStatusMessages(portB)).toHaveLength(0);
+    expect(hostState.resourceGovernorDeps?.getDropSnapshot()).toEqual({
+      droppedBytesDelta: 0,
+      dataLossCountDelta: 0,
+    });
+  });
+
+  it("FAN_OUT_SATURATED_PORT_THROWS_ON_STATUS_POSTMESSAGE", async () => {
+    // A starved window whose port throws on postMessage (closing mid-iteration)
+    // must not break the fan-out: the accepting window keeps its data and the
+    // drop is still accounted. Mirrors the tier-changed closing-port tolerance.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+
+    const portA = createRendererPort();
+    const portThrowing = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2 },
+      ports: [portThrowing],
+    });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    hostState.batchers[1].write.mockReturnValue(false);
+    portThrowing.postMessage.mockImplementation(() => {
+      throw new Error("port closing");
+    });
+
+    expect(() =>
+      (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "a".repeat(15))
+    ).not.toThrow();
+    await flushMicrotasks();
+
+    // The drop is still accounted even though the pulse delivery threw.
+    expect(hostState.resourceGovernorDeps?.getDropSnapshot()).toEqual({
+      droppedBytesDelta: 15,
+      dataLossCountDelta: 1,
+    });
   });
 });
