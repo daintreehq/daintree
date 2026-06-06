@@ -462,13 +462,19 @@ class PullRequestService {
           error: formatErrorMessage(error, "findPRsByBranches failed"),
         });
       }
-      // A branch missing from the batch map falls back to a per-branch call,
-      // matching the old `perBranchFallback`. A transient per-branch error
-      // resolves to null (treated as "no PR"), as the prior path did.
+      // A present key (even null-valued) is authoritative "found / not found";
+      // a branch missing from the batch map falls back to a per-branch call.
+      // The fallback preserves the transient-vs-not-found distinction:
+      // findPRByBranch resolves null for a confirmed missing PR but throws on
+      // transient failure, which we surface as a per-key Error so the loader
+      // rejects it and the caller skips (never clears) that branch.
       return Promise.all(
         list.map((branch) => {
           if (batchMap?.has(branch)) return batchMap.get(branch) ?? null;
-          return bridge.findPRByBranch(providerId, repo, branch).catch(() => null);
+          return bridge.findPRByBranch(providerId, repo, branch).then(
+            (pr) => pr,
+            (error: unknown) => (error instanceof Error ? error : new Error(String(error)))
+          );
         })
       );
     });
@@ -957,16 +963,17 @@ class PullRequestService {
   }
 
   /**
-   * Consult the active forge provider's rate-limit state and return a blocking
-   * decision. Fails open (unblocked) when the provider is absent, lacks
+   * Consult the active forge provider's rate-limit state and return the active
+   * block (`kind` matches `handleError`'s rate-limit marker) or null when
+   * unblocked. Fails open (null) when the provider is absent, lacks
    * `getRateLimit`, or the call throws — a provider bug must not stall polling.
    */
   private async checkRateLimitGate(): Promise<{
-    blocked: boolean;
-    resumeAt: number | null;
-  }> {
+    kind: "primary" | "secondary";
+    resumeAt: number;
+  } | null> {
     if (!this.providerNamespacedId) {
-      return { blocked: false, resumeAt: null };
+      return null;
     }
     try {
       const info: RateLimitInfo | null = await getForgeBridge().getRateLimit(
@@ -974,23 +981,23 @@ class PullRequestService {
       );
       // `null` here means the provider does not implement `getRateLimit` —
       // fail open, polling proceeds without a rate-limit gate.
-      if (!info) return { blocked: false, resumeAt: null };
+      if (!info) return null;
       const now = Date.now();
       if (info.secondaryThrottled) {
         const resumeAt = info.resetAt ?? now + RATE_LIMIT_SECONDARY_FALLBACK_MS;
-        if (resumeAt <= now) return { blocked: false, resumeAt: null };
-        return { blocked: true, resumeAt };
+        if (resumeAt <= now) return null;
+        return { kind: "secondary", resumeAt };
       }
       if (info.remaining === 0) {
         const resumeAt = info.resetAt
           ? info.resetAt + RATE_LIMIT_CLOCK_SKEW_MS
           : now + RATE_LIMIT_SECONDARY_FALLBACK_MS;
-        if (resumeAt <= now) return { blocked: false, resumeAt: null };
-        return { blocked: true, resumeAt };
+        if (resumeAt <= now) return null;
+        return { kind: "primary", resumeAt };
       }
-      return { blocked: false, resumeAt: null };
+      return null;
     } catch {
-      return { blocked: false, resumeAt: null };
+      return null;
     }
   }
 
@@ -1004,12 +1011,12 @@ class PullRequestService {
     if (!repo || !providerId) return;
     const bridge = getForgeBridge();
 
-    const { blocked, resumeAt } = await this.checkRateLimitGate();
-    if (blocked && resumeAt) {
-      this.nextRetryAt = resumeAt;
+    const rateLimitBlock = await this.checkRateLimitGate();
+    if (rateLimitBlock) {
+      this.nextRetryAt = rateLimitBlock.resumeAt;
       logDebug("Skipping PR revalidation — rate limit active", {
         providerId,
-        resumeAt,
+        resumeAt: rateLimitBlock.resumeAt,
       });
       return;
     }
@@ -1372,13 +1379,13 @@ class PullRequestService {
     }
     const bridge = getForgeBridge();
 
-    const { blocked, resumeAt } = await this.checkRateLimitGate();
-    if (blocked && resumeAt) {
-      this.nextRetryAt = resumeAt;
+    const rateLimitBlock = await this.checkRateLimitGate();
+    if (rateLimitBlock) {
+      this.nextRetryAt = rateLimitBlock.resumeAt;
       logDebug("Skipping PR check — rate limit active", {
         providerId,
-        resumeAt,
-        waitMs: resumeAt - Date.now(),
+        resumeAt: rateLimitBlock.resumeAt,
+        waitMs: rateLimitBlock.resumeAt - Date.now(),
       });
       return;
     }
@@ -1472,11 +1479,22 @@ class PullRequestService {
         return;
       }
 
-      this.consecutiveErrors = 0;
+      let branchErrorCount = 0;
+      let firstBranchError: Error | null = null;
 
-      for (const { branch, pr } of prResults) {
+      for (const { branch, pr, error } of prResults) {
         const worktreeIds = uniqueBranches.get(branch);
         if (!worktreeIds) continue;
+
+        if (error) {
+          // Transient lookup failure — NOT authoritative absence. Skip the
+          // branch so any existing PR row survives; the loader evicts settled
+          // keys, so the branch retries fresh next cycle. Routed to
+          // handleError once per cycle after the loop.
+          branchErrorCount++;
+          firstBranchError ??= error;
+          continue;
+        }
 
         if (!pr) {
           // Authoritative "no PR found" for a fresh candidate. Without this,
@@ -1484,6 +1502,11 @@ class PullRequestService {
           // and the renderer's preservation rule (#8870) would hold any
           // `linked.pr` carried over from a prior session indefinitely.
           for (const worktreeId of worktreeIds) {
+            // Drop any stale detection alongside the clear: refresh() empties
+            // `resolvedWorktrees` but keeps `detectedPRs`, so a PR that
+            // disappeared between cycles would otherwise leave a PENDING
+            // entry keeping the 30s revalidation boost armed indefinitely.
+            this.detectedPRs.delete(worktreeId);
             events.emit("sys:pr:cleared", {
               worktreeId,
               branchName: branch,
@@ -1543,6 +1566,22 @@ class PullRequestService {
       }
 
       this.updateBoostFromDetectedPRs();
+
+      if (branchErrorCount > 0 && firstBranchError) {
+        // Route the cycle's transient lookup failures through the breaker
+        // exactly once — per cycle, not per branch, so breaker behavior isn't
+        // topology-dependent on how many branches a repo happens to have.
+        // Re-consult the rate-limit gate first: a 429 that landed mid-cycle
+        // (after the top-of-cycle gate passed) must pause polling via the
+        // rate-limit path rather than count toward the circuit breaker.
+        const rateLimit = await this.checkRateLimitGate();
+        this.handleError(
+          `PR branch lookup failed for ${branchErrorCount} of ${prResults.length} branches: ${firstBranchError.message}`,
+          rateLimit ?? undefined
+        );
+      } else {
+        this.consecutiveErrors = 0;
+      }
     } catch (error) {
       this.handleError(formatErrorMessage(error, "PR check failed"));
     }
@@ -1553,12 +1592,13 @@ class PullRequestService {
    * `prByBranchLoader`. All `load()` calls here enqueue synchronously, so the
    * loader coalesces them into a single `findPRsByBranches` batch (or per-branch
    * fallback) and dedups any branch already in flight from an overlapping
-   * cycle. The loader resolves a transient error to `null` ("no PR"), matching
-   * the prior `perBranchFallback` behavior.
+   * cycle. A resolved `pr` (including null) is authoritative; a transient
+   * lookup failure surfaces as a non-null `error` so the caller skips the
+   * branch (never clears it) and routes the failure to the circuit breaker.
    */
   private async resolvePRsForBranches(
     branches: string[]
-  ): Promise<Array<{ branch: string; pr: ForgePR | null }>> {
+  ): Promise<Array<{ branch: string; pr: ForgePR | null; error: Error | null }>> {
     if (branches.length === 0) return [];
 
     const loader = this.prByBranchLoader;
@@ -1570,18 +1610,26 @@ class PullRequestService {
       return [];
     }
 
-    // Absorb a per-load rejection as `null` ("no PR found"). The only source of
-    // rejection here is the loader being disposed by a mid-cycle provider swap
-    // (`invalidateProvider()` from refresh()/setForgeSettings()); propagating it
-    // would land in checkForPRs's catch and wrongly bump `consecutiveErrors`
+    // A disposal rejection comes from a mid-cycle provider swap
+    // (`invalidateProvider()` from refresh()/setForgeSettings()), not a lookup
+    // failure — absorb it as `null` so it never bumps `consecutiveErrors`
     // toward the circuit breaker. The downstream stale-provider guard discards
     // the whole cycle once it sees the provider changed, so the null is never
-    // written as a spurious `sys:pr:cleared`.
+    // written as a spurious `sys:pr:cleared`. Any other rejection is a
+    // transient lookup failure surfaced via the per-key Error contract.
     return Promise.all(
       branches.map((branch) =>
         loader.load(branch).then(
-          (pr) => ({ branch, pr }),
-          () => ({ branch, pr: null as ForgePR | null })
+          (pr) => ({ branch, pr, error: null as Error | null }),
+          (error: unknown) => {
+            const err = error instanceof Error ? error : new Error(String(error));
+            const isDisposed = err.message === "BatchLoader disposed";
+            return {
+              branch,
+              pr: null as ForgePR | null,
+              error: isDisposed ? null : err,
+            };
+          }
         )
       )
     );
