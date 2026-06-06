@@ -88,6 +88,21 @@ describe("panelIdsByWorktreeId invariant across mutations", () => {
       expect(usePanelStore.getState().panelIdsByWorktreeId["wt-A"]).toEqual(["t3", "t1", "t2"]);
     });
 
+    it("reorderTabGroups updates the bucket order", () => {
+      seedTerminal("t1", "wt-A");
+      seedTerminal("t2", "wt-A");
+      seedTerminal("t3", "wt-A");
+
+      // Explicit groups sort to the front of getTabGroups; the explicit
+      // [t1, t2] tab group lands at index 0, virtual t3 lands at index 1.
+      usePanelStore.getState().createTabGroup("grid", "wt-A", ["t1", "t2"]);
+
+      // Move the virtual t3 group (index 1) to the front of the grid scope.
+      usePanelStore.getState().reorderTabGroups(1, 0, "grid", "wt-A");
+
+      expect(usePanelStore.getState().panelIdsByWorktreeId["wt-A"]).toEqual(["t3", "t1", "t2"]);
+    });
+
     it("moveTerminalToPosition reorders the affected bucket", () => {
       seedTerminal("t1", "wt-A");
       seedTerminal("t2", "wt-A");

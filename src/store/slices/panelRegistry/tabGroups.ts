@@ -10,7 +10,7 @@ import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { deriveRuntimeStatus, dissolvePanelFromGroup } from "./helpers";
-import { NO_WORKTREE, transferBetweenWorktreeIndex } from "./worktreeIndex";
+import { buildWorktreeIndex, NO_WORKTREE, transferBetweenWorktreeIndex } from "./worktreeIndex";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
@@ -570,7 +570,12 @@ export const createTabGroupActions = (
             ];
 
       saveNormalized(state.panelsById, newIds);
-      return { panelIds: newIds };
+      // Rebuild bucket order so per-worktree selectors observe the new order
+      // (issue #7451). Reorder is user-gesture rate, so a full rebuild is fine.
+      return {
+        panelIds: newIds,
+        panelIdsByWorktreeId: buildWorktreeIndex(newIds, state.panelsById),
+      };
     });
   },
 
