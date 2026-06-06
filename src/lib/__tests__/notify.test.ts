@@ -3116,7 +3116,7 @@ describe("EVENT_POLICY manifest routing", () => {
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
     });
 
-    it.each(["uiFeedback", "settings"] as const)(
+    it.each(["uiFeedback", "settings", "workingPulse"] as const)(
       "warns when a passive kind %s + transient resolves to a silent no-op",
       (eventKind) => {
         // No explicit priority → policy fills "low"; transient skips the inbox.
@@ -3136,7 +3136,7 @@ describe("EVENT_POLICY manifest routing", () => {
 
     it("explicit priority: 'high' overrides the passive default so the transient toast fires", () => {
       // The call-site fix: passive kind + transient + explicit high → toast
-      // shows, no inbox row, and no no-op warning.
+      // shows, no inbox row, and the passive-policy no-op warn does not fire.
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       notify({
