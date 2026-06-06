@@ -5,26 +5,28 @@ import { SEL } from "./selectors";
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 
 const toolbarOverflowLabels: Record<string, string> = {
-  "Open Terminal": "Terminal",
-  "Open Browser": "Browser",
+  "Open terminal": "Terminal",
+  "Open browser": "Browser",
   "Open settings": "Settings",
-  "Copy Context": "Copy Context",
+  "Open dev preview": "Dev preview",
+  "Copy context": "Copy context",
   Notifications: "Notifications",
 };
 
 const toolbarButtonIds: Record<string, string> = {
-  "Open Terminal": "terminal",
-  "Open Browser": "browser",
+  "Open terminal": "terminal",
+  "Open browser": "browser",
   "Open settings": "settings",
-  "Copy Context": "copy-tree",
+  "Open dev preview": "dev-server",
+  "Copy context": "copy-tree",
   Notifications: "notification-center",
 };
 
 const toolbarShortcuts: Record<string, string> = {
-  "Open Terminal": `${mod}+Alt+t`,
-  "Open Browser": `${mod}+Alt+b`,
+  "Open terminal": `${mod}+Alt+t`,
+  "Open browser": `${mod}+Alt+b`,
   "Open settings": `${mod}+,`,
-  "Copy Context": `${mod}+Shift+c`,
+  "Copy context": `${mod}+Shift+c`,
 };
 
 function extractToolbarLabel(selector: string): string | null {

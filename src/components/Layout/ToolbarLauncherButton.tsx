@@ -1,16 +1,11 @@
 import { useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { SquareTerminal, Globe, Unplug } from "lucide-react";
+import { SquareTerminal, Globe } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
-import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
+import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 
 type LauncherType = "terminal" | "browser";
 
@@ -25,14 +20,14 @@ const LAUNCHER_CONFIG: Record<
 > = {
   terminal: {
     icon: SquareTerminal,
-    label: "Open Terminal",
-    tooltipLabel: "Open Terminal",
+    label: "Open terminal",
+    tooltipLabel: "Open terminal",
     keybindingAction: "agent.terminal",
   },
   browser: {
     icon: Globe,
-    label: "Open Browser",
-    tooltipLabel: "Open Browser",
+    label: "Open browser",
+    tooltipLabel: "Open browser",
     keybindingAction: "agent.browser",
   },
 };
@@ -54,7 +49,6 @@ export function ToolbarLauncherButton({
   const shortcut = useKeybindingDisplay(config.keybindingAction);
   const ariaShortcut = useAriaKeyshortcuts(config.keybindingAction);
   const launcherHover = useShortcutHintHover(config.keybindingAction);
-  const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
   const handleClick = useCallback(() => {
     onLaunchAgent(type);
@@ -86,10 +80,7 @@ export function ToolbarLauncherButton({
         </Tooltip>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-        <ContextMenuItem onSelect={() => toggleButtonVisibility(type, "left")}>
-          <Unplug className="mr-2 h-3.5 w-3.5" />
-          Unpin from Toolbar
-        </ContextMenuItem>
+        <ToolbarContextMenuItems buttonId={type} side="left" />
       </ContextMenuContent>
     </ContextMenu>
   );

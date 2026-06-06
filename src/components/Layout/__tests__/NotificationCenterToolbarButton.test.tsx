@@ -89,13 +89,35 @@ vi.mock("@/components/ui/context-menu", () => ({
       {children}
     </div>
   ),
+  ContextMenuActionItem: ({
+    children,
+  }: {
+    actionId: string;
+    args?: unknown;
+    children: React.ReactNode;
+    onSelect?: (e: { defaultPrevented: boolean; preventDefault: () => void }) => void;
+  }) => <div role="menuitem">{children}</div>,
+  ContextMenuSeparator: () => <hr />,
+  ContextMenuLabel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuSub: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuSubContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuSubTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuRadioGroup: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuRadioItem: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuCheckboxItem: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuShortcut: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
+  ContextMenuPortal: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuGroup: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-vi.mock("lucide-react", () => ({
-  Bell: () => <span data-testid="icon-bell" />,
-  BellOff: () => <span data-testid="icon-bell-off" />,
-  Unplug: () => <span data-testid="icon-unplug" />,
-}));
+vi.mock("lucide-react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("lucide-react")>();
+  return {
+    ...actual,
+    Bell: () => <span data-testid="icon-bell" />,
+    BellOff: () => <span data-testid="icon-bell-off" />,
+  };
+});
 
 function resetStores() {
   useNotificationHistoryStore.setState({

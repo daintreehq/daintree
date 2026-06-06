@@ -72,6 +72,46 @@ vi.mock("@/components/ui/context-menu", () => ({
       {children}
     </button>
   ),
+  ContextMenuActionItem: ({
+    actionId,
+    args,
+    children,
+    onSelect,
+  }: {
+    actionId: string;
+    args?: unknown;
+    children: React.ReactNode;
+    onSelect?: (e: { defaultPrevented: boolean; preventDefault: () => void }) => void;
+  }) => (
+    <button
+      type="button"
+      data-testid="context-menu-action-item"
+      data-action-id={actionId}
+      data-args={JSON.stringify(args)}
+      onClick={() => {
+        const fakeEvent = {
+          defaultPrevented: false,
+          preventDefault: () => {
+            (fakeEvent as { defaultPrevented: boolean }).defaultPrevented = true;
+          },
+        };
+        onSelect?.(fakeEvent);
+      }}
+    >
+      {children}
+    </button>
+  ),
+  ContextMenuSeparator: () => <hr />,
+  ContextMenuLabel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuSub: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuSubContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuSubTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuRadioGroup: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuRadioItem: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuCheckboxItem: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuShortcut: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
+  ContextMenuPortal: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuGroup: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 vi.mock("@/lib/tooltipShortcut", () => ({

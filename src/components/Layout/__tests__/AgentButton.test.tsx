@@ -17,7 +17,7 @@
  *    choices and warrants the picker.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, screen } from "@testing-library/react";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { MenuActionSourceContext } from "@/components/ui/menu-source";
 
@@ -44,13 +44,15 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => dispatchMock(...args) },
 }));
 
+const setAgentPinnedMock = vi.fn().mockResolvedValue(undefined);
+
 vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: Object.assign(
-    (selector: (s: { settings: AgentSettings | null }) => unknown) =>
-      selector({ settings: mockSettings }),
+    (selector: (s: Record<string, unknown>) => unknown) =>
+      selector({ settings: mockSettings, setAgentPinned: setAgentPinnedMock }),
     {
       getState: () => ({
-        setAgentPinned: vi.fn(),
+        setAgentPinned: setAgentPinnedMock,
         updateWorktreePreset: updateWorktreePresetMock,
         updateAgent: updateAgentMock,
       }),
@@ -1311,5 +1313,75 @@ describe("AgentButton preset UX", () => {
       // accessible name.
       expect(primary!.getAttribute("aria-label")).toBe("Start Claude");
     });
+  });
+});
+
+describe("AgentButton right-click unpin — issue #9825", () => {
+  beforeEach(() => {
+    dispatchMock.mockClear();
+    updateWorktreePresetMock.mockClear();
+    updateAgentMock.mockClear();
+    setAgentPinnedMock.mockClear();
+    mockSettings = settingsWith({ claude: { pinned: true } });
+    mockActiveWorktreeId = null;
+    mockCcrPresetsByAgent = {};
+    mockMergedPresetsFn = () => [];
+    mockCliDetails = {};
+    mockDominantState = null;
+    mockDotColor = "";
+    mockPanelsById = {};
+    mockPanelIds = [];
+    mockPanelIdsByWorktreeId = {};
+    mockWorktrees = [];
+  });
+
+  it("routes the no-presets branch's unpin to setAgentPinned (not pinnedButtons)", () => {
+    render(
+      <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+    );
+    // The new wrapper routes the unpin via onUnpin override for agent IDs.
+    // The "Unpin from toolbar" item lives in the right-click content; find
+    // it and click it.
+    const items = screen.getAllByTestId("context-menu-item");
+    const unpin = items.find((el) => el.textContent?.includes("Unpin from toolbar"));
+    expect(unpin, "no Unpin-from-toolbar menu item rendered").toBeTruthy();
+    fireEvent.click(unpin!);
+    expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
+  });
+
+  it("routes the has-presets branch's unpin to setAgentPinned", () => {
+    mockMergedPresetsFn = (id: string) => [
+      { id: `${id}-blue`, name: "Blue" },
+      { id: `${id}-green`, name: "Green" },
+    ];
+    render(
+      <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+    );
+    const items = screen.getAllByTestId("context-menu-item");
+    const unpin = items.find((el) => el.textContent?.includes("Unpin from toolbar"));
+    expect(unpin).toBeTruthy();
+    fireEvent.click(unpin!);
+    expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
+  });
+
+  it("exposes the Customize toolbar… entry on the right-click content for both branches", () => {
+    const { rerender } = render(
+      <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+    );
+    const itemsNoPresets = screen.getAllByTestId("context-menu-item");
+    const customizeNoPresets = itemsNoPresets.find((el) =>
+      el.textContent?.includes("Customize toolbar")
+    );
+    expect(customizeNoPresets, "Customize entry missing in no-presets branch").toBeTruthy();
+
+    mockMergedPresetsFn = (id: string) => [{ id: `${id}-blue`, name: "Blue" }];
+    rerender(
+      <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+    );
+    const itemsHasPresets = screen.getAllByTestId("context-menu-item");
+    const customizeHasPresets = itemsHasPresets.find((el) =>
+      el.textContent?.includes("Customize toolbar")
+    );
+    expect(customizeHasPresets, "Customize entry missing in has-presets branch").toBeTruthy();
   });
 });

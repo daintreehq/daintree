@@ -11,18 +11,13 @@ import {
   memo,
   forwardRef,
 } from "react";
-import { CircleDot, GitPullRequest, GitCommit, Clock, Unplug } from "lucide-react";
+import { CircleDot, GitPullRequest, GitCommit, Clock } from "lucide-react";
 import { PRDetectionPausedIndicator } from "./PRDetectionPausedIndicator";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { actionService } from "@/services/ActionService";
-import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
+import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -146,8 +141,6 @@ export const GitHubStatsToolbarButton = memo(
 
     const setIssueSearchQuery = useGitHubFilterStore((s) => s.setIssueSearchQuery);
     const setPrSearchQuery = useGitHubFilterStore((s) => s.setPrSearchQuery);
-
-    const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
     const prCircuitTripped = usePRCircuitBreakerStore((s) => s.tripped);
 
@@ -1018,10 +1011,7 @@ export const GitHubStatsToolbarButton = memo(
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-          <ContextMenuItem onSelect={() => toggleButtonVisibility("github-stats", "right")}>
-            <Unplug className="mr-2 h-3.5 w-3.5" />
-            Unpin from Toolbar
-          </ContextMenuItem>
+          <ToolbarContextMenuItems buttonId="github-stats" side="right" />
         </ContextMenuContent>
       </ContextMenu>
     );
