@@ -46,6 +46,7 @@ export function useGitHubTokenHealth(): void {
           message: "GitHub token expired — reconnect to restore GitHub features.",
           supersedeKey: "github.token",
           countable: false,
+          context: { eventKind: "connectivity" },
         });
       }
 
