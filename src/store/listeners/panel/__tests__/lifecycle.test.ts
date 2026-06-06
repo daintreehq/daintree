@@ -349,13 +349,26 @@ describe("onRestored — dock popover preservation (#8368)", () => {
     expect(usePanelStore.getState().activeDockTerminalId).toBe("dock-1");
   });
 
-  it("clears the dock popover when the restored terminal is the one displayed in it", () => {
-    setupPanel();
+  it("clears the dock popover when the restored terminal moved out of the dock", () => {
+    setupPanel({ location: "grid" });
     usePanelStore.setState({ activeDockTerminalId: "term-1", focusedId: "term-1" });
 
     getRestoredHandler()({ id: "term-1" });
 
     expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
+  });
+
+  it("keeps the dock popover open when the restored terminal lands back in the dock (#9938)", () => {
+    setupPanel({ location: "dock" });
+    usePanelStore.setState({ activeDockTerminalId: "term-1", focusedId: "term-1" });
+
+    getRestoredHandler()({ id: "term-1" });
+
+    // A docked terminal restored from trash must keep its popover open so
+    // focus and the visible panel agree, rather than the listener nulling the
+    // dock pointer the restore wrapper just set.
+    expect(usePanelStore.getState().activeDockTerminalId).toBe("term-1");
+    expect(usePanelStore.getState().focusedId).toBe("term-1");
   });
 
   it("is a no-op on dock state when no dock popover is open", () => {

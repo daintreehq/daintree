@@ -780,11 +780,18 @@ export const usePanelStore = create<PanelGridState>()(
         const restoredPanel = get().panelsById[id];
         if (!restoredPanel) return;
         const previousFocusedId = get().focusedId;
+        const landsInDock = restoredPanel.location === "dock" && isPtyPanel(restoredPanel);
         set({
           focusedId: id,
-          // Open the dock popover when the panel landed back in the dock;
-          // otherwise focus would point at an invisible panel (issue #9938).
-          activeDockTerminalId: restoredPanel.location === "dock" ? id : null,
+          // Open the dock popover when the panel landed back in the dock so
+          // focus and the visible panel agree (#9938). If it landed elsewhere,
+          // only clear the dock when this very panel was the one shown there —
+          // an unrelated open dock session must not be dismissed (#8368).
+          ...(landsInDock
+            ? { activeDockTerminalId: id }
+            : get().activeDockTerminalId === id
+              ? { activeDockTerminalId: null }
+              : {}),
           ...(previousFocusedId !== id && { previousFocusedId }),
         });
       },
@@ -807,20 +814,32 @@ export const usePanelStore = create<PanelGridState>()(
 
         registrySlice.restoreTrashedGroup(groupRestoreId, targetWorktreeId);
 
-        const focusId: string =
+        const preferredFocusId =
           anchorPanel?.groupMetadata?.activeTabId &&
           groupPanelIds.includes(anchorPanel.groupMetadata.activeTabId)
             ? anchorPanel.groupMetadata.activeTabId
             : groupPanelIds[0]!;
-        // Guard against a no-op restore leaving focus on a missing panel.
-        const restoredPanel = get().panelsById[focusId];
-        if (!restoredPanel) return;
+        // The preferred tab may have been pruned from panelsById during the
+        // trash window (expiry race); fall back to any surviving member so the
+        // restored group still gains focus and reopens its dock popover.
+        const focusId = get().panelsById[preferredFocusId]
+          ? preferredFocusId
+          : groupPanelIds.find((pid) => get().panelsById[pid]);
+        if (!focusId) return;
+        const restoredPanel = get().panelsById[focusId]!;
         const previousFocusedId = get().focusedId;
+        const landsInDock = restoredPanel.location === "dock" && isPtyPanel(restoredPanel);
         set({
           focusedId: focusId,
           // Match the restored panel's location so a docked group reopens the
-          // dock popover instead of focusing an invisible panel (issue #9938).
-          activeDockTerminalId: restoredPanel.location === "dock" ? focusId : null,
+          // dock popover instead of focusing an invisible panel (#9938); leave
+          // an unrelated open dock session untouched when it lands elsewhere
+          // (#8368).
+          ...(landsInDock
+            ? { activeDockTerminalId: focusId }
+            : get().activeDockTerminalId === focusId
+              ? { activeDockTerminalId: null }
+              : {}),
           ...(previousFocusedId !== focusId && { previousFocusedId }),
         });
 

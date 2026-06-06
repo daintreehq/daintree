@@ -116,6 +116,20 @@ describe("restore trashed dock focus (#9938)", () => {
     expect(state.activeDockTerminalId).toBeNull();
   });
 
+  it("does not dismiss an unrelated open dock when a grid terminal is restored", () => {
+    setTerminals([makeTerm("term-1", "grid"), makeTerm("other-dock", "dock")]);
+    usePanelStore.setState({ activeDockTerminalId: "other-dock", focusedId: "other-dock" });
+
+    usePanelStore.getState().trashPanel("term-1");
+    usePanelStore.getState().restoreTerminal("term-1");
+
+    const state = usePanelStore.getState();
+    // Restoring a grid terminal moves focus but must not close a dock session
+    // belonging to a different panel.
+    expect(state.focusedId).toBe("term-1");
+    expect(state.activeDockTerminalId).toBe("other-dock");
+  });
+
   it("does not move focus when restoring a missing terminal (no-op)", () => {
     setTerminals([makeTerm("visible-dock", "dock")]);
     usePanelStore.setState({ focusedId: "visible-dock", activeDockTerminalId: "visible-dock" });
@@ -150,6 +164,40 @@ describe("restore trashed dock focus (#9938)", () => {
     const state = usePanelStore.getState();
     expect(state.panelsById["term-2"]?.location).toBe("dock");
     // Focus and the dock popover both land on the originally-active tab.
+    expect(state.focusedId).toBe("term-2");
+    expect(state.activeDockTerminalId).toBe("term-2");
+  });
+
+  it("falls back to a surviving member when the preferred tab was pruned", () => {
+    const group: TabGroup = {
+      id: "group-1",
+      panelIds: ["term-1", "term-2", "term-3"],
+      activeTabId: "term-1",
+      location: "dock",
+    };
+    setTerminals([
+      makeTerm("term-1", "dock"),
+      makeTerm("term-2", "dock"),
+      makeTerm("term-3", "dock"),
+    ]);
+    usePanelStore.setState({ tabGroups: new Map([["group-1", group]]) });
+
+    usePanelStore.getState().trashPanelGroup("term-1");
+    const groupRestoreId = usePanelStore.getState().trashedTerminals.get("term-2")!.groupRestoreId!;
+
+    // Simulate the preferred active tab being garbage-collected from panelsById
+    // during the trash window while its trash metadata lingers.
+    usePanelStore.setState((state) => {
+      const panelsById = { ...state.panelsById };
+      delete panelsById["term-1"];
+      return { panelsById, panelIds: state.panelIds.filter((id) => id !== "term-1") };
+    });
+
+    usePanelStore.getState().restoreTrashedGroup(groupRestoreId);
+
+    const state = usePanelStore.getState();
+    // Focus and the dock popover land on a surviving member rather than being
+    // stranded because the preferred tab is gone.
     expect(state.focusedId).toBe("term-2");
     expect(state.activeDockTerminalId).toBe("term-2");
   });
