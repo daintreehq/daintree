@@ -5560,7 +5560,7 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("debounces idle: a working signal within 200ms cancels the pending idle timer", () => {
+    it("OSC idle is advisory: a later working signal keeps the monitor busy", () => {
       vi.setSystemTime(3000);
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("osc-debounce", 100, onStateChange, {
@@ -5572,11 +5572,11 @@ describe("ActivityMonitor", () => {
       });
 
       monitor.onOscProgressWorking(3000);
+      // OSC idle is advisory (a no-op); it never arms a timer or forces idle.
       monitor.onOscProgressIdle(3050);
-      // Working arrives well inside the 200ms debounce window.
       vi.setSystemTime(3100);
       monitor.onOscProgressWorking(3100);
-      // Advance past the original 200ms window — no idle should fire.
+      // Advance well past any former debounce window — state stays busy.
       vi.advanceTimersByTime(300);
 
       expect(monitor.getState()).toBe("busy");
@@ -5600,11 +5600,11 @@ describe("ActivityMonitor", () => {
       monitor.onOscProgressIdle(4010);
       vi.advanceTimersByTime(199);
 
-      // Under the 200ms debounce, no transition fires (and nothing else has).
+      // OSC idle is a no-op — no transition fires (and nothing else has).
       expect(monitor.getState()).toBe("busy");
       expect(onStateChange).not.toHaveBeenCalled();
 
-      // After the debounce fires, state is still busy — OSC idle is advisory.
+      // Advancing time changes nothing — OSC idle is advisory.
       vi.advanceTimersByTime(2);
       expect(monitor.getState()).toBe("busy");
 
@@ -5668,7 +5668,7 @@ describe("ActivityMonitor", () => {
       monitor.onOscProgressIdle(15050);
       onStateChange.mockClear();
 
-      // Cross the 200ms OSC debounce — no transition yet (advisory only).
+      // OSC idle is advisory (a no-op) — no transition fires.
       vi.advanceTimersByTime(201);
       expect(monitor.getState()).toBe("busy");
 
@@ -5680,7 +5680,7 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("dispose() while an OSC idle timer is pending does not throw", () => {
+    it("dispose() after onOscProgressIdle does not throw", () => {
       vi.setSystemTime(6000);
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("osc-dispose", 100, onStateChange, {
@@ -5688,9 +5688,9 @@ describe("ActivityMonitor", () => {
       });
 
       monitor.onOscProgressIdle(6000);
-      // Don't advance — leave the timer pending.
+      // onOscProgressIdle is a no-op; there is no timer to leave pending.
       expect(() => monitor.dispose()).not.toThrow();
-      // Advancing afterwards must not throw either (timer cleared).
+      // Advancing afterwards must not throw either.
       expect(() => vi.advanceTimersByTime(500)).not.toThrow();
     });
 

@@ -3,9 +3,10 @@
 // react to a viewport-independent signal — the existing simpleOutputState path
 // only sees N visible terminal lines, which starves detection in small grid
 // tiles. This parser is read-only; the OSC_NOISE stripper in
-// `IdleSequenceFilter` still removes the sequence from the renderer-bound and
-// byte-volume paths so downstream detectors stay clean (the strip-on-success
-// invariant is the same one `OscResponder` follows for OSC 10/11).
+// `IdleSequenceFilter` still removes the sequence from the ActivityMonitor
+// byte-volume / activity-gate path so those detectors stay clean (the
+// renderer receives the raw bytes and renders the progress bar). The
+// strip-on-success invariant is the same one `OscResponder` follows for OSC 10/11.
 //
 // OSC 9;4 format: `\x1b]9;4;<state>;<progress>\x07` or terminated by ST
 // (`\x1b\\`). State codes (from the de-facto Windows ConEmu spec that Claude
