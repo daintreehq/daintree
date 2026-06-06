@@ -5611,6 +5611,36 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
+    it("OSC idle does not mutate activity timestamps — advisory no-op contract", () => {
+      // Guards the advisory contract: state=0 must leave the natural-decay
+      // inputs untouched. A future change that refreshes (or zeroes) these on
+      // idle receipt would silently shift when the 8s gate fires.
+      vi.setSystemTime(8000);
+      const monitor = new ActivityMonitor("osc-idle-no-mutate", 100, vi.fn(), {
+        agentId: "claude",
+        initialState: "busy",
+        skipInitialStateEmit: true,
+      });
+
+      type MonitorInternals = {
+        lastActivityTimestamp: number;
+        lastDataTimestamp: number;
+      };
+      const internals = monitor as unknown as MonitorInternals;
+
+      monitor.onOscProgressWorking(8000);
+      const activityTs = internals.lastActivityTimestamp;
+      const dataTs = internals.lastDataTimestamp;
+
+      vi.setSystemTime(8500);
+      monitor.onOscProgressIdle(8500);
+
+      expect(internals.lastActivityTimestamp).toBe(activityTs);
+      expect(internals.lastDataTimestamp).toBe(dataTs);
+
+      monitor.dispose();
+    });
+
     it("respects MAX_WORKING_SILENCE_MS — OSC working does not bypass the safety timeout (#4974 regression)", () => {
       // Bug #4974: a working signal that never decays leaves the agent stuck.
       // The OSC heartbeat must refresh `lastDataTimestamp` like real output, so

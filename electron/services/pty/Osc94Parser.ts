@@ -11,7 +11,8 @@
 // OSC 9;4 format: `\x1b]9;4;<state>;<progress>\x07` or terminated by ST
 // (`\x1b\\`). State codes (from the de-facto Windows ConEmu spec that Claude
 // Code adopted in v2.0.56):
-//   0 — remove/hide (between tool calls; debounced in `ActivityMonitor`)
+//   0 — remove/hide (between tool calls; advisory only — `onOscProgressIdle`
+//       is a deliberate no-op in `ActivityMonitor`)
 //   1 — normal/determinate (working, percent follows)
 //   2 — error
 //   3 — indeterminate (working, no percent)
