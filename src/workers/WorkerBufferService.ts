@@ -43,17 +43,20 @@ export function trimAnalysisBuffer(buffer: string): string {
 
   if (anchor < trimStart && buffer.length - anchor <= MAX_ANALYSIS_BUFFER_HARD_CAP) {
     trimStart = anchor;
-  } else if (fences.length % 2 === 0) {
-    // All fences are balanced, but the cut can strand a closing fence in the
-    // kept tail; the next round would mistake it for an opener and
-    // over-retain. If the tail's own fence parity is odd, advance the cut
-    // past the first stranded fence line.
-    const tailFences = fences.filter((offset) => offset >= trimStart);
-    if (tailFences.length % 2 === 1) {
-      const lineEnd = buffer.indexOf("\n", tailFences[0]!);
-      if (lineEnd !== -1) {
-        trimStart = lineEnd + 1;
-      }
+  }
+
+  // Invariant: the kept buffer must start outside any code block, so fences
+  // alternate opener/closer by index and parity stays meaningful next round.
+  // If the first fence the cut keeps is a closer (odd index), the cut landed
+  // inside a closed block — advance past that stranded closer's line, else a
+  // later round would misread it as an opener and over- or under-retain.
+  const firstKeptFence = fences.findIndex((offset) => offset >= trimStart);
+  if (firstKeptFence !== -1 && firstKeptFence % 2 === 1) {
+    const lineEnd = buffer.indexOf("\n", fences[firstKeptFence]!);
+    // A fence on the final, newline-less line may still be streaming; leave
+    // it and fix up on a later round.
+    if (lineEnd !== -1) {
+      trimStart = lineEnd + 1;
     }
   }
 

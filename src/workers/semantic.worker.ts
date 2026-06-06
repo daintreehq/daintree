@@ -55,6 +55,8 @@ async function processPacket(terminalId: string, data: string): Promise<void> {
   // Maintain sliding window for artifact detection. Extraction runs on the
   // untrimmed buffer: when a closing fence arrives, the open-fence anchor is
   // released and the trim evicts the block — extracting first captures it.
+  // Trimming before the await is deliberate: if extraction throws, the block
+  // is lost (memory safety over a retry that the error path can't deliver).
   const combined = appendToAnalysisBuffer(state.analysisBuffer, cleanData);
   state.analysisBuffer = trimAnalysisBuffer(combined);
 

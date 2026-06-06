@@ -130,6 +130,15 @@ describe("trimAnalysisBuffer", () => {
     expect(trimmed.startsWith("diff --git")).toBe(false);
   });
 
+  it("anchors at the earliest open structure when a fence wraps a patch", () => {
+    let patch = "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1,300 +1,300 @@\n";
+    for (let i = 0; i < 300; i++) {
+      patch += `+const generated${i} = ${i};\n`;
+    }
+    const buffer = trimAnalysisBuffer(prose(20) + "```diff\n" + patch);
+    expect(buffer.startsWith("```diff\n")).toBe(true);
+  });
+
   it("does not let a partial final line terminate an open patch", () => {
     let patch = "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1,300 +1,300 @@\n";
     for (let i = 0; i < 300; i++) {
@@ -184,7 +193,44 @@ describe("multi-chunk artifact survival (#9999)", () => {
   it("drops a never-closing fence at the hard cap without unbounded growth", () => {
     const chunks = ["```ts\n", ...Array.from({ length: 60 }, () => "y".repeat(20_000) + "\n")];
     const { buffer } = feed(chunks);
-    expect(buffer.length).toBeLessThanOrEqual(MAX_ANALYSIS_BUFFER_HARD_CAP);
+    // Once the cap is exceeded the trim falls back to the plain window tail.
+    expect(buffer.length).toBe(MAX_ANALYSIS_BUFFER_SIZE);
+  });
+
+  it("survives a fence opener split across a chunk boundary", () => {
+    const body = prose(300);
+    const chunks = [
+      prose(10) + "``",
+      "`ts\n" + body.slice(0, 1000),
+      ...chunked(body.slice(1000) + "```\n", 1024),
+    ];
+    const { combined } = feed(chunks);
+
+    const blocks = extractCodeBlocks(combined);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.language).toBe("ts");
+    expect(blocks[0]!.content).toBe(body.trim());
+  });
+
+  it("extracts two large blocks arriving back-to-back with per-chunk extraction", () => {
+    const bodyA = prose(300);
+    const bodyB = prose(280).replace(/ordinary/g, "different");
+    const text = "```js\n" + bodyA + "```\n```python\n" + bodyB + "```\n";
+
+    // Mirror the worker: extract from the untrimmed combined string each
+    // chunk, dedup like seenArtifactIds, then trim.
+    let buffer = "";
+    const found = new Set<string>();
+    for (const chunk of chunked(text, 1024)) {
+      const combined = appendToAnalysisBuffer(buffer, chunk);
+      for (const block of extractCodeBlocks(combined)) {
+        found.add(block.content);
+      }
+      buffer = trimAnalysisBuffer(combined);
+    }
+
+    expect(found.has(bodyA.trim())).toBe(true);
+    expect(found.has(bodyB.trim())).toBe(true);
   });
 
   it("keeps the trimmed buffer flat and window-sized during steady prose", () => {
