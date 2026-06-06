@@ -122,6 +122,7 @@ describe("PortalVisibilityController", () => {
     expect(portal.create).toHaveBeenCalledWith({
       tabId: "tab-1",
       url: "https://example.com/docs",
+      isRestore: true,
     });
     expect(portal.show).toHaveBeenCalledWith({
       tabId: "tab-1",
@@ -162,6 +163,7 @@ describe("PortalVisibilityController", () => {
     expect(portal.create).toHaveBeenLastCalledWith({
       tabId: "tab-a",
       url: "https://example.com/a",
+      isRestore: true,
     });
 
     act(() => {
@@ -178,6 +180,7 @@ describe("PortalVisibilityController", () => {
     expect(portal.create).toHaveBeenLastCalledWith({
       tabId: "tab-b",
       url: "https://example.com/b",
+      isRestore: true,
     });
     expect(portal.show).toHaveBeenCalledTimes(1);
     expect(portal.show).toHaveBeenCalledWith({
@@ -415,6 +418,7 @@ describe("PortalVisibilityController", () => {
     expect(portal.create).toHaveBeenCalledWith({
       tabId: "tab-3",
       url: "https://example.com/3",
+      isRestore: true,
     });
     expect(portal.show).toHaveBeenCalledWith({
       tabId: "tab-3",
