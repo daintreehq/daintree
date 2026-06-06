@@ -12,6 +12,7 @@ import type {
   GitHubTokenConfig,
   GitHubTokenValidation,
   RepoStatsAndPagePayload,
+  RepoCountsUpdatedPayload,
   GitHubFirstPageCachePayload,
   GitHubRateLimitDetails,
 } from "../../types/index.js";
@@ -155,6 +156,15 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
         fetchedAt: Date.now(),
       };
       broadcastToRenderer(CHANNELS.GITHUB_REPO_STATS_AND_PAGE_UPDATED, payload);
+    } else if (result.source === "network" && !result.stale) {
+      // Count-only poll (the cheap REST path, issue #10122) — push the fresh
+      // counts to other views of the same project without page data.
+      const payload: RepoCountsUpdatedPayload = {
+        projectPath: path.resolve(cwd),
+        stats: result.stats,
+        fetchedAt: Date.now(),
+      };
+      broadcastToRenderer(CHANNELS.GITHUB_REPO_COUNTS_UPDATED, payload);
     }
 
     return result.stats;

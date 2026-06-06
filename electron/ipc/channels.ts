@@ -159,6 +159,7 @@ export const CHANNELS = {
   GITHUB_TOKEN_HEALTH_CHANGED: "github:token-health-changed",
   GITHUB_GET_TOKEN_HEALTH: "github:get-token-health",
   GITHUB_REPO_STATS_AND_PAGE_UPDATED: "github:repo-stats-and-page-updated",
+  GITHUB_REPO_COUNTS_UPDATED: "github:repo-counts-updated",
   GITHUB_GET_FIRST_PAGE_CACHE: "github:get-first-page-cache",
   GITHUB_RESOLVE_AUTHOR_AVATAR: "github:resolve-author-avatar",
 

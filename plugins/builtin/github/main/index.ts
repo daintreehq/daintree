@@ -49,7 +49,6 @@ export {
 } from "./GitHubTokenHealthService.js";
 
 export {
-  REPO_STATS_QUERY,
   REPO_STATS_AND_PAGE_QUERY,
   PROJECT_HEALTH_QUERY,
   MERGE_VELOCITY_QUERY,
@@ -73,7 +72,7 @@ export type { RollupContextNode, DerivedCIResult } from "./prRequiredCIStatus.js
 export type {
   RepoContext,
   RepoStats,
-  RepoStatsResult,
+  RestCountsSnapshot,
   LinkedPR,
   PRCheckResult,
   PRCheckCandidate,
@@ -111,12 +110,7 @@ export {
 export { clearGitHubCaches, clearPRCaches } from "./GitHubCaches.js";
 
 // Stats
-export {
-  getRepoStats,
-  getRepoStatsAndPage,
-  getFirstPageCache,
-  getRepoStatsComplete,
-} from "./GitHubStats.js";
+export { getRepoStatsAndPage, getFirstPageCache, getRepoStatsComplete } from "./GitHubStats.js";
 export type { RepoStatsAndPageResult, RepoStatsCompleteResult } from "./GitHubStats.js";
 
 // Project health

@@ -10,6 +10,7 @@ const {
   getFirstPageCacheMock,
   onRateLimitChangedMock,
   onRepoStatsAndPageUpdatedMock,
+  onRepoCountsUpdatedMock,
 } = vi.hoisted(() => ({
   getCurrentMock: vi.fn(),
   onSwitchMock: vi.fn(),
@@ -19,6 +20,7 @@ const {
   onRepoStatsAndPageUpdatedMock: vi.fn<(cb: (payload: unknown) => void) => () => void>(
     () => () => {}
   ),
+  onRepoCountsUpdatedMock: vi.fn<(cb: (payload: unknown) => void) => () => void>(() => () => {}),
 }));
 
 vi.mock("@/clients", () => ({
@@ -31,6 +33,7 @@ vi.mock("@/clients", () => ({
     getFirstPageCache: getFirstPageCacheMock,
     onRateLimitChanged: onRateLimitChangedMock,
     onRepoStatsAndPageUpdated: onRepoStatsAndPageUpdatedMock,
+    onRepoCountsUpdated: onRepoCountsUpdatedMock,
   },
 }));
 
@@ -280,6 +283,146 @@ describe("useRepositoryStats", () => {
       expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
       expect(getRepoStatsMock.mock.calls[1]?.[0]).toBe("/repo/b");
       expect(result.current.stats?.commitCount).toBe(77);
+    });
+  });
+
+  describe("onRepoCountsUpdated push (issue #10122)", () => {
+    function countsPayload(projectPath: string, stats: RepositoryStats, fetchedAt = Date.now()) {
+      return { projectPath, stats, fetchedAt };
+    }
+
+    it("applies count-only pushed stats for the current project", async () => {
+      const project = { id: "p", path: "/repo/counts" };
+      getCurrentMock.mockResolvedValue(project);
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 5,
+        issueCount: 2,
+        prCount: 1,
+        loading: false,
+        stale: false,
+        lastUpdated: 1000,
+      });
+
+      let pushHandler: ((payload: unknown) => void) | undefined;
+      onRepoCountsUpdatedMock.mockImplementation((cb: (p: unknown) => void) => {
+        pushHandler = cb;
+        return () => {};
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(2);
+      });
+
+      const pushedStats: RepositoryStats = {
+        commitCount: 5,
+        issueCount: 7,
+        prCount: 3,
+        loading: false,
+        stale: false,
+        lastUpdated: 2000,
+      };
+      await act(async () => {
+        pushHandler?.(countsPayload(project.path, pushedStats, 2000));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(7);
+        expect(result.current.stats?.prCount).toBe(3);
+        expect(result.current.lastUpdated).toBe(2000);
+      });
+    });
+
+    it("ignores count pushes for a different project", async () => {
+      const project = { id: "p", path: "/repo/current" };
+      getCurrentMock.mockResolvedValue(project);
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 5,
+        issueCount: 2,
+        prCount: 1,
+        loading: false,
+        stale: false,
+        lastUpdated: 1000,
+      });
+
+      let pushHandler: ((payload: unknown) => void) | undefined;
+      onRepoCountsUpdatedMock.mockImplementation((cb: (p: unknown) => void) => {
+        pushHandler = cb;
+        return () => {};
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(2);
+      });
+
+      await act(async () => {
+        pushHandler?.(
+          countsPayload("/repo/other", {
+            commitCount: 0,
+            issueCount: 99,
+            prCount: 99,
+            loading: false,
+            stale: false,
+            lastUpdated: 2000,
+          })
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(result.current.stats?.issueCount).toBe(2);
+      expect(result.current.lastUpdated).toBe(1000);
+    });
+
+    it("skips a count push older than the last applied result", async () => {
+      const project = { id: "p", path: "/repo/older" };
+      getCurrentMock.mockResolvedValue(project);
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 5,
+        issueCount: 4,
+        prCount: 2,
+        loading: false,
+        stale: false,
+        lastUpdated: 5000,
+      });
+
+      let pushHandler: ((payload: unknown) => void) | undefined;
+      onRepoCountsUpdatedMock.mockImplementation((cb: (p: unknown) => void) => {
+        pushHandler = cb;
+        return () => {};
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(4);
+      });
+
+      await act(async () => {
+        pushHandler?.(
+          countsPayload(project.path, {
+            commitCount: 5,
+            issueCount: 1,
+            prCount: 1,
+            loading: false,
+            stale: false,
+            lastUpdated: 1000,
+          })
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(result.current.stats?.issueCount).toBe(4);
+      expect(result.current.lastUpdated).toBe(5000);
     });
   });
 

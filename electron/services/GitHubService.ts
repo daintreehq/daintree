@@ -14,7 +14,6 @@ export {
   withRepoContextRetry,
   clearGitHubCaches,
   clearPRCaches,
-  getRepoStats,
   getRepoStatsAndPage,
   getProjectHealth,
   batchCheckLinkedPRs,

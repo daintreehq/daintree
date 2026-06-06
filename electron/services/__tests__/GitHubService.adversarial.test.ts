@@ -221,13 +221,15 @@ describe("GitHubService adversarial", () => {
     });
     shared.graphqlClient.mockRejectedValueOnce(new Error("API rate limit exceeded"));
 
-    await expect(github.getRepoStats("/repo")).resolves.toEqual({
+    await expect(github.getRepoStatsAndPage("/repo", true)).resolves.toEqual({
       stats: {
         issueCount: 11,
         prCount: 5,
         stale: true,
         lastUpdated: 123,
       },
+      issues: null,
+      prs: null,
       error: "GitHub rate limit exceeded. Try again in a few minutes.",
     });
   });
@@ -300,8 +302,10 @@ describe("GitHubService adversarial", () => {
   it("AUTH_FAILURE_NOT_CACHED_ACROSS_RECOVERY", async () => {
     shared.tokenState.token = undefined;
 
-    await expect(github.getRepoStats("/repo")).resolves.toEqual({
+    await expect(github.getRepoStatsAndPage("/repo")).resolves.toEqual({
       stats: null,
+      issues: null,
+      prs: null,
       error: "GitHub token not configured. Set it in Settings.",
     });
 
@@ -313,12 +317,13 @@ describe("GitHubService adversarial", () => {
       },
     });
 
-    await expect(github.getRepoStats("/repo", true)).resolves.toEqual({
+    await expect(github.getRepoStatsAndPage("/repo", true)).resolves.toMatchObject({
       stats: {
         issueCount: 3,
         prCount: 2,
         lastUpdated: expect.any(Number),
       },
+      source: "network",
     });
   });
 
@@ -429,10 +434,10 @@ describe("GitHubService adversarial", () => {
         },
       });
 
-    const repoStats = await github.getRepoStats("/repo", true);
+    const repoStats = await github.getRepoStatsAndPage("/repo", true);
     const projectHealth = await github.getProjectHealth("/repo", true);
 
-    expect(repoStats).toEqual({
+    expect(repoStats).toMatchObject({
       stats: {
         issueCount: 0,
         prCount: 0,

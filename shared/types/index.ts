@@ -169,6 +169,7 @@ export type {
   // GitHub IPC types
   RepositoryStats,
   RepoStatsAndPagePayload,
+  RepoCountsUpdatedPayload,
   GitHubFirstPageCachePayload,
   ProjectHealthData,
   GitHubCliStatus,

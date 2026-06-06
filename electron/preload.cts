@@ -97,6 +97,7 @@ import type {
   GitHubRateLimitPayload,
   GitHubTokenHealthPayload,
   RepoStatsAndPagePayload,
+  RepoCountsUpdatedPayload,
   ServiceConnectivityPayload,
   GitStatus,
   KeyAction,
@@ -1686,6 +1687,9 @@ const api: ElectronAPI = {
 
     onRepoStatsAndPageUpdated: (callback: (data: RepoStatsAndPagePayload) => void) =>
       _typedOn(CHANNELS.GITHUB_REPO_STATS_AND_PAGE_UPDATED, callback),
+
+    onRepoCountsUpdated: (callback: (data: RepoCountsUpdatedPayload) => void) =>
+      _typedOn(CHANNELS.GITHUB_REPO_COUNTS_UPDATED, callback),
 
     getTokenHealth: () => _unwrappingInvoke(CHANNELS.GITHUB_GET_TOKEN_HEALTH),
   },

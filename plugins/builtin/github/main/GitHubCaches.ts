@@ -11,7 +11,12 @@ import type {
   IssueTooltipData,
   PRTooltipData,
 } from "../../../../shared/types/github.js";
-import type { RepoContext, RepoStats, RepoStatsAndPageSnapshot } from "./types.js";
+import type {
+  RepoContext,
+  RepoStats,
+  RepoStatsAndPageSnapshot,
+  RestCountsSnapshot,
+} from "./types.js";
 import type { Issue, PR, Page } from "../../../../shared/types/forge.js";
 
 export const repoContextCache = new Cache<string, RepoContext>({ defaultTTL: 300000 });
@@ -107,6 +112,21 @@ export const repoPRListETagCache = new Cache<string, string>({
  * the other ETag caches.
  */
 export const openPRListETagCache = new Cache<string, string>({
+  maxSize: ETAG_CACHE_MAX_SIZE,
+  defaultTTL: ETAG_CACHE_TTL,
+});
+
+/**
+ * Counts + ETags from the last successful `fetchRestCounts` (the cheap REST
+ * count poll behind the toolbar pill, issue #10122), keyed by `owner/repo`.
+ * One atomic entry rather than separate ETag caches: a `304` on either REST
+ * leg is only servable when the count that ETag validated is still on hand,
+ * and a mixed `304`/`200` pair must read both fallback values from the same
+ * baseline. Written only after both legs produce valid counts (#9440 commit
+ * discipline) — a failed fetch never advances the ETags. 1-hour TTL matches
+ * the other ETag caches; on expiry both legs simply refetch unconditionally.
+ */
+export const restCountsCache = new Cache<string, RestCountsSnapshot>({
   maxSize: ETAG_CACHE_MAX_SIZE,
   defaultTTL: ETAG_CACHE_TTL,
 });
@@ -215,6 +235,7 @@ export function clearGitHubCaches(): void {
   projectHealthCache.clear();
   velocityCache.clear();
   repoStatsAndPageSnapshotCache.clear();
+  restCountsCache.clear();
   repoEventsETagCache.clear();
   repoEventsPollIntervalCache.clear();
   repoEventsNoChangeCount.clear();
@@ -261,6 +282,10 @@ export function clearPRCaches(): void {
   // must drop with the PR caches. `velocityCache` is repo-level metadata on a
   // days timescale, not PR-list state, so it deliberately survives here.
   repoStatsAndPageSnapshotCache.clear();
+  // The REST count snapshot embeds the open-PR count and the ETag baselines it
+  // was observed under — a manual refresh must force the next count poll to a
+  // fresh `200` rather than serving the pre-refresh counts on a `304`.
+  restCountsCache.clear();
   // The events ETag is correctness state: a cleared ETag forces a fresh `200`
   // so the next probe re-checks from scratch. The no-change counter and last
   // probe time are reset too — a manual refresh is exactly the "window focus"

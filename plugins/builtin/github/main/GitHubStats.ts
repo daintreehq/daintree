@@ -2,7 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import { GitHubAuth, GITHUB_API_TIMEOUT_MS, rateLimitAwareFetch } from "./GitHubAuth.js";
-import { REPO_STATS_QUERY, REPO_STATS_AND_PAGE_QUERY } from "./GitHubQueries.js";
+import { REPO_STATS_AND_PAGE_QUERY } from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import { rateLimitMessage } from "./GitHubErrors.js";
 import { parseGitHubError } from "./GitHubErrors.js";
@@ -13,6 +13,7 @@ import {
   issueListCache,
   prListCache,
   repoStatsAndPageSnapshotCache,
+  restCountsCache,
   repoEventsETagCache,
   repoEventsPollIntervalCache,
   repoEventsNoChangeCount,
@@ -21,7 +22,7 @@ import {
 } from "./GitHubCaches.js";
 import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
 import { GitHubFirstPageCache } from "../../../../electron/services/GitHubFirstPageCache.js";
-import type { RepoStats, RepoStatsResult } from "./types.js";
+import type { RepoStats, RestCountsSnapshot } from "./types.js";
 import type { GitHubIssue, GitHubPR } from "../../../../shared/types/github.js";
 import { parseIssueNode } from "./GitHubIssues.js";
 import { parsePRNode, buildListCacheKey } from "./GitHubPRs.js";
@@ -29,124 +30,6 @@ import type {
   RepositoryStats,
   GitHubFirstPageCachePayload,
 } from "../../../../electron/types/index.js";
-
-export async function getRepoStats(
-  cwd: string,
-  bypassCache = false,
-  _retried = false
-): Promise<RepoStatsResult> {
-  const context = await getRepoContext(cwd);
-  if (!context) {
-    return { stats: null, error: "Not a GitHub repository" };
-  }
-
-  const cacheKey = `${context.owner}/${context.repo}`;
-  const persistentCache = GitHubStatsCache.getInstance();
-
-  const client = GitHubAuth.createClient();
-  if (!client) {
-    const diskCached = persistentCache.get(cacheKey);
-    if (diskCached) {
-      return {
-        stats: {
-          issueCount: diskCached.issueCount,
-          prCount: diskCached.prCount,
-          stale: true,
-          lastUpdated: diskCached.lastUpdated,
-        },
-        error: "GitHub token not configured. Set it in Settings.",
-      };
-    }
-    return { stats: null, error: "GitHub token not configured. Set it in Settings." };
-  }
-
-  const rateLimitBlock = gitHubRateLimitService.shouldBlockRequest("graphql");
-  if (rateLimitBlock.blocked && rateLimitBlock.reason && rateLimitBlock.resumeAt) {
-    const diskCached = persistentCache.get(cacheKey);
-    const message = rateLimitMessage(rateLimitBlock.reason, rateLimitBlock.resumeAt);
-    if (diskCached) {
-      return {
-        stats: {
-          issueCount: diskCached.issueCount,
-          prCount: diskCached.prCount,
-          stale: true,
-          lastUpdated: diskCached.lastUpdated,
-        },
-        error: message,
-      };
-    }
-    return { stats: null, error: message };
-  }
-
-  if (!bypassCache) {
-    const cached = repoStatsCache.get(cacheKey);
-    if (cached) {
-      return { stats: cached };
-    }
-  }
-
-  try {
-    const result = (await client(REPO_STATS_QUERY, {
-      owner: context.owner,
-      repo: context.repo,
-      request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
-    })) as GraphQlQueryResponseData;
-
-    gitHubRateLimitService.updateFromGraphQL(result, "REPO_STATS_QUERY");
-
-    const repository = result?.repository;
-    if (!repository) {
-      const diskCached = persistentCache.get(cacheKey);
-      if (diskCached) {
-        return {
-          stats: {
-            issueCount: diskCached.issueCount,
-            prCount: diskCached.prCount,
-            stale: true,
-            lastUpdated: diskCached.lastUpdated,
-          },
-          error: "Repository not found (showing cached data)",
-        };
-      }
-      return { stats: null, error: "Repository not found" };
-    }
-
-    const stats: RepoStats = {
-      issueCount: repository.issues?.totalCount ?? 0,
-      prCount: repository.pullRequests?.totalCount ?? 0,
-      lastUpdated: Date.now(),
-    };
-
-    repoStatsCache.set(cacheKey, stats);
-    persistentCache.set(cacheKey, stats, cwd);
-
-    return { stats };
-  } catch (error) {
-    if (!_retried && isRepoNotFoundError(error)) {
-      repoContextCache.invalidate(cwd);
-      const freshContext = await getRepoContext(cwd);
-      if (
-        freshContext &&
-        (freshContext.owner !== context.owner || freshContext.repo !== context.repo)
-      ) {
-        return getRepoStats(cwd, bypassCache, true);
-      }
-    }
-    const diskCached = persistentCache.get(cacheKey);
-    if (diskCached) {
-      return {
-        stats: {
-          issueCount: diskCached.issueCount,
-          prCount: diskCached.prCount,
-          stale: true,
-          lastUpdated: diskCached.lastUpdated,
-        },
-        error: parseGitHubError(error),
-      };
-    }
-    return { stats: null, error: parseGitHubError(error) };
-  }
-}
 
 export interface RepoStatsAndPageResult {
   stats: RepoStats | null;
@@ -302,6 +185,136 @@ export async function fetchActivityProbe(
   }
 }
 
+/**
+ * Total result count from a paginated REST response's `Link` header: with
+ * `per_page=1`, the `rel="last"` page number IS the total count. Returns
+ * `null` when the header is absent (GitHub omits it when everything fits on
+ * one page, i.e. 0 or 1 results) or unparseable — callers fall back to the
+ * body's array length.
+ */
+export function parseLinkLastPage(linkHeader: string | null): number | null {
+  if (!linkHeader) return null;
+  const match = linkHeader.match(/<[^>]*[?&]page=(\d+)[^>]*>;\s*rel="last"/);
+  if (!match) return null;
+  const page = parseInt(match[1], 10);
+  return Number.isFinite(page) && page >= 0 ? page : null;
+}
+
+/**
+ * Cheap REST replacement for the count half of `REPO_STATS_AND_PAGE_QUERY`
+ * (issue #10122): the background toolbar poll needs two scalars, not a full
+ * first page with labels, assignees, timeline items, and check rollups.
+ *
+ * Two parallel conditional GETs, both on the REST `"core"` bucket (separate
+ * from the GraphQL budget, zero quota on `304` — same economics as
+ * {@link fetchActivityProbe}):
+ *
+ * - `GET /repos/{owner}/{repo}` → `open_issues_count`, which GitHub defines as
+ *   open issues + open PRs combined.
+ * - `GET /repos/{owner}/{repo}/pulls?state=open&per_page=1` → total open PR
+ *   count from the `Link: rel="last"` page number (or body length when the
+ *   header is omitted at 0–1 results).
+ *
+ * `issueCount` is derived as `combined − prCount`, so both legs must resolve
+ * against the same baseline: on success the counts and their ETags are
+ * committed as one {@link restCountsCache} entry, and a `304` leg replays the
+ * stored value from that entry. Any failure — non-200/304 status, malformed
+ * body, a `304` with no stored baseline, a negative derived count from a
+ * cross-endpoint race — returns `null` without advancing any ETag (#9440), so
+ * the next poll re-detects the change instead of masking it.
+ */
+export async function fetchRestCounts(
+  token: string,
+  owner: string,
+  repo: string
+): Promise<RepoStats | null> {
+  const cacheKey = `${owner}/${repo}`;
+
+  const block = gitHubRateLimitService.shouldBlockRequest("core");
+  if (block.blocked) return null;
+
+  const prior = restCountsCache.get(cacheKey);
+  const versionAtStart = getETagCacheVersion();
+  const baseHeaders: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  const repoHeaders = { ...baseHeaders };
+  if (prior?.repoEtag) repoHeaders["If-None-Match"] = prior.repoEtag;
+  const prHeaders = { ...baseHeaders };
+  if (prior?.prEtag) prHeaders["If-None-Match"] = prior.prEtag;
+
+  try {
+    const [repoRes, prRes] = await Promise.all([
+      rateLimitAwareFetch(`https://api.github.com/repos/${owner}/${repo}`, {
+        headers: repoHeaders,
+        signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+        daintreeSkipRateLimitPreflight: true,
+      }),
+      rateLimitAwareFetch(
+        `https://api.github.com/repos/${owner}/${repo}/pulls?state=open&per_page=1`,
+        {
+          headers: prHeaders,
+          signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+          daintreeSkipRateLimitPreflight: true,
+        }
+      ),
+    ]);
+
+    // A concurrent cache clear invalidated the ETag baseline these requests
+    // were built on — discard rather than committing counts against it.
+    if (getETagCacheVersion() !== versionAtStart) return null;
+
+    let combinedCount: number;
+    let repoEtag: string | null;
+    if (repoRes.status === 304 && prior) {
+      combinedCount = prior.combinedCount;
+      repoEtag = prior.repoEtag;
+    } else if (repoRes.status === 200) {
+      const body = (await repoRes.json()) as { open_issues_count?: unknown } | null;
+      const count = body?.open_issues_count;
+      if (typeof count !== "number" || !Number.isFinite(count) || count < 0) return null;
+      combinedCount = count;
+      repoEtag = repoRes.headers.get("etag");
+    } else {
+      return null;
+    }
+
+    let prCount: number;
+    let prEtag: string | null;
+    if (prRes.status === 304 && prior) {
+      prCount = prior.prCount;
+      prEtag = prior.prEtag;
+    } else if (prRes.status === 200) {
+      const lastPage = parseLinkLastPage(prRes.headers.get("link"));
+      if (lastPage !== null) {
+        prCount = lastPage;
+      } else {
+        const body = (await prRes.json()) as unknown;
+        if (!Array.isArray(body)) return null;
+        prCount = body.length;
+      }
+      prEtag = prRes.headers.get("etag");
+    } else {
+      return null;
+    }
+
+    // The two endpoints are not transactional — a PR opening between the two
+    // reads can make the derived issue count negative. Treat it as a failed
+    // fetch (no commit) so the next poll reads a consistent pair.
+    const issueCount = combinedCount - prCount;
+    if (issueCount < 0) return null;
+
+    const lastUpdated = Date.now();
+    const snapshot: RestCountsSnapshot = { combinedCount, prCount, repoEtag, prEtag, lastUpdated };
+    restCountsCache.set(cacheKey, snapshot);
+    return { issueCount, prCount, lastUpdated };
+  } catch {
+    return null;
+  }
+}
+
 export async function getRepoStatsAndPage(
   cwd: string,
   bypassCache = false,
@@ -384,17 +397,14 @@ export async function getRepoStatsAndPage(
   }
 
   // Activity-probe gate: when the short-lived memory cache has expired, a cheap
-  // conditional GET to the REST `/events` feed decides whether the expensive
-  // stats query (~6+ GraphQL points) is needed at all. An authenticated `304`
-  // costs zero rate-limit quota, so an idle repo polls indefinitely for free.
-  // When the probe reports "unchanged", nothing the stats query observes can
-  // have changed, so the cached snapshot is re-warmed and returned without the
-  // heavy fetch. This runs BEFORE the GraphQL rate-limit gate below: the probe
-  // and the snapshot it validates draw from the REST `"core"` bucket, so a
-  // depleted GraphQL budget must not suppress a zero-cost `304` cache hit.
+  // conditional GET to the REST `/events` feed decides whether any count fetch
+  // is needed at all. An authenticated `304` costs zero rate-limit quota, so an
+  // idle repo polls indefinitely for free. When the probe reports "unchanged",
+  // nothing the count fetch observes can have changed, so the cached snapshot
+  // is re-warmed and returned without any further request.
   //
   // `pendingEventsEtag` carries a changed-probe's new ETag so it can be written
-  // only after the full query succeeds — committing it eagerly would let a
+  // only after the count fetch succeeds — committing it eagerly would let a
   // failed fetch advance the ETag ahead of the snapshot and mask the change.
   let pendingEventsEtag: string | null | undefined;
   if (bypassCache) {
@@ -407,12 +417,14 @@ export async function getRepoStatsAndPage(
     const token = GitHubAuth.getToken();
     if (token) {
       const snapshot = repoStatsAndPageSnapshotCache.get(cacheKey);
+      const restCounts = restCountsCache.get(cacheKey);
       // Skip the network probe entirely while inside the adaptive window: never
       // poll `/events` faster than the server-advertised `X-Poll-Interval`, and
-      // back off further on an idle repo. The cached snapshot stands in for the
+      // back off further on an idle repo. The cached snapshot (or, on the
+      // background-only path, the last REST counts) stands in for the
       // "unchanged" result we'd otherwise pay a request to confirm.
       const withinBackoff =
-        snapshot !== undefined &&
+        (snapshot !== undefined || restCounts !== undefined) &&
         Date.now() - (repoEventsLastProbeAt.get(cacheKey) ?? 0) < eventsProbeDelayMs(cacheKey);
       const probe: ActivityProbeResult = withinBackoff
         ? { status: "unchanged" }
@@ -423,7 +435,19 @@ export async function getRepoStatsAndPage(
       }
 
       if (probe.status === "unchanged" && snapshot) {
-        const freshStats: RepoStats = { ...snapshot.stats, lastUpdated: Date.now() };
+        // The cheap REST poll may have observed fresher counts after this
+        // snapshot was written (it deliberately leaves the page snapshot
+        // untouched) — serve whichever count pair was committed most recently
+        // so an unchanged probe can't roll the pill back to pre-REST counts.
+        const restCountsFresher =
+          restCounts !== undefined && restCounts.lastUpdated >= (snapshot.stats.lastUpdated ?? 0);
+        const freshStats: RepoStats = restCountsFresher
+          ? {
+              issueCount: restCounts.combinedCount - restCounts.prCount,
+              prCount: restCounts.prCount,
+              lastUpdated: Date.now(),
+            }
+          : { ...snapshot.stats, lastUpdated: Date.now() };
         repoStatsCache.set(cacheKey, freshStats);
         issueListCache.set(issuesListCacheKey, {
           items: snapshot.issues.items,
@@ -460,7 +484,87 @@ export async function getRepoStatsAndPage(
           nextPollIntervalMs: eventsProbeDelayMs(cacheKey),
         };
       }
+
+      // Background-only steady state: the page snapshot is written solely by
+      // the explicit-refresh GraphQL path now, so once its 10-min TTL lapses
+      // an unchanged probe lands here. The last committed REST counts are the
+      // "reuse cached count" half of the probe contract (issue #10122) — an
+      // idle repo costs one conditional `/events` GET per cadence window, not
+      // a probe plus two count requests.
+      if (probe.status === "unchanged" && !snapshot && restCounts) {
+        const freshStats: RepoStats = {
+          issueCount: restCounts.combinedCount - restCounts.prCount,
+          prCount: restCounts.prCount,
+          lastUpdated: Date.now(),
+        };
+        repoStatsCache.set(cacheKey, freshStats);
+        persistentCache.set(cacheKey, freshStats, cwd);
+        return {
+          stats: freshStats,
+          issues: null,
+          prs: null,
+          source: "network",
+          nextPollIntervalMs: eventsProbeDelayMs(cacheKey),
+        };
+      }
     }
+  }
+
+  // Background polls (the only `bypassCache: false` callers reaching this
+  // point) need just the two toolbar count scalars — fetch them via the cheap
+  // conditional REST pair instead of the ~6-point GraphQL page query (issue
+  // #10122). The full page now ships only on the explicit-refresh path below
+  // or via the dropdown's own list queries; the dropdown's fresh `totalCount`
+  // corrects the pill through `resolveGitHubDisplayCount`. On REST failure,
+  // serve the last-known disk counts rather than falling through to GraphQL —
+  // a silent fallback would quietly reinstate the heavy query on every
+  // transient REST error.
+  if (!bypassCache) {
+    const token = GitHubAuth.getToken();
+    const restStats = token ? await fetchRestCounts(token, context.owner, context.repo) : null;
+    if (restStats) {
+      repoStatsCache.set(cacheKey, restStats);
+      persistentCache.set(cacheKey, restStats, cwd);
+      // Commit the changed-probe's events ETag in lockstep with the counts it
+      // describes — same deferred-commit discipline as the GraphQL path: a
+      // failed count fetch leaves the old ETag so the next probe re-detects
+      // the change instead of masking it behind a 304.
+      if (pendingEventsEtag !== undefined) {
+        if (pendingEventsEtag) {
+          repoEventsETagCache.set(cacheKey, pendingEventsEtag);
+        } else {
+          repoEventsETagCache.invalidate(cacheKey);
+        }
+      }
+      return {
+        stats: restStats,
+        issues: null,
+        prs: null,
+        source: "network",
+        nextPollIntervalMs: eventsProbeDelayMs(cacheKey),
+      };
+    }
+
+    const coreBlock = gitHubRateLimitService.shouldBlockRequest("core");
+    const message =
+      coreBlock.blocked && coreBlock.reason && coreBlock.resumeAt
+        ? rateLimitMessage(coreBlock.reason, coreBlock.resumeAt)
+        : "Couldn't fetch repository counts";
+    const diskCached = persistentCache.get(cacheKey);
+    if (diskCached) {
+      return {
+        stats: {
+          issueCount: diskCached.issueCount,
+          prCount: diskCached.prCount,
+          stale: true,
+          lastUpdated: diskCached.lastUpdated,
+        },
+        issues: null,
+        prs: null,
+        error: message,
+      };
+    }
+    return { stats: null, issues: null, prs: null, error: message };
   }
 
   const rateLimitBlock = gitHubRateLimitService.shouldBlockRequest("graphql");
@@ -588,18 +692,6 @@ export async function getRepoStatsAndPage(
       issues: issuesPage,
       prs: prsPage,
     });
-    // Commit the changed-probe's events ETag now, in lockstep with the snapshot
-    // it describes. Deferring it to here (rather than writing it in
-    // `fetchActivityProbe`) guarantees the ETag never advances ahead of the
-    // snapshot: if this query had failed, the old ETag would survive and the
-    // next probe would re-detect the change instead of masking it behind a 304.
-    if (pendingEventsEtag !== undefined) {
-      if (pendingEventsEtag) {
-        repoEventsETagCache.set(cacheKey, pendingEventsEtag);
-      } else {
-        repoEventsETagCache.invalidate(cacheKey);
-      }
-    }
 
     return {
       stats,
