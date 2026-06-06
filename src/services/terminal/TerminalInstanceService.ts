@@ -171,6 +171,7 @@ class TerminalInstanceService {
       clearResizeJob: (managed) => this.resizeController.clearResizeJob(managed),
       clearSettledTimer: (id) => this.resizeController.clearSettledTimer(id),
       applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
+      drawDataLossMarker: (id, droppedBytes) => this.drawDataLossMarker(id, droppedBytes),
       ensureDeferredAddons: (id) => {
         const managed = this.instances.get(id);
         if (managed) this.ensureDeferredAddons(id, managed);

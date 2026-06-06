@@ -18,6 +18,13 @@ export interface HibernationManagerDeps extends TerminalListenerInstallDeps {
   clearResizeJob: (managed: ManagedTerminal) => void;
   clearSettledTimer: (id: string) => void;
   applyDeferredResize: (id: string) => void;
+  /**
+   * Draws the "Output dropped" marker for a PTY data-loss signal. Required (not
+   * optional) so the wake path can never silently diverge from `getOrCreate()`
+   * and drop the OSC 57301 callback again (#9907) — the omission becomes a
+   * compile error instead.
+   */
+  drawDataLossMarker: (id: string, droppedBytes: number) => void;
   onHibernationChanged: (id: string) => void;
   /**
    * Builds the deferred Image/file-link/web-link addons on the fresh post-wake
@@ -175,10 +182,19 @@ export class TerminalHibernationManager {
     const hostElement = managed.hostElement;
     hostElement.replaceChildren();
 
-    // Re-create parser handler
-    managed.parserHandler = new TerminalParserHandler(managed, () => {
-      this.deps.applyDeferredResize(id);
-    });
+    // Re-create parser handler — mirror `getOrCreate()` exactly, including the
+    // data-loss callback, so woken terminals keep rendering the "Output
+    // dropped" marker (#9907). `id` is the live key, never a captured managed
+    // ref — `drawDataLossMarker` does its own `instances.get(id)` lookup.
+    managed.parserHandler = new TerminalParserHandler(
+      managed,
+      () => {
+        this.deps.applyDeferredResize(id);
+      },
+      (droppedBytes) => {
+        this.deps.drawDataLossMarker(id, droppedBytes);
+      }
+    );
 
     // Re-register terminal-bound listeners via the canonical installer so the
     // wake path stays in lockstep with `getOrCreate()`. IPC listeners

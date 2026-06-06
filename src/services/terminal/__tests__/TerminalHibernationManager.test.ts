@@ -157,6 +157,7 @@ function makeMockDeps(managed?: ManagedTerminal): HibernationManagerDeps {
     clearResizeJob: vi.fn(),
     clearSettledTimer: vi.fn(),
     applyDeferredResize: vi.fn(),
+    drawDataLossMarker: vi.fn(),
     ensureDeferredAddons: vi.fn(),
     onHibernationChanged: vi.fn(),
     getIsBackgrounded: vi.fn(() => false),
