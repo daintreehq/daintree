@@ -967,6 +967,20 @@ describe("notify()", () => {
       expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
     });
 
+    it("records urgent grid-bar as unread when disabled (bypasses quiet)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const id = notify({
+        type: "error",
+        message: "Urgent bar",
+        placement: "grid-bar",
+        urgent: true,
+      });
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+      expect(id).toBe("");
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(false);
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
+    });
+
     it("returns empty string when disabled", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       const id = notify({ type: "success", message: "Done", priority: "high" });
