@@ -20,7 +20,11 @@ import {
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./dockPanelPortalContext";
-import { getDockDisplayAgentState, useDockBlockedState } from "./useDockBlockedState";
+import {
+  getDockDisplayAgentState,
+  isDockAgentStateDeprioritized,
+  useDockBlockedState,
+} from "./useDockBlockedState";
 import {
   handleDockInteractOutside,
   handleDockEscapeKeyDown,
@@ -299,9 +303,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   // state coerces to waiting so it never disappears mid-flight.
   const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
   const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
-  const isDeprioritized =
-    !isOpen &&
-    (!agentState || agentState === "idle" || agentState === "completed" || agentState === "exited");
+  const isDeprioritized = !isOpen && isDockAgentStateDeprioritized(agentState);
 
   return (
     <DockPopoverChildProvider>
@@ -369,7 +371,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                     <TooltipTrigger asChild>
                       <div
                         className={cn(
-                          "flex items-center shrink-0",
+                          "ml-1.5 flex items-center shrink-0",
                           getEffectiveStateColor(displayAgentState)
                         )}
                       >
