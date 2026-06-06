@@ -775,10 +775,16 @@ export const usePanelStore = create<PanelGridState>()(
 
       restoreTerminal: (id: string, targetWorktreeId?: string) => {
         registrySlice.restoreTerminal(id, targetWorktreeId);
+        // The registry restore is a no-op when the id is gone; don't move
+        // focus onto a panel that doesn't exist.
+        const restoredPanel = get().panelsById[id];
+        if (!restoredPanel) return;
         const previousFocusedId = get().focusedId;
         set({
           focusedId: id,
-          activeDockTerminalId: null,
+          // Open the dock popover when the panel landed back in the dock;
+          // otherwise focus would point at an invisible panel (issue #9938).
+          activeDockTerminalId: restoredPanel.location === "dock" ? id : null,
           ...(previousFocusedId !== id && { previousFocusedId }),
         });
       },
@@ -806,10 +812,15 @@ export const usePanelStore = create<PanelGridState>()(
           groupPanelIds.includes(anchorPanel.groupMetadata.activeTabId)
             ? anchorPanel.groupMetadata.activeTabId
             : groupPanelIds[0]!;
+        // Guard against a no-op restore leaving focus on a missing panel.
+        const restoredPanel = get().panelsById[focusId];
+        if (!restoredPanel) return;
         const previousFocusedId = get().focusedId;
         set({
           focusedId: focusId,
-          activeDockTerminalId: null,
+          // Match the restored panel's location so a docked group reopens the
+          // dock popover instead of focusing an invisible panel (issue #9938).
+          activeDockTerminalId: restoredPanel.location === "dock" ? focusId : null,
           ...(previousFocusedId !== focusId && { previousFocusedId }),
         });
 
