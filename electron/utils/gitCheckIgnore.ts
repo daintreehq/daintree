@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { HARDENED_GIT_CONFIG, buildHardenedGitEnv } from "./hardenedGit.js";
+import { HARDENED_GIT_CONFIG, buildHardenedGitEnv, GIT_BLOCK_TIMEOUT_MS } from "./hardenedGit.js";
 
 /**
  * Direct-spawn wrapper around `git check-ignore --stdin -z`.
@@ -17,6 +17,12 @@ import { HARDENED_GIT_CONFIG, buildHardenedGitEnv } from "./hardenedGit.js";
  * `protocol.ext.allow=never`, credential-blocking entries, …). Env comes
  * from `buildHardenedGitEnv` so locale and lock-suppression are identical
  * to the simple-git path.
+ *
+ * The wrapper applies the same `GIT_BLOCK_TIMEOUT_MS` ceiling that
+ * `createHardenedGit` passes to simple-git's `block` knob: a hung git
+ * (broken FUSE mount, deadlocked repo lock, hostile git shim on PATH) is
+ * killed with SIGTERM and the wrapper rejects, so a single bad call cannot
+ * pin the file-tree request forever.
  */
 
 export interface CheckIgnoreOptions {
@@ -54,14 +60,40 @@ export async function checkIgnoredPaths(
       signal: options.signal,
     });
 
+    let settled = false;
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    const timer = setTimeout(() => {
+      // Kill the child so `close` fires and we exit the wrapper. Reject
+      // here directly so a caller blocked on this promise gets unblocked
+      // even if the child is stuck in an uninterruptible syscall.
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // already exited
+      }
+      settle(() => reject(new Error(`git check-ignore timed out after ${GIT_BLOCK_TIMEOUT_MS}ms`)));
+    }, GIT_BLOCK_TIMEOUT_MS);
+
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
 
     child.stdout?.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
 
+    // Swallow stdin EPIPE: when git exits before we finish writing the
+    // body (fast failure, e.g. an unknown flag triggers an early exit),
+    // the stdin stream emits `error` after the process is already gone.
+    // The `close` handler is the source of truth for the result; any
+    // stdio error here is already terminal.
+    child.stdin?.on("error", () => {});
+
     child.on("error", (err) => {
-      reject(err);
+      settle(() => reject(err));
     });
 
     child.on("close", (code) => {
@@ -71,17 +103,17 @@ export async function checkIgnoredPaths(
         for (const entry of stdout.split("\0")) {
           if (entry) ignored.add(entry);
         }
-        resolve(ignored);
+        settle(() => resolve(ignored));
         return;
       }
       if (code === 1) {
         // `git check-ignore` exits 1 when none of the supplied paths are
         // ignored — not an error condition.
-        resolve(new Set());
+        settle(() => resolve(new Set()));
         return;
       }
       const stderr = Buffer.concat(stderrChunks).toString("utf8");
-      reject(new Error(`git check-ignore failed: exit ${code}: ${stderr.trim()}`));
+      settle(() => reject(new Error(`git check-ignore failed: exit ${code}: ${stderr.trim()}`)));
     });
 
     child.stdin?.end(body);

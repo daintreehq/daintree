@@ -153,6 +153,29 @@ describe("FileTreeService adversarial", () => {
     expect(result).toEqual([]);
   });
 
+  it("WARN_THROTTLE_DEDUPES_REPEATED_GIT_IGNORE_FAILURES", async () => {
+    // Sustained git failure (e.g. a broken FUSE mount on a refresh storm)
+    // must not spam the main process log. The first call logs; the
+    // second within the throttle window is suppressed.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      shared.readdir.mockResolvedValue([d("visible.txt")]);
+      shared.checkIgnoredPaths.mockRejectedValue(new Error("git unavailable"));
+
+      await service.getFileTree("/repo");
+      await service.getFileTree("/repo");
+      await service.getFileTree("/repo");
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        "git check-ignore failed; hiding checked entries to prevent leak",
+        expect.objectContaining({ entryCount: 1 })
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("CONCURRENT_CALLS_NO_SHARED_SNAPSHOT", async () => {
     const firstLstat = deferred<MockStats>();
     let readdirCall = 0;

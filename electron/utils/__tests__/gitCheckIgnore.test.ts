@@ -24,11 +24,13 @@ vi.mock("node:child_process", () => ({
 vi.mock("../hardenedGit.js", () => ({
   HARDENED_GIT_CONFIG: mockHardenedGitConfig,
   buildHardenedGitEnv: mockBuildHardenedGitEnv,
+  GIT_BLOCK_TIMEOUT_MS: 30_000,
 }));
 
 import { checkIgnoredPaths } from "../gitCheckIgnore.js";
+import { GIT_BLOCK_TIMEOUT_MS } from "../hardenedGit.js";
 
-interface FakeStdin {
+interface FakeStdin extends EventEmitter {
   end: ReturnType<typeof vi.fn>;
 }
 
@@ -43,7 +45,7 @@ function makeFakeProcess(
   const { exitCode = 0, errorEvent, stdoutData, stderrData } = opts;
   const stdout = new Readable({ read() {} });
   const stderr = new Readable({ read() {} });
-  const stdin: FakeStdin = { end: vi.fn() };
+  const stdin: FakeStdin = Object.assign(new EventEmitter(), { end: vi.fn() }) as FakeStdin;
 
   const child = new EventEmitter() as EventEmitter & {
     pid: number;
@@ -76,6 +78,26 @@ function makeFakeProcess(
     }
   });
 
+  return child;
+}
+
+function makeHangingProcess() {
+  // Never emits `close` or `error`; mirrors a stuck git subprocess.
+  const stdout = new Readable({ read() {} });
+  const stderr = new Readable({ read() {} });
+  const stdin: FakeStdin = Object.assign(new EventEmitter(), { end: vi.fn() }) as FakeStdin;
+  const child = new EventEmitter() as EventEmitter & {
+    pid: number;
+    stdout: Readable;
+    stderr: Readable;
+    stdin: FakeStdin;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  child.pid = 12345;
+  child.stdout = stdout;
+  child.stderr = stderr;
+  child.stdin = stdin;
+  child.kill = vi.fn();
   return child;
 }
 
@@ -265,4 +287,54 @@ describe("checkIgnoredPaths", () => {
 
     expect(mockBuildHardenedGitEnv).toHaveBeenCalledWith("win32");
   });
+
+  it("STDIN_EPIPE_DOES_NOT_CRASH_PROCESS", async () => {
+    // Git exits before we finish writing the body (e.g. a fast failure on
+    // an unknown flag). The stdin stream then emits `error` (EPIPE). The
+    // wrapper must swallow this — `close` is the source of truth for the
+    // result and any stdio error here is already terminal. Without the
+    // `stdin.on('error')` listener this surfaces as an unhandled
+    // `process.on('uncaughtException')` and crashes the main process.
+    const child = makeFakeProcess({
+      exitCode: 128,
+      stderrData: Buffer.from("fatal: unknown flag"),
+    });
+    mockSpawn.mockReturnValue(child);
+
+    const promise = checkIgnoredPaths("/repo", ["a.txt"]);
+
+    // Emit an EPIPE-like error on stdin after spawn; the wrapper's
+    // listener must catch it. Then await — the close handler resolves
+    // (rejects) with the exit-128 error.
+    const stdin = child.stdin;
+    setImmediate(() => stdin.emit("error", new Error("EPIPE")));
+
+    await expect(promise).rejects.toThrow(/exit 128/);
+  });
+
+  it(
+    "KILLS_AND_REJECTS_HANGING_CHILD_AFTER_BLOCK_TIMEOUT",
+    async () => {
+      // A stuck git (broken FUSE mount, deadlocked repo lock, hostile git
+      // shim on PATH) must not pin the file-tree request forever. The
+      // wrapper applies GIT_BLOCK_TIMEOUT_MS and kills the child with
+      // SIGTERM, rejecting with a timeout error.
+      const child = makeHangingProcess();
+      mockSpawn.mockReturnValue(child);
+
+      const promise = checkIgnoredPaths("/repo", ["a.txt"]);
+      // Attach a no-op catch immediately so the rejection the wrapper
+      // raises when the timeout fires is not flagged as unhandled before
+      // the assertion below attaches its own handler.
+      promise.catch(() => {});
+
+      // Wait past the timeout for the kill to fire. We use a small margin
+      // to keep the test fast — the wrapper uses the real constant.
+      await new Promise((r) => setTimeout(r, GIT_BLOCK_TIMEOUT_MS + 100));
+
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      await expect(promise).rejects.toThrow(/timed out/);
+    },
+    GIT_BLOCK_TIMEOUT_MS + 5000
+  );
 });

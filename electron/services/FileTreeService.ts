@@ -5,8 +5,17 @@ import type { FileTreeNode } from "../../shared/types/ipc.js";
 
 const _baseRealpathCache = new Map<string, Promise<string>>();
 
+// Throttle for the fail-closed warn so a sustained git failure (e.g. a
+// broken FUSE mount on a refresh storm) doesn't spam the main process log
+// with one line per `getFileTree` call. First occurrence is logged
+// immediately; subsequent occurrences within the throttle window are
+// suppressed.
+const WARN_THROTTLE_MS = 30_000;
+const _lastWarnAt = new Map<string, number>();
+
 export function _resetBaseRealpathCacheForTests(): void {
   _baseRealpathCache.clear();
+  _lastWarnAt.clear();
 }
 
 function _getBaseRealpath(resolvedBasePath: string): Promise<string> {
@@ -83,11 +92,16 @@ export class FileTreeService {
         // prevents gitignored entries (build output, dependency folders,
         // secret-like files) from leaking into the tree. A transient
         // failure self-heals on the next successful call.
-        console.warn("git check-ignore failed; hiding checked entries to prevent leak", {
-          code: (error as NodeJS.ErrnoException)?.code,
-          message: error instanceof Error ? error.message : String(error),
-          entryCount: pathsToCheck.length,
-        });
+        const now = Date.now();
+        const last = _lastWarnAt.get(resolvedBasePath) ?? 0;
+        if (now - last >= WARN_THROTTLE_MS) {
+          _lastWarnAt.set(resolvedBasePath, now);
+          console.warn("git check-ignore failed; hiding checked entries to prevent leak", {
+            code: (error as NodeJS.ErrnoException)?.code,
+            message: error instanceof Error ? error.message : String(error),
+            entryCount: pathsToCheck.length,
+          });
+        }
         for (const p of pathsToCheck) {
           ignoredPaths.add(p);
         }
