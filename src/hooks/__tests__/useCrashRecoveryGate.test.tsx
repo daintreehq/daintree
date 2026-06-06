@@ -504,6 +504,42 @@ describe("useCrashRecoveryGate", () => {
     expect(resolve).toHaveBeenCalledTimes(1);
   });
 
+  it("updateConfig patches local config in failed state so the auto-restore switch reflects the change", async () => {
+    // After an auto-restore failure, the user can toggle the auto-restore
+    // switch in the dialog. The dialog's local config must update so the
+    // switch position matches the persisted value (not the stale boot config).
+    const resolve = vi.fn(async () => {
+      throw new Error("Crash recovery restore failed");
+    });
+    installElectronStub({ resolve });
+
+    const { result } = renderHook(() =>
+      useCrashRecoveryGate(
+        makeBootResult({
+          crashPending: { ...mockCrash, crashCount: 1 },
+          crashConfig: { autoRestoreOnCrash: true },
+        })
+      )
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.state.status).toBe("failed");
+
+    await act(async () => {
+      await result.current.updateConfig({ autoRestoreOnCrash: false });
+    });
+
+    expect(result.current.state.status).toBe("failed");
+    if (result.current.state.status === "failed") {
+      expect(result.current.state.config.autoRestoreOnCrash).toBe(false);
+    }
+  });
+
   describe("perf instrumentation", () => {
     beforeEach(() => {
       window.__DAINTREE_PERF_MARKS__ = [];

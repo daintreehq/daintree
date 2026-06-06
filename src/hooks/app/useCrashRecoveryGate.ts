@@ -130,7 +130,10 @@ export function useCrashRecoveryGate(bootResult: BootResult | null): {
     if (!isElectronAvailable()) return;
     const updated = await window.electron.crashRecovery.setConfig(patch);
     setState((prev) => {
-      if (prev.status !== "pending") return prev;
+      // The dialog can also be visible in `failed` state (after an
+      // auto-restore rejection). Keep the local config in sync so the
+      // auto-restore switch reflects the user's choice during retry.
+      if (prev.status !== "pending" && prev.status !== "failed") return prev;
       return { ...prev, config: updated };
     });
   };
