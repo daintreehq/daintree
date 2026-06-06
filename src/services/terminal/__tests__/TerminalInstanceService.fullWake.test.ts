@@ -358,6 +358,26 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     expect(instance.pendingVisibilityWake).toBe(true);
   });
 
+  it("keeps pendingVisibilityWake set when the geometry sync throws while attaching (#10070)", async () => {
+    const id = "fw-6c";
+    const instance = makeInstance({ isAttaching: true });
+    service.instances.set(id, instance);
+
+    vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {
+      throw new Error("terminal disposed mid-wake");
+    });
+    const wakeAndRestore = vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+
+    // The throw propagates, but the deferred-wake flag must already be set so
+    // notifyAttachSettledWaiters re-runs the wake once attach settles.
+    await expect(service.fullWakeForVisibilityRestore(id)).rejects.toThrow(
+      "terminal disposed mid-wake"
+    );
+
+    expect(instance.pendingVisibilityWake).toBe(true);
+    expect(wakeAndRestore).not.toHaveBeenCalled();
+  });
+
   it("bypasses the resize lock for the geometry sync even while attaching (#10070)", async () => {
     const id = "fw-6b";
     const instance = makeInstance({

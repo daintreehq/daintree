@@ -874,6 +874,13 @@ class TerminalInstanceService {
     if (!current) return;
     if (!current.isOpened) return;
 
+    // Set the deferred-wake flag before the geometry sync so an unexpected
+    // throw from applyDeferredResize (e.g. a terminal disposed between the
+    // unhibernate re-fetch above and here) can't strand it: while attaching the
+    // async wake must re-run once attach settles, so the flag has to survive a
+    // throw. On the proceed path we clear it again below.
+    current.pendingVisibilityWake = current.isAttaching === true;
+
     // Geometry sync runs synchronously even while attaching (#10070).
     // applyDeferredResize only calls terminal.resize() — no buffer reset, no
     // async — so it is safe mid-attach and corrects the grid before the warm
@@ -905,10 +912,10 @@ class TerminalInstanceService {
     // Attach is in progress — running the async wake now would race the
     // attach's own post-rAF reconciliation, which calls terminal.reset()
     // during buffer restore. The geometry sync above is safe to keep, but the
-    // async wake must defer: mark the terminal so notifyAttachSettledWaiters
-    // re-runs this wake once attach settles (#9702).
+    // async wake must defer: pendingVisibilityWake was already set true above
+    // so notifyAttachSettledWaiters re-runs this wake once attach settles
+    // (#9702).
     if (current.isAttaching) {
-      current.pendingVisibilityWake = true;
       return;
     }
 
