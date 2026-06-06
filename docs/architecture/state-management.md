@@ -117,7 +117,7 @@ Settings-style stores opt in by wrapping their `create()` in the `persist` middl
 
 A persisted store declares `name` (the storage key), `version`, and optional `migrate`/`merge` in its persist options — `preferencesStore` is the canonical worked example (version 9, full `migrate` chain, `merge`-time sanitization).
 
-**Hydration ordering:** localStorage reads are synchronous, so a persisted store hydrates at module-evaluation time. Cross-store reads during hydration must not assume another store has finished — this is exactly the TDZ/stale-state hazard documented in [store-init-order.md](./store-init-order.md). Route any cross-store read through `storeAccessors.ts`, never a direct top-level import.
+**Hydration ordering:** localStorage reads are synchronous, so a persisted store hydrates at module-evaluation time. Cross-store reads _during hydration_ run at eval time, so they must not assume another store has finished — this is exactly the TDZ/stale-state hazard documented in [store-init-order.md](./store-init-order.md). Route any eval-time cross-store read through `storeAccessors.ts`. (A direct top-level import is only safe when every read sits inside a later-running function body, as in the sanctioned `panelStore` ↔ `worktreeStore` pair — see [store-init-order.md](./store-init-order.md); hydration is not that case.)
 
 ### 2. Project-scoped panel snapshots → main process (`persistence/panelPersistence.ts`)
 
@@ -144,7 +144,7 @@ This module owns everything that wires _independent_ stores together. `initStore
 Mirrors the "Adding new IPC" checklist in [development.md](../development.md).
 
 1. **Pick the flavor.** Per-view, port-driven, project-owned data → vanilla `createStore()` + Context provider + module accessor (model on `createWorktreeStore.ts`). Everything else → app-global `create()` with a `useFooStore` hook.
-2. **Create `src/store/fooStore.ts`.** Keep it a leaf where possible — do not top-level-import a sibling store you need to _read_; route that read through an accessor in `storeAccessors.ts` (see [store-init-order.md](./store-init-order.md)).
+2. **Create `src/store/fooStore.ts`.** Keep it a leaf where possible. If you must read a sibling store, the read may never touch the sibling's binding at module-evaluation time — route eval-time reads through an accessor in `storeAccessors.ts`. A direct top-level import is only acceptable when every read lives inside a later-running function body and you add a cold-graph regression gate, as the sanctioned `panelStore` ↔ `worktreeStore` pair does (see [store-init-order.md](./store-init-order.md) for the full decision tree).
 3. **Export from `src/store/index.ts`** if anything outside `src/store/` consumes it — `index.ts` is the canonical inventory.
 4. **If it persists to localStorage:** wrap in `persist` with `storage: createSafeJSONStorage()` (or the debounced variant for hot writers), set a unique `name`, a `version`, and `migrate`/`merge` if the shape can change. Then call `registerPersistedStore({ … })` at module load so the diagnostic surface and the key-collision guard pick it up.
 5. **If it needs to react to another store** (not just be read by one), add the subscription to `rendererStoreOrchestrator.ts` inside the `DisposableStore`, **not** as a module-scope `subscribe` — that's what gives HMR/test teardown a deterministic cleanup point.
