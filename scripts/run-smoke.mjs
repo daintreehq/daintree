@@ -3,8 +3,8 @@
  *
  * This script launches the built Electron app in --smoke-test mode and
  * validates stability markers (node-pty, renderer load, IPC bridge, terminal
- * stress, project persistence). It runs on push in CI (Linux, xvfb) via
- * `npm run test:smoke`, gated by `.github/workflows/ci.yml`.
+ * stress, project persistence). It runs in CI on every push and pull request
+ * (Linux, xvfb) via `npm run test:smoke` in `.github/workflows/ci.yml`.
  *
  * The Playwright release-gate smoke suite lives in `e2e/core/` and runs via
  * `npm run test:e2e:core`. See `docs/e2e-testing.md` for the distinction
