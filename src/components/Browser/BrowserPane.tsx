@@ -186,6 +186,15 @@ export function BrowserPane({
   // navigations into redundant full reloads (#9940). All post-mount navigation
   // goes through imperative loadURL calls instead.
   const initialUrlRef = useRef<string>(history.present);
+  // When `webviewPartition` changes the `key` remounts the <webview> as a fresh
+  // element, so its seed `src` must be the URL the user is currently on — not the
+  // URL captured at first component mount (#9940). Re-seed during render, before
+  // the JSX `src={initialUrlRef.current}` is read for the remounting element.
+  const lastPartitionRef = useRef<string>(webviewPartition);
+  if (lastPartitionRef.current !== webviewPartition) {
+    lastPartitionRef.current = webviewPartition;
+    initialUrlRef.current = history.present;
+  }
   // Track if webview has been mounted and is ready
   const [isWebviewReady, setIsWebviewReady] = useState(false);
 

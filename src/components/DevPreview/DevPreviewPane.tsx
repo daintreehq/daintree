@@ -683,8 +683,11 @@ export function DevPreviewPane({
     if (proxyOrigin === undefined) return;
     const nextUrl = url ? computeDevServerUrl(url, currentUrl, proxyOrigin) : false;
     if (nextUrl !== false) {
+      // Push history only; the imperative navigation effect (keyed on currentUrl
+      // vs lastSetUrlRef) performs the actual loadURL. Pre-setting lastSetUrlRef
+      // here would make that effect skip — which used to be fine when `src`
+      // re-bound to currentUrl, but src is now seed-only (#9940).
       setHistory((prev) => pushBrowserHistory(prev, nextUrl));
-      lastSetUrlRef.current = nextUrl;
     }
   }, [url, currentUrl, isUnconfigured, proxyOrigin]);
 
@@ -706,8 +709,9 @@ export function DevPreviewPane({
   const handleNavigate = useCallback((rawUrl: string) => {
     const normalized = normalizeBrowserUrl(rawUrl);
     if (normalized.url) {
+      // Push history only; the imperative navigation effect drives loadURL now
+      // that `src` is seed-only (#9940). Mirrors handleBack/handleForward.
       setHistory((prev) => pushBrowserHistory(prev, normalized.url!));
-      lastSetUrlRef.current = normalized.url;
     }
   }, []);
 
@@ -1181,12 +1185,13 @@ export function DevPreviewPane({
         try {
           const loadedUrl = webviewElement.getURL();
           if (loadedUrl !== currentUrl) {
-            loadWebviewUrl(webviewElement, currentUrl, () => {
-              webviewElement.src = currentUrl;
-            });
+            // Imperative load only — never write `.src`, which would re-trigger
+            // Electron's SrcAttribute observer into a redundant reload (#9940).
+            loadWebviewUrl(webviewElement, currentUrl);
           }
         } catch {
-          webviewElement.src = currentUrl;
+          // getURL() threw — the webview is detaching/unready. The ready
+          // lifecycle re-drives the load on recovery; don't write `.src` here.
         }
       }
     }

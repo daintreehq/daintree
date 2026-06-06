@@ -1705,5 +1705,31 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(setAttributeSpy.mock.calls.filter(([name]) => name === "src")).toHaveLength(0);
       expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
     });
+
+    it("re-seeds src to the current URL when a partition change remounts the webview", () => {
+      const { container, rerender } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+
+      // Guest navigates to a new route.
+      act(() => {
+        emitWebviewEvent(webview, "did-navigate", { url: "http://localhost:5173/dashboard" });
+      });
+
+      // The project id resolves to a different value, changing webviewPartition,
+      // which remounts the <webview> via its key. The fresh element must seed to
+      // the URL the user is currently on — not the URL captured at mount (#9940).
+      useProjectStoreMock.mockImplementation(
+        (selector: (state: { currentProject: { id: string } | null }) => unknown) =>
+          selector({ currentProject: { id: "other-project" } })
+      );
+
+      act(() => {
+        rerender(<BrowserPane {...baseProps} />);
+      });
+
+      const remountedWebview = getWebviewElement(container);
+      expect(remountedWebview.getAttribute("src")).toBe("http://localhost:5173/dashboard");
+    });
   });
 });

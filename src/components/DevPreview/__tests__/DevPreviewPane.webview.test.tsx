@@ -2213,5 +2213,30 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(setAttributeSpy.mock.calls.filter(([name]) => name === "src")).toHaveLength(0);
       expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
     });
+
+    it("navigates imperatively when the dev-server URL changes (src is seed-only)", async () => {
+      const { container, rerender } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // A dev-server restart shifts the origin (port 5173 -> 5174). Because `src`
+      // no longer re-binds to currentUrl, the imperative navigation effect MUST
+      // drive the loadURL — otherwise the guest would be stranded on the old URL.
+      webview.loadURL.mockClear();
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        url: "http://localhost:5174/",
+      };
+
+      await act(async () => {
+        rerender(<DevPreviewPane {...baseProps} />);
+        await Promise.resolve();
+      });
+
+      expect(webview.loadURL).toHaveBeenCalledWith("http://localhost:5174/");
+    });
   });
 });
