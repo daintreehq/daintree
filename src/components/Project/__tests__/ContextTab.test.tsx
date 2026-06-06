@@ -272,7 +272,7 @@ describe("ContextTab test-config payload", () => {
       fireEvent.click(screen.getByRole("button", { name: "Test config" }));
     });
 
-    const [, options] = testConfigMock.mock.calls[0];
+    const [, options] = testConfigMock.mock.calls[0]!;
     expect(options.exclude).toBeNull();
   });
 });
