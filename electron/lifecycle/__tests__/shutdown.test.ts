@@ -18,6 +18,7 @@ const projectStoreMock = vi.hoisted(() => ({
   getAllProjects: vi.fn(() => []),
   getProjectState: vi.fn(),
   saveProjectState: vi.fn(),
+  enqueueProjectStateUpdate: vi.fn(async () => undefined),
 }));
 
 vi.mock("../../services/ProjectStore.js", () => ({

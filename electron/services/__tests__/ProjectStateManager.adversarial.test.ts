@@ -121,6 +121,69 @@ describe("ProjectStateManager.clearProjectState adversarial", () => {
   });
 });
 
+describe("ProjectStateManager.enqueueProjectStateUpdate adversarial", () => {
+  let tempDir: string;
+  let manager: ProjectStateManager;
+  let projectId: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    utilsMock.resilientAtomicWriteFile.mockResolvedValue(undefined);
+    utilsMock.resilientRename.mockResolvedValue(undefined);
+    utilsMock.resilientUnlink.mockResolvedValue(undefined);
+    fsPromisesMock.mkdir.mockResolvedValue(undefined);
+    fsPromisesMock.readFile.mockRejectedValue(
+      Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+    );
+
+    tempDir = path.join(os.tmpdir(), "daintree-queue-adv");
+    manager = new ProjectStateManager(tempDir);
+    projectId = generateProjectId("/test/adversarial-queue-project");
+  });
+
+  it("a write failure rejects its caller but does not poison subsequent queued updates", async () => {
+    const epipe = Object.assign(new Error("EPIPE"), { code: "EPIPE" });
+    utilsMock.resilientAtomicWriteFile.mockRejectedValueOnce(epipe);
+
+    const first = manager.enqueueProjectStateUpdate(projectId, () =>
+      makeState({ sidebarWidth: 1 })
+    );
+    const second = manager.enqueueProjectStateUpdate(projectId, () =>
+      makeState({ sidebarWidth: 2 })
+    );
+
+    await expect(first).rejects.toThrow("EPIPE");
+    await expect(second).resolves.toBeUndefined();
+    expect(utilsMock.resilientAtomicWriteFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("returning null from the updater skips the disk write entirely", async () => {
+    await manager.enqueueProjectStateUpdate(projectId, () => null);
+
+    expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
+  });
+
+  it("the second queued update reads the first's committed cache, not stale disk", async () => {
+    const seen: Array<number | null> = [];
+
+    await Promise.all([
+      manager.enqueueProjectStateUpdate(projectId, (existing) => {
+        seen.push(existing?.sidebarWidth ?? null);
+        return makeState({ sidebarWidth: 123 });
+      }),
+      manager.enqueueProjectStateUpdate(projectId, (existing) => {
+        seen.push(existing?.sidebarWidth ?? null);
+        return { ...existing!, sidebarWidth: existing!.sidebarWidth + 1 };
+      }),
+    ]);
+
+    expect(seen).toEqual([null, 123]);
+    // The second read is served from the post-save cache — only the initial
+    // cache miss hits the disk.
+    expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("ProjectStateManager.getProjectState ENOENT branch (mocked fs)", () => {
   let tempDir: string;
   let manager: ProjectStateManager;

@@ -166,16 +166,16 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           const captured = results.filter((r) => r.agentSessionId);
           if (captured.length === 0) continue;
 
-          const state = await projectStore.getProjectState(projectIds[i]);
-          if (!state?.terminals) continue;
-
-          for (const result of captured) {
-            const snapshot = state.terminals.find((t: { id: string }) => t.id === result.id);
-            if (snapshot) {
-              snapshot.agentSessionId = result.agentSessionId ?? undefined;
+          await projectStore.enqueueProjectStateUpdate(projectIds[i], (state) => {
+            if (!state?.terminals) return null;
+            for (const result of captured) {
+              const snapshot = state.terminals.find((t: { id: string }) => t.id === result.id);
+              if (snapshot) {
+                snapshot.agentSessionId = result.agentSessionId ?? undefined;
+              }
             }
-          }
-          await projectStore.saveProjectState(projectIds[i], state);
+            return state;
+          });
         }
       } catch (error) {
         console.warn("[MAIN] Graceful agent shutdown incomplete:", error);

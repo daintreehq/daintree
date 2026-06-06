@@ -55,6 +55,7 @@ vi.mock("../../services/ProjectStore.js", () => ({
     getProjectById: vi.fn(() => null),
     getProjectStateWithRecovery: vi.fn(),
     saveProjectState: vi.fn(),
+    enqueueProjectStateUpdate: vi.fn(async () => undefined),
   },
 }));
 

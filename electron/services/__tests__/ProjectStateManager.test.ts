@@ -96,6 +96,154 @@ describe("ProjectStateManager clone isolation", () => {
   });
 });
 
+describe("ProjectStateManager.enqueueProjectStateUpdate concurrency", () => {
+  let tempDir: string;
+  let manager: ProjectStateManager;
+  let projectId: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-state-queue-"));
+    manager = new ProjectStateManager(tempDir);
+    projectId = generateProjectId("/test/queue-project");
+    await fs.mkdir(path.join(tempDir, projectId), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("concurrent updates to different fields both land (issue #9913)", async () => {
+    await manager.saveProjectState(projectId, makeState({ tabGroups: [] }));
+    manager.invalidateProjectStateCache(projectId);
+
+    const newTerminals = [
+      { id: "t9", title: "New", location: "grid" as const, kind: "terminal" as const, cwd: "/tmp" },
+    ];
+    const newTabGroups = [
+      { id: "g1", location: "grid" as const, activeTabId: "t9", panelIds: ["t9"] },
+    ];
+
+    await Promise.all([
+      manager.enqueueProjectStateUpdate(projectId, (existing) => ({
+        ...existing!,
+        terminals: newTerminals,
+      })),
+      manager.enqueueProjectStateUpdate(projectId, (existing) => ({
+        ...existing!,
+        tabGroups: newTabGroups,
+      })),
+    ]);
+
+    const result = await manager.getProjectState(projectId);
+    expect(result!.terminals.map((t) => t.id)).toEqual(["t9"]);
+    expect(result!.tabGroups).toEqual(newTabGroups);
+  });
+
+  it("each queued updater sees the previous update's committed state", async () => {
+    await manager.saveProjectState(projectId, makeState({ sidebarWidth: 100 }));
+
+    const seen: number[] = [];
+    await Promise.all([
+      manager.enqueueProjectStateUpdate(projectId, (existing) => {
+        seen.push(existing!.sidebarWidth);
+        return { ...existing!, sidebarWidth: 200 };
+      }),
+      manager.enqueueProjectStateUpdate(projectId, (existing) => {
+        seen.push(existing!.sidebarWidth);
+        return { ...existing!, sidebarWidth: existing!.sidebarWidth + 1 };
+      }),
+    ]);
+
+    expect(seen).toEqual([100, 200]);
+    const result = await manager.getProjectState(projectId);
+    expect(result!.sidebarWidth).toBe(201);
+  });
+
+  it("a failing updater rejects its own caller but does not block later updates", async () => {
+    await manager.saveProjectState(projectId, makeState({ sidebarWidth: 100 }));
+
+    const failing = manager.enqueueProjectStateUpdate(projectId, () => {
+      throw new Error("updater boom");
+    });
+    const following = manager.enqueueProjectStateUpdate(projectId, (existing) => ({
+      ...existing!,
+      sidebarWidth: 400,
+    }));
+
+    await expect(failing).rejects.toThrow("updater boom");
+    await expect(following).resolves.toBeUndefined();
+    const result = await manager.getProjectState(projectId);
+    expect(result!.sidebarWidth).toBe(400);
+  });
+
+  it("creates state through the queue when none exists yet", async () => {
+    const seen: Array<ProjectState | null> = [];
+    await manager.enqueueProjectStateUpdate(projectId, (existing) => {
+      seen.push(existing);
+      return makeState({ sidebarWidth: 777 });
+    });
+
+    expect(seen).toEqual([null]);
+    const result = await manager.getProjectState(projectId);
+    expect(result!.sidebarWidth).toBe(777);
+  });
+
+  it("updates for different projects do not serialize behind one another", async () => {
+    const otherProjectId = generateProjectId("/test/queue-project-other");
+    await fs.mkdir(path.join(tempDir, otherProjectId), { recursive: true });
+
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => (releaseFirst = resolve));
+    const order: string[] = [];
+
+    const slow = manager.enqueueProjectStateUpdate(projectId, async () => {
+      await gate;
+      order.push("slow");
+      return makeState();
+    });
+    const fast = manager.enqueueProjectStateUpdate(otherProjectId, () => {
+      order.push("fast");
+      return makeState({ projectId: otherProjectId });
+    });
+
+    await fast;
+    expect(order).toEqual(["fast"]);
+
+    releaseFirst();
+    await slow;
+    expect(order).toEqual(["fast", "slow"]);
+  });
+
+  it("both concurrent updates survive a disk read by a fresh manager instance", async () => {
+    await Promise.all([
+      manager.enqueueProjectStateUpdate(projectId, (existing) => ({
+        ...(existing ?? makeState()),
+        sidebarWidth: 640,
+      })),
+      manager.enqueueProjectStateUpdate(projectId, (existing) => ({
+        ...(existing ?? makeState()),
+        draftInputs: { t1: "draft" },
+      })),
+    ]);
+
+    const freshManager = new ProjectStateManager(tempDir);
+    const result = await freshManager.getProjectState(projectId);
+    expect(result!.sidebarWidth).toBe(640);
+    expect(result!.draftInputs).toEqual({ t1: "draft" });
+  });
+
+  it("sequential updates after the queue drains still see committed state", async () => {
+    await manager.enqueueProjectStateUpdate(projectId, () => makeState({ sidebarWidth: 1 }));
+    await manager.enqueueProjectStateUpdate(projectId, (existing) => ({
+      ...existing!,
+      sidebarWidth: existing!.sidebarWidth + 1,
+    }));
+
+    const result = await manager.getProjectState(projectId);
+    expect(result!.sidebarWidth).toBe(2);
+  });
+});
+
 describe("ProjectStateManager telemetry", () => {
   let tempDir: string;
   let manager: ProjectStateManager;
