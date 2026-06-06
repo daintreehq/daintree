@@ -185,12 +185,14 @@ describe("forge handlers — rate limiting", () => {
   });
 
   describe("token family (forge:validate-token)", () => {
+    const validatePayload = { providerId: "fake-plugin.fake", token: "fake_token" };
+
     it("calls checkRateLimit with token limits (5, 10_000)", async () => {
       const handler = getInvokeHandler(CHANNELS.FORGE_VALIDATE_TOKEN);
-      await handler({}, "fake_token");
+      await handler({}, validatePayload);
 
       expect(checkRateLimitMock).toHaveBeenCalledWith(CHANNELS.FORGE_VALIDATE_TOKEN, 5, 10_000);
-      expect(fakeImpl.validateToken).toHaveBeenCalled();
+      expect(fakeImpl.validateToken).toHaveBeenCalledWith("fake_token");
     });
 
     it("rejects and skips validateToken when rate limit throws", async () => {
@@ -199,10 +201,10 @@ describe("forge handlers — rate limiting", () => {
       });
       const handler = getInvokeHandler(CHANNELS.FORGE_VALIDATE_TOKEN);
 
-      await expect(handler({}, "fake_token")).rejects.toThrow("Rate limit exceeded");
+      await expect(handler({}, validatePayload)).rejects.toThrow("Rate limit exceeded");
       expect(fakeImpl.validateToken).not.toHaveBeenCalled();
       // The guard fires before provider lookup, not just before the API call.
-      expect(storeMock.get).not.toHaveBeenCalled();
+      expect(fakeImpl.validateToken).not.toHaveBeenCalled();
     });
   });
 
@@ -274,7 +276,11 @@ describe("forge handlers — rate limiting", () => {
       },
       { channel: CHANNELS.FORGE_GET_PR, maxCalls: 25, invoke: (h) => h({}, { cwd, prNumber: 1 }) },
       // token + mutation family: 5/10s (matches github:validate-token / assign-issue)
-      { channel: CHANNELS.FORGE_VALIDATE_TOKEN, maxCalls: 5, invoke: (h) => h({}, "fake_token") },
+      {
+        channel: CHANNELS.FORGE_VALIDATE_TOKEN,
+        maxCalls: 5,
+        invoke: (h) => h({}, { providerId: "fake-plugin.fake", token: "fake_token" }),
+      },
       {
         channel: CHANNELS.FORGE_ASSIGN_ISSUE,
         maxCalls: 5,

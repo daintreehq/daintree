@@ -1311,8 +1311,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     assignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
     /** Unassign a user from an issue via the resolved forge provider. */
     unassignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
-    /** Validate a token against the global default forge provider. */
-    validateToken(token: string): Promise<AuthValidation>;
+    /**
+     * Validate a token against a specific forge provider, identified by its
+     * canonical `{pluginId}.{contributionId}` id. The Test button in the
+     * Code Forge settings surfaces a single provider at a time and passes
+     * that provider's id directly — there is no implicit default fallback,
+     * so a token entered in the GitHub tab can never be validated against
+     * a non-GitHub forge (issue #9985).
+     */
+    validateToken(payload: { providerId: string; token: string }): Promise<AuthValidation>;
     /**
      * Validate and persist credentials for a specific forge provider, keyed
      * by its canonical `{pluginId}.{contributionId}` id. `credentials` is a

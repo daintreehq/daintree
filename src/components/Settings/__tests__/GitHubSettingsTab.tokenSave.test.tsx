@@ -179,4 +179,44 @@ describe("GitHubSettingsTab handleSaveToken", () => {
 
     expect(mockedNotify).not.toHaveBeenCalled();
   });
+
+  it("Test button dispatches forge.validateToken with the GitHub provider id so a non-GitHub default cannot reroute the call (#9985)", async () => {
+    mockedDispatch.mockImplementation(async (actionId: string, args: unknown) => {
+      if (actionId === "forge.validateToken") {
+        return {
+          ok: true,
+          result: { valid: true, scopes: ["repo"], error: undefined },
+        } as never;
+      }
+      // Defensive — make the assertion message below specific to the test id
+      void args;
+      return { ok: true, result: undefined } as never;
+    });
+
+    render(
+      <SettingsValidationProvider>
+        <GitHubSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    fireEvent.change(screen.getByLabelText(/github personal access token/i), {
+      target: { value: "  ghp_typed_token  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Test token" }));
+
+    await waitFor(() => {
+      expect(mockedDispatch).toHaveBeenCalledWith(
+        "forge.validateToken",
+        expect.objectContaining({
+          providerId: "daintree.github.github",
+          token: "ghp_typed_token",
+        }),
+        expect.objectContaining({ source: "user" })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/token valid/i)).toBeTruthy();
+    });
+  });
 });

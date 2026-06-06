@@ -5,6 +5,7 @@ import { GitHubIcon } from "@/components/icons/brands";
 // TODO(#8061): replace with plugin settings contribution when forge settings UI lands
 import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
 import { actionService } from "@/services/ActionService";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import type { GitHubTokenConfig, GitHubTokenValidation } from "@/types";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
@@ -161,7 +162,10 @@ export function GitHubSettingsTab() {
     try {
       const result = await actionService.dispatch<GitHubTokenValidation>(
         "forge.validateToken",
-        { token: githubToken.trim() },
+        // `providerId` is required by the action schema; the GitHub tab is
+        // GitHub-pinned by design, so the test always validates against
+        // GitHub regardless of the stored default forge (#9985).
+        { providerId: BUILTIN_GITHUB_PROVIDER_ID, token: githubToken.trim() },
         { source: "user" }
       );
       if (!result.ok) {

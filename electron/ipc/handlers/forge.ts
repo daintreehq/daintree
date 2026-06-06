@@ -3,7 +3,6 @@ import { CHANNELS } from "../channels.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
 import { checkRateLimit, typedHandle } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
-import { store } from "../../store.js";
 import {
   getForgeProviderImpl,
   getRegisteredForgeProviders,
@@ -188,48 +187,55 @@ export function registerForgeHandlers(): () => void {
   cleanups.push(forgeUnassignIssueNamespace.register());
 
   cleanups.push(
-    typedHandle(CHANNELS.FORGE_VALIDATE_TOKEN, async (token: string) => {
-      checkRateLimit(CHANNELS.FORGE_VALIDATE_TOKEN, 5, 10_000);
-      if (typeof token !== "string" || !token.trim()) {
-        return { valid: false as const, error: "Token is required" };
-      }
-      const providers = getRegisteredForgeProviders();
-      if (providers.length === 0) {
-        return { valid: false as const, error: "No forge provider configured" };
-      }
+    typedHandle(
+      CHANNELS.FORGE_VALIDATE_TOKEN,
+      async (payload: { providerId: unknown; token: unknown }) => {
+        checkRateLimit(CHANNELS.FORGE_VALIDATE_TOKEN, 5, 10_000);
+        if (!payload || typeof payload !== "object") {
+          return { valid: false as const, error: "Invalid payload" };
+        }
+        if (typeof payload.token !== "string" || !payload.token.trim()) {
+          return { valid: false as const, error: "Token is required" };
+        }
+        const providerId = normalizeProviderId(payload.providerId);
+        if (!providerId) {
+          return { valid: false as const, error: "Provider id is required" };
+        }
+        const providers = getRegisteredForgeProviders();
+        if (providers.length === 0) {
+          return { valid: false as const, error: "No forge provider configured" };
+        }
 
-      const providerId = normalizeProviderId(store.get("forgeDefaultProviderId"));
+        // Resolve strictly by canonical `{pluginId}.{contributionId}` so a
+        // GitHub-tab test cannot silently route to whichever forge registered
+        // first (#9985). The pre-fix handler fell back to `providers[0]`
+        // when the stored default id was a non-GitHub forge, producing
+        // spurious "Invalid token" results for valid GitHub PATs.
+        const entry = providers.find(
+          (p) => makeForgeProviderId(p.pluginId, p.contribution.id) === providerId
+        );
+        if (!entry) {
+          return { valid: false as const, error: `Unknown forge provider "${providerId}"` };
+        }
 
-      // Match canonical first; bare `contribution.id` fallback preserves
-      // third-party providers whose stored ids predate canonicalization.
-      let targetProvider: (typeof providers)[0] | undefined;
-      if (providerId) {
-        targetProvider = providers.find(
-          (p) =>
-            makeForgeProviderId(p.pluginId, p.contribution.id) === providerId ||
-            p.contribution.id === providerId
+        const namespaceId = makeForgeProviderId(entry.pluginId, entry.contribution.id);
+        const impl = getForgeProviderImpl(namespaceId);
+        if (!impl) {
+          return {
+            valid: false as const,
+            error: `Forge provider "${entry.contribution.id}" not activated`,
+          };
+        }
+        return auditForgeCall(
+          { providerId: namespaceId, methodName: "validateToken", argsSummary: "" },
+          () => impl.validateToken(payload.token.trim()),
+          // A rejected credential ({ valid: false }) is a resolved call but a
+          // failed outcome — record it as an error so a burst of bad-token
+          // responses is visible to the failure-cluster detector.
+          (validation) => (validation.valid ? "success" : "error")
         );
       }
-      // Fall back to first registered provider
-      const entry = targetProvider ?? providers[0];
-
-      const namespaceId = makeForgeProviderId(entry.pluginId, entry.contribution.id);
-      const impl = getForgeProviderImpl(namespaceId);
-      if (!impl) {
-        return {
-          valid: false as const,
-          error: `Forge provider "${entry.contribution.id}" not activated`,
-        };
-      }
-      return auditForgeCall(
-        { providerId: namespaceId, methodName: "validateToken", argsSummary: "" },
-        () => impl.validateToken(token.trim()),
-        // A rejected credential ({ valid: false }) is a resolved call but a
-        // failed outcome — record it as an error so a burst of bad-token
-        // responses is visible to the failure-cluster detector.
-        (validation) => (validation.valid ? "success" : "error")
-      );
-    })
+    )
   );
 
   cleanups.push(
