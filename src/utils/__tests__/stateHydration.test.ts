@@ -118,6 +118,8 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     get: getManagedTerminalMock,
     setGPUHardwareAvailable: setGPUHardwareAvailableMock,
     setTargetSize: setTargetSizeMock,
+    notifyScrollbackRestoreListeners: vi.fn(),
+    notifyRestoreSettledWaiters: vi.fn(),
   },
 }));
 
@@ -136,7 +138,7 @@ function makeMockManagedTerminal(id: string) {
   const hostElement = document.createElement("div");
   return {
     id,
-    scrollbackRestoreState: "none" as "none" | "pending" | "in-progress" | "done",
+    scrollbackRestoreState: "none" as "none" | "pending" | "lazy-pending" | "in-progress" | "done",
     scrollbackRestoreDisposable: undefined as { dispose: () => void } | undefined,
     hostElement,
     listeners: [] as Array<() => void>,
@@ -989,7 +991,7 @@ describe("hydrateAppState", () => {
 
     // Background terminal restores lazily — simulate scroll event on its host element
     const bgManaged = managedTerminals.get("terminal-background")!;
-    expect(bgManaged.scrollbackRestoreState).toBe("pending");
+    expect(bgManaged.scrollbackRestoreState).toBe("lazy-pending");
 
     bgManaged.hostElement.dispatchEvent(new Event("wheel"));
     await flushPostTasks();

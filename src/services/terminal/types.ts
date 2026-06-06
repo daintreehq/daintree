@@ -152,8 +152,12 @@ export interface ManagedTerminal {
   isSerializedRestoreInProgress: boolean;
   deferredOutput: Array<string | Uint8Array>;
 
-  // Deferred scrollback restore state — prevents double-restore and tracks lifecycle
-  scrollbackRestoreState: "none" | "pending" | "in-progress" | "done";
+  // Deferred scrollback restore state — prevents double-restore and tracks
+  // lifecycle. "lazy-pending" is a deferred (scroll-triggered) restore awaiting
+  // its first wheel/PageUp event; it transitions to "in-progress" only once the
+  // user scrolls the panel into view, so the batch progress aggregate excludes
+  // it (a never-scrolled panel would otherwise pin the indicator open).
+  scrollbackRestoreState: "none" | "pending" | "lazy-pending" | "in-progress" | "done";
   scrollbackRestoreDisposable?: { dispose: () => void };
   // Out-of-band failure channel set by TerminalRestoreController catch blocks
   // when the deferred restore replay fails (write timeout, parse error). The

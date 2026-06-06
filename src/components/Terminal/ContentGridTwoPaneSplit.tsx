@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import { GridNotificationBar } from "./GridNotificationBar";
+import { BatchScrollbackRestoreBar } from "./BatchScrollbackRestoreBar";
 import { TwoPaneSplitLayout } from "./TwoPaneSplitLayout";
 import { GridShell } from "./GridShell";
 import type { ContentGridContext } from "./useContentGridContext";
@@ -35,6 +36,7 @@ export function ContentGridTwoPaneSplit({
       )}
     >
       <GridNotificationBar className="mx-1 mt-1 shrink-0" />
+      <BatchScrollbackRestoreBar className="mx-1 mt-1 shrink-0" />
       <GridShell ctx={ctx}>
         <div
           ref={bindCombinedGrid}
