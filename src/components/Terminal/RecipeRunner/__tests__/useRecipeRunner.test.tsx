@@ -923,3 +923,53 @@ describe("useRecipeRunner — delete confirm flow", () => {
     });
   });
 });
+
+describe("useRecipeRunner — keyboard model", () => {
+  it("starts with focusedIndex 0 and focusedItemId pointing at the first recipe", () => {
+    recipes.push(
+      makeRecipe({ id: "alpha", name: "Alpha" }),
+      makeRecipe({ id: "beta", name: "Beta" }),
+      makeRecipe({ id: "gamma", name: "Gamma" })
+    );
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    expect(result.current.focusedIndex).toBe(0);
+    expect(result.current.focusedItemId).toBe("recipe-option-alpha");
+  });
+
+  it("updates focusedItemId when setFocusedIndex is called", () => {
+    recipes.push(
+      makeRecipe({ id: "alpha", name: "Alpha" }),
+      makeRecipe({ id: "beta", name: "Beta" }),
+      makeRecipe({ id: "gamma", name: "Gamma" })
+    );
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.setFocusedIndex(2);
+    });
+
+    expect(result.current.focusedIndex).toBe(2);
+    expect(result.current.focusedItemId).toBe("recipe-option-gamma");
+  });
+
+  it("exposes the create option id when focusedIndex is at the trailing button", () => {
+    recipes.push(makeRecipe({ id: "alpha", name: "Alpha" }));
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.setFocusedIndex(1);
+    });
+
+    expect(result.current.focusedItemId).toBe("recipe-option-create");
+  });
+});
