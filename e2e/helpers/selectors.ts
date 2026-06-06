@@ -82,6 +82,7 @@ export const SEL = {
     restartConfirm: '[data-testid="panel-restart-confirm"]',
     tabList: '[role="tablist"][aria-label="Panel tabs"]',
     tab: '[role="tab"]',
+    dockPopoverResizeHandle: '[data-testid="dock-popover-resize-handle"]',
   },
   terminal: {
     xtermRows: ".xterm-screen",
