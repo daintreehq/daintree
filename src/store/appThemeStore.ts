@@ -50,7 +50,7 @@ function applySchemeToDOMNow(scheme: AppColorScheme): void {
   const effective = applyAccentOverrideToScheme(scheme, accentColorOverride);
   applyAppThemeToRoot(document.documentElement, effective);
   if (colorVisionMode !== "default") {
-    applyColorVisionMode(document.documentElement, colorVisionMode);
+    applyColorVisionMode(document.documentElement, colorVisionMode, effective);
   }
 }
 
@@ -162,7 +162,14 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
 
   setColorVisionMode: (mode) => {
     set({ colorVisionMode: mode });
-    applyColorVisionMode(document.documentElement, mode);
+    // Pass the active scheme so base --theme-* values are restored for tokens
+    // the mode doesn't override, rather than stripped to undefined.
+    const { selectedSchemeId, customSchemes, accentColorOverride } = useAppThemeStore.getState();
+    const effective = applyAccentOverrideToScheme(
+      resolveAppTheme(selectedSchemeId, customSchemes),
+      accentColorOverride
+    );
+    applyColorVisionMode(document.documentElement, mode, effective);
   },
 
   setFollowSystem: (enabled) => set({ followSystem: enabled }),
