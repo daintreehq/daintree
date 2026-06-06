@@ -1579,7 +1579,10 @@ class PullRequestService {
           `PR branch lookup failed for ${branchErrorCount} of ${prResults.length} branches: ${firstBranchError.message}`,
           rateLimit ?? undefined
         );
-      } else {
+      } else if (prResults.length > 0) {
+        // Only a cycle that actually completed a PR lookup counts as success
+        // for the breaker — an issue-title-only retry cycle (no unresolved
+        // branch candidates) must not clear a real PR-lookup error streak.
         this.consecutiveErrors = 0;
       }
     } catch (error) {
@@ -1709,6 +1712,11 @@ class PullRequestService {
     // can escalate to a permanent ban.
     if (rateLimit) {
       this.nextRetryAt = rateLimit.resumeAt;
+      // Clear the streak: failures preceding the pause were likely the same
+      // rate limit manifesting as transient errors before the gate caught it,
+      // so carrying them over would leave the breaker on a hair trigger for
+      // the first post-pause hiccup.
+      this.consecutiveErrors = 0;
       logWarn("PR check hit a GitHub rate limit — pausing without tripping circuit breaker", {
         reason: rateLimit.kind,
         resumeAt: rateLimit.resumeAt,
