@@ -305,7 +305,6 @@ export function BulkCreateWorktreeDialog({
           if (runIdRef.current !== currentRunId) return;
 
           const itemNumber = planned.item.number;
-          const tracked = tracking.get(itemNumber);
           let backoffDelay = BACKOFF_BASE_MS;
           // Per-item-total deadline shared across worktree creation, terminal
           // spawning, and assignment. Transient failures retry until this
@@ -316,6 +315,10 @@ export function BulkCreateWorktreeDialog({
           while (true) {
             if (runIdRef.current !== currentRunId) return;
             attempt++;
+            // Re-read tracking each iteration: a prior attempt may have created
+            // the worktree or spawned terminals, so the snapshot must reflect
+            // that to avoid duplicate creation on retry.
+            const tracked = tracking.get(itemNumber);
 
             try {
               // Step 1: Worktree creation (skip if already created)
@@ -588,13 +591,11 @@ export function BulkCreateWorktreeDialog({
 
                   if (results.failed.length > 0) {
                     const hasTransient = results.failed.some((f) => isTransientError(f.error));
-                    if (
-                      hasTransient &&
-                      performance.now() - itemStart < MAX_TRANSIENT_RETRY_MS
-                    ) {
+                    const remaining = MAX_TRANSIENT_RETRY_MS - (performance.now() - itemStart);
+                    if (hasTransient && remaining > 0) {
                       backoffDelay = nextBackoffDelay(backoffDelay);
                       await cancellableDelay(
-                        backoffDelay,
+                        Math.min(backoffDelay, remaining),
                         () => runIdRef.current !== currentRunId
                       );
                       continue;
@@ -634,13 +635,11 @@ export function BulkCreateWorktreeDialog({
                       break;
                     } catch (err) {
                       const assignErr = normalizeError(err);
-                      if (
-                        isTransientError(assignErr) &&
-                        performance.now() - itemStart < MAX_TRANSIENT_RETRY_MS
-                      ) {
+                      const remaining = MAX_TRANSIENT_RETRY_MS - (performance.now() - itemStart);
+                      if (isTransientError(assignErr) && remaining > 0) {
                         assignBackoff = nextBackoffDelay(assignBackoff, ASSIGNMENT_BACKOFF_CAP_MS);
                         await cancellableDelay(
-                          assignBackoff,
+                          Math.min(assignBackoff, remaining),
                           () => runIdRef.current !== currentRunId
                         );
                         continue;
@@ -669,12 +668,13 @@ export function BulkCreateWorktreeDialog({
               if (runIdRef.current !== currentRunId) return;
               const errorMsg = normalizeError(err);
 
-              if (
-                isTransientError(errorMsg) &&
-                performance.now() - itemStart < MAX_TRANSIENT_RETRY_MS
-              ) {
+              const remaining = MAX_TRANSIENT_RETRY_MS - (performance.now() - itemStart);
+              if (isTransientError(errorMsg) && remaining > 0) {
                 backoffDelay = nextBackoffDelay(backoffDelay);
-                await cancellableDelay(backoffDelay, () => runIdRef.current !== currentRunId);
+                await cancellableDelay(
+                  Math.min(backoffDelay, remaining),
+                  () => runIdRef.current !== currentRunId
+                );
                 continue;
               }
 

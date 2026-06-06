@@ -536,6 +536,39 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.queryByText(/failed/)).toBeNull();
   });
 
+  it("keeps retrying a transient worktree creation past the old 3-attempt cap", async () => {
+    // Five consecutive transient failures — beyond the old MAX_AUTO_RETRIES cap
+    // of 3 total attempts — then success. Proves the count ceiling is gone for
+    // worktree creation, not just assignment (see #10128).
+    let callCount = 0;
+    mockWorktreeCreate.mockImplementation(() => {
+      callCount++;
+      if (callCount <= 5) {
+        return Promise.reject(new Error("index.lock: File exists"));
+      }
+      return Promise.resolve("wt-1");
+    });
+
+    const props = {
+      ...defaultProps,
+      selectedIssues: [makeIssue(1)],
+    };
+
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    // Each worktree backoff is capped at 30s; drain enough virtual time (still
+    // under the 5-minute ceiling) for all five retries to elapse.
+    await advanceTimersGradually(240000, 5000);
+
+    expect(callCount).toBe(6);
+    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(screen.queryByText(/failed/)).toBeNull();
+  });
+
   it("classifies rate limit errors as transient", async () => {
     let callCount = 0;
     mockWorktreeCreate.mockImplementation(() => {
