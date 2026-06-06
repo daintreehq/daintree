@@ -49,9 +49,6 @@ describe("createActionDefinitions", () => {
     expect(actions.has("forge.openIssue")).toBe(true);
     expect(actions.has("forge.assignIssue")).toBe(true);
     expect(actions.has("forge.validateToken")).toBe(true);
-    // Aliases retire in the next release.
-    expect(actions.has("github.openIssues")).toBe(true);
-    expect(actions.has("github.openPRs")).toBe(true);
     expect(actions.has("app.developerMode.set")).toBe(true);
     expect(actions.has("portal.openLaunchpad")).toBe(true);
     expect(actions.has("browser.navigate")).toBe(true);

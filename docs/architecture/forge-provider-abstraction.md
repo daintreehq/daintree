@@ -316,7 +316,7 @@ Host-owned actions become `forge.*` (the host dispatches to the active provider)
 - `forge.openIssues`, `forge.openPRs`, `forge.openCommits`, `forge.openIssue`, `forge.assignIssue`
 - `forge.validateToken` (per active provider)
 
-The GitHub built-in plugin contributes `github.*` aliases that forward to the corresponding `forge.*` action for one release cycle so existing user-defined keybindings, recipes, and `actions.repeatLast` MRU entries keep working. The aliases are removed in the release after, with a CHANGELOG callout.
+During the migration these were temporarily mirrored by `github.*` aliases that forwarded to the corresponding `forge.*` action so existing user-defined keybindings, recipes, and `actions.repeatLast` MRU entries kept working across the transition. Those aliases have since been removed; stale keybinding overrides referencing them are dropped non-fatally at load time.
 
 Even with only GitHub shipping, we land `forge.*` now so the action shape doesn't break a second time when the next provider arrives.
 
