@@ -148,6 +148,7 @@ describe("FileLinksAddon", () => {
             resolve(null);
             return;
           }
+          expect(links.length).toBe(1);
           resolve(links[0]! as unknown as ResolvedLink);
         });
       });
@@ -202,6 +203,47 @@ describe("FileLinksAddon", () => {
       const link = await matchSingle("\\\\notwsl\\Ubuntu\\home\\user\\App.tsx");
       expect(link).toBeNull();
     });
+
+    it("reports the buffer column where the WSL path begins", () =>
+      new Promise<void>((resolve) => {
+        const terminal = createMockTerminal();
+        const addon = new FileLinksAddon(terminal, () => "/home/user/project");
+        const line = createMockLine("Error at \\\\wsl$\\Ubuntu\\home\\user\\App.tsx:45:12");
+        vi.mocked(terminal.buffer.active.getLine).mockReturnValue(line);
+
+        addon.provideLinks(1, (links) => {
+          expect(links).toBeDefined();
+          expect(links).toHaveLength(1);
+          // "Error at " is 9 chars; the leading backslash sits at 0-based index 9,
+          // so the 1-based buffer column is 10.
+          expect(links![0]!.range.start.x).toBe(10);
+          expect(links![0]!.range.end.x).toBe(
+            9 + "\\\\wsl$\\Ubuntu\\home\\user\\App.tsx:45:12".length
+          );
+          resolve();
+        });
+      }));
+
+    it("matches two WSL paths on the same line independently", () =>
+      new Promise<void>((resolve) => {
+        const terminal = createMockTerminal();
+        const addon = new FileLinksAddon(terminal, () => "/home/user/project");
+        const line = createMockLine(
+          "Compare \\\\wsl$\\Ubuntu\\home\\user\\App.tsx:45:12 and \\\\wsl.localhost\\Debian\\srv\\util.ts:9"
+        );
+        vi.mocked(terminal.buffer.active.getLine).mockReturnValue(line);
+
+        addon.provideLinks(1, (links) => {
+          expect(links).toBeDefined();
+          expect(links).toHaveLength(2);
+          const resolved = links! as unknown as Array<{ text: string; _absolutePath: string }>;
+          expect(resolved[0]!.text).toBe("\\\\wsl$\\Ubuntu\\home\\user\\App.tsx:45:12");
+          expect(resolved[0]!._absolutePath).toBe("\\\\wsl$\\Ubuntu\\home\\user\\App.tsx");
+          expect(resolved[1]!.text).toBe("\\\\wsl.localhost\\Debian\\srv\\util.ts:9");
+          expect(resolved[1]!._absolutePath).toBe("\\\\wsl.localhost\\Debian\\srv\\util.ts");
+          resolve();
+        });
+      }));
   });
 
   describe("exclusions", () => {
