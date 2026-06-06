@@ -21,9 +21,7 @@ function walkSuites(suites, parentPath = [], results = [], parentFile = null) {
         const lastResult = test.results?.at(-1);
         const failed = test.status
           ? test.status === "unexpected"
-          : lastResult != null &&
-            lastResult.status !== "passed" &&
-            lastResult.status !== "skipped";
+          : lastResult != null && lastResult.status !== "passed" && lastResult.status !== "skipped";
         if (!failed) continue;
         const primaryError = lastResult?.errors?.[0];
         results.push({
