@@ -16,6 +16,7 @@ import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState"
 import {
   getEffectiveStateIcon,
   getEffectiveStateColor,
+  getEffectiveStateLabel,
 } from "@/components/Worktree/terminalStateConfig";
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -342,7 +343,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   e.stopPropagation();
                   handleMoveToGrid();
                 }}
-                aria-label={`${terminal.title} - Click to preview, double-click to move to grid, drag to reorder`}
+                aria-label={`${terminal.title}${displayAgentState ? ` — agent ${getEffectiveStateLabel(displayAgentState)}` : ""} - Click to preview, double-click to move to grid, drag to reorder`}
               >
                 <div className="flex items-center justify-center shrink-0">
                   <TerminalIcon kind={terminal.kind} chrome={chrome} className="w-3.5 h-3.5" />

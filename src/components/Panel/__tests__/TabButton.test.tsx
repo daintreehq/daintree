@@ -590,9 +590,12 @@ describe("TabButton", () => {
 
     // #10024 — the visual state icon is aria-hidden, so a visually-hidden text
     // alternative carries the agent state into the tab's accessible name.
-    it("exposes the agent state as visually-hidden text when a state is shown", () => {
+    it("includes the agent state in the tab's accessible name when a state is shown", () => {
       render(<TabButton {...defaultProps} chrome={deriveTerminalChrome()} agentState="working" />);
-      expect(screen.queryByText("Agent working")).not.toBeNull();
+      // getByRole name computation proves the sr-only span lives inside the
+      // role="tab" element and participates in the accessible name alongside
+      // the visible title — queryByText alone wouldn't guarantee that.
+      expect(screen.getByRole("tab", { name: /Test Agent.*Agent working/ })).not.toBeNull();
     });
 
     it("uses the effective state label when state is coerced (idle -> waiting)", () => {
@@ -603,11 +606,22 @@ describe("TabButton", () => {
           agentState="idle"
         />
       );
-      expect(screen.queryByText("Agent waiting")).not.toBeNull();
+      expect(screen.getByRole("tab", { name: /Agent waiting/ })).not.toBeNull();
     });
 
     it("does not expose state text when no state is shown (plain shell)", () => {
       render(<TabButton {...defaultProps} chrome={deriveTerminalChrome()} />);
+      expect(screen.queryByText(/^Agent /)).toBeNull();
+    });
+
+    it("suppresses state text when the agent chrome has exited (stale state)", () => {
+      render(
+        <TabButton
+          {...defaultProps}
+          chrome={deriveTerminalChrome({ launchAgentId: "claude", exitCode: 0 })}
+          agentState="working"
+        />
+      );
       expect(screen.queryByText(/^Agent /)).toBeNull();
     });
   });
