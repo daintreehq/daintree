@@ -298,6 +298,24 @@ export interface McpToolCallSettledPayload {
 }
 
 /**
+ * Live event emitted when the assistant invokes the `help.displayImage` MCP
+ * tool (#9828). The main process validates the URL against the daintree.org
+ * allowlist and assigns `figureNumber` sequentially per help session, so the
+ * model never picks its own number. The renderer keys figures by `imageId`
+ * and references them inline as `[image #<figureNumber>]`. Send is targeted at
+ * the pinned WebContents, never broadcast.
+ */
+export interface McpHelpDisplayImagePayload {
+  sessionId: string;
+  imageId: string;
+  figureNumber: number;
+  figureLabel: string;
+  url: string;
+  caption?: string;
+  altText?: string;
+}
+
+/**
  * Result of a renderer-driven `revokeSessionGrants` IPC. The handler
  * deletes every grant for the named session and reports how many entries
  * were affected — useful for UI confirmation copy ("Revoked N grants").

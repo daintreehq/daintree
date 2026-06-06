@@ -1682,6 +1682,11 @@ export interface IpcEventMap {
    * settled. Carries the audit-aligned outcome for the activity strip (#9759).
    */
   "mcp-server:tool-call-settled": import("./mcpServer.js").McpToolCallSettledPayload;
+  /**
+   * Targeted push: the assistant invoked `help.displayImage`. Carries the
+   * validated image URL and session-assigned figure number (#9828).
+   */
+  "mcp-server:help-display-image": import("./mcpServer.js").McpHelpDisplayImagePayload;
 
   // Error events
   "error:notify": ErrorRecord;

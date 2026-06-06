@@ -20,6 +20,7 @@ import type {
   McpBearerIdentity,
   McpToolCallStartedPayload,
   McpToolCallSettledPayload,
+  McpHelpDisplayImagePayload,
 } from "../shared/types/ipc/mcpServer.js";
 import type { ActionContext, ActionDispatchResult } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
@@ -2464,6 +2465,8 @@ const api: ElectronAPI = {
       _typedOn(CHANNELS.MCP_TOOL_CALL_STARTED, callback),
     onToolCallSettled: (callback: (payload: McpToolCallSettledPayload) => void) =>
       _typedOn(CHANNELS.MCP_TOOL_CALL_SETTLED, callback),
+    onDisplayImage: (callback: (payload: McpHelpDisplayImagePayload) => void) =>
+      _typedOn(CHANNELS.MCP_HELP_DISPLAY_IMAGE, callback),
   },
 
   helpAssistant: buildHelpAssistantPreloadBindings(_unwrappingInvoke),

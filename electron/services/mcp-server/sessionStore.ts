@@ -113,6 +113,12 @@ export class SessionStore {
   // per-connection id, so this is the join that lets audit records and
   // turn-id lookups correlate back to the help session the user sees.
   readonly sessionHelpIdMap = new Map<string, string>();
+  // Public help-session id → count of figures emitted by `help.displayImage`
+  // (#9828). Keyed by the public help-session id (NOT the transport sessionId)
+  // so the sequence survives a transport reconnect within one conversation.
+  // Torn down when the help session's transport is reaped, by capturing the
+  // public id from `sessionHelpIdMap` BEFORE that map entry is deleted.
+  readonly figureCounters = new Map<string, number>();
   readonly resourceSubscriptions = new Map<string, Map<string, () => void>>();
   // Per-session idempotency dedup state for the MCP creation-tool allowlist.
   // Two phases: in-flight singleflight (same-moment duplicates share the
@@ -277,6 +283,33 @@ export class SessionStore {
     this.rateLimitBuckets.delete(sessionId);
   }
 
+  /**
+   * Assign the next sequential figure number for a help session and advance
+   * the counter (#9828). First call for a session returns 1. Keyed by the
+   * public help-session id so the sequence is stable across transport
+   * reconnects within one conversation — the model never picks its own number.
+   */
+  nextFigureNumber(helpSessionId: string): number {
+    const next = (this.figureCounters.get(helpSessionId) ?? 0) + 1;
+    this.figureCounters.set(helpSessionId, next);
+    return next;
+  }
+
+  /**
+   * Drop a help session's figure counter. Resolve the public help-session id
+   * from {@link sessionHelpIdMap} BEFORE that entry is deleted, since the
+   * counter is keyed by the public id, not the transport sessionId. Public so
+   * the inline `transport.onclose` / connect-failure cleanup closures in
+   * `httpLifecycle` can tear it down on a normal disconnect, in lockstep with
+   * the other per-session maps (mirrors {@link clearClientMetadata}).
+   */
+  clearFigureCounter(sessionId: string): void {
+    const helpSessionId = this.sessionHelpIdMap.get(sessionId);
+    if (helpSessionId !== undefined) {
+      this.figureCounters.delete(helpSessionId);
+    }
+  }
+
   private expireSseSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
@@ -289,6 +322,7 @@ export class SessionStore {
     this.grantCache.revokeSession(sessionId, "session-idle");
     this.sessionWebContentsMap.delete(sessionId);
     this.sessionContextMap.delete(sessionId);
+    this.clearFigureCounter(sessionId);
     this.sessionHelpIdMap.delete(sessionId);
     this.clearDedupState(sessionId);
     this.clearRateLimitState(sessionId);
@@ -346,6 +380,7 @@ export class SessionStore {
     this.grantCache.revokeSession(sessionId, "session-idle");
     this.sessionWebContentsMap.delete(sessionId);
     this.sessionContextMap.delete(sessionId);
+    this.clearFigureCounter(sessionId);
     this.sessionHelpIdMap.delete(sessionId);
     this.clearDedupState(sessionId);
     this.clearRateLimitState(sessionId);
@@ -595,6 +630,7 @@ export class SessionStore {
     this.grantCache.revokeSession(sessionId, "session-ended");
     this.sessionWebContentsMap.delete(sessionId);
     this.sessionContextMap.delete(sessionId);
+    this.clearFigureCounter(sessionId);
     this.sessionHelpIdMap.delete(sessionId);
     this.clearDedupState(sessionId);
     this.clearRateLimitState(sessionId);
@@ -650,6 +686,7 @@ export class SessionStore {
     this.sessionWebContentsMap.clear();
     this.sessionContextMap.clear();
     this.sessionHelpIdMap.clear();
+    this.figureCounters.clear();
     this.sessionConnectedAtMs.clear();
     this.sessionUserAgent.clear();
     this.sessionTransport.clear();

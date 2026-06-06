@@ -72,6 +72,7 @@ const {
     introDismissed: true,
     conversationTouched: false,
     hibernateSessions: {} as Record<string, { sessionId: string; cwd: string; agentId: string }>,
+    figures: [] as unknown[],
     markConversationStarted: vi.fn(),
     setWidth: vi.fn(),
     setOpen: vi.fn(),
@@ -81,6 +82,8 @@ const {
     dismissIntro: vi.fn(),
     setHibernateSession: vi.fn(),
     clearHibernateSession: vi.fn(),
+    addFigure: vi.fn(),
+    clearFigures: vi.fn(),
   },
   panelStoreState: {
     panelIds: [] as string[],
@@ -312,6 +315,7 @@ function resetState() {
   helpPanelState.introDismissed = true;
   helpPanelState.conversationTouched = false;
   helpPanelState.hibernateSessions = {};
+  helpPanelState.figures = [];
   helpPanelState.markConversationStarted = vi.fn();
   helpPanelState.setTerminal = vi.fn();
   helpPanelState.setOpen = vi.fn();
@@ -321,6 +325,8 @@ function resetState() {
   helpPanelState.dismissIntro = vi.fn();
   helpPanelState.setHibernateSession = vi.fn();
   helpPanelState.clearHibernateSession = vi.fn();
+  helpPanelState.addFigure = vi.fn();
+  helpPanelState.clearFigures = vi.fn();
 
   panelStoreState.panelIds = [];
   panelStoreState.panelsById = {};
@@ -418,6 +424,7 @@ beforeEach(() => {
           onTierNotPermitted: vi.fn(() => () => {}),
           onToolCallStarted: vi.fn(() => () => {}),
           onToolCallSettled: vi.fn(() => () => {}),
+          onDisplayImage: vi.fn(() => () => {}),
           setSessionTier: vi.fn().mockResolvedValue({ sessionId: "", tier: "workbench" }),
           issueGrant: vi.fn().mockResolvedValue({
             sessionId: "",

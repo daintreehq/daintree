@@ -5,6 +5,7 @@ const {
   mockMcpOnTierNotPermitted,
   mockMcpOnToolCallStarted,
   mockMcpOnToolCallSettled,
+  mockMcpOnDisplayImage,
   mockMcpSetSessionTier,
   mockMcpIssueGrant,
   mockSystemSleepOnSuspend,
@@ -13,6 +14,7 @@ const {
   tierListeners,
   toolStartedListeners,
   toolSettledListeners,
+  displayImageListeners,
   helpPanelState,
   panelStoreState,
   projectStoreState,
@@ -20,6 +22,7 @@ const {
   mockMcpOnTierNotPermitted: vi.fn(),
   mockMcpOnToolCallStarted: vi.fn(),
   mockMcpOnToolCallSettled: vi.fn(),
+  mockMcpOnDisplayImage: vi.fn(),
   mockMcpSetSessionTier: vi.fn().mockResolvedValue(undefined),
   mockMcpIssueGrant: vi.fn().mockResolvedValue({
     sessionId: "",
@@ -36,6 +39,7 @@ const {
   tierListeners: [] as Array<(payload: unknown) => void>,
   toolStartedListeners: [] as Array<(payload: unknown) => void>,
   toolSettledListeners: [] as Array<(payload: unknown) => void>,
+  displayImageListeners: [] as Array<(payload: unknown) => void>,
   helpPanelState: {
     isOpen: false,
     terminalId: null as string | null,
@@ -130,6 +134,7 @@ beforeEach(() => {
   tierListeners.length = 0;
   toolStartedListeners.length = 0;
   toolSettledListeners.length = 0;
+  displayImageListeners.length = 0;
 
   mockMcpOnTierNotPermitted.mockReset();
   mockMcpOnTierNotPermitted.mockImplementation((cb: (payload: unknown) => void) => {
@@ -153,6 +158,14 @@ beforeEach(() => {
     return () => {
       const idx = toolSettledListeners.indexOf(cb);
       if (idx >= 0) toolSettledListeners.splice(idx, 1);
+    };
+  });
+  mockMcpOnDisplayImage.mockReset();
+  mockMcpOnDisplayImage.mockImplementation((cb: (payload: unknown) => void) => {
+    displayImageListeners.push(cb);
+    return () => {
+      const idx = displayImageListeners.indexOf(cb);
+      if (idx >= 0) displayImageListeners.splice(idx, 1);
     };
   });
   mockMcpSetSessionTier.mockReset();
@@ -207,6 +220,7 @@ beforeEach(() => {
           onTierNotPermitted: mockMcpOnTierNotPermitted,
           onToolCallStarted: mockMcpOnToolCallStarted,
           onToolCallSettled: mockMcpOnToolCallSettled,
+          onDisplayImage: mockMcpOnDisplayImage,
           setSessionTier: mockMcpSetSessionTier,
           issueGrant: mockMcpIssueGrant,
         },
@@ -249,12 +263,14 @@ describe("HelpSessionController — lifecycle", () => {
     expect(tierListeners).toHaveLength(1);
     expect(toolStartedListeners).toHaveLength(1);
     expect(toolSettledListeners).toHaveLength(1);
+    expect(displayImageListeners).toHaveLength(1);
     expect(systemSleepListeners.suspend).toHaveLength(1);
     expect(systemSleepListeners.wake).toHaveLength(1);
     ctrl.stop();
     expect(tierListeners).toHaveLength(0);
     expect(toolStartedListeners).toHaveLength(0);
     expect(toolSettledListeners).toHaveLength(0);
+    expect(displayImageListeners).toHaveLength(0);
     expect(systemSleepListeners.suspend).toHaveLength(0);
     expect(systemSleepListeners.wake).toHaveLength(0);
   });

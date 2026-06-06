@@ -668,6 +668,13 @@ export const CHANNELS = {
    * so the activity strip can dim to a glyph. Targeted send — never broadcast.
    */
   MCP_TOOL_CALL_SETTLED: "mcp-server:tool-call-settled",
+  /**
+   * Push channel: the assistant invoked the `help.displayImage` MCP tool
+   * (#9828). Carries the validated daintree.org image URL plus the
+   * session-assigned figure number so the Assistant panel can render the
+   * figure inline. Targeted at the pinned WebContents — never broadcast.
+   */
+  MCP_HELP_DISPLAY_IMAGE: "mcp-server:help-display-image",
 
   // Voice Input channels
   VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",
