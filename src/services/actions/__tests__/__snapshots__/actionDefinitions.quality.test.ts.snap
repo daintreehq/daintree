@@ -42,7 +42,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "introspection",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Fetch one action's full manifest entry, including inputSchema and outputSchema. Args: \`actionId\` (required) — an action id from \`actions.search\` results (the \`id\` field). Returns { ok: true, entry } on success, or { ok: false, error: { code: 'NOT_FOUND', message } } as data (not a thrown error) when the id is unknown or hidden. Use after \`actions.search\` to inspect the exact arguments an action expects before dispatching it.",
+    "description": "Fetch one action's full manifest entry, including inputSchema and outputSchema. Args: \`actionId\` (required) — an action id from \`actions.search\` results (the \`id\` field). Returns { ok: true, entry } on success, or { ok: false, error: { code: 'NOT_FOUND', message } } as data (not a thrown error) when the id is unknown, hidden, or restricted. Use after \`actions.search\` to inspect the exact arguments an action expects before dispatching it.",
     "examples": [
       {
         "args": {
