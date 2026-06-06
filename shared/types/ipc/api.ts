@@ -114,7 +114,6 @@ import type {
   GitHubCliStatus,
   GitHubTokenConfig,
   GitHubTokenValidation,
-  GitHubRateLimitPayload,
   GitHubRateLimitDetails,
   GitHubTokenHealthPayload,
   RepoStatsAndPagePayload,
@@ -759,7 +758,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onPRCleared(callback: (data: PRClearedPayload) => void): () => void;
     onIssueDetected(callback: (data: IssueDetectedPayload) => void): () => void;
     onIssueNotFound(callback: (data: IssueNotFoundPayload) => void): () => void;
-    onRateLimitChanged(callback: (data: GitHubRateLimitPayload) => void): () => void;
     getRateLimitDetails(): Promise<GitHubRateLimitDetails | null>;
     onTokenHealthChanged(callback: (data: GitHubTokenHealthPayload) => void): () => void;
     onRepoStatsAndPageUpdated(callback: (data: RepoStatsAndPagePayload) => void): () => void;
