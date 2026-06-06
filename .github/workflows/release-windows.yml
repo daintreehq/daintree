@@ -218,9 +218,11 @@ jobs:
           # 7-Zip extraction (preinstalled on windows-latest) is faster than an
           # NSIS silent install and avoids registry/shortcut side effects.
           7z x $setup.FullName -o"$extractDir" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { Write-Error "7z extraction of installer failed (exit $LASTEXITCODE)"; exit 1 }
           $nested = Get-ChildItem -Path $extractDir -Filter 'app-64.7z' -Recurse | Select-Object -First 1
           if ($nested) {
             7z x $nested.FullName -o"$extractDir\app" -y | Out-Null
+            if ($LASTEXITCODE -ne 0) { Write-Error "7z extraction of $($nested.Name) failed (exit $LASTEXITCODE)"; exit 1 }
           }
           $binary = Get-ChildItem -Path $extractDir -Filter 'Daintree.exe' -Recurse | Select-Object -First 1
           if (-not $binary) { Write-Error "Daintree.exe not found after extracting installer"; exit 1 }
@@ -389,9 +391,11 @@ jobs:
           # 7-Zip extraction (preinstalled on windows-11-arm) is faster than an
           # NSIS silent install and avoids registry/shortcut side effects.
           7z x $setup.FullName -o"$extractDir" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { Write-Error "7z extraction of installer failed (exit $LASTEXITCODE)"; exit 1 }
           $nested = Get-ChildItem -Path $extractDir -Filter 'app-arm64.7z' -Recurse | Select-Object -First 1
           if ($nested) {
             7z x $nested.FullName -o"$extractDir\app" -y | Out-Null
+            if ($LASTEXITCODE -ne 0) { Write-Error "7z extraction of $($nested.Name) failed (exit $LASTEXITCODE)"; exit 1 }
           }
           $binary = Get-ChildItem -Path $extractDir -Filter 'Daintree.exe' -Recurse | Select-Object -First 1
           if (-not $binary) { Write-Error "Daintree.exe not found after extracting installer"; exit 1 }
