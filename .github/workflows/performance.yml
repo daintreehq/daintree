@@ -64,8 +64,49 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # PERF-004 launches a real packaged binary, so the nightly job must
+      # build one first (#10068). The `--dir` target skips AppImage/deb
+      # packaging and outputs release/linux-unpacked/ directly.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libarchive-tools \
+            libxss-dev \
+            libsecret-1-dev \
+            libnss3-dev \
+            libnotify-dev \
+            libxkbfile-dev
+
+      - name: Build
+        run: npm run build
+
+      - name: Package Linux binary (dir target)
+        run: npx electron-builder --config electron-builder.config.cjs --linux --dir --publish never
+
+      - name: Verify packaged binary exists
+        run: test -x release/linux-unpacked/daintree
+
+      - name: Install Linux runtime dependencies
+        run: |
+          sudo apt-get install -y \
+            libgbm1 \
+            libgtk-3-0 \
+            libnss3 \
+            libasound2 \
+            libxss1 \
+            libxtst6 \
+            libatk1.0-0 \
+            libatk-bridge2.0-0 \
+            libcups2 \
+            libdrm2 \
+            libnotify4 \
+            xvfb
+
       - name: Run nightly matrix
-        run: npm run perf:nightly
+        env:
+          DBUS_SESSION_BUS_ADDRESS: /dev/null
+        run: xvfb-run --auto-servernum npm run perf:nightly
 
       - name: Run soak matrix
         run: npm run perf:soak

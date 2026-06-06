@@ -151,6 +151,13 @@ async function run(): Promise<void> {
       const start = performance.now();
       const sample = (await scenario.run(context)) as ScenarioSample;
       const wallClockMs = performance.now() - start;
+      if (!Number.isFinite(sample.durationMs)) {
+        throw new Error(
+          `Scenario ${scenario.id} returned non-finite durationMs (${sample.durationMs})`
+        );
+      }
+      // Negative durationMs is the documented "harness self-times" sentinel
+      // (see TERM scenarios) — substitute the wall-clock bracket.
       const durationMs = sample.durationMs >= 0 ? sample.durationMs : wallClockMs;
 
       const metrics = sample.metrics ?? {};
