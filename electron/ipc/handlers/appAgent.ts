@@ -1,4 +1,6 @@
+import { z } from "zod";
 import { CHANNELS } from "../channels.js";
+import { ValidationError } from "../validationError.js";
 import type { HandlerDependencies } from "../types.js";
 import { appAgentService } from "../../services/AppAgentService.js";
 import type { AppAgentConfig } from "../../../shared/types/appAgent.js";
@@ -16,7 +18,8 @@ export function registerAppAgentHandlers(_deps: HandlerDependencies): () => void
   const handleSetConfig = async (config: Partial<AppAgentConfig>) => {
     const configResult = AppAgentConfigSchema.partial().safeParse(config);
     if (!configResult.success) {
-      throw new Error(`Invalid config: ${configResult.error.message}`);
+      console.error("Invalid app agent config:", z.prettifyError(configResult.error));
+      throw new ValidationError(CHANNELS.APP_AGENT_SET_CONFIG);
     }
 
     appAgentService.setConfig(configResult.data);
