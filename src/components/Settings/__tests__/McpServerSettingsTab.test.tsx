@@ -1017,13 +1017,13 @@ describe("McpServerSettingsTab", () => {
     expect(applyButton.disabled).toBe(true);
   });
 
-  it("subscribes to runtime state changes on mount", async () => {
+  it("subscribes to runtime state changes on mount and unsubscribes on unmount", async () => {
     const unsub = vi.fn();
     const onRuntimeStateChanged = vi.fn().mockReturnValue(unsub);
 
     installMcpApi({ onRuntimeStateChanged });
 
-    render(
+    const { unmount } = render(
       <SettingsValidationProvider>
         <McpServerSettingsTab />
       </SettingsValidationProvider>
@@ -1032,6 +1032,10 @@ describe("McpServerSettingsTab", () => {
     await waitFor(() => {
       expect(onRuntimeStateChanged).toHaveBeenCalledTimes(1);
     });
+    expect(unsub).not.toHaveBeenCalled();
+
+    unmount();
+    expect(unsub).toHaveBeenCalledTimes(1);
   });
 
   it("result filter includes Unauthorized option", async () => {
@@ -1301,10 +1305,38 @@ describe("McpServerSettingsTab", () => {
         </SettingsValidationProvider>
       );
       await waitForContent(container, "API key active");
-      expect(container.textContent).toContain("Running on port");
-      expect(container.textContent).toContain("9020");
+      expect(container.textContent).toContain("Running on port 9020");
       expect(container.textContent).toContain("http://127.0.0.1:9020/sse");
       expect(screen.getByRole("button", { name: /copy mcp config/i })).toBeTruthy();
+    });
+
+    it("uses the runtime snapshot port when it diverges from the slower getStatus refetch", async () => {
+      // Regression: the ready branch must read the port from the runtime
+      // snapshot, not from the persisted-config `status`, so a push that
+      // binds the port before `getStatus()` resolves still renders the URL.
+      installMcpApi({
+        getRuntimeState: vi.fn().mockResolvedValue({
+          enabled: true,
+          state: "ready",
+          port: 9020,
+          lastError: null,
+        }),
+        getStatus: vi.fn().mockResolvedValue({
+          enabled: true,
+          port: null,
+          configuredPort: 9020,
+          apiKey: "dnt-key-abc123",
+        }),
+      });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+      expect(container.textContent).toContain("Running on port 9020");
+      expect(container.textContent).toContain("http://127.0.0.1:9020/sse");
     });
 
     it("renders the starting copy and hides the URL block when state is starting", async () => {

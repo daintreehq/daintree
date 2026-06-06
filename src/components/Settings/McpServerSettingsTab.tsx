@@ -490,7 +490,13 @@ export function McpServerSettingsTab() {
     }
   };
 
-  const sseUrl = status.port ? `http://127.0.0.1:${status.port}/sse` : null;
+  // Prefer the runtime-snapshot port for the ready branch so a push that
+  // transitions starting→ready renders the URL without waiting for the
+  // follow-up `getStatus()` refetch. Fall back to `status.port` when the
+  // snapshot hasn't caught up yet (matches the assistant tab precedent at
+  // DaintreeAssistantSettingsTab.tsx:740).
+  const boundPort = runtimeSnapshot.port ?? status.port;
+  const sseUrl = boundPort ? `http://127.0.0.1:${boundPort}/sse` : null;
 
   // Rotation is the revoke-all primitive — it invalidates every external
   // client holding the current key in one shot (Tier D3). Gate it behind
@@ -558,9 +564,7 @@ export function McpServerSettingsTab() {
               <div className="contents">
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-status-success shrink-0" />
-                  <span className="text-xs text-daintree-text/60">
-                    Running on port {status.port}
-                  </span>
+                  <span className="text-xs text-daintree-text/60">Running on port {boundPort}</span>
                 </div>
 
                 <div className="flex items-center gap-2 p-2.5 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border font-mono text-xs text-daintree-text/80 select-all">
