@@ -3131,6 +3131,44 @@ describe("EVENT_POLICY manifest routing", () => {
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
     });
+
+    it.each(["uiFeedback", "settings", "workingPulse"] as const)(
+      "warns when a passive kind %s + transient resolves to a silent no-op",
+      (eventKind) => {
+        // No explicit priority → policy fills "low"; transient skips the inbox.
+        // Low priority skips the toast. The notification fires nowhere, so the
+        // policy-resolved case must warn (distinct from the explicit-low warn).
+        vi.spyOn(document, "hasFocus").mockReturnValue(true);
+        const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        notify({ type: "info", message: "x", transient: true, context: { eventKind } });
+        expect(useNotificationStore.getState().notifications).toHaveLength(0);
+        expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
+        expect(consoleSpy).toHaveBeenCalledWith(
+          expect.stringContaining("passive eventKind resolved to priority: 'low'")
+        );
+        consoleSpy.mockRestore();
+      }
+    );
+
+    it("explicit priority: 'high' overrides the passive default so the transient toast fires", () => {
+      // The call-site fix: passive kind + transient + explicit high → toast
+      // shows, no inbox row, and the passive-policy no-op warn does not fire.
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      notify({
+        type: "success",
+        message: "Removed 3 worktrees",
+        transient: true,
+        priority: "high",
+        context: { eventKind: "uiFeedback" },
+      });
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
+      expect(consoleSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("passive eventKind resolved to priority: 'low'")
+      );
+      consoleSpy.mockRestore();
+    });
   });
 
   describe("urgent / quiet-gate resolution", () => {

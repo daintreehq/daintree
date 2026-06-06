@@ -568,6 +568,22 @@ export default tseslint.config(
           message:
             "Sentry scope setters (setTag/setUser/setContext) are centralized in TelemetryService.ts so every value entering event.tags/user/contexts stays within the scrubbing contract. Annotate a legitimate site with `// eslint-disable-next-line no-restricted-syntax -- sentry-scope-setter: ok` plus a rationale. See #10047.",
         },
+        {
+          // why: passive eventKinds (uiFeedback, workingPulse, settings) resolve
+          // to priority:"low" via resolveEventPolicyDefaults() when the caller
+          // omits priority. Combined with transient:true this is a silent no-op:
+          // low priority skips the toast and transient skips the inbox, so the
+          // notification fires nowhere. Add an explicit priority:"high" to
+          // override the passive policy default. See #10051.
+          // NOTE: the eventKind `:has()` clause omits the leading `>` before the
+          // `context` property for the same esquery reason as the
+          // notify-event-kind rule above; the transient/priority guards keep
+          // their `>` since they're single-level top-of-payload properties.
+          selector:
+            "CallExpression:matches([callee.name=/^(notify|addNotification)$/], [callee.property.name=/^(notify|addNotification)$/]) > ObjectExpression:has(> Property[key.name='transient'][value.value=true]):has(Property[key.name='context'] > ObjectExpression > Property[key.name='eventKind'][value.value=/^(uiFeedback|workingPulse|settings)$/]):not(:has(> Property[key.name='priority']))",
+          message:
+            'Passive eventKind (uiFeedback/workingPulse/settings) + transient:true is a silent no-op — priority resolves to "low" (inbox-only) and transient skips the inbox, so the notification fires nowhere. Add an explicit priority:"high" to override the policy default, or annotate with `// eslint-disable-next-line no-restricted-syntax -- notify-passive-transient: ok` for a deliberate exception. See #10051.',
+        },
       ],
     },
   },

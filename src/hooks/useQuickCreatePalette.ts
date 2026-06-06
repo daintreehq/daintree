@@ -229,6 +229,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
                 type: "warning",
                 title: "Could not assign issue",
                 message: `${assignmentError} — you can assign it manually on GitHub`,
+                priority: "high",
                 context: { eventKind: "uiFeedback" },
               });
             }

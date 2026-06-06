@@ -812,6 +812,9 @@ export function isScheduledQuietHours(now: Date = new Date()): boolean {
 export function notify(payload: NotifyPayload): string {
   // Resolve routing defaults from the EVENT_POLICY manifest before reading any
   // routing fields — explicit caller fields are preserved, only gaps are filled.
+  // Capture whether the caller supplied a priority first, so we can tell a
+  // caller-written "low" apart from one the passive-eventKind policy filled in.
+  const hadExplicitPriority = payload.priority !== undefined;
   payload = resolveEventPolicyDefaults(payload);
 
   const priority = payload.priority ?? "high";
@@ -823,9 +826,15 @@ export function notify(payload: NotifyPayload): string {
     // promotes the inbox entry on navigate-away) collapse to a silent drop.
     // Surface here so the contradictory shape is caught at write-time.
     if (priority === "low") {
-      console.warn(
-        "[notify] transient: true with priority: 'low' is a silent no-op — low priority skips the toast and transient skips the inbox."
-      );
+      if (hadExplicitPriority) {
+        console.warn(
+          "[notify] transient: true with priority: 'low' is a silent no-op — low priority skips the toast and transient skips the inbox."
+        );
+      } else {
+        console.warn(
+          "[notify] transient: true with a passive eventKind resolved to priority: 'low' — this is a silent no-op (low priority skips the toast, transient skips the inbox). Add an explicit priority: 'high' at the call site to override the policy default."
+        );
+      }
     }
     if (context) {
       console.warn(
@@ -1164,6 +1173,9 @@ setPermanentFallbackHandler(() => {
     title: "Settings won't be saved",
     message:
       "Couldn't write to local storage, so changes made this session won't persist after restart.",
+    // settings is a passive eventKind (→ priority "low" / inbox-only); a
+    // storage-failure warning must surface as a toast, so pin it high.
+    priority: "high",
     context: { eventKind: "settings" },
   });
 });

@@ -114,6 +114,7 @@ export const useDiagnosticsReviewStore = create<DiagnosticsReviewState>((set, ge
           // The saved ZIP is already revealed in the OS file manager, so this
           // is a one-shot action prompt — no durable inbox row needed.
           transient: true,
+          priority: "high",
           context: { eventKind: "settings" },
           action: {
             label: "Continue to GitHub issue",
