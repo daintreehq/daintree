@@ -8,9 +8,11 @@ import { useGlobalBannerPriority, type GlobalBannerSlot } from "./useGlobalBanne
  *  global recovery cause (see `useGlobalBannerPriority`) suppresses the banner.
  *
  *  - `backend-dependent` — the banner describes a failure whose only recovery
- *    path runs through the backend (spawn, reconnect, restart). Always
- *    suppressed while a global cause is active, because the user can't act on
- *    it until the global cause clears.
+ *    path runs through the backend (spawn, reconnect, restart). Suppressed only
+ *    while a *recovery* global cause is active (see `SLOT_IS_RECOVERY`), because
+ *    the user can't act on it until the backend is healthy again. Advisory
+ *    causes (`github-token`, `cloud-sync`) leave the backend connected, so the
+ *    banner stays visible and actionable.
  *  - `parse-error` — the banner describes a file-format or replay failure
  *    that's independent of host connectivity (e.g. corrupt saved scrollback).
  *    The terminal itself is operational; never suppressed.
@@ -26,11 +28,29 @@ export function useActiveGlobalCause(): GlobalBannerSlot {
   return useGlobalBannerPriority();
 }
 
+/** Classifies each global banner slot as a *recovery* cause (the backend is
+ *  unhealthy or its protection layer is down) versus an *advisory* cause (the
+ *  backend is connected; the banner is informational). Only recovery causes
+ *  suppress `backend-dependent` pane-local errors — under an advisory cause the
+ *  backend is operational, so spawn/reconnect/restart banners stay actionable.
+ *
+ *  Declared as an exhaustive `Record` so adding a slot to `GlobalBannerSlot`
+ *  without classifying it here is a compile error (TS2741) — the suppression
+ *  domain can never silently widen to a new advisory slot. */
+const SLOT_IS_RECOVERY: Record<Exclude<GlobalBannerSlot, null>, boolean> = {
+  "host-crash": true,
+  "watchdog-disabled": true,
+  "safe-mode": true,
+  "restore-confirmation": true,
+  "github-token": false,
+  "cloud-sync": false,
+};
+
 function isSuppressedByGlobalCause(cause: GlobalBannerSlot, category: LocalErrorCategory): boolean {
   if (cause === null) return false;
   switch (category) {
     case "backend-dependent":
-      return true;
+      return SLOT_IS_RECOVERY[cause];
     case "parse-error":
     case "permission-error":
       return false;
