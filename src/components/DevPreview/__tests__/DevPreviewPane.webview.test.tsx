@@ -1990,6 +1990,72 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(container.textContent).not.toContain("Dev server unavailable");
     });
 
+    it("passes an upstream app 500/503/504 through without an overlay", () => {
+      // The proxy forwards upstream responses untouched; only it self-generates
+      // 502. A dev app's own 5xx error page must render, not be hidden/reloaded.
+      for (const code of [500, 503, 504]) {
+        const { container, unmount } = render(<DevPreviewPane {...baseProps} />);
+        const webview = getWebviewElement(container);
+        act(() => {
+          emitWebviewEvent(webview, "did-frame-navigate", {
+            isMainFrame: true,
+            httpResponseCode: code,
+            url: "http://localhost:5173/",
+          });
+          emitWebviewEvent(webview, "did-finish-load");
+        });
+        expect(container.textContent).not.toContain("Dev server unavailable");
+        expect(webview.reload).not.toHaveBeenCalled();
+        unmount();
+      }
+    });
+
+    it("drops the automatic-reload promise from the message once the retry cap is hit", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      const delays = [1000, 2000, 4000, 8000, 16000];
+      for (let i = 0; i < 6; i++) {
+        act(() => {
+          emitWebviewEvent(webview, "did-start-loading");
+          emitWebviewEvent(webview, "did-frame-navigate", {
+            isMainFrame: true,
+            httpResponseCode: 502,
+            url: "http://localhost:5173/",
+          });
+        });
+        if (i < 5) {
+          act(() => {
+            vi.advanceTimersByTime(delays[i]!);
+          });
+        }
+      }
+
+      expect(container.textContent).toContain("Dev server unavailable");
+      expect(container.textContent).not.toContain("reloads automatically");
+      expect(container.textContent).toContain("Restart it or reload");
+    });
+
+    it("cancels the pending auto-retry on unmount", () => {
+      const { container, unmount } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 502,
+          url: "http://localhost:5173/",
+        });
+      });
+
+      unmount();
+      act(() => {
+        vi.advanceTimersByTime(16000);
+      });
+
+      expect(webview.reload).not.toHaveBeenCalled();
+    });
+
     it("ignores a 502 from a non-main-frame navigation", () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       const webview = getWebviewElement(container);

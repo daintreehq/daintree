@@ -543,15 +543,17 @@ export function useDevPreviewLoadLifecycle({
 
     const handleDidFrameNavigate = (e: Electron.DidFrameNavigateEvent) => {
       // did-frame-navigate is the only renderer-side <webview> event carrying
-      // httpResponseCode. The dev-preview proxy returns HTTP 502 when the upstream
-      // dev server is down or unregistered; because TCP succeeds, did-fail-load
-      // never fires and did-finish-load would otherwise render the raw text/plain
-      // 502 body. Latch a main-frame 5xx here and surface the styled overlay; the
-      // guards in did-navigate/did-finish-load keep it from being cleared. The
-      // proxy origin is exclusive to the proxy, so any 5xx is a proxy failure
-      // (not an app-rendered error page); 4xx (bootstrap 403/405) passes through.
+      // httpResponseCode. The dev-preview proxy self-generates exactly one status
+      // — HTTP 502 — when the upstream dev server is down or unregistered
+      // (DevPreviewProxyService.send502); every other response (including an app
+      // 500/503/504) is forwarded upstream untouched and must render normally so
+      // developers can see their own error pages. Because TCP succeeds for the
+      // 502, did-fail-load never fires and did-finish-load would otherwise render
+      // the raw text/plain 502 body. Latch a main-frame 502 here and surface the
+      // styled overlay; the guards in did-navigate/did-finish-load keep it from
+      // being cleared. 4xx (bootstrap 403/405) and other 5xx pass through.
       if (!e.isMainFrame) return;
-      if (typeof e.httpResponseCode !== "number" || e.httpResponseCode < 500) return;
+      if (e.httpResponseCode !== 502) return;
       pendingHttpErrorRef.current = true;
       setIsLoading(false);
       setIsSlowLoad(false);
@@ -569,23 +571,28 @@ export function useDevPreviewLoadLifecycle({
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
       }
-      setWebviewLoadError({
-        code: "proxy_error",
-        message: `The dev server returned an error (HTTP ${e.httpResponseCode}). It may be restarting — the preview reloads automatically once it's back.`,
-        errorCode: e.httpResponseCode,
-        validatedURL: e.url || undefined,
-      });
 
       // Schedule a bounded auto-retry. proxyRetryCountRef persists across the
       // reload (did-start-loading clears the timer, not the count), so repeated
-      // 5xx responses walk up the backoff and stop at the cap.
+      // 502 responses walk up the backoff and stop at the cap.
       const PROXY_MAX_RETRIES = 5;
       if (proxyRetryRef.current) {
         clearTimeout(proxyRetryRef.current);
         proxyRetryRef.current = null;
       }
       const attempt = proxyRetryCountRef.current;
-      if (attempt < PROXY_MAX_RETRIES) {
+      const willRetry = attempt < PROXY_MAX_RETRIES;
+
+      setWebviewLoadError({
+        code: "proxy_error",
+        message: willRetry
+          ? "The dev server isn't responding. It may be restarting — the preview reloads automatically once it's back."
+          : "The dev server isn't responding. Restart it or reload the preview to try again.",
+        errorCode: e.httpResponseCode,
+        validatedURL: e.url || undefined,
+      });
+
+      if (willRetry) {
         proxyRetryCountRef.current = attempt + 1;
         const delayMs = Math.min(1000 * 2 ** attempt, 16000);
         proxyRetryRef.current = setTimeout(() => {
