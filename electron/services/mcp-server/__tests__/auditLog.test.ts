@@ -213,6 +213,76 @@ describe("AuditService.appendRecord — turnId, severity, schemaVersion", () => 
   });
 });
 
+describe("AuditService.appendRecord — resultMeta (#10014)", () => {
+  it("persists retryAfter on rate_limited records and round-trips through getRecords", () => {
+    const { service } = makeFixture();
+    service.appendRecord({
+      toolId: "agent.terminal",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 0,
+      outcome: { kind: "rate_limited", retryAfter: 5 },
+      argsSummary: "{}",
+      resultMeta: { retryAfter: 5 },
+    });
+    const [record] = service.getRecords();
+    expect(record!.result).toBe("rate_limited");
+    expect(record!.resultMeta).toEqual({ retryAfter: 5 });
+  });
+
+  it("leaves resultMeta undefined on records that do not provide it", () => {
+    const { service } = makeFixture();
+    service.appendRecord({
+      toolId: "agent.launch",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 5,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+    const [record] = service.getRecords();
+    expect("resultMeta" in record!).toBe(false);
+  });
+
+  it("does not backfill resultMeta on gate outcomes that omit it (unauthorized / dedup / collision)", () => {
+    const { service } = makeFixture();
+    service.appendRecord({
+      toolId: "agent.terminal",
+      sessionId: "sess-1",
+      tier: "workbench",
+      args: {},
+      durationMs: 0,
+      outcome: { kind: "unauthorized" },
+      argsSummary: "{}",
+    });
+    service.appendRecord({
+      toolId: "agent.terminal",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 0,
+      outcome: { kind: "dedup" },
+      argsSummary: "{}",
+    });
+    service.appendRecord({
+      toolId: "agent.terminal",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 0,
+      outcome: { kind: "collision" },
+      argsSummary: "{}",
+    });
+    const records = service.getRecords();
+    expect(records).toHaveLength(3);
+    for (const r of records) {
+      expect("resultMeta" in r!).toBe(false);
+    }
+  });
+});
+
 describe("AuditService.recordAuth401 pre-auth records", () => {
   it("emits a pre-auth record alongside the counter increment", () => {
     const { service } = makeFixture();

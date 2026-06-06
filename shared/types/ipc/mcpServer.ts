@@ -123,9 +123,18 @@ export interface McpAuditRecord {
    * Redacted, bounded (1500-char) pretty-printed JSON of what the call
    * returned — or the error code + message for failed dispatches. Lets the
    * recent-calls popover show each call's actual output. Absent for gate
-   * outcomes (unauthorized/dedup/collision/rate-limit) and old records.
+   * outcomes (unauthorized / dedup / collision) and old records. For
+   * `rate_limited` the wait time travels in `resultMeta.retryAfter` (#10014).
    */
   resultSummary?: string;
+  /**
+   * Renderer-presented hints for gate outcomes that carry a meaningful
+   * parameter the `result` label can't capture on its own. Currently set
+   * only for `rate_limited` (`retryAfter`, integer seconds from the
+   * `MCP_RATE_LIMITED_CODE` error). Absent on every other result, and on
+   * old records written before the field existed (#10014).
+   */
+  resultMeta?: { retryAfter?: number };
   result: McpAuditResult;
   errorCode?: string;
   durationMs: number;

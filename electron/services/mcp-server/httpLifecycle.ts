@@ -1352,12 +1352,24 @@ export class HttpLifecycle {
         const resultSummary = summarizeAuditOutcome(input.outcome, (s) =>
           scrubSecrets(sanitizePath(s))
         );
+        // `summarizeAuditOutcome` returns null for all gate outcomes by
+        // contract — the wait-time hint for `rate_limited` reaches the audit
+        // record through `resultMeta` instead, so the recent-calls popover
+        // can surface the integer-seconds value the agent already received
+        // in the JSON-RPC error (`details: { retryAfter }`) without
+        // re-scrubbing display text or polluting the tool-output summary
+        // (#10014).
+        const resultMeta =
+          input.outcome.kind === "rate_limited"
+            ? { retryAfter: input.outcome.retryAfter }
+            : undefined;
         this.deps.auditService.appendRecord({
           ...input,
           argsSummary: summarizeMcpArgs(input.args, (s) => scrubSecrets(sanitizePath(s))),
           ...(turnId !== null ? { turnId } : {}),
           ...(helpSessionId !== null ? { helpSessionId } : {}),
           ...(resultSummary !== null ? { resultSummary } : {}),
+          ...(resultMeta !== undefined ? { resultMeta } : {}),
         });
       },
       getCachedManifest,

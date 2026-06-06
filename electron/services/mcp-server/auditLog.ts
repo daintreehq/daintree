@@ -153,6 +153,7 @@ export class AuditService {
     turnId?: string;
     helpSessionId?: string;
     resultSummary?: string;
+    resultMeta?: McpAuditRecord["resultMeta"];
   }): void {
     if (this.readConfig().auditEnabled === false) return;
     this.hydrate();
@@ -194,6 +195,9 @@ export class AuditService {
     }
     if (input.resultSummary !== undefined) {
       record.resultSummary = input.resultSummary;
+    }
+    if (input.resultMeta !== undefined) {
+      record.resultMeta = input.resultMeta;
     }
 
     this.enqueueAndTrim(record);
