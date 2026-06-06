@@ -71,7 +71,11 @@ import { getDevPreviewWebContents, buildEmulationParams } from "./viewportEmulat
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { loadWebviewUrl } from "./loadWebviewUrl";
-import { useDevPreviewLoadLifecycle, type SessionStorageEntry } from "./useDevPreviewLoadLifecycle";
+import {
+  useDevPreviewLoadLifecycle,
+  webviewLoadErrorHeading,
+  type SessionStorageEntry,
+} from "./useDevPreviewLoadLifecycle";
 
 import { BlockedNavBanner, blockedNavReducer } from "./BlockedNavBanner";
 import { looksLikeOAuthUrl } from "@shared/utils/urlUtils";
@@ -1751,20 +1755,7 @@ export function DevPreviewPane({
                     <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
                       <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
                       <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
-                        {webviewLoadError.code === "timeout"
-                          ? "Page load timed out"
-                          : webviewLoadError.code === "aborted"
-                            ? "Load cancelled"
-                            : webviewLoadError.code === "connection_refused"
-                              ? "Dev server unreachable"
-                              : webviewLoadError.code === "name_not_resolved"
-                                ? "Couldn't resolve address"
-                                : webviewLoadError.code === "internet_disconnected"
-                                  ? "No internet connection"
-                                  : webviewLoadError.code === "cert" ||
-                                      webviewLoadError.code === "ssl_protocol"
-                                    ? "Certificate Error"
-                                    : "Page load failed"}
+                        {webviewLoadErrorHeading(webviewLoadError.code)}
                       </h3>
                       <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">
                         {webviewLoadError.message}

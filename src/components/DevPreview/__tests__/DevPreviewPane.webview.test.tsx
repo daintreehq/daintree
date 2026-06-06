@@ -1522,7 +1522,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         });
       });
 
-      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("Certificate error");
       expect(container.textContent).toContain("certificate couldn't be verified");
       expect(container.textContent).toContain("mkcert -install");
       expect(container.textContent).toContain("localhost:8443");
@@ -1570,7 +1570,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         });
       });
 
-      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("Certificate error");
       expect(container.textContent).toContain("SSL/TLS handshake failed");
       // -107 is also raised on protocol mismatch — the mkcert hint is wrong here
       expect(container.textContent).not.toContain("mkcert");
@@ -1591,7 +1591,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         });
       });
 
-      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("Certificate error");
       expect(container.textContent).toContain("mkcert -install");
     });
 
@@ -1627,7 +1627,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       // The stale retry must NOT have called loadURL
       expect(webview.loadURL).not.toHaveBeenCalled();
       // Cert error overlay must be visible
-      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("Certificate error");
     });
 
     it("classifies -299 (cert range lower bound) as cert, -199 and -300 fall through", () => {
@@ -1641,7 +1641,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
           validatedURL: "https://example.com/",
         });
       });
-      expect(c1.textContent).toContain("Certificate Error");
+      expect(c1.textContent).toContain("Certificate error");
 
       const { container: c2 } = render(<DevPreviewPane {...baseProps} />);
       const w2 = getWebviewElement(c2);

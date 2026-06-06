@@ -3,6 +3,7 @@ import type { BrowserHistory } from "@shared/types/browser";
 import type { DevPreviewStatus } from "@/hooks/useDevServer";
 import { normalizeBrowserUrl } from "../../Browser/browserUtils";
 import { computeDevServerUrl } from "../urlSync";
+import { webviewLoadErrorHeading, type WebviewLoadErrorCode } from "../useDevPreviewLoadLifecycle";
 
 // ─── Browser History Logic ──────────────────────────────────────────
 // Extracted from DevPreviewPane to enable pure-function testing
@@ -579,6 +580,36 @@ describe("DevPreviewPane", () => {
       const renderState = determineRenderState("stopped", false, "");
       const showWarning = renderState === "waiting" && !devCommand;
       expect(showWarning).toBe(false);
+    });
+  });
+
+  describe("webview load-error heading", () => {
+    it("uses sentence case for the certificate error heading (cert and ssl_protocol)", () => {
+      expect(webviewLoadErrorHeading("cert")).toBe("Certificate error");
+      expect(webviewLoadErrorHeading("ssl_protocol")).toBe("Certificate error");
+    });
+
+    it("renders every WebviewLoadErrorCode in sentence case with no trailing period", () => {
+      const codes: WebviewLoadErrorCode[] = [
+        "aborted",
+        "timeout",
+        "name_not_resolved",
+        "internet_disconnected",
+        "connection_refused",
+        "cert",
+        "ssl_protocol",
+        "failed",
+      ];
+      for (const code of codes) {
+        const heading = webviewLoadErrorHeading(code);
+        // Sentence-case invariant: the first character is uppercase, no interior
+        // word starts with an uppercase letter, and there is no trailing period.
+        const firstChar = heading.charAt(0);
+        expect(firstChar).toBe(firstChar.toUpperCase());
+        const interiorWords = heading.split(" ").slice(1);
+        expect(interiorWords.every((w) => w === w.toLowerCase())).toBe(true);
+        expect(heading.endsWith(".")).toBe(false);
+      }
     });
   });
 });

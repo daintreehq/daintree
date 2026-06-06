@@ -34,6 +34,27 @@ export interface WebviewLoadError {
   validatedURL?: string;
 }
 
+// Sentence-case headings for the webview load-error overlay.
+export function webviewLoadErrorHeading(code: WebviewLoadErrorCode): string {
+  switch (code) {
+    case "timeout":
+      return "Page load timed out";
+    case "aborted":
+      return "Load cancelled";
+    case "connection_refused":
+      return "Dev server unreachable";
+    case "name_not_resolved":
+      return "Couldn't resolve address";
+    case "internet_disconnected":
+      return "No internet connection";
+    case "cert":
+    case "ssl_protocol":
+      return "Certificate error";
+    default:
+      return "Page load failed";
+  }
+}
+
 // Chromium net error codes — see net/base/net_error_list.h
 const ERR_SSL_PROTOCOL_ERROR = -107;
 const ERR_CERT_RANGE_END = -200;
