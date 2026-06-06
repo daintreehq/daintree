@@ -26,6 +26,13 @@ vi.stubGlobal(
 );
 vi.stubGlobal("cancelAnimationFrame", (id: number) => clearTimeout(id));
 
+// jsdom's document.hasFocus() is false unless an element holds focus, which
+// would make every toast mount blur-paused (#10056) and never auto-dismiss.
+// Pin the focused state file-wide; blur-specific tests override per test.
+beforeEach(() => {
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+});
+
 function addToast(overrides: Record<string, unknown> = {}) {
   return useNotificationStore.getState().addNotification({
     type: "info",
@@ -1107,6 +1114,96 @@ describe("Toast severity-based dismissal (issue #5859)", () => {
 // Issue #6424 — when MAX_VISIBLE_TOASTS evicts a toast into the inbox, surface
 // a "+N more" pill below the visible stack so users can discover that
 // notifications were silently moved instead of disappearing.
+describe("Toast window-blur pause (issue #10056)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useNotificationStore.getState().reset();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  it("pauses auto-dismiss while the window is blurred and resumes on focus", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ duration: 1000 });
+      vi.advanceTimersByTime(16);
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(screen.getByText("Test message")).toBeTruthy();
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(1500);
+    });
+    expect(screen.queryByText("Test message")).toBeNull();
+  });
+
+  it("credits blurred time against the visible-duration cap (no instant dismiss on refocus)", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ duration: 1000 });
+      vi.advanceTimersByTime(16);
+    });
+
+    // Blur far past the wall-clock cap (duration * 3 = 3s). Without the
+    // blurred-time credit, refocus would compute a 0ms delay and dismiss the
+    // toast the instant the user comes back for it.
+    await act(async () => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(20_000);
+    });
+    expect(screen.getByText("Test message")).toBeTruthy();
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(900);
+    });
+    expect(screen.getByText("Test message")).toBeTruthy();
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+    expect(screen.queryByText("Test message")).toBeNull();
+  });
+
+  it("starts paused when the toast is created while the window is blurred", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ duration: 1000 });
+      vi.advanceTimersByTime(16);
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.getByText("Test message")).toBeTruthy();
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(1500);
+    });
+    expect(screen.queryByText("Test message")).toBeNull();
+  });
+});
+
 describe("Toast overflow pill (issue #6424)", () => {
   beforeEach(() => {
     vi.useFakeTimers();

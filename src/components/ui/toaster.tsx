@@ -101,7 +101,25 @@ function Toast({
   const [isHovered, setIsHovered] = useState(false);
   const [isFocusInside, setIsFocusInside] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const isPaused = isHovered || isFocusInside || isDropdownOpen;
+  // Window blur pauses auto-dismiss (#10056): a toast racing its timer in a
+  // blurred window dismisses unseen while its history entry says
+  // `seenAsToast: true`. Initialized from `document.hasFocus()` at mount
+  // (synchronous read — safe outside event handlers) so a toast born into a
+  // blurred window starts paused; the listeners below are pure state flips
+  // because `hasFocus()` is stale inside blur handlers in Chromium 148.
+  const [isWindowBlurred, setIsWindowBlurred] = useState(
+    () => typeof document !== "undefined" && !document.hasFocus()
+  );
+  const isPaused = isHovered || isFocusInside || isDropdownOpen || isWindowBlurred;
+  // Blurred time doesn't count against the visible-duration cap — the cap
+  // bounds *visible* time (see MAX_VISIBLE_DURATION_MS), and a toast in a
+  // blurred window isn't visible. Without this credit, a blur outlasting the
+  // cap would compute a 0ms delay on refocus and instant-dismiss the toast
+  // the user came back for (e.g. a watch-priority toast born blurred).
+  const blurredAccumRef = useRef(0);
+  const blurredSinceRef = useRef<number | null>(
+    typeof document !== "undefined" && !document.hasFocus() ? Date.now() : null
+  );
   const toastRef = useRef<HTMLDivElement>(null);
   const prevFocusRef = useRef<Element | null>(null);
 
@@ -177,6 +195,28 @@ function Toast({
   useEffect(() => {
     const handle = requestAnimationFrame(() => setIsVisible(true));
     return () => cancelAnimationFrame(handle);
+  }, []);
+
+  useEffect(() => {
+    // Pure state flips — `document.hasFocus()` is stale inside blur handlers
+    // in Chromium 148, so the event arrival itself is the signal.
+    const handleBlur = (): void => {
+      if (blurredSinceRef.current === null) blurredSinceRef.current = Date.now();
+      setIsWindowBlurred(true);
+    };
+    const handleFocus = (): void => {
+      if (blurredSinceRef.current !== null) {
+        blurredAccumRef.current += Date.now() - blurredSinceRef.current;
+        blurredSinceRef.current = null;
+      }
+      setIsWindowBlurred(false);
+    };
+    window.addEventListener("blur", handleBlur);
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      window.removeEventListener("blur", handleBlur);
+      window.removeEventListener("focus", handleFocus);
+    };
   }, []);
 
   const restoreFocus = useCallback(() => {
@@ -262,7 +302,8 @@ function Toast({
     const cap = hasActions
       ? duration * VISIBLE_DURATION_MULTIPLIER
       : Math.min(duration * VISIBLE_DURATION_MULTIPLIER, MAX_VISIBLE_DURATION_MS);
-    const deadline = (notification.firstShownAt ?? Date.now()) + cap;
+    // Credit accumulated blurred time so the cap only consumes visible time.
+    const deadline = (notification.firstShownAt ?? Date.now()) + cap + blurredAccumRef.current;
     const delay = Math.min(duration, Math.max(0, deadline - Date.now()));
     dismissTimerRef.current = setTimeout(() => dismissRef.current(), delay);
     return () => {

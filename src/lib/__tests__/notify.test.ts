@@ -1757,10 +1757,12 @@ describe("notify()", () => {
       expect(useNotificationStore.getState().notifications).toHaveLength(1);
     });
 
-    it("promotes to toast on window blur during grace window", () => {
+    it("defers blur promotion until refocus instead of toasting into a blurred window (#10056)", () => {
       // Alt-tab without changing worktree/panel doesn't fire a context
-      // subscriber, so without the blur fallback the timer would silently
-      // drop the notification with seenAsToast=true.
+      // subscriber. Promoting immediately on blur would fire the toast into
+      // a blurred window where it auto-dismisses unseen, so the decision is
+      // deferred to a one-shot refocus listener; the grace drop-timer pauses
+      // while blurred so the pending entry isn't silently dropped meanwhile.
       const focusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
       setActiveWorktree("wt-1");
       notify({
@@ -1770,11 +1772,110 @@ describe("notify()", () => {
         context: { worktreeId: "wt-1" },
       });
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
+      const entryId = useNotificationHistoryStore.getState().entries[0]!.id;
 
       focusSpy.mockReturnValue(false);
       window.dispatchEvent(new Event("blur"));
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+      // Well past SUPPRESS_GRACE_MS — the paused timer must not drop the entry.
+      vi.advanceTimersByTime(5_000);
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+
+      // The worktree changed while blurred without a subscriber tick (e.g.
+      // restored session state) — origin is no longer visible on refocus, so
+      // the missed signal promotes to a toast the user can actually see.
+      activeWorktreeId = "wt-2";
+      focusSpy.mockReturnValue(true);
+      window.dispatchEvent(new Event("focus"));
+      const notifications = useNotificationStore.getState().notifications;
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0]!.message).toBe("Alt-tab signal");
+      expect(notifications[0]!.historyEntryId).toBe(entryId);
+    });
+
+    it("refocusing onto the still-visible origin surface resumes the grace countdown", () => {
+      const focusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      setActiveWorktree("wt-1");
+      notify({
+        type: "info",
+        message: "Back to same surface",
+        priority: "high",
+        context: { worktreeId: "wt-1" },
+      });
+      focusSpy.mockReturnValue(false);
+      window.dispatchEvent(new Event("blur"));
+      vi.advanceTimersByTime(5_000);
+
+      // User returns to the surface where the signal is visible inline — no
+      // toast; the grace countdown restarts instead.
+      focusSpy.mockReturnValue(true);
+      window.dispatchEvent(new Event("focus"));
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+      vi.advanceTimersByTime(501);
+      // Once the restarted grace elapses on the visible surface, the entry is
+      // considered seen — a later navigate-away no longer promotes.
+      setActiveWorktree("wt-2");
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    });
+
+    it("repeated blurs arm a single one-shot refocus promotion", () => {
+      const focusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      setActiveWorktree("wt-1");
+      notify({
+        type: "info",
+        message: "One-shot",
+        priority: "high",
+        context: { worktreeId: "wt-1" },
+      });
+      focusSpy.mockReturnValue(false);
+      window.dispatchEvent(new Event("blur"));
+      window.dispatchEvent(new Event("blur"));
+
+      activeWorktreeId = "wt-2";
+      focusSpy.mockReturnValue(true);
+      window.dispatchEvent(new Event("focus"));
+      window.dispatchEvent(new Event("focus"));
       expect(useNotificationStore.getState().notifications).toHaveLength(1);
-      expect(useNotificationStore.getState().notifications[0]!.message).toBe("Alt-tab signal");
+    });
+
+    it("subscriber promotion while blurred cleans up the deferred refocus listener", () => {
+      const focusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      setActiveWorktree("wt-1");
+      notify({
+        type: "info",
+        message: "Nav while blurred",
+        priority: "high",
+        context: { worktreeId: "wt-1" },
+      });
+      focusSpy.mockReturnValue(false);
+      window.dispatchEvent(new Event("blur"));
+      // A context change while blurred still promotes via the subscriber path.
+      setActiveWorktree("wt-2");
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+
+      // Refocus must not double-promote — cleanup removed the one-shot listener.
+      focusSpy.mockReturnValue(true);
+      window.dispatchEvent(new Event("focus"));
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+    });
+
+    it("reset clears the deferred refocus listener", () => {
+      const focusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      setActiveWorktree("wt-1");
+      notify({
+        type: "info",
+        message: "Torn down",
+        priority: "high",
+        context: { worktreeId: "wt-1" },
+      });
+      focusSpy.mockReturnValue(false);
+      window.dispatchEvent(new Event("blur"));
+      _resetPendingSuppressedForTest();
+
+      activeWorktreeId = "wt-2";
+      focusSpy.mockReturnValue(true);
+      window.dispatchEvent(new Event("focus"));
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
     });
 
     it("promoted toast carries the same historyEntryId as the suppressed entry", () => {
@@ -2896,6 +2997,39 @@ describe("notify() — thread re-promotion (#9008)", () => {
       urgent: true,
     });
     expect(useNotificationStore.getState().notifications).toHaveLength(1);
+  });
+
+  it("stays inbox-only with seenAsToast=false when escalating while blurred (#10056)", () => {
+    // A re-promotion fired into a blurred window would render unseen,
+    // auto-dismiss, and be marked read — invisible to both the unread badge
+    // and the re-entry summary. Blurred escalations must stay inbox-only.
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+    notify({ type: "warning", correlationId: "build", message: "Build degraded", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+
+    const entries = useNotificationHistoryStore.getState().entries;
+    expect(entries).toHaveLength(2);
+    const escalation = entries.find((e) => e.message === "Build degraded");
+    expect(escalation?.seenAsToast).toBe(false);
+    expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
+  });
+
+  it("urgent escalation while blurred also stays inbox-only (urgent bypasses quiet hours, not focus)", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+    notify({
+      type: "info",
+      correlationId: "build",
+      message: "Urgent update",
+      priority: "low",
+      urgent: true,
+    });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    const urgentEntry = useNotificationHistoryStore
+      .getState()
+      .entries.find((e) => e.message === "Urgent update");
+    expect(urgentEntry?.seenAsToast).toBe(false);
   });
 
   it("excludes archived entries from the escalation baseline", () => {
