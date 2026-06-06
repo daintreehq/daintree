@@ -1263,11 +1263,11 @@ export class HttpLifecycle {
         const wc = webContentsModule.fromId(id);
         if (!wc || wc.isDestroyed()) return;
         // Redact args with the same pipeline the audit record uses so the strip
-        // never shows raw bearer tokens or absolute paths (#9759).
-        const turnId =
-          helpSessionId !== null
-            ? this.deps.turnOutcomeService.getCurrentTurnIdForSession(helpSessionId)
-            : null;
+        // never shows raw bearer tokens or absolute paths (#9759). The turn id
+        // is the snapshot the dispatch took at call-start (#10067) — not a fresh
+        // read here, which could disagree with the settled/audit value if the
+        // FSM transitioned mid-call.
+        const turnId = payload.capturedTurnId;
         try {
           wc.send(CHANNELS.MCP_TOOL_CALL_STARTED, {
             sessionId: payload.sessionId,
@@ -1291,10 +1291,9 @@ export class HttpLifecycle {
         // Derive result/errorCode/severity from the same classifier the audit
         // writer uses, so the strip's glyph and red-tint match the audit log.
         const { result, errorCode } = classifyMcpDispatchResult(payload.outcome);
-        const turnId =
-          helpSessionId !== null
-            ? this.deps.turnOutcomeService.getCurrentTurnIdForSession(helpSessionId)
-            : null;
+        // Same snapshot the started event carried (#10067) — guarantees the
+        // strip's in-flight row and its settled row resolve to one turn group.
+        const turnId = payload.capturedTurnId;
         try {
           wc.send(CHANNELS.MCP_TOOL_CALL_SETTLED, {
             sessionId: payload.sessionId,
@@ -1345,15 +1344,20 @@ export class HttpLifecycle {
         // `summarizeMcpArgs` — running the scrubber after truncation would
         // miss bearer tokens whose body got cut below the scrubber's
         // 8-char minimum match length.
-        const turnId =
-          helpSessionId !== null
-            ? this.deps.turnOutcomeService.getCurrentTurnIdForSession(helpSessionId)
-            : null;
+        // Stamp the turn id from the dispatch-start snapshot (#10067), never a
+        // fresh read at write time — by the time the audit lands the FSM may
+        // have cleared the turn, which would split this call away from the
+        // started/settled strip events that already carry it.
+        // `capturedTurnId` is the transport-only carrier — peel it off so it
+        // never lands in the persisted record (the stamped `turnId` is the
+        // public field).
+        const { capturedTurnId, ...recordInput } = input;
+        const turnId = capturedTurnId ?? null;
         const resultSummary = summarizeAuditOutcome(input.outcome, (s) =>
           scrubSecrets(sanitizePath(s))
         );
         this.deps.auditService.appendRecord({
-          ...input,
+          ...recordInput,
           argsSummary: summarizeMcpArgs(input.args, (s) => scrubSecrets(sanitizePath(s))),
           ...(turnId !== null ? { turnId } : {}),
           ...(helpSessionId !== null ? { helpSessionId } : {}),
@@ -1368,6 +1372,13 @@ export class HttpLifecycle {
       clearDenialState: (sessionId) => {
         this.deps.abusePolicy.dropSession(sessionId);
       },
+      // Single live read of the turn register, called once per dispatch from
+      // sessionServer (#10067). Closes over the build-time `helpSessionId` so
+      // the snapshot it returns is the turn this session's call is part of.
+      getCurrentTurnId: () =>
+        helpSessionId !== null
+          ? this.deps.turnOutcomeService.getCurrentTurnIdForSession(helpSessionId)
+          : null,
       notifyToolCallStarted,
       notifyToolCallSettled,
       notifyDisplayImage,

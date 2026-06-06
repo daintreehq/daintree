@@ -438,21 +438,41 @@ describe("HttpLifecycle", () => {
     });
   });
 
-  describe("buildSessionServerDeps — appendAuditRecord turnId/helpSessionId stamping", () => {
-    it("resolves turnId via the HELP session id and stamps both onto the record", () => {
+  describe("buildSessionServerDeps — turnId snapshot stamping (#10067)", () => {
+    type TurnDeps = {
+      getCurrentTurnId?: () => string | null;
+      appendAuditRecord: (input: Record<string, unknown>) => void;
+    };
+    const buildDeps = (lc: HttpLifecycle, sessionId: string): TurnDeps =>
+      (
+        lc as unknown as { buildSessionServerDeps: (id: string) => TurnDeps }
+      ).buildSessionServerDeps(sessionId);
+
+    it("resolves the live turn id via the HELP session id through getCurrentTurnId", () => {
       const deps = fakeDeps();
       (
         deps.turnOutcomeService.getCurrentTurnIdForSession as ReturnType<typeof vi.fn>
       ).mockReturnValue("turn-uuid-abc");
       deps.sessionStore.sessionHelpIdMap.set("session-1", "help-session-9");
       const lc = new HttpLifecycle(deps);
-      const deps_ = (
-        lc as unknown as {
-          buildSessionServerDeps: (sessionId: string) => {
-            appendAuditRecord: (input: Record<string, unknown>) => void;
-          };
-        }
-      ).buildSessionServerDeps("session-1");
+      const deps_ = buildDeps(lc, "session-1");
+      // The turn-id register is keyed by HELP session id, not the MCP transport
+      // id — passing the transport id always missed (#9759 gap).
+      expect(deps_.getCurrentTurnId?.()).toBe("turn-uuid-abc");
+      expect(deps.turnOutcomeService.getCurrentTurnIdForSession).toHaveBeenCalledWith(
+        "help-session-9"
+      );
+    });
+
+    it("stamps the captured turn id onto the audit record without re-reading it", () => {
+      const deps = fakeDeps();
+      (
+        deps.turnOutcomeService.getCurrentTurnIdForSession as ReturnType<typeof vi.fn>
+      ).mockReturnValue("turn-uuid-abc");
+      deps.sessionStore.sessionHelpIdMap.set("session-1", "help-session-9");
+      const lc = new HttpLifecycle(deps);
+      const deps_ = buildDeps(lc, "session-1");
+      (deps.turnOutcomeService.getCurrentTurnIdForSession as ReturnType<typeof vi.fn>).mockClear();
       deps_.appendAuditRecord({
         toolId: "agent.terminal",
         sessionId: "session-1",
@@ -460,31 +480,22 @@ describe("HttpLifecycle", () => {
         args: {},
         durationMs: 5,
         outcome: { kind: "result", value: { ok: true, result: null } },
+        capturedTurnId: "turn-uuid-abc",
       });
-      // The turn-id register is keyed by HELP session id, not the MCP
-      // transport id — passing the transport id always missed (#9759 gap).
-      expect(deps.turnOutcomeService.getCurrentTurnIdForSession).toHaveBeenCalledWith(
-        "help-session-9"
-      );
+      // The write path must not re-read the live register — the snapshot is the
+      // single source of truth, so the audit record can't disagree with the
+      // started/settled strip events.
+      expect(deps.turnOutcomeService.getCurrentTurnIdForSession).not.toHaveBeenCalled();
       expect(deps.auditService.appendRecord).toHaveBeenCalledWith(
         expect.objectContaining({ turnId: "turn-uuid-abc", helpSessionId: "help-session-9" })
       );
     });
 
-    it("omits turnId when getCurrentTurnIdForSession returns null", () => {
+    it("omits turnId when the captured snapshot is null", () => {
       const deps = fakeDeps();
-      (
-        deps.turnOutcomeService.getCurrentTurnIdForSession as ReturnType<typeof vi.fn>
-      ).mockReturnValue(null);
       deps.sessionStore.sessionHelpIdMap.set("session-1", "help-session-9");
       const lc = new HttpLifecycle(deps);
-      const deps_ = (
-        lc as unknown as {
-          buildSessionServerDeps: (sessionId: string) => {
-            appendAuditRecord: (input: Record<string, unknown>) => void;
-          };
-        }
-      ).buildSessionServerDeps("session-1");
+      const deps_ = buildDeps(lc, "session-1");
       deps_.appendAuditRecord({
         toolId: "agent.terminal",
         sessionId: "session-1",
@@ -492,6 +503,7 @@ describe("HttpLifecycle", () => {
         args: {},
         durationMs: 5,
         outcome: { kind: "result", value: { ok: true, result: null } },
+        capturedTurnId: null,
       });
       const callArgs = (deps.auditService.appendRecord as ReturnType<typeof vi.fn>).mock
         .calls[0]?.[0];
@@ -500,16 +512,12 @@ describe("HttpLifecycle", () => {
       expect(callArgs.helpSessionId).toBe("help-session-9");
     });
 
-    it("skips turn lookup and helpSessionId for sessions with no help binding", () => {
+    it("getCurrentTurnId returns null and skips lookup for sessions with no help binding", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
-      const deps_ = (
-        lc as unknown as {
-          buildSessionServerDeps: (sessionId: string) => {
-            appendAuditRecord: (input: Record<string, unknown>) => void;
-          };
-        }
-      ).buildSessionServerDeps("session-external");
+      const deps_ = buildDeps(lc, "session-external");
+      expect(deps_.getCurrentTurnId?.()).toBeNull();
+      expect(deps.turnOutcomeService.getCurrentTurnIdForSession).not.toHaveBeenCalled();
       deps_.appendAuditRecord({
         toolId: "agent.terminal",
         sessionId: "session-external",
@@ -517,12 +525,47 @@ describe("HttpLifecycle", () => {
         args: {},
         durationMs: 5,
         outcome: { kind: "result", value: { ok: true, result: null } },
+        capturedTurnId: null,
       });
-      expect(deps.turnOutcomeService.getCurrentTurnIdForSession).not.toHaveBeenCalled();
       const callArgs = (deps.auditService.appendRecord as ReturnType<typeof vi.fn>).mock
         .calls[0]?.[0];
       expect(callArgs.turnId).toBeUndefined();
       expect(callArgs.helpSessionId).toBeUndefined();
+    });
+
+    it("stamps the start-time snapshot even after the FSM clears the turn mid-call", () => {
+      const deps = fakeDeps();
+      const liveTurn = deps.turnOutcomeService.getCurrentTurnIdForSession as ReturnType<
+        typeof vi.fn
+      >;
+      liveTurn.mockReturnValue("turn-T1");
+      deps.sessionStore.sessionHelpIdMap.set("session-1", "help-session-9");
+      const lc = new HttpLifecycle(deps);
+      const deps_ = buildDeps(lc, "session-1");
+
+      // Snapshot at dispatch start, while the turn is still active.
+      const capturedTurnId = deps_.getCurrentTurnId?.() ?? null;
+      expect(capturedTurnId).toBe("turn-T1");
+
+      // The active→passive FSM transition clears the register before the call
+      // settles — a fresh read would now return null (the #10067 race).
+      liveTurn.mockReturnValue(null);
+
+      deps_.appendAuditRecord({
+        toolId: "agent.terminal",
+        sessionId: "session-1",
+        tier: "action",
+        args: {},
+        durationMs: 5,
+        outcome: { kind: "result", value: { ok: true, result: null } },
+        capturedTurnId,
+      });
+
+      // The audit record carries the snapshot, not the post-transition null —
+      // so it groups with the started/settled events under the same turn.
+      expect(deps.auditService.appendRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ turnId: "turn-T1", helpSessionId: "help-session-9" })
+      );
     });
   });
 
