@@ -397,22 +397,26 @@ export function BrowserPane({
 
   const handleBack = useCallback(() => {
     isInitialRestoredLoadRef.current = false;
-    setBlockedNav(null);
-    setIsLoading(true);
-    setLoadError(null);
     const webview = webviewRef.current;
+    // Only enter the loading state once we know navigation will actually fire —
+    // otherwise no load event ever clears isLoading and the spinner sticks.
     if (webview && isWebviewReady && webview.canGoBack()) {
+      setBlockedNav(null);
+      setIsLoading(true);
+      setLoadError(null);
       webview.goBack();
     }
   }, [isWebviewReady]);
 
   const handleForward = useCallback(() => {
     isInitialRestoredLoadRef.current = false;
-    setBlockedNav(null);
-    setIsLoading(true);
-    setLoadError(null);
     const webview = webviewRef.current;
+    // Only enter the loading state once we know navigation will actually fire —
+    // otherwise no load event ever clears isLoading and the spinner sticks.
     if (webview && isWebviewReady && webview.canGoForward()) {
+      setBlockedNav(null);
+      setIsLoading(true);
+      setLoadError(null);
       webview.goForward();
     }
   }, [isWebviewReady]);
@@ -628,12 +632,17 @@ export function BrowserPane({
 
   const handleGoToHistoryIndex = useCallback(
     async (index: number) => {
-      const entry = navSnapshot?.entries[index];
+      // Entries are filtered upstream but keep their original Chromium stack
+      // position in `.index`, so the array is sparse — match on the field, not
+      // the array position.
+      const entry = navSnapshot?.entries.find((e) => e.index === index);
       if (!entry) return;
 
       const result = normalizeBrowserUrl(entry.url, { allowedHosts });
+      if (result.error || !result.url) return;
+
       if (result.requiresConfirmation && result.hostname) {
-        setPendingApproval({ url: result.url!, hostname: result.hostname, historyIndex: index });
+        setPendingApproval({ url: result.url, hostname: result.hostname, historyIndex: index });
         return;
       }
 
