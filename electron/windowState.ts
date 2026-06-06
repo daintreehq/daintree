@@ -106,14 +106,19 @@ function clampToDisplay(bounds: { x: number; y: number; width: number; height: n
   if (!display) return bounds;
   // Some Wayland/GNOME compositors report a zero-dimension workArea; fall back to
   // the display's full bounds so the clamp math never produces a 0x0 window.
-  const safeWorkArea = display.workArea.width > 0 && display.workArea.height > 0
-    ? display.workArea
-    : display.bounds;
+  const safeWorkArea =
+    display.workArea.width > 0 && display.workArea.height > 0 ? display.workArea : display.bounds;
   const clampedWidth = Math.round(Math.min(bounds.width, safeWorkArea.width));
   const clampedHeight = Math.round(Math.min(bounds.height, safeWorkArea.height));
   return {
-    x: Math.max(safeWorkArea.x, Math.min(bounds.x, safeWorkArea.x + safeWorkArea.width - clampedWidth)),
-    y: Math.max(safeWorkArea.y, Math.min(bounds.y, safeWorkArea.y + safeWorkArea.height - clampedHeight)),
+    x: Math.max(
+      safeWorkArea.x,
+      Math.min(bounds.x, safeWorkArea.x + safeWorkArea.width - clampedWidth)
+    ),
+    y: Math.max(
+      safeWorkArea.y,
+      Math.min(bounds.y, safeWorkArea.y + safeWorkArea.height - clampedHeight)
+    ),
     width: clampedWidth,
     height: clampedHeight,
   };
@@ -186,9 +191,7 @@ export function createWindowWithState(
   // When the saved state has no x/y (cold-start / first-run / defaults), getBounds() on a
   // show:false window returns placeholder coordinates, so getDisplayMatching would route to
   // the primary display anyway — call it directly to make the intent explicit (#10076).
-  const display = hasSavedPosition
-    ? screen.getDisplayMatching(bounds)
-    : screen.getPrimaryDisplay();
+  const display = hasSavedPosition ? screen.getDisplayMatching(bounds) : screen.getPrimaryDisplay();
 
   if (
     !display ||
