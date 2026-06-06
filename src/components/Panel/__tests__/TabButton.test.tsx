@@ -587,5 +587,28 @@ describe("TabButton", () => {
       const { container } = render(<TabButton {...defaultProps} chrome={deriveTerminalChrome()} />);
       expect(queryStateIcon(container)).toBeUndefined();
     });
+
+    // #10024 — the visual state icon is aria-hidden, so a visually-hidden text
+    // alternative carries the agent state into the tab's accessible name.
+    it("exposes the agent state as visually-hidden text when a state is shown", () => {
+      render(<TabButton {...defaultProps} chrome={deriveTerminalChrome()} agentState="working" />);
+      expect(screen.queryByText("Agent working")).not.toBeNull();
+    });
+
+    it("uses the effective state label when state is coerced (idle -> waiting)", () => {
+      render(
+        <TabButton
+          {...defaultProps}
+          chrome={deriveTerminalChrome({ launchAgentId: "claude" })}
+          agentState="idle"
+        />
+      );
+      expect(screen.queryByText("Agent waiting")).not.toBeNull();
+    });
+
+    it("does not expose state text when no state is shown (plain shell)", () => {
+      render(<TabButton {...defaultProps} chrome={deriveTerminalChrome()} />);
+      expect(screen.queryByText(/^Agent /)).toBeNull();
+    });
   });
 });
