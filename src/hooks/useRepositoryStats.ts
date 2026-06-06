@@ -512,15 +512,18 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       // When the limit clears, run an immediate refresh so the UI updates
       // without waiting a full poll interval; `refresh` clears the timer,
       // fetches, and reschedules against the new rate-limit-aware interval.
-      // When blocked, just reschedule against the new resume time.
+      // When blocked, just reschedule against the new resume time. The clear
+      // is an automatic system event, not a user action — suppressed on
+      // worker instances like the polling loop itself (#10123).
       if (!payload.blocked) {
+        if (isWorkerInstance) return;
         void polling.refresh();
       } else {
         polling.scheduleNextPoll();
       }
     });
     return cleanup;
-  }, [polling]);
+  }, [polling, isWorkerInstance]);
 
   const isTokenError = isTokenRelatedError(error);
 
