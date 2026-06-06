@@ -139,7 +139,7 @@ describe("BrowserToolbar handleSubmit", () => {
   // #9941: with no validateUrl prop the toolbar stays strict (DevPreview policy),
   // rejecting LAN hosts before onNavigate fires.
   it("rejects a LAN host in strict default mode (no validateUrl)", () => {
-    const { getByTestId } = renderToolbar();
+    const { getByTestId, container } = renderToolbar();
     const input = openDropdown(getByTestId);
 
     fireEvent.change(input, { target: { value: "192.168.1.10:3000" } });
@@ -147,6 +147,9 @@ describe("BrowserToolbar handleSubmit", () => {
 
     expect(defaultProps.onNavigate).not.toHaveBeenCalled();
     expect(defaultProps.onReload).not.toHaveBeenCalled();
+    // The inline error banner renders, confirming the host was actively rejected
+    // rather than the submit silently no-op'ing.
+    expect(container.querySelector(".text-status-error")).not.toBeNull();
   });
 
   // #9941: a validateUrl prop lets BrowserPane inject its extended policy so the
@@ -167,18 +170,19 @@ describe("BrowserToolbar handleSubmit", () => {
   // #9941: requiresConfirmation is not an error — the toolbar forwards the URL and
   // lets BrowserPane.handleNavigate raise the approval banner.
   it("forwards the URL when validateUrl returns requiresConfirmation", () => {
-    const { getByTestId } = renderToolbar({
-      validateUrl: () => ({
-        url: "http://tunnel.example.com/",
-        requiresConfirmation: true,
-        hostname: "tunnel.example.com",
-      }),
-    });
+    const validateUrl = vi.fn(() => ({
+      url: "http://tunnel.example.com/",
+      requiresConfirmation: true,
+      hostname: "tunnel.example.com",
+    }));
+    const { getByTestId } = renderToolbar({ validateUrl });
     const input = openDropdown(getByTestId);
 
     fireEvent.change(input, { target: { value: "tunnel.example.com" } });
     fireEvent.submit(input.closest("form")!);
 
+    // validateUrl receives the edited input, not the current `url` prop.
+    expect(validateUrl).toHaveBeenCalledWith("tunnel.example.com");
     expect(defaultProps.onNavigate).toHaveBeenCalledWith("http://tunnel.example.com/");
     expect(defaultProps.onReload).not.toHaveBeenCalled();
   });
