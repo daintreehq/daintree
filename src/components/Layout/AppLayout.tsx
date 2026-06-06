@@ -108,6 +108,51 @@ export function AppLayout({
   const showAssistant = !layout.gestureAssistantHidden && layout.helpPanelOpen;
   const effectiveAssistantWidth = showAssistant ? layout.helpPanelWidth : 0;
 
+  // Issue #9864: the sidebar wrapper carries overflowClipMargin: 6px so the
+  // resize handle's overhang paints outside the contain boundary. But
+  // overflow-clip-margin is a discrete (non-animatable) property — when the
+  // wrapper width animates to 0 on hide, the clip edge stays 6px out and the
+  // full-width inner content bleeds a 6px strip at the left edge. Track when
+  // the sidebar is *fully* hidden (after the collapse animation) and only then
+  // zero the clip margin, so the handle overhang survives the whole animation
+  // while no strip remains at rest. Initialize from !showSidebar to avoid a
+  // 6px flash on startup when the app boots with the sidebar hidden.
+  const [sidebarFullyHidden, setSidebarFullyHidden] = useState(() => !showSidebar);
+
+  useEffect(() => {
+    if (showSidebar) {
+      // Restore the clip margin immediately on show so the resize handle
+      // overhang is live before/throughout the reveal animation.
+      setSidebarFullyHidden(false);
+      return;
+    }
+    // Hiding: when no width transition will actually run, transitionend never
+    // fires, so flush directly. The width transition is suppressed by the
+    // in-app reduceAnimations toggle, an active drag-resize, OS-level reduced
+    // motion (the motion-reduce:transition-none variant), or performance mode
+    // (data-performance-mode narrows transition-property to exclude width).
+    const prefersReducedMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduceAnimations || isSidebarResizing || prefersReducedMotion || layout.performanceMode) {
+      setSidebarFullyHidden(true);
+    }
+  }, [showSidebar, reduceAnimations, isSidebarResizing, layout.performanceMode]);
+
+  const handleSidebarTransitionEnd = useCallback(
+    (event: React.TransitionEvent<HTMLDivElement>) => {
+      // Only the wrapper's own width transition marks the end of the collapse.
+      // Filter on propertyName to ignore other transitioned properties and on
+      // target === currentTarget to ignore bubbled child transitions. Re-check
+      // visibility so a stale transitionend from a hide that was reversed
+      // mid-animation (hide then show) doesn't clip the now-visible sidebar.
+      if (event.propertyName === "width" && event.target === event.currentTarget && !showSidebar) {
+        setSidebarFullyHidden(true);
+      }
+    },
+    [showSidebar]
+  );
+
   useEffect(() => {
     if (layout.performanceMode) {
       document.body.setAttribute("data-performance-mode", "true");
@@ -530,9 +575,10 @@ export function AppLayout({
                 "transition-[width] duration-[var(--duration-250)] ease-[var(--ease-out-expo)] motion-reduce:transition-none",
               !showSidebar && "pointer-events-none"
             )}
+            onTransitionEnd={handleSidebarTransitionEnd}
             style={{
               width: effectiveSidebarWidth,
-              overflowClipMargin: "6px",
+              overflowClipMargin: sidebarFullyHidden ? "0px" : "6px", // #9864
               contain: "layout paint",
               // The contain boundary makes this wrapper a stacking context, so
               // the resize handle's 6px overhang (-right-1.5, z-50) would fall
