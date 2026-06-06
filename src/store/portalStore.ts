@@ -71,6 +71,18 @@ const initialState: PortalState = {
   showDevDashboard: false,
 };
 
+function isPersistedTab(value: unknown): value is PortalTab {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<PortalTab>;
+  if (typeof candidate.id !== "string") return false;
+  if (typeof candidate.title !== "string") return false;
+  if (candidate.url !== null && typeof candidate.url !== "string") return false;
+  if (candidate.favicon !== undefined && typeof candidate.favicon !== "string") return false;
+  if (candidate.icon !== undefined && typeof candidate.icon !== "string") return false;
+  if (candidate.partition !== undefined && typeof candidate.partition !== "string") return false;
+  return true;
+}
+
 const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) => {
   const CLOSE_TAB_RESTORE_MAX_ATTEMPTS = 20;
   const CLOSE_TAB_RESTORE_DELAY_MS = 50;
@@ -479,7 +491,9 @@ const portalStoreCreator: StateCreator<
       ] as PortalLink[];
     }
 
-    const persistedTabs = Array.isArray(persisted.tabs) ? persisted.tabs : currentState.tabs;
+    const persistedTabs = Array.isArray(persisted.tabs)
+      ? persisted.tabs.filter(isPersistedTab)
+      : currentState.tabs;
     const persistedActiveTabId = persisted.activeTabId;
     const activeTabId =
       typeof persistedActiveTabId === "string" &&
