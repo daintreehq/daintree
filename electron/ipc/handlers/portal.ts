@@ -69,6 +69,11 @@ export function registerPortalHandlers(deps: HandlerDependencies): () => void {
               console.warn("[PortalHandler] flushStorageData failed before promote:", error);
             }
           }
+          // Restore-intent creates are shielded from LRU eviction until the
+          // follow-up show lands; createTab clears the guard on failure.
+          if (payload.isRestore === true) {
+            deps.portalManager.markRestoring(payload.tabId);
+          }
           deps.portalManager.createTab(payload.tabId, payload.url, partition);
         } catch (error) {
           console.error("[PortalHandler] Error in create:", error);

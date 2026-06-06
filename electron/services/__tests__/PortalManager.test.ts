@@ -852,6 +852,115 @@ describe("PortalManager LRU eviction", () => {
     }
   });
 
+  describe("restoring tab guard (#9971)", () => {
+    it("does not evict a tab in the create→show restore window", () => {
+      const manager = new PortalManagerClass(mockWindow);
+
+      // tab-1 is mid-restore: created, bounds polling in flight, show pending.
+      manager.markRestoring("tab-1");
+      manager.createTab("tab-1", "http://localhost:1001");
+      manager.createTab("tab-2", "http://localhost:1002");
+      manager.createTab("tab-3", "http://localhost:1003");
+
+      // A background create overflows the limit. tab-1 is the LRU and not the
+      // active tab, but the restore guard must protect it — tab-2 (oldest
+      // unprotected) is evicted instead.
+      manager.createTab("tab-4", "http://localhost:1004");
+
+      expect(manager.hasTab("tab-1")).toBe(true);
+      expect(manager.hasTab("tab-2")).toBe(false);
+      expect(manager.hasTab("tab-3")).toBe(true);
+      expect(manager.hasTab("tab-4")).toBe(true);
+    });
+
+    it("showTab clears the guard so the tab re-enters normal LRU order", () => {
+      const manager = new PortalManagerClass(mockWindow);
+
+      manager.markRestoring("tab-1");
+      manager.createTab("tab-1", "http://localhost:1001");
+      manager.createTab("tab-2", "http://localhost:1002");
+      manager.createTab("tab-3", "http://localhost:1003");
+
+      // Restore completes, then the user switches through the other tabs,
+      // leaving tab-1 as the LRU background tab.
+      manager.showTab("tab-1", { x: 0, y: 0, width: 800, height: 600 });
+      manager.showTab("tab-2", { x: 0, y: 0, width: 800, height: 600 });
+      manager.showTab("tab-3", { x: 0, y: 0, width: 800, height: 600 });
+
+      manager.createTab("tab-4", "http://localhost:1004");
+
+      // Guard is gone — tab-1 is evictable again.
+      expect(manager.hasTab("tab-1")).toBe(false);
+      expect(manager.hasTab("tab-2")).toBe(true);
+      expect(manager.hasTab("tab-3")).toBe(true);
+      expect(manager.hasTab("tab-4")).toBe(true);
+    });
+
+    it("closeTab mid-restore leaves no stale guard for a reused tab id", async () => {
+      const manager = new PortalManagerClass(mockWindow);
+
+      manager.markRestoring("tab-1");
+      manager.createTab("tab-1", "http://localhost:1001");
+      await manager.closeTab("tab-1");
+
+      // Recreate the same id as a plain background tab — it must follow
+      // normal LRU eviction, which fails if the old guard entry leaked.
+      manager.createTab("tab-1", "http://localhost:1001");
+      manager.createTab("tab-2", "http://localhost:1002");
+      manager.createTab("tab-3", "http://localhost:1003");
+      manager.createTab("tab-4", "http://localhost:1004");
+
+      expect(manager.hasTab("tab-1")).toBe(false);
+      expect(manager.hasTab("tab-2")).toBe(true);
+    });
+
+    it("createTab failure clears the guard set by a preceding markRestoring", () => {
+      const manager = new PortalManagerClass(mockWindow);
+
+      manager.markRestoring("tab-1");
+      manager.createTab("tab-1", "not-a-valid-url");
+      expect(manager.hasTab("tab-1")).toBe(false);
+
+      // Same id later created as a background tab must not inherit protection.
+      manager.createTab("tab-1", "http://localhost:1001");
+      manager.createTab("tab-2", "http://localhost:1002");
+      manager.createTab("tab-3", "http://localhost:1003");
+      manager.createTab("tab-4", "http://localhost:1004");
+
+      expect(manager.hasTab("tab-1")).toBe(false);
+      expect(manager.hasTab("tab-2")).toBe(true);
+    });
+
+    it("tolerates exceeding the limit when every candidate is protected", () => {
+      const manager = new PortalManagerClass(mockWindow);
+
+      for (let i = 1; i <= 4; i++) {
+        manager.markRestoring(`tab-${i}`);
+        manager.createTab(`tab-${i}`, `http://localhost:${1000 + i}`);
+      }
+
+      // No eligible eviction candidate — all four stay alive until a show
+      // resolves one of the restores.
+      for (let i = 1; i <= 4; i++) {
+        expect(manager.hasTab(`tab-${i}`)).toBe(true);
+      }
+
+      // First show clears tab-1's guard but makes it active — still over the
+      // limit, still nothing evictable. The second show releases tab-1 as a
+      // normal LRU candidate and the deferred eviction reclaims it.
+      manager.showTab("tab-1", { x: 0, y: 0, width: 800, height: 600 });
+      for (let i = 1; i <= 4; i++) {
+        expect(manager.hasTab(`tab-${i}`)).toBe(true);
+      }
+
+      manager.showTab("tab-2", { x: 0, y: 0, width: 800, height: 600 });
+      expect(manager.hasTab("tab-1")).toBe(false);
+      expect(manager.hasTab("tab-2")).toBe(true);
+      expect(manager.hasTab("tab-3")).toBe(true);
+      expect(manager.hasTab("tab-4")).toBe(true);
+    });
+  });
+
   it("destroy after evictions does not double-close", async () => {
     const manager = new PortalManagerClass(mockWindow);
 

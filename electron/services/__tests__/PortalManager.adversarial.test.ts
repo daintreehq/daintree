@@ -149,6 +149,42 @@ describe("PortalManager adversarial", () => {
     expect(evictedWebContents.close).toHaveBeenCalledTimes(1);
   });
 
+  it("protects multiple concurrent restores while evicting the unprotected LRU tab", () => {
+    const manager = new PortalManagerClass(mockWindow);
+
+    // Two restores in flight at once (e.g. queued restore follows an overlay
+    // close) racing a background create that overflows the limit.
+    manager.markRestoring("tab-1");
+    manager.createTab("tab-1", "http://localhost:3001");
+    manager.createTab("tab-2", "http://localhost:3002");
+    manager.markRestoring("tab-3");
+    manager.createTab("tab-3", "http://localhost:3003");
+
+    manager.createTab("tab-4", "http://localhost:3004");
+
+    expect(manager.hasTab("tab-1")).toBe(true);
+    expect(manager.hasTab("tab-2")).toBe(false);
+    expect(manager.hasTab("tab-3")).toBe(true);
+    expect(manager.hasTab("tab-4")).toBe(true);
+  });
+
+  it("restoring guard does not leak through destroy()", () => {
+    const manager = new PortalManagerClass(mockWindow);
+
+    manager.markRestoring("tab-1");
+    manager.createTab("tab-1", "http://localhost:3001");
+    manager.destroy();
+
+    // Fresh session reusing the same id as a background tab — normal LRU.
+    manager.createTab("tab-1", "http://localhost:3001");
+    manager.createTab("tab-2", "http://localhost:3002");
+    manager.createTab("tab-3", "http://localhost:3003");
+    manager.createTab("tab-4", "http://localhost:3004");
+
+    expect(manager.hasTab("tab-1")).toBe(false);
+    expect(manager.hasTab("tab-2")).toBe(true);
+  });
+
   describe("navigation gating", () => {
     type WebContentsMock = ReturnType<typeof createMockWebContents>;
     type EventName = "will-navigate" | "will-redirect" | "will-frame-navigate";

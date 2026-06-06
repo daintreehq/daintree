@@ -28,6 +28,7 @@ import { registerPortalHandlers } from "../portal.js";
 function createPortalManager() {
   return {
     createTab: vi.fn<(tabId: string, url: string, partition?: string) => void>(),
+    markRestoring: vi.fn<(tabId: string) => void>(),
     showTab: vi.fn(),
     hideAll: vi.fn(),
     updateBounds: vi.fn(),
@@ -135,6 +136,38 @@ describe("portal create handler partition override", () => {
       "persist:dev-preview-a-b-c"
     );
     warnSpy.mockRestore();
+  });
+
+  it("marks the tab as restoring before createTab when isRestore is true", async () => {
+    const order: string[] = [];
+    portalManager.markRestoring.mockImplementationOnce(() => {
+      order.push("markRestoring");
+    });
+    portalManager.createTab.mockImplementationOnce(() => {
+      order.push("createTab");
+    });
+
+    const handler = getHandler(CHANNELS.PORTAL_CREATE);
+    await handler(
+      { sender: {} },
+      { tabId: "tab-1", url: "http://localhost:3000/", isRestore: true }
+    );
+
+    expect(portalManager.markRestoring).toHaveBeenCalledWith("tab-1");
+    expect(order).toEqual(["markRestoring", "createTab"]);
+  });
+
+  it("does not mark restoring when isRestore is absent or false", async () => {
+    const handler = getHandler(CHANNELS.PORTAL_CREATE);
+
+    await handler({ sender: {} }, { tabId: "tab-1", url: "http://localhost:3000/" });
+    await handler(
+      { sender: {} },
+      { tabId: "tab-2", url: "http://localhost:3000/", isRestore: false }
+    );
+
+    expect(portalManager.markRestoring).not.toHaveBeenCalled();
+    expect(portalManager.createTab).toHaveBeenCalledTimes(2);
   });
 
   it("rejects an invalid url before touching the session", async () => {
