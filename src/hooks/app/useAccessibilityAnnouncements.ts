@@ -312,11 +312,15 @@ export function useAccessibilityAnnouncements() {
     if (prev === undefined) return; // first render — establish baseline only
     if (prev === maximizedId) return;
 
+    // Read titles from the freshest store state — the closure's `panelsById`
+    // can lag a render behind if a panel is removed in the same tick it is
+    // unmaximized, which would otherwise drop the title to the fallback.
+    const currentPanels = usePanelStore.getState().panelsById;
     if (maximizedId !== null) {
-      const title = panelsById[maximizedId]?.title ?? "Panel";
+      const title = currentPanels[maximizedId]?.title ?? "Panel";
       useAnnouncerStore.getState().announce(`${title} maximized`, "polite");
     } else if (prev !== null) {
-      const title = panelsById[prev]?.title ?? "Panel";
+      const title = currentPanels[prev]?.title ?? "Panel";
       useAnnouncerStore.getState().announce(`${title} unmaximized`, "polite");
     }
   }, [maximizedId, panelsById]);

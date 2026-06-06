@@ -764,7 +764,7 @@ describe("useAccessibilityAnnouncements — location and maximize announcements 
     expect(useAnnouncerStore.getState().polite).toBeNull();
   });
 
-  it("does not announce for internal locations (grid → overlay, dock → trash)", () => {
+  it("does not announce for internal locations (overlay, background, trash)", () => {
     const { rerender } = renderHook(() => useAccessibilityAnnouncements());
 
     act(() => {
@@ -773,11 +773,26 @@ describe("useAccessibilityAnnouncements — location and maximize announcements 
     rerender();
     useAnnouncerStore.setState({ polite: null, assertive: null });
 
+    for (const dest of ["overlay", "background", "trash"] as const) {
+      act(() => {
+        setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+      });
+      rerender();
+      useAnnouncerStore.setState({ polite: null, assertive: null });
+
+      act(() => {
+        setPanels([{ id: "t1", title: "Pane A", location: dest }]);
+      });
+      rerender();
+      expect(useAnnouncerStore.getState().polite).toBeNull();
+    }
+
+    // dock → trash is also silent (only dock → grid is reported).
     act(() => {
-      setPanels([{ id: "t1", title: "Pane A", location: "overlay" }]);
+      setPanels([{ id: "t1", title: "Pane A", location: "dock" }]);
     });
     rerender();
-    expect(useAnnouncerStore.getState().polite).toBeNull();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
 
     act(() => {
       setPanels([{ id: "t1", title: "Pane A", location: "trash" }]);
@@ -839,6 +854,74 @@ describe("useAccessibilityAnnouncements — location and maximize announcements 
     });
 
     const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+
+  it("announces only the new panel on an in-group representative switch (t1 → t2)", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([
+        { id: "t1", title: "Pane A", location: "grid" },
+        { id: "t2", title: "Pane B", location: "grid" },
+      ]);
+      setMaximizedId("t1");
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setMaximizedId("t2");
+    });
+    rerender();
+
+    // The group is still maximized; only the new representative is announced —
+    // no spurious "Pane A unmaximized".
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane B maximized");
+  });
+
+  it("falls back to a generic title when the panel was removed before unmaximize", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+      setMaximizedId("t1");
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setPanels([]);
+      setMaximizedId(null);
+    });
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Panel unmaximized");
+  });
+
+  it("does not re-announce maximize when an unrelated panel updates", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([
+        { id: "t1", title: "Pane A", location: "grid" },
+        { id: "t2", title: "Pane B", location: "grid" },
+      ]);
+      setMaximizedId("t1");
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    // Update an unrelated panel's title while t1 stays maximized.
+    act(() => {
+      setPanels([
+        { id: "t1", title: "Pane A", location: "grid" },
+        { id: "t2", title: "Pane B renamed", location: "grid" },
+      ]);
+      setMaximizedId("t1");
+    });
     rerender();
 
     expect(useAnnouncerStore.getState().polite).toBeNull();
