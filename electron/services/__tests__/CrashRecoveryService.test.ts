@@ -1389,6 +1389,112 @@ describe("CrashRecoveryService", () => {
 
       expect(svc.getBackupPanelCount()).toBeNull();
     });
+
+    it("falls back to disk when allowDiskFallback is true and no crash marker is present", () => {
+      // Renderer-crash mid-session: no marker was ever consumed, so the
+      // cache is empty. The default-arg call must still return null
+      // (the line-1346 contract), but opting in to the disk fallback must
+      // surface the live session's terminal count.
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: {
+            terminals: [
+              { id: "t1", kind: "terminal" },
+              { id: "t2", kind: "terminal" },
+              { id: "t3", kind: "browser" },
+              { id: "t4", kind: "terminal" },
+            ],
+          },
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getBackupPanelCount()).toBeNull();
+      expect(svc.getBackupPanelCount(true)).toBe(4);
+    });
+
+    it("returns cached count even when allowDiskFallback is true (cache wins over disk)", () => {
+      // consumeMarker() reads the disk backup into cachedBackupSnapshot.
+      // After that, the disk file is rotated/overwritten by the live backup
+      // tick. The cache must continue to drive getBackupPanelCount(true)
+      // so the main-crash dialog keeps showing the pre-crash panel count
+      // (mirrors the "snapshot at the moment we learned about the crash"
+      // contract on consumeMarker).
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const preCrash = {
+        capturedAt: Date.now() - 60_000,
+        appState: {
+          terminals: [
+            { id: "t1", kind: "terminal" },
+            { id: "t2", kind: "terminal" },
+            { id: "t3", kind: "terminal" },
+          ],
+        },
+      };
+      fs.writeFileSync(path.join(backupDir, "session-state.json"), JSON.stringify(preCrash));
+
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      // Overwrite the disk file with a divergent post-recovery snapshot.
+      // The cache must NOT be replaced; the fallback must not perturb it.
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: {
+            terminals: [
+              { id: "n1", kind: "terminal" },
+              { id: "n2", kind: "terminal" },
+              { id: "n3", kind: "terminal" },
+              { id: "n4", kind: "terminal" },
+              { id: "n5", kind: "browser" },
+              { id: "n6", kind: "terminal" },
+              { id: "n7", kind: "terminal" },
+            ],
+          },
+        })
+      );
+
+      expect(svc.getBackupPanelCount(true)).toBe(3);
+    });
+
+    it("returns null on malformed disk snapshot when fallback is allowed", () => {
+      // readBackupFile + Array.isArray already defend the wiring. This test
+      // pins that the fallback returns null (not garbage, not a throw) when
+      // the disk snapshot has a non-array `terminals` field.
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: { terminals: "not an array" },
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getBackupPanelCount(true)).toBeNull();
+    });
   });
 
   describe("resetToFresh", () => {
