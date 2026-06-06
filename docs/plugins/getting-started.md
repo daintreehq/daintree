@@ -95,7 +95,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
 
 Build, package, and install the plugin into your running Daintree:
 
-> `daintree-plugin install` depends on the CLI, which is not yet published on npm. Until it ships, sideload the built plugin manually by copying it into `~/.daintree/plugins/` (see [Distribution → Sideload](./distribution.md#sideload)).
+> `daintree-plugin install` depends on the CLI, which is not yet published on npm. Until it ships, sideload manually by placing the built plugin directory (not the `.dntr` file) at `~/.daintree/plugins/{publisher}.{name}/` and restarting Daintree (see [Distribution → Sideload](./distribution.md#sideload)).
 
 ```bash
 npm run package

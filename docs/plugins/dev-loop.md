@@ -23,7 +23,7 @@ npx daintree-plugin new my-plugin
 Creates `./my-plugin/` with:
 
 - `plugin.json` — starter manifest
-- `package.json` — npm dev deps (`@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite`, Vite, TypeScript)
+- `package.json` — npm dev deps (`@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite`, Vite, TypeScript). Note: `@daintreehq/plugin-sdk` and `@daintreehq/plugin-vite` are not yet published, so `npm install` against this generated `package.json` will fail today — see the caveat at the top of this page.
 - `vite.config.ts` — pre-configured for plugin builds
 - `tsconfig.json`
 - `src/` — starter code based on template choice
@@ -38,7 +38,7 @@ Templates:
 
 ### The edit loop (today)
 
-There's no hot reload yet. The loop that works now is manual:
+There's no hot reload yet. The loop below still depends on the unpublished `daintree-plugin` CLI (see the caveat at the top of this page); until it ships, package and install by hand following [Distribution → Sideload](./distribution.md#sideload). The intended manual loop once the CLI is available:
 
 ```bash
 cd my-plugin
@@ -204,6 +204,8 @@ If you publish `@daintreehq/plugin-sdk`-dependent utilities or shared code as np
 ## CI integration
 
 Recommended CI setup for plugins published to GitHub Releases:
+
+> The `daintree-plugin` commands in this workflow are not yet published on npm and will return E404 today. This YAML shows the intended setup once the CLI ships.
 
 ```yaml
 # .github/workflows/release.yml

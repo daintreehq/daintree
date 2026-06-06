@@ -42,7 +42,7 @@ The plugin system is under active development. Each contribution point in the [c
 
 ## Stability
 
-`@daintreehq/plugin-sdk` follows semver but is pre-1.0 until the SDK stabilizes. Breaking changes may occur between 0.x minor versions. Pin to an exact version during early development and upgrade deliberately.
+`@daintreehq/plugin-sdk` is not yet published on npm (see the [status banner](#daintree-plugins) above); once it ships it will follow semver but stay pre-1.0 until the SDK stabilizes. Breaking changes may occur between 0.x minor versions, so pin to an exact version during early development and upgrade deliberately.
 
 The `engines.daintree` field in your manifest controls host compatibility. Plugins declaring a range that doesn't match the running Daintree version are rejected at load time with a user-visible warning.
 
