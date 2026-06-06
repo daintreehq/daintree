@@ -4,6 +4,8 @@ The host API is the runtime surface a plugin's `activate` function receives. It 
 
 The canonical import source is `@daintreehq/plugin-sdk`. Types referenced here live in that package.
 
+> `@daintreehq/plugin-sdk` is not yet published on npm, so the imports shown below won't resolve from the registry today. The types it will ship currently live in-repo at `shared/types/plugin-sdk.ts`; import them via a relative path for now.
+
 ## Activation
 
 A plugin's main module exports an `activate` function:
