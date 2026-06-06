@@ -35,7 +35,7 @@ import {
 import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import { markPerformance } from "../utils/performance.js";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
-import { isSmokeTest } from "../setup/environment.js";
+import { isDemoMode, isSmokeTest } from "../setup/environment.js";
 import { SMOKE_BOOT_TIMEOUT_MS } from "../services/smokeTest.js";
 import {
   beginWindowRecreating,
@@ -262,7 +262,13 @@ export function setupBrowserWindow(
       v8CacheOptions: "code",
       // Seed the renderer with the persisted theme so first paint applies the
       // saved scheme instead of a prefers-color-scheme default (#9169).
-      additionalArguments: [`${INITIAL_COLOR_SCHEME_ARG}=${colorSchemeId}`],
+      additionalArguments: [
+        `${INITIAL_COLOR_SCHEME_ARG}=${colorSchemeId}`,
+        // Thread the demo-mode flag into renderer argv (Electron does not
+        // forward main-process CLI switches), so window.electron.demo and the
+        // demo overlay components are available when launched with --demo-mode.
+        ...(isDemoMode ? ["--demo-mode"] : []),
+      ],
     },
   });
 

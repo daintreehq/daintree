@@ -35,6 +35,16 @@ export interface DemoScreenshotResult {
 export interface DemoStartCapturePayload {
   fps?: number;
   outputPath: string;
+  /**
+   * Target encode bitrate in bits/sec for the MediaRecorder. Higher = sharper,
+   * larger files. Defaults to a very-high-quality value chosen by the main
+   * handler when omitted. Set explicitly for embeddable/master-quality output.
+   */
+  videoBitsPerSecond?: number;
+  /** Force the captured frame width in device pixels (getDisplayMedia ideal). */
+  width?: number;
+  /** Force the captured frame height in device pixels (getDisplayMedia ideal). */
+  height?: number;
 }
 
 export interface DemoCaptureChunkPayload {
@@ -53,6 +63,9 @@ export interface DemoExecStartCapturePayload {
   requestId: string;
   fps: number;
   mimeType: string;
+  videoBitsPerSecond?: number;
+  width?: number;
+  height?: number;
 }
 
 export interface DemoExecStopCapturePayload {
@@ -97,10 +110,39 @@ export interface DemoSpotlightPayload {
   padding?: number;
 }
 
+export type DemoAnnotationPlacement =
+  // Anchored to a target element (requires `selector`).
+  | "top"
+  | "bottom"
+  | "left"
+  | "right"
+  // Anchored to the viewport (selector ignored). screen-bottom is subtitle style.
+  | "screen-top"
+  | "screen-bottom"
+  | "screen-center"
+  | "lower-third-left"
+  | "lower-third-right"
+  | "top-left"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-right"
+  // Anchored to the demo cursor's position at annotate time.
+  | "above-cursor"
+  | "below-cursor";
+
+/** Caption size tier — resolved to a fraction of frame height so it scales across 1080p/4K. */
+export type DemoAnnotationSize = "sm" | "md" | "lg" | "xl";
+
 export interface DemoAnnotatePayload {
-  selector: string;
+  /**
+   * Target element. Required for element-anchored placements (top/bottom/left/
+   * right); ignored for screen-* and cursor placements.
+   */
+  selector?: string;
   text: string;
-  position?: "top" | "bottom" | "left" | "right";
+  position?: DemoAnnotationPlacement;
+  /** Size tier; defaults to "md". */
+  size?: DemoAnnotationSize;
   id?: string;
 }
 

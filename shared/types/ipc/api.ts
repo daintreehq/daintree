@@ -73,6 +73,8 @@ import type {
   DemoStopCaptureResult,
   DemoCaptureStatus,
   DemoAnnotateResult,
+  DemoAnnotationPlacement,
+  DemoAnnotationSize,
 } from "./demo.js";
 import type {
   CopyTreeResult,
@@ -1638,7 +1640,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     annotate(
       selector: string,
       text: string,
-      position?: "top" | "bottom" | "left" | "right",
+      position?: DemoAnnotationPlacement,
+      size?: DemoAnnotationSize,
       id?: string
     ): Promise<DemoAnnotateResult>;
     dismissAnnotation(id?: string): Promise<void>;

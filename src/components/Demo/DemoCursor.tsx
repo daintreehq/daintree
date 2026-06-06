@@ -782,6 +782,7 @@ export function DemoCursor() {
   return (
     <div
       ref={cursorRef}
+      data-demo-cursor
       style={{
         position: "fixed",
         left: "50%",

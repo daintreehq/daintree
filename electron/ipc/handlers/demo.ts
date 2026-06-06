@@ -229,7 +229,12 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
           }
 
           const fps = payload.fps ?? 30;
-          const { outputPath } = payload;
+          const { outputPath, width, height } = payload;
+          // Default to a very-high-quality bitrate so demo recordings are
+          // embeddable masters out of the box (~40 Mbps comfortably covers up
+          // to 4K). Callers can override down for smaller files. MediaRecorder's
+          // own default is far lower (~2.5 Mbps), which looks blocky at high res.
+          const videoBitsPerSecond = payload.videoBitsPerSecond ?? 40_000_000;
 
           fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
@@ -273,6 +278,9 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
               captureId,
               fps,
               mimeType: CAPTURE_MIME_TYPE,
+              videoBitsPerSecond,
+              width,
+              height,
             });
           } catch (err) {
             captureSession = null;

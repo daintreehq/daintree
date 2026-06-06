@@ -75,7 +75,7 @@ import {
 import { getProjectStatsService } from "./ipc/handlers/projectCrud/index.js";
 import { getIdleTerminalNotificationService } from "./services/IdleTerminalNotificationService.js";
 import { preAgentSnapshotService } from "./services/PreAgentSnapshotService.js";
-import { isSmokeTest, kickOffEarlyPathRefresh } from "./setup/environment.js";
+import { isDemoMode, isSmokeTest, kickOffEarlyPathRefresh } from "./setup/environment.js";
 import { activateOpenFileInstaller } from "./setup/openFileInstall.js";
 import { store } from "./store.js";
 import { initializeLogger, registerLoggerTransport, setLogLevelOverrides } from "./utils/logger.js";
@@ -490,7 +490,7 @@ if (!gotTheLock) {
       });
       setupPermissionLockdown();
       registerDeepLinkProtocolClient();
-      registerAppProtocol(distPath);
+      registerAppProtocol(distPath, { allowDisplayCapture: isDemoMode });
       registerDaintreeFileProtocol();
       const { pluginService } = await import("./services/PluginService.js");
       registerPluginProtocol((pluginId) => pluginService.getPluginDir(pluginId));

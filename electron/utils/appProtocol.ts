@@ -2,6 +2,18 @@ import path from "node:path";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { DAINTREE_APP_PERMISSIONS_POLICY } from "../../shared/config/permissionsPolicy.js";
 
+// Process-wide Permissions-Policy served on app:// responses. Defaults to the
+// deny-by-default posture; demo mode swaps in a variant that allows
+// `display-capture=(self)` via setAppPermissionsPolicy() at protocol setup so
+// the screencast recorder's getDisplayMedia() call isn't blocked by policy.
+// Kept as module state (not an import of electron `isDemoMode`) so this pure
+// util stays decoupled from the heavyweight environment module and its tests.
+let appPermissionsPolicy = DAINTREE_APP_PERMISSIONS_POLICY;
+
+export function setAppPermissionsPolicy(policy: string): void {
+  appPermissionsPolicy = policy;
+}
+
 export interface AppProtocolHeaders extends Record<string, string> {
   "Content-Type": string;
   "Cross-Origin-Opener-Policy": string;
@@ -93,7 +105,7 @@ export function buildHeaders(
     "Content-Type": mimeType,
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Embedder-Policy": "credentialless",
-    "Permissions-Policy": DAINTREE_APP_PERMISSIONS_POLICY,
+    "Permissions-Policy": appPermissionsPolicy,
     "X-Content-Type-Options": "nosniff",
     "Cross-Origin-Resource-Policy": "same-origin",
     "Cache-Control": cacheControl,

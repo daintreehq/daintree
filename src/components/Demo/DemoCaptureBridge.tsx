@@ -67,16 +67,30 @@ export function DemoCaptureBridge() {
         const requestId = payload.requestId as string;
         const fps = (payload.fps as number | undefined) ?? 30;
         const requestedMime = (payload.mimeType as string | undefined) ?? "video/webm;codecs=vp9";
+        const videoBitsPerSecond =
+          typeof payload.videoBitsPerSecond === "number" ? payload.videoBitsPerSecond : undefined;
+        const width = typeof payload.width === "number" ? payload.width : undefined;
+        const height = typeof payload.height === "number" ? payload.height : undefined;
 
         if (activeRef.current && !activeRef.current.stopped) {
           api.sendCommandDone(requestId, "Capture already in progress");
           return;
         }
 
+        // Pin the capture resolution when requested so the recorded frame is a
+        // precise size (e.g. 3840×2160) rather than whatever the surface
+        // happens to be. `ideal` keeps the request soft so capture still
+        // succeeds if the backend can't hit the exact size.
+        const videoConstraints: MediaTrackConstraints = { frameRate: fps };
+        if (width && height) {
+          videoConstraints.width = { ideal: width };
+          videoConstraints.height = { ideal: height };
+        }
+
         let stream: MediaStream;
         try {
           stream = await navigator.mediaDevices.getDisplayMedia({
-            video: { frameRate: fps },
+            video: videoConstraints,
             audio: false,
           });
         } catch (err) {
@@ -91,7 +105,10 @@ export function DemoCaptureBridge() {
 
         let recorder: MediaRecorder;
         try {
-          recorder = new MediaRecorder(stream, { mimeType });
+          recorder = new MediaRecorder(stream, {
+            mimeType,
+            ...(videoBitsPerSecond ? { videoBitsPerSecond } : {}),
+          });
         } catch (err) {
           stream.getTracks().forEach((t) => t.stop());
           const message = formatErrorMessage(err, "MediaRecorder init failed");

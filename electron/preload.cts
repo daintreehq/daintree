@@ -2655,8 +2655,13 @@ const api: ElectronAPI = {
           pause: () => _unwrappingInvoke(CHANNELS.DEMO_PAUSE),
           resume: () => _unwrappingInvoke(CHANNELS.DEMO_RESUME),
           sleep: (durationMs: number) => _unwrappingInvoke(CHANNELS.DEMO_SLEEP, { durationMs }),
-          startCapture: (payload: { fps?: number; outputPath: string }) =>
-            _unwrappingInvoke(CHANNELS.DEMO_START_CAPTURE, payload),
+          startCapture: (payload: {
+            fps?: number;
+            outputPath: string;
+            videoBitsPerSecond?: number;
+            width?: number;
+            height?: number;
+          }) => _unwrappingInvoke(CHANNELS.DEMO_START_CAPTURE, payload),
           sendCaptureChunk: (captureId: string, data: Uint8Array) => {
             ipcRenderer.send(CHANNELS.DEMO_CAPTURE_CHUNK, { captureId, data });
           },
@@ -2680,13 +2685,30 @@ const api: ElectronAPI = {
           annotate: (
             selector: string,
             text: string,
-            position?: "top" | "bottom" | "left" | "right",
+            position?:
+              | "top"
+              | "bottom"
+              | "left"
+              | "right"
+              | "screen-top"
+              | "screen-bottom"
+              | "screen-center"
+              | "lower-third-left"
+              | "lower-third-right"
+              | "top-left"
+              | "top-right"
+              | "bottom-left"
+              | "bottom-right"
+              | "above-cursor"
+              | "below-cursor",
+            size?: "sm" | "md" | "lg" | "xl",
             id?: string
           ) =>
             _unwrappingInvoke(CHANNELS.DEMO_ANNOTATE, {
               selector,
               text,
               position,
+              size,
               id,
             }),
           dismissAnnotation: (id?: string) =>
