@@ -95,6 +95,16 @@ describe("extractDescription", () => {
       '2026-01-01 said "hi" there'
     );
   });
+
+  it("ignores a description that only appears in a comment", () => {
+    const slice = [
+      "{",
+      '  // description: "2099-01-01 commented out",',
+      '  description: "2026-04-01 real one",',
+      "}",
+    ].join("\n");
+    expect(extractDescription(slice)).toBe("2026-04-01 real one");
+  });
 });
 
 describe("extractQuarantineEntry", () => {
@@ -183,6 +193,10 @@ describe("computeThreshold", () => {
 
   it("handles month boundaries", () => {
     expect(computeThreshold(new Date("2026-01-05T00:00:00Z"), 30)).toBe("2025-12-06");
+  });
+
+  it("returns today when staleDays is 0", () => {
+    expect(computeThreshold(new Date("2026-06-06T13:37:00Z"), 0)).toBe("2026-06-06");
   });
 });
 
@@ -290,6 +304,41 @@ describe("scanStaleQuarantines", () => {
       { line: 2, date: "2026-04-01", reason: "first" },
       { line: 6, date: "2026-04-02", reason: "second" },
     ]);
+  });
+
+  it("keeps only the stale annotation when a file mixes stale and fresh", () => {
+    const files = {
+      "/repo/e2e/mixed.spec.ts": [
+        "test.info().annotations.push({",
+        '  type: "quarantine",',
+        '  description: "2026-04-01 stale one",',
+        "});",
+        "test.info().annotations.push({",
+        '  type: "quarantine",',
+        '  description: "2026-05-27 fresh one",',
+        "});",
+      ].join("\n"),
+    };
+    const { staleBySpec } = run(files, [
+      { filePath: "/repo/e2e/mixed.spec.ts", lineNum: 2 },
+      { filePath: "/repo/e2e/mixed.spec.ts", lineNum: 6 },
+    ]);
+    expect(staleBySpec.get("e2e/mixed.spec.ts")).toEqual([
+      { line: 2, date: "2026-04-01", reason: "stale one" },
+    ]);
+  });
+
+  it("uses the absolute path as key when the file is outside rootDir", () => {
+    const files = {
+      "/other/e2e/x.spec.ts": [
+        "test.info().annotations.push({",
+        '  type: "quarantine",',
+        '  description: "2026-04-01 elsewhere",',
+        "});",
+      ].join("\n"),
+    };
+    const { staleBySpec } = run(files, [{ filePath: "/other/e2e/x.spec.ts", lineNum: 2 }]);
+    expect(staleBySpec.has("/other/e2e/x.spec.ts")).toBe(true);
   });
 
   it("falls back to a placeholder reason when only a date is present", () => {

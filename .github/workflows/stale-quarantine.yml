@@ -23,7 +23,7 @@ jobs:
 
       - name: Bootstrap test-quarantine label
         run: |
-          if ! gh label list --search test-quarantine --limit 1 | grep -q test-quarantine; then
+          if ! gh label list --json name --jq '.[].name' | grep -qx 'test-quarantine'; then
             gh label create test-quarantine --force --color "FF0000" --description "Test quarantine tracking for stale annotations"
           fi
         env:
@@ -31,7 +31,14 @@ jobs:
 
       - name: Extract quarantine annotations
         run: |
-          rg --no-heading --json --type ts 'type:\s*"quarantine"' e2e/ > "$RUNNER_TEMP/quarantine-matches.json" || true
+          # rg exits 0 (matches) or 1 (no matches); any other code is a real
+          # error and must fail the job — otherwise an empty match file would
+          # later be read as "no stale quarantines" and close every open issue.
+          rg --no-heading --json --type ts 'type:\s*"quarantine"' e2e/ > "$RUNNER_TEMP/quarantine-matches.json" || rg_exit=$?
+          if [ "${rg_exit:-0}" -gt 1 ]; then
+            echo "ripgrep failed with exit ${rg_exit}" >&2
+            exit "${rg_exit}"
+          fi
 
       - name: Resolve stale quarantines
         run: |
@@ -48,11 +55,18 @@ jobs:
             const path = require('path');
 
             const resultPath = path.join(process.env.RUNNER_TEMP, 'stale-quarantines.json');
-            let parsed = { thresholdStr: '', staleBySpec: {} };
+            let parsed;
             try {
               parsed = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
-            } catch {
-              console.log('No scan result found; treating as zero stale quarantines.');
+            } catch (err) {
+              // A missing/unreadable artifact must NOT be treated as "zero stale" —
+              // that would make the close loop purge every open quarantine issue.
+              core.setFailed(`Could not read scan result (${err.message}); aborting to avoid incorrect issue closure.`);
+              return;
+            }
+            if (parsed.scanCompleted !== true) {
+              core.setFailed('Scan result is incomplete; aborting to avoid incorrect issue closure.');
+              return;
             }
 
             const thresholdStr = parsed.thresholdStr || '';
@@ -112,19 +126,20 @@ jobs:
                     continue;
                   }
 
-                  // Check if the most recent comment already matches this body.
-                  // The issue-comments endpoint ignores sort/direction and returns
-                  // comments oldest-first, so paginate and take the last one.
+                  // Skip if our most recent bot comment already matches this body.
+                  // The list endpoint returns comments oldest-first (sort/direction
+                  // are ignored), so paginate and take the LAST bot-authored one.
+                  // Filtering to Bot comments means a maintainer replying in between
+                  // doesn't trick us into re-posting an identical stale table.
                   const comments = await github.paginate(github.rest.issues.listComments, {
                     owner: context.repo.owner,
                     repo: context.repo.repo,
                     issue_number: existing.number,
                     per_page: 100,
                   });
-                  const latestComment = comments.at(-1);
-
-                  if (latestComment && normalize(latestComment.body) === normalize(body)) {
-                    console.log(`Skipped commenting on #${existing.number}: most recent comment already matches.`);
+                  const lastBotComment = comments.filter(c => c.user?.type === 'Bot').at(-1);
+                  if (lastBotComment && normalize(lastBotComment.body) === normalize(body)) {
+                    console.log(`Skipped commenting on #${existing.number}: latest bot comment already matches.`);
                     continue;
                   }
 

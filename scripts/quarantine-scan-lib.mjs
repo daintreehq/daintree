@@ -159,12 +159,59 @@ function unescapeStringLiteral(value) {
 }
 
 /**
+ * Strip line and block comments from `text`, leaving string literals intact, so
+ * a `description:` that only appears in a comment can't be mistaken for the real
+ * property value.
+ */
+function stripCommentsOutsideStrings(text) {
+  let out = "";
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    const ch = text[i];
+    if (ch === "/" && text[i + 1] === "/") {
+      while (i < n && text[i] !== "\n") i++;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      i += 2;
+      while (i < n && !(text[i] === "*" && text[i + 1] === "/")) i++;
+      i += 2;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      const quote = ch;
+      out += ch;
+      i++;
+      while (i < n) {
+        if (text[i] === "\\") {
+          out += text[i] + (text[i + 1] ?? "");
+          i += 2;
+          continue;
+        }
+        out += text[i];
+        if (text[i] === quote) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+/**
  * Extract the `description` string literal from an object-literal slice. Handles
  * either quote style and a value that begins on the line after `description:`.
  * Returns the unescaped description text, or null when absent / not a literal.
  */
 export function extractDescription(objectSlice) {
-  const m = objectSlice.match(/\bdescription\s*:\s*(["'`])((?:\\.|(?!\1)[\s\S])*?)\1/);
+  const cleaned = stripCommentsOutsideStrings(objectSlice);
+  const m = cleaned.match(/\bdescription\s*:\s*(["'`])((?:\\.|(?!\1)[\s\S])*?)\1/);
   if (!m) return null;
   return unescapeStringLiteral(m[2]);
 }
@@ -304,6 +351,11 @@ function main() {
   for (const warning of warnings) console.warn(warning);
 
   const result = {
+    // Sentinel the consumer checks before acting on staleBySpec. An empty
+    // staleBySpec is only trustworthy when it came from a completed scan — never
+    // from a missing/partial artifact — so the workflow won't close issues on a
+    // silently-empty result.
+    scanCompleted: true,
     staleDays,
     thresholdStr,
     staleBySpec: Object.fromEntries(staleBySpec),
