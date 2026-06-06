@@ -237,21 +237,28 @@ async function activateProjectView(
   // windowToProject mapping, so it is safe to run first — this matches the
   // legacy ProjectSwitchService ordering (onProjectSwitch before loadProject).
   if (windowId !== undefined) {
-    if (deps.ptyClient) {
-      deps.ptyClient.onProjectSwitch(windowId, projectId, project.path);
-    }
-
-    // Cold-started views receive their first PTY MessagePort from
-    // ProjectViewManager.onViewReady during did-finish-load. Replacing that
-    // port again here can race with the first terminal prompt after the view
-    // becomes interactive. Cached reactivations do not reload, so they still
-    // need a fresh port here.
-    const win = senderWindow ?? deps.mainWindow;
-    if (!isNew && win && deps.windowRegistry && !view.webContents.isDestroyed()) {
-      const ctx = deps.windowRegistry.getByWindowId(win.id);
-      if (ctx) {
-        distributePortsToView(win, ctx, view.webContents, deps.ptyClient ?? null);
+    // Best-effort: the PTY rebrokering now runs before the worktree load, so an
+    // unexpected throw here must not abort the switch and skip `loadProject`
+    // (which would leave the WorkspaceClient windowToProject mapping stale).
+    try {
+      if (deps.ptyClient) {
+        deps.ptyClient.onProjectSwitch(windowId, projectId, project.path);
       }
+
+      // Cold-started views receive their first PTY MessagePort from
+      // ProjectViewManager.onViewReady during did-finish-load. Replacing that
+      // port again here can race with the first terminal prompt after the view
+      // becomes interactive. Cached reactivations do not reload, so they still
+      // need a fresh port here.
+      const win = senderWindow ?? deps.mainWindow;
+      if (!isNew && win && deps.windowRegistry && !view.webContents.isDestroyed()) {
+        const ctx = deps.windowRegistry.getByWindowId(win.id);
+        if (ctx) {
+          distributePortsToView(win, ctx, view.webContents, deps.ptyClient ?? null);
+        }
+      }
+    } catch (err) {
+      console.error(`${options.logPrefix} Failed to rebroker PTY port:`, err);
     }
   }
 

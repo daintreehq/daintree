@@ -854,9 +854,39 @@ describe("project:switch PTY port ordering (#10075)", () => {
 
     expect(ptyClient.onProjectSwitch).toHaveBeenCalledWith(7, "proj-new", "/projects/new");
     expect(distributeMock).toHaveBeenCalledTimes(1);
+    // Port goes to the sender's window/context and carries the live ptyClient —
+    // routing to the wrong window would silently drop terminal data.
+    expect(distributeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 7 }),
+      expect.any(Object),
+      expect.objectContaining({ id: 300 }),
+      ptyClient
+    );
+    // PTY-host routing must be updated before the renderer port opens, else the
+    // port is connected while the host still points at the old project.
+    expect(ptyClient.onProjectSwitch.mock.invocationCallOrder[0]).toBeLessThan(
+      distributeMock.mock.invocationCallOrder[0]
+    );
 
     resolveLoad();
     await handlerPromise;
+  });
+
+  it("still rebrokers the PTY port even when the worktree load rejects", async () => {
+    const { invoke, ptyClient } = setup({
+      isNew: false,
+      loadProject: async () => {
+        throw new Error("Not a git repository");
+      },
+    });
+    const distributeMock = vi.mocked(distributePortsToView);
+
+    await invoke();
+
+    // The reorder runs PTY work before loadProject, so a git-load failure must
+    // not retroactively undo terminal connectivity (#10075).
+    expect(ptyClient.onProjectSwitch).toHaveBeenCalledWith(7, "proj-new", "/projects/new");
+    expect(distributeMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not redistribute the PTY port for a cold-started view (isNew guard)", async () => {
