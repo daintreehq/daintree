@@ -242,6 +242,19 @@ export class WorkspaceClient extends EventEmitter {
     }
   }
 
+  /**
+   * Broadcast that a forge provider descriptor was registered (startup scan
+   * or runtime plugin install/enable) so hosts whose PR polling paused on a
+   * "no provider matches" resolution re-evaluate (#9997). Fire-and-forget,
+   * mirroring the polling-control sends above.
+   */
+  notifyForgeProviderRegistryUpdated(): void {
+    if (this.isDisposed) return;
+    for (const entry of this.pool.entries.values()) {
+      entry.host.send({ type: "forge:provider-registry-updated" });
+    }
+  }
+
   setPRPollCadence(focused: boolean): void {
     for (const entry of this.pool.entries.values()) {
       entry.host.send({ type: "set-pr-poll-cadence", focused });

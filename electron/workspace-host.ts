@@ -666,6 +666,10 @@ port.on("message", async (rawMsg: any) => {
         workspaceService.updateForgeCredentials(request.providerId, request.credentials);
         break;
 
+      case "forge:provider-registry-updated":
+        workspaceService.notifyForgeProviderRegistryUpdated();
+        break;
+
       case "retry-auth-fetch":
         workspaceService.retryAuthFetch();
         break;

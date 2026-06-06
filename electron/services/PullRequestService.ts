@@ -161,6 +161,14 @@ class PullRequestService {
   private projectId: string | null = null;
   private providerNamespacedId: string | null = null;
   private repoRef: RepoRef | null = null;
+  // Outcome of the last `resolveProvider()` round-trip. `"no-match"` is a
+  // definitive answer (plugin scan complete, no provider matches the remote):
+  // polling pauses and re-resolution is skipped until `invalidateProvider()`
+  // clears it back to null — without this, a GitLab/Bitbucket project would
+  // spin on the 5s cold-start cap forever (#9997). `"not-ready"` and null
+  // keep the cold-start retry cap. Re-armed by forge settings changes,
+  // manual refresh, and `forge:provider-registry-updated` pushes from main.
+  private providerResolutionStatus: "resolved" | "no-match" | "not-ready" | null = null;
   // Forge provider routing settings, pushed in from the main process. The
   // workspace-host can't read `projectStore` or `electron-store` directly —
   // those modules pull `BrowserWindow`/`app` into the bundle and crash the
@@ -389,19 +397,31 @@ class PullRequestService {
 
       // The bridge does provider resolution and `parseRemote` in one IPC
       // roundtrip: the registry lives in main (where plugins activate), so
-      // there's no point trying to consult it locally. Returns null when no
-      // provider matches the remote OR no remote URL is available.
+      // there's no point trying to consult it locally. A miss is
+      // discriminated (#9997): "not-ready" (plugin scan still running —
+      // retry on the cold-start cap) vs "no-match" (definitive — pause
+      // polling until invalidation).
       const resolved = await getForgeBridge().resolveProvider({
         remoteUrl,
         forgeProviderOverride: this.forgeProviderOverride,
         globalDefaultProviderId: this.globalDefaultProviderId,
       });
-      if (!resolved) {
+      if (resolved.status !== "resolved") {
+        this.providerResolutionStatus = resolved.status;
         this.providerNamespacedId = null;
         this.repoRef = null;
         this.disposeLoaders();
+        if (resolved.status === "no-match") {
+          logInfo(
+            "PullRequestService: no forge provider matches this project — pausing PR polling",
+            {
+              hasRemoteUrl: remoteUrl !== null,
+            }
+          );
+        }
         return;
       }
+      this.providerResolutionStatus = "resolved";
       this.providerNamespacedId = resolved.namespacedId;
       this.repoRef = resolved.repo;
       this.createLoaders(resolved.namespacedId, resolved.repo);
@@ -414,6 +434,9 @@ class PullRequestService {
       logWarn("PullRequestService provider resolution failed", {
         error: formatErrorMessage(error, "Provider resolution failed"),
       });
+      // A thrown resolution (git read or IPC failure) is transient — leave
+      // the status null so the cold-start retry cap stays in effect.
+      this.providerResolutionStatus = null;
       this.providerNamespacedId = null;
       this.repoRef = null;
       this.disposeLoaders();
@@ -421,9 +444,27 @@ class PullRequestService {
   }
 
   private invalidateProvider(): void {
+    this.providerResolutionStatus = null;
     this.providerNamespacedId = null;
     this.repoRef = null;
     this.disposeLoaders();
+  }
+
+  /**
+   * Main pushed `forge:provider-registry-updated` — a forge provider
+   * descriptor was registered (startup scan or runtime plugin
+   * install/enable). A cached "no-match"/"not-ready" miss may now resolve, so
+   * drop it and re-check. A resolved provider is left alone: provider-affecting
+   * settings changes arrive via `setForgeSettings()`, which always invalidates.
+   */
+  public notifyForgeProviderRegistryUpdated(): void {
+    if (this.providerResolutionStatus === "resolved") return;
+    this.invalidateProvider();
+    if (!this.isPolling || this.startupDelayTimer !== null) return;
+    // Re-enter the poll loop: "no-match" pauses without an armed timer, so a
+    // debounced check (which respects the 5s floor and re-arms the poll
+    // timer when none is pending) is the wake-up.
+    this.scheduleDebounceCheck();
   }
 
   private async clearProviderPullRequestCaches(): Promise<void> {
@@ -833,6 +874,17 @@ class PullRequestService {
       return;
     }
 
+    // Definitive "no provider matches this remote" (#9997): pause without a
+    // timer, exactly like the all-resolved case above. Re-armed by
+    // `invalidateProvider()` (forge settings change, manual refresh, or a
+    // `forge:provider-registry-updated` push when a plugin registers a new
+    // provider). Without this, the cold-start cap below would re-poll a
+    // GitLab/Bitbucket project every 5s forever.
+    if (this.providerResolutionStatus === "no-match") {
+      logDebug("No matching forge provider - pausing polling until invalidation");
+      return;
+    }
+
     let interval = this.pollIntervalMs;
     if (this.consecutiveErrors > 0) {
       interval = computeBackoff(this.consecutiveErrors);
@@ -850,7 +902,9 @@ class PullRequestService {
     // fires before that completes, leaving `providerNamespacedId` null. At the
     // blurred cadence (120s) the user would otherwise stare at empty PR
     // sub-rows for two minutes after every cold start. Once the bridge returns
-    // a real provider the next poll uses the normal cadence again.
+    // a real provider the next poll uses the normal cadence again. This cap
+    // only ever applies to a transient miss ("not-ready"/null) — a definitive
+    // "no-match" already paused above (#9997).
     //
     // Skip this when `consecutiveErrors > 0`: the circuit-breaker backoff is
     // deliberate (the last call failed against the API), and punching through
@@ -1355,9 +1409,16 @@ class PullRequestService {
     // lives in main and is populated by `PluginService.initialize()`; the
     // workspace-host UtilityProcess starts polling before that finishes, so a
     // one-shot resolution at `start()` would lose the race permanently. Each
-    // poll retries until main answers with a real provider — and once resolved
-    // we keep the cache (cleared explicitly by `refresh()`/`setForgeSettings`).
-    if (!this.providerNamespacedId || !this.repoRef) {
+    // poll retries until main answers definitively — and both definitive
+    // answers are then cached (cleared explicitly by `refresh()` /
+    // `setForgeSettings()` / `forge:provider-registry-updated`): a resolved
+    // provider, or a "no-match" miss, which would otherwise re-spawn
+    // `resolveProvider()`'s git-config reads on every debounced worktree
+    // update (#9997).
+    if (
+      (!this.providerNamespacedId || !this.repoRef) &&
+      this.providerResolutionStatus !== "no-match"
+    ) {
       await this.resolveProvider();
     }
 
