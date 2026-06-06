@@ -107,6 +107,86 @@ describe("SettingsValidationRegistry", () => {
     expect(tabs.has("code-forge")).toBe(true);
   });
 
+  it("keeps the tab in error when an errored child unmounts while the parent is errored", () => {
+    let tabs: ReadonlySet<SettingsTab> = new Set();
+    const onSnapshot = (next: ReadonlySet<SettingsTab>) => {
+      tabs = next;
+    };
+
+    const { rerender } = render(
+      <Harness parentMounted parentHasError childMounted childHasError onSnapshot={onSnapshot} />
+    );
+    expect(tabs.has("code-forge")).toBe(true);
+
+    rerender(
+      <Harness
+        parentMounted
+        parentHasError
+        childMounted={false}
+        childHasError
+        onSnapshot={onSnapshot}
+      />
+    );
+    expect(tabs.has("code-forge")).toBe(true);
+  });
+
+  it("keeps the tab in error when one publisher toggles to false while another stays errored", () => {
+    let tabs: ReadonlySet<SettingsTab> = new Set();
+    const onSnapshot = (next: ReadonlySet<SettingsTab>) => {
+      tabs = next;
+    };
+
+    const { rerender } = render(
+      <Harness parentMounted parentHasError childMounted childHasError onSnapshot={onSnapshot} />
+    );
+    expect(tabs.has("code-forge")).toBe(true);
+
+    rerender(
+      <Harness
+        parentMounted
+        parentHasError
+        childMounted
+        childHasError={false}
+        onSnapshot={onSnapshot}
+      />
+    );
+    expect(tabs.has("code-forge")).toBe(true);
+  });
+
+  it("moves the error to the new tab when a publisher's tab changes", () => {
+    const { result, rerender } = renderHook(
+      ({ tab }: { tab: SettingsTab }) => {
+        useSettingsTabValidation(tab, true);
+        return useContext(SettingsValidationContext);
+      },
+      { wrapper: wrap, initialProps: { tab: "code-forge" as SettingsTab } }
+    );
+
+    expect(result.current!.tabsWithErrors.has("code-forge")).toBe(true);
+
+    rerender({ tab: "portal" });
+    expect(result.current!.tabsWithErrors.has("code-forge")).toBe(false);
+    expect(result.current!.tabsWithErrors.has("portal")).toBe(true);
+  });
+
+  it("clearing one tab's publishers leaves other tabs untouched", () => {
+    const { result, rerender } = renderHook(
+      ({ codeForgeHasError }: { codeForgeHasError: boolean }) => {
+        useSettingsTabValidation("code-forge", codeForgeHasError);
+        useSettingsTabValidation("portal", true);
+        return useContext(SettingsValidationContext);
+      },
+      { wrapper: wrap, initialProps: { codeForgeHasError: true } }
+    );
+
+    expect(result.current!.tabsWithErrors.has("code-forge")).toBe(true);
+    expect(result.current!.tabsWithErrors.has("portal")).toBe(true);
+
+    rerender({ codeForgeHasError: false });
+    expect(result.current!.tabsWithErrors.has("code-forge")).toBe(false);
+    expect(result.current!.tabsWithErrors.has("portal")).toBe(true);
+  });
+
   it("clears the tab once every publisher unmounts", () => {
     let tabs: ReadonlySet<SettingsTab> = new Set();
     const onSnapshot = (next: ReadonlySet<SettingsTab>) => {
