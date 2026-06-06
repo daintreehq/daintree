@@ -504,15 +504,14 @@ describe("portalStore persistence migration", () => {
       state: {
         tabs: [
           null,
-          undefined,
           "string-not-an-object",
           42,
           { title: "no-id", url: "https://example.com" },
           { id: "no-title", url: "https://example.com" },
           { id: 7, title: "wrong-id-type" },
           { id: "wrong-url", title: "Wrong url", url: 5 },
-          { id: "undefined-url", title: "Undefined url", url: undefined },
           { id: "wrong-icon", title: "Wrong icon", url: null, icon: 9 },
+          { id: "wrong-partition", title: "Wrong partition", url: null, partition: 7 },
           { id: "tab-good", title: "Good", url: "https://example.com" },
         ],
         activeTabId: "tab-good",
@@ -527,6 +526,34 @@ describe("portalStore persistence migration", () => {
     expect(tabs).toHaveLength(1);
     expect(tabs[0]?.id).toBe("tab-good");
     expect(store.getState().activeTabId).toBe("tab-good");
+  });
+
+  it("preserves valid optional fields through rehydration", async () => {
+    const persistedBlob = JSON.stringify({
+      version: 0,
+      state: {
+        tabs: [
+          {
+            id: "tab-rich",
+            title: "Rich",
+            url: "https://example.com",
+            favicon: "https://example.com/favicon.ico",
+            icon: "globe",
+            partition: "persist:dev-preview-1",
+          },
+        ],
+        activeTabId: "tab-rich",
+        links: [],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: persistedBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    const tab = store.getState().tabs[0];
+    expect(tab?.favicon).toBe("https://example.com/favicon.ico");
+    expect(tab?.icon).toBe("globe");
+    expect(tab?.partition).toBe("persist:dev-preview-1");
   });
 
   it("falls back to the first surviving tab when activeTabId points to a filtered entry", async () => {
@@ -547,6 +574,7 @@ describe("portalStore persistence migration", () => {
     const { usePortalStore: store } = await import("../portalStore");
 
     expect(store.getState().activeTabId).toBe("tab-good");
+    expect(store.getState().tabs.map((t) => t.id)).toEqual(["tab-good"]);
   });
 
   it("clears tabs and activeTabId when every persisted tab fails shape validation", async () => {
@@ -564,6 +592,24 @@ describe("portalStore persistence migration", () => {
 
     expect(store.getState().tabs).toEqual([]);
     expect(store.getState().activeTabId).toBeNull();
+  });
+
+  it("does not crash when persisted links contains a null entry", async () => {
+    const persistedBlob = JSON.stringify({
+      version: 0,
+      state: {
+        links: [null, "string-not-an-object", 42],
+        tabs: [{ id: "tab-1", title: "One", url: "https://example.com" }],
+        activeTabId: "tab-1",
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: persistedBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    // Survived the rehydration with usable defaults; no throw on first l.id access.
+    expect(Array.isArray(store.getState().links)).toBe(true);
+    expect(store.getState().tabs[0]?.id).toBe("tab-1");
   });
 
   it("falls back to currentState.tabs when persisted tabs is non-array", async () => {

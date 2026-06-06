@@ -456,6 +456,7 @@ const portalStoreCreator: StateCreator<
       const seen = new Set<string>();
       const migratedLinks: Array<Record<string, unknown>> = [];
       for (const l of rawLinks) {
+        if (!l || typeof l !== "object") continue;
         const newId = l.id?.startsWith("discovered-")
           ? String(l.id).replace("discovered-", "system-")
           : l.id;
