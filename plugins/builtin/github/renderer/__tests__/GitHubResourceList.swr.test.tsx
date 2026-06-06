@@ -874,7 +874,7 @@ describe("GitHubResourceList focus/visibility revalidation", () => {
 
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
 
-    render(
+    const { rerender } = render(
       <FixedDropdownVisibleContext.Provider value={false}>
         <GitHubResourceList type="issue" projectPath="/test/proj" />
       </FixedDropdownVisibleContext.Provider>
@@ -890,6 +890,19 @@ describe("GitHubResourceList focus/visibility revalidation", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     // Focus while the dropdown body is hidden must NOT trigger a revalidate.
+    expect(mockListIssues).toHaveBeenCalledTimes(1);
+
+    // Reopening the dropdown (visibility flip) must also not replay a hidden
+    // focus — the listener is gated on the latest context value, not
+    // buffered, so the gating carries through.
+    await act(async () => {
+      rerender(
+        <FixedDropdownVisibleContext.Provider value={true}>
+          <GitHubResourceList type="issue" projectPath="/test/proj" />
+        </FixedDropdownVisibleContext.Provider>
+      );
+    });
+    await vi.advanceTimersByTimeAsync(0);
     expect(mockListIssues).toHaveBeenCalledTimes(1);
   });
 });
@@ -1055,12 +1068,9 @@ describe("GitHubResourceList wake-coordinator revalidation", () => {
     });
     expect(mockListIssues).toHaveBeenCalledTimes(1);
 
-    // Reopen (now visible). If the hidden wake had NOT been consumed, the
-    // wake effect's next run would see the new wakeEpoch plus a stale ref
-    // and refetch immediately on the visibility flip. Consumed means the
-    // ref is already at the latest epoch — a fresh wake is the only thing
-    // that triggers a fetch. Bump again: with consume-fix in place, exactly
-    // one new call. Without it, two new calls.
+    // Reopen (now visible). The visibility flip alone must NOT trigger a
+    // fetch — guards against a regression where the wake-effect dep array
+    // loses `dropdownVisible` and the flip itself behaves like a wake.
     await act(async () => {
       rerender(
         <FixedDropdownVisibleContext.Provider value={true}>
@@ -1068,7 +1078,13 @@ describe("GitHubResourceList wake-coordinator revalidation", () => {
         </FixedDropdownVisibleContext.Provider>
       );
     });
+    expect(mockListIssues).toHaveBeenCalledTimes(1);
 
+    // Bump wake again. If the hidden wake had NOT been consumed, the wake
+    // effect's next run would see the new wakeEpoch plus a stale ref and
+    // refetch on top of the visibility-flip fetch (total 2 from this phase
+    // + initial 1 = 3). Consumed means the ref is already at the latest
+    // epoch — this fresh wake is the only thing that fetches.
     await act(async () => {
       useSystemWakeStore.setState((s) => ({ wakeEpoch: s.wakeEpoch + 1 }));
     });
