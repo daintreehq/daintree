@@ -1934,4 +1934,152 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("npm run custom");
     });
   });
+
+  describe("proxy 502 handling (#9948)", () => {
+    it("shows the proxy-error overlay for a main-frame 502 and keeps it across did-finish-load", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      // An HTTP 502 is a successful network load: did-frame-navigate carries the
+      // status, then did-navigate + did-finish-load fire and would otherwise
+      // clear the error. The overlay must survive both.
+      act(() => {
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 502,
+          url: "http://localhost:5173/",
+        });
+        emitWebviewEvent(webview, "did-navigate", { url: "http://localhost:5173/" });
+        emitWebviewEvent(webview, "did-finish-load");
+      });
+
+      expect(container.textContent).toContain("Dev server unavailable");
+    });
+
+    it("routes the proxy 502 to the Restart dev server recovery branch, not the bare Retry", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 502,
+          url: "http://localhost:5173/",
+        });
+      });
+
+      // "Reload preview" only exists in the restart-action dropdown branch shared
+      // with connection_refused — its presence proves proxy_error uses it.
+      expect(container.textContent).toContain("Dev server unavailable");
+      expect(container.textContent).toContain("Reload preview");
+    });
+
+    it("passes 4xx (bootstrap 403/405) through without an overlay", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 403,
+          url: "http://localhost:5173/",
+        });
+        emitWebviewEvent(webview, "did-finish-load");
+      });
+
+      expect(container.textContent).not.toContain("Dev server unavailable");
+    });
+
+    it("ignores a 502 from a non-main-frame navigation", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: false,
+          httpResponseCode: 502,
+          url: "http://localhost:5173/iframe",
+        });
+        emitWebviewEvent(webview, "did-finish-load");
+      });
+
+      expect(container.textContent).not.toContain("Dev server unavailable");
+    });
+
+    it("auto-retries the load with backoff while the 502 persists", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 502,
+          url: "http://localhost:5173/",
+        });
+      });
+
+      // First retry fires after 1000ms (1000 * 2^0); not before.
+      expect(webview.reload).not.toHaveBeenCalled();
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(webview.reload).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops auto-retrying after the cap but keeps the overlay for manual recovery", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      const delays = [1000, 2000, 4000, 8000, 16000];
+      // Each cycle mimics a reload that 502s again: a fresh load (did-start-loading)
+      // then another main-frame 502.
+      for (let i = 0; i < 6; i++) {
+        act(() => {
+          emitWebviewEvent(webview, "did-start-loading");
+          emitWebviewEvent(webview, "did-frame-navigate", {
+            isMainFrame: true,
+            httpResponseCode: 502,
+            url: "http://localhost:5173/",
+          });
+        });
+        if (i < 5) {
+          act(() => {
+            vi.advanceTimersByTime(delays[i]!);
+          });
+        }
+      }
+
+      // The 6th 502 lands after the count hit the cap, so no further reload is scheduled.
+      expect(webview.reload).toHaveBeenCalledTimes(5);
+      expect(container.textContent).toContain("Dev server unavailable");
+    });
+
+    it("clears the proxy overlay once the upstream answers with a 2xx", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 502,
+          url: "http://localhost:5173/",
+        });
+      });
+      expect(container.textContent).toContain("Dev server unavailable");
+
+      // Recovery: the retry reloads, the upstream is back, a 200 commits and finishes.
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 200,
+          url: "http://localhost:5173/",
+        });
+        emitWebviewEvent(webview, "did-navigate", { url: "http://localhost:5173/" });
+        emitWebviewEvent(webview, "did-finish-load");
+      });
+
+      expect(container.textContent).not.toContain("Dev server unavailable");
+    });
+  });
 });

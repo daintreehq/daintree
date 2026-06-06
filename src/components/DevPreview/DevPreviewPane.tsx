@@ -1778,7 +1778,8 @@ export function DevPreviewPane({
                             </span>
                           </Button>
                         )}
-                        {webviewLoadError.code === "connection_refused" ? (
+                        {webviewLoadError.code === "connection_refused" ||
+                        webviewLoadError.code === "proxy_error" ? (
                           <>
                             <Tooltip>
                               <TooltipTrigger asChild>
