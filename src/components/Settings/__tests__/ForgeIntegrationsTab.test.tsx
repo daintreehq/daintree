@@ -178,7 +178,30 @@ describe("ForgeIntegrationsTab", () => {
     });
   });
 
-  it("shows a no-providers message when remotes exist but no plugins are installed", async () => {
+  it("does not flash the no-remotes empty state while a load is in flight (#9990)", async () => {
+    // listRemotes never resolves, so the load stays in flight: remotesLoading
+    // is true and remotes stays []. Within the 400ms Doherty window the gated
+    // `showRemotesLoading` is still false, which previously fell through to the
+    // "has no git remotes configured" empty state.
+    installForgeMocks({
+      providers: [makeProvider("builtin", "github", "GitHub", ["github.com"])],
+    });
+    window.electron.project.listRemotes = vi.fn(() => new Promise<RemoteInfo[]>(() => {}));
+    setProject({ id: "proj-pending", path: "/pending", name: "Pending" } as Project);
+
+    render(<ForgeIntegrationsTab />);
+
+    // Wait until the top-level settings load settles (providers resolved) so we
+    // know the component has rendered past its own loading state.
+    await waitFor(() => {
+      expect(screen.getByText("Active project routing")).toBeTruthy();
+    });
+    expect(window.electron.project.listRemotes).toHaveBeenCalledWith("/pending");
+    // The panel renders nothing during the in-flight window — no false empty state.
+    expect(screen.queryByText(/has no git remotes configured/i)).toBeNull();
+  });
+
+  it("shows the no-providers note alongside the remotes list when no plugins are installed", async () => {
     installForgeMocks({
       providers: [],
       remotes: [makeRemote("origin", "git@github.com:owner/repo.git")],
@@ -191,7 +214,14 @@ describe("ForgeIntegrationsTab", () => {
     render(<ForgeIntegrationsTab />);
 
     await waitFor(() => {
-      expect(screen.getByText(/No forge plugins are installed\./i)).toBeTruthy();
+      // The informational note remains visible in the routing panel. Match the
+      // phrase unique to it — the default-provider section also says "No forge
+      // plugins are installed yet." which getByText would otherwise conflate.
+      expect(screen.getByText(/Each remote shows as unmatched/i)).toBeTruthy();
+      // …and the remote row with its "No match" badge is now rendered too,
+      // instead of being hidden behind a text-only early return (#9990).
+      expect(screen.getByText("origin")).toBeTruthy();
+      expect(screen.getByText("No match")).toBeTruthy();
     });
   });
 
@@ -281,6 +311,15 @@ describe("ForgeIntegrationsTab source guards", () => {
     expect(source).toMatch(/showRemotesLoading\s*=\s*useDohertyGate\(\s*remotesLoading\s*\)/);
     expect(source).toMatch(/loading=\{showRemotesLoading\}/);
     expect(source).not.toMatch(/loading=\{remotesLoading\}/);
+  });
+
+  it("passes a raw pending flag to suppress the empty state during in-flight loads", () => {
+    expect(source).toMatch(/pending=\{remotesPending\}/);
+    // pending covers the active load AND the pre-effect frame on a project switch.
+    expect(source).toMatch(/remotesPending\s*=\s*\n?\s*remotesLoading\s*\|\|/);
+    expect(source).toMatch(/remotesLoadedForRef\.current\s*!==\s*activeProjectId/);
+    // The panel returns null during the in-flight window before the Doherty gate fires.
+    expect(source).toMatch(/if\s*\(\s*pending\s*&&\s*!loading\s*&&\s*remotes\.length === 0\s*\)/);
   });
 
   it("reads remotes through a ref in reresolveRemotes to avoid stale closures on project switch", () => {
