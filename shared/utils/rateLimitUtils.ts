@@ -4,6 +4,9 @@ import type { RateLimitInfo } from "../types/forge.js";
 // Project a GitHub rate-limit payload onto the provider-agnostic RateLimitInfo
 // shape. Canonical implementation — main's renderer broadcast and any other
 // emit site must use this projection so the rule can't drift between copies.
+// `throttleMultiplier` passes through as-is: `undefined` means "not yet
+// observed", and consumers that need a usable cadence apply `?? 1` themselves
+// (the workspace-host relay, `getRateLimitImpl`, renderer projections).
 export function toRateLimitInfo(payload: GitHubRateLimitPayload): RateLimitInfo {
   if (!payload.blocked) {
     // Forward the observed GraphQL budget (if any) so the toolbar can show a

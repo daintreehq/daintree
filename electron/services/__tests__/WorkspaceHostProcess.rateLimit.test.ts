@@ -122,4 +122,25 @@ describe("WorkspaceHostProcess — fetch-throttle relay", () => {
     expect(throttleMultipliersSentTo(child)).toEqual([1, 5, 5]);
     host.dispose();
   });
+
+  it("replays the cached multiplier to the NEW child after a real restart", async () => {
+    const host = await createHost();
+    const firstChild = mockChildren[0] as MockUtilityChild;
+
+    firstChild.emit("message", { type: "ready" });
+    host.relayFetchThrottle(7);
+
+    // Crash the host, then restart — a fresh child process is forked.
+    firstChild.emit("exit", 1);
+    host.manualRestart();
+    expect(mockChildren).toHaveLength(2);
+    const secondChild = mockChildren[1] as MockUtilityChild;
+
+    secondChild.emit("message", { type: "ready" });
+
+    // The replay must reach the new child, not the dead one.
+    expect(throttleMultipliersSentTo(secondChild)).toEqual([7]);
+    expect(throttleMultipliersSentTo(firstChild)).toEqual([1, 7]);
+    host.dispose();
+  });
 });
