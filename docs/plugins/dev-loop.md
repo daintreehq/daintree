@@ -2,6 +2,8 @@
 
 The `daintree-plugin` CLI provides the plugin author's tooling. Install it as a dev dependency or use `npx`.
 
+> `daintree-plugin` is not yet published on npm — the `npm install --save-dev daintree-plugin` and `npx daintree-plugin` commands below return E404 today. The CLI is tracked for publication; until it ships, build plugins by hand (see [Getting started](./getting-started.md)) and sideload them manually (see [Distribution → Sideload](./distribution.md#sideload)).
+
 ```bash
 npm install --save-dev daintree-plugin
 # or

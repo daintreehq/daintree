@@ -10,6 +10,8 @@ Scaffold your first plugin, package it, and install it in Daintree.
 
 ## Create a plugin
 
+> The `daintree-plugin` and `create-daintree-plugin` packages are not yet published on npm — the `npx` commands below return E404 today. Until they ship, create the structure by hand following the [Manifest reference](./manifest.md), and read `plugins/sample/hello-daintree/` in the repo as a working example. The commands below show the intended workflow once the CLI is on npm.
+
 ```bash
 npx daintree-plugin new my-first-plugin
 cd my-first-plugin
@@ -62,6 +64,8 @@ The `commands[].id` maps to `src/say-hello.{ts,tsx,js,mjs}` by filesystem conven
 
 The filesystem-convention handler is a default export that receives the action args only — it has no `host`. To call host APIs like `showToast`, register the command imperatively from `activate` instead:
 
+> `@daintreehq/plugin-sdk` is not yet published on npm, so this import won't resolve from the registry today. The types it will ship currently live in-repo at `shared/types/plugin-sdk.ts`; import them via a relative path until the package lands on npm.
+
 ```ts
 // src/index.ts
 import type { PluginHostApi } from "@daintreehq/plugin-sdk";
@@ -90,6 +94,8 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
 ## Run it
 
 Build, package, and install the plugin into your running Daintree:
+
+> `daintree-plugin install` depends on the CLI, which is not yet published on npm. Until it ships, sideload the built plugin manually by copying it into `~/.daintree/plugins/` (see [Distribution → Sideload](./distribution.md#sideload)).
 
 ```bash
 npm run package
