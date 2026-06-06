@@ -530,20 +530,60 @@ describe("accentOverrideHasLowContrast", () => {
     const result = accentOverrideHasLowContrast(scheme);
     assert(result !== null);
     expect(result.mode).toBe("foreground");
+    // The foreground branch must not leak a surface key, and the reported ratio
+    // must be the foreground pair's ratio — not whichever surface scored worst.
+    expect(result.worstSurface).toBeNull();
+    expect(result.worstRatio).toBeCloseTo(contrastRatio("#a4a4a4", "#aaaaaa"), 5);
   });
 
-  it("does not flag when every contrast pair clears the 4.5:1 boundary", () => {
-    // Black accent + white foreground on white surfaces: foreground ~21:1, surfaces ~21:1.
+  it("returns the foreground failure mode when a non-hex accent-foreground is paired with a failing surface", () => {
+    // Non-hex foreground skips the foreground branch; a low-contrast surface then governs.
     const scheme = makeScheme({
-      "accent-primary": "#000000" as AppColorSchemeTokens["accent-primary"],
-      "accent-foreground": "#ffffff" as AppColorSchemeTokens["accent-foreground"],
-      "surface-grid": "#ffffff" as AppColorSchemeTokens["surface-grid"],
-      "surface-sidebar": "#ffffff" as AppColorSchemeTokens["surface-sidebar"],
-      "surface-canvas": "#ffffff" as AppColorSchemeTokens["surface-canvas"],
-      "surface-panel": "#ffffff" as AppColorSchemeTokens["surface-panel"],
-      "surface-panel-elevated": "#ffffff" as AppColorSchemeTokens["surface-panel-elevated"],
+      "accent-primary": "#ffffff" as AppColorSchemeTokens["accent-primary"],
+      "accent-foreground": "oklch(0.5 0.1 200)" as AppColorSchemeTokens["accent-foreground"],
+      "surface-grid": "#fdfdfd" as AppColorSchemeTokens["surface-grid"],
+      "surface-sidebar": "#fdfdfd" as AppColorSchemeTokens["surface-sidebar"],
+      "surface-canvas": "#fdfdfd" as AppColorSchemeTokens["surface-canvas"],
+      "surface-panel": "#fdfdfd" as AppColorSchemeTokens["surface-panel"],
+      "surface-panel-elevated": "#fdfdfd" as AppColorSchemeTokens["surface-panel-elevated"],
     });
-    expect(accentOverrideHasLowContrast(scheme)).toBeNull();
+    const result = accentOverrideHasLowContrast(scheme);
+    assert(result !== null);
+    // Foreground skipped (non-hex) → surface branch reports the near-white-on-white failure.
+    expect(result.mode).toBe("surface");
+    expect(result.worstRatio).toBeLessThan(4.5);
+    expect(result.worstSurface).not.toBeNull();
+  });
+
+  it("treats the 4.5:1 gate as strict — passes just above, fails just below", () => {
+    // WCAG reference greys on white: #767676 = 4.54:1 (clears), #777777 = 4.48:1 (fails).
+    // Surfaces are black so the surface branch never fires; the foreground gate governs.
+    const baseSurfaces = {
+      "surface-grid": "#000000",
+      "surface-sidebar": "#000000",
+      "surface-canvas": "#000000",
+      "surface-panel": "#000000",
+      "surface-panel-elevated": "#000000",
+    } as Partial<AppColorSchemeTokens>;
+
+    const justAbove = makeScheme({
+      "accent-primary": "#ffffff" as AppColorSchemeTokens["accent-primary"],
+      "accent-foreground": "#767676" as AppColorSchemeTokens["accent-foreground"],
+      ...baseSurfaces,
+    });
+    // Sanity-check the fixtures straddle the boundary so the test stays meaningful.
+    expect(contrastRatio("#767676", "#ffffff")).toBeGreaterThanOrEqual(4.5);
+    expect(accentOverrideHasLowContrast(justAbove)).toBeNull();
+
+    const justBelow = makeScheme({
+      "accent-primary": "#ffffff" as AppColorSchemeTokens["accent-primary"],
+      "accent-foreground": "#777777" as AppColorSchemeTokens["accent-foreground"],
+      ...baseSurfaces,
+    });
+    expect(contrastRatio("#777777", "#ffffff")).toBeLessThan(4.5);
+    const result = accentOverrideHasLowContrast(justBelow);
+    assert(result !== null);
+    expect(result.mode).toBe("foreground");
   });
 
   it("skips the foreground pair when accent-foreground is non-hex but still checks surfaces", () => {
