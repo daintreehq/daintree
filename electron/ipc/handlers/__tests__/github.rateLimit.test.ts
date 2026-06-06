@@ -117,6 +117,7 @@ vi.mock("../../../services/github/index.js", () => ({
   getPRByNumber: gitHubServiceMock.getPRByNumber,
   getIssuesByNumbers: gitHubServiceMock.getIssuesByNumbers,
   getPRsByNumbers: gitHubServiceMock.getPRsByNumbers,
+  getPRReviewThreads: vi.fn().mockResolvedValue({}),
   hasGitHubToken: gitHubServiceMock.hasGitHubToken,
   getGitHubConfigAsync: gitHubServiceMock.getGitHubConfigAsync,
   getProjectHealth: gitHubServiceMock.getProjectHealth,

@@ -83,7 +83,6 @@ import type {
   GitHubCliStatus,
   GitHubTokenConfig,
   GitHubTokenValidation,
-  GitHubRateLimitPayload,
   GitHubRateLimitDetails,
   GitHubTokenHealthPayload,
   RepoStatsAndPagePayload,
@@ -1589,9 +1588,6 @@ export interface IpcEventMap {
   // Issue detection events
   "issue:detected": IssueDetectedPayload;
   "issue:not-found": IssueNotFoundPayload;
-
-  // GitHub rate-limit state push
-  "github:rate-limit-changed": GitHubRateLimitPayload;
 
   // GitHub token health state push (expiry/revocation detection)
   "github:token-health-changed": GitHubTokenHealthPayload;

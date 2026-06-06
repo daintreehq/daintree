@@ -154,7 +154,6 @@ export const CHANNELS = {
   GITHUB_GET_PRS_BY_NUMBERS: "github:get-prs-by-numbers",
   GITHUB_GET_PR_REVIEW_THREADS: "github:get-pr-review-threads",
   GITHUB_LIST_REMOTES: "github:list-remotes",
-  GITHUB_RATE_LIMIT_CHANGED: "github:rate-limit-changed",
   GITHUB_GET_RATE_LIMIT_DETAILS: "github:get-rate-limit-details",
   GITHUB_TOKEN_HEALTH_CHANGED: "github:token-health-changed",
   GITHUB_GET_TOKEN_HEALTH: "github:get-token-health",

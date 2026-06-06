@@ -93,12 +93,11 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
   // Main-process transport: push rate-limit state changes to every renderer.
-  // The legacy GitHub channel is kept for backward compat; the provider-keyed
-  // forge channel is what `githubClient.onRateLimitChanged` now subscribes to,
-  // so main-process-sourced GitHub blocks (REST 403/429, rate-limit headers)
-  // still reach the renderer after the workspace-host fast-path was removed.
+  // The provider-keyed forge channel is what `githubClient.onRateLimitChanged`
+  // now subscribes to, so main-process-sourced GitHub blocks (REST 403/429,
+  // rate-limit headers) still reach the renderer after the workspace-host
+  // fast-path was removed.
   const unsubscribeRateLimit = gitHubRateLimitService.onStateChange((state) => {
-    broadcastToRenderer(CHANNELS.GITHUB_RATE_LIMIT_CHANGED, state);
     broadcastToRenderer(CHANNELS.FORGE_RATE_LIMIT_CHANGED, {
       providerId: BUILTIN_GITHUB_PROVIDER_ID,
       state: toRateLimitInfo(state),
@@ -560,7 +559,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       return {};
     }
 
-    const { getPRReviewThreads } = await import("../../services/GitHubService.js");
+    const { getPRReviewThreads } = await import("../../services/github/index.js");
     return getPRReviewThreads(payload.cwd.trim(), payload.prNumber);
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_GET_PR_REVIEW_THREADS, handleGitHubGetPRReviewThreads));

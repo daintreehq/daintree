@@ -94,7 +94,6 @@ import type {
   PRClearedPayload,
   IssueDetectedPayload,
   IssueNotFoundPayload,
-  GitHubRateLimitPayload,
   GitHubTokenHealthPayload,
   RepoStatsAndPagePayload,
   ServiceConnectivityPayload,
@@ -1675,9 +1674,6 @@ const api: ElectronAPI = {
 
     onIssueNotFound: (callback: (data: IssueNotFoundPayload) => void) =>
       _typedOn(CHANNELS.ISSUE_NOT_FOUND, callback),
-
-    onRateLimitChanged: (callback: (data: GitHubRateLimitPayload) => void) =>
-      _typedOn(CHANNELS.GITHUB_RATE_LIMIT_CHANGED, callback),
 
     getRateLimitDetails: () => _unwrappingInvoke(CHANNELS.GITHUB_GET_RATE_LIMIT_DETAILS),
 
