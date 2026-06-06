@@ -38,7 +38,7 @@ describe("notifyRecipeSpawnFailures", () => {
         spawned: [],
         failed: [failure(0, "Panel limit reached"), failure(1, "Panel limit reached")],
       },
-      { recipeName: "Dev setup", projectId: "p1", worktreeId: "wt-1" }
+      { recipeName: "Dev setup", projectId: "p1" }
     );
 
     expect(notifyMock).toHaveBeenCalledTimes(1);
@@ -47,15 +47,18 @@ describe("notifyRecipeSpawnFailures", () => {
     expect(payload.title).toBe("Recipe launch failed");
     expect(payload.message).toContain("'Dev setup'");
     expect(payload.message).toContain("Panel limit reached");
-    expect(payload.context).toEqual({ eventKind: "agent", projectId: "p1", worktreeId: "wt-1" });
+    expect(payload.context).toEqual({ eventKind: "agent", projectId: "p1" });
     // The banned error + priority:"low" combination silently drops the toast.
     expect(payload.priority).toBeUndefined();
+    // worktreeId would trigger notify()'s origin-surface suppression and
+    // swallow the toast when the failing worktree is active — must never be set.
+    expect(payload.context.worktreeId).toBeUndefined();
   });
 
   it("emits a warning when only some terminals failed", () => {
     notifyRecipeSpawnFailures(
       { spawned: [spawned(0), spawned(1)], failed: [failure(2, "Panel limit reached")] },
-      { recipeName: "Dev setup", worktreeId: "wt-1" }
+      { recipeName: "Dev setup" }
     );
 
     expect(notifyMock).toHaveBeenCalledTimes(1);
@@ -64,6 +67,22 @@ describe("notifyRecipeSpawnFailures", () => {
     expect(payload.title).toBe("Recipe partially launched");
     expect(payload.message).toContain("1 of 3 terminals");
     expect(payload.context.eventKind).toBe("agent");
+  });
+
+  it("counts mixed-reason partial failures without relaying a reason", () => {
+    notifyRecipeSpawnFailures(
+      {
+        spawned: [spawned(0), spawned(1)],
+        failed: [failure(2, "Panel limit reached"), failure(3, "spawn ENOENT")],
+      },
+      { recipeName: "Dev setup" }
+    );
+
+    const payload = notifyMock.mock.calls[0]![0];
+    expect(payload.type).toBe("warning");
+    expect(payload.message).toContain("2 of 4 terminals");
+    expect(payload.message).not.toContain("Panel limit reached");
+    expect(payload.message).not.toContain("ENOENT");
   });
 
   it("relays a single shared failure reason but omits mixed reasons", () => {

@@ -312,7 +312,8 @@ describe("worktree.createWithRecipe", () => {
         branchName: "contrib/feature-x",
         issueNumber: undefined,
         prNumber: 42,
-      }
+      },
+      { spawnedBy: undefined, focusPolicy: undefined, dispatchSource: undefined }
     );
     expect(result.recipeLaunched).toBe(true);
   });
@@ -334,7 +335,24 @@ describe("worktree.createWithRecipe", () => {
         worktreePath: "/repo/feature/issue-6609-add-tools",
         branchName: "feature/issue-6609-add-tools",
       }),
-      { spawnedBy: "mcp", focusPolicy: undefined }
+      { spawnedBy: "mcp", focusPolicy: undefined, dispatchSource: undefined }
+    );
+  });
+
+  it("forwards ctx.dispatchSource so agent-driven recipe runs stay capped", async () => {
+    const runRecipeWithResults = setRecipe("recipe-1");
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    await def.run({ branchName: "feature/foo", recipeId: "recipe-1" }, {
+      dispatchSource: "agent",
+    } as never);
+
+    expect(runRecipeWithResults).toHaveBeenCalledWith(
+      "recipe-1",
+      expect.any(String),
+      "wt-new",
+      expect.any(Object),
+      expect.objectContaining({ dispatchSource: "agent" })
     );
   });
 
@@ -379,7 +397,6 @@ describe("worktree.createWithRecipe", () => {
     expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, {
       recipeName: "Recipe",
       projectId: "p1",
-      worktreeId: "wt-new",
     });
   });
 
@@ -416,8 +433,20 @@ describe("worktree.createWithRecipe", () => {
     // results through it so the gate lives in one place.
     expect(notifySpawnFailuresMock).toHaveBeenCalledWith(
       OK_SPAWN_RESULTS,
-      expect.objectContaining({ worktreeId: "wt-new" })
+      expect.objectContaining({ recipeName: "Recipe" })
     );
+  });
+
+  it("does not notify when the recipe store throws (PARTIAL_SUCCESS path)", async () => {
+    setRecipe("recipe-1", async () => {
+      throw new Error("recipe boom");
+    });
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    await expect(
+      def.run({ branchName: "feature/foo", recipeId: "recipe-1" }, {} as never)
+    ).rejects.toThrow(/PARTIAL_SUCCESS:/);
+    expect(notifySpawnFailuresMock).not.toHaveBeenCalled();
   });
 
   it("treats empty-string headRefName the same as missing", async () => {
@@ -590,7 +619,6 @@ describe("workflow.startWorkOnIssue", () => {
     expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, {
       recipeName: "Recipe",
       projectId: "p1",
-      worktreeId: "wt-new",
     });
   });
 
@@ -610,6 +638,29 @@ describe("workflow.startWorkOnIssue", () => {
     expect(result.recipeLaunched).toBe(true);
     expect(result.spawnedTerminalCount).toBe(1);
     expect(result.failedTerminalCount).toBe(1);
+  });
+
+  it("PARTIAL_SUCCESS from a failed agent launch preserves partial spawn counts", async () => {
+    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 1, title: "t", url: "u" });
+    setRecipe("recipe-1", async () => ({
+      spawned: [{ index: 0, terminalId: "t-0" }],
+      failed: [{ index: 1, error: "Panel limit reached" }],
+    }));
+    const callbacks = makeCallbacks();
+    callbacks.onLaunchAgent.mockRejectedValue(new Error("PTY spawn failed"));
+    const def = setupActions(callbacks)("workflow.startWorkOnIssue");
+
+    try {
+      await def.run({ issueNumber: 1, agentId: "claude", recipeId: "recipe-1" }, {} as never);
+      throw new Error("expected throw");
+    } catch (err) {
+      const message = (err as Error).message;
+      expect(message).toContain("PARTIAL_SUCCESS:");
+      const payload = JSON.parse(message.slice(message.indexOf("{")));
+      expect(payload.partialResult.recipeLaunched).toBe(true);
+      expect(payload.partialResult.spawnedTerminalCount).toBe(1);
+      expect(payload.partialResult.failedTerminalCount).toBe(1);
+    }
   });
 
   it("agent.launch throwing (not just returning null) becomes PARTIAL_SUCCESS", async () => {

@@ -202,12 +202,7 @@ export function DockLaunchMenuItems({
               void useRecipeStore
                 .getState()
                 .runRecipeWithResults(recipe.id, cwd, activeWorktreeId ?? undefined, recipeContext)
-                .then((results) =>
-                  notifyRecipeSpawnFailures(results, {
-                    recipeName: recipe.name,
-                    worktreeId: activeWorktreeId ?? undefined,
-                  })
-                )
+                .then((results) => notifyRecipeSpawnFailures(results, { recipeName: recipe.name }))
                 .catch((error) => logError("Recipe launch from dock failed", error))
             }
           >

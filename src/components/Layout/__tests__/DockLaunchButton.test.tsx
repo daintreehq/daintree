@@ -30,6 +30,12 @@ vi.mock("@/utils/recipeNotify", () => ({
   notifyRecipeSpawnFailures: (...args: unknown[]) => notifySpawnFailuresMock(...args),
 }));
 
+const logErrorMock = vi.fn();
+vi.mock("@/utils/logger", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/logger")>()),
+  logError: (...args: unknown[]) => logErrorMock(...args),
+}));
+
 vi.mock("@/store/actionMruStore", () => ({
   useActionMruStore: Object.assign(
     (selector: (s: { getSortedActionMruList: () => typeof mockMruEntries }) => unknown) =>
@@ -118,6 +124,7 @@ beforeEach(() => {
     failed: [],
   });
   notifySpawnFailuresMock.mockReset();
+  logErrorMock.mockReset();
   actionDispatchMock.mockReset();
   recordActionMruMock.mockReset();
   dropdownCloseAutoFocusSpy = null;
@@ -509,7 +516,7 @@ describe("DockLaunchButton", () => {
     await waitFor(() =>
       expect(notifySpawnFailuresMock).toHaveBeenCalledWith(
         { spawned: [{ index: 0, terminalId: "t-0" }], failed: [] },
-        { recipeName: "My recipe", worktreeId: "wt-1" }
+        { recipeName: "My recipe" }
       )
     );
   });
@@ -534,11 +541,29 @@ describe("DockLaunchButton", () => {
 
     fireEvent.click(getByText("My recipe"));
     await waitFor(() =>
-      expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, {
-        recipeName: "My recipe",
-        worktreeId: undefined,
-      })
+      expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, { recipeName: "My recipe" })
     );
+  });
+
+  it("logs dock recipe launch rejections without notifying", async () => {
+    mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
+    runRecipeWithResultsMock.mockRejectedValue(new Error("recipe gone"));
+
+    const { getByText } = render(
+      <DockLaunchButton
+        agents={AGENTS}
+        hasDevPreview={false}
+        onLaunchAgent={vi.fn()}
+        activeWorktreeId={null}
+        cwd="/tmp"
+      />
+    );
+
+    fireEvent.click(getByText("My recipe"));
+    await waitFor(() =>
+      expect(logErrorMock).toHaveBeenCalledWith("Recipe launch from dock failed", expect.any(Error))
+    );
+    expect(notifySpawnFailuresMock).not.toHaveBeenCalled();
   });
 
   describe("Recently launched band", () => {

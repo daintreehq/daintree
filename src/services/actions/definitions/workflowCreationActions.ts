@@ -1,6 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
+import type { ActionContext } from "@shared/types/actions";
 // eslint-disable-next-line no-restricted-imports
 import { worktreeClient, githubClient, copyTreeClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
@@ -87,18 +88,21 @@ export function registerWorkflowCreationActions(
         assignedUsername: z.string().nullable(),
         assignmentError: z.string().nullable(),
       }),
-      run: async ({
-        branchName,
-        baseBranch,
-        recipeId,
-        fromRemote,
-        useExistingBranch,
-        issueNumber,
-        pullRequestNumber,
-        assignToSelf,
-        spawnedBy,
-        focusPolicy,
-      }) => {
+      run: async (
+        {
+          branchName,
+          baseBranch,
+          recipeId,
+          fromRemote,
+          useExistingBranch,
+          issueNumber,
+          pullRequestNumber,
+          assignToSelf,
+          spawnedBy,
+          focusPolicy,
+        },
+        ctx: ActionContext
+      ) => {
         if (issueNumber !== undefined && pullRequestNumber !== undefined) {
           throw new Error("issueNumber and pullRequestNumber are mutually exclusive");
         }
@@ -195,17 +199,16 @@ export function registerWorkflowCreationActions(
               issueNumber,
               prNumber: pullRequestNumber,
             };
-            const results =
-              spawnedBy === undefined && focusPolicy === undefined
-                ? await useRecipeStore
-                    .getState()
-                    .runRecipeWithResults(recipeId, path, worktreeId, recipeContext)
-                : await useRecipeStore
-                    .getState()
-                    .runRecipeWithResults(recipeId, path, worktreeId, recipeContext, {
-                      spawnedBy,
-                      focusPolicy,
-                    });
+            // Forward dispatchSource so runRecipeWithResults applies the
+            // agent-source terminal cap to MCP-driven worktree+recipe combos,
+            // matching recipe.run.
+            const results = await useRecipeStore
+              .getState()
+              .runRecipeWithResults(recipeId, path, worktreeId, recipeContext, {
+                spawnedBy,
+                focusPolicy,
+                dispatchSource: ctx.dispatchSource,
+              });
             // "Launched" means at least one terminal actually spawned — a run
             // where every terminal was dropped (e.g. panel limit) must not
             // report success to agent callers.
@@ -215,7 +218,6 @@ export function registerWorkflowCreationActions(
             notifyRecipeSpawnFailures(results, {
               recipeName: useRecipeStore.getState().getRecipeById(recipeId)?.name,
               projectId: currentProject.id,
-              worktreeId,
             });
           } catch (err) {
             throw partialSuccessError(
@@ -332,17 +334,20 @@ export function registerWorkflowCreationActions(
         assignmentError: z.string().nullable(),
         contextInjected: z.boolean(),
       }),
-      run: async ({
-        issueNumber,
-        agentId,
-        branchName,
-        baseBranch,
-        recipeId,
-        assignToSelf,
-        injectContext,
-        spawnedBy,
-        focusPolicy,
-      }) => {
+      run: async (
+        {
+          issueNumber,
+          agentId,
+          branchName,
+          baseBranch,
+          recipeId,
+          assignToSelf,
+          injectContext,
+          spawnedBy,
+          focusPolicy,
+        },
+        ctx: ActionContext
+      ) => {
         const currentProject = useProjectStore.getState().currentProject;
         if (!currentProject) {
           throw new Error("No active project");
@@ -410,17 +415,16 @@ export function registerWorkflowCreationActions(
               branchName: availableBranch,
               issueNumber: issue.number,
             };
-            const results =
-              spawnedBy === undefined && focusPolicy === undefined
-                ? await useRecipeStore
-                    .getState()
-                    .runRecipeWithResults(recipeId, worktreePath, worktreeId, recipeContext)
-                : await useRecipeStore
-                    .getState()
-                    .runRecipeWithResults(recipeId, worktreePath, worktreeId, recipeContext, {
-                      spawnedBy,
-                      focusPolicy,
-                    });
+            // Forward dispatchSource so runRecipeWithResults applies the
+            // agent-source terminal cap to MCP-driven worktree+recipe combos,
+            // matching recipe.run.
+            const results = await useRecipeStore
+              .getState()
+              .runRecipeWithResults(recipeId, worktreePath, worktreeId, recipeContext, {
+                spawnedBy,
+                focusPolicy,
+                dispatchSource: ctx.dispatchSource,
+              });
             // "Launched" means at least one terminal actually spawned — a run
             // where every terminal was dropped (e.g. panel limit) must not
             // report success to agent callers.
@@ -430,7 +434,6 @@ export function registerWorkflowCreationActions(
             notifyRecipeSpawnFailures(results, {
               recipeName: useRecipeStore.getState().getRecipeById(recipeId)?.name,
               projectId: currentProject.id,
-              worktreeId,
             });
           } catch (err) {
             throw partialSuccessError(

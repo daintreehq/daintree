@@ -240,8 +240,20 @@ describe("recipeActions adversarial", () => {
     expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, {
       recipeName: "My recipe",
       projectId: "proj-1",
-      worktreeId: "wt-1",
     });
+  });
+
+  it("recipe.run re-throws store rejections without notifying", async () => {
+    const runRecipeWithResults = vi.fn().mockRejectedValue(new Error("recipe gone"));
+    setRecipeState({ runRecipeWithResults });
+    setWorktreeMap(new Map([["wt-1", { path: "/repo/wt" }]]));
+
+    const run = setupActions();
+
+    await expect(run("recipe.run", { recipeId: "r1", worktreeId: "wt-1" }, {})).rejects.toThrow(
+      "recipe gone"
+    );
+    expect(notifySpawnFailuresMock).not.toHaveBeenCalled();
   });
 
   it("recipe.run throws when no terminals spawned but still notifies first", async () => {
