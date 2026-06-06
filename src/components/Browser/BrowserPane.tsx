@@ -198,6 +198,7 @@ export function BrowserPane({
   const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isSlowLoad, setIsSlowLoad] = useState(false);
   const slowLoadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const screenshotInFlightRef = useRef(false);
 
   const hasBeenVisible = useHasBeenVisible(id, location);
 
@@ -559,6 +560,8 @@ export function BrowserPane({
       return;
     }
     if (!url || url === "about:blank") return;
+    if (screenshotInFlightRef.current) return;
+    screenshotInFlightRef.current = true;
     try {
       const image = await webview.capturePage();
       const pngData = new Uint8Array(image.toPNG());
@@ -568,8 +571,10 @@ export function BrowserPane({
       notify({
         type: "error",
         title: "Screenshot failed",
-        message: "Couldn't copy the screenshot to clipboard.",
+        message: "Couldn't copy the screenshot to clipboard",
       });
+    } finally {
+      screenshotInFlightRef.current = false;
     }
   }, [isWebviewReady]);
 
