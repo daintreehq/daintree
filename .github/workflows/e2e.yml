@@ -570,7 +570,11 @@ jobs:
           set -euo pipefail
           rm -f failed-specs.txt
           if [ -f test-results/report.json ] && [ -s test-results/report.json ]; then
-            jq -r '.suites[] | .. | objects | select(.file != null and .ok == false) | .file' test-results/report.json | sort -u > failed-specs.txt
+            # Flaky specs report spec.ok === true but still fail the job under
+            # FAIL_ON_FLAKY_TESTS (core/online), so a `.ok == false` filter
+            # dropped them from the retry list. The extractor includes flaky
+            # specs too — see scripts/ci/extract-failed-specs.mjs (#10039).
+            node scripts/ci/extract-failed-specs.mjs test-results/report.json failed-specs.txt
             echo "[e2e] Extracted $(wc -l < failed-specs.txt) failed spec(s) from JSON report"
           else
             echo "[e2e] JSON report missing or empty — no failures to extract"
