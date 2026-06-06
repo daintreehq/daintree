@@ -307,15 +307,24 @@ describe("palette distinguishability", () => {
       for (const scheme of BUILT_IN_APP_SCHEMES) {
         const values = resolveTokens(scheme, [...STATUS_TOKENS]);
         if (values.length !== STATUS_TOKENS.length) {
+          const present = new Set(
+            STATUS_TOKENS.filter((k) => typeof scheme.tokens[k as AppThemeTokenKey] === "string")
+          );
+          const missing = STATUS_TOKENS.filter((k) => !present.has(k));
           failures.push(
-            `${scheme.id}: only ${values.length}/${STATUS_TOKENS.length} status tokens present`
+            `${scheme.id}: only ${values.length}/${STATUS_TOKENS.length} status tokens present (missing: ${missing.join(", ")})`
           );
           continue;
         }
 
         const { distances, skipped } = computePairwiseDistances(values, deficiency);
         if (skipped.length > 0) {
-          failures.push(`${scheme.id} ${deficiency}: could not parse: ${skipped.join(", ")}`);
+          const skippedKeys = STATUS_TOKENS.filter(
+            (_, idx) => parseColor(values[idx]) === undefined
+          );
+          failures.push(
+            `${scheme.id} ${deficiency}: could not parse ${skippedKeys.join(", ")}: ${skipped.join(", ")}`
+          );
           continue;
         }
 
