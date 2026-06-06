@@ -187,6 +187,7 @@ function setup(overrides?: {
   config?: Partial<CrashRecoveryConfig>;
   onResolve?: () => Promise<void>;
   onUpdateConfig?: (patch: Partial<CrashRecoveryConfig>) => Promise<void>;
+  initialError?: string;
 }) {
   const onResolve = overrides?.onResolve ?? vi.fn(async () => {});
   const onUpdateConfig = overrides?.onUpdateConfig ?? vi.fn(async () => {});
@@ -197,6 +198,7 @@ function setup(overrides?: {
       config={{ ...mockConfig, ...(overrides?.config ?? {}) }}
       onResolve={onResolve}
       onUpdateConfig={onUpdateConfig}
+      {...(overrides?.initialError !== undefined && { initialError: overrides.initialError })}
     />
   );
 
@@ -1041,6 +1043,19 @@ describe("CrashRecoveryDialog", () => {
         { scope: { source: "recovery.crashRecoveryFailed" } },
         { source: "user" }
       );
+    });
+
+    it("renders the inline banner on first paint when initialError is set (auto-restore failure path)", () => {
+      // The auto-restore path in useCrashRecoveryGate sets the gate to
+      // `failed` after the IPC rejects, and App.tsx passes the error
+      // message into the dialog as `initialError`. The banner must be
+      // visible immediately — the user did not click Restore.
+      setup({ initialError: "Crash recovery restore failed" });
+
+      const banner = screen.getByTestId("recovery-error");
+      expect(banner).toBeTruthy();
+      const desc = within(banner).getByTestId("inline-status-banner-description");
+      expect(desc.textContent).toContain("Crash recovery restore failed");
     });
   });
 });

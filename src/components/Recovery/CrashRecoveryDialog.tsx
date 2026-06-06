@@ -48,6 +48,13 @@ interface CrashRecoveryDialogProps {
   config: CrashRecoveryConfig;
   onResolve: (action: CrashRecoveryAction) => Promise<void>;
   onUpdateConfig: (patch: Partial<CrashRecoveryConfig>) => Promise<void>;
+  /**
+   * If set, renders the "Recovery failed" inline banner on first paint.
+   * Used by the auto-restore path when the IPC handler rejects — the manual
+   * rejection path (user clicks Restore → `onResolve` throws) still wins on
+   * subsequent retries because it overrides this seed in `handleResolve`.
+   */
+  initialError?: string;
 }
 
 function getPanelIcon(kind: string) {
@@ -70,6 +77,7 @@ export function CrashRecoveryDialog({
   config,
   onResolve,
   onUpdateConfig,
+  initialError,
 }: CrashRecoveryDialogProps) {
   const panels = useMemo(() => crash.panels ?? [], [crash.panels]);
   const hasPanels = panels.length > 0;
@@ -80,7 +88,7 @@ export function CrashRecoveryDialog({
     () => new Set(panels.filter((p) => !(shouldDeselectSuspects && p.isSuspect)).map((p) => p.id))
   );
   const [resolving, setResolving] = useState(false);
-  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [recoveryError, setRecoveryError] = useState<string | null>(initialError ?? null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [showReportPreview, setShowReportPreview] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
