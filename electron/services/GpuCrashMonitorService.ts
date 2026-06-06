@@ -195,14 +195,29 @@ class GpuCrashMonitorService {
             crashCount: effectiveCount,
           });
           writeCleanGpuMitigationMarkers("angle-fallback");
-          await closeTelemetry();
+          try {
+            await closeTelemetry();
+          } catch (err) {
+            // Hard-stop has no queued relaunch, so a telemetry rejection
+            // would skip the exit and hang the process. Match the shutdown.ts
+            // pattern (L497-501): log and fall through to app.exit(0).
+            logger.error("gpu-mitigation-close-telemetry-failed", err, {
+              path: "angle-fallback",
+            });
+          }
           app.exit(0);
           return;
         }
         logger.warn("gpu-crash-soft-fallback", { crashCount: effectiveCount });
         writeCleanGpuMitigationMarkers("angle-fallback");
         app.relaunch();
-        await closeTelemetry();
+        try {
+          await closeTelemetry();
+        } catch (err) {
+          logger.error("gpu-mitigation-close-telemetry-failed", err, {
+            path: "angle-fallback",
+          });
+        }
         app.exit(0);
         return;
       }
@@ -227,14 +242,26 @@ class GpuCrashMonitorService {
             crashCount: effectiveCount,
           });
           writeCleanGpuMitigationMarkers("nuclear-disable");
-          await closeTelemetry();
+          try {
+            await closeTelemetry();
+          } catch (err) {
+            logger.error("gpu-mitigation-close-telemetry-failed", err, {
+              path: "nuclear-disable",
+            });
+          }
           app.exit(0);
           return;
         }
         logger.warn("gpu-crash-nuclear-disable", { crashCount: effectiveCount });
         writeCleanGpuMitigationMarkers("nuclear-disable");
         app.relaunch();
-        await closeTelemetry();
+        try {
+          await closeTelemetry();
+        } catch (err) {
+          logger.error("gpu-mitigation-close-telemetry-failed", err, {
+            path: "nuclear-disable",
+          });
+        }
         app.exit(0);
       }
     });

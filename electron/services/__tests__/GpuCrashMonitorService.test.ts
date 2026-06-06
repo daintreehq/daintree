@@ -478,6 +478,15 @@ describe("GpuCrashMonitorService", () => {
       });
       expect(appMock.relaunch).toHaveBeenCalledTimes(1);
       expect(appMock.exit).not.toHaveBeenCalled();
+      // Issue #10065: markers must commit before telemetry drain (shutdown.ts
+      // invariant). Lock the order so a future refactor can't invert it.
+      const cleanupOrder = crashRecoveryMock.cleanupOnExit.mock.invocationCallOrder[0];
+      const markExitOrder = crashLoopGuardMock.markCleanExit.mock.invocationCallOrder[0];
+      const markLaunchOrder = panelSuspectLedgerMock.markCleanLaunch.mock.invocationCallOrder[0];
+      const telemetryOrder = telemetryServiceMock.closeTelemetry.mock.invocationCallOrder[0];
+      expect(cleanupOrder).toBeLessThan(telemetryOrder);
+      expect(markExitOrder).toBeLessThan(telemetryOrder);
+      expect(markLaunchOrder).toBeLessThan(telemetryOrder);
 
       resolveClose();
 
@@ -713,7 +722,7 @@ describe("GpuCrashMonitorService", () => {
         expect(relaunchOrder).toBeLessThan(exitOrder);
       });
 
-      it("soft hard-stop writes all three markers, no relaunch()", async () => {
+      it("soft hard-stop writes all three markers in order before app.exit(0)", async () => {
         crashLoopGuardMock.shouldRelaunch.mockReturnValue(false);
         await loadAndInit();
         emitGpuCrash();
@@ -725,13 +734,15 @@ describe("GpuCrashMonitorService", () => {
         expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
         expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
         const cleanupOrder = crashRecoveryMock.cleanupOnExit.mock.invocationCallOrder[0];
+        const markExitOrder = crashLoopGuardMock.markCleanExit.mock.invocationCallOrder[0];
         const markLaunchOrder = panelSuspectLedgerMock.markCleanLaunch.mock.invocationCallOrder[0];
         const exitOrder = appMock.exit.mock.invocationCallOrder[0];
-        expect(cleanupOrder).toBeLessThan(exitOrder);
+        expect(cleanupOrder).toBeLessThan(markExitOrder);
+        expect(markExitOrder).toBeLessThan(markLaunchOrder);
         expect(markLaunchOrder).toBeLessThan(exitOrder);
       });
 
-      it("nuclear hard-stop writes all three markers, no relaunch()", async () => {
+      it("nuclear hard-stop writes all three markers in order before app.exit(0)", async () => {
         writeGpuAngleFallbackFlag(tmpDir);
         crashLoopGuardMock.shouldRelaunch.mockReturnValue(false);
         await loadAndInit();
@@ -745,6 +756,13 @@ describe("GpuCrashMonitorService", () => {
         expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
         expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
         expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
+        const cleanupOrder = crashRecoveryMock.cleanupOnExit.mock.invocationCallOrder[0];
+        const markExitOrder = crashLoopGuardMock.markCleanExit.mock.invocationCallOrder[0];
+        const markLaunchOrder = panelSuspectLedgerMock.markCleanLaunch.mock.invocationCallOrder[0];
+        const exitOrder = appMock.exit.mock.invocationCallOrder[0];
+        expect(cleanupOrder).toBeLessThan(markExitOrder);
+        expect(markExitOrder).toBeLessThan(markLaunchOrder);
+        expect(markLaunchOrder).toBeLessThan(exitOrder);
       });
 
       it("soft relaunch: marker writes still complete when cleanupOnExit throws", async () => {
@@ -820,6 +838,95 @@ describe("GpuCrashMonitorService", () => {
         expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
         expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
         expect(appMock.relaunch).not.toHaveBeenCalled();
+      });
+
+      it("nuclear relaunch: marker writes still complete when markCleanExit throws", async () => {
+        writeGpuAngleFallbackFlag(tmpDir);
+        crashLoopGuardMock.markCleanExit.mockImplementationOnce(() => {
+          throw new Error("markCleanExit failed");
+        });
+        await loadAndInit();
+        emitGpuCrash();
+        emitGpuCrash();
+        emitGpuCrash();
+        await vi.waitFor(() => {
+          expect(appMock.exit).toHaveBeenCalledWith(0);
+        });
+        expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
+        expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
+        expect(appMock.relaunch).toHaveBeenCalledTimes(1);
+        expect(loggerMethods.error).toHaveBeenCalledWith(
+          "gpu-mitigation-mark-clean-exit-failed",
+          expect.any(Error),
+          expect.objectContaining({ path: "nuclear-disable" })
+        );
+      });
+
+      it("nuclear relaunch: relaunch still happens when markCleanLaunch throws", async () => {
+        writeGpuAngleFallbackFlag(tmpDir);
+        panelSuspectLedgerMock.markCleanLaunch.mockImplementationOnce(() => {
+          throw new Error("markCleanLaunch failed");
+        });
+        await loadAndInit();
+        emitGpuCrash();
+        emitGpuCrash();
+        emitGpuCrash();
+        await vi.waitFor(() => {
+          expect(appMock.exit).toHaveBeenCalledWith(0);
+        });
+        expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
+        expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
+        expect(appMock.relaunch).toHaveBeenCalledTimes(1);
+        expect(loggerMethods.error).toHaveBeenCalledWith(
+          "gpu-mitigation-mark-clean-launch-failed",
+          expect.any(Error),
+          expect.objectContaining({ path: "nuclear-disable" })
+        );
+      });
+
+      it("soft hard-stop: app.exit(0) still happens when closeTelemetry rejects", async () => {
+        crashLoopGuardMock.shouldRelaunch.mockReturnValue(false);
+        telemetryServiceMock.closeTelemetry.mockRejectedValueOnce(
+          new Error("telemetry drain failed")
+        );
+        await loadAndInit();
+        emitGpuCrash();
+        await vi.waitFor(() => {
+          expect(appMock.exit).toHaveBeenCalledWith(0);
+        });
+        expect(appMock.relaunch).not.toHaveBeenCalled();
+        expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
+        expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
+        expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
+        expect(loggerMethods.error).toHaveBeenCalledWith(
+          "gpu-mitigation-close-telemetry-failed",
+          expect.any(Error),
+          expect.objectContaining({ path: "angle-fallback" })
+        );
+      });
+
+      it("nuclear hard-stop: app.exit(0) still happens when closeTelemetry rejects", async () => {
+        writeGpuAngleFallbackFlag(tmpDir);
+        crashLoopGuardMock.shouldRelaunch.mockReturnValue(false);
+        telemetryServiceMock.closeTelemetry.mockRejectedValueOnce(
+          new Error("telemetry drain failed")
+        );
+        await loadAndInit();
+        emitGpuCrash();
+        emitGpuCrash();
+        emitGpuCrash();
+        await vi.waitFor(() => {
+          expect(appMock.exit).toHaveBeenCalledWith(0);
+        });
+        expect(appMock.relaunch).not.toHaveBeenCalled();
+        expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
+        expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
+        expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
+        expect(loggerMethods.error).toHaveBeenCalledWith(
+          "gpu-mitigation-close-telemetry-failed",
+          expect.any(Error),
+          expect.objectContaining({ path: "nuclear-disable" })
+        );
       });
 
       it("non-GPU crashes do not call the cleanup helper", async () => {
