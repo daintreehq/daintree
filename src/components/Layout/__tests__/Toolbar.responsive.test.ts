@@ -355,4 +355,52 @@ describe("Toolbar responsive design — issue #4133", () => {
       );
     });
   });
+
+  describe("agent split-button seam — issue #9823", () => {
+    // The seam is implemented as a custom toolbar.css class (not a Tailwind
+    // utility) because .border-divider resolves to the plain --border-divider
+    // alias and skips the --toolbar-divider override chain. The chevron's
+    // open-state suppression is asserted as a CSS source guard so a future
+    // refactor cannot silently drop the suppression — which would let the
+    // 1px right border stack with the chevron's inset 1px border-strong
+    // armed ring into a 2px smudge on light themes (the same failure mode
+    // the L97-117 comment block above documents).
+
+    it("declares the toolbar-agent-split-seam class", () => {
+      expect(css).toContain(".toolbar-agent-split-seam");
+    });
+
+    it("paints the seam with the --toolbar-divider chain (matches .toolbar-divider)", () => {
+      // Verify the seam rule body uses the same fallback chain as the
+      // existing .toolbar-divider so per-theme --toolbar-divider overrides
+      // apply identically. A regression that hardcodes a color here would
+      // break the theme-tokened contract.
+      const seamBlock = css.match(/\.toolbar-agent-split-seam\s*\{[^}]*\}/)?.[0];
+      expect(seamBlock).toBeDefined();
+      expect(seamBlock).toContain("border-right-color");
+      expect(seamBlock).toContain("var(--toolbar-divider, var(--theme-border-divider))");
+    });
+
+    it("suppresses the seam when the chevron is armed via :has() on group/agent-split", () => {
+      // The suppression anchors on .toolbar-agent-button[data-state="open"]
+      // (the same selector the existing armed-state block above uses) so
+      // the trigger path is shared. The :has() sits on .group\/agent-split
+      // to scope the rule to the split-button JSX, not bare toolbar buttons.
+      // (CSS escapes the `/` so the on-disk literal is `\/`.)
+      expect(css).toContain('.group\\/agent-split:has(.toolbar-agent-button[data-state="open"])');
+      expect(css).toContain("border-right-color: transparent");
+    });
+
+    it("provides a forced-colors fallback so the seam survives Windows High Contrast", () => {
+      // Without the ButtonText fallback, Windows High Contrast would force
+      // the seam to Canvas (invisible) and the split-button structure would
+      // read as a single button — losing the discoverability win the issue
+      // asks for.
+      const forcedColorsBlock = css.match(
+        /@media \(forced-colors: active\)\s*\{[\s\S]*?\.toolbar-agent-split-seam[\s\S]*?\}/
+      )?.[0];
+      expect(forcedColorsBlock).toBeDefined();
+      expect(forcedColorsBlock).toContain("border-right-color: ButtonText");
+    });
+  });
 });

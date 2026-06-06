@@ -169,6 +169,28 @@
   background: var(--toolbar-divider, var(--theme-border-divider));
 }
 
+/* Split-button seam: persistent 1px hairline at rest so the chevron half
+ * reads as a separate control. The color chain mirrors .toolbar-divider so
+ * per-theme --toolbar-divider overrides apply identically. Suppressed when
+ * the chevron dropdown is open via the named group/agent-split parent: the
+ * chevron's armed-state inset ring (above) would otherwise stack with this
+ * 1px right border and read as a 2px smudge on light themes (same failure
+ * the L97-117 comment block above documents). Forced-colors mode keeps a
+ * 1px system-color edge so the seam survives Windows High Contrast. */
+.toolbar-agent-split-seam {
+  border-right-color: var(--toolbar-divider, var(--theme-border-divider));
+}
+
+.group\/agent-split:has(.toolbar-agent-button[data-state="open"]) .toolbar-agent-split-seam {
+  border-right-color: transparent;
+}
+
+@media (forced-colors: active) {
+  .toolbar-agent-split-seam {
+    border-right-color: ButtonText;
+  }
+}
+
 .toolbar-stats {
   --_bg: var(--toolbar-stats-bg, var(--theme-overlay-hover));
   --_border: var(--toolbar-stats-border, var(--theme-border-subtle));
