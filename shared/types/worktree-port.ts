@@ -28,6 +28,10 @@ export interface WorktreePortProtocol {
     // snapshot time — a state description, not a new event.
     // `watcherDegraded` hydrates the persistent watcher-degraded indicator on
     // late-mounting views without waiting for a live event (#8413).
+    // `topologyWatcherDark` hydrates the parallel topology-watcher-dark
+    // indicator the same way (#9908) — true when the topology watcher's
+    // subscribe() failed or a safety valve expired and no reconcile has since
+    // verified the worktree list.
     // `lastAcknowledgedMutationIds` carries the host's epoch-scoped set of
     // successfully acknowledged mutation IDs so the renderer's mutation outbox
     // can prune entries that landed before a host crash without replaying them
@@ -36,6 +40,7 @@ export interface WorktreePortProtocol {
     result: {
       states: WorktreeSnapshot[];
       watcherDegraded: boolean;
+      topologyWatcherDark: boolean;
       lastAcknowledgedMutationIds: string[];
     } & WorktreeEventVersion;
   };
@@ -70,6 +75,13 @@ export interface WorktreePortProtocol {
     result: { ok: true };
   };
   "refresh-prs": {
+    payload: Record<string, never>;
+    result: { ok: true };
+  };
+  // Forces an immediate topology reconcile (full worktree re-discovery),
+  // independent of the watcher. Backs the "Reconcile now" recovery action for
+  // the topology-watcher-dark state (#9908).
+  "reconcile-topology": {
     payload: Record<string, never>;
     result: { ok: true };
   };

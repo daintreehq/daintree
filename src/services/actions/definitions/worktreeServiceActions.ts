@@ -27,6 +27,21 @@ export function registerWorktreeServiceActions(
     },
   }));
 
+  actions.set("worktree.reconcileTopology", () => ({
+    id: "worktree.reconcileTopology",
+    title: "Reconcile worktree list",
+    description:
+      "Force a full re-scan of worktrees. Recovers from a dark topology watcher that stopped reporting worktree changes.",
+    category: "worktree",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["watcher", "dark", "topology", "reconcile", "sync", "stale"],
+    run: async () => {
+      await window.electron.worktreePort.request("reconcile-topology");
+    },
+  }));
+
   actions.set("worktree.refreshPullRequests", () => ({
     id: "worktree.refreshPullRequests",
     title: "Refresh Pull Requests",

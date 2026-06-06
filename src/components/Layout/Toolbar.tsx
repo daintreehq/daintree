@@ -477,6 +477,7 @@ export function Toolbar({
   );
   const branchName = activeWorktree?.branch;
   const watcherDegraded = useWorktreeStore((state) => state.watcherDegraded);
+  const topologyWatcherDark = useWorktreeStore((state) => state.topologyWatcherDark);
 
   // Per-item state for the overflow menu, so evicted buttons keep the signal
   // they carry on the visible toolbar (issue #9821). Reads mirror the
@@ -1018,14 +1019,15 @@ export function Toolbar({
             key="problems"
             errorCount={errorCount}
             watcherDegraded={watcherDegraded}
+            topologyWatcherDark={topologyWatcherDark}
             onToggleProblems={onToggleProblems}
             data-toolbar-item=""
           />
         ),
-        // Auto-surface the Problems button when the watcher is degraded so
+        // Auto-surface the Problems button when file watching is unreliable so
         // the persistent Tier-1 indicator is visible even for users who
         // haven't enabled developer tools (the default).
-        isAvailable: showDeveloperTools || watcherDegraded,
+        isAvailable: showDeveloperTools || watcherDegraded || topologyWatcherDark,
       },
       "assistant-toggle": {
         render: () => <ToolbarAssistantButton key="assistant-toggle" data-toolbar-item="" />,
@@ -1074,6 +1076,7 @@ export function Toolbar({
       onToggleProblems,
       errorCount,
       watcherDegraded,
+      topologyWatcherDark,
       showDeveloperTools,
       notificationsEnabled,
       pluginButtonIds,

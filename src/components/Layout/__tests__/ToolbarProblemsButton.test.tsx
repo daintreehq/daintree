@@ -186,3 +186,35 @@ describe("ToolbarProblemsButton — watcher-degraded pip", () => {
     expect(container.querySelector("button")?.getAttribute("aria-label")).toBe("Problems: 1 error");
   });
 });
+
+describe("ToolbarProblemsButton — topology-watcher-dark pip (#9908)", () => {
+  beforeEach(() => {
+    useDiagnosticsStore.setState({ isOpen: false });
+  });
+
+  it("shows the shared watcher pip when only topologyWatcherDark is true", () => {
+    const { getByTestId } = render(<ToolbarProblemsButton errorCount={0} topologyWatcherDark />);
+    expect(getByTestId("watcher-degraded-badge").getAttribute("data-visible")).toBe("true");
+  });
+
+  it("reflects the topology-dark state in the accessible label", () => {
+    const { container } = render(<ToolbarProblemsButton errorCount={0} topologyWatcherDark />);
+    expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(
+      "Problems: 0 errors, worktree list may be stale"
+    );
+  });
+
+  it("prefers the file-watching-degraded clause when both states are active", () => {
+    const { container } = render(
+      <ToolbarProblemsButton errorCount={0} watcherDegraded topologyWatcherDark />
+    );
+    expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(
+      "Problems: 0 errors, file watching degraded"
+    );
+  });
+
+  it("keeps the pip hidden when neither watcher signal is set", () => {
+    const { getByTestId } = render(<ToolbarProblemsButton errorCount={0} />);
+    expect(getByTestId("watcher-degraded-badge").getAttribute("data-visible")).toBe("false");
+  });
+});

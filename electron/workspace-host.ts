@@ -96,6 +96,7 @@ async function handleWorktreePortRequest(
           epoch,
           seq,
           watcherDegraded: workspaceService.isWatcherDegraded(),
+          topologyWatcherDark: workspaceService.isTopologyWatcherDark(),
           lastAcknowledgedMutationIds: workspaceService.getAcknowledgedMutationIds(),
         };
         break;
@@ -157,6 +158,12 @@ async function handleWorktreePortRequest(
       case "refresh-prs": {
         const { pullRequestService } = await import("./services/PullRequestService.js");
         await pullRequestService.refresh();
+        result = { ok: true };
+        break;
+      }
+
+      case "reconcile-topology": {
+        workspaceService.scheduleTopologyReconcile();
         result = { ok: true };
         break;
       }

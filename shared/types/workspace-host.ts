@@ -607,6 +607,17 @@ export type WorkspaceHostEvent =
   // Clears the one-shot degradation guards so a later relapse can re-signal,
   // and hides the persistent degraded indicator in the renderer.
   | { type: "watcher-recovered" }
+  // Fired when the topology watcher goes "dark": either the `@parcel/watcher`
+  // subscribe() rejected at cold start (no events will ever arrive), or a 5s
+  // pending-event safety valve expired without the watcher delivering the
+  // matching event (the watcher missed a worktree-tree mutation the app itself
+  // produced). Both mean the worktree list may silently drift out of date.
+  // One-shot per dark period; clears via `topology-watcher-recovered`.
+  | { type: "topology-watcher-dark" }
+  // Fired when a topology reconcile completes successfully after a dark period,
+  // restoring confidence that the worktree list is current. Independent of the
+  // recursive-watcher `watcher-recovered` signal.
+  | { type: "topology-watcher-recovered" }
   // PR events
   | {
       type: "pr-detected";

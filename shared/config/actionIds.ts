@@ -25,6 +25,7 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.list",
   "worktree.getCurrent",
   "worktree.refresh",
+  "worktree.reconcileTopology",
   "worktree.refreshPullRequests",
   "worktree.restartService",
   "worktree.retryProjectLoad",
