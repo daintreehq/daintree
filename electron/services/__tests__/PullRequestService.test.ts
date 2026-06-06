@@ -1278,6 +1278,362 @@ describe("PullRequestService", () => {
     pullRequestService.destroy();
   });
 
+  describe("transient lookup failures (#9994)", () => {
+    it("preserves PR rows and counts one error when a per-branch lookup fails transiently", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderResolved(async () => {
+        throw new Error("network timeout");
+      });
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+      const unsubscribe = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+
+      const svc = pullRequestService as unknown as {
+        checkForPRs: () => Promise<void>;
+        resolveProvider: () => Promise<void>;
+        consecutiveErrors: number;
+        lastCheckAt: number;
+      };
+
+      await svc.resolveProvider();
+      svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+      await svc.checkForPRs();
+
+      // Transient failure is NOT authoritative absence: no spurious clear,
+      // and the failure counts toward the circuit breaker.
+      expect(cleared).toHaveLength(0);
+      expect(svc.consecutiveErrors).toBe(1);
+
+      unsubscribe();
+      pullRequestService.destroy();
+    });
+
+    it("trips the circuit breaker after three consecutive failing cycles", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderResolved(async () => {
+        throw new Error("network timeout");
+      });
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      const detectionStates: DaintreeEventMap["sys:pr:detection-state"][] = [];
+      const unsubscribe = events.on("sys:pr:detection-state", (payload) =>
+        detectionStates.push(payload)
+      );
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+
+      const svc = pullRequestService as unknown as {
+        checkForPRs: () => Promise<void>;
+        resolveProvider: () => Promise<void>;
+        consecutiveErrors: number;
+        lastCheckAt: number;
+      };
+
+      await svc.resolveProvider();
+      for (let cycle = 0; cycle < 3; cycle++) {
+        svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+        await svc.checkForPRs();
+      }
+
+      expect(svc.consecutiveErrors).toBe(3);
+      expect(detectionStates).toContainEqual(expect.objectContaining({ tripped: true }));
+
+      unsubscribe();
+      pullRequestService.destroy();
+    });
+
+    it("resets consecutiveErrors once a cycle completes without lookup failures", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      let failing = true;
+      mockForgeProviderResolved(async () => {
+        if (failing) throw new Error("network timeout");
+        return makeMockForgePR();
+      });
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+      const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+
+      const svc = pullRequestService as unknown as {
+        checkForPRs: () => Promise<void>;
+        resolveProvider: () => Promise<void>;
+        consecutiveErrors: number;
+        lastCheckAt: number;
+      };
+
+      await svc.resolveProvider();
+      for (let cycle = 0; cycle < 2; cycle++) {
+        svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+        await svc.checkForPRs();
+      }
+      expect(svc.consecutiveErrors).toBe(2);
+
+      failing = false;
+      svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+      await svc.checkForPRs();
+
+      expect(svc.consecutiveErrors).toBe(0);
+      expect(detected).toHaveLength(1);
+
+      unsubscribe();
+      pullRequestService.destroy();
+    });
+
+    it("keeps an existing PR row when its branch lookup later fails transiently", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      let failing = false;
+      mockForgeProviderResolved(async () => {
+        if (failing) throw new Error("network timeout");
+        return makeMockForgePR();
+      });
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+      const unsubscribe = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+
+      await pullRequestService.refresh();
+      const svc = pullRequestService as unknown as {
+        detectedPRs: Map<string, unknown>;
+        consecutiveErrors: number;
+      };
+      expect(svc.detectedPRs.has("wt-1")).toBe(true);
+
+      // refresh() re-queries every worktree; the lookup now fails transiently.
+      // The detected row must survive — this is the #9994 regression scenario.
+      failing = true;
+      await pullRequestService.refresh();
+
+      expect(cleared).toHaveLength(0);
+      expect(svc.detectedPRs.has("wt-1")).toBe(true);
+      expect(svc.consecutiveErrors).toBe(1);
+
+      unsubscribe();
+      pullRequestService.destroy();
+    });
+
+    it("treats a non-Error rejection as transient, not confirmed absence", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderResolved(() => Promise.reject({ code: "ETIMEDOUT" }));
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+      const unsubscribe = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+
+      await pullRequestService.refresh();
+
+      const svc = pullRequestService as unknown as { consecutiveErrors: number };
+      expect(cleared).toHaveLength(0);
+      expect(svc.consecutiveErrors).toBe(1);
+
+      unsubscribe();
+      pullRequestService.destroy();
+    });
+
+    it("clears the row and deletes the detectedPRs entry on a confirmed no-PR result", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      let prGone = false;
+      mockForgeProviderResolved(async () => (prGone ? null : makeMockForgePR()));
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+      const unsubscribe = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+
+      await pullRequestService.refresh();
+      const svc = pullRequestService as unknown as {
+        detectedPRs: Map<string, unknown>;
+        consecutiveErrors: number;
+      };
+      expect(svc.detectedPRs.has("wt-1")).toBe(true);
+
+      // refresh() empties resolvedWorktrees but keeps detectedPRs, so the
+      // confirmed-absent path must delete the stale entry alongside the clear
+      // (otherwise a PENDING entry keeps the revalidation boost armed).
+      prGone = true;
+      await pullRequestService.refresh();
+
+      expect(cleared).toHaveLength(1);
+      expect(cleared[0]).toMatchObject({ worktreeId: "wt-1", branchName: "feature/a" });
+      expect(svc.detectedPRs.has("wt-1")).toBe(false);
+      expect(svc.consecutiveErrors).toBe(0);
+
+      unsubscribe();
+      pullRequestService.destroy();
+    });
+
+    it("handles a mixed cycle: detected, confirmed-absent, and failed branches independently", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      const mockImpl = mockForgeProviderResolved();
+      mockImpl.findPRByBranch = vi.fn(async (_repo: RepoRef, branch: string) => {
+        if (branch === "feature/a") return makeMockForgePR({ number: 1, headRef: branch });
+        if (branch === "feature/b") return null;
+        throw new Error("socket hang up");
+      });
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+      const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+      const unsubDetected = events.on("sys:pr:detected", (payload) => detected.push(payload));
+      const unsubCleared = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-a", branch: "feature/a" })
+      );
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-b", branch: "feature/b" })
+      );
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-c", branch: "feature/c" })
+      );
+
+      const svc = pullRequestService as unknown as {
+        checkForPRs: () => Promise<void>;
+        resolveProvider: () => Promise<void>;
+        detectedPRs: Map<string, unknown>;
+        consecutiveErrors: number;
+        lastCheckAt: number;
+      };
+
+      // Seed a previously-detected PR on the branch that is about to fail —
+      // the failing lookup must leave it untouched.
+      const priorPR = {
+        number: 3,
+        title: "Prior PR",
+        url: "https://github.com/o/r/pull/3",
+        state: "open",
+        isDraft: false,
+        providerId: "daintree.github.github",
+        stagnantPollCount: 0,
+      };
+      svc.detectedPRs.set("wt-c", priorPR);
+
+      await svc.resolveProvider();
+      svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+      await svc.checkForPRs();
+
+      // Detected branch resolves, confirmed-absent branch clears, failed
+      // branch is skipped entirely (row preserved) — and the cycle counts a
+      // single error.
+      expect(detected.map((d) => d.worktreeId)).toContain("wt-a");
+      expect(detected.map((d) => d.worktreeId)).not.toContain("wt-c");
+      expect(cleared).toHaveLength(1);
+      expect(cleared[0].worktreeId).toBe("wt-b");
+      expect(svc.detectedPRs.get("wt-c")).toBe(priorPR);
+      expect(svc.consecutiveErrors).toBe(1);
+
+      unsubDetected();
+      unsubCleared();
+      pullRequestService.destroy();
+    });
+
+    it("routes mid-cycle failures to the rate-limit pause instead of the breaker when a limit is active", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      const mockImpl = mockForgeProviderResolved(async () => {
+        throw new Error("API rate limit exceeded");
+      });
+      // First gate consult (top of cycle) sees budget remaining; the
+      // post-error consult sees the exhausted limit that landed mid-cycle.
+      mockImpl.getRateLimit = vi
+        .fn()
+        .mockResolvedValueOnce({ limit: 5000, remaining: 100, resetAt: null })
+        .mockResolvedValue({ limit: 5000, remaining: 0, resetAt: Date.now() + 60_000 });
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+      const notifications: DaintreeEventMap["ui:notify"][] = [];
+      const unsubCleared = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
+      const unsubNotify = events.on("ui:notify", (payload) => notifications.push(payload));
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+
+      const svc = pullRequestService as unknown as {
+        checkForPRs: () => Promise<void>;
+        resolveProvider: () => Promise<void>;
+        consecutiveErrors: number;
+        nextRetryAt: number;
+        lastCheckAt: number;
+      };
+
+      await svc.resolveProvider();
+      // A pre-existing streak is cleared by the pause: the prior failures were
+      // likely the same rate limit before the gate caught it, so carrying them
+      // over would leave the breaker on a hair trigger after the pause.
+      svc.consecutiveErrors = 2;
+      svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+      await svc.checkForPRs();
+
+      // Rate-limit pause, not circuit breaker: streak cleared, no clear event,
+      // no breaker trip or toast, polling deferred until the limit resets.
+      expect(svc.consecutiveErrors).toBe(0);
+      expect(svc.nextRetryAt).toBeGreaterThan(Date.now());
+      expect(cleared).toHaveLength(0);
+      expect(pullRequestService.getStatus().detectionStateTripped).toBe(false);
+      expect(notifications).toHaveLength(0);
+
+      unsubCleared();
+      unsubNotify();
+      pullRequestService.destroy();
+    });
+  });
+
   it("no-ops when no forge provider is resolved (null linkage, no toast, no error)", async () => {
     const clearPRCaches = vi.fn();
     vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
