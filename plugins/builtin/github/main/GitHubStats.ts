@@ -194,10 +194,17 @@ export async function fetchActivityProbe(
  */
 export function parseLinkLastPage(linkHeader: string | null): number | null {
   if (!linkHeader) return null;
-  const match = linkHeader.match(/<[^>]*[?&]page=(\d+)[^>]*>;\s*rel="last"/);
-  if (!match) return null;
-  const page = parseInt(match[1], 10);
-  return Number.isFinite(page) && page >= 0 ? page : null;
+  // Split into link-values first: RFC 8288 allows extra parameters between the
+  // URL and `rel` (`<url>; type="…"; rel="last"`), so anchoring `rel="last"`
+  // directly after `>` would silently miss a reordered header and undercount.
+  for (const segment of linkHeader.split(",")) {
+    if (!/rel="last"/.test(segment)) continue;
+    const match = segment.match(/<[^>]*[?&]page=(\d+)[^>]*>/);
+    if (!match) return null;
+    const page = parseInt(match[1], 10);
+    return Number.isFinite(page) && page >= 0 ? page : null;
+  }
+  return null;
 }
 
 /**
@@ -305,6 +312,12 @@ export async function fetchRestCounts(
     // fetch (no commit) so the next poll reads a consistent pair.
     const issueCount = combinedCount - prCount;
     if (issueCount < 0) return null;
+
+    // Re-check right before the commit: the `json()` awaits above are further
+    // suspension points where a concurrent clear (token change / manual
+    // refresh) can land — committing past it would re-seed the just-cleared
+    // cache with a pre-clear baseline that then serves for up to the 1h TTL.
+    if (getETagCacheVersion() !== versionAtStart) return null;
 
     const lastUpdated = Date.now();
     const snapshot: RestCountsSnapshot = { combinedCount, prCount, repoEtag, prEtag, lastUpdated };

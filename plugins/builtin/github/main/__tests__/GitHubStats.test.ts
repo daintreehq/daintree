@@ -235,6 +235,12 @@ describe("parseLinkLastPage", () => {
   it("returns null on a malformed header", () => {
     expect(parseLinkLastPage("not a link header")).toBeNull();
   });
+
+  it("tolerates extra link parameters between the URL and rel (RFC 8288)", () => {
+    expect(
+      parseLinkLastPage(`<https://api.github.com/x?page=47>; type="application/json"; rel="last"`)
+    ).toBe(47);
+  });
 });
 
 describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () => {
@@ -477,6 +483,54 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
       repoEtag: '"r1"',
     });
     expect(repoEventsETagCache.get(CACHE_KEY)).toBe('"e1"');
+  });
+
+  it("keeps the prior baseline and events ETag when one REST leg fails", async () => {
+    routeFetch({
+      events: [eventsResponse(200, { etag: '"e1"' }), eventsResponse(200, { etag: '"e2"' })],
+      repo: [repoOk(8, '"r1"'), repoOk(9, '"r2"')],
+      pulls: [pullsOk(3, '"p1"'), restResponse(500)],
+    });
+
+    await getRepoStatsAndPage("/test", false);
+    expireMemoryCaches();
+    expireBackoffWindow();
+    const result = await getRepoStatsAndPage("/test", false);
+
+    // A half-valid pair must never commit — both the count baseline and the
+    // events ETag stay on the last fully-successful fetch.
+    expect(result.error).toBeDefined();
+    expect(restCountsCache.get(CACHE_KEY)).toMatchObject({
+      combinedCount: 8,
+      prCount: 3,
+      repoEtag: '"r1"',
+      prEtag: '"p1"',
+    });
+    expect(repoEventsETagCache.get(CACHE_KEY)).toBe('"e1"');
+  });
+
+  it("discards counts when a concurrent cache clear lands mid-parse", async () => {
+    const clearingRepo: FakeResponse = {
+      status: 200,
+      headers: { get: (name: string) => (name.toLowerCase() === "etag" ? '"r1"' : null) },
+      json: async () => {
+        // Simulates a token change / manual refresh arriving while the body is
+        // still being parsed — the commit must not re-seed the cleared cache.
+        clearPRCaches();
+        return { open_issues_count: 8 };
+      },
+    };
+    routeFetch({
+      events: [eventsResponse(200, { etag: '"e1"' })],
+      repo: [clearingRepo],
+      pulls: [pullsOk(3)],
+    });
+
+    const result = await getRepoStatsAndPage("/test", false);
+
+    expect(result.error).toBeDefined();
+    expect(restCountsCache.get(CACHE_KEY)).toBeUndefined();
+    expect(repoEventsETagCache.get(CACHE_KEY)).toBeUndefined();
   });
 
   it("rejects a malformed repo body (missing open_issues_count)", async () => {
