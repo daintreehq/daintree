@@ -50,6 +50,7 @@ const storeMock = vi.hoisted(() => {
 vi.mock("../../../store.js", () => ({ store: storeMock }));
 
 import { registerForgeDataHandlers } from "../forgeData.js";
+import { _resetRateLimitQueuesForTest } from "../../utils.js";
 import { forgeAuditService } from "../../../services/forge/forgeAuditService.js";
 
 function findHandler(channel: string): (...args: unknown[]) => unknown {
@@ -91,6 +92,9 @@ const makePR = (n: number): PR => ({
 describe("registerForgeDataHandlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The handlers share a per-channel rate-limit budget (10 calls / 10s); a
+    // suite-cumulative count would make later tests fail on call volume alone.
+    _resetRateLimitQueuesForTest();
     resolveForCwdMock.mockResolvedValue({
       namespaceId: "fake.provider",
       repoRef,
@@ -350,6 +354,22 @@ describe("registerForgeDataHandlers", () => {
     // `["a,b"]` and `["a","b"]` are different queries — the JSON-tuple key keeps
     // them in separate in-flight slots instead of collapsing to one call.
     expect(fakeImpl.listIssues).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not coalesce list queries that differ only by search term", async () => {
+    fakeImpl.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    registerForgeDataHandlers();
+    const handler = findHandler("forge:list-issues");
+
+    // The issue picker fires a new IPC call per debounced keystroke; a key
+    // that omitted `search` would hand the second caller the first's result.
+    await Promise.all([
+      handler(null, { cwd: "/repo", opts: { state: "open", search: "auth" } }),
+      handler(null, { cwd: "/repo", opts: { state: "open", search: "auth bug" } }),
+      handler(null, { cwd: "/repo", opts: { state: "open" } }),
+    ]);
+
+    expect(fakeImpl.listIssues).toHaveBeenCalledTimes(3);
   });
 
   it("collapses repeat lookups within the TTL then re-runs after it elapses", async () => {

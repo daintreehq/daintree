@@ -545,9 +545,14 @@ async function searchIssuesImpl(
   const limit = opts.perPage ?? 20;
   // Free text is appended unquoted — GitHub search tokenizes it as keywords,
   // matching what its own search box does (see findPRByBranchImpl, which only
-  // quotes because branch refs must not parse as separate operators).
+  // quotes because branch refs must not parse as separate operators). GitHub
+  // caps search queries at 256 chars, so the term is truncated to the budget
+  // left after the qualifiers rather than letting the whole query be rejected.
   const stateQualifier = state === "all" ? "" : ` state:${state}`;
-  const searchQuery = `repo:${repo.owner}/${repo.repo} is:issue${stateQualifier} ${search}`;
+  const sortQualifier = opts.sort === "updated" ? "sort:updated-desc" : "sort:created-desc";
+  const prefix = `repo:${repo.owner}/${repo.repo} is:issue${stateQualifier} ${sortQualifier} `;
+  const available = 256 - prefix.length;
+  const searchQuery = `${prefix}${available > 0 ? search.slice(0, available) : ""}`.trim();
   const dedupeKey = `search:${searchQuery}:${opts.cursor ?? ""}:${limit}`;
 
   return dedupe(listIssuesInflight, dedupeKey, bypass, async () => {

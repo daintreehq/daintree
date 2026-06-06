@@ -595,7 +595,9 @@ describe("listIssues search", () => {
     ];
     expect(query).toContain("SearchItems");
     expect(variables.type).toBe("ISSUE");
-    expect(variables.searchQuery).toBe("repo:owner/repo is:issue state:open flaky");
+    expect(variables.searchQuery).toBe(
+      "repo:owner/repo is:issue state:open sort:created-desc flaky"
+    );
     expect(page.items[0]?.number).toBe(9);
     expect(page.items[0]?.state).toBe("open");
     expect(page.totalCount).toBe(1);
@@ -610,8 +612,63 @@ describe("listIssues search", () => {
     const queries = mockGraphQLClient.mock.calls.map(
       (call) => (call[1] as { searchQuery: string }).searchQuery
     );
-    expect(queries[0]).toBe("repo:owner/repo is:issue state:closed flaky");
-    expect(queries[1]).toBe("repo:owner/repo is:issue flaky");
+    expect(queries[0]).toBe("repo:owner/repo is:issue state:closed sort:created-desc flaky");
+    expect(queries[1]).toBe("repo:owner/repo is:issue sort:created-desc flaky");
+  });
+
+  it("maps opts.sort 'updated' to sort:updated-desc", async () => {
+    mockGraphQLClient.mockResolvedValue(issueSearchResponse());
+
+    await githubForgeProvider.listIssues(repo, { state: "open", search: "flaky", sort: "updated" });
+
+    const { searchQuery } = mockGraphQLClient.mock.calls[0]![1] as { searchQuery: string };
+    expect(searchQuery).toBe("repo:owner/repo is:issue state:open sort:updated-desc flaky");
+  });
+
+  it("truncates the free-text term so the query stays within GitHub's 256-char cap", async () => {
+    mockGraphQLClient.mockResolvedValue(issueSearchResponse());
+
+    await githubForgeProvider.listIssues(repo, { state: "open", search: "x".repeat(400) });
+
+    const { searchQuery } = mockGraphQLClient.mock.calls[0]![1] as { searchQuery: string };
+    expect(searchQuery.length).toBeLessThanOrEqual(256);
+    expect(searchQuery.startsWith("repo:owner/repo is:issue state:open sort:created-desc x")).toBe(
+      true
+    );
+  });
+
+  it("does not coalesce concurrent calls with different search terms", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(issueSearchResponse()).mockResolvedValueOnce({
+      search: {
+        issueCount: 1,
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes: [
+          {
+            number: 11,
+            title: "Other hit",
+            bodyText: "",
+            state: "OPEN",
+            url: "https://github.com/owner/repo/issues/11",
+            author: { login: "user", avatarUrl: "" },
+            assignees: { nodes: [] },
+            labels: { nodes: [] },
+            createdAt: "2025-01-01T00:00:00Z",
+            updatedAt: "2025-01-01T00:00:00Z",
+            closedAt: null,
+          },
+        ],
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+
+    const [a, b] = await Promise.all([
+      githubForgeProvider.listIssues(repo, { state: "open", search: "abc" }),
+      githubForgeProvider.listIssues(repo, { state: "open", search: "def" }),
+    ]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+    expect(a.items[0]?.number).toBe(9);
+    expect(b.items[0]?.number).toBe(11);
   });
 
   it("does not write search results into the forge issue list cache", async () => {
