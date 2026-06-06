@@ -5,7 +5,7 @@ import { FolderGit2, Check, AlertCircle } from "lucide-react";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
-// eslint-disable-next-line no-restricted-imports
+
 import { worktreeClient, forgeClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { usePreferencesStore } from "@/store/preferencesStore";
