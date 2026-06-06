@@ -43,6 +43,7 @@ export function registerIntrospectionActions(
       const { category, search, enabledOnly } =
         (args as { category?: string; search?: string; enabledOnly?: boolean } | undefined) ?? {};
       let manifest = actionService.list(ctx);
+      manifest = manifest.filter((entry) => entry.mcpVisibility !== "hidden");
 
       if (category) {
         manifest = manifest.filter((a) => a.category === category);
@@ -292,7 +293,7 @@ export function registerIntrospectionActions(
     id: "actions.getSchema",
     title: "Get Action Schema",
     description:
-      "Fetch one action's full manifest entry, including inputSchema and outputSchema. Args: `actionId` (required) — an action id from `actions.search` results (the `id` field). Returns { ok: true, entry } on success, or { ok: false, error: { code: 'NOT_FOUND', message } } as data (not a thrown error) when the id is unknown or hidden. Use after `actions.search` to inspect the exact arguments an action expects before dispatching it.",
+      "Fetch one action's full manifest entry, including inputSchema and outputSchema. Args: `actionId` (required) — an action id from `actions.search` results (the `id` field). Returns { ok: true, entry } on success, or { ok: false, error: { code: 'NOT_FOUND', message } } as data (not a thrown error) when the id is unknown, hidden, or restricted. Use after `actions.search` to inspect the exact arguments an action expects before dispatching it.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -323,17 +324,7 @@ export function registerIntrospectionActions(
       const { actionId } = args as { actionId: string };
       const entry = actionService.get(actionId, ctx);
 
-      if (!entry) {
-        return {
-          ok: false,
-          error: {
-            code: "NOT_FOUND",
-            message: `No action found with id "${actionId}". Use actions.search to find available actions.`,
-          },
-        };
-      }
-
-      if (entry.mcpVisibility === "hidden") {
+      if (!entry || entry.mcpVisibility === "hidden" || entry.danger === "restricted") {
         return {
           ok: false,
           error: {
