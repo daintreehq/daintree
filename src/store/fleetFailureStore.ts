@@ -21,8 +21,6 @@ export interface FleetFailureSnapshot {
   failedIds: Set<string>;
   /** The literal payload that should be re-fired on retry. */
   payload: string | null;
-  /** Wall clock of the most recent failure record (ms). */
-  recordedAt: number | null;
 }
 
 interface FleetFailureState extends FleetFailureSnapshot {
@@ -38,14 +36,13 @@ const EMPTY_SET: Set<string> = new Set();
 export const useFleetFailureStore = create<FleetFailureState>((set) => ({
   failedIds: EMPTY_SET,
   payload: null,
-  recordedAt: null,
   recordFailure: (payload, failedIds) => {
     const ids = new Set(failedIds);
     if (ids.size === 0) {
-      set({ failedIds: EMPTY_SET, payload: null, recordedAt: null });
+      set({ failedIds: EMPTY_SET, payload: null });
       return;
     }
-    set({ failedIds: ids, payload, recordedAt: Date.now() });
+    set({ failedIds: ids, payload });
   },
   dismissId: (id) =>
     set((s) => {
@@ -53,11 +50,11 @@ export const useFleetFailureStore = create<FleetFailureState>((set) => ({
       const next = new Set(s.failedIds);
       next.delete(id);
       if (next.size === 0) {
-        return { failedIds: EMPTY_SET, payload: null, recordedAt: null };
+        return { failedIds: EMPTY_SET, payload: null };
       }
       return { failedIds: next };
     }),
-  clear: () => set({ failedIds: EMPTY_SET, payload: null, recordedAt: null }),
+  clear: () => set({ failedIds: EMPTY_SET, payload: null }),
 }));
 
 /**

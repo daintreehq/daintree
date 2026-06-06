@@ -44,7 +44,6 @@ function resetStore() {
   useFleetFailureStore.setState({
     failedIds: new Set(),
     payload: null,
-    recordedAt: null,
   });
 }
 
@@ -63,7 +62,6 @@ describe("FleetFailureBanner", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
       payload: "ls\r",
-      recordedAt: Date.now(),
     });
     render(<FleetFailureBanner />);
     expect(screen.getByText("Broadcast failed")).toBeTruthy();
@@ -75,7 +73,6 @@ describe("FleetFailureBanner", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1"]),
       payload: "ls\r",
-      recordedAt: Date.now(),
     });
     render(<FleetFailureBanner />);
     expect(screen.getByText("1 terminal rejected the write.")).toBeTruthy();
@@ -85,7 +82,6 @@ describe("FleetFailureBanner", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
       payload: null,
-      recordedAt: Date.now(),
     });
     render(<FleetFailureBanner />);
     expect(
@@ -98,7 +94,6 @@ describe("FleetFailureBanner", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1"]),
       payload: "ls\r",
-      recordedAt: Date.now(),
     });
     render(<FleetFailureBanner />);
     fireEvent.click(screen.getByRole("button", { name: "Retry failed" }));
@@ -111,13 +106,11 @@ describe("FleetFailureBanner", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1"]),
       payload: "ls\r",
-      recordedAt: Date.now(),
     });
     render(<FleetFailureBanner />);
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     const s = useFleetFailureStore.getState();
     expect(s.failedIds.size).toBe(0);
     expect(s.payload).toBeNull();
-    expect(s.recordedAt).toBeNull();
   });
 });
