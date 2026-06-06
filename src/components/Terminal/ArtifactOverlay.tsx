@@ -28,6 +28,23 @@ export function patchLineClass(line: string): string {
   return "text-daintree-text/80";
 }
 
+function PatchDiffLines({ content, className }: { content: string; className?: string }) {
+  return (
+    <pre
+      className={cn(
+        "font-mono text-[11px] leading-4 overflow-y-auto overflow-x-auto select-text",
+        className
+      )}
+    >
+      {content.split("\n").map((line, i) => (
+        <div key={i} className={patchLineClass(line)}>
+          {line || " "}
+        </div>
+      ))}
+    </pre>
+  );
+}
+
 function PatchDiffPreview({ content }: { content: string }) {
   return (
     <div className="rounded border border-tint/[0.08] bg-tint/[0.04]">
@@ -36,13 +53,7 @@ function PatchDiffPreview({ content }: { content: string }) {
           Patch contents
         </span>
       </div>
-      <pre className="font-mono text-[11px] leading-4 px-3 py-2 max-h-[200px] overflow-y-auto overflow-x-auto select-text">
-        {content.split("\n").map((line, i) => (
-          <div key={i} className={patchLineClass(line)}>
-            {line || " "}
-          </div>
-        ))}
-      </pre>
+      <PatchDiffLines content={content} className="px-3 py-2 max-h-[200px]" />
     </div>
   );
 }
@@ -306,6 +317,24 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     const result = await applyPatch(artifact);
     resolve?.(result);
   }, [applyPatch, pendingPatch]);
+
+  // Resolve a pending confirm as cancelled when the overlay loses its artifacts
+  // (Clear hides the dialog via the early return below) or unmounts, so the
+  // promise awaited in ArtifactItem never hangs.
+  useEffect(() => {
+    if (hasArtifacts) return;
+    pendingApplyResolveRef.current?.({ success: false, error: "Cancelled", cancelled: true });
+    pendingApplyResolveRef.current = null;
+    setPendingPatch(null);
+    setPendingBulkPatches(null);
+  }, [hasArtifacts]);
+
+  useEffect(() => {
+    return () => {
+      pendingApplyResolveRef.current?.({ success: false, error: "Cancelled", cancelled: true });
+      pendingApplyResolveRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -612,22 +641,33 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                 Patches to apply
               </span>
             </div>
-            <ul className="px-3 py-2 space-y-1.5 max-h-[200px] overflow-y-auto">
+            <div className="max-h-[260px] overflow-y-auto divide-y divide-tint/[0.08]">
               {pendingBulkPatches.map((patch) => {
                 const stats = getPatchStats(patch.content);
                 return (
-                  <li key={patch.id} className="flex items-baseline gap-2">
-                    <span className="text-daintree-text/80 truncate min-w-0">
-                      {patch.filename || patch.language || "patch"}
-                    </span>
-                    <span className="font-mono text-[10px] shrink-0 ml-auto tabular-nums">
-                      <span className="text-status-success">+{stats.additions}</span>{" "}
-                      <span className="text-status-error">-{stats.deletions}</span>
-                    </span>
-                  </li>
+                  // D2 requires actual diff content per patch, not just counts —
+                  // open by default; the toggle only tames very long bulk sets.
+                  <details key={patch.id} open className="group">
+                    <summary className="flex items-baseline gap-2 px-3 py-2 cursor-pointer list-none">
+                      <span className="text-daintree-text/40 text-[10px] shrink-0 group-open:hidden">
+                        ▶
+                      </span>
+                      <span className="text-daintree-text/40 text-[10px] shrink-0 hidden group-open:inline">
+                        ▼
+                      </span>
+                      <span className="text-daintree-text/80 truncate min-w-0">
+                        {patch.filename || patch.language || "patch"}
+                      </span>
+                      <span className="font-mono text-[10px] shrink-0 ml-auto tabular-nums">
+                        <span className="text-status-success">+{stats.additions}</span>{" "}
+                        <span className="text-status-error">-{stats.deletions}</span>
+                      </span>
+                    </summary>
+                    <PatchDiffLines content={patch.content} className="px-3 pb-2 max-h-[120px]" />
+                  </details>
                 );
               })}
-            </ul>
+            </div>
           </div>
         )}
       </ConfirmDialog>
