@@ -362,7 +362,12 @@ export function createDebouncedSafeJSONStorage<T>(delayMs: number): PersistStora
     const entry = pending.get(name);
     if (!entry) return;
     pending.delete(name);
-    raw.setItem(name, entry.value);
+    // Only advance the backup when the primary write actually reached durable
+    // storage. On a quota failure the primary keeps its old value, so writing
+    // a newer backup would leave the two inconsistent and recover stale state.
+    if (raw.setItem(name, entry.value) === "durable") {
+      raw.writeBackup(name, entry.value);
+    }
   };
 
   return {
@@ -373,8 +378,18 @@ export function createDebouncedSafeJSONStorage<T>(delayMs: number): PersistStora
       if (value instanceof Promise) return null;
       if (value === null) return null;
       try {
-        return JSON.parse(value) as StorageValue<T>;
+        return parseJson<StorageValue<T>>(value);
       } catch (error) {
+        // The live blob is corrupt but present — try the last known-good backup
+        // before discarding the user's config to defaults (issue #9170/#9916).
+        const recovered = parseBackup<T>(raw.readBackup(name));
+        if (recovered !== null) {
+          console.warn("[safeStorage] corrupt persisted state, recovered from backup", {
+            key: name,
+            error: formatErrorMessage(error, "Corrupt persisted state"),
+          });
+          return recovered;
+        }
         console.warn("[safeStorage] corrupt persisted state, resetting to defaults", {
           key: name,
           error: formatErrorMessage(error, "Corrupt persisted state"),
@@ -396,6 +411,7 @@ export function createDebouncedSafeJSONStorage<T>(delayMs: number): PersistStora
         pending.delete(name);
       }
       raw.removeItem(name);
+      raw.removeBackup(name);
     },
   };
 }

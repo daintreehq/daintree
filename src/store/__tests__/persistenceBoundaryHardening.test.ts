@@ -676,7 +676,8 @@ describe("persistence boundary hardening", () => {
 
       vi.advanceTimersByTime(300);
 
-      expect(setItem).toHaveBeenCalledTimes(1);
+      // One coalesced primary write (the backup write targets the `.__bak` key).
+      expect(setItem.mock.calls.filter(([key]) => key === "k")).toHaveLength(1);
       expect(setItem).toHaveBeenCalledWith(
         "k",
         JSON.stringify({ state: { value: 3 }, version: 1 })
@@ -729,7 +730,8 @@ describe("persistence boundary hardening", () => {
       // No timer advance — getItem must flush.
       const result = storage.getItem("k");
 
-      expect(setItem).toHaveBeenCalledTimes(1);
+      // One coalesced primary write (the backup write targets the `.__bak` key).
+      expect(setItem.mock.calls.filter(([key]) => key === "k")).toHaveLength(1);
       expect(result).toEqual({ state: { value: 42 }, version: 1 });
 
       vi.useRealTimers();
@@ -779,13 +781,152 @@ describe("persistence boundary hardening", () => {
       storage.setItem("b", { state: { value: 2 }, version: 1 });
       vi.advanceTimersByTime(150);
 
-      // 'a' has flushed; 'b' has 150ms remaining
-      expect(setItem).toHaveBeenCalledTimes(1);
+      // 'a' has flushed; 'b' has 150ms remaining (count primary writes only —
+      // each durable flush also writes a `.__bak` backup copy).
+      expect(setItem.mock.calls.filter(([key]) => key === "a")).toHaveLength(1);
+      expect(setItem.mock.calls.filter(([key]) => key === "b")).toHaveLength(0);
       expect(setItem).toHaveBeenCalledWith("a", expect.any(String));
 
       vi.advanceTimersByTime(150);
-      expect(setItem).toHaveBeenCalledTimes(2);
-      expect(setItem).toHaveBeenLastCalledWith("b", expect.any(String));
+      expect(setItem.mock.calls.filter(([key]) => key === "b")).toHaveLength(1);
+      expect(setItem).toHaveBeenCalledWith("b", expect.any(String));
+
+      vi.useRealTimers();
+    });
+
+    it("writes a backup copy alongside the primary key after a durable flush", async () => {
+      const backing = new Map<string, string>();
+      installLocalStorage(
+        createStorageMock({
+          getItem: (key) => backing.get(key) ?? null,
+          setItem: (key, value) => {
+            backing.set(key, value);
+          },
+        })
+      );
+      vi.useFakeTimers();
+
+      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+
+      storage.setItem("backup-key", { state: { value: 5 }, version: 1 });
+      vi.advanceTimersByTime(300);
+
+      expect(backing.get("backup-key.__bak")).toBe(
+        JSON.stringify({ state: { value: 5 }, version: 1 })
+      );
+
+      vi.useRealTimers();
+    });
+
+    it("does not advance the backup when the primary flush hits a quota error", async () => {
+      const backing = new Map<string, string>();
+      const good = JSON.stringify({ state: { value: 1 }, version: 1 });
+      backing.set("stale-key", good);
+      backing.set("stale-key.__bak", good);
+      installLocalStorage(
+        createStorageMock({
+          getItem: (key) => backing.get(key) ?? null,
+          setItem: (key, value) => {
+            // Quota only on the primary key — let backup writes through so the
+            // assertion proves the backup was never *attempted*, not just blocked.
+            if (key === "stale-key") {
+              throw new DOMException("Quota exceeded", "QuotaExceededError");
+            }
+            backing.set(key, value);
+          },
+        })
+      );
+      vi.useFakeTimers();
+
+      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+
+      storage.setItem("stale-key", { state: { value: 2 }, version: 1 });
+      vi.advanceTimersByTime(300);
+
+      // Primary write failed → backup must keep the previous good value.
+      expect(backing.get("stale-key.__bak")).toBe(good);
+
+      vi.useRealTimers();
+    });
+
+    it("getItem recovers from the backup key when the primary blob is corrupt", async () => {
+      const backup = JSON.stringify({ state: { value: 9 }, version: 1 });
+      installLocalStorage(
+        createStorageMock({
+          getItem: (key) => {
+            if (key === "recover-key") return "{corrupt";
+            if (key === "recover-key.__bak") return backup;
+            return null;
+          },
+        })
+      );
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+
+      const result = storage.getItem("recover-key");
+
+      expect(result).toEqual({ state: { value: 9 }, version: 1 });
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[safeStorage] corrupt persisted state, recovered from backup",
+        expect.objectContaining({ key: "recover-key" })
+      );
+    });
+
+    it("removeItem clears both the primary key and its backup", async () => {
+      const backing = new Map<string, string>();
+      installLocalStorage(
+        createStorageMock({
+          getItem: (key) => backing.get(key) ?? null,
+          setItem: (key, value) => {
+            backing.set(key, value);
+          },
+          removeItem: (key) => {
+            backing.delete(key);
+          },
+        })
+      );
+      vi.useFakeTimers();
+
+      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+
+      storage.setItem("rm-key", { state: { value: 1 }, version: 1 });
+      vi.advanceTimersByTime(300);
+      expect(backing.get("rm-key.__bak")).not.toBeUndefined();
+
+      storage.removeItem("rm-key");
+
+      expect(backing.get("rm-key")).toBeUndefined();
+      expect(backing.get("rm-key.__bak")).toBeUndefined();
+
+      vi.useRealTimers();
+    });
+
+    it("recovers from a backup written by an earlier flush on the same instance", async () => {
+      const backing = new Map<string, string>();
+      installLocalStorage(
+        createStorageMock({
+          getItem: (key) => backing.get(key) ?? null,
+          setItem: (key, value) => {
+            backing.set(key, value);
+          },
+        })
+      );
+      vi.useFakeTimers();
+
+      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+
+      storage.setItem("e2e-key", { state: { value: 7 }, version: 1 });
+      vi.advanceTimersByTime(300);
+      // Corrupt only the primary; the backup written by the flush stays intact.
+      backing.set("e2e-key", "{corrupt");
+
+      expect(storage.getItem("e2e-key")).toEqual({ state: { value: 7 }, version: 1 });
 
       vi.useRealTimers();
     });
