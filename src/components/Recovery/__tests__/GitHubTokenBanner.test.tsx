@@ -1,8 +1,17 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
+
+vi.mock("@/services/ActionService", () => ({
+  actionService: {
+    dispatch: vi.fn(),
+  },
+}));
+
 import { GitHubTokenBanner } from "../GitHubTokenBanner";
 import { useGitHubTokenHealthStore } from "@/store/githubTokenHealthStore";
+import { actionService } from "@/services/ActionService";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -23,6 +32,7 @@ beforeAll(() => {
 describe("GitHubTokenBanner", () => {
   beforeEach(() => {
     useGitHubTokenHealthStore.setState({ isUnhealthy: false });
+    vi.mocked(actionService.dispatch).mockClear();
     cleanup();
   });
 
@@ -41,19 +51,18 @@ describe("GitHubTokenBanner", () => {
     expect(screen.getByRole("button", { name: /Reconnect to GitHub/i })).toBeTruthy();
   });
 
-  it("dispatches open-settings-tab event when reconnect clicked", () => {
+  it("routes reconnect through the settings action with the token sectionId", () => {
     useGitHubTokenHealthStore.setState({ isUnhealthy: true });
-    const listener = vi.fn();
-    window.addEventListener("daintree:open-settings-tab", listener as EventListener);
 
     render(<GitHubTokenBanner />);
     fireEvent.click(screen.getByRole("button", { name: /Reconnect to GitHub/i }));
 
-    expect(listener).toHaveBeenCalledOnce();
-    const event = listener.mock.calls[0]![0] as CustomEvent<{ tab: string }>;
-    expect(event.detail.tab).toBe("code-forge");
-
-    window.removeEventListener("daintree:open-settings-tab", listener as EventListener);
+    expect(actionService.dispatch).toHaveBeenCalledOnce();
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "code-forge", subtab: BUILTIN_GITHUB_PROVIDER_ID, sectionId: "github-token" },
+      { source: "user" }
+    );
   });
 
   it("hides automatically when store transitions back to healthy", () => {

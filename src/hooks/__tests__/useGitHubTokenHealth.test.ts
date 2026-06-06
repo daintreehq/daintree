@@ -79,7 +79,46 @@ describe("useGitHubTokenHealth", () => {
     act(() => healthListener?.({ status: "unhealthy", tokenVersion: 0, checkedAt: 0 }));
 
     const entries = useNotificationHistoryStore.getState().entries;
-    expect(entries.filter((e) => e.correlationId === "github-token-health")).toHaveLength(1);
+    const healthEntries = entries.filter((e) => e.correlationId === "github-token-health");
+    expect(healthEntries).toHaveLength(1);
+  });
+
+  it("shares the github.token supersedeKey so the expiry-notification row can archive it", async () => {
+    renderHook(() => useGitHubTokenHealth());
+    await act(async () => {});
+
+    act(() => healthListener?.({ status: "unhealthy", tokenVersion: 0, checkedAt: 0 }));
+
+    const entry = useNotificationHistoryStore
+      .getState()
+      .entries.find((e) => e.correlationId === "github-token-health");
+    expect(entry?.supersedeKey).toBe("github.token");
+    // Inbox-only backstop: must not surface as a toast.
+    expect(entry?.seenAsToast).toBe(false);
+  });
+
+  it("keeps a single active row when a later github.token write supersedes the backstop", async () => {
+    renderHook(() => useGitHubTokenHealth());
+    await act(async () => {});
+
+    act(() => healthListener?.({ status: "unhealthy", tokenVersion: 0, checkedAt: 0 }));
+
+    // Simulate the toolbar's expiry-notification path writing under the same key.
+    act(() => {
+      useNotificationHistoryStore.getState().addEntry({
+        type: "warning",
+        title: "GitHub authentication required",
+        message: "Reconnect in settings.",
+        correlationId: "github:token-expiry",
+        supersedeKey: "github.token",
+      });
+    });
+
+    const active = useNotificationHistoryStore
+      .getState()
+      .entries.filter((e) => e.supersedeKey === "github.token" && !e.archivedAt);
+    expect(active).toHaveLength(1);
+    expect(active[0]?.correlationId).toBe("github:token-expiry");
   });
 
   it("re-arms the inbox entry after recovery + a new failure", async () => {
