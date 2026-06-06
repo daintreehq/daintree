@@ -36,6 +36,7 @@ import { TerminalHibernationManager } from "./TerminalHibernationManager";
 import { TerminalReflowController, forceXtermReflow } from "./TerminalReflowController";
 import { TerminalReconciliationWatchdog } from "./TerminalReconciliationWatchdog";
 import { TerminalWriteController } from "./TerminalWriteController";
+import { reportFileLinkFailure } from "./FileLinksAddon";
 import {
   installTerminalBoundListeners,
   type TerminalListenerInstallDeps,
@@ -420,16 +421,21 @@ class TerminalInstanceService {
    * method. File links route through the actionService (file.view); URL and
    * OSC 8 links route through TerminalLinkHandler (localhost → browser panel
    * when modifier pressed, external open otherwise).
+   *
+   * Async because `ILink.activate()` may return a rejected Promise (e.g. a
+   * `FileLink` whose actionService + systemClient fallback chain both fail)
+   * — a sync try/catch misses async rejections, so the right-click path
+   * would still silently fail after the leaf was fixed (#9925).
    */
-  openHoveredLink(id: string, event?: MouseEvent): void {
+  async openHoveredLink(id: string, event?: MouseEvent): Promise<void> {
     const managed = this.instances.get(id);
     const link = managed?.hoveredLink;
     if (!link) return;
     const mouseEvent = event ?? new MouseEvent("click");
     try {
-      link.activate(mouseEvent, link.text);
+      await Promise.resolve(link.activate(mouseEvent, link.text));
     } catch (error) {
-      logWarn("Failed to activate hovered link", { id, error });
+      reportFileLinkFailure("Failed to activate hovered link", error, link.text);
     }
   }
 

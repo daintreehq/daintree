@@ -198,7 +198,7 @@ export function TerminalContextMenu({
       if (!terminal) return;
 
       if (actionId === "open-link") {
-        terminalInstanceService.openHoveredLink(terminalId);
+        void terminalInstanceService.openHoveredLink(terminalId);
         return;
       }
 

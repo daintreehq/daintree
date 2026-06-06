@@ -1,6 +1,21 @@
-import { describe, it, expect, vi } from "vitest";
-import type { Terminal, IBufferLine } from "@xterm/xterm";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { Terminal, IBufferLine, ILink } from "@xterm/xterm";
 import { FileLinksAddon } from "../FileLinksAddon";
+import { notify } from "@/lib/notify";
+import { actionService } from "@/services/ActionService";
+import { systemClient } from "@/clients";
+
+vi.mock("@/lib/notify", () => ({
+  notify: vi.fn(),
+}));
+
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: vi.fn() },
+}));
+
+vi.mock("@/clients", () => ({
+  systemClient: { openPath: vi.fn(), openInEditor: vi.fn() },
+}));
 
 describe("FileLinksAddon", () => {
   const createMockTerminal = () => {
@@ -361,6 +376,178 @@ describe("FileLinksAddon", () => {
           resolve();
         });
       });
+    });
+  });
+
+  describe("activation failures (#9925)", () => {
+    beforeEach(() => {
+      vi.mocked(notify).mockClear();
+      vi.mocked(actionService.dispatch).mockReset();
+      vi.mocked(systemClient.openPath).mockReset();
+      vi.mocked(systemClient.openInEditor).mockReset();
+      Object.defineProperty(global.navigator, "clipboard", {
+        value: { writeText: vi.fn().mockResolvedValue(undefined) },
+        configurable: true,
+      });
+    });
+
+    const buildLink = (
+      terminal: Terminal,
+      getCwd: () => string,
+      text = "/home/user/project/src/App.tsx:10"
+    ): Promise<ILink | undefined> =>
+      new Promise((resolve) => {
+        const line = createMockLine(`Error at ${text}`);
+        vi.mocked(terminal.buffer.active.getLine).mockReturnValue(line);
+        const addon = new FileLinksAddon(terminal, getCwd);
+        addon.provideLinks(1, (links) => resolve(links?.[0]));
+      });
+
+    const makeClick = (modifiers: MouseEventInit = {}): MouseEvent =>
+      ({ metaKey: false, ctrlKey: false, ...modifiers }) as unknown as MouseEvent;
+
+    it("surfaces OUTSIDE_ROOT from the systemClient fallback as a user-visible toast", async () => {
+      const terminal = createMockTerminal();
+      const link = await buildLink(terminal, () => "/home/user/project");
+      expect(link).toBeDefined();
+
+      vi.mocked(actionService.dispatch).mockResolvedValue({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: "view failed" },
+      });
+      const outsideRootError = new Error(
+        "[AppError|OUTSIDE_ROOT|Path is not in a project root] Path is not in a project root"
+      );
+      vi.mocked(systemClient.openPath).mockRejectedValue(outsideRootError);
+
+      link!.activate(makeClick(), link!.text);
+      // Microtask flush so the .then/.catch chain settles.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(notify).toHaveBeenCalledTimes(1);
+      const payload = vi.mocked(notify).mock.calls[0]?.[0] as {
+        type: string;
+        title: string;
+        message: string;
+        action?: { label: string; onClick?: () => void };
+        coalesce?: { key: string };
+        priority?: string;
+      };
+      expect(payload.type).toBe("error");
+      expect(payload.title).toBe("Couldn't open file link");
+      expect(payload.priority).toBe("high");
+      expect(payload.coalesce?.key).toBe("filelink-activate-fail");
+      expect(payload.message).toContain("Path is outside your project roots");
+      expect(payload.message).toContain("App.tsx");
+      expect(payload.action?.label).toBe("Copy path");
+    });
+
+    it("surfaces INVALID_PATH (e.g. WSL UNC) using the code-aware message", async () => {
+      const terminal = createMockTerminal();
+      const link = await buildLink(
+        terminal,
+        () => "/home/user/project",
+        "/home/user/project/missing.app:1"
+      );
+      expect(link).toBeDefined();
+
+      vi.mocked(actionService.dispatch).mockResolvedValue({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: "view failed" },
+      });
+      const invalidPathError = new Error(
+        "[AppError|INVALID_PATH|Path is not a valid file] Path is not a valid file"
+      );
+      vi.mocked(systemClient.openPath).mockRejectedValue(invalidPathError);
+
+      link!.activate(makeClick(), link!.text);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(notify).toHaveBeenCalledTimes(1);
+      const payload = vi.mocked(notify).mock.calls[0]?.[0] as { message: string };
+      expect(payload.message).toContain("Path is not a valid file");
+    });
+
+    it("falls back to the error's own message when no AppError code is present", async () => {
+      const terminal = createMockTerminal();
+      const link = await buildLink(terminal, () => "/home/user/project");
+      expect(link).toBeDefined();
+
+      vi.mocked(actionService.dispatch).mockResolvedValue({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: "view failed" },
+      });
+      vi.mocked(systemClient.openPath).mockRejectedValue(new Error("disk gone"));
+
+      link!.activate(makeClick(), link!.text);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(notify).toHaveBeenCalledTimes(1);
+      const payload = vi.mocked(notify).mock.calls[0]?.[0] as { message: string };
+      expect(payload.message).toContain("disk gone");
+    });
+
+    it("does NOT toast when actionService dispatch succeeds (no false-positive)", async () => {
+      const terminal = createMockTerminal();
+      const link = await buildLink(terminal, () => "/home/user/project");
+      expect(link).toBeDefined();
+
+      vi.mocked(actionService.dispatch).mockResolvedValue({ ok: true, result: undefined });
+      vi.mocked(systemClient.openPath).mockResolvedValue(undefined);
+
+      link!.activate(makeClick(), link!.text);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(notify).not.toHaveBeenCalled();
+      // systemClient fallback should NOT have been called when the action succeeded.
+      expect(systemClient.openPath).not.toHaveBeenCalled();
+    });
+
+    it("routes the modified-click (openInEditor) path and surfaces editor failures", async () => {
+      const terminal = createMockTerminal();
+      const link = await buildLink(terminal, () => "/home/user/project");
+      expect(link).toBeDefined();
+
+      vi.mocked(actionService.dispatch).mockResolvedValue({
+        ok: false,
+        error: { code: "NOT_FOUND", message: "action not registered" },
+      });
+      vi.mocked(systemClient.openInEditor).mockRejectedValue(new Error("no editor configured"));
+
+      link!.activate(makeClick({ metaKey: true }), link!.text);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(systemClient.openInEditor).toHaveBeenCalledTimes(1);
+      expect(notify).toHaveBeenCalledTimes(1);
+      const payload = vi.mocked(notify).mock.calls[0]?.[0] as { message: string };
+      expect(payload.message).toContain("no editor configured");
+    });
+
+    it("copy-path action button writes the absolute path to the clipboard", async () => {
+      const terminal = createMockTerminal();
+      const link = await buildLink(
+        terminal,
+        () => "/home/user/project",
+        "/home/user/project/src/App.tsx"
+      );
+      expect(link).toBeDefined();
+
+      vi.mocked(actionService.dispatch).mockResolvedValue({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: "boom" },
+      });
+      vi.mocked(systemClient.openPath).mockRejectedValue(new Error("boom"));
+
+      link!.activate(makeClick(), link!.text);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const writeText = vi.mocked(navigator.clipboard.writeText);
+      const payload = vi.mocked(notify).mock.calls[0]?.[0] as {
+        action?: { onClick?: () => void };
+      };
+      payload.action?.onClick?.();
+
+      expect(writeText).toHaveBeenCalledWith("/home/user/project/src/App.tsx");
     });
   });
 });
