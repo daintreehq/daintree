@@ -25,6 +25,15 @@ export interface PollingLifecycleConfig {
    * any per-project state here so the immediate refetch lands cleanly.
    */
   onProjectSwitch?: () => void;
+  /**
+   * When false, the lifecycle is fully inert: no initial fetch, no timer, and
+   * no global-trigger subscription — the consumer never registers in the
+   * module-level fan-out Set. Explicit `refresh()` calls still fetch (the
+   * on-demand path stays functional) but never arm the polling timer. Used by
+   * worker instances to suppress automatic background GitHub polling (#10123).
+   * Defaults to true.
+   */
+  enabled?: boolean;
 }
 
 export interface PollingLifecycleControl {
@@ -217,6 +226,10 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
   const scheduleNextPoll = useCallback(
     function scheduleNextPollImpl(): void {
       if (!aliveRef.current) return;
+      // Disabled lifecycles never arm the timer — this also covers the
+      // `refresh()` tail, so an explicit on-demand fetch can't resurrect
+      // background polling on a worker instance (#10123).
+      if (configRef.current.enabled === false) return;
       if (pollTimerRef.current) {
         clearTimeout(pollTimerRef.current);
       }
@@ -254,8 +267,18 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
     controlRef.current = { scheduleNextPoll, refresh };
   }
 
+  // Read through the live config so the effect below re-runs on change —
+  // `false` makes the lifecycle inert (no fetch, no timer, no subscription).
+  const enabled = config.enabled !== false;
+
   useEffect(() => {
     aliveRef.current = true;
+
+    if (!enabled) {
+      return () => {
+        aliveRef.current = false;
+      };
+    }
 
     const subscriber: Subscriber = {
       onVisibilityVisible: () => {
@@ -312,8 +335,9 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
     // callFetchFn / scheduleNextPoll / refresh are identity-stable
     // (`useCallback` with stable deps), so depending on them here is a no-op
     // — they never change after first render — but listing them silences the
-    // exhaustive-deps lint.
-  }, [callFetchFn, refresh, scheduleNextPoll]);
+    // exhaustive-deps lint. `enabled` is the one live dep: a false→true flip
+    // re-runs the effect and starts polling; true→false tears it down.
+  }, [callFetchFn, refresh, scheduleNextPoll, enabled]);
 
   return controlRef.current;
 }

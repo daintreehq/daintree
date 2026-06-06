@@ -43,6 +43,29 @@ export const INITIAL_COLOR_SCHEME_ARG = "--daintree-initial-color-scheme-id";
 export const INITIAL_PROJECT_ID_ARG = "--daintree-initial-project-id";
 
 /**
+ * Command-line argument carrying the instance role (`worker` | `attended`)
+ * from the main process into each renderer context (#10123). Worker instances
+ * (`DAINTREE_INSTANCE_ROLE=worker`) suppress automatic background GitHub
+ * polling to conserve GraphQL quota; on-demand fetches stay functional.
+ * Read synchronously in preload.cts from `process.argv` and exposed as
+ * `window.__DAINTREE_INSTANCE_ROLE__`. Default is `attended` — no behavior
+ * change unless an instance explicitly opts in.
+ */
+export const INSTANCE_ROLE_ARG = "--daintree-instance-role";
+
+export type InstanceRole = "attended" | "worker";
+
+/**
+ * Resolves the instance role from the launch environment. Only the exact
+ * value `worker` opts in; anything else (unset, empty, malformed) falls back
+ * to `attended` so a typo can never silently disable polling for an attended
+ * instance — or, worse, leave a worker polling.
+ */
+export function resolveInstanceRole(): InstanceRole {
+  return process.env.DAINTREE_INSTANCE_ROLE === "worker" ? "worker" : "attended";
+}
+
+/**
  * Resolves the color scheme id to seed the renderer with on cold start.
  * Mirrors the fallback logic in createWindow and getAppThemeConfig: the raw
  * persisted id when present (without resolving `followSystem` — that happens

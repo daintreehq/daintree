@@ -220,7 +220,12 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     []
   );
 
+  // Worker instances suppress automatic background polling to conserve
+  // GitHub GraphQL quota (#10123) — on-demand `refresh()` stays functional.
+  const isWorkerInstance = window.__DAINTREE_INSTANCE_ROLE__?.role === "worker";
+
   const polling = usePollingLifecycle({
+    enabled: !isWorkerInstance,
     fetchFn: async ({ force, isInvalidated }) => {
       try {
         const project = await projectClient.getCurrent();
@@ -489,8 +494,11 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   useEffect(() => {
     if (wakeEpoch <= lastSeenWakeEpochRef.current) return;
     lastSeenWakeEpochRef.current = wakeEpoch;
+    // Wake refetches are automatic background fetches — suppressed on worker
+    // instances like the polling loop itself (#10123).
+    if (isWorkerInstance) return;
     void polling.refresh();
-  }, [wakeEpoch, polling]);
+  }, [wakeEpoch, polling, isWorkerInstance]);
 
   useEffect(() => {
     const cleanup = githubClient.onRateLimitChanged((payload) => {
@@ -504,15 +512,18 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       // When the limit clears, run an immediate refresh so the UI updates
       // without waiting a full poll interval; `refresh` clears the timer,
       // fetches, and reschedules against the new rate-limit-aware interval.
-      // When blocked, just reschedule against the new resume time.
+      // When blocked, just reschedule against the new resume time. The clear
+      // is an automatic system event, not a user action — suppressed on
+      // worker instances like the polling loop itself (#10123).
       if (!payload.blocked) {
+        if (isWorkerInstance) return;
         void polling.refresh();
       } else {
         polling.scheduleNextPoll();
       }
     });
     return cleanup;
-  }, [polling]);
+  }, [polling, isWorkerInstance]);
 
   const isTokenError = isTokenRelatedError(error);
 

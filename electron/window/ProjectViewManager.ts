@@ -32,8 +32,10 @@ import {
   injectSkeletonProjectIdentity,
   resolveInitialColorSchemeId,
   resolveInitialCanvasBackgroundColor,
+  resolveInstanceRole,
   INITIAL_COLOR_SCHEME_ARG,
   INITIAL_PROJECT_ID_ARG,
+  INSTANCE_ROLE_ARG,
 } from "./skeletonCss.js";
 import { isDemoMode } from "../setup/runtimeFlags.js";
 import { projectStore } from "../services/ProjectStore.js";
@@ -1141,9 +1143,13 @@ export class ProjectViewManager {
         // threaded the same way instead of via a `?projectId=` query string so
         // the document URL stays static and the V8 bytecode cache is shared
         // across projects (#9162).
+        // The instance role rides along so LRU-evicted and project-switch
+        // views keep suppressing background GitHub polling in worker
+        // instances (#10123).
         additionalArguments: [
           `${INITIAL_COLOR_SCHEME_ARG}=${resolveInitialColorSchemeId()}`,
           `${INITIAL_PROJECT_ID_ARG}=${projectId}`,
+          `${INSTANCE_ROLE_ARG}=${resolveInstanceRole()}`,
           // Demo mode is gated in the renderer on process.argv. Electron does
           // not forward main-process CLI switches to renderer argv, so the
           // `--demo-mode` flag must be threaded explicitly for the DemoCursor /

@@ -47,7 +47,12 @@ export function useProjectHealth(): UseProjectHealthReturn {
     };
   }, []);
 
+  // Worker instances suppress automatic background polling to conserve
+  // GitHub GraphQL quota (#10123) — on-demand `refresh()` stays functional.
+  const isWorkerInstance = window.__DAINTREE_INSTANCE_ROLE__?.role === "worker";
+
   const polling = usePollingLifecycle({
+    enabled: !isWorkerInstance,
     fetchFn: async ({ force, isInvalidated }) => {
       try {
         const project = await projectClient.getCurrent();
@@ -136,8 +141,11 @@ export function useProjectHealth(): UseProjectHealthReturn {
   useEffect(() => {
     if (wakeEpoch <= lastSeenWakeEpochRef.current) return;
     lastSeenWakeEpochRef.current = wakeEpoch;
+    // Wake refetches are automatic background fetches — suppressed on worker
+    // instances like the polling loop itself (#10123).
+    if (isWorkerInstance) return;
     void polling.refresh();
-  }, [wakeEpoch, polling]);
+  }, [wakeEpoch, polling, isWorkerInstance]);
 
   return {
     health,

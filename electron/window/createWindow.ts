@@ -30,7 +30,9 @@ import { PERF_MARKS } from "../../shared/perf/marks.js";
 import {
   injectSkeletonCss,
   resolveInitialColorSchemeId,
+  resolveInstanceRole,
   INITIAL_COLOR_SCHEME_ARG,
+  INSTANCE_ROLE_ARG,
 } from "./skeletonCss.js";
 import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import { markPerformance } from "../utils/performance.js";
@@ -261,9 +263,12 @@ export function setupBrowserWindow(
       navigateOnDragDrop: false,
       v8CacheOptions: "code",
       // Seed the renderer with the persisted theme so first paint applies the
-      // saved scheme instead of a prefers-color-scheme default (#9169).
+      // saved scheme instead of a prefers-color-scheme default (#9169). The
+      // instance role rides along so worker instances suppress automatic
+      // background GitHub polling (#10123).
       additionalArguments: [
         `${INITIAL_COLOR_SCHEME_ARG}=${colorSchemeId}`,
+        `${INSTANCE_ROLE_ARG}=${resolveInstanceRole()}`,
         // Thread the demo-mode flag into renderer argv (Electron does not
         // forward main-process CLI switches), so window.electron.demo and the
         // demo overlay components are available when launched with --demo-mode.

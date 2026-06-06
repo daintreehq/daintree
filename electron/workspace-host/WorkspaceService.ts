@@ -37,7 +37,7 @@ import { events } from "../services/events.js";
 import { WorktreeLifecycleService, type WorkspaceHostContext } from "./WorktreeLifecycleService.js";
 import { WorktreeMonitor } from "./WorktreeMonitor.js";
 import { WorktreeListService } from "./WorktreeListService.js";
-import { PRIntegrationService } from "./PRIntegrationService.js";
+import { PRIntegrationService, type PRIntegrationCallbacks } from "./PRIntegrationService.js";
 import { RepoFetchCoordinator } from "./RepoFetchCoordinator.js";
 import { waitForPathExists } from "../utils/fs.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -221,7 +221,7 @@ export class WorkspaceService {
         monitor.triggerRefreshIfUpdating();
       },
     });
-    this.prService = new PRIntegrationService(pullRequestService, events, {
+    const prCallbacks: PRIntegrationCallbacks = {
       onPRDetected: (worktreeId, data) => {
         const monitor = this.monitors.get(worktreeId);
         if (!monitor) return;
@@ -425,6 +425,19 @@ export class WorkspaceService {
       onDetectionStateChanged: (tripped) => {
         this.sendEvent({ type: "pr-detection-state", tripped });
       },
+    };
+    // Worker instances (DAINTREE_INSTANCE_ROLE=worker) never start the
+    // automatic PR polling loop — the UtilityProcess inherits the launch env
+    // from main, so the flag is readable here directly (#10123). On-demand
+    // refresh and detection wiring stay fully functional.
+    const rawInstanceRole = process.env.DAINTREE_INSTANCE_ROLE;
+    if (rawInstanceRole && rawInstanceRole !== "worker" && rawInstanceRole !== "attended") {
+      console.warn(
+        `WorkspaceService: unrecognized DAINTREE_INSTANCE_ROLE "${rawInstanceRole}" — defaulting to attended`
+      );
+    }
+    this.prService = new PRIntegrationService(pullRequestService, events, prCallbacks, {
+      isWorker: rawInstanceRole === "worker",
     });
 
     this.resourceActionExecutor = new ResourceActionExecutor({

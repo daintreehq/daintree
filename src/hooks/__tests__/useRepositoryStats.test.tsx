@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RepositoryStats } from "@/types";
 
 const {
@@ -1454,6 +1454,79 @@ describe("useRepositoryStats", () => {
         expect(result.current.isValidating).toBe(false);
         expect(result.current.stats?.commitCount).toBe(6);
       });
+    });
+  });
+
+  describe("worker instance role (#10123)", () => {
+    beforeEach(() => {
+      window.__DAINTREE_INSTANCE_ROLE__ = { role: "worker" };
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 1,
+        issueCount: 1,
+        prCount: 1,
+        loading: false,
+        stale: false,
+        lastUpdated: 1000,
+      });
+    });
+
+    afterEach(() => {
+      delete window.__DAINTREE_INSTANCE_ROLE__;
+    });
+
+    it("performs no automatic fetch on mount", async () => {
+      renderHook(() => useRepositoryStats());
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(getRepoStatsMock).not.toHaveBeenCalled();
+    });
+
+    it("suppresses the wake-epoch refetch", async () => {
+      renderHook(() => useRepositoryStats());
+
+      await act(async () => {
+        useSystemWakeStore.setState((s) => ({ wakeEpoch: s.wakeEpoch + 1 }));
+        await Promise.resolve();
+      });
+
+      expect(getRepoStatsMock).not.toHaveBeenCalled();
+    });
+
+    it("suppresses the rate-limit-cleared auto-refresh", async () => {
+      let rateLimitCb: ((payload: unknown) => void) | undefined;
+      onRateLimitChangedMock.mockImplementation((cb) => {
+        rateLimitCb = cb;
+        return () => {};
+      });
+
+      renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(rateLimitCb).toBeDefined();
+      });
+
+      await act(async () => {
+        rateLimitCb?.({ blocked: false, kind: null, resetAt: null });
+        await Promise.resolve();
+      });
+
+      expect(getRepoStatsMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps explicit refresh() functional without resuming polling", async () => {
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await act(async () => {
+        await result.current.refresh({ force: true });
+      });
+
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+      expect(getRepoStatsMock.mock.calls[0]?.[1]).toBe(true);
     });
   });
 });

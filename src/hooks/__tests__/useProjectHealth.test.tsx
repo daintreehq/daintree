@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectHealthData } from "@shared/types/ipc/github";
 
 const { getCurrentMock, onSwitchMock, getProjectHealthMock } = vi.hoisted(() => ({
@@ -357,6 +357,50 @@ describe("useProjectHealth", () => {
         expect(result.current.isValidating).toBe(false);
         expect(result.current.health?.issueCount).toBe(9);
       });
+    });
+  });
+
+  describe("worker instance role (#10123)", () => {
+    beforeEach(() => {
+      window.__DAINTREE_INSTANCE_ROLE__ = { role: "worker" };
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo/a" });
+      getProjectHealthMock.mockResolvedValue(makeHealth());
+    });
+
+    afterEach(() => {
+      delete window.__DAINTREE_INSTANCE_ROLE__;
+    });
+
+    it("performs no automatic fetch on mount", async () => {
+      renderHook(() => useProjectHealth());
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(getProjectHealthMock).not.toHaveBeenCalled();
+    });
+
+    it("suppresses the wake-epoch refetch", async () => {
+      renderHook(() => useProjectHealth());
+
+      await act(async () => {
+        useSystemWakeStore.setState((s) => ({ wakeEpoch: s.wakeEpoch + 1 }));
+        await Promise.resolve();
+      });
+
+      expect(getProjectHealthMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps explicit refresh() functional", async () => {
+      const { result } = renderHook(() => useProjectHealth());
+
+      await act(async () => {
+        await result.current.refresh({ force: true });
+      });
+
+      expect(getProjectHealthMock).toHaveBeenCalledTimes(1);
+      expect(getProjectHealthMock.mock.calls[0]?.[1]).toBe(true);
     });
   });
 });
