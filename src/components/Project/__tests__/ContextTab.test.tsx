@@ -222,6 +222,61 @@ describe("ContextTab test-config button", () => {
   });
 });
 
+describe("ContextTab test-config payload", () => {
+  it("sends explicit null sentinels for every cleared field on an empty form", async () => {
+    testConfigMock.mockResolvedValue(successResult);
+    renderTab();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Test config" }));
+    });
+
+    // null (not omitted) — omitted keys are back-filled from saved settings in
+    // the main process, which is the exact bug this guards against (#10004).
+    expect(testConfigMock).toHaveBeenCalledWith("wt-1", {
+      exclude: null,
+      always: null,
+      maxTotalSize: null,
+      maxFileSize: null,
+      charLimit: null,
+      sort: null,
+    });
+  });
+
+  it("sends form values for set fields and null for cleared fields", async () => {
+    testConfigMock.mockResolvedValue(successResult);
+    renderTab({
+      excludedPaths: ["node_modules/**"],
+      copyTreeSettings: { maxContextSize: 5000, strategy: "modified" } as CopyTreeSettings,
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Test config" }));
+    });
+
+    expect(testConfigMock).toHaveBeenCalledWith("wt-1", {
+      exclude: ["node_modules/**"],
+      always: null,
+      maxTotalSize: 5000,
+      maxFileSize: null,
+      charLimit: null,
+      sort: "modified",
+    });
+  });
+
+  it("treats whitespace-only patterns as cleared, sending null instead of empty entries", async () => {
+    testConfigMock.mockResolvedValue(successResult);
+    renderTab({ excludedPaths: ["   ", ""] });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Test config" }));
+    });
+
+    const [, options] = testConfigMock.mock.calls[0];
+    expect(options.exclude).toBeNull();
+  });
+});
+
 describe("ContextTab — DOM anchors for settings deep-links", () => {
   it("exposes the project-excluded-paths anchor for settings deep-links", () => {
     const { container } = renderTab();

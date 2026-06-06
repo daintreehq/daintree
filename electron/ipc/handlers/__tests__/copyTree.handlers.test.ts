@@ -162,6 +162,71 @@ describe("copyTree handlers", () => {
       vi.useRealTimers();
     }
   });
+
+  describe("test-config merge integration", () => {
+    const projectSettingsFixture = {
+      excludedPaths: [],
+      copyTreeSettings: { maxContextSize: 9999, alwaysInclude: ["*.md"] },
+    };
+
+    function registerWithWorktreeService() {
+      const testConfig = vi.fn().mockResolvedValue({
+        includedFiles: 1,
+        includedSize: 1,
+        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
+      });
+      // Re-register so the channel resolves to a handler whose worktreeService
+      // is live; clear ipcMain.handle first so getInvokeHandler finds this one.
+      ipcMainMock.handle.mockClear();
+      registerCopyTreeHandlers({
+        mainWindow: {
+          isDestroyed: () => false,
+          webContents: { isDestroyed: () => false, send: vi.fn() },
+        },
+        ptyClient: { hasTerminal: vi.fn(() => false), write: vi.fn() },
+        worktreeService: {
+          getAllStatesAsync: vi.fn().mockResolvedValue([{ id: "wt-1", path: "/wt-1" }]),
+          testConfig,
+        },
+      } as never);
+      projectStoreMock.getCurrentProjectId.mockReturnValue("proj-1" as never);
+      projectStoreMock.getProjectSettings.mockResolvedValue(projectSettingsFixture as never);
+      return testConfig;
+    }
+
+    async function invokeTestConfig(options: unknown) {
+      const handler = getInvokeHandler(CHANNELS.COPYTREE_TEST_CONFIG);
+      vi.useFakeTimers();
+      try {
+        vi.advanceTimersByTime(11_000);
+        await handler(mockEvent, { worktreeId: "wt-1", options });
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+
+    it("does not back-fill saved settings over null-cleared fields", async () => {
+      const testConfig = registerWithWorktreeService();
+
+      await invokeTestConfig({ maxTotalSize: null, always: null });
+
+      const [, mergedOptions] = testConfig.mock.calls[0];
+      expect("maxTotalSize" in mergedOptions).toBe(false);
+      expect("always" in mergedOptions).toBe(false);
+    });
+
+    it("back-fills saved settings for absent fields", async () => {
+      const testConfig = registerWithWorktreeService();
+
+      await invokeTestConfig({});
+
+      const [, mergedOptions] = testConfig.mock.calls[0];
+      expect(mergedOptions.maxTotalSize).toBe(
+        projectSettingsFixture.copyTreeSettings.maxContextSize
+      );
+      expect(mergedOptions.always).toEqual(projectSettingsFixture.copyTreeSettings.alwaysInclude);
+    });
+  });
 });
 
 describe("mergeCopyTreeOptions", () => {
