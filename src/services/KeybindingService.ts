@@ -17,6 +17,7 @@ import { KEY_ACTION_VALUES } from "@shared/types/keymap";
 import { evaluate } from "@shared/utils/whenClause/evaluator";
 import { parse } from "@shared/utils/whenClause/parser";
 import type { WhenClauseContext } from "@shared/utils/whenClause/types";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export * from "./keybindingUtils";
 export * from "./defaultKeybindings";
@@ -87,13 +88,15 @@ class KeybindingService {
         this.notifyListeners();
       } catch (error) {
         // Mirrors useUserAgentRegistryStore.initialize() — non-fatal degradation.
-        // `this.bindings` retains DEFAULT_KEYBINDINGS (seeded in constructor) and
-        // `this.overrides` is left empty, so the user gets stock shortcuts. The
-        // caller (hydrate bootstrap, settings tabs, settings-changed IPC) keeps
-        // running instead of aborting the entire session restore.
-        const message = error instanceof Error ? error.message : String(error);
+        // `this.bindings` retains DEFAULT_KEYBINDINGS (seeded in constructor).
+        // On a fresh service, `this.overrides` is empty, so the user gets stock
+        // shortcuts. On a service that has loaded overrides before, the prior
+        // overrides persist as last-known-good — a failed reload does not
+        // silently clobber the user's customizations. The caller (hydrate
+        // bootstrap, settings tabs, settings-changed IPC) keeps running
+        // instead of aborting the entire session restore.
         console.warn(
-          `[KeybindingService] Failed to load keybinding overrides; using defaults: ${message}`
+          `[KeybindingService] Failed to load keybinding overrides; keeping prior state: ${formatErrorMessage(error, "Unknown keybinding override load failure")}`
         );
       }
     }

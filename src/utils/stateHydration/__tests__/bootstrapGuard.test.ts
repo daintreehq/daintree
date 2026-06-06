@@ -46,10 +46,12 @@ describe("ensureHydrationBootstrap", () => {
   });
 
   it("resolves and reuses the singleton when loadOverrides rejects (non-fatal degradation — issue #9931)", async () => {
-    // Mirror the production contract: the underlying IPC rejects, but
-    // loadOverrides() self-catches and resolves with defaults. Use
-    // mockImplementationOnce so the real promise rejection happens and is
-    // observed by the test before the public method returns.
+    // This is a unit test of bootstrap behavior given the post-fix contract
+    // that loadOverrides() self-catches IPC rejections. The boundary contract
+    // (production try/catch in loadOverrides) is covered in
+    // KeybindingService.test.ts. Use mockImplementationOnce so the real
+    // promise rejection happens and is observed before the public method
+    // returns — emulating the production self-catch shape.
     loadOverridesMock.mockImplementationOnce(() =>
       Promise.reject(new Error("boom")).catch(() => undefined)
     );
@@ -126,7 +128,8 @@ describe("ensureHydrationBootstrap", () => {
     });
 
     it("emits start + end for both spans when loadOverrides IPC rejects (non-fatal degradation — issue #9931)", async () => {
-      // Mirror production: IPC rejects, loadOverrides() self-catches and resolves.
+      // Mirror production: IPC rejects, loadOverrides() self-catches and
+      // resolves. The boundary contract is covered in KeybindingService.test.ts.
       loadOverridesMock.mockImplementationOnce(() =>
         Promise.reject(new Error("boom")).catch(() => undefined)
       );
