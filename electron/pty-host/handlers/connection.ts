@@ -1,6 +1,6 @@
 import type { MessagePort } from "node:worker_threads";
 import { SharedRingBuffer } from "../../../shared/utils/SharedRingBuffer.js";
-import { POOL_ENV_EMPTY_HASH } from "../../services/pty/ptyPoolEnvHash.js";
+import { POOL_ENV_EMPTY_HASH, computePoolEnvHash } from "../../services/pty/ptyPoolEnvHash.js";
 import { PortBatcher, type PortBatcherFailedBatch } from "../index.js";
 import type { HandlerMap, HostContext } from "./types.js";
 
@@ -192,6 +192,15 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
           Math.floor(pool.getMaxEntries() / pool.getMaxPoolSize()) - 1
         );
         const panelCwds = (msg.panelCwds ?? []).slice(0, maxPanelKeys);
+        // Compute the envHash here (not in Main) so the warm key is guaranteed
+        // to match the `acquireByKey` lookup at spawn time — the same
+        // `computePoolEnvHash` over the same merged env produces both (#9810).
+        // When `projectEnv` is null/empty, `computePoolEnvHash` collapses to
+        // POOL_ENV_EMPTY_HASH and the warm path is identical to the pre-#9810
+        // behaviour.
+        const projectEnvHash = computePoolEnvHash(msg.projectEnv ?? undefined);
+        const warmCallerEnv =
+          projectEnvHash === POOL_ENV_EMPTY_HASH ? undefined : (msg.projectEnv ?? undefined);
         pool
           .drainAndRefill(msg.projectPath)
           .then(() => {
@@ -202,7 +211,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
             // warmForKey is idempotent, per-key capacity-capped, and circuit-
             // broken, so stale/deleted worktree paths self-limit.
             for (const cwd of panelCwds) {
-              pool.warmForKey(cwd, undefined, POOL_ENV_EMPTY_HASH);
+              pool.warmForKey(cwd, warmCallerEnv, projectEnvHash);
             }
           })
           .catch((err) => {

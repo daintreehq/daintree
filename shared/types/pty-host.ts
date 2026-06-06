@@ -100,6 +100,15 @@ export type PtyHostRequest =
        * drain/refill so the first restored panel hits the pool (#9774).
        */
       panelCwds?: string[];
+      /**
+       * Merged project env (global + project settings) computed at the Main
+       * process, sent so the pty-host can warm non-empty envHash slots for
+       * plain PTY panels (#9810). `null` when neither global nor project env
+       * is present — the pty-host falls back to the env-empty warm path. The
+       * pty-host is the single owner of hash computation, which guarantees
+       * the warmed key matches the `acquireByKey` lookup at spawn time.
+       */
+      projectEnv?: Record<string, string> | null;
     }
   | {
       type: "project-switch";

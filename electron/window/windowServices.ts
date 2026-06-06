@@ -17,6 +17,8 @@ import { getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { extractRestorePanelCwds } from "./restorePanelCwds.js";
+import { mergeProjectEnv } from "./restoreProjectEnv.js";
+import { store } from "../store.js";
 import {
   isSmokeTest,
   smokeTestStart,
@@ -365,6 +367,12 @@ export async function setupWindowServices(
   // projectStore.initialize's in-memory list), so racing it against
   // initialize() is safe.
   let restorePanelCwds: string[] = [];
+  // Merged env (global + project) for the pty-host's non-empty envHash warm
+  // (#9810). Computed from the same store reads above; on any failure the warm
+  // path falls back to whatever global env we can read; if both reads fail
+  // the env-empty warm path runs. We read settings concurrently because the
+  // project state path already calls into the settings manager.
+  let restoreProjectEnv: Record<string, string> | null = null;
 
   try {
     const results = await Promise.allSettled([
@@ -373,6 +381,9 @@ export async function setupWindowServices(
       opts.initialProjectId
         ? projectStore.getProjectState(opts.initialProjectId)
         : Promise.resolve(null),
+      opts.initialProjectId
+        ? projectStore.getProjectSettings(opts.initialProjectId)
+        : Promise.resolve(null),
     ]);
 
     ptyReady = results[0].status === "fulfilled";
@@ -380,6 +391,13 @@ export async function setupWindowServices(
     if (results[2].status === "fulfilled") {
       restorePanelCwds = extractRestorePanelCwds(results[2].value);
     }
+    const globalEnv = store.get("globalEnvironmentVariables") as Record<string, string>;
+    const projectEnv =
+      results[3].status === "fulfilled"
+        ? ((results[3].value?.environmentVariables as Record<string, string> | undefined) ??
+          undefined)
+        : undefined;
+    restoreProjectEnv = mergeProjectEnv(globalEnv, projectEnv);
 
     if (ptyReady && workspaceReady && projectStoreReady) {
       console.log("[MAIN] All critical services ready");
@@ -421,7 +439,13 @@ export async function setupWindowServices(
     createAndDistributePorts(win, ctx);
 
     if (restoreProject) {
-      pty.setActiveProject(win.id, restoreProject.id, restoreProject.path, restorePanelCwds);
+      pty.setActiveProject(
+        win.id,
+        restoreProject.id,
+        restoreProject.path,
+        restorePanelCwds,
+        restoreProjectEnv
+      );
     } else {
       pty.setActiveProject(win.id, null);
     }
