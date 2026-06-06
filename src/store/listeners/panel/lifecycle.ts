@@ -432,6 +432,20 @@ export function setupLifecycleListeners(): DisposableStore {
           // data-loss-count, pending-bytes-gauge, throughput-rate) are
           // host-side telemetry sinks — observable via the host log
           // stream and ignored here.
+          //
+          // FUTURE_SAB: the `suspend` arm is the symmetric companion of the
+          // `suspended` `flowStatus` dropped in the onStatus boundary above.
+          // `suspendVisualStream` emits BOTH the `suspended` status and the
+          // `suspend` reliability metric (see `electron/pty-host/backpressure.ts:309+`).
+          // The flow-status half is now dropped at the listener boundary
+          // (#9900) but the metric half is still routed through
+          // `clearHeldDuration`. In production the SAB transport path is
+          // disabled so neither half can fire; the asymmetry is a forward-
+          // looking breadcrumb for the migration author. When the SAB
+          // transport is revived, EITHER drop the `suspend` metric arm
+          // alongside the `suspended` status, OR gate it on the same
+          // source/buffer the flow-status boundary uses, so the held-
+          // duration gauge and the pill stay in lockstep.
           if (payload.metricType === "pause-end" || payload.metricType === "suspend") {
             const terminal = usePanelStore.getState().panelsById[payload.terminalId];
             if (terminal && isPtyPanel(terminal)) {
