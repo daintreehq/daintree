@@ -104,7 +104,7 @@ export function RecipeRunnerGrid({
         onClick={onCreate}
         onFocus={() => setFocusedIndex(createIndex)}
         onKeyDown={handleOptionKeyDown(createIndex)}
-        tabIndex={focusedIndex === createIndex ? 0 : -1}
+        tabIndex={disabled || focusedIndex === createIndex ? 0 : -1}
         className="group col-span-full flex items-center justify-center gap-2 px-3 py-2 mt-1 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent aria-selected:ring-2 aria-selected:ring-daintree-accent/60"
       >
         <Plus

@@ -84,9 +84,8 @@ describe("RecipeRunnerGrid — roving tabindex", () => {
 });
 
 describe("RecipeRunnerGrid — focus-driven Enter runs the focused recipe", () => {
-  it("runs the focused recipe when Enter is pressed on its button, not index 0", () => {
+  it("does not call preventDefault on Enter so the button's native activation is preserved", () => {
     const onRun = vi.fn();
-    const onCreate = vi.fn();
     const recipes: TerminalRecipe[] = [
       makeRecipe({ id: "alpha", name: "Alpha" }),
       makeRecipe({ id: "beta", name: "Beta" }),
@@ -106,21 +105,65 @@ describe("RecipeRunnerGrid — focus-driven Enter runs the focused recipe", () =
           onPin={noop}
           onUnpin={noop}
           onDelete={noop}
-          onCreate={onCreate}
+          onCreate={noop}
         />
       );
     }
 
     render(<StatefulHarness />);
 
-    // Simulate the user Tab-focusing the third card (this is the bug scenario).
+    // The bug: an ancestor onKeyDown called e.preventDefault() on Enter and
+    // dispatched handleRun(flat[focusedIndex]). With the fix the per-option
+    // onKeyDown only intercepts navigation keys, so Enter falls through to
+    // the button's native click handler.
     const gamma = optionButton(recipes[2]!);
-    gamma.focus();
-    fireEvent.click(gamma);
-    expect(onRun).toHaveBeenCalledWith("gamma");
+    const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    gamma.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
   });
 
-  it("fires onCreate when the create option is clicked after focus moves there", () => {
+  it("runs the focused recipe when Enter activates its button, not index 0", () => {
+    const onRun = vi.fn();
+    const recipes: TerminalRecipe[] = [
+      makeRecipe({ id: "alpha", name: "Alpha" }),
+      makeRecipe({ id: "beta", name: "Beta" }),
+      makeRecipe({ id: "gamma", name: "Gamma" }),
+    ];
+
+    function StatefulHarness() {
+      const [focusedIndex, setFocusedIndex] = useState(2);
+      return (
+        <RecipeRunnerGrid
+          recipes={recipes}
+          focusedIndex={focusedIndex}
+          setFocusedIndex={setFocusedIndex}
+          onRun={onRun}
+          onEdit={noop}
+          onDuplicate={noop}
+          onPin={noop}
+          onUnpin={noop}
+          onDelete={noop}
+          onCreate={noop}
+        />
+      );
+    }
+
+    render(<StatefulHarness />);
+
+    // Browsers dispatch a click after Enter on a focused button; jsdom doesn't
+    // so we simulate both halves of that chain. The regression guard is
+    // that keyDown(Enter) does not preventDefault (asserted above) and the
+    // click still calls onRun with the focused recipe's id, not index 0.
+    const gamma = optionButton(recipes[2]!);
+    fireEvent.keyDown(gamma, { key: "Enter" });
+    fireEvent.click(gamma);
+
+    expect(onRun).toHaveBeenCalledWith("gamma");
+    expect(onRun).not.toHaveBeenCalledWith("alpha");
+  });
+
+  it("runs the create action when Enter is pressed on the focused create option", () => {
     const onCreate = vi.fn();
     const recipes: TerminalRecipe[] = [
       makeRecipe({ id: "alpha", name: "Alpha" }),
@@ -148,9 +191,38 @@ describe("RecipeRunnerGrid — focus-driven Enter runs the focused recipe", () =
     render(<StatefulHarness />);
 
     const create = screen.getByRole("option", { name: /Create new recipe/ });
-    create.focus();
+    fireEvent.keyDown(create, { key: "Enter" });
     fireEvent.click(create);
+
     expect(onCreate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("RecipeRunnerGrid — disabled entry point", () => {
+  it("keeps the create option tabbable when all recipes are disabled", () => {
+    const recipes: TerminalRecipe[] = [
+      makeRecipe({ id: "alpha", name: "Alpha" }),
+      makeRecipe({ id: "beta", name: "Beta" }),
+    ];
+
+    render(
+      <RecipeRunnerGrid
+        recipes={recipes}
+        focusedIndex={0}
+        setFocusedIndex={() => {}}
+        onRun={noop}
+        onEdit={noop}
+        onDuplicate={noop}
+        onPin={noop}
+        onUnpin={noop}
+        onDelete={noop}
+        onCreate={noop}
+        disabled
+      />
+    );
+
+    const create = screen.getByRole("option", { name: /Create new recipe/ });
+    expect(create.getAttribute("tabindex")).toBe("0");
   });
 });
 
