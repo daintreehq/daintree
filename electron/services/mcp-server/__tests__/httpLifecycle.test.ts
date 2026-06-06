@@ -489,6 +489,11 @@ describe("HttpLifecycle", () => {
       expect(deps.auditService.appendRecord).toHaveBeenCalledWith(
         expect.objectContaining({ turnId: "turn-uuid-abc", helpSessionId: "help-session-9" })
       );
+      // `capturedTurnId` is a transport-only carrier — it must be peeled off and
+      // never persist into the stored record (the public field is `turnId`).
+      const persisted = (deps.auditService.appendRecord as ReturnType<typeof vi.fn>).mock
+        .calls[0]?.[0];
+      expect(persisted.capturedTurnId).toBeUndefined();
     });
 
     it("omits turnId when the captured snapshot is null", () => {
