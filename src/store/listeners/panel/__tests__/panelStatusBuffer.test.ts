@@ -4,8 +4,10 @@ import { usePanelStore } from "@/store/panelStore";
 import type { PtyPanelData } from "@shared/types/panel";
 import {
   cancelPanelStatusBuffer,
+  clearHeldDuration,
   enqueueActivityUpdate,
   enqueueFlowStatusUpdate,
+  enqueueHeldDurationUpdate,
   flushPanelStatusBuffer,
 } from "@/store/panelStatusBuffer";
 
@@ -291,5 +293,72 @@ describe("panelStatusBuffer — lifecycle", () => {
     enqueueFlowStatusUpdate("term-1", "suspended", 100);
 
     expect(raf.callbacks).toHaveLength(1);
+  });
+});
+
+describe("panelStatusBuffer — held-duration batching", () => {
+  it("applies per-terminal held duration patches on flush", () => {
+    seedPanel("term-1");
+    enqueueHeldDurationUpdate("term-1", 4000);
+    raf.flushAll();
+    expect(getPtyPanel("term-1")?.heldDurationMs).toBe(4000);
+  });
+
+  it("last-write-wins within a frame for the same terminal", () => {
+    seedPanel("term-1");
+    enqueueHeldDurationUpdate("term-1", 1000);
+    enqueueHeldDurationUpdate("term-1", 2000);
+    raf.flushAll();
+    expect(getPtyPanel("term-1")?.heldDurationMs).toBe(2000);
+  });
+
+  it("clearHeldDuration sets heldDurationMs to undefined", () => {
+    seedPanel("term-1", { heldDurationMs: 5000 });
+    clearHeldDuration("term-1");
+    raf.flushAll();
+    expect(getPtyPanel("term-1")?.heldDurationMs).toBeUndefined();
+  });
+
+  it("non-null patch does not clobber a pending null for the same terminal", () => {
+    // A fresh tick reporting the terminal is no longer paused (null)
+    // must win over a stale non-null entry from a previous tick.
+    seedPanel("term-1", { heldDurationMs: 8000 });
+    clearHeldDuration("term-1");
+    enqueueHeldDurationUpdate("term-1", 12000);
+    raf.flushAll();
+    expect(getPtyPanel("term-1")?.heldDurationMs).toBeUndefined();
+  });
+
+  it("clearHeldDuration is a no-op when a null is already buffered", () => {
+    seedPanel("term-1", { heldDurationMs: 5000 });
+    clearHeldDuration("term-1");
+    clearHeldDuration("term-1");
+    enqueueHeldDurationUpdate("term-1", 9999);
+    raf.flushAll();
+    // Second null is a fast-path no-op; the subsequent non-null must
+    // be ignored (null wins). Final value is undefined.
+    expect(getPtyPanel("term-1")?.heldDurationMs).toBeUndefined();
+  });
+
+  it("combines with activity + flow-status in a single flush", () => {
+    seedPanel("term-1", { isVisible: true });
+    enqueueActivityUpdate("term-1", "Working", "working", "interactive", 100, "cmd");
+    enqueueFlowStatusUpdate("term-1", "paused-backpressure", 100);
+    enqueueHeldDurationUpdate("term-1", 6000);
+    const setSpy = vi.spyOn(usePanelStore, "setState");
+    raf.flushAll();
+    expect(setSpy).toHaveBeenCalledTimes(1);
+    const t = getPtyPanel("term-1");
+    expect(t?.activityHeadline).toBe("Working");
+    expect(t?.flowStatus).toBe("paused-backpressure");
+    expect(t?.heldDurationMs).toBe(6000);
+  });
+
+  it("flush is a no-op when only held-duration buffer is empty", () => {
+    seedPanel("term-1");
+    const setSpy = vi.spyOn(usePanelStore, "setState");
+    // Force a "tick" by enqueuing an empty flush — no buffers populated.
+    flushPanelStatusBuffer();
+    expect(setSpy).not.toHaveBeenCalled();
   });
 });

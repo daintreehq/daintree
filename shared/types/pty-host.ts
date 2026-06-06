@@ -547,7 +547,10 @@ export interface TerminalReliabilityMetricPayload {
     | "pending-byte-cap-hit"
     | "pending-bytes-gauge"
     | "throughput-rate"
-    | "tier-transition";
+    | "tier-transition"
+    | "pause-duration-gauge"
+    | "queue-depth-gauge"
+    | "data-loss-count";
   timestamp: number;
   durationMs?: number;
   bufferUtilization?: number;
@@ -571,6 +574,33 @@ export interface TerminalReliabilityMetricPayload {
   tierTransitionReason?: string;
   /** Snapshot of pause-coordinator holds at transition time (sorted, possibly empty). */
   tierTransitionHeldTokens?: string[];
+  /**
+   * Used by `pause-duration-gauge`: per-paused-terminal held duration sampled
+   * at the metric tick. Field name `heldDurationMs` distinguishes the gauge
+   * (a point-in-time state) from `durationMs` on `pause-end` (a span resolved
+   * at resume).
+   */
+  perTerminalHeld?: Array<{ terminalId: string; heldDurationMs: number }>;
+  /**
+   * Used by `queue-depth-gauge`: per-terminal queue depth for the live IPC
+   * and per-window MessagePort paths. Excludes the FUTURE_SAB path
+   * (dead in production) so the dead-code and live paths stay independently
+   * observable. The `layer` discriminator lets consumers split per-path
+   * attribution in one pass.
+   */
+  perTerminalQueueDepth?: Array<{
+    terminalId: string;
+    layer: "ipc" | "port";
+    pendingBytes: number;
+  }>;
+  /**
+   * Used by `data-loss-count`: number of bytes dropped since the last tick.
+   * Always paired with `dataLossCountDelta` (one or more chunks may be
+   * dropped per drop event).
+   */
+  droppedBytesDelta?: number;
+  /** Used by `data-loss-count`: number of drop events since the last tick. */
+  dataLossCountDelta?: number;
 }
 
 /**

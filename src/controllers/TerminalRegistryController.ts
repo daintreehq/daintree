@@ -25,6 +25,7 @@ import type {
   TerminalStatusPayload,
   SpawnResult,
 } from "@shared/types";
+import type { TerminalReliabilityMetricPayload } from "@shared/types/pty-host";
 import { getAgentConfig } from "@/config/agents";
 import { getTerminalAppearanceSnapshot } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
@@ -302,6 +303,10 @@ class TerminalRegistryController {
 
   onStatus(handler: (data: TerminalStatusPayload) => void) {
     return terminalClient.onStatus(handler);
+  }
+
+  onReliabilityMetric(handler: (data: TerminalReliabilityMetricPayload) => void) {
+    return terminalClient.onReliabilityMetric(handler);
   }
 
   onBackendCrashed(

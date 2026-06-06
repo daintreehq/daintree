@@ -140,6 +140,7 @@ import type {
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
   FdLeakWarningPayload,
+  TerminalReliabilityMetricPayload,
 } from "../pty-host.js";
 import type {
   FileSearchPayload,
@@ -266,6 +267,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onRestored(callback: (data: { id: string }) => void): () => void;
     forceResume(id: string): Promise<void>;
     onStatus(callback: (data: TerminalStatusPayload) => void): () => void;
+    onReliabilityMetric(callback: (data: TerminalReliabilityMetricPayload) => void): () => void;
     onResourceMetrics(
       callback: (data: { metrics: TerminalResourceBatchPayload; timestamp: number }) => void
     ): () => void;

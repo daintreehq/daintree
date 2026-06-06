@@ -25,6 +25,16 @@ vi.mock("@/utils/logger", () => ({
 }));
 
 const restoredHandlers = vi.hoisted(() => [] as Array<(data: { id: string }) => void>);
+const reliabilityMetricHandlers = vi.hoisted(
+  () =>
+    [] as Array<
+      (payload: {
+        metricType: string;
+        terminalId?: string;
+        perTerminalHeld?: Array<{ terminalId: string; heldDurationMs: number }>;
+      }) => void
+    >
+);
 vi.mock("@/controllers", () => {
   const noopSub = () => () => {};
   return {
@@ -37,6 +47,18 @@ vi.mock("@/controllers", () => {
       }),
       onExit: vi.fn(noopSub),
       onStatus: vi.fn(noopSub),
+      onReliabilityMetric: vi.fn(
+        (
+          handler: (payload: {
+            metricType: string;
+            terminalId?: string;
+            perTerminalHeld?: Array<{ terminalId: string; heldDurationMs: number }>;
+          }) => void
+        ) => {
+          reliabilityMetricHandlers.push(handler);
+          return () => {};
+        }
+      ),
       onSpawnResult: vi.fn(noopSub),
       onReduceScrollback: vi.fn(noopSub),
       onRestoreScrollback: vi.fn(noopSub),
@@ -46,6 +68,14 @@ vi.mock("@/controllers", () => {
 
 import { handleFallbackTriggered, setupLifecycleListeners } from "../lifecycle";
 import { notify } from "@/lib/notify";
+import { flushPanelStatusBuffer } from "@/store/panelStatusBuffer";
+import { isPtyPanel } from "@shared/types/panel";
+
+function getPtyHeldDuration(id: string): number | undefined {
+  const panel = usePanelStore.getState().panelsById[id];
+  if (!panel || !isPtyPanel(panel)) return undefined;
+  return panel.heldDurationMs;
+}
 
 const actionMatcher = {
   label: "Open agent settings",
@@ -330,5 +360,106 @@ describe("onRestored — dock popover preservation (#8368)", () => {
 
     expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
     expect(usePanelStore.getState().focusedId).toBe("term-1");
+  });
+});
+
+describe("onReliabilityMetric — pause-duration-gauge routing", () => {
+  function getReliabilityHandler(): (payload: {
+    metricType: string;
+    terminalId?: string;
+    perTerminalHeld?: Array<{ terminalId: string; heldDurationMs: number }>;
+  }) => void {
+    reliabilityMetricHandlers.length = 0;
+    setupLifecycleListeners();
+    const handler = reliabilityMetricHandlers.at(-1);
+    if (!handler) throw new Error("onReliabilityMetric handler was not registered");
+    return handler;
+  }
+
+  it("routes perTerminalHeld entries to heldDurationMs on matching PTY panels", () => {
+    setupPanel();
+    const handler = getReliabilityHandler();
+
+    handler({
+      metricType: "pause-duration-gauge",
+      perTerminalHeld: [{ terminalId: "term-1", heldDurationMs: 4500 }],
+    });
+
+    // Flush the RAF-coalesced buffer.
+    flushPanelStatusBuffer();
+
+    expect(getPtyHeldDuration("term-1")).toBe(4500);
+  });
+
+  it("clears heldDurationMs for terminals on a pause-end (resumed)", () => {
+    setupPanel({ heldDurationMs: 5000 });
+    const handler = getReliabilityHandler();
+
+    handler({ metricType: "pause-end", terminalId: "term-1" });
+    flushPanelStatusBuffer();
+
+    expect(getPtyHeldDuration("term-1")).toBeUndefined();
+  });
+
+  it("clears heldDurationMs for terminals on a suspend (dropped-don't-block)", () => {
+    setupPanel({ heldDurationMs: 9000 });
+    const handler = getReliabilityHandler();
+
+    handler({ metricType: "suspend", terminalId: "term-1" });
+    flushPanelStatusBuffer();
+
+    expect(getPtyHeldDuration("term-1")).toBeUndefined();
+  });
+
+  it("ignores non-pause-duration-gauge metric types", () => {
+    setupPanel();
+    const handler = getReliabilityHandler();
+
+    handler({ metricType: "queue-depth-gauge" });
+    handler({ metricType: "data-loss-count" });
+    handler({ metricType: "throughput-rate" });
+    flushPanelStatusBuffer();
+
+    expect(getPtyHeldDuration("term-1")).toBeUndefined();
+  });
+
+  it("ignores pause-duration-gauge entries for terminals that don't exist as panels", () => {
+    setupPanel();
+    const handler = getReliabilityHandler();
+
+    handler({
+      metricType: "pause-duration-gauge",
+      perTerminalHeld: [{ terminalId: "ghost-terminal", heldDurationMs: 9999 }],
+    });
+    flushPanelStatusBuffer();
+
+    expect(getPtyHeldDuration("term-1")).toBeUndefined();
+    expect(usePanelStore.getState().panelsById["ghost-terminal"]).toBeUndefined();
+  });
+
+  it("pause-end clears a buffered (but unflushed) heldDurationMs patch", () => {
+    // Locks in the cross-frame race fix: a `pause-duration-gauge`
+    // patch enqueues a value into the RAF buffer; a `pause-end` arrives
+    // before the RAF flushes; the committed (post-flush) value is still
+    // `undefined` so an old guard would skip the clear. With the guard
+    // removed, the buffer's null-wins semantics correctly clear the
+    // buffered non-null patch before flush.
+    setupPanel();
+    const handler = getReliabilityHandler();
+
+    // Frame 1: gauge arrives, enqueues non-null into buffer (no flush).
+    handler({
+      metricType: "pause-duration-gauge",
+      perTerminalHeld: [{ terminalId: "term-1", heldDurationMs: 2000 }],
+    });
+    // Do NOT flush — simulate the in-flight RAF.
+
+    // Frame 1 continued: pause-end arrives synchronously, enqueues null.
+    handler({ metricType: "pause-end", terminalId: "term-1" });
+
+    // Now flush — the null-wins behavior must clobber the buffered 2000.
+    flushPanelStatusBuffer();
+
+    expect(getPtyHeldDuration("term-1")).toBeUndefined();
   });
 });

@@ -158,6 +158,7 @@ export function TerminalHeaderContent({
     stateChangeConfidence,
     sessionCost,
     sessionTokens,
+    heldDurationMs,
   } = usePanelStore(
     useShallow((state) => {
       const t = state.panelsById[id];
@@ -170,6 +171,7 @@ export function TerminalHeaderContent({
         stateChangeConfidence: pty?.stateChangeConfidence,
         sessionCost: pty?.sessionCost,
         sessionTokens: pty?.sessionTokens,
+        heldDurationMs: pty?.heldDurationMs,
       };
     })
   );
@@ -366,6 +368,11 @@ export function TerminalHeaderContent({
             <div className="flex flex-col gap-0.5">
               <span className="font-medium">Buffer overflow</span>
               <span>Output paused to prevent data loss.</span>
+              {heldDurationMs != null && heldDurationMs > 0 && (
+                <span className="text-daintree-text/60 tabular-nums">
+                  Paused for {formatElapsedDuration(heldDurationMs)}
+                </span>
+              )}
             </div>
           </TooltipContent>
         </Tooltip>
@@ -389,6 +396,11 @@ export function TerminalHeaderContent({
             <div className="flex flex-col gap-0.5">
               <span className="font-medium">System memory pressure</span>
               <span>Paused to reduce memory pressure. Recovers automatically.</span>
+              {/* Held-duration gauge intentionally omitted: ResourceGovernor
+                  pauses via the coordinator but does not emit `pause-start`
+                  / `pause-end` reliability metrics, so the
+                  `pause-duration-gauge` funnel never tracks it. Showing
+                  a frozen "Paused for Xs" line would be a lie. */}
             </div>
           </TooltipContent>
         </Tooltip>
@@ -412,6 +424,11 @@ export function TerminalHeaderContent({
             <div className="flex flex-col gap-0.5">
               <span className="font-medium">Output suspended</span>
               <span>Streaming stalled. Recovers automatically on focus.</span>
+              {heldDurationMs != null && heldDurationMs > 0 && (
+                <span className="text-daintree-text/60 tabular-nums">
+                  Paused for {formatElapsedDuration(heldDurationMs)}
+                </span>
+              )}
             </div>
           </TooltipContent>
         </Tooltip>

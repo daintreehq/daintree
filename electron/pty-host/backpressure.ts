@@ -41,6 +41,14 @@ export interface BackpressureDeps {
   getPauseCoordinator: (id: string) => PtyPauseCoordinator | undefined;
   sendEvent: (event: PtyHostEvent) => void;
   metricsEnabled: () => boolean;
+  /**
+   * Optional override for the canonical reliability-metric funnel. When
+   * supplied, internal `pause-start` / `pause-end` / `suspend` emissions
+   * route through this dep (so the host can update its per-source
+   * pause-tracking map before the wire event fires). When omitted, the
+   * internal default just sends the wire event (legacy behavior).
+   */
+  emitReliabilityMetric?: (payload: TerminalReliabilityMetricPayload, forceEmit?: boolean) => void;
 }
 
 export class BackpressureManager {
@@ -239,6 +247,15 @@ export class BackpressureManager {
   }
 
   emitReliabilityMetric(payload: TerminalReliabilityMetricPayload, forceEmit = false): void {
+    if (this.deps.emitReliabilityMetric) {
+      // Route through the host-supplied funnel so per-source pause
+      // tracking (held-duration map) stays in sync with wire emissions.
+      this.deps.emitReliabilityMetric(payload, forceEmit);
+      return;
+    }
+    // Legacy default: just emit the wire event. The funnel dep is the
+    // canonical path; this branch is kept only for tests/embedders that
+    // construct BackpressureManager without supplying one.
     if (!forceEmit && !this.deps.metricsEnabled()) return;
     this.deps.sendEvent({
       type: "terminal-reliability-metric",

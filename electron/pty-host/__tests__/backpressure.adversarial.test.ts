@@ -361,4 +361,135 @@ describe("BackpressureManager adversarial", () => {
   it.todo(
     "safety-timeout force-resume behavior is orchestrated in electron/pty-host.ts rather than BackpressureManager"
   );
+
+  describe("emitReliabilityMetric dep funnel", () => {
+    // When the host wires `emitReliabilityMetric` as a dep, every
+    // internal reliability-metric emission must route through it
+    // (so the closure-scoped pause-tracking map in pty-host.ts can
+    // observe pause-start / pause-end / suspend). Without the dep,
+    // the manager falls back to the legacy inline wire emission.
+    it("routes internal emissions through the dep when provided", () => {
+      const dep = vi.fn();
+      const backpressure = new BackpressureManager({
+        getTerminal: vi.fn(),
+        getPauseCoordinator: (id) =>
+          coordinators.get(id) as unknown as PtyPauseCoordinator | undefined,
+        sendEvent,
+        metricsEnabled: () => true,
+        emitReliabilityMetric: dep,
+      });
+
+      backpressure.emitReliabilityMetric({
+        terminalId: "term-1",
+        metricType: "pause-start",
+        timestamp: 1000,
+      });
+
+      expect(dep).toHaveBeenCalledWith(
+        expect.objectContaining({ metricType: "pause-start", terminalId: "term-1" }),
+        false
+      );
+      // sendEvent must NOT be called when the dep is provided — the
+      // dep owns the wire emission.
+      expect(sendEvent).not.toHaveBeenCalled();
+    });
+
+    it("suspendVisualStream's internal suspend emission routes through the dep", () => {
+      const dep = vi.fn();
+      const backpressure = new BackpressureManager({
+        getTerminal: vi.fn(),
+        getPauseCoordinator: (id) =>
+          coordinators.get(id) as unknown as PtyPauseCoordinator | undefined,
+        sendEvent,
+        metricsEnabled: () => true,
+        emitReliabilityMetric: dep,
+      });
+
+      backpressure.suspendVisualStream("term-1", "stall", 85.0, 500, 1);
+
+      // The internal `suspend` emission from suspendVisualStream must
+      // also route through the dep (with forceEmit=true so the data-loss
+      // pulse still fires when metrics are off).
+      const suspendCalls = dep.mock.calls.filter(
+        (c) => (c[0] as { metricType: string }).metricType === "suspend"
+      );
+      expect(suspendCalls).toHaveLength(1);
+      expect(suspendCalls[0][1]).toBe(true);
+    });
+
+    it("falls back to inline wire emission when no dep is provided (legacy behavior)", () => {
+      const backpressure = new BackpressureManager({
+        getTerminal: vi.fn(),
+        getPauseCoordinator: (id) =>
+          coordinators.get(id) as unknown as PtyPauseCoordinator | undefined,
+        sendEvent,
+        metricsEnabled: () => true,
+      });
+
+      backpressure.emitReliabilityMetric({
+        terminalId: "term-1",
+        metricType: "pause-start",
+        timestamp: 1000,
+      });
+
+      expect(sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "terminal-reliability-metric",
+          payload: expect.objectContaining({ metricType: "pause-start" }),
+        })
+      );
+    });
+
+    it("does not recurse when the dep funnel re-enters the manager (prod wiring shape)", () => {
+      // Production wiring: the host constructs the manager with an
+      // `emitReliabilityMetric` dep pointing at the host funnel
+      // (`emitReliabilityMetricWithTracking`). That funnel MUST terminate the
+      // chain by emitting the wire event itself — if it instead called back
+      // into `manager.emitReliabilityMetric`, the manager would forward to the
+      // dep again and recurse until the stack overflows. This pins the
+      // invariant: a funnel-shaped dep that does its tracking and then sends
+      // directly yields exactly one wire emission, with the manager's
+      // dep-forwarding path entered exactly once (no loop).
+      const trackingCalls: Array<{ metricType: string; forceEmit: boolean }> = [];
+
+      // Matches the fixed `emitReliabilityMetricWithTracking`: it does its
+      // pause-source bookkeeping (elided here) and then TERMINATES by emitting
+      // the wire event directly. It does NOT re-enter the manager.
+      const funnel = vi.fn((payload: { metricType: string }, forceEmit: boolean) => {
+        trackingCalls.push({ metricType: payload.metricType, forceEmit });
+        sendEvent({ type: "terminal-reliability-metric", payload });
+      });
+
+      const manager = new BackpressureManager({
+        getTerminal: vi.fn(),
+        getPauseCoordinator: (id) =>
+          coordinators.get(id) as unknown as PtyPauseCoordinator | undefined,
+        sendEvent,
+        metricsEnabled: () => true,
+        emitReliabilityMetric: (payload, forceEmit = false) =>
+          funnel(payload as { metricType: string }, forceEmit),
+      });
+
+      expect(() =>
+        manager.emitReliabilityMetric({
+          terminalId: "term-1",
+          metricType: "pause-start",
+          timestamp: 1000,
+        })
+      ).not.toThrow();
+
+      // The funnel (dep) is invoked exactly once — one originating emit, no
+      // recursive re-entry.
+      expect(funnel).toHaveBeenCalledTimes(1);
+      expect(trackingCalls).toEqual([{ metricType: "pause-start", forceEmit: false }]);
+      // Exactly one wire emission reaches the transport.
+      expect(sendEvent).toHaveBeenCalledTimes(1);
+      expect(sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "terminal-reliability-metric",
+          payload: expect.objectContaining({ metricType: "pause-start", terminalId: "term-1" }),
+        })
+      );
+    });
+  });
 });
