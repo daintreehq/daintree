@@ -14,6 +14,7 @@ import latin400Woff2Url from "@fontsource/jetbrains-mono/files/jetbrains-mono-la
 import "@fontsource/jetbrains-mono/latin-700.css";
 import "./index.css";
 import { applyDefaultAppTheme } from "./theme/applyAppTheme";
+import { ensureLatin400Preload } from "./lib/fontPreload";
 // Importing this module has the side effect of starting the font load (via
 // the eagerly-initialised `terminalFontReady` singleton). Terminals open
 // immediately against whatever font is resolved; if JetBrains Mono arrives
@@ -43,16 +44,6 @@ void getSafeBootPromise();
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupOrchestrator: (() => void) | undefined;
-
-function ensureLatin400Preload(href: string) {
-  if (document.head.querySelector(`link[rel="preload"][href="${href}"]`)) return;
-  const link = document.createElement("link");
-  link.rel = "preload";
-  link.as = "font";
-  link.type = "font/woff2";
-  link.href = href;
-  document.head.appendChild(link);
-}
 
 ensureLatin400Preload(latin400Woff2Url);
 
@@ -120,7 +111,7 @@ bootstrap().catch((error: unknown) => {
       error instanceof Error
         ? { name: error.name, message: error.message, stack: error.stack }
         : { message: String(error) };
-    window.electron?.logs?.write("error", `Bootstrap failed: ${JSON.stringify(errObj)}`);
+    void window.electron?.logs?.write("error", `Bootstrap failed: ${JSON.stringify(errObj)}`);
   } catch {
     // IPC may not be available
   }

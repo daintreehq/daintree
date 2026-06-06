@@ -131,6 +131,11 @@ vi.mock("../skeletonCss.js", () => ({
   resolveInitialCanvasBackgroundColor: vi.fn(() => "#1f1b16"),
 }));
 
+vi.mock("../../setup/environment.js", () => ({
+  isDemoMode: false,
+  isSmokeTest: false,
+}));
+
 vi.mock("../../services/ProjectStore.js", () => ({
   projectStore: { getProjectById: vi.fn(() => null) },
 }));

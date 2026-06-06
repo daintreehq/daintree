@@ -84,6 +84,11 @@ vi.mock("../../setup/protocols.js", () => ({
   getDistPath: vi.fn(() => "/dist"),
 }));
 
+vi.mock("../../setup/environment.js", () => ({
+  isDemoMode: false,
+  isSmokeTest: false,
+}));
+
 vi.mock("../../../shared/config/devServer.js", () => ({
   getDevServerUrl: vi.fn(() => "http://localhost:5173"),
 }));
