@@ -14,6 +14,7 @@ import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
+import { removeArtifactsForTerminal } from "@/hooks/useArtifacts";
 import {
   setPanelStoreAccessor,
   setPanelStoreClearForSwitchAccessor,
@@ -203,6 +204,11 @@ export function initStoreOrchestrator(): () => void {
             useVoiceRecordingStore.getState().clearLockedTarget(removedId);
             unregisterInputController(removedId);
             semanticAnalysisService.unregisterTerminal(removedId);
+            // Drop the renderer-side artifact store entry so content strings
+            // don't pin the dead panel's heap for the rest of the renderer
+            // lifetime (#10023). The hook listener Set is owned by each
+            // mounted `useArtifacts` consumer's own `useEffect` cleanup.
+            removeArtifactsForTerminal(removedId);
 
             const removed = prevById[removedId];
             if (removed?.worktreeId) {

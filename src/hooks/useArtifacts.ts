@@ -20,6 +20,58 @@ function notifyListeners(terminalId: string, artifacts: Artifact[]) {
   listeners.forEach((listener) => listener(terminalId, artifacts));
 }
 
+/**
+ * Drop the per-terminal entry from the module-level artifact store and notify
+ * any still-mounted listeners with an empty array. Called from the
+ * `panelIds` subscriber in `rendererStoreOrchestrator.ts` so force-removed
+ * panels (browser/dev-preview, or worktree teardown shrinking `panelIds`
+ * without a PTY exit) do not leak their content strings for the lifetime of
+ * the renderer. Safe to call for unknown ids (`Map.delete` is a no-op) and
+ * safe to call twice. Mirrors the shape of `unregisterInputController` and
+ * `useResourceMonitoringStore.removePanel` so the orchestrator's teardown
+ * loop remains the single convergence point.
+ */
+export function removeArtifactsForTerminal(terminalId: string): void {
+  artifactStore.delete(terminalId);
+  notifyListeners(terminalId, []);
+}
+
+/** Reset all module-level state. Only for test isolation. */
+export function __test_resetArtifactStore(): void {
+  artifactStore.clear();
+  listeners.clear();
+  refState.count = 0;
+  if (refState.unsubscribe) {
+    refState.unsubscribe();
+    refState.unsubscribe = null;
+  }
+}
+
+/** Test-only: seed the module-level store for a terminal id. */
+export function __test_seedArtifactStore(terminalId: string, items: Artifact[]): void {
+  artifactStore.set(terminalId, [...items]);
+}
+
+/** Test-only: current size of the module-level store. */
+export function __test_getArtifactStoreSize(): number {
+  return artifactStore.size;
+}
+
+/** Test-only: peek the seeded entry for a terminal id. */
+export function __test_getArtifactsFor(terminalId: string): Artifact[] | undefined {
+  return artifactStore.get(terminalId);
+}
+
+/** Test-only: subscribe a listener to the artifact store. Returns unsubscribe. */
+export function __test_subscribeArtifactStore(
+  listener: (terminalId: string, artifacts: Artifact[]) => void
+): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
 interface BulkProgress {
   action: "copy" | "save" | "apply";
   current: number;
@@ -222,9 +274,8 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
   );
 
   const clearArtifacts = useCallback(() => {
-    artifactStore.delete(terminalId);
+    removeArtifactsForTerminal(terminalId);
     setArtifacts([]);
-    notifyListeners(terminalId, []);
   }, [terminalId]);
 
   const canApplyPatch = useCallback(
