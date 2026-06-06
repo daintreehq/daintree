@@ -171,6 +171,31 @@ describe("buildCrashReportUrl", () => {
     expect(body).toContain("USER");
   });
 
+  it("redacts WSL UNC user paths", () => {
+    const result = buildCrashReportUrl(
+      baseEntry({ errorMessage: "ENOENT at \\\\wsl$\\Ubuntu\\home\\alice\\file.ts" })
+    );
+    const body = decodeBody(result.url);
+    expect(body).not.toContain("alice");
+    expect(body).toContain("Ubuntu");
+  });
+
+  it("redacts non-C-drive Windows paths inside action args", () => {
+    const result = buildCrashReportUrl(
+      baseEntry({ recentActions: [action({ args: { cwd: "D:\\Users\\Carol\\repo" } })] })
+    );
+    const body = decodeBody(result.url);
+    expect(body).not.toContain("Carol");
+    expect(body).toContain("USER");
+  });
+
+  it("redacts non-C-drive Windows paths in the error stack", () => {
+    const result = buildCrashReportUrl(
+      baseEntry({ errorStack: "at run (D:\\Users\\carol\\app\\file.ts:1:1)" })
+    );
+    expect(decodeBody(result.url)).not.toContain("carol");
+  });
+
   it("middle-truncates a long stack before falling back to the clipboard", () => {
     // 200 frames push the full body well past the URL budget, but the 15-head +
     // 5-tail truncation brings it back under, so this hits stage 3 (not the stub).
