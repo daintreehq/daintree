@@ -372,6 +372,32 @@ jobs:
           }
           Write-Host "Found NSIS installer: $($installers[0].Name) ($([math]::Round($installers[0].Length / 1MB, 1)) MB)"
 
+      - name: Smoke test (packaged Windows arm64)
+        shell: pwsh
+        timeout-minutes: 12
+        env:
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          SMOKE_TIMEOUT_MS: "210000"
+          SMOKE_RETRIES: "1"
+        run: |
+          $setup = Get-ChildItem -Path 'release\*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $setup) { Write-Error "No NSIS .exe found in release/"; exit 1 }
+          $extractDir = Join-Path $env:RUNNER_TEMP "daintree-packaged-smoke"
+          Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+          # 7-Zip extraction (preinstalled on windows-11-arm) is faster than an
+          # NSIS silent install and avoids registry/shortcut side effects.
+          7z x $setup.FullName -o"$extractDir" -y | Out-Null
+          $nested = Get-ChildItem -Path $extractDir -Filter 'app-arm64.7z' -Recurse | Select-Object -First 1
+          if ($nested) {
+            7z x $nested.FullName -o"$extractDir\app" -y | Out-Null
+          }
+          $binary = Get-ChildItem -Path $extractDir -Filter 'Daintree.exe' -Recurse | Select-Object -First 1
+          if (-not $binary) { Write-Error "Daintree.exe not found after extracting installer"; exit 1 }
+          $env:PACKAGED_BINARY = $binary.FullName
+          node scripts/run-packaged-smoke.mjs
+
       - name: Upload build artifacts (arm64)
         uses: actions/upload-artifact@v7
         with:
