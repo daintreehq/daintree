@@ -56,10 +56,7 @@ export function delay(ms: number): Promise<void> {
 // instead of blocking for the full 30-60s backoff. Resolves — never rejects —
 // on cancel, matching the `runIdRef.current !== currentRunId` guard pattern the
 // callers re-check after the await returns (see #10128).
-export async function cancellableDelay(
-  ms: number,
-  isCancelled: () => boolean
-): Promise<void> {
+export async function cancellableDelay(ms: number, isCancelled: () => boolean): Promise<void> {
   const end = performance.now() + ms;
   let remaining = end - performance.now();
   while (remaining > 0) {
