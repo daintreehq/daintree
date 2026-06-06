@@ -161,6 +161,12 @@ export function flushPanelStatusBuffer(): void {
         const terminal = nextById[id];
         if (!terminal || !isPtyPanel(terminal)) continue;
 
+        // A late flow event for a terminal that has already exited must not
+        // revive the "paused" pill. `deriveRuntimeStatus` already pins
+        // runtimeStatus at "exited", but flowStatus drives the header pill
+        // directly, so guard the write here too (#9899).
+        if (terminal.runtimeStatus === "exited") continue;
+
         const prevTs = terminal.flowStatusTimestamp;
         if (prevTs !== undefined && patch.timestamp < prevTs) continue;
 
@@ -216,4 +222,18 @@ export function cancelPanelStatusBuffer(): void {
   activityBuffer.clear();
   flowStatusBuffer.clear();
   heldDurationBuffer.clear();
+}
+
+/**
+ * Drop a single terminal's pending flow-status and held-duration patches
+ * without touching the shared RAF or other terminals' buffers. Called when a
+ * terminal exits: a flow-status patch enqueued earlier in the same frame would
+ * otherwise survive the flush and resurrect a stale "paused" state on the
+ * just-exited panel — the fold's timestamp guard can't catch it because exit
+ * clears `flowStatusTimestamp` to `undefined`, defeating the `< prevTs` check.
+ * Activity patches are left intact; they don't drive the paused pill.
+ */
+export function cancelTerminalFlowState(terminalId: string): void {
+  flowStatusBuffer.delete(terminalId);
+  heldDurationBuffer.delete(terminalId);
 }
