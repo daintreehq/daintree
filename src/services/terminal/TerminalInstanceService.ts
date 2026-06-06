@@ -45,6 +45,8 @@ import { usePanelStore } from "@/store/panelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { yieldToScheduler } from "@/lib/schedulerYield";
 import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
+import { PERF_MARKS } from "@shared/perf/marks";
+import { markRendererPerformance } from "@/utils/performance";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
 
 export { isNonKeyboardInput } from "./inputUtils";
@@ -165,8 +167,10 @@ class TerminalInstanceService {
       clearResizeJob: (managed) => this.resizeController.clearResizeJob(managed),
       clearSettledTimer: (id) => this.resizeController.clearSettledTimer(id),
       applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
-      openLink: (url, id, event) => this.linkHandler.openLink(url, id, event),
-      getCwdProvider: (id) => this.cwdProviders.get(id),
+      ensureDeferredAddons: (id) => {
+        const managed = this.instances.get(id);
+        if (managed) this.ensureDeferredAddons(id, managed);
+      },
       onHibernationChanged: (id) => this.notifyHibernationListeners(id),
       getIsBackgrounded: (id) => usePanelStore.getState().backgroundedTerminals.has(id),
       ...this.makeListenerInstallDeps(),
@@ -255,50 +259,7 @@ class TerminalInstanceService {
           managed.lastScrollbackReduceAt = undefined;
           restoreScrollback(managed);
 
-          if (!managed.imageAddon) {
-            try {
-              managed.imageAddon = createImageAddon(managed.terminal);
-            } catch (err) {
-              logWarn("Failed to recreate ImageAddon", { id, error: err });
-            }
-          }
-          if (!managed.fileLinksDisposable) {
-            try {
-              managed.fileLinksDisposable = createFileLinksAddon(
-                managed.terminal,
-                () => (this.cwdProviders.get(id) ?? (() => ""))(),
-                (link) => {
-                  const current = this.instances.get(id);
-                  if (!current) return;
-                  current.hoveredLink = link;
-                }
-              );
-            } catch (err) {
-              logWarn("Failed to recreate FileLinksAddon", { id, error: err });
-            }
-          }
-          if (!managed.webLinksAddon) {
-            try {
-              managed.webLinksAddon = createWebLinksAddon(
-                managed.terminal,
-                (event, uri) => this.linkHandler.openLink(uri, id, event),
-                {
-                  hover: (_event, text) => {
-                    const current = this.instances.get(id);
-                    if (!current) return;
-                    current.hoveredLink = this.makeSyntheticLink(text, null, id);
-                  },
-                  leave: () => {
-                    const current = this.instances.get(id);
-                    if (!current) return;
-                    current.hoveredLink = null;
-                  },
-                }
-              );
-            } catch (err) {
-              logWarn("Failed to recreate WebLinksAddon", { id, error: err });
-            }
-          }
+          this.ensureDeferredAddons(id, managed);
         }
 
         if (managed.runtimeAgentId) {
@@ -1053,16 +1014,10 @@ class TerminalInstanceService {
 
     const terminal = new Terminal(terminalOptions);
     this.cwdProviders.set(id, getCwd ?? (() => ""));
-    const addons = setupTerminalAddons(
-      terminal,
-      () => (this.cwdProviders.get(id) ?? (() => ""))(),
-      (event, uri) => openLink(uri, event),
-      (link) => setHoveredLink(link),
-      {
-        hover: (_event, text) => setHoveredLink(this.makeSyntheticLink(text, null, id)),
-        leave: () => setHoveredLink(null),
-      }
-    );
+    // Only the eager core addons are built here. Image/file-link/web-link addons
+    // are deferred to ensureDeferredAddons(), called once the terminal is opened
+    // in attach() — keeping their construction off the bulk-create cold path.
+    const addons = setupTerminalAddons(terminal);
 
     const hostElement = document.createElement("div");
     hostElement.style.width = "100%";
@@ -1527,6 +1482,61 @@ class TerminalInstanceService {
     }
   }
 
+  /**
+   * Builds the tier-managed, non-critical addons (Image DCS handlers, file-link
+   * and web-link providers) that `setupTerminalAddons` deliberately skips on the
+   * bulk-create cold path. Idempotent — each addon is only created when its slot
+   * is null, so this is safe to call from both the cold-open path in `attach()`
+   * and the BACKGROUND→active tier-upgrade path. Never call it for a BACKGROUND
+   * terminal; the tier machinery disposes these addons there on purpose (#9809).
+   */
+  private ensureDeferredAddons(id: string, managed: ManagedTerminal): void {
+    if (!managed.imageAddon) {
+      try {
+        managed.imageAddon = createImageAddon(managed.terminal);
+      } catch (err) {
+        logWarn("Failed to create ImageAddon", { id, error: err });
+      }
+    }
+    if (!managed.fileLinksDisposable) {
+      try {
+        managed.fileLinksDisposable = createFileLinksAddon(
+          managed.terminal,
+          () => (this.cwdProviders.get(id) ?? (() => ""))(),
+          (link) => {
+            const current = this.instances.get(id);
+            if (!current) return;
+            current.hoveredLink = link;
+          }
+        );
+      } catch (err) {
+        logWarn("Failed to create FileLinksAddon", { id, error: err });
+      }
+    }
+    if (!managed.webLinksAddon) {
+      try {
+        managed.webLinksAddon = createWebLinksAddon(
+          managed.terminal,
+          (event, uri) => this.linkHandler.openLink(uri, id, event),
+          {
+            hover: (_event, text) => {
+              const current = this.instances.get(id);
+              if (!current) return;
+              current.hoveredLink = this.makeSyntheticLink(text, null, id);
+            },
+            leave: () => {
+              const current = this.instances.get(id);
+              if (!current) return;
+              current.hoveredLink = null;
+            },
+          }
+        );
+      } catch (err) {
+        logWarn("Failed to create WebLinksAddon", { id, error: err });
+      }
+    }
+  }
+
   attach(id: string, container: HTMLElement): ManagedTerminal | null {
     const managed = this.instances.get(id);
     if (!managed) {
@@ -1563,9 +1573,26 @@ class TerminalInstanceService {
       if (managed.targetCols && managed.targetRows) {
         managed.terminal.resize(managed.targetCols, managed.targetRows);
       }
-      managed.terminal.open(managed.hostElement);
+      // Bracket the synchronous open() — the first-paint step that builds
+      // xterm's DOM, forces a reflow to measure the cell grid, and inits the
+      // renderer. terminalOpenStartedAt anchors the first-write delta (#9809).
+      managed.terminalOpenStartedAt =
+        typeof performance !== "undefined" ? performance.now() : Date.now();
+      managed.hasEmittedFirstWriteMark = false;
+      markRendererPerformance(PERF_MARKS.TERMINAL_OPEN_START, { terminalId: id });
+      try {
+        managed.terminal.open(managed.hostElement);
+      } finally {
+        markRendererPerformance(PERF_MARKS.TERMINAL_OPEN_END, { terminalId: id });
+      }
       managed.isOpened = true;
       logDebug(`[TIS.attach] Opened terminal ${id}`);
+      // Build the deferred Image/link addons now that the terminal is live.
+      // Skip BACKGROUND terminals — the tier machinery disposes these addons
+      // there on purpose; they're rebuilt on the next promotion.
+      if (managed.lastAppliedTier !== TerminalRefreshTier.BACKGROUND) {
+        this.ensureDeferredAddons(id, managed);
+      }
       if (managed.runtimeAgentId && isWebGLEligibleTier(managed.lastAppliedTier)) {
         this.webGLManager.ensureContext(id, managed);
       }

@@ -139,6 +139,10 @@ export const PHASE_PAIRS: Array<[string, string, string]> = [
     PERF_MARKS.PRELOAD_EXPOSE_IN_MAIN_WORLD_END,
     "preload.exposeInMainWorld",
   ],
+  // New-terminal cold path (#9809): isolates the synchronous `terminal.open()`
+  // step so the first-paint work for a freshly-attached terminal is visible
+  // alongside the boot/hydrate phases above.
+  [PERF_MARKS.TERMINAL_OPEN_START, PERF_MARKS.TERMINAL_OPEN_END, "terminal_open"],
 ];
 
 // Warn-only thresholds for the new first-launch quality signals introduced

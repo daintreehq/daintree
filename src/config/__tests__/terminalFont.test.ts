@@ -96,16 +96,20 @@ describe("onTerminalFontArrivedLate", () => {
     expect(callback).toHaveBeenCalledTimes(1);
   });
 
-  it("does not fire when the font loads before the timeout", async () => {
+  it("fires when the font loads before the timeout (#9809)", async () => {
     const mod = await import("../terminalFont");
     mod.ensureTerminalFontLoaded();
     const callback = vi.fn();
     mod.onTerminalFontArrivedLate(callback);
 
-    // Font resolves before the 3s timeout elapses — on-time, no repair needed.
+    // With the `use(terminalFontReady)` Suspense gate removed, terminals open
+    // immediately — so a cache-miss font that lands WITHIN the 3s window (the
+    // common case) still arrives after terminals measured against the fallback
+    // and must trigger a repair. Pre-#9809 this was gated on the timeout having
+    // already elapsed, leaving these terminals permanently mis-sized.
     resolveLoad([{ family: "JetBrains Mono" }]);
     await vi.runAllTimersAsync();
-    expect(callback).not.toHaveBeenCalled();
+    expect(callback).toHaveBeenCalledTimes(1);
   });
 
   it("fires synchronously when subscribing after the font already arrived late", async () => {

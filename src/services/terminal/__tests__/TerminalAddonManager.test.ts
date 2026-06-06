@@ -41,19 +41,29 @@ describe("TerminalAddonManager", () => {
   });
 
   describe("setupTerminalAddons", () => {
-    it("creates ImageAddon with memory-safe options", () => {
+    it("defers ImageAddon off the eager core set (#9809)", () => {
       const terminal = createMockTerminal();
-      setupTerminalAddons(terminal, () => "/tmp");
+      const addons = setupTerminalAddons(terminal);
 
-      expect(mockImageAddon).toHaveBeenCalledWith({
-        pixelLimit: 2_000_000,
-        storageLimit: 8,
-      });
+      // ImageAddon is built lazily via createImageAddon once a terminal is
+      // actually opened, not on the bulk-create cold path.
+      expect(mockImageAddon).not.toHaveBeenCalled();
+      expect(addons.imageAddon).toBeNull();
     });
 
-    it("creates SearchAddon with highlightLimit for bounded match counts", () => {
+    it("defers file-link and web-link providers off the eager core set (#9809)", () => {
       const terminal = createMockTerminal();
-      setupTerminalAddons(terminal, () => "/tmp");
+      const addons = setupTerminalAddons(terminal);
+
+      expect(FileLinksAddon).not.toHaveBeenCalled();
+      expect(WebLinksAddon).not.toHaveBeenCalled();
+      expect(addons.fileLinksDisposable).toBeNull();
+      expect(addons.webLinksAddon).toBeNull();
+    });
+
+    it("creates SearchAddon eagerly with highlightLimit for bounded match counts", () => {
+      const terminal = createMockTerminal();
+      setupTerminalAddons(terminal);
 
       expect(mockSearchAddon).toHaveBeenCalledWith({
         highlightLimit: SEARCH_HIGHLIGHT_LIMIT,
@@ -62,7 +72,7 @@ describe("TerminalAddonManager", () => {
 
     it("activates Unicode 11 widths so modern emoji and CJK glyphs render at 2 cells (issue #7205)", () => {
       const terminal = createMockTerminal();
-      setupTerminalAddons(terminal, () => "/tmp");
+      setupTerminalAddons(terminal);
 
       expect(mockUnicode11Addon).toHaveBeenCalledTimes(1);
       expect(terminal.loadAddon).toHaveBeenCalledWith(expect.any(mockUnicode11Addon));

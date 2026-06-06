@@ -56,6 +56,21 @@ export class TerminalWriteController {
 
     this.deps.onWrite?.(id);
 
+    // First real byte to paint for this terminal — anchors the open→first-write
+    // segment of the cold path (#9809). Gated to once; cheap no-op in prod
+    // since markRendererPerformance early-returns without perf capture.
+    if (!managed.hasEmittedFirstWriteMark) {
+      managed.hasEmittedFirstWriteMark = true;
+      markRendererPerformance(PERF_MARKS.TERMINAL_FIRST_WRITE, {
+        terminalId: id,
+        elapsedSinceOpenMs:
+          managed.terminalOpenStartedAt !== undefined
+            ? (typeof performance !== "undefined" ? performance.now() : Date.now()) -
+              managed.terminalOpenStartedAt
+            : undefined,
+      });
+    }
+
     this.deps.incrementUnseen(id, managed.isUserScrolledBack);
 
     this.perfWriteSampleCounter += 1;
