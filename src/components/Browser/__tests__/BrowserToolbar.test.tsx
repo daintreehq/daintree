@@ -317,7 +317,7 @@ describe("BrowserToolbar ARIA semantics", () => {
     });
 
     await act(async () => {
-      fireEvent.click(getByRole("button", { name: "Capture screenshot" }));
+      fireEvent.click(getByRole("button", { name: "Copy screenshot to clipboard" }));
     });
 
     expect(onCaptureScreenshot).toHaveBeenCalledOnce();
