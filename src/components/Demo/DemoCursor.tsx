@@ -288,6 +288,7 @@ export function DemoCursor() {
 
     cleanups.push(
       demo.onExecCommand("demo:exec-move-to", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoMoveToPayload & { requestId: string };
         try {
           await waitIfPaused();
@@ -303,6 +304,7 @@ export function DemoCursor() {
 
     cleanups.push(
       demo.onExecCommand("demo:exec-move-to-selector", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoMoveToSelectorPayload & { requestId: string };
         try {
           await waitIfPaused();
@@ -310,6 +312,7 @@ export function DemoCursor() {
           const elements = document.querySelectorAll(payload.selector);
           let target: Element | null = null;
           for (const el of elements) {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             const htmlEl = el as HTMLElement;
             if (htmlEl.checkVisibility ? htmlEl.checkVisibility() : htmlEl.offsetParent !== null) {
               target = el;
@@ -342,6 +345,7 @@ export function DemoCursor() {
 
     cleanups.push(
       demo.onExecCommand("demo:exec-click", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as { requestId: string };
         try {
           await waitIfPaused();
@@ -423,6 +427,7 @@ export function DemoCursor() {
 
     cleanups.push(
       demo.onExecCommand("demo:exec-type", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoTypePayload & { requestId: string };
         try {
           await waitIfPaused();
@@ -451,6 +456,7 @@ export function DemoCursor() {
               prevChar = char;
             }
           } else {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             const inputTarget = target as HTMLInputElement | HTMLTextAreaElement;
             inputTarget.focus();
             let prevChar = "";
@@ -474,6 +480,7 @@ export function DemoCursor() {
     // --- type-in-terminal: humanized char-by-char PTY write into a terminal ---
     cleanups.push(
       demo.onExecCommand("demo:exec-type-in-terminal", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoTypeInTerminalPayload & { requestId: string };
         try {
           await waitIfPaused();
@@ -502,6 +509,7 @@ export function DemoCursor() {
     // --- send-key-to-terminal: write a special-key escape sequence to the PTY ---
     cleanups.push(
       demo.onExecCommand("demo:exec-send-key-to-terminal", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoSendKeyToTerminalPayload & { requestId: string };
         try {
           await waitIfPaused();
@@ -529,6 +537,7 @@ export function DemoCursor() {
 
     cleanups.push(
       demo.onExecCommand("demo:exec-wait-for-selector", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoWaitForSelectorPayload & { requestId: string };
         try {
           if (document.querySelector(payload.selector)) {
@@ -561,6 +570,7 @@ export function DemoCursor() {
 
     cleanups.push(
       demo.onExecCommand("demo:exec-sleep", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoSleepPayload & { requestId: string };
         try {
           await pauseAwareDelay(payload.durationMs);
@@ -574,6 +584,7 @@ export function DemoCursor() {
     // --- scroll handler: spring-animate scrollTop on nearest scrollable ancestor ---
     cleanups.push(
       demo.onExecCommand("demo:exec-scroll", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoScrollPayload & { requestId: string };
         try {
           await waitIfPaused();
@@ -652,6 +663,7 @@ export function DemoCursor() {
     // --- drag handler: mousedown → animate → mousemove×N → mouseup ---
     cleanups.push(
       demo.onExecCommand("demo:exec-drag", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoDragPayload & { requestId: string };
         try {
           await waitIfPaused();
@@ -748,6 +760,7 @@ export function DemoCursor() {
     // --- pressKey handler: dispatch keydown/keyup on target ---
     cleanups.push(
       demo.onExecCommand("demo:exec-press-key", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoPressKeyPayload & { requestId: string };
         try {
           await waitIfPaused();
@@ -788,6 +801,7 @@ export function DemoCursor() {
     // --- waitForIdle handler: MutationObserver + getAnimations + double-rAF ---
     cleanups.push(
       demo.onExecCommand("demo:exec-wait-for-idle", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoWaitForIdlePayload & { requestId: string };
         try {
           const settleMs = payload.settleMs ?? 300;
@@ -807,6 +821,7 @@ export function DemoCursor() {
               const hasAnimations = document.getAnimations().some((a) => {
                 const state = a.playState as string;
                 if (state !== "running" && state !== "pending") return false;
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                 const effect = a.effect as KeyframeEffect | null;
                 // Skip demo-owned animations (cursor, overlay)
                 if (effect?.target && isDemoOwned(effect.target as Element)) return false;
@@ -860,6 +875,7 @@ export function DemoCursor() {
 
     cleanups.push(
       demo.onExecCommand("demo:exec-pause", (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as { requestId: string };
         pausedRef.current = true;
         sendDone(payload.requestId);
@@ -868,6 +884,7 @@ export function DemoCursor() {
 
     cleanups.push(
       demo.onExecCommand("demo:exec-resume", (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as { requestId: string };
         pausedRef.current = false;
         const resolvers = pauseResolversRef.current.splice(0);

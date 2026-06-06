@@ -79,6 +79,8 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   "demo:exec-start-capture",
   "demo:exec-stop-capture",
   "demo:exec-wait-for-idle",
+  "demo:exec-send-key-to-terminal",
+  "demo:exec-type-in-terminal",
 
   // fire-and-forget — renderer→main `ipcRenderer.send` handled by
   // `ipcMain.on(CHANNELS.ERROR_RETRY_CANCEL)` in errorHandlers.ts.

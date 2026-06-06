@@ -32,7 +32,9 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 }));
 
 // Set up window.electron.demo before importing the component
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
 const originalElectron = (window as unknown as { electron?: unknown }).electron;
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
 (window as unknown as { electron: unknown }).electron = {
   demo: demoMock,
   terminal: { write: terminalWriteMock },
@@ -49,6 +51,7 @@ function createMockAnimation() {
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const animateSpy = vi.fn((() => createMockAnimation()) as any) as ReturnType<typeof vi.fn>;
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
 Element.prototype.animate = animateSpy as unknown as typeof Element.prototype.animate;
 
 import { DemoCursor } from "../DemoCursor";
@@ -803,8 +806,10 @@ describe("DemoCursor", () => {
 
 afterAll(() => {
   if (originalElectron) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     (window as unknown as { electron: unknown }).electron = originalElectron;
   } else {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     delete (window as unknown as { electron?: unknown }).electron;
   }
 });
