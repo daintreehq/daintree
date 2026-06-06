@@ -370,7 +370,10 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     scope: "renderer",
     run: async () => {
       // Clears renderer injection state and cancels the active injection by
-      // UUID, then sweeps any other in-flight CopyTree operations.
+      // UUID, then sweeps any other in-flight CopyTree operations
+      // (generate/copy-file). An injection started between these two calls
+      // would be swept too — accepted: both are user-initiated cancels and
+      // the window is a single microtask turn.
       cancelContextInjection();
       await copyTreeClient.cancel();
     },

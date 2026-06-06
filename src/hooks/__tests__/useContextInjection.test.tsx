@@ -195,6 +195,39 @@ describe("useContextInjection", () => {
     expect(injectMock).not.toHaveBeenCalled();
   });
 
+  it("cancelling during the availability check aborts before any context is written", async () => {
+    let resolveAvailable!: (value: boolean) => void;
+    isAvailableMock.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveAvailable = resolve;
+        })
+    );
+
+    const { result } = renderHook(() => useContextInjection("term-1"));
+
+    let injectPromise!: Promise<void>;
+    act(() => {
+      injectPromise = result.current.inject("wt-1", "term-1");
+    });
+    await vi.waitFor(() => expect(result.current.isInjecting).toBe(true));
+
+    act(() => {
+      result.current.cancel();
+    });
+
+    await act(async () => {
+      resolveAvailable(true);
+      await injectPromise;
+    });
+
+    expect(injectMock).not.toHaveBeenCalled();
+    expect(addErrorMock).not.toHaveBeenCalled();
+    expect(result.current.error).toBeNull();
+    expect(result.current.isInjecting).toBe(false);
+    expect(result.current.injectionStatus).toBe("idle");
+  });
+
   it("still records a real injection failure as an error", async () => {
     isAvailableMock.mockResolvedValue(true);
     injectMock.mockResolvedValue({ error: "copytree exploded" });

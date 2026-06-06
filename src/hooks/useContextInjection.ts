@@ -363,6 +363,13 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           );
         }
 
+        // User may have cancelled while the availability check was in flight —
+        // abort before any context reaches the terminal.
+        if (cancelledUuids.has(injectionUuid)) {
+          logDebug("[useContextInjection] Injection cancelled before write", { injectionUuid });
+          return;
+        }
+
         const options = {
           format: DEFAULT_COPYTREE_FORMAT,
           ...(selectedPaths && selectedPaths.length > 0 ? { includePaths: selectedPaths } : {}),
