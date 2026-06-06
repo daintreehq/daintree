@@ -125,6 +125,10 @@ export function FileViewerModal({
   const currentHunkIndexRef = useRef<number>(-1);
   const [activeHunkIndex, setActiveHunkIndex] = useState<number>(-1);
   const [hunkCount, setHunkCount] = useState<number>(0);
+  // Bumped whenever a file's collapse state is toggled inside DiffViewer, so the
+  // hunk-counting effect re-scans the DOM whose hunk rows just appeared (expand)
+  // or disappeared (collapse). See #10013.
+  const [collapseRevision, setCollapseRevision] = useState(0);
   const hunkRatiosRef = useRef<Map<number, number>>(new Map());
   const observerGenerationRef = useRef(0);
   const observerDisposedRef = useRef(false);
@@ -468,7 +472,11 @@ export function FileViewerModal({
       observerDisposedRef.current = true;
       observer.disconnect();
     };
-  }, [isOpen, mode, diff, diffViewType]);
+  }, [isOpen, mode, diff, diffViewType, collapseRevision]);
+
+  const handleDiffToggleCollapse = useCallback(() => {
+    setCollapseRevision((r) => r + 1);
+  }, []);
 
   return (
     <AppDialog
@@ -745,6 +753,7 @@ export function FileViewerModal({
             viewType={diffViewType}
             rootPath={rootPath}
             onRetry={onRetryDiff}
+            onToggleCollapse={handleDiffToggleCollapse}
           />
         )}
 

@@ -82,6 +82,8 @@ export interface DiffViewerProps {
   /** Absolute path to the worktree root, used to resolve per-file open-in-editor paths */
   rootPath?: string;
   onRetry?: () => void;
+  /** Fired when a collapsible file is expanded or collapsed, so consumers can re-scan the hunk rows that just appeared or disappeared */
+  onToggleCollapse?: () => void;
 }
 
 function useTokens(
@@ -134,7 +136,7 @@ function useTokens(
 }
 
 export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function DiffViewer(
-  { diff, viewType = "split", rootPath, onRetry },
+  { diff, viewType = "split", rootPath, onRetry, onToggleCollapse },
   ref
 ) {
   const files = useMemo(() => {
@@ -211,6 +213,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           file={file}
           viewType={viewType}
           rootPath={rootPath}
+          onToggleCollapse={onToggleCollapse}
         />
       ))}
     </div>
@@ -221,9 +224,11 @@ interface FileDiffProps {
   file: ReturnType<typeof parseDiff>[0];
   viewType: ViewType;
   rootPath?: string;
+  /** Fired whenever this file's collapse state is toggled (expand or collapse) */
+  onToggleCollapse?: () => void;
 }
 
-function FileDiff({ file, viewType, rootPath }: FileDiffProps) {
+function FileDiff({ file, viewType, rootPath, onToggleCollapse }: FileDiffProps) {
   const relPath = getFilePath(file);
   const language = useMemo(() => {
     const derived = getLanguageForFile(relPath);
@@ -271,7 +276,13 @@ function FileDiff({ file, viewType, rootPath }: FileDiffProps) {
     );
   };
 
-  const handleToggleCollapse = () => setIsCollapsed((prev) => !prev);
+  const handleToggleCollapse = () => {
+    // Notify consumers on every toggle so they can re-scan the hunk rows that
+    // just appeared (expand) or disappeared (collapse) — the hunk indicator and
+    // scroll tracking attach to live DOM and must follow both transitions.
+    onToggleCollapse?.();
+    setIsCollapsed((prev) => !prev);
+  };
 
   return (
     <div className="mb-2">
