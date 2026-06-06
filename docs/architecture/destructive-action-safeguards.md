@@ -96,6 +96,14 @@ Columns:
 | `terminal.restartAll` | **confirm** (updated #8245) | yes (`TerminalDestructiveActionConfirmDialog`) — fires when any non-trash terminal has a running agent | Boolean via dispatch | local-irreversible | many terminals | D1 | Done (#8245) | — |
 | `terminal.restartService` | safe | n/a | n/a | local-irreversible (all PTY processes restart) | every terminal in the window | D1 | Action is gated on `backendStatus === "disconnected"`; the gate already implies an error state, so leave as-is | — |
 
+### Artifacts
+
+| Action / call site | Current | UI confirm | Consent in breadcrumb | Reversibility | Blast | Tier | Recommendation | Follow-up |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `artifact.applyPatch` | **confirm** (updated #10020) | yes — `ConfirmDialog` in `ArtifactOverlay.tsx` with full per-line diff preview of the patch content; the dispatch lives in `useArtifacts.ts`, so the action is on `BYPASS_WIRED` (ID not co-located with the dialog) | Boolean via dispatch (agents must pass `confirmed: true`) | shared-state (writes worktree files via `git apply`; recovery is a manual git checkout) | files touched by one patch | D2 | Done (#10020) — single apply gates on a diff-content preview | — |
+| `ArtifactOverlay.tsx` "Apply All Patches" (fans out `artifact.applyPatch` via `useArtifacts.applyAllPatches`) | routes through `artifact.applyPatch` | yes — single `ConfirmDialog` previews the snapshotted patch list (filename + per-patch `+N −N` line stats); the confirm passes the same snapshot to the apply loop so patches detected while the dialog is open are never applied unseen | Boolean via dispatch | shared-state (sequential `git apply`; a mid-list failure leaves earlier patches applied) | files touched by every detected patch | D2 | Done (#10020) — snapshot-at-request prevents the TOCTOU gap between preview and apply | — |
+| `artifact.saveToFile` | safe | n/a — the native save dialog is itself the consent surface (user picks the destination path) | n/a | reversible (delete the saved file) | one new file | D0 | Leave | — |
+
 ### Dev preview
 
 | Action / call site | Current | UI confirm | Consent in breadcrumb | Reversibility | Blast | Tier | Recommendation | Follow-up |

@@ -244,7 +244,9 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       description: "Apply a unified diff patch to the filesystem",
       category: "artifacts",
       kind: "command",
-      danger: "safe",
+      danger: "confirm",
+      dangerRationale:
+        "Writes patch content directly into worktree files via git apply — a shared-state mutation with no automatic inverse; recovery is a manual git checkout of the touched files.",
       scope: "renderer",
       argsSchema: z.object({
         patchContent: z.string(),

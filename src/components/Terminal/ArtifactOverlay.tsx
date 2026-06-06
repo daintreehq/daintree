@@ -1,8 +1,51 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useArtifacts } from "@/hooks/useArtifacts";
 import type { Artifact } from "@shared/types";
+
+type ApplyPatchOutcome =
+  | { success: true; modifiedFiles: string[] }
+  | { success: false; error: string; cancelled?: boolean };
+
+export function getPatchStats(content: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of content.split("\n")) {
+    if (line.startsWith("+") && !line.startsWith("+++")) additions++;
+    else if (line.startsWith("-") && !line.startsWith("---")) deletions++;
+  }
+  return { additions, deletions };
+}
+
+export function patchLineClass(line: string): string {
+  if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("@@")) {
+    return "text-daintree-text/40";
+  }
+  if (line.startsWith("+")) return "text-status-success bg-status-success/10";
+  if (line.startsWith("-")) return "text-status-error bg-status-error/10";
+  return "text-daintree-text/80";
+}
+
+function PatchDiffPreview({ content }: { content: string }) {
+  return (
+    <div className="rounded border border-tint/[0.08] bg-tint/[0.04]">
+      <div className="px-3 py-2 border-b border-tint/[0.08]">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+          Patch contents
+        </span>
+      </div>
+      <pre className="font-mono text-[11px] leading-4 px-3 py-2 max-h-[200px] overflow-y-auto overflow-x-auto select-text">
+        {content.split("\n").map((line, i) => (
+          <div key={i} className={patchLineClass(line)}>
+            {line || " "}
+          </div>
+        ))}
+      </pre>
+    </div>
+  );
+}
 
 interface ArtifactOverlayProps {
   terminalId: string;
@@ -33,9 +76,7 @@ interface ArtifactItemProps {
   artifact: Artifact;
   onCopy: (artifact: Artifact) => Promise<boolean>;
   onSave: (artifact: Artifact) => Promise<{ filePath: string } | null>;
-  onApplyPatch: (
-    artifact: Artifact
-  ) => Promise<{ success: true; modifiedFiles: string[] } | { success: false; error: string }>;
+  onApplyPatch: (artifact: Artifact) => Promise<ApplyPatchOutcome>;
   canApplyPatch: boolean;
   isProcessing: boolean;
 }
@@ -88,7 +129,7 @@ function ArtifactItem({
     const result = await onApplyPatch(artifact);
     if (result.success) {
       showFeedback("Patch applied!", "success");
-    } else {
+    } else if (!result.cancelled) {
       showFeedback(result.error || "Patch failed", "error");
     }
   }, [artifact, onApplyPatch, showFeedback]);
@@ -236,12 +277,35 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     [saveToFile]
   );
 
-  const handleApplyPatch = useCallback(
-    async (artifact: Artifact) => {
-      return await applyPatch(artifact);
-    },
-    [applyPatch]
-  );
+  // D2 confirm gate: applying a patch mutates worktree files, so both apply
+  // paths preview the change in a ConfirmDialog before the dispatch fires.
+  const [pendingPatch, setPendingPatch] = useState<Artifact | null>(null);
+  const [pendingBulkPatches, setPendingBulkPatches] = useState<Artifact[] | null>(null);
+  const pendingApplyResolveRef = useRef<((outcome: ApplyPatchOutcome) => void) | null>(null);
+
+  const handleApplyPatch = useCallback((artifact: Artifact) => {
+    return new Promise<ApplyPatchOutcome>((resolve) => {
+      pendingApplyResolveRef.current?.({ success: false, error: "Cancelled", cancelled: true });
+      pendingApplyResolveRef.current = resolve;
+      setPendingPatch(artifact);
+    });
+  }, []);
+
+  const handleCancelApplyPatch = useCallback(() => {
+    pendingApplyResolveRef.current?.({ success: false, error: "Cancelled", cancelled: true });
+    pendingApplyResolveRef.current = null;
+    setPendingPatch(null);
+  }, []);
+
+  const handleConfirmApplyPatch = useCallback(async () => {
+    const resolve = pendingApplyResolveRef.current;
+    const artifact = pendingPatch;
+    pendingApplyResolveRef.current = null;
+    setPendingPatch(null);
+    if (!artifact) return;
+    const result = await applyPatch(artifact);
+    resolve?.(result);
+  }, [applyPatch, pendingPatch]);
 
   useEffect(() => {
     return () => {
@@ -286,8 +350,21 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     }
   }, [saveAll, showBulkResult]);
 
-  const handleApplyAllPatches = useCallback(async () => {
-    const result = await applyAllPatches();
+  const handleApplyAllPatches = useCallback(() => {
+    // Snapshot at request time so the dialog previews exactly the set confirm
+    // will apply — patches detected while the dialog is open are excluded.
+    setPendingBulkPatches(artifacts.filter((a) => a.type === "patch"));
+  }, [artifacts]);
+
+  const handleCancelApplyAllPatches = useCallback(() => {
+    setPendingBulkPatches(null);
+  }, []);
+
+  const handleConfirmApplyAllPatches = useCallback(async () => {
+    const snapshot = pendingBulkPatches;
+    setPendingBulkPatches(null);
+    if (!snapshot) return;
+    const result = await applyAllPatches(snapshot);
     if (result.succeeded > 0 && result.failed === 0) {
       const filesMsg = result.modifiedFiles?.length
         ? ` (${result.modifiedFiles.length} files)`
@@ -301,7 +378,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     } else if (result.failed > 0) {
       showBulkResult(`Failed to apply patches`, "error");
     }
-  }, [applyAllPatches, showBulkResult]);
+  }, [applyAllPatches, pendingBulkPatches, showBulkResult]);
 
   const codeArtifactCount = artifacts.filter((a) => a.type === "code").length;
   const patchCount = artifacts.filter((a) => a.type === "patch").length;
@@ -361,7 +438,11 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                 </button>
                 <button
                   type="button"
-                  onClick={() => setIsExpanded(false)}
+                  onClick={() => {
+                    handleCancelApplyPatch();
+                    handleCancelApplyAllPatches();
+                    setIsExpanded(false);
+                  }}
                   disabled={isBulkActionRunning}
                   className="text-daintree-text/40 hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                   aria-label="Close artifact overlay"
@@ -490,6 +571,66 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={pendingPatch !== null}
+        onClose={handleCancelApplyPatch}
+        title="Apply patch to worktree?"
+        description={
+          <span>
+            Writes the diff below to files in this worktree via{" "}
+            <span className="font-mono">git apply</span>. Recovery is a manual git checkout of the
+            touched files.
+          </span>
+        }
+        confirmLabel="Apply patch"
+        variant="destructive"
+        hasPreview={true}
+        onConfirm={() => void handleConfirmApplyPatch()}
+      >
+        {pendingPatch && <PatchDiffPreview content={pendingPatch.content} />}
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        isOpen={pendingBulkPatches !== null}
+        onClose={handleCancelApplyAllPatches}
+        title={`Apply ${pendingBulkPatches?.length ?? 0} patch${
+          pendingBulkPatches?.length !== 1 ? "es" : ""
+        } to worktree?`}
+        description="Applies each patch below to files in this worktree in extraction order. A patch that fails leaves the earlier ones applied."
+        confirmLabel={`Apply ${pendingBulkPatches?.length ?? 0} patch${
+          pendingBulkPatches?.length !== 1 ? "es" : ""
+        }`}
+        variant="destructive"
+        hasPreview={true}
+        onConfirm={() => void handleConfirmApplyAllPatches()}
+      >
+        {pendingBulkPatches && (
+          <div className="rounded border border-tint/[0.08] bg-tint/[0.04]">
+            <div className="px-3 py-2 border-b border-tint/[0.08]">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+                Patches to apply
+              </span>
+            </div>
+            <ul className="px-3 py-2 space-y-1.5 max-h-[200px] overflow-y-auto">
+              {pendingBulkPatches.map((patch) => {
+                const stats = getPatchStats(patch.content);
+                return (
+                  <li key={patch.id} className="flex items-baseline gap-2">
+                    <span className="text-daintree-text/80 truncate min-w-0">
+                      {patch.filename || patch.language || "patch"}
+                    </span>
+                    <span className="font-mono text-[10px] shrink-0 ml-auto tabular-nums">
+                      <span className="text-status-success">+{stats.additions}</span>{" "}
+                      <span className="text-status-error">-{stats.deletions}</span>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+      </ConfirmDialog>
     </div>
   );
 }
