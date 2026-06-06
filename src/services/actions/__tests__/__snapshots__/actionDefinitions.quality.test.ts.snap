@@ -1916,8 +1916,22 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "help",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Display a Daintree documentation image inline in the assistant panel so it can be referenced as \`[image #N]\`. Args: \`url\` is an \`https://daintree.org\` image URL (data:/blob:/non-daintree URLs are rejected); \`caption\` and \`altText\` are optional. Returns { imageId, figureNumber, figureLabel } — the figure number is assigned by the app sequentially per session; never pick your own.",
-    "examples": undefined,
+    "description": "Display a Daintree documentation image inline in the assistant panel so it can be referenced as \`[image #N]\`. Call this when a \`daintree-docs\` search result includes an image URL that directly illustrates your answer; skip images that are decorative or tangential rather than displaying every image a result contains. Reference the returned \`figureLabel\` as plain text at the insertion point (e.g. \`[image #2]\`) — never markdown image syntax (\`![](...)\`), which CLI renderers strip. Args: \`url\` is an \`https://daintree.org\` image URL (data:/blob:/non-daintree URLs are rejected); \`caption\` and \`altText\` are optional. Returns { imageId, figureNumber, figureLabel } — the figure number is assigned by the app sequentially per session; never pick your own.",
+    "examples": [
+      {
+        "args": {
+          "caption": "The worktree dashboard",
+          "url": "https://daintree.org/img/docs/worktree-dashboard.png",
+        },
+        "description": "A daintree-docs result returned this screenshot and it directly illustrates the answer — pin it, then write the returned \`figureLabel\` (e.g. \`[image #N]\`) at the relevant point in the reply.",
+      },
+      {
+        "args": {
+          "url": "https://daintree.org/img/docs/terminal-grid.png",
+        },
+        "description": "Only call this for images that genuinely help — if a result's image is decorative or tangential to the question, do not display it.",
+      },
+    ],
     "id": "help.displayImage",
     "keywords": undefined,
     "kind": "command",
