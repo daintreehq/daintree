@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { forwardRef, type ReactNode } from "react";
 
@@ -268,7 +268,12 @@ describe("FileViewerModal", () => {
     });
 
     expect(screen.queryByText("Invalid file path")).toBeNull();
-    expect(screen.getAllByText("Open in image viewer").length).toBeGreaterThan(0);
+    const errorContainer = screen
+      .getByText("Content does not appear to be a valid SVG")
+      .closest("div")!;
+    expect(
+      within(errorContainer).getByRole("button", { name: "Open in image viewer" })
+    ).toBeTruthy();
     expect(screen.queryByText("Open in Image Viewer")).toBeNull();
   });
 
@@ -286,6 +291,24 @@ describe("FileViewerModal", () => {
     });
 
     expect(screen.queryByText("File no longer exists")).toBeNull();
+    const errorContainer = screen.getByText("Unable to display image").closest("div")!;
+    expect(
+      within(errorContainer).getByRole("button", { name: "Open in image viewer" })
+    ).toBeTruthy();
+  });
+
+  it("shows the file-read error message when reading an SVG fails", async () => {
+    mockRead.mockRejectedValue(
+      Object.assign(new Error("File not found"), { name: "AppError", code: "NOT_FOUND" })
+    );
+
+    render(<FileViewerModal {...defaultProps} filePath="/project/icon.svg" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("File no longer exists")).toBeTruthy();
+    });
+
+    expect(mockSanitizeSvg).not.toHaveBeenCalled();
   });
 
   it("clears a stale SVG sanitization error when navigating to another file", async () => {
