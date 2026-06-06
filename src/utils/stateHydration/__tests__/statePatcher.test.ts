@@ -514,6 +514,91 @@ describe("buildArgsForRespawn", () => {
     expect(result.launchAgentId).toBe("claude");
   });
 
+  // issue #9802 — surface the session-lost signal whenever restore falls
+  // through to a fresh launch, and only then.
+  describe("sessionLostOnRestore signal", () => {
+    it("is not set when an exact-session resume command succeeds", () => {
+      const result = buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "claude",
+          cwd: "/p",
+          location: "grid",
+          agentSessionId: "sess-123",
+        },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp"
+      );
+      expect(result.command).toBe("claude --resume sess-123");
+      expect(result.sessionLostOnRestore).toBeUndefined();
+    });
+
+    it("is set when a captured session can no longer be resumed (branch 2)", () => {
+      buildResumeCommandMock.mockReturnValue(undefined);
+      const result = buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "claude",
+          cwd: "/p",
+          location: "grid",
+          agentSessionId: "sess-expired",
+        },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp"
+      );
+      expect(result.command).toBe("claude --generated");
+      expect(result.sessionLostOnRestore).toBe(true);
+    });
+
+    it("is set when no session was captured and resume-latest is unavailable (branch 3)", () => {
+      buildResumeLatestCommandMock.mockReturnValue(undefined);
+      const result = buildArgsForRespawn(
+        { id: "t1", kind: "terminal" as const, agentId: "claude", cwd: "/p", location: "grid" },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp"
+      );
+      expect(result.command).toBe("claude --generated");
+      expect(result.sessionLostOnRestore).toBe(true);
+    });
+
+    it("is not set when resume-latest succeeds as a fallback", () => {
+      buildResumeLatestCommandMock.mockReturnValue("claude --continue");
+      const result = buildArgsForRespawn(
+        { id: "t1", kind: "terminal" as const, agentId: "claude", cwd: "/p", location: "grid" },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp"
+      );
+      expect(result.command).toBe("claude --continue");
+      expect(result.sessionLostOnRestore).toBeUndefined();
+    });
+
+    it("is not set for non-agent panels", () => {
+      const result = buildArgsForRespawn(
+        { id: "t1", kind: "terminal" as const, cwd: "/p", location: "grid" },
+        "terminal",
+        "/p",
+        undefined,
+        false,
+        undefined
+      );
+      expect(result.sessionLostOnRestore).toBeUndefined();
+    });
+  });
+
   it("preserves exitBehavior for non-agent panels", () => {
     const result = buildArgsForRespawn(
       { id: "t1", kind: "terminal" as const, cwd: "/p", location: "grid", exitBehavior: "keep" },

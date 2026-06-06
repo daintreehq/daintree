@@ -17,6 +17,9 @@ export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> 
     ...(t.originalPresetId && { originalPresetId: t.originalPresetId }),
     ...(t.isUsingFallback && { isUsingFallback: true }),
     ...(typeof t.fallbackChainIndex === "number" && { fallbackChainIndex: t.fallbackChainIndex }),
+    // sessionLostOnRestore intentionally omitted — it's a transient restore-time
+    // signal. Persisting it would resurface the "Session no longer reachable"
+    // banner on every subsequent restart (issue #9802).
     // "directing" is a renderer-only ephemeral state owned by
     // TerminalAgentStateController; persisting it could resurrect a stuck
     // indicator on the next reload (issue #5832).

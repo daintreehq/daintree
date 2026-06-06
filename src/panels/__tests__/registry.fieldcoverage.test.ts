@@ -77,6 +77,9 @@ const PTY_FIELD_CLASSIFICATION = {
   lastCommand: false,
   restartKey: false,
   isRestarting: false,
+  // Transient restore-time signal (#9802) — drives the "Session no longer
+  // reachable" banner; must never be persisted or it resurfaces every restart.
+  sessionLostOnRestore: false,
   restartError: false,
   reconnectError: false,
   scrollbackRestoreError: false,

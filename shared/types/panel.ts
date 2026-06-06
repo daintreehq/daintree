@@ -432,6 +432,13 @@ export interface PtyPanelData extends BasePanelData {
   isUsingFallback?: boolean;
   /** How many fallback hops have been consumed from the primary's chain (0-based index into fallbacks[]). */
   fallbackChainIndex?: number;
+  /**
+   * Live-only restore signal. True on first mount when the saved agent session
+   * could not be resumed and a fresh session was launched instead. Drives the
+   * "Session no longer reachable" restart banner. Cleared on restart; never
+   * serialized — see `serializePtyPanel`.
+   */
+  sessionLostOnRestore?: boolean;
 }
 
 export interface BrowserPanelData extends BasePanelData {

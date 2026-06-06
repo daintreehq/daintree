@@ -95,6 +95,7 @@ export interface HydrationOptions {
     originalPresetId?: string;
     isUsingFallback?: boolean;
     fallbackChainIndex?: number;
+    sessionLostOnRestore?: boolean;
     env?: Record<string, string>;
     extensionState?: Record<string, unknown>;
     pluginId?: string;

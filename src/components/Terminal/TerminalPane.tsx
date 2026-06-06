@@ -444,6 +444,7 @@ function TerminalPaneComponent({
         exitBehavior: pty?.exitBehavior,
         isTrashedOrRemoved: terminal?.location === "trash" || terminal === undefined,
         spawnStatus: pty?.spawnStatus,
+        sessionLostOnRestore: pty?.sessionLostOnRestore ?? false,
       };
     })
   );
@@ -455,6 +456,7 @@ function TerminalPaneComponent({
     exitBehavior,
     isTrashedOrRemoved,
     spawnStatus,
+    sessionLostOnRestore,
   } = terminalState;
   // Fleet-scope mounts pass `isInputLocked: true` to render the panel as a
   // read-only broadcast view. Prop takes precedence over the stored flag so
@@ -1151,6 +1153,7 @@ function TerminalPaneComponent({
     reconnectError,
     spawnError,
     backendStatus,
+    sessionLostOnRestore,
   });
   // Backend-dependent banners (restart / spawn / reconnect) describe failures
   // whose only recovery path runs through the host, so they're hidden while
