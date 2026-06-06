@@ -68,6 +68,7 @@ export type ForgeProviderMethodName =
   | "getIssue"
   | "getPR"
   | "getRepoMetadata"
+  | "createIssue"
   | "assignIssue"
   | "unassignIssue"
   | "validateToken";

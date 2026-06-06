@@ -3,6 +3,7 @@ import { configure } from "safe-stable-stringify";
 import type {
   AuthValidation,
   CIStatus,
+  CreateIssueInput,
   Credentials,
   ForgeProviderImpl,
   ForgeUser,
@@ -199,6 +200,68 @@ function toForgeIssue(node: Record<string, unknown>): Issue {
     updatedAt: isoToMs(node.updatedAt),
     closedAt: isoToMsOrNull(node.closedAt),
     rawData: node,
+  };
+}
+
+/**
+ * Map a GitHub REST user object ({@link https://docs.github.com/en/rest/issues})
+ * to a {@link ForgeUser}. REST uses `avatar_url` where the GraphQL projection
+ * (consumed by {@link toForgeUser}) uses `avatarUrl`, so REST responses need
+ * their own mapper.
+ */
+function restUserToForgeUser(node: unknown): ForgeUser | undefined {
+  if (!node || typeof node !== "object") return undefined;
+  const n = node as { login?: unknown; avatar_url?: unknown };
+  if (typeof n.login !== "string") return undefined;
+  return {
+    login: n.login,
+    ...(typeof n.avatar_url === "string" ? { avatarUrl: n.avatar_url } : {}),
+    rawData: node,
+  };
+}
+
+/**
+ * Normalize a GitHub REST issue payload (e.g. the `POST .../issues` create
+ * response) to the contract {@link Issue}. The REST field names diverge from
+ * the GraphQL ones {@link toForgeIssue} handles — `html_url` vs `url`, `body`
+ * vs `bodyText`, snake_case timestamps, and flat `labels`/`assignees` arrays
+ * rather than `{ nodes: [...] }` connections — so a dedicated mapper is needed.
+ */
+function restToForgeIssue(raw: Record<string, unknown>): Issue {
+  const rawState = typeof raw.state === "string" ? raw.state : "open";
+  const assignees = Array.isArray(raw.assignees)
+    ? raw.assignees.map(restUserToForgeUser).filter((u): u is ForgeUser => u !== undefined)
+    : [];
+  const labels: ForgeLabel[] = [];
+  if (Array.isArray(raw.labels)) {
+    for (const entry of raw.labels) {
+      if (typeof entry === "string") {
+        labels.push({ name: entry });
+        continue;
+      }
+      if (!entry || typeof entry !== "object") continue;
+      const label = entry as { name?: unknown; color?: unknown };
+      if (typeof label.name !== "string") continue;
+      labels.push({
+        name: label.name,
+        ...(typeof label.color === "string" ? { color: label.color } : {}),
+      });
+    }
+  }
+  return {
+    number: raw.number as number,
+    title: typeof raw.title === "string" ? raw.title : "",
+    body: typeof raw.body === "string" ? raw.body : "",
+    state: normalizeIssueState(rawState),
+    rawState,
+    url: typeof raw.html_url === "string" ? raw.html_url : "",
+    author: restUserToForgeUser(raw.user),
+    assignees,
+    labels,
+    createdAt: isoToMs(raw.created_at ?? raw.updated_at),
+    updatedAt: isoToMs(raw.updated_at),
+    closedAt: isoToMsOrNull(raw.closed_at),
+    rawData: raw,
   };
 }
 
@@ -1120,6 +1183,45 @@ export const githubForgeProvider: ForgeProviderImpl = {
   buildCommitsUrl(repo: RepoRef, branch?: string): string {
     const base = `https://github.com/${repo.owner}/${repo.repo}/commits`;
     return branch ? `${base}/${encodeURIComponent(branch)}` : base;
+  },
+
+  async createIssue(repo: RepoRef, input: CreateIssueInput): Promise<Issue> {
+    const token = GitHubAuth.getToken();
+    if (!token) {
+      throw new Error("GitHub token not configured. Set it in Settings.");
+    }
+    const title = input.title?.trim();
+    if (!title) {
+      throw new Error("Issue title is required.");
+    }
+    const requestBody: Record<string, unknown> = { title };
+    if (input.body) requestBody.body = input.body;
+    if (input.labels && input.labels.length > 0) requestBody.labels = input.labels;
+
+    const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      // 410 Gone = issues are disabled on the repository.
+      if (response.status === 410) {
+        throw new Error("Issues are disabled for this repository.");
+      }
+      throw new Error(
+        `Failed to create issue: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
+      );
+    }
+    const data = (await response.json()) as Record<string, unknown>;
+    return restToForgeIssue(data);
   },
 
   async assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void> {

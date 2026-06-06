@@ -253,6 +253,18 @@ export interface Issue {
   rawData: unknown;
 }
 
+/**
+ * Normalized input for {@link ForgeProviderImpl.createIssue}. Mirrors the
+ * lowest common denominator across forges — `title` is required, `body` and
+ * `labels` are optional. Providers map these onto their own create payload and
+ * silently ignore fields they don't support.
+ */
+export interface CreateIssueInput {
+  title: string;
+  body?: string;
+  labels?: string[];
+}
+
 export interface PR {
   number: number;
   title: string;
@@ -476,7 +488,14 @@ export interface ForgeProviderImpl {
   buildPRsUrl(repo: RepoRef, options?: { query?: string; state?: string }): string;
   buildCommitsUrl(repo: RepoRef, branch?: string): string;
 
-  // Mutations — providers that don't support assignment throw "Not supported".
+  // Mutations — providers that don't support a mutation throw "Not supported".
+  /**
+   * Create a new issue and return the normalized {@link Issue}. Providers that
+   * can't create issues throw `"Not supported"`, matching the assignment
+   * convention. The host clears its issue caches after a successful create so
+   * the new issue shows up in subsequent {@link listIssues} calls.
+   */
+  createIssue(repo: RepoRef, input: CreateIssueInput): Promise<Issue>;
   assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void>;
   unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void>;
   validateToken(token: string): Promise<AuthValidation>;
