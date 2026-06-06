@@ -49,10 +49,27 @@ vi.mock("../TelemetryService.js", () => telemetryServiceMock);
 
 const crashLoopGuardMock = vi.hoisted(() => ({
   shouldRelaunch: vi.fn(() => true),
+  markCleanExit: vi.fn(),
+}));
+
+const crashRecoveryMock = vi.hoisted(() => ({
+  cleanupOnExit: vi.fn(),
+}));
+
+const panelSuspectLedgerMock = vi.hoisted(() => ({
+  markCleanLaunch: vi.fn(),
 }));
 
 vi.mock("../CrashLoopGuardService.js", () => ({
   getCrashLoopGuard: () => crashLoopGuardMock,
+}));
+
+vi.mock("../CrashRecoveryService.js", () => ({
+  getCrashRecoveryService: () => crashRecoveryMock,
+}));
+
+vi.mock("../PanelSuspectLedgerService.js", () => ({
+  getPanelSuspectLedger: () => panelSuspectLedgerMock,
 }));
 
 import {
@@ -643,6 +660,248 @@ describe("GpuCrashMonitorService", () => {
           expect(appMock.exit).toHaveBeenCalledWith(0);
         });
         expect(appMock.relaunch).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    // Issue #10065: GPU-mitigation exits skip the before-quit cleanup chain
+    // (app.exit does not emit before-quit / will-quit), so the next boot was
+    // treating the deliberate relaunch as a crash. Verify the three clean-exit
+    // markers are written in shutdown.ts order, in independent try/catch, and
+    // BEFORE app.relaunch() / app.exit(0) so the writes are not no-op'd by the
+    // process tear-down.
+    describe("clean-exit marker wiring (issue #10065)", () => {
+      it("soft relaunch writes all three markers in order before app.relaunch()", async () => {
+        await loadAndInit();
+        emitGpuCrash();
+        await vi.waitFor(() => {
+          expect(appMock.exit).toHaveBeenCalledWith(0);
+        });
+        expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
+        expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
+        expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
+        const cleanupOrder = crashRecoveryMock.cleanupOnExit.mock.invocationCallOrder[0];
+        const markExitOrder = crashLoopGuardMock.markCleanExit.mock.invocationCallOrder[0];
+        const markLaunchOrder = panelSuspectLedgerMock.markCleanLaunch.mock.invocationCallOrder[0];
+        const relaunchOrder = appMock.relaunch.mock.invocationCallOrder[0];
+        const exitOrder = appMock.exit.mock.invocationCallOrder[0];
+        expect(cleanupOrder).toBeLessThan(markExitOrder);
+        expect(markExitOrder).toBeLessThan(markLaunchOrder);
+        expect(markLaunchOrder).toBeLessThan(relaunchOrder);
+        expect(relaunchOrder).toBeLessThan(exitOrder);
+      });
+
+      it("nuclear relaunch writes all three markers in order before app.relaunch()", async () => {
+        writeGpuAngleFallbackFlag(tmpDir);
+        await loadAndInit();
+        emitGpuCrash();
+        emitGpuCrash();
+        emitGpuCrash();
+        await vi.waitFor(() => {
+          expect(appMock.exit).toHaveBeenCalledWith(0);
+        });
+        expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
+        expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
+        expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
+        const cleanupOrder = crashRecoveryMock.cleanupOnExit.mock.invocationCallOrder[0];
+        const markExitOrder = crashLoopGuardMock.markCleanExit.mock.invocationCallOrder[0];
+        const markLaunchOrder = panelSuspectLedgerMock.markCleanLaunch.mock.invocationCallOrder[0];
+        const relaunchOrder = appMock.relaunch.mock.invocationCallOrder[0];
+        const exitOrder = appMock.exit.mock.invocationCallOrder[0];
+        expect(cleanupOrder).toBeLessThan(markExitOrder);
+        expect(markExitOrder).toBeLessThan(markLaunchOrder);
+        expect(markLaunchOrder).toBeLessThan(relaunchOrder);
+        expect(relaunchOrder).toBeLessThan(exitOrder);
+      });
+
+      it("soft hard-stop writes all three markers, no relaunch()", async () => {
+        crashLoopGuardMock.shouldRelaunch.mockReturnValue(false);
+        await loadAndInit();
+        emitGpuCrash();
+        await vi.waitFor(() => {
+          expect(appMock.exit).toHaveBeenCalledWith(0);
+        });
+        expect(appMock.relaunch).not.toHaveBeenCalled();
+        expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
+        expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
+        expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
+        const cleanupOrder = crashRecoveryMock.cleanupOnExit.mock.invocationCallOrder[0];
+        const markLaunchOrder = panelSuspectLedgerMock.markCleanLaunch.mock.invocationCallOrder[0];
+        const exitOrder = appMock.exit.mock.invocationCallOrder[0];
+        expect(cleanupOrder).toBeLessThan(exitOrder);
+        expect(markLaunchOrder).toBeLessThan(exitOrder);
+      });
+
+      it("nuclear hard-stop writes all three markers, no relaunch()", async () => {
+        writeGpuAngleFallbackFlag(tmpDir);
+        crashLoopGuardMock.shouldRelaunch.mockReturnValue(false);
+        await loadAndInit();
+        emitGpuCrash();
+        emitGpuCrash();
+        emitGpuCrash();
+        await vi.waitFor(() => {
+          expect(appMock.exit).toHaveBeenCalledWith(0);
+        });
+        expect(appMock.relaunch).not.toHaveBeenCalled();
+        expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
+        expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
+        expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
+      });
+
+      it("soft relaunch: marker writes still complete when cleanupOnExit throws", async () => {
+        crashRecoveryMock.cleanupOnExit.mockImplementationOnce(() => {
+          throw new Error("cleanupOnExit failed");
+        });
+        await loadAndInit();
+        emitGpuCrash();
+        await vi.waitFor(() => {
+          expect(appMock.exit).toHaveBeenCalledWith(0);
+        });
+        expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
+        expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
+        expect(appMock.relaunch).toHaveBeenCalledTimes(1);
+        expect(loggerMethods.error).toHaveBeenCalledWith(
+          "gpu-mitigation-cleanup-on-exit-failed",
+          expect.any(Error),
+          expect.objectContaining({ path: "angle-fallback" })
+        );
+      });
+
+      it("soft relaunch: marker writes still complete when markCleanExit throws", async () => {
+        crashLoopGuardMock.markCleanExit.mockImplementationOnce(() => {
+          throw new Error("markCleanExit failed");
+        });
+        await loadAndInit();
+        emitGpuCrash();
+        await vi.waitFor(() => {
+          expect(appMock.exit).toHaveBeenCalledWith(0);
+        });
+        expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
+        expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
+        expect(appMock.relaunch).toHaveBeenCalledTimes(1);
+        expect(loggerMethods.error).toHaveBeenCalledWith(
+          "gpu-mitigation-mark-clean-exit-failed",
+          expect.any(Error),
+          expect.objectContaining({ path: "angle-fallback" })
+        );
+      });
+
+      it("soft relaunch: relaunch still happens when markCleanLaunch throws", async () => {
+        panelSuspectLedgerMock.markCleanLaunch.mockImplementationOnce(() => {
+          throw new Error("markCleanLaunch failed");
+        });
+        await loadAndInit();
+        emitGpuCrash();
+        await vi.waitFor(() => {
+          expect(appMock.exit).toHaveBeenCalledWith(0);
+        });
+        expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
+        expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
+        expect(appMock.relaunch).toHaveBeenCalledTimes(1);
+        expect(loggerMethods.error).toHaveBeenCalledWith(
+          "gpu-mitigation-mark-clean-launch-failed",
+          expect.any(Error),
+          expect.objectContaining({ path: "angle-fallback" })
+        );
+      });
+
+      it("nuclear hard-stop: marker writes still complete when cleanupOnExit throws", async () => {
+        writeGpuAngleFallbackFlag(tmpDir);
+        crashLoopGuardMock.shouldRelaunch.mockReturnValue(false);
+        crashRecoveryMock.cleanupOnExit.mockImplementationOnce(() => {
+          throw new Error("cleanupOnExit failed");
+        });
+        await loadAndInit();
+        emitGpuCrash();
+        emitGpuCrash();
+        emitGpuCrash();
+        await vi.waitFor(() => {
+          expect(appMock.exit).toHaveBeenCalledWith(0);
+        });
+        expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
+        expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
+        expect(appMock.relaunch).not.toHaveBeenCalled();
+      });
+
+      it("non-GPU crashes do not call the cleanup helper", async () => {
+        await loadAndInit();
+        emitChildProcessGone("Utility", "crashed", 1, "daintree-pty-host");
+        emitChildProcessGone("Utility", "crashed", 1, "daintree-pty-host");
+        emitChildProcessGone("Utility", "crashed", 1, "daintree-pty-host");
+        expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+        expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+        expect(panelSuspectLedgerMock.markCleanLaunch).not.toHaveBeenCalled();
+      });
+
+      it("clean-exit / killed GPU exits do not call the cleanup helper", async () => {
+        await loadAndInit();
+        emitGpuCrash("clean-exit");
+        emitGpuCrash("killed");
+        emitGpuCrash("clean-exit");
+        expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+        expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+        expect(panelSuspectLedgerMock.markCleanLaunch).not.toHaveBeenCalled();
+      });
+
+      it("already-disabled path does not call the cleanup helper", async () => {
+        writeGpuDisabledFlag(tmpDir);
+        await loadAndInit();
+        emitGpuCrash();
+        emitGpuCrash();
+        emitGpuCrash();
+        expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+        expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+        expect(panelSuspectLedgerMock.markCleanLaunch).not.toHaveBeenCalled();
+      });
+
+      it("failed ANGLE flag write does not call the cleanup helper", async () => {
+        vi.doMock("../../utils/fs.js", async () => {
+          const actual =
+            await vi.importActual<typeof import("../../utils/fs.js")>("../../utils/fs.js");
+          return {
+            ...actual,
+            resilientAtomicWriteFileSync: vi.fn(() => {
+              throw new Error("EROFS: read-only filesystem");
+            }),
+          };
+        });
+        try {
+          await loadAndInit();
+          emitGpuCrash();
+          await new Promise((r) => setImmediate(r));
+          expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+          expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+          expect(panelSuspectLedgerMock.markCleanLaunch).not.toHaveBeenCalled();
+          expect(appMock.relaunch).not.toHaveBeenCalled();
+        } finally {
+          vi.doUnmock("../../utils/fs.js");
+        }
+      });
+
+      it("failed nuclear disable write does not call the cleanup helper", async () => {
+        writeGpuAngleFallbackFlag(tmpDir);
+        vi.doMock("../../utils/fs.js", async () => {
+          const actual =
+            await vi.importActual<typeof import("../../utils/fs.js")>("../../utils/fs.js");
+          return {
+            ...actual,
+            resilientAtomicWriteFileSync: vi.fn(() => {
+              throw new Error("EROFS: read-only filesystem");
+            }),
+          };
+        });
+        try {
+          await loadAndInit();
+          emitGpuCrash();
+          emitGpuCrash();
+          emitGpuCrash();
+          await new Promise((r) => setImmediate(r));
+          expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+          expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+          expect(panelSuspectLedgerMock.markCleanLaunch).not.toHaveBeenCalled();
+          expect(appMock.relaunch).not.toHaveBeenCalled();
+        } finally {
+          vi.doUnmock("../../utils/fs.js");
+        }
       });
     });
   });
