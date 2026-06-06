@@ -4,10 +4,10 @@ This directory contains the benchmark harness for app-level performance regressi
 
 ## Modes
 
-- `smoke`: fast PR guardrails
-- `ci`: broader merge validation
-- `nightly`: full matrix + soak coverage
-- `soak`: long-run stress focus
+- `smoke`: fast local smoke suite (not invoked by any workflow — run on demand)
+- `ci`: broader validation — run on the daily schedule and via manual dispatch in `performance.yml`, not on PRs or merges
+- `nightly`: full matrix + soak coverage (daily schedule / manual dispatch in `performance.yml`)
+- `soak`: long-run stress focus (daily schedule / manual dispatch in `performance.yml`)
 
 ## Commands
 

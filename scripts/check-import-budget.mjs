@@ -2,13 +2,14 @@
 
 // Compares dist-electron/eager-import-meta.json (emitted by
 // scripts/build-import-budget.mjs) against the checked-in
-// eager-import-baseline.json. Fails CI if:
+// eager-import-baseline.json. This budget is not wired into CI pre-1.0 (see
+// .github/workflows/ci.yml) — it runs locally on demand and fails when run if:
 //   - the count of eagerly-imported modules grows past the budget, OR
 //   - a file not on the allowlist gains a sync FS / store / SQLite call on the
 //     eager main-process import path.
 //
 // Usage:
-//   node scripts/check-import-budget.mjs                    # check mode (CI)
+//   node scripts/check-import-budget.mjs                    # check mode (local, not wired to CI pre-1.0)
 //   node scripts/check-import-budget.mjs --update           # rewrite baseline from current report
 //   node scripts/check-import-budget.mjs --update --force   # bypass shrinkage guard
 
