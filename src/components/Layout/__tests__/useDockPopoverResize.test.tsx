@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, cleanup } from "@testing-library/react";
 
 // Keep persistence IPC out of the unit under test.
 vi.mock("@/clients", () => ({
@@ -19,7 +19,11 @@ const maxHeight = () => Math.round(window.innerHeight * POPOVER_MAX_HEIGHT_RATIO
 
 function mouseDownAt(handleProps: ReturnType<typeof useDockPopoverResize>["handleProps"], y: number) {
   act(() => {
-    handleProps.onMouseDown({ preventDefault: vi.fn(), clientY: y } as unknown as React.MouseEvent);
+    handleProps.onMouseDown({
+      preventDefault: vi.fn(),
+      clientY: y,
+      button: 0,
+    } as unknown as React.MouseEvent);
   });
 }
 
@@ -45,6 +49,14 @@ describe("useDockPopoverResize", () => {
   });
 
   afterEach(() => {
+    // Release any in-flight drag (tests that assert the live draft height never
+    // call mouseup), then unmount so the drag effect cleanup detaches its
+    // document listeners — otherwise a leaked mouseup handler fires in the next
+    // test and pollutes its assertions.
+    act(() => {
+      document.dispatchEvent(new MouseEvent("mouseup"));
+    });
+    cleanup();
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
   });
@@ -145,6 +157,61 @@ describe("useDockPopoverResize", () => {
     });
     expect(useDockStore.getState().popoverHeight).toBe(POPOVER_DEFAULT_HEIGHT);
     expect(onCommit).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not commit when the pointer is released without moving", () => {
+    // onCommit is unique to this hook instance, so it isolates this gesture from
+    // any drag listeners other tests may have left attached to document.
+    const onCommit = vi.fn();
+    const { result } = renderHook(() => useDockPopoverResize(onCommit));
+    mouseDownAt(result.current.handleProps, 500);
+    mouseUp(); // released at the same position
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(result.current.height).toBe(POPOVER_DEFAULT_HEIGHT);
+  });
+
+  it("ignores non-primary mouse buttons", () => {
+    const { result } = renderHook(() => useDockPopoverResize());
+    act(() => {
+      result.current.handleProps.onMouseDown({
+        preventDefault: vi.fn(),
+        clientY: 500,
+        button: 2, // right-click
+      } as unknown as React.MouseEvent);
+    });
+    expect(result.current.isResizing).toBe(false);
+    expect(document.body.style.cursor).toBe("");
+  });
+
+  it("does not fire onCommit when ArrowDown is pressed at the minimum", () => {
+    act(() => {
+      useDockStore.setState({ popoverHeight: POPOVER_MIN_HEIGHT });
+    });
+    const onCommit = vi.fn();
+    const { result } = renderHook(() => useDockPopoverResize(onCommit));
+    act(() => {
+      result.current.handleProps.onKeyDown({
+        key: "ArrowDown",
+        preventDefault: vi.fn(),
+      } as unknown as React.KeyboardEvent);
+    });
+    expect(useDockStore.getState().popoverHeight).toBe(POPOVER_MIN_HEIGHT);
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("ignores document mouse events after unmount mid-drag", () => {
+    const spy = vi.spyOn(useDockStore.getState(), "setPopoverHeight");
+    const onCommit = vi.fn();
+    const { result, unmount } = renderHook(() => useDockPopoverResize(onCommit));
+    mouseDownAt(result.current.handleProps, 500);
+    moveTo(400);
+    unmount();
+    spy.mockClear();
+    moveTo(300);
+    mouseUp();
+    expect(spy).not.toHaveBeenCalled();
+    expect(onCommit).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 
   it("resets to the default height on double-click", () => {

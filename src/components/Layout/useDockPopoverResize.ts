@@ -60,9 +60,6 @@ export function useDockPopoverResize(onCommit?: () => void): UseDockPopoverResiz
   // Live height while dragging; null when idle (store value is the source of truth).
   const [draftHeight, setDraftHeight] = useState<number | null>(null);
   const [isResizing, setIsResizing] = useState(false);
-  // Mirrors `isResizing` synchronously so the unmount-only cleanup effect can
-  // detect a mid-drag teardown without relying on stale closure state.
-  const isResizingRef = useRef(false);
 
   const dragStartYRef = useRef(0);
   const dragStartHeightRef = useRef(popoverHeight);
@@ -77,22 +74,25 @@ export function useDockPopoverResize(onCommit?: () => void): UseDockPopoverResiz
 
   const startResizing = useCallback(
     (e: React.MouseEvent) => {
+      // Only the primary button drives a resize; right/middle-click should fall
+      // through to the context menu rather than locking the row-resize cursor.
+      if (e.button !== 0) return;
       e.preventDefault();
       dragStartYRef.current = e.clientY;
       dragStartHeightRef.current = popoverHeight;
       draftHeightRef.current = popoverHeight;
       setDraftHeight(popoverHeight);
-      isResizingRef.current = true;
       setIsResizing(true);
-      document.body.style.cursor = "row-resize";
-      document.body.style.userSelect = "none";
     },
     [popoverHeight]
   );
 
-  // Attach document listeners for the duration of the drag. Resolved inside the
-  // effect (not via React handlers on the strip) so the drag continues even when
-  // the pointer leaves the thin handle.
+  // Own the drag for as long as `isResizing` holds. Document listeners (not React
+  // handlers on the thin strip) keep the drag alive when the pointer leaves the
+  // handle. The body cursor/userSelect lock lives here too — set on attach,
+  // cleared on cleanup — so it is restored on every teardown path, including an
+  // unmount mid-drag when the popover closes via Escape/outside-click before
+  // `mouseup` ever fires.
   useEffect(() => {
     if (!isResizing) return;
 
@@ -104,55 +104,56 @@ export function useDockPopoverResize(onCommit?: () => void): UseDockPopoverResiz
     };
 
     const onUp = () => {
-      setPopoverHeight(draftHeightRef.current);
+      const moved = draftHeightRef.current !== dragStartHeightRef.current;
       setDraftHeight(null);
-      isResizingRef.current = false;
       setIsResizing(false);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      onCommitRef.current?.();
+      // A click without drag (or a drag that nets back to the start height)
+      // shouldn't fire a persistence write or a terminal re-fit.
+      if (moved) {
+        setPopoverHeight(draftHeightRef.current);
+        onCommitRef.current?.();
+      }
     };
 
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
     return () => {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
     };
   }, [isResizing, setPopoverHeight]);
 
-  // Unmount-mid-drag guard: if the popover closes (Escape / outside-click) while
-  // a drag is live, `mouseup` never fires and the row-resize cursor + userSelect
-  // lock would stay stuck for the rest of the session. Reset on teardown.
-  useEffect(() => {
-    return () => {
-      if (isResizingRef.current) {
-        isResizingRef.current = false;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-      }
-    };
-  }, []);
+  const commit = useCallback(
+    (next: number) => {
+      const clamped = clampHeight(next);
+      // No-op at the clamp boundary — don't churn the persistence IPC or re-fit.
+      if (clamped === popoverHeight) return;
+      setPopoverHeight(clamped);
+      onCommitRef.current?.();
+    },
+    [popoverHeight, setPopoverHeight]
+  );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        setPopoverHeight(popoverHeight + RESIZE_STEP);
-        onCommitRef.current?.();
+        commit(popoverHeight + RESIZE_STEP);
       } else if (e.key === "ArrowDown") {
         e.preventDefault();
-        setPopoverHeight(popoverHeight - RESIZE_STEP);
-        onCommitRef.current?.();
+        commit(popoverHeight - RESIZE_STEP);
       }
     },
-    [popoverHeight, setPopoverHeight]
+    [popoverHeight, commit]
   );
 
   const handleDoubleClick = useCallback(() => {
-    setPopoverHeight(POPOVER_DEFAULT_HEIGHT);
-    onCommitRef.current?.();
-  }, [setPopoverHeight]);
+    commit(POPOVER_DEFAULT_HEIGHT);
+  }, [commit]);
 
   const height = draftHeight ?? popoverHeight;
 

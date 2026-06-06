@@ -473,6 +473,20 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     );
   }, [panels, agentSettingsAll, ccrPresetsByAgent, projectPresetsByAgent]);
 
+  // Re-fit the active tab's terminal once a resize gesture settles on a new
+  // height. Declared before the early return below so the hook order stays
+  // stable when the group transiently empties (Rules of Hooks).
+  const { height: popoverHeight, isResizing, handleProps } = useDockPopoverResize(() => {
+    if (!activePanelId) return;
+    requestAnimationFrame(() => {
+      try {
+        terminalInstanceService.fit(activePanelId);
+      } catch {
+        // fit() guards zero-dimension cases internally; ignore transient throws.
+      }
+    });
+  });
+
   if (!activePanel || panels.length === 0) {
     return null;
   }
@@ -500,18 +514,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const displayTitle = getBaseTitle(activePanel.title);
   const displayAgentState = getTerminalAgentDisplayState(activeChrome, agentState);
   const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
-
-  // Re-fit the active tab's terminal once a resize gesture settles on a new height.
-  const { height: popoverHeight, isResizing, handleProps } = useDockPopoverResize(() => {
-    if (!activePanelId) return;
-    requestAnimationFrame(() => {
-      try {
-        terminalInstanceService.fit(activePanelId);
-      } catch {
-        // fit() guards zero-dimension cases internally; ignore transient throws.
-      }
-    });
-  });
 
   return (
     <DockPopoverChildProvider>
@@ -637,7 +639,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           >
             <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
               <LayoutGroup id={`dock-tabs-${group.id}`}>
-                <div className="group flex items-stretch border-b border-divider bg-daintree-sidebar shrink-0">
+                <div className="group flex items-stretch border-b border-divider bg-daintree-sidebar shrink-0 pt-2">
                   <div
                     ref={setTabListEl}
                     className="flex items-center min-w-0 flex-1 overflow-x-auto overscroll-x-none scrollbar-none"
