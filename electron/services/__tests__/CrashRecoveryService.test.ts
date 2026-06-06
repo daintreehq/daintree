@@ -2280,7 +2280,10 @@ describe("CrashRecoveryService", () => {
     const T0 = 1_700_000_000_000;
     const DEAD_MS = 7_200_000; // 2 hours
 
-    function writeMarkerWithHeartbeat(lastHeartbeatMs: number, extras: Record<string, unknown> = {}): void {
+    function writeMarkerWithHeartbeat(
+      lastHeartbeatMs: number,
+      extras: Record<string, unknown> = {}
+    ): void {
       fs.writeFileSync(
         path.join(userData, "running.lock"),
         JSON.stringify({
@@ -2578,6 +2581,7 @@ describe("CrashRecoveryService", () => {
       const flagPath = path.join(userData, "watchdog-kill.flag");
       fs.writeFileSync(
         flagPath,
+        // eslint-disable-next-line no-loss-of-precision -- sentinel: forces Infinity, exercises 2f134fabf hardening
         JSON.stringify({ killedAt: 1e309, missedBeats: 3, mainPid: 4242 }),
         "utf8"
       );
