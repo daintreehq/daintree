@@ -170,6 +170,66 @@ describe("deferredInitQueue", () => {
     });
   });
 
+  it("queue still advances when failure reporting itself throws", async () => {
+    const ran: string[] = [];
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Simulate a store-write / serialization failure inside notifyError.
+    // mockImplementationOnce auto-reverts so it can't leak into later tests.
+    vi.mocked(notifyError).mockImplementationOnce(() => {
+      throw new Error("reporting backend exploded");
+    });
+
+    registerDeferredTask({
+      name: "fail-sync",
+      run: () => {
+        throw new Error("boom");
+      },
+    });
+    registerDeferredTask({ name: "ok", run: () => void ran.push("ok") });
+
+    finalizeDeferredRegistration(10_000);
+    signalFirstInteractive(null);
+    await waitForDrain();
+
+    // The reporter threw, but failure isolation held: the next task ran and the
+    // queue reached "drained" instead of stalling in "draining".
+    expect(ran).toEqual(["ok"]);
+    expect(getDeferredQueueState().drainState).toBe("drained");
+    consoleError.mockRestore();
+  });
+
+  it("reports non-Error thrown values without secondary failure", async () => {
+    const ran: string[] = [];
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    registerDeferredTask({
+      name: "throws-string",
+      run: () => {
+        throw "plain string failure";
+      },
+    });
+    registerDeferredTask({
+      name: "throws-null",
+      run: () => {
+        throw null;
+      },
+    });
+    registerDeferredTask({ name: "ok", run: () => void ran.push("ok") });
+
+    finalizeDeferredRegistration(10_000);
+    signalFirstInteractive(null);
+    await waitForDrain();
+
+    expect(ran).toEqual(["ok"]);
+    expect(getDeferredQueueState().drainState).toBe("drained");
+    expect(notifyError).toHaveBeenCalledTimes(2);
+    // Each reported error is a real Error with the original value preserved on cause.
+    for (const [error] of vi.mocked(notifyError).mock.calls) {
+      expect(error).toBeInstanceOf(Error);
+    }
+    consoleError.mockRestore();
+  });
+
   it("late registration after drain runs immediately", async () => {
     const early = vi.fn();
     registerDeferredTask({ name: "early", run: early });

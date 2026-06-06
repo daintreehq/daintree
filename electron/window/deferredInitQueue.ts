@@ -124,12 +124,21 @@ export function resetDeferredQueue(): void {
  * failure-isolation guarantee: the caller still advances to the next task.
  */
 function reportDeferredTaskFailure(taskName: string, err: unknown): void {
-  const message = err instanceof Error ? err.message : String(err);
-  console.error(`[DeferredInit] Task "${taskName}" failed:`, err);
-  notifyError(new Error(`Deferred task "${taskName}" failed: ${message}`, { cause: err }), {
-    source: "deferred-init",
-  });
-  trackEvent("deferred_init_task_failed", { taskName });
+  // Reporting is best-effort and must never throw: the synchronous drain catch
+  // calls this immediately before `scheduleNext()`, so a throw here would strand
+  // the queue in "draining" forever. Guard the whole body — a non-Error thrown
+  // value (`String(err)`) or a store-write failure inside `notifyError` must not
+  // break failure isolation.
+  try {
+    const message = err instanceof Error ? err.message : String(err ?? "unknown error");
+    console.error(`[DeferredInit] Task "${taskName}" failed:`, err);
+    notifyError(new Error(`Deferred task "${taskName}" failed: ${message}`, { cause: err }), {
+      source: "deferred-init",
+    });
+    trackEvent("deferred_init_task_failed", { taskName });
+  } catch (reportErr) {
+    console.error(`[DeferredInit] Failed to report failure for task "${taskName}":`, reportErr);
+  }
 }
 
 function doDrain(): void {
