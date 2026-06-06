@@ -246,7 +246,18 @@ function emitReliabilityMetricWithTracking(
   ) {
     clearAllPauseSources(payload.terminalId);
   }
-  backpressureManager.emitReliabilityMetric(payload, forceEmit);
+  // This funnel TERMINATES the chain: emit the wire event directly. We must
+  // NOT call `backpressureManager.emitReliabilityMetric` here — in production
+  // the manager is constructed with its `emitReliabilityMetric` dep wired
+  // back to this funnel (see construction below), so re-entering it would
+  // route straight back here and recurse until the stack overflows. The gate
+  // (`metricsEnabled()`, bypassed by `forceEmit` for the data-loss pulse)
+  // mirrors the manager's legacy default branch.
+  if (!forceEmit && !metricsEnabled()) return;
+  sendEvent({
+    type: "terminal-reliability-metric",
+    payload,
+  });
 }
 
 // Terminals that need IPC data mirroring (e.g., dev-preview sessions that

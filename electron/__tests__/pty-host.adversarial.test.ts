@@ -579,7 +579,7 @@ vi.mock("../pty-host/index.js", async () => {
   };
 });
 
-import { BACKPRESSURE_SAFETY_TIMEOUT_MS } from "../pty-host/index.js";
+import { BACKPRESSURE_SAFETY_TIMEOUT_MS, metricsEnabled } from "../pty-host/index.js";
 import { getPtyPool } from "../services/PtyPool.js";
 
 const originalParentPortDescriptor = Object.getOwnPropertyDescriptor(process, "parentPort");
@@ -632,6 +632,8 @@ describe("pty-host adversarial", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.mocked(getPtyPool).mockClear();
+    // Restore the module-default (metrics off) so per-test overrides don't leak.
+    vi.mocked(metricsEnabled).mockReturnValue(false);
   });
 
   afterEach(async () => {
@@ -701,6 +703,9 @@ describe("pty-host adversarial", () => {
   });
 
   it("IPC_QUEUE_FULL_EMITS_DATA_LOSS_STATUS", async () => {
+    // Metrics on so the gated reliability-metric wire emission fires; the
+    // data-loss status event is ungated and fires regardless.
+    vi.mocked(metricsEnabled).mockReturnValue(true);
     const parentPort = await loadHost();
     const terminal = createTerminal("t1");
     hostState.terminals.set("t1", terminal);
@@ -731,20 +736,34 @@ describe("pty-host adversarial", () => {
     });
 
     // The reliability metric must still fire alongside the new status event —
-    // existing telemetry consumers must keep working.
-    const backpressure = hostState.backpressureManagers[0];
-    expect(backpressure.emitReliabilityMetric).toHaveBeenCalledTimes(1);
-    expect(backpressure.emitReliabilityMetric).toHaveBeenCalledWith(
-      expect.objectContaining({
+    // existing telemetry consumers must keep working. The host funnel
+    // (`emitReliabilityMetricWithTracking`) TERMINATES the chain by emitting
+    // the wire event directly via sendEvent; it must NOT re-enter the manager
+    // (which in prod is wired with its `emitReliabilityMetric` dep pointing
+    // back at this same funnel — re-entering would recurse to a stack
+    // overflow). So we assert on the actual wire event, not the manager
+    // method, and confirm the manager was never re-invoked by the funnel.
+    const reliabilityEvents = parentPort.postMessage.mock.calls
+      .map((call: unknown[]) => call[0])
+      .filter(
+        (msg: unknown): msg is Record<string, unknown> =>
+          typeof msg === "object" &&
+          msg !== null &&
+          (msg as { type?: string }).type === "terminal-reliability-metric"
+      );
+    expect(reliabilityEvents).toHaveLength(1);
+    expect(reliabilityEvents[0]).toMatchObject({
+      type: "terminal-reliability-metric",
+      payload: {
         terminalId: "t1",
         metricType: "suspend",
         bufferUtilization: 100,
-      }),
-      // Second arg is the `forceEmit` flag on `BackpressureManager.emitReliabilityMetric`.
-      // The funnel passes its own `forceEmit` through (default `false` for
-      // non-pulse events); the test asserts the payload shape, not the flag.
-      expect.any(Boolean)
-    );
+      },
+    });
+    // The funnel does NOT route back through the manager — that path is the
+    // production recursion cycle and must stay broken.
+    const backpressure = hostState.backpressureManagers[0];
+    expect(backpressure.emitReliabilityMetric).not.toHaveBeenCalled();
 
     // Drop path returns early, so addBytes and the data event are never sent.
     expect(ipcQueue.addBytes).not.toHaveBeenCalled();

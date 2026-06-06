@@ -439,5 +439,57 @@ describe("BackpressureManager adversarial", () => {
         })
       );
     });
+
+    it("does not recurse when the dep funnel re-enters the manager (prod wiring shape)", () => {
+      // Production wiring: the host constructs the manager with an
+      // `emitReliabilityMetric` dep pointing at the host funnel
+      // (`emitReliabilityMetricWithTracking`). That funnel MUST terminate the
+      // chain by emitting the wire event itself — if it instead called back
+      // into `manager.emitReliabilityMetric`, the manager would forward to the
+      // dep again and recurse until the stack overflows. This pins the
+      // invariant: a funnel-shaped dep that does its tracking and then sends
+      // directly yields exactly one wire emission, with the manager's
+      // dep-forwarding path entered exactly once (no loop).
+      const trackingCalls: Array<{ metricType: string; forceEmit: boolean }> = [];
+
+      // Matches the fixed `emitReliabilityMetricWithTracking`: it does its
+      // pause-source bookkeeping (elided here) and then TERMINATES by emitting
+      // the wire event directly. It does NOT re-enter the manager.
+      const funnel = vi.fn((payload: { metricType: string }, forceEmit: boolean) => {
+        trackingCalls.push({ metricType: payload.metricType, forceEmit });
+        sendEvent({ type: "terminal-reliability-metric", payload });
+      });
+
+      const manager = new BackpressureManager({
+        getTerminal: vi.fn(),
+        getPauseCoordinator: (id) =>
+          coordinators.get(id) as unknown as PtyPauseCoordinator | undefined,
+        sendEvent,
+        metricsEnabled: () => true,
+        emitReliabilityMetric: (payload, forceEmit = false) =>
+          funnel(payload as { metricType: string }, forceEmit),
+      });
+
+      expect(() =>
+        manager.emitReliabilityMetric({
+          terminalId: "term-1",
+          metricType: "pause-start",
+          timestamp: 1000,
+        })
+      ).not.toThrow();
+
+      // The funnel (dep) is invoked exactly once — one originating emit, no
+      // recursive re-entry.
+      expect(funnel).toHaveBeenCalledTimes(1);
+      expect(trackingCalls).toEqual([{ metricType: "pause-start", forceEmit: false }]);
+      // Exactly one wire emission reaches the transport.
+      expect(sendEvent).toHaveBeenCalledTimes(1);
+      expect(sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "terminal-reliability-metric",
+          payload: expect.objectContaining({ metricType: "pause-start", terminalId: "term-1" }),
+        })
+      );
+    });
   });
 });
