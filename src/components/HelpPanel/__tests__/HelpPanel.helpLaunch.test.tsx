@@ -348,6 +348,12 @@ vi.mock("@/types", () => ({
   TerminalRefreshTier: { BACKGROUND: 0, ACTIVE: 1 },
 }));
 
+// The figure rail pulls the real AppDialog (lightbox) into the module graph,
+// which drags the @/hooks → panelPersistence chain past this suite's store
+// mocks. The rail isn't under test here, so stub it like the other heavy
+// children (XtermAdapter, ConfirmDialog) — its own suite is FigureRail.test.tsx.
+vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
+
 import { HelpPanel } from "../HelpPanel";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 

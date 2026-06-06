@@ -20,6 +20,7 @@ const { controllerSpies, helpPanelState, panelStoreState } = vi.hoisted(() => ({
     conversationTouched: false,
     hibernateSessions: {} as Record<string, unknown>,
     focusRequest: 0,
+    figures: [] as unknown[],
     markConversationStarted: vi.fn(),
     setWidth: vi.fn(),
     setOpen: vi.fn(),
@@ -198,6 +199,12 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
       </div>
     ) : null,
 }));
+
+// The figure rail pulls the real AppDialog (lightbox) into the module graph,
+// which drags the @/hooks → panelPersistence chain past this suite's store
+// mocks. The rail isn't under test here, so stub it like the other heavy
+// children (XtermAdapter, ConfirmDialog) — its own suite is FigureRail.test.tsx.
+vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
 import { HelpPanel } from "../HelpPanel";
 

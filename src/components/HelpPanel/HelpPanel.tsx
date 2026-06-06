@@ -24,6 +24,7 @@ import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpLaunchingState } from "./HelpLaunchingState";
 import { McpActivityStrip } from "./McpActivityStrip";
+import { FigureRail } from "./FigureRail";
 import {
   useHelpPanelStore,
   HELP_PANEL_MIN_WIDTH,
@@ -149,6 +150,7 @@ export function HelpPanel({
     introDismissed,
     conversationTouched,
     focusRequest,
+    figures,
     markConversationStarted,
     setWidth,
     setOpen,
@@ -755,6 +757,7 @@ export function HelpPanel({
                   />
                 </Suspense>
               )}
+              {figures.length > 0 && <FigureRail figures={figures} />}
             </>
           )
         ) : session.assistantVersionTooOld ? (
