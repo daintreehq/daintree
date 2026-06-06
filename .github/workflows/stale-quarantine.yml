@@ -180,6 +180,13 @@ jobs:
                 const existing = existingIssues.find(i => i.title === title);
 
                 if (existing) {
+                  // The first report for an issue lives in the issue body, not a
+                  // comment, so dedup against it too or run 2 would always re-post.
+                  if (normalize(existing.body) === normalize(body)) {
+                    console.log(`Skipped commenting on #${existing.number}: issue body already matches.`);
+                    continue;
+                  }
+
                   // Check if the most recent comment already matches this body.
                   // The issue-comments endpoint ignores sort/direction and returns
                   // comments oldest-first, so paginate and take the last one.
