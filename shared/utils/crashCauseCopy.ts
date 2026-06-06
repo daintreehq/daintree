@@ -55,15 +55,28 @@ export const CRASH_CAUSE_COPY: Record<CrashCause, CrashCauseCopy> = {
 
 /** Dialog headline title for the given `crashCause`. Falls back to the V1 generic for `undefined`. */
 export function getCrashCauseTitle(cause: CrashCause | undefined): string {
-  return CRASH_CAUSE_COPY[cause ?? "unknown"].title;
+  return CRASH_CAUSE_COPY[normalizeCrashCause(cause)].title;
 }
 
 /** Dialog sub-line description for the given `crashCause`. Falls back to the V1 generic for `undefined`. */
 export function getCrashCauseDescription(cause: CrashCause | undefined): string {
-  return CRASH_CAUSE_COPY[cause ?? "unknown"].description;
+  return CRASH_CAUSE_COPY[normalizeCrashCause(cause)].description;
 }
 
 /** Short label for the GitHub report's `**Cause**:` line. */
 export function getCrashCauseReportLabel(cause: CrashCause | undefined): string {
-  return CRASH_CAUSE_COPY[cause ?? "unknown"].reportLabel;
+  return CRASH_CAUSE_COPY[normalizeCrashCause(cause)].reportLabel;
+}
+
+/**
+ * Normalize an unknown `crashCause` from a persisted log to a known
+ * `CrashCause`. A future-schema log (e.g. an enum value added in a later
+ * build) or a hand-edited crash-{id}.json must not throw `TypeError` from
+ * `CRASH_CAUSE_COPY[badValue].title` — the dialog and report preview render
+ * during a crash-pending state, so any throw here would mask the recovery UI
+ * behind a render error.
+ */
+export function normalizeCrashCause(cause: CrashCause | undefined): CrashCause {
+  if (cause === undefined) return "unknown";
+  return CRASH_CAUSE_COPY[cause] !== undefined ? cause : "unknown";
 }

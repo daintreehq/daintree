@@ -267,6 +267,35 @@ describe("buildCrashReportUrl", () => {
     expect(body).toContain("**Cause**: Watchdog deadlock (SIGKILL)");
     expect(body).not.toContain("External kill");
   });
+
+  it("does not throw on a future-schema crashCause value (defensive normalization)", () => {
+    // A log from a newer build with a cause enum value this build doesn't know
+    // about must not throw TypeError from CRASH_CAUSE_COPY[bad].title — the
+    // dialog and report preview both render during a crash-pending state.
+    const result = buildCrashReportUrl(
+      baseEntry({ errorMessage: undefined, crashCause: "future-value" as never })
+    );
+    const body = decodeBody(result.url);
+    // No Cause: line for unknown / future-schema values (would be "Unknown"
+    // noise).
+    expect(body).not.toContain("**Cause**:");
+    // Title falls back to the V1 generic for an unknown cause.
+    expect(decodeTitle(result.url)).toContain("Daintree closed unexpectedly");
+  });
+
+  it("does not throw on an out-of-range timestamp (safeIsoTime guards toISOString)", () => {
+    expect(() =>
+      buildCrashReportUrl(
+        baseEntry({
+          timestamp: Number.MAX_VALUE,
+          watchdogKilledAt: Number.MAX_VALUE,
+          cause: "watchdog-deadlock",
+          watchdogMissedBeats: 3,
+          watchdogMainPid: 42,
+        })
+      )
+    ).not.toThrow();
+  });
 });
 
 describe("buildCrashReportUrlFromBody", () => {

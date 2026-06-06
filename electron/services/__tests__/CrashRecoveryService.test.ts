@@ -1831,6 +1831,55 @@ describe("CrashRecoveryService", () => {
       }
     });
 
+    it("writes the synthesized log before deleteMarker (preserve-before-delete per #8728)", () => {
+      const uptime = osUptimeSpy(24 * 60 * 60);
+      // Track the order in which the marker is unlinked and the synthesized
+      // crash log is written. The marker must still be present at the moment
+      // writeCrashLog fires — a kill in the gap would otherwise leave the
+      // next launch with a real log file but no marker to consume it.
+      const events: string[] = [];
+      const realUnlink = fs.unlinkSync;
+      const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation(((target: fs.PathLike) => {
+        if (String(target).endsWith("running.lock")) events.push("unlink-marker");
+        return realUnlink(target);
+      }) as typeof fs.unlinkSync);
+      utilsMock.resilientAtomicWriteFileSync.mockImplementation(((
+        fp: string,
+        data: string,
+        enc?: BufferEncoding
+      ) => {
+        if (fp.includes("crash-") && !fp.includes("session-state")) events.push("write-crash-log");
+        fs.writeFileSync(fp, data, enc ?? "utf-8");
+      }) as typeof utilsMock.resilientAtomicWriteFileSync.mockImplementation extends (
+        ...args: infer _A
+      ) => infer _R
+        ? (...args: _A) => _R
+        : never);
+      try {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: Date.now() - 10 * 60 * 1000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: Date.now() - 5 * 60 * 1000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        // The crash log was written first; the marker was unlinked afterwards.
+        const writeIdx = events.indexOf("write-crash-log");
+        const unlinkIdx = events.indexOf("unlink-marker");
+        expect(writeIdx).toBeGreaterThanOrEqual(0);
+        expect(unlinkIdx).toBeGreaterThan(writeIdx);
+      } finally {
+        unlinkSpy.mockRestore();
+        uptime.mockRestore();
+      }
+    });
+
     it("falls back to the synthetic path without throwing when writeCrashLog fails", () => {
       const uptime = osUptimeSpy(24 * 60 * 60);
       // Force the atomic write to throw — the dialog's defensive openPath
@@ -1860,6 +1909,40 @@ describe("CrashRecoveryService", () => {
         expect(pending!.logPath).toBe(
           path.join(userData, "crashes", `crash-${pending!.entry.id}.json`)
         );
+      } finally {
+        uptime.mockRestore();
+      }
+    });
+
+    it("prunes old crash logs after writing a synthesized marker-only log", () => {
+      const uptime = osUptimeSpy(24 * 60 * 60);
+      try {
+        // Seed 12 pre-existing crash-{id}.json files to exceed MAX_CRASH_LOGS=10.
+        const crashesDir = path.join(userData, "crashes");
+        fs.mkdirSync(crashesDir, { recursive: true });
+        for (let i = 0; i < 12; i++) {
+          fs.writeFileSync(
+            path.join(crashesDir, `crash-seed-${i}.json`),
+            JSON.stringify({ id: `seed-${i}`, timestamp: Date.now() - (12 - i) * 1000 })
+          );
+        }
+
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: Date.now() - 10 * 60 * 1000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: Date.now() - 5 * 60 * 1000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        const remaining = fs.readdirSync(crashesDir).filter((f) => f.startsWith("crash-"));
+        // 12 seeded + 1 synthesized = 13 → pruned down to MAX_CRASH_LOGS=10.
+        expect(remaining.length).toBeLessThanOrEqual(10);
       } finally {
         uptime.mockRestore();
       }

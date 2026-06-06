@@ -443,7 +443,7 @@ export class CrashRecoveryService {
         return null;
       }
 
-      // Move the live backup aside BEFORE deleting the marker. A kill
+      // Move the live backup aside BEFORE any state mutations. A kill
       // between the two operations would otherwise wipe the marker (and
       // skip crash detection on the next launch) while session-state.json
       // is still present and recoverable. preserveBackupForRecovery is
@@ -451,7 +451,12 @@ export class CrashRecoveryService {
       // from a partially-completed prior attempt it is reused.
       this.crashedBackupPath = this.preserveBackupForRecovery(marker.sessionStartMs);
 
-      this.deleteMarker();
+      // NOTE: deleteMarker() is called AFTER the synthesized crash log is
+      // written below (per the #8728 preserve-before-delete ordering rule).
+      // If a kill happens in the gap, the next launch re-runs consumeMarker
+      // and surfaces the recovery dialog against the persisted log.
+      // (Watchdog annotation rewrites for an existing logPath fire earlier
+      // in this block and are unaffected.)
 
       // Gate hasBackup on parseability: a renamed crashed-* file that fails
       // to parse (corrupted write, partial flush) shouldn't surface a
@@ -536,14 +541,22 @@ export class CrashRecoveryService {
       // For marker-only crashes (no original crashLogPath — e.g. external kill,
       // power loss, native crash), synthesize a real on-disk log so the
       // recovery dialog's "Open log file" affordance points at a file that
-      // actually exists. Persist BEFORE returning the PendingCrash so the
-      // dialog can openPath it immediately on mount. Failure is non-fatal —
-      // the in-memory entry is the source of truth and the dialog falls back
-      // to a softer warning if the file later can't be opened.
+      // actually exists. Persist BEFORE deleteMarker (per #8728's
+      // preserve-before-delete ordering rule) so a kill in this window still
+      // leaves the marker pointing at a real on-disk log, and the next
+      // launch re-runs consumeMarker to surface the recovery dialog. Failure
+      // is non-fatal — the in-memory entry is the source of truth and the
+      // dialog falls back to a softer warning if the file later can't be
+      // opened.
       let resolvedLogPath = logPath;
       if (!resolvedLogPath) {
         try {
           resolvedLogPath = this.writeCrashLog(entry);
+          // Honor the same MAX_CRASH_LOGS retention as recordCrash so 25
+          // consecutive external kills don't accumulate crash-{id}.json
+          // files. recordCrash also calls pruneOldLogs; folding it here keeps
+          // retention behavior consistent across both code paths.
+          this.pruneOldLogs();
         } catch (writeErr) {
           console.error("[CrashRecovery] Failed to persist synthesized crash log:", writeErr);
           // Fall back to the synthetic path so PendingCrash.logPath is stable
@@ -552,6 +565,12 @@ export class CrashRecoveryService {
           resolvedLogPath = path.join(this.crashesDir, `crash-${entry.id}.json`);
         }
       }
+
+      // Marker is unlinked LAST — after the synthesized crash log is on disk.
+      // A kill between preserveBackupForRecovery and this point still leaves
+      // the marker on disk and the next launch re-detects the crash against
+      // the persisted log.
+      this.deleteMarker();
 
       const panels = parseableBackupPath
         ? this.extractPanelSummaries(entry.timestamp, parseableBackupPath)

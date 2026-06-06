@@ -1,7 +1,11 @@
 import type { ActionBreadcrumb, CrashLogEntry } from "../types/ipc/crashRecovery.js";
 import { scrubReportText } from "./reportScrubbers.js";
 import { URL_BODY_BUDGET, capForBudget, makeUrl, truncateStackMiddle } from "./githubIssueUrl.js";
-import { getCrashCauseReportLabel, getCrashCauseTitle } from "./crashCauseCopy.js";
+import {
+  getCrashCauseReportLabel,
+  getCrashCauseTitle,
+  normalizeCrashCause,
+} from "./crashCauseCopy.js";
 
 export interface CrashReportResult {
   url: string;
@@ -125,7 +129,7 @@ function formatCrashBody(
   if (e.gpuAccelerationDisabled !== undefined)
     lines.push(`- **GPU Acceleration**: ${e.gpuAccelerationDisabled ? "Disabled" : "Enabled"}`);
 
-  lines.push(`- **Crashed at**: ${new Date(e.timestamp).toISOString()}`);
+  lines.push(`- **Crashed at**: ${safeIsoTime(e.timestamp)}`);
 
   if (e.cause === "watchdog-deadlock") {
     const causeParts: string[] = [`**Cause**: Watchdog deadlock (SIGKILL)`];
@@ -133,17 +137,23 @@ function formatCrashBody(
       causeParts.push(`${e.watchdogMissedBeats} missed heartbeats`);
     }
     if (e.watchdogKilledAt !== undefined) {
-      causeParts.push(`killed at ${new Date(e.watchdogKilledAt).toISOString()}`);
+      causeParts.push(`killed at ${safeIsoTime(e.watchdogKilledAt)}`);
     }
     if (e.watchdogMainPid !== undefined) {
       causeParts.push(`main PID ${e.watchdogMainPid}`);
     }
     lines.push(`- ${causeParts.join(" — ")}`);
-  } else if (e.crashCause && e.crashCause !== "uncaught-exception") {
+  } else if (
+    e.crashCause &&
+    e.crashCause !== "uncaught-exception" &&
+    normalizeCrashCause(e.crashCause) !== "unknown"
+  ) {
     // The `**Error**:` line right below already names the uncaught exception
     // message, so adding `**Cause**: Uncaught JavaScript exception` would be
-    // redundant noise. For every other cause, surface the heuristic so the
-    // report is searchable for "power-loss", "external-kill", etc.
+    // redundant noise. Unknown / future-schema crashCause values are skipped
+    // (rather than rendered as "Cause: Unknown") so the report stays free of
+    // non-actionable labels — getCrashCauseReportLabel() still normalizes
+    // the value defensively, but the body just doesn't carry the line.
     lines.push(`- **Cause**: ${getCrashCauseReportLabel(e.crashCause)}`);
   }
 
