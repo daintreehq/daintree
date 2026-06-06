@@ -17,7 +17,10 @@ import {
 
 const maxHeight = () => Math.round(window.innerHeight * POPOVER_MAX_HEIGHT_RATIO);
 
-function mouseDownAt(handleProps: ReturnType<typeof useDockPopoverResize>["handleProps"], y: number) {
+function mouseDownAt(
+  handleProps: ReturnType<typeof useDockPopoverResize>["handleProps"],
+  y: number
+) {
   act(() => {
     handleProps.onMouseDown({
       preventDefault: vi.fn(),

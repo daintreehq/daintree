@@ -476,7 +476,11 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   // Re-fit the active tab's terminal once a resize gesture settles on a new
   // height. Declared before the early return below so the hook order stays
   // stable when the group transiently empties (Rules of Hooks).
-  const { height: popoverHeight, isResizing, handleProps } = useDockPopoverResize(() => {
+  const {
+    height: popoverHeight,
+    isResizing,
+    handleProps,
+  } = useDockPopoverResize(() => {
     if (!activePanelId) return;
     requestAnimationFrame(() => {
       try {

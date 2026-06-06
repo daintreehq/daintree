@@ -309,7 +309,11 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const isDeprioritized = !isOpen && isDockAgentStateDeprioritized(agentState);
 
   // Re-fit the terminal once a resize gesture settles on a new popover height.
-  const { height: popoverHeight, isResizing, handleProps } = useDockPopoverResize(() => {
+  const {
+    height: popoverHeight,
+    isResizing,
+    handleProps,
+  } = useDockPopoverResize(() => {
     requestAnimationFrame(() => {
       try {
         terminalInstanceService.fit(terminal.id);
