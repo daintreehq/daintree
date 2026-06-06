@@ -569,6 +569,15 @@ export const CHANNELS = {
    */
   MCP_SERVER_LIST_ACTIVE_CLIENTS: "mcp-server:list-active-clients",
   MCP_SERVER_GET_AUDIT_RECORDS: "mcp-server:get-audit-records",
+  /**
+   * Sibling of `MCP_SERVER_GET_AUDIT_RECORDS` that returns the full
+   * `McpLogRecord` union (dispatch + grant lifecycle). Used by the
+   * audit-log viewer and the NDJSON export. Dispatch-only consumers
+   * (latency table, recent-calls popover, activity strip) keep using
+   * the dispatch channel so their `result`/`durationMs` reads stay
+   * type-safe — see #10027.
+   */
+  MCP_SERVER_GET_LOG_RECORDS: "mcp-server:get-log-records",
   MCP_SERVER_CLEAR_AUDIT_LOG: "mcp-server:clear-audit-log",
   MCP_SERVER_SET_AUDIT_ENABLED: "mcp-server:set-audit-enabled",
   MCP_SERVER_SET_AUDIT_MAX_RECORDS: "mcp-server:set-audit-max-records",

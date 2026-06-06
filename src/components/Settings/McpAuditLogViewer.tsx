@@ -4,11 +4,15 @@ import { cn } from "@/lib/utils";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
-import type {
-  McpAuditRecord,
-  McpAuditResult,
-  AssistantTurnRecord,
-  McpAnomalySignal,
+import {
+  type McpAuditResult,
+  type McpGrantRecord,
+  type McpLogRecord,
+  type McpGrantRecordType,
+  isAuditRecord,
+  isGrantRecord,
+  type AssistantTurnRecord,
+  type McpAnomalySignal,
 } from "@shared/types";
 
 type AuditResultFilter = "all" | McpAuditResult;
@@ -39,6 +43,22 @@ const RESULT_DOT_CLASS: Record<McpAuditResult, string> = {
   rate_limited: "bg-status-warning",
 };
 
+const GRANT_TYPE_LABEL: Record<McpGrantRecordType, string> = {
+  "grant.issued": "Grant issued",
+  "grant.expired": "Grant expired",
+  "grant.revoked": "Grant revoked",
+  "tier.elevated": "Tier elevated",
+  "tier.decayed": "Tier decayed",
+};
+
+const GRANT_TYPE_DOT_CLASS: Record<McpGrantRecordType, string> = {
+  "grant.issued": "bg-status-info",
+  "grant.expired": "bg-status-warning",
+  "grant.revoked": "bg-status-danger",
+  "tier.elevated": "bg-status-warning",
+  "tier.decayed": "bg-status-info",
+};
+
 type TimeRange = "5m" | "1h" | "24h" | "all";
 
 const TIME_RANGE_MS: Record<Exclude<TimeRange, "all">, number> = {
@@ -63,32 +83,86 @@ const OUTCOME_LABEL: Record<string, string> = {
 export interface TurnGroup {
   turnId: string;
   turnRecord: AssistantTurnRecord;
-  records: McpAuditRecord[];
+  records: McpLogRecord[];
   callCount: number;
   unauthorizedCount: number;
   errorCount: number;
   totalDurationMs: number;
+  /** Session-scoped grant lifecycle events that share this turn's `sessionId`. */
+  lifecycle: McpGrantRecord[];
 }
 
 export function groupRecordsByTurn(
-  records: McpAuditRecord[],
+  records: McpLogRecord[],
   turnRecords: AssistantTurnRecord[]
-): { groups: TurnGroup[]; unassociated: McpAuditRecord[] } {
+): { groups: TurnGroup[]; unassociated: McpLogRecord[]; lifecycle: McpGrantRecord[] } {
   const turnById = new Map<string, AssistantTurnRecord>();
   for (const t of turnRecords) {
     if (t.turnId) turnById.set(t.turnId, t);
   }
 
-  const grouped = new Map<string, McpAuditRecord[]>();
-  const unassociated: McpAuditRecord[] = [];
+  // Two passes: grant records bucket into a turn only when a dispatch in the
+  // same turn shares `sessionId` — fabricating a turn correlation from
+  // timestamp alone would be brittle (#10027). Records that don't match any
+  // turn fall into `unassociated`; grants that don't match any turn go to
+  // the dedicated `lifecycle` section.
+  const grouped = new Map<string, McpLogRecord[]>();
+  const sessionByTurn = new Map<string, Set<string>>();
+  const unassociated: McpLogRecord[] = [];
+  const unassociatedGrants: McpGrantRecord[] = [];
+  // `unassociatedDispatchSessions` collects session ids of dispatches that
+  // landed in the `unassociated` bucket, NOT all grant sessions — otherwise
+  // the second-pass check would always be true and orphan grants would
+  // never reach the trailing `lifecycle` section.
+  const unassociatedDispatchSessions = new Set<string>();
 
   for (const r of records) {
+    if (isGrantRecord(r)) {
+      unassociatedGrants.push(r);
+      continue;
+    }
     if (r.turnId && turnById.has(r.turnId)) {
       const list = grouped.get(r.turnId);
       if (list) list.push(r);
       else grouped.set(r.turnId, [r]);
+      let set = sessionByTurn.get(r.turnId);
+      if (!set) {
+        set = new Set();
+        sessionByTurn.set(r.turnId, set);
+      }
+      set.add(r.sessionId);
     } else {
       unassociated.push(r);
+      unassociatedDispatchSessions.add(r.sessionId);
+    }
+  }
+
+  // Second pass: route grants that share a `sessionId` with a turn's
+  // dispatches into that turn's `lifecycle`; the rest stay in the trailing
+  // `lifecycle` array.
+  const lifecycle: McpGrantRecord[] = [];
+  const groupedLifecycle = new Map<string, McpGrantRecord[]>();
+  for (const grant of unassociatedGrants) {
+    let routed = false;
+    for (const [turnId, sessions] of sessionByTurn) {
+      if (sessions.has(grant.sessionId)) {
+        const list = groupedLifecycle.get(turnId);
+        if (list) list.push(grant);
+        else groupedLifecycle.set(turnId, [grant]);
+        routed = true;
+        break;
+      }
+    }
+    if (!routed) {
+      // A grant whose session has at least one unassociated dispatch rides
+      // along under that session's unassociated block. A pure orphan grant
+      // (no associated dispatch at all) goes to standalone `lifecycle` so
+      // the trailing "Lifecycle events" section actually surfaces them.
+      if (unassociatedDispatchSessions.has(grant.sessionId)) {
+        unassociated.push(grant);
+      } else {
+        lifecycle.push(grant);
+      }
     }
   }
 
@@ -100,14 +174,19 @@ export function groupRecordsByTurn(
       turnRecord,
       records: recs,
       callCount: recs.length,
-      unauthorizedCount: recs.filter((r) => r.result === "unauthorized").length,
-      errorCount: recs.filter((r) => r.result === "error").length,
-      totalDurationMs: recs.reduce((sum, r) => sum + r.durationMs, 0),
+      unauthorizedCount: recs.filter((r) => isAuditRecord(r) && r.result === "unauthorized").length,
+      errorCount: recs.filter((r) => isAuditRecord(r) && r.result === "error").length,
+      totalDurationMs: recs.filter(isAuditRecord).reduce((sum, r) => sum + r.durationMs, 0),
+      lifecycle: groupedLifecycle.get(turnId) ?? [],
     });
   }
   groups.sort((a, b) => b.turnRecord.timestamp - a.turnRecord.timestamp);
 
-  return { groups, unassociated };
+  // Newest-first within the standalone lifecycle section so it reads like a
+  // chronological feed rather than a stale backlog.
+  lifecycle.sort((a, b) => b.timestamp - a.timestamp);
+
+  return { groups, unassociated, lifecycle };
 }
 
 function formatRelativeTimestamp(ts: number, now: number): string {
@@ -124,21 +203,82 @@ function formatRelativeTimestamp(ts: number, now: number): string {
 }
 
 interface McpAuditLogViewerProps {
-  records: McpAuditRecord[];
+  records: McpLogRecord[];
   turnRecords?: AssistantTurnRecord[];
   loading: boolean;
   onRefresh: () => Promise<void> | void;
-  onCopy: (records: McpAuditRecord[]) => Promise<void> | void;
+  onCopy: (records: McpLogRecord[]) => Promise<void> | void;
   onClear?: () => void;
-  includeRecord?: (record: McpAuditRecord) => boolean;
+  includeRecord?: (record: McpLogRecord) => boolean;
   maxRecords?: number;
   copyFlashActive?: boolean;
   /** Triggers the NDJSON export via OS save dialog with the filtered records. */
-  onExport?: (records: McpAuditRecord[]) => Promise<void> | void;
+  onExport?: (records: McpLogRecord[]) => Promise<void> | void;
   /** Set when an export succeeded so the UI can flash a confirmation. */
   exportFlashActive?: boolean;
   anomalySignals?: McpAnomalySignal[];
   anomalySuppressed?: boolean;
+}
+
+/**
+ * Single grant-lifecycle row. The flat and grouped views use slightly
+ * different padding, controlled by `compact`. Reads no `result` or
+ * `durationMs` — those are dispatch-only fields and absent on grant
+ * records.
+ */
+function GrantRow({
+  record,
+  now,
+  compact = false,
+}: {
+  record: McpGrantRecord;
+  now: number;
+  compact?: boolean;
+}) {
+  return (
+    <li className="grid grid-cols-[auto_1fr_auto] gap-2 py-0.5">
+      <span
+        className={cn("mt-1 h-1.5 w-1.5 rounded-full shrink-0", GRANT_TYPE_DOT_CLASS[record.type])}
+        aria-label={GRANT_TYPE_LABEL[record.type]}
+        title={GRANT_TYPE_LABEL[record.type]}
+      />
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-daintree-text/80">{GRANT_TYPE_LABEL[record.type]}</span>
+          <span className="font-mono text-daintree-text/60 truncate">{record.toolId}</span>
+        </div>
+        {record.type === "tier.elevated" && record.tier && record.previousTier && (
+          <div className="mt-0.5 text-[10px] text-daintree-text/50">
+            {record.previousTier} → {record.tier}
+          </div>
+        )}
+        {record.type === "tier.decayed" && record.tier && record.previousTier && (
+          <div className="mt-0.5 text-[10px] text-daintree-text/50">
+            {record.previousTier} → {record.tier}
+          </div>
+        )}
+        {record.type === "grant.revoked" && record.revokedReason && (
+          <div className="mt-0.5 text-[10px] text-daintree-text/50">
+            Reason: {record.revokedReason}
+          </div>
+        )}
+        {record.expiresAt !== undefined && record.type === "grant.issued" && (
+          <div className="mt-0.5 text-[10px] text-daintree-text/50">
+            Expires{" "}
+            {new Date(record.expiresAt).toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </div>
+        )}
+      </div>
+      <div
+        className={cn("text-right text-daintree-text/40 whitespace-nowrap", !compact && "self-end")}
+      >
+        <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
+      </div>
+    </li>
+  );
 }
 
 export function McpAuditLogViewer({
@@ -175,7 +315,11 @@ export function McpAuditLogViewer({
   }, [records, includeRecord]);
 
   const unauthorizedCount = useMemo(
-    () => visibleRecords.reduce((n, r) => (r.result === "unauthorized" ? n + 1 : n), 0),
+    () =>
+      visibleRecords.reduce(
+        (n, r) => (isAuditRecord(r) && r.result === "unauthorized" ? n + 1 : n),
+        0
+      ),
     [visibleRecords]
   );
 
@@ -185,13 +329,20 @@ export function McpAuditLogViewer({
     const cutoffMs = timeRange !== "all" ? now - TIME_RANGE_MS[timeRange] : undefined;
     return visibleRecords.filter((record) => {
       if (cutoffMs !== undefined && record.timestamp < cutoffMs) return false;
-      if (resultFilter !== "all" && record.result !== resultFilter) return false;
-      if (needle.length > 0 && !record.toolId.toLowerCase().includes(needle)) return false;
-      if (
-        searchNeedle.length > 0 &&
-        !(record.argsSummary || "").toLowerCase().includes(searchNeedle)
-      )
+      // The result filter is dispatch-taxonomy; grant records have no
+      // `result` field, so they pass through the result filter unchanged.
+      // The export must include them — forensic export of a tier-rejection
+      // incident must still surface the grant.issued/grant.revoked events
+      // for that session (#10027).
+      if (resultFilter !== "all" && isAuditRecord(record) && record.result !== resultFilter) {
         return false;
+      }
+      // Tool filter and search work against the union's common fields.
+      if (needle.length > 0 && !record.toolId.toLowerCase().includes(needle)) return false;
+      if (searchNeedle.length > 0) {
+        const haystack = isAuditRecord(record) ? (record.argsSummary ?? "") : "";
+        if (!haystack.toLowerCase().includes(searchNeedle)) return false;
+      }
       return true;
     });
   }, [visibleRecords, resultFilter, toolFilter, timeRange, searchQuery, now]);
@@ -399,37 +550,58 @@ export function McpAuditLogViewer({
                   <span className="text-daintree-text/40">{group.totalDurationMs}ms</span>
                 </div>
                 <ul className="ml-3 space-y-1 border-l-2 border-daintree-border/50 pl-3">
-                  {group.records.map((record) => (
-                    <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 py-0.5">
-                      <span
-                        className={cn(
-                          "mt-1 h-1.5 w-1.5 rounded-full shrink-0",
-                          RESULT_DOT_CLASS[record.result]
-                        )}
-                        aria-label={RESULT_LABEL[record.result]}
-                        title={RESULT_LABEL[record.result]}
-                      />
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-daintree-text/80 truncate">
-                            {record.toolId}
-                          </span>
-                          {record.errorCode && (
-                            <span className="text-[10px] uppercase tracking-wide text-status-danger/80">
-                              {record.errorCode}
+                  {group.records.map((record) =>
+                    isAuditRecord(record) ? (
+                      <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 py-0.5">
+                        <span
+                          className={cn(
+                            "mt-1 h-1.5 w-1.5 rounded-full shrink-0",
+                            RESULT_DOT_CLASS[record.result]
+                          )}
+                          aria-label={RESULT_LABEL[record.result]}
+                          title={RESULT_LABEL[record.result]}
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-daintree-text/80 truncate">
+                              {record.toolId}
                             </span>
+                            {record.errorCode && (
+                              <span className="text-[10px] uppercase tracking-wide text-status-danger/80">
+                                {record.errorCode}
+                              </span>
+                            )}
+                          </div>
+                          <div className="font-mono text-daintree-text/50 truncate">
+                            {record.argsSummary || "{}"}
+                          </div>
+                          {record.result === "unauthorized" && record.tierHint && (
+                            <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                              Raise capability tier to {TIER_HINT_LABEL[record.tierHint]} to allow.
+                            </div>
+                          )}
+                          {record.result === "unauthorized" && record.tierHint === null && (
+                            <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                              Tool isn't permitted at any tier.
+                            </div>
                           )}
                         </div>
-                        <div className="font-mono text-daintree-text/50 truncate">
-                          {record.argsSummary || "{}"}
+                        <div className="text-right text-daintree-text/40 whitespace-nowrap">
+                          <div>{record.durationMs}ms</div>
                         </div>
-                      </div>
-                      <div className="text-right text-daintree-text/40 whitespace-nowrap">
-                        <div>{record.durationMs}ms</div>
-                      </div>
-                    </li>
-                  ))}
+                      </li>
+                    ) : (
+                      <GrantRow key={record.id} record={record} now={now} compact />
+                    )
+                  )}
                 </ul>
+                {group.lifecycle.length > 0 && (
+                  <ul className="ml-3 mt-1 space-y-1 border-l-2 border-status-warning/30 pl-3">
+                    {group.lifecycle.map((grant) => (
+                      <GrantRow key={grant.id} record={grant} now={now} compact />
+                    ))}
+                  </ul>
+                )}
               </li>
             ))}
             {turnGroups.unassociated.length > 0 && (
@@ -442,35 +614,55 @@ export function McpAuditLogViewer({
                   </span>
                 </div>
                 <ul className="ml-3 space-y-1 border-l-2 border-daintree-border/50 pl-3">
-                  {turnGroups.unassociated.map((record) => (
-                    <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 py-0.5">
-                      <span
-                        className={cn(
-                          "mt-1 h-1.5 w-1.5 rounded-full shrink-0",
-                          RESULT_DOT_CLASS[record.result]
-                        )}
-                        aria-label={RESULT_LABEL[record.result]}
-                        title={RESULT_LABEL[record.result]}
-                      />
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-daintree-text/80 truncate">
-                            {record.toolId}
-                          </span>
-                          {record.errorCode && (
-                            <span className="text-[10px] uppercase tracking-wide text-status-danger/80">
-                              {record.errorCode}
-                            </span>
+                  {turnGroups.unassociated.map((record) =>
+                    isAuditRecord(record) ? (
+                      <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 py-0.5">
+                        <span
+                          className={cn(
+                            "mt-1 h-1.5 w-1.5 rounded-full shrink-0",
+                            RESULT_DOT_CLASS[record.result]
                           )}
+                          aria-label={RESULT_LABEL[record.result]}
+                          title={RESULT_LABEL[record.result]}
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-daintree-text/80 truncate">
+                              {record.toolId}
+                            </span>
+                            {record.errorCode && (
+                              <span className="text-[10px] uppercase tracking-wide text-status-danger/80">
+                                {record.errorCode}
+                              </span>
+                            )}
+                          </div>
+                          <div className="font-mono text-daintree-text/50 truncate">
+                            {record.argsSummary || "{}"}
+                          </div>
                         </div>
-                        <div className="font-mono text-daintree-text/50 truncate">
-                          {record.argsSummary || "{}"}
+                        <div className="text-right text-daintree-text/40 whitespace-nowrap">
+                          <div>{record.durationMs}ms</div>
                         </div>
-                      </div>
-                      <div className="text-right text-daintree-text/40 whitespace-nowrap">
-                        <div>{record.durationMs}ms</div>
-                      </div>
-                    </li>
+                      </li>
+                    ) : (
+                      <GrantRow key={record.id} record={record} now={now} compact />
+                    )
+                  )}
+                </ul>
+              </li>
+            )}
+            {turnGroups.lifecycle.length > 0 && (
+              <li className="p-2 text-xs">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-medium text-daintree-text/60">Lifecycle events</span>
+                  <span className="text-daintree-text/40">
+                    {turnGroups.lifecycle.length} event
+                    {turnGroups.lifecycle.length !== 1 ? "s" : ""}
+                  </span>
+                </div>
+                <ul className="ml-3 space-y-1 border-l-2 border-status-warning/30 pl-3">
+                  {turnGroups.lifecycle.map((grant) => (
+                    <GrantRow key={grant.id} record={grant} now={now} compact />
                   ))}
                 </ul>
               </li>
@@ -478,52 +670,103 @@ export function McpAuditLogViewer({
           </ul>
         ) : (
           <ul className="divide-y divide-daintree-border">
-            {filteredRecords.map((record) => (
-              <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
-                <div className="flex items-start gap-1 mt-1">
-                  <span
-                    className={cn("h-2 w-2 rounded-full shrink-0", RESULT_DOT_CLASS[record.result])}
-                    aria-label={RESULT_LABEL[record.result]}
-                    title={RESULT_LABEL[record.result]}
-                  />
-                  {signalRecordIds.has(record.id) && (
+            {filteredRecords.map((record) =>
+              isAuditRecord(record) ? (
+                <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
+                  <div className="flex items-start gap-1 mt-1">
                     <span
-                      className="h-2 w-2 rounded-sm rotate-45 shrink-0 bg-status-danger"
-                      title="Anomaly"
+                      className={cn(
+                        "h-2 w-2 rounded-full shrink-0",
+                        RESULT_DOT_CLASS[record.result]
+                      )}
+                      aria-label={RESULT_LABEL[record.result]}
+                      title={RESULT_LABEL[record.result]}
                     />
-                  )}
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-daintree-text/90 truncate">
-                      {record.toolId}
-                    </span>
-                    {record.errorCode && (
-                      <span className="text-[10px] uppercase tracking-wide text-status-danger/80">
-                        {record.errorCode}
-                      </span>
+                    {signalRecordIds.has(record.id) && (
+                      <span
+                        className="h-2 w-2 rounded-sm rotate-45 shrink-0 bg-status-danger"
+                        title="Anomaly"
+                      />
                     )}
                   </div>
-                  <div className="mt-0.5 font-mono text-daintree-text/50 truncate">
-                    {record.argsSummary || "{}"}
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-daintree-text/90 truncate">
+                        {record.toolId}
+                      </span>
+                      {record.errorCode && (
+                        <span className="text-[10px] uppercase tracking-wide text-status-danger/80">
+                          {record.errorCode}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-0.5 font-mono text-daintree-text/50 truncate">
+                      {record.argsSummary || "{}"}
+                    </div>
+                    {record.result === "unauthorized" && record.tierHint && (
+                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                        Raise capability tier to {TIER_HINT_LABEL[record.tierHint]} to allow.
+                      </div>
+                    )}
+                    {record.result === "unauthorized" && record.tierHint === null && (
+                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                        Tool isn't permitted at any tier.
+                      </div>
+                    )}
                   </div>
-                  {record.result === "unauthorized" && record.tierHint && (
-                    <div className="mt-0.5 text-[10px] text-daintree-text/50">
-                      Raise capability tier to {TIER_HINT_LABEL[record.tierHint]} to allow.
+                  <div className="text-right text-daintree-text/40 whitespace-nowrap">
+                    <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
+                    <div>{record.durationMs}ms</div>
+                  </div>
+                </li>
+              ) : (
+                <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
+                  <span
+                    className={cn(
+                      "mt-1 h-2 w-2 rounded-full shrink-0",
+                      GRANT_TYPE_DOT_CLASS[record.type]
+                    )}
+                    aria-label={GRANT_TYPE_LABEL[record.type]}
+                    title={GRANT_TYPE_LABEL[record.type]}
+                  />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-daintree-text/90">{GRANT_TYPE_LABEL[record.type]}</span>
+                      <span className="font-mono text-daintree-text/60 truncate">
+                        {record.toolId}
+                      </span>
                     </div>
-                  )}
-                  {record.result === "unauthorized" && record.tierHint === null && (
-                    <div className="mt-0.5 text-[10px] text-daintree-text/50">
-                      Tool isn't permitted at any tier.
-                    </div>
-                  )}
-                </div>
-                <div className="text-right text-daintree-text/40 whitespace-nowrap">
-                  <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
-                  <div>{record.durationMs}ms</div>
-                </div>
-              </li>
-            ))}
+                    {record.type === "tier.elevated" && record.tier && record.previousTier && (
+                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                        {record.previousTier} → {record.tier}
+                      </div>
+                    )}
+                    {record.type === "tier.decayed" && record.tier && record.previousTier && (
+                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                        {record.previousTier} → {record.tier}
+                      </div>
+                    )}
+                    {record.type === "grant.revoked" && record.revokedReason && (
+                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                        Reason: {record.revokedReason}
+                      </div>
+                    )}
+                    {record.expiresAt !== undefined && record.type === "grant.issued" && (
+                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                        Expires{" "}
+                        {new Date(record.expiresAt).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-right text-daintree-text/40 whitespace-nowrap">
+                    <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
+                  </div>
+                </li>
+              )
+            )}
           </ul>
         )}
       </div>

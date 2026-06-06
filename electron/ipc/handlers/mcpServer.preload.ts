@@ -8,6 +8,7 @@ export const MCP_SERVER_METHOD_CHANNELS = {
   getConfigSnippet: "mcp-server:get-config-snippet",
   listActiveClients: "mcp-server:list-active-clients",
   getAuditRecords: "mcp-server:get-audit-records",
+  getLogRecords: "mcp-server:get-log-records",
   getAuditConfig: "mcp-server:get-audit-config",
   getAuditStats: "mcp-server:get-audit-stats",
   clearAuditLog: "mcp-server:clear-audit-log",

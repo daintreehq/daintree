@@ -84,7 +84,7 @@ function createMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {})
     listActiveClients: vi.fn().mockResolvedValue([]),
     getConfigSnippet: vi.fn().mockResolvedValue("http://127.0.0.1:9020/sse"),
     rotateApiKey: vi.fn().mockResolvedValue("dnt-key-rotated789"),
-    getAuditRecords: vi.fn().mockResolvedValue([]),
+    getLogRecords: vi.fn().mockResolvedValue([]),
     getAuditConfig: vi.fn().mockResolvedValue({ enabled: true, maxRecords: 500 }),
     getAuditStats: vi.fn().mockResolvedValue({
       auth401Count: 0,
@@ -739,7 +739,7 @@ describe("McpServerSettingsTab", () => {
 
   it("clears audit log via confirm dialog without notifying", async () => {
     installMcpApi({
-      getAuditRecords: vi.fn().mockResolvedValue([
+      getLogRecords: vi.fn().mockResolvedValue([
         {
           id: "1",
           toolId: "files.read",
@@ -775,7 +775,7 @@ describe("McpServerSettingsTab", () => {
 
   it("Clear log dialog can be canceled without clearing", async () => {
     installMcpApi({
-      getAuditRecords: vi.fn().mockResolvedValue([
+      getLogRecords: vi.fn().mockResolvedValue([
         {
           id: "1",
           toolId: "files.read",
@@ -810,7 +810,7 @@ describe("McpServerSettingsTab", () => {
 
   it("shows inline error and logs audit clear failure without notifying", async () => {
     installMcpApi({
-      getAuditRecords: vi.fn().mockResolvedValue([
+      getLogRecords: vi.fn().mockResolvedValue([
         {
           id: "1",
           toolId: "files.read",
@@ -846,7 +846,7 @@ describe("McpServerSettingsTab", () => {
 
   it("shows Copied! pill on audit copy instead of notifying", async () => {
     installMcpApi({
-      getAuditRecords: vi.fn().mockResolvedValue([
+      getLogRecords: vi.fn().mockResolvedValue([
         {
           id: "1",
           toolId: "files.read",
@@ -891,7 +891,7 @@ describe("McpServerSettingsTab", () => {
       configurable: true,
     });
     installMcpApi({
-      getAuditRecords: vi.fn().mockResolvedValue([
+      getLogRecords: vi.fn().mockResolvedValue([
         {
           id: "1",
           toolId: "files.read",
@@ -919,7 +919,7 @@ describe("McpServerSettingsTab", () => {
 
   it("shows filtered count when a result filter is active", async () => {
     installMcpApi({
-      getAuditRecords: vi.fn().mockResolvedValue([
+      getLogRecords: vi.fn().mockResolvedValue([
         {
           id: "1",
           toolId: "files.read",
@@ -958,7 +958,7 @@ describe("McpServerSettingsTab", () => {
 
   it("shows filtered count when tool filter is active", async () => {
     installMcpApi({
-      getAuditRecords: vi.fn().mockResolvedValue([
+      getLogRecords: vi.fn().mockResolvedValue([
         {
           id: "1",
           toolId: "files.read",
@@ -1071,7 +1071,7 @@ describe("McpServerSettingsTab", () => {
         anomalySuppressed: false,
         anomalyRecordFloor: 50,
       }),
-      getAuditRecords: vi.fn().mockResolvedValue([
+      getLogRecords: vi.fn().mockResolvedValue([
         {
           id: "r1",
           toolId: "slow.tool",

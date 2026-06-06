@@ -14,6 +14,7 @@ import type {
   McpAuditStats,
   McpGrantLifecyclePayload,
   McpIssueGrantResult,
+  McpLogRecord,
   McpRevokeSessionGrantsResult,
   McpRuntimeSnapshot,
   McpRuntimeState,
@@ -404,6 +405,18 @@ export class McpServerService {
 
   getAuditRecords(): McpAuditRecord[] {
     return this.auditService.getRecords();
+  }
+
+  /**
+   * Newest-first view of the full union (dispatch + grant lifecycle
+   * records). Reserved for the audit-log viewer, NDJSON export, and any
+   * other surface that handles the discriminated union — dispatch-only
+   * consumers (latency table, recent-calls popover, activity strip) keep
+   * using {@link getAuditRecords} so their `result`/`durationMs` reads
+   * stay type-safe.
+   */
+  getLogRecords(): McpLogRecord[] {
+    return this.auditService.getLogRecords();
   }
 
   getAuditConfig(): { enabled: boolean; maxRecords: number } {

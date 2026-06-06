@@ -17,6 +17,7 @@ const serviceMock = vi.hoisted(() => ({
   rotateApiKey: vi.fn().mockResolvedValue("k-new"),
   getConfigSnippet: vi.fn(() => "snippet"),
   getAuditRecords: vi.fn(() => []),
+  getLogRecords: vi.fn(() => []),
   getAuditConfig: vi.fn(() => ({ enabled: true, maxRecords: 500 })),
   clearAuditLog: vi.fn(),
   getTurnOutcomeRecords: vi.fn(() => []),
@@ -194,6 +195,38 @@ describe("mcpServer IPC adversarial", () => {
     expect((result as unknown[]).length).toBe(1);
   });
 
+  it("getLogRecords returns the full union (dispatch + grant) and does not call the dispatch variant (#10027)", async () => {
+    const mixed = [
+      {
+        id: "a",
+        timestamp: 2,
+        toolId: "t",
+        sessionId: "s",
+        tier: "unknown",
+        argsSummary: "{}",
+        result: "success",
+        durationMs: 0,
+      },
+      {
+        id: "g",
+        timestamp: 1,
+        type: "grant.issued",
+        sessionId: "s",
+        toolId: "files.search",
+        ttlMs: 60000,
+      },
+    ] as never;
+    serviceMock.getLogRecords.mockReturnValueOnce(mixed);
+    const result = await getHandler(CHANNELS.MCP_SERVER_GET_LOG_RECORDS)(fakeEvent());
+    expect(Array.isArray(result)).toBe(true);
+    expect((result as unknown[]).length).toBe(2);
+    expect(serviceMock.getLogRecords).toHaveBeenCalledTimes(1);
+    // Make sure the new channel routes to the union accessor, not the
+    // legacy dispatch-only one — a typo in the handler would silently
+    // re-introduce the original bug.
+    expect(serviceMock.getAuditRecords).not.toHaveBeenCalled();
+  });
+
   it("clearAuditLog calls service clear", async () => {
     await getHandler(CHANNELS.MCP_SERVER_CLEAR_AUDIT_LOG)(fakeEvent());
     expect(serviceMock.clearAuditLog).toHaveBeenCalledTimes(1);
@@ -240,8 +273,8 @@ describe("mcpServer IPC adversarial", () => {
     expect(serviceMock.disconnectBearer).toHaveBeenCalledWith(valid);
   });
 
-  it("cleanup removes all twenty-one registered handlers", () => {
-    expect(ipcHandlers.size).toBe(21);
+  it("cleanup removes all twenty-two registered handlers", () => {
+    expect(ipcHandlers.size).toBe(22);
     cleanup();
     expect(ipcHandlers.size).toBe(0);
   });
