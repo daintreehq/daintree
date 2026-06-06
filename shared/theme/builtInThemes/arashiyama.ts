@@ -126,7 +126,7 @@ export const theme: BuiltInThemeSource = {
     "toolbar-project-shadow": "none",
     "toolbar-stats-bg": "rgba(241,235,228,0.05)",
     "toolbar-stats-border": "rgba(67,58,50,0.5)",
-    "toolbar-stats-divider": "rgba(241,235,228,0.05)",
+    "toolbar-stats-divider": "rgba(67,58,50,0.5)",
     "toolbar-stats-hover-bg": "rgba(241,235,228,0.08)",
     "worktree-section-hover-bg": "rgba(241,235,228,0.05)",
   },

@@ -437,6 +437,23 @@ describe("built-in themes", () => {
         }
       }
 
+      // Cross-key invariant: toolbar-stats-divider must match toolbar-divider —
+      // the stats pill's inter-segment seams use the same separator ink as the
+      // rest of the toolbar chrome. Arashiyama drifted by copy-pasting the
+      // toolbar-stats-bg fill tint instead, leaving the seams invisible (#10029).
+      const toolbarDivider = extensions["toolbar-divider"];
+      const statsDivider = extensions["toolbar-stats-divider"];
+      if (
+        toolbarDivider !== undefined &&
+        statsDivider !== undefined &&
+        statsDivider !== toolbarDivider
+      ) {
+        failures.push(
+          `${source.id} toolbar-stats-divider ("${statsDivider}") must equal toolbar-divider ` +
+            `("${toolbarDivider}"); the stats pill uses the toolbar's separator ink (#10029)`
+        );
+      }
+
       // Extra-key regression: no built-in source ships an unregistered extension
       // key. TypeScript enforces this at compile time, but a runtime check
       // catches `as unknown as` casts and ad-hoc fixture mutations.
