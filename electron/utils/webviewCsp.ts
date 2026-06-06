@@ -10,8 +10,8 @@ export type WebviewPartitionType = "browser" | "dev-preview" | "portal" | "proje
  * Checks if a partition is a valid dev-preview partition.
  * Matches exact "persist:dev-preview" or dynamic "persist:dev-preview-*" patterns.
  */
-export function isDevPreviewPartition(partition: string): boolean {
-  return partition === "persist:dev-preview" || partition.startsWith("persist:dev-preview-");
+export function isDevPreviewPartition(value: string): boolean {
+  return value === "persist:dev-preview" || value.startsWith("persist:dev-preview-");
 }
 
 /**

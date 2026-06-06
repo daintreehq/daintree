@@ -70,7 +70,9 @@ const {
   );
   (usePanelStoreMock as unknown as { getState: () => typeof terminalStoreState }).getState = () =>
     terminalStoreState;
-  const projectStoreState = { currentProject: { id: "test-project" } };
+  const projectStoreState: { currentProject: { id: string } | null } = {
+    currentProject: { id: "test-project" },
+  };
   const useProjectStoreMock = vi.fn((selector: (state: typeof projectStoreState) => unknown) =>
     selector(projectStoreState)
   );
@@ -270,9 +272,8 @@ describe("BrowserPane webview lifecycle regression", () => {
 
   describe("per-project session partition (#9965)", () => {
     const restoreProjectMock = () =>
-      useProjectStoreMock.mockImplementation(
-        (selector: (state: { currentProject: { id: string } | null }) => unknown) =>
-          selector({ currentProject: { id: "test-project" } })
+      useProjectStoreMock.mockImplementation((selector) =>
+        selector({ currentProject: { id: "test-project" } })
       );
 
     afterEach(() => {
@@ -288,10 +289,7 @@ describe("BrowserPane webview lifecycle regression", () => {
     });
 
     it("falls back to the synchronously-seeded project id when the store has not resolved", () => {
-      useProjectStoreMock.mockImplementation(
-        (selector: (state: { currentProject: { id: string } | null }) => unknown) =>
-          selector({ currentProject: null })
-      );
+      useProjectStoreMock.mockImplementation((selector) => selector({ currentProject: null }));
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).__DAINTREE_INITIAL_PROJECT__ = { id: "seeded-project" };
 
@@ -303,10 +301,7 @@ describe("BrowserPane webview lifecycle regression", () => {
     });
 
     it("uses the default partition only when no project id is available at all", () => {
-      useProjectStoreMock.mockImplementation(
-        (selector: (state: { currentProject: { id: string } | null }) => unknown) =>
-          selector({ currentProject: null })
-      );
+      useProjectStoreMock.mockImplementation((selector) => selector({ currentProject: null }));
 
       const { container } = render(<BrowserPane {...baseProps} />);
       const webview = getWebviewElement(container);

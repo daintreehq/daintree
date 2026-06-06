@@ -63,7 +63,14 @@ export function buildBrowserPartition(projectId: string | undefined): string {
  */
 export const BROWSER_PARTITION_PATTERN = /^persist:browser(-[a-z0-9_-]+)?$/;
 
-/** True when `value` is a syntactically valid Browser panel partition. */
-export function isBrowserPartition(value: unknown): value is string {
+/**
+ * True when `value` is a syntactically valid Browser panel partition.
+ *
+ * Returns a plain `boolean` rather than a `value is string` predicate: callers
+ * pass an already-typed `string` and chain this in `||` with other partition
+ * checks, where a negative type-guard branch would wrongly narrow `string` to
+ * `never` (a non-browser partition is still a string).
+ */
+export function isBrowserPartition(value: unknown): boolean {
   return typeof value === "string" && BROWSER_PARTITION_PATTERN.test(value);
 }
