@@ -2224,3 +2224,105 @@ describe("Adversarial: globalEnv merge in buildArgsForRespawn", () => {
     expect(result.env).toBeUndefined();
   });
 });
+
+// Issue #9933 — `lastActiveAt` must round-trip from the saved snapshot to
+// the live panel so `useAppHydration`'s post-hydration focus picker can
+// rank panels by recency instead of falling back to first-in-`panelIds`-
+// order. Each builder that consumes a `SavedTerminalData` must propagate
+// the field, and the propagation must apply the same `Number.isFinite &&
+// > 0` rejection as `panelRestorePhase.ts:109` so corrupted persisted
+// values never seed the picker with a sentinel that would always win.
+describe("lastActiveAt propagation (issue #9933)", () => {
+  it("buildArgsForBackendTerminal propagates a valid saved timestamp", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", title: "T" },
+      { id: "t1", location: "grid", lastActiveAt: 1_700_000_000_000 },
+      "/p"
+    );
+    expect(result.lastActiveAt).toBe(1_700_000_000_000);
+  });
+
+  it("buildArgsForBackendTerminal drops a missing timestamp", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", title: "T" },
+      { id: "t1", location: "grid" },
+      "/p"
+    );
+    expect(result.lastActiveAt).toBeUndefined();
+  });
+
+  it("buildArgsForBackendTerminal rejects lastActiveAt <= 0", () => {
+    // Mirrors `panelRestorePhase.ts:109` — a zero stamp is treated as
+    // "no stamp" so a corrupted writer that emits 0 can't promote an
+    // arbitrary panel to the boot focus.
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", title: "T" },
+      { id: "t1", location: "grid", lastActiveAt: 0 },
+      "/p"
+    );
+    expect(result.lastActiveAt).toBeUndefined();
+  });
+
+  it("buildArgsForBackendTerminal rejects NaN / ±Infinity", () => {
+    // Defense in depth: even if the persisted file is corrupted, the
+    // sanitizer refuses to propagate non-finite values.
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const result = buildArgsForBackendTerminal(
+        { id: "t1", cwd: "/p", title: "T" },
+        { id: "t1", location: "grid", lastActiveAt: bad },
+        "/p"
+      );
+      expect(result.lastActiveAt).toBeUndefined();
+    }
+  });
+
+  it("buildArgsForReconnectedFallback propagates a valid saved timestamp", () => {
+    const result = buildArgsForReconnectedFallback(
+      { id: "t1", cwd: "/p" },
+      { id: "t1", location: "grid", lastActiveAt: 1_700_000_000_000 },
+      "/p"
+    );
+    expect(result.lastActiveAt).toBe(1_700_000_000_000);
+  });
+
+  it("buildArgsForRespawn propagates a valid saved timestamp", () => {
+    const result = buildArgsForRespawn(
+      { id: "t1", cwd: "/p", location: "grid", lastActiveAt: 1_700_000_000_000 },
+      "terminal",
+      "/p",
+      undefined,
+      false,
+      undefined
+    );
+    expect(result.lastActiveAt).toBe(1_700_000_000_000);
+  });
+
+  it("buildArgsForRespawn drops a missing timestamp", () => {
+    const result = buildArgsForRespawn(
+      { id: "t1", cwd: "/p", location: "grid" },
+      "terminal",
+      "/p",
+      undefined,
+      false,
+      undefined
+    );
+    expect(result.lastActiveAt).toBeUndefined();
+  });
+
+  it("buildArgsForNonPtyRecreation propagates a valid saved timestamp", () => {
+    const result = buildArgsForNonPtyRecreation(
+      { id: "t1", cwd: "/p", location: "grid", lastActiveAt: 1_700_000_000_000 },
+      "browser",
+      "/p"
+    );
+    expect(result.lastActiveAt).toBe(1_700_000_000_000);
+  });
+
+  it("buildArgsForOrphanedTerminal never propagates lastActiveAt (no saved data)", () => {
+    // Orphans are panels alive in the backend but missing from the
+    // saved snapshot — there is no recency data to recover, so the
+    // builder deliberately doesn't accept or emit `lastActiveAt`.
+    const result = buildArgsForOrphanedTerminal({ id: "t1", cwd: "/p" }, "/p");
+    expect(result).not.toHaveProperty("lastActiveAt");
+  });
+});

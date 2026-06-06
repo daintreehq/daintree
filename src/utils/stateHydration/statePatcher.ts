@@ -44,6 +44,16 @@ export interface AddTerminalArgs extends AddPanelOptionsBase {
   viewportDpr?: 1 | 2 | 3;
   viewportFit?: boolean;
   devPreviewScrollPosition?: { url: string; scrollY: number };
+  /**
+   * Preserved user-initiated focus timestamp from the saved snapshot. The
+   * post-hydration focus picker in `useAppHydration` reads this off
+   * `panelsById[id]` to pick the active worktree's most-recently-focused
+   * panel, so the data must survive the save→restore round-trip
+   * (#9933). Conditional on being a valid finite > 0 value; never
+   * defaults to `Date.now()` here — the restore path must reflect the
+   * user's last actual focus, not the current boot time.
+   */
+  lastActiveAt?: number;
 }
 
 export interface SavedTerminalData {
@@ -88,6 +98,16 @@ export interface SavedTerminalData {
   agentFlavorColor?: string;
   extensionState?: Record<string, unknown>;
   pluginId?: string;
+  /**
+   * User-initiated focus timestamp from the saved snapshot. Read at the
+   * hydration boundary and propagated to the live panel via the
+   * `AddTerminalArgs.lastActiveAt` field (#9933), so the post-hydration
+   * focus picker in `useAppHydration` can pick the active worktree's
+   * most-recently-focused panel. Without this field, the picker falls
+   * back to first-in-`panelIds`-order and silently regresses to the
+   * pre-#9933 behavior the issue was meant to fix.
+   */
+  lastActiveAt?: number;
 }
 
 function readPresetId(saved: SavedTerminalData): string | undefined {
@@ -194,6 +214,22 @@ function normalizePtyKind(kind: PanelKind | undefined): PanelKind {
   return kind;
 }
 
+/**
+ * Validate a `lastActiveAt` timestamp from a saved snapshot before
+ * propagating it to the live panel via `AddTerminalArgs.lastActiveAt`
+ * (#9933). Mirrors the rejection rule in `panelRestorePhase.ts:109`:
+ * `Number.isFinite && > 0`. Returns `undefined` for any other value
+ * (NaN, ±Infinity, <= 0, missing) so a corrupted persisted value can't
+ * silently seed the post-hydration focus picker with a sentinel that
+ * would always win (e.g. `Number.MAX_SAFE_INTEGER` from a buggy writer).
+ */
+function sanitizeLastActiveAt(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return value;
+}
+
 export function buildArgsForBackendTerminal(
   backendTerminal: BackendTerminalData,
   saved: SavedTerminalData,
@@ -257,6 +293,7 @@ export function buildArgsForBackendTerminal(
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
     pluginId: saved.pluginId,
+    lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
   };
 }
 
@@ -323,6 +360,7 @@ export function buildArgsForReconnectedFallback(
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
     pluginId: saved.pluginId,
+    lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
   };
 }
 
@@ -471,6 +509,7 @@ export function buildArgsForRespawn(
     extensionState: saved.extensionState,
     pluginId: saved.pluginId,
     restore: true,
+    lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
   };
 }
 
@@ -495,6 +534,7 @@ export function buildArgsForNonPtyRecreation(
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
     pluginId: saved.pluginId,
+    lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
   };
 
   const deserializer = getDeserializer(kind);

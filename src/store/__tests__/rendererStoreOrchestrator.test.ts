@@ -75,7 +75,8 @@ vi.mock("../worktreeStore", async (importOriginal) => {
 });
 
 const { usePanelStore } = await import("../panelStore");
-const { useWorktreeSelectionStore, persistMruList } = await import("../worktreeStore");
+const { useWorktreeSelectionStore, persistMruList, suppressMruRecording } =
+  await import("../worktreeStore");
 const { useTerminalInputStore } = await import("../terminalInputStore");
 const { useConsoleCaptureStore } = await import("../consoleCaptureStore");
 const { useResourceMonitoringStore } = await import("../resourceMonitoringStore");
@@ -322,6 +323,120 @@ describe("rendererStoreOrchestrator", () => {
     usePanelStore.setState({ focusedId: "term-1" });
 
     expect(trackSpy).not.toHaveBeenCalled();
+  });
+
+  // Issue #9933 — boot focus and suppression-window tests. Placed AFTER
+  // the existing "does not fire side effects" test because
+  // `vi.spyOn(useWorktreeSelectionStore.getState(), "trackTerminalFocus")`
+  // wraps the underlying StateCreator function (which is shared by every
+  // state object via the closure), so a spy installed in one test keeps
+  // receiving calls from later tests that re-install on the same function
+  // — Vitest returns the existing spy on re-wrap, and its mock state
+  // carries over. Running these after the existing side-effect test
+  // keeps the order predictable without requiring `vi.restoreAllMocks`.
+  it("skips MRU recording for boot focus when suppressMruRecording is on (issue #9933)", () => {
+    // Boot-time focus (post-hydration) must NOT prepend the panel to
+    // `mruList` — that would silently demote the user's actual
+    // last-focused terminal on every cold boot. The L1c subscription
+    // checks `isMruRecordingSuppressed()` and bails; the L1a (focus
+    // tracking) and L1b (worktree switch) subscriptions still fire so
+    // the boot pick correctly seeds `lastFocusedTerminalByWorktree`
+    // (which is runtime-only and has no other writer).
+    const recordMruSpy = vi.spyOn(usePanelStore.getState(), "recordMru");
+    const trackSpy = vi.spyOn(useWorktreeSelectionStore.getState(), "trackTerminalFocus");
+    trackSpy.mockClear();
+    recordMruSpy.mockClear();
+
+    usePanelStore.setState({
+      panelsById: {
+        "term-boot": {
+          id: "term-boot",
+          title: "T-boot",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          worktreeId: "wt-1",
+        },
+      },
+      panelIds: ["term-boot"],
+    });
+
+    suppressMruRecording(true);
+    try {
+      usePanelStore.setState({ focusedId: "term-boot" });
+    } finally {
+      suppressMruRecording(false);
+    }
+
+    // L1c: MRU recording gated.
+    expect(recordMruSpy).not.toHaveBeenCalled();
+    // L1a: focus tracking still fires — seeds `lastFocusedTerminalByWorktree`
+    // so future worktree switches can restore last-focus (#9512).
+    expect(trackSpy).toHaveBeenCalledWith("wt-1", "term-boot");
+  });
+
+  it("MRU recording resumes immediately after suppressMruRecording is lifted (issue #9933)", () => {
+    // Verifies the suppression window is correctly scoped to the boot pick
+    // and doesn't leak into subsequent user focus changes.
+    const recordMruSpy = vi.spyOn(usePanelStore.getState(), "recordMru");
+    recordMruSpy.mockClear();
+
+    usePanelStore.setState({
+      panelsById: {
+        "term-1": {
+          id: "term-1",
+          title: "T1",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          worktreeId: "wt-1",
+        },
+      },
+      panelIds: ["term-1"],
+    });
+
+    // Suppress window for the boot pick — a null→"term-1" change is
+    // gated, so no recordMru.
+    suppressMruRecording(true);
+    usePanelStore.setState({ focusedId: "term-1" });
+    suppressMruRecording(false);
+    recordMruSpy.mockClear();
+
+    // A subsequent user focus on a DIFFERENT panel (after suppress is
+    // lifted) MUST record. Using a different id is necessary because
+    // `subscribeWithSelector` compares with `Object.is` — a same-value
+    // set wouldn't fire the subscription at all.
+    usePanelStore.setState({
+      panelsById: {
+        "term-1": {
+          id: "term-1",
+          title: "T1",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          worktreeId: "wt-1",
+        },
+        "term-2": {
+          id: "term-2",
+          title: "T2",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          worktreeId: "wt-1",
+        },
+      },
+      panelIds: ["term-1", "term-2"],
+      focusedId: "term-2",
+    });
+    expect(recordMruSpy).toHaveBeenCalledWith("terminal:term-2");
   });
 
   it("handles rapid A→B focus changes correctly", () => {
