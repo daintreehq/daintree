@@ -100,7 +100,11 @@ import {
   CopyTreeCancelPayloadSchema,
   CopyTreeTestConfigPayloadSchema,
 } from "../../schemas/ipc.js";
-import type { CopyTreeCancelPayload, ProjectSettings } from "../../types/index.js";
+import type {
+  CopyTreeCancelPayload,
+  CopyTreeTestConfigOptions,
+  ProjectSettings,
+} from "../../types/index.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { contextInjectionTracker } from "../../services/ContextInjectionTracker.js";
 
@@ -114,8 +118,28 @@ function getStringField(payload: unknown, key: string): string | undefined {
 }
 
 /**
+ * Drop `null`-valued keys so downstream CopyTree code only ever sees
+ * `T | undefined`. `null` marks a field the caller explicitly cleared
+ * (test-config dry runs) — it has done its job once the merge is over.
+ */
+function stripClearedFields(options: CopyTreeTestConfigOptions): CopyTreeOptions {
+  const result = { ...options };
+  for (const key of Object.keys(result) as Array<keyof CopyTreeTestConfigOptions>) {
+    if (result[key] === null) {
+      delete result[key];
+    }
+  }
+  return result as CopyTreeOptions;
+}
+
+/**
  * Merge project-level settings with runtime CopyTree options.
  * Runtime options take precedence over project settings.
+ *
+ * A `null` runtime value means "explicitly cleared": the field is excluded
+ * from the project-settings back-fill (the `=== undefined` guards skip it)
+ * and stripped from the result. An absent/`undefined` field still falls back
+ * to project settings.
  *
  * Merges both:
  * - ProjectSettings.excludedPaths (default exclusions)
@@ -123,13 +147,13 @@ function getStringField(payload: unknown, key: string): string | undefined {
  */
 export function mergeCopyTreeOptions(
   projectSettings: Pick<ProjectSettings, "excludedPaths" | "copyTreeSettings"> | undefined,
-  runtimeOptions: CopyTreeOptions | undefined
+  runtimeOptions: CopyTreeOptions | CopyTreeTestConfigOptions | undefined
 ): CopyTreeOptions {
   if (!projectSettings) {
-    return runtimeOptions || {};
+    return stripClearedFields(runtimeOptions || {});
   }
 
-  const merged: CopyTreeOptions = {
+  const merged: CopyTreeTestConfigOptions = {
     ...runtimeOptions,
   };
 
@@ -158,7 +182,7 @@ export function mergeCopyTreeOptions(
   }
 
   if (!copyTreeSettings) {
-    return merged;
+    return stripClearedFields(merged);
   }
 
   if (copyTreeSettings.maxContextSize !== undefined && merged.maxTotalSize === undefined) {
@@ -182,7 +206,7 @@ export function mergeCopyTreeOptions(
     merged.always = copyTreeSettings.alwaysInclude;
   }
 
-  return merged;
+  return stripClearedFields(merged);
 }
 
 /**

@@ -77,39 +77,25 @@ export function ContextTab({
     setTestConfigResult(null);
 
     try {
-      const testOptions: import("@/types").CopyTreeOptions = {};
+      // Send the complete form state so the dry run reflects exactly what is
+      // on screen: a value when set, an explicit null when cleared. null (not
+      // undefined — structured clone drops undefined keys) blocks the
+      // saved-settings back-fill in the main process for that field.
+      const excludePatterns = [...excludedPaths, ...(copyTreeSettings.alwaysExclude ?? [])]
+        .map((p) => p.trim())
+        .filter(Boolean);
+      const alwaysPatterns = (copyTreeSettings.alwaysInclude ?? [])
+        .map((p) => p.trim())
+        .filter(Boolean);
 
-      if (excludedPaths.length > 0) {
-        const sanitizedPaths = excludedPaths.map((p) => p.trim()).filter(Boolean);
-        if (sanitizedPaths.length > 0) {
-          testOptions.exclude = sanitizedPaths;
-        }
-      }
-
-      if (copyTreeSettings.maxContextSize !== undefined) {
-        testOptions.maxTotalSize = copyTreeSettings.maxContextSize;
-      }
-      if (copyTreeSettings.maxFileSize !== undefined) {
-        testOptions.maxFileSize = copyTreeSettings.maxFileSize;
-      }
-      if (copyTreeSettings.charLimit !== undefined) {
-        testOptions.charLimit = copyTreeSettings.charLimit;
-      }
-      if (copyTreeSettings.strategy === "modified") {
-        testOptions.sort = "modified";
-      }
-      if (copyTreeSettings.alwaysInclude && copyTreeSettings.alwaysInclude.length > 0) {
-        const sanitized = copyTreeSettings.alwaysInclude.map((p) => p.trim()).filter(Boolean);
-        if (sanitized.length > 0) {
-          testOptions.always = sanitized;
-        }
-      }
-      if (copyTreeSettings.alwaysExclude && copyTreeSettings.alwaysExclude.length > 0) {
-        const sanitized = copyTreeSettings.alwaysExclude.map((p) => p.trim()).filter(Boolean);
-        if (sanitized.length > 0) {
-          testOptions.exclude = [...(testOptions.exclude || []), ...sanitized];
-        }
-      }
+      const testOptions: import("@/types").CopyTreeTestConfigOptions = {
+        exclude: excludePatterns.length > 0 ? excludePatterns : null,
+        always: alwaysPatterns.length > 0 ? alwaysPatterns : null,
+        maxTotalSize: copyTreeSettings.maxContextSize ?? null,
+        maxFileSize: copyTreeSettings.maxFileSize ?? null,
+        charLimit: copyTreeSettings.charLimit ?? null,
+        sort: copyTreeSettings.strategy === "modified" ? "modified" : null,
+      };
 
       const result = await copyTreeClient.testConfig(mainWorktree.id, testOptions);
       if (runIdRef.current !== runId) return;

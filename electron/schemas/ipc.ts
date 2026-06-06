@@ -374,9 +374,24 @@ export const CopyTreeCancelPayloadSchema = z.object({
   injectionId: z.string().min(1).optional(),
 });
 
+// Test-config dry runs send `null` for fields the user explicitly cleared in the
+// unsaved settings form (Electron's structured clone drops `undefined` keys, so
+// `null` is the only sentinel that survives IPC). `null` blocks the saved-settings
+// back-fill in mergeCopyTreeOptions; absent/undefined still falls back.
+export const CopyTreeTestConfigOptionsSchema = CopyTreeOptionsSchema.unwrap()
+  .extend({
+    exclude: z.union([z.string(), z.array(z.string())]).nullish(),
+    always: z.array(z.string()).nullish(),
+    maxFileSize: z.number().int().positive().nullish(),
+    maxTotalSize: z.number().int().positive().nullish(),
+    charLimit: z.number().int().positive().nullish(),
+    sort: z.enum(["path", "size", "modified", "name", "extension", "depth"]).nullish(),
+  })
+  .optional();
+
 export const CopyTreeTestConfigPayloadSchema = z.object({
   worktreeId: z.string().min(1),
-  options: CopyTreeOptionsSchema,
+  options: CopyTreeTestConfigOptionsSchema,
 });
 
 export const CopyTreeProgressSchema = z.object({

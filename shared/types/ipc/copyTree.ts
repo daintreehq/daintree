@@ -54,10 +54,29 @@ export interface CopyTreeCancelPayload {
   injectionId?: string;
 }
 
+/**
+ * Options for the test-config dry run. `null` marks a field the user explicitly
+ * cleared in the unsaved settings form — it blocks the saved-settings back-fill
+ * in the main process, while `undefined`/absent still falls back. The sentinel
+ * must be `null` (not `undefined`) because Electron's structured clone drops
+ * `undefined`-valued keys in transit.
+ */
+export interface CopyTreeTestConfigOptions extends Omit<
+  CopyTreeOptions,
+  "exclude" | "always" | "maxFileSize" | "maxTotalSize" | "charLimit" | "sort"
+> {
+  exclude?: string | string[] | null;
+  always?: string[] | null;
+  maxFileSize?: number | null;
+  maxTotalSize?: number | null;
+  charLimit?: number | null;
+  sort?: CopyTreeOptions["sort"] | null;
+}
+
 /** Payload for testing CopyTree configuration (dry run) */
 export interface CopyTreeTestConfigPayload {
   worktreeId: string;
-  options?: CopyTreeOptions;
+  options?: CopyTreeTestConfigOptions;
 }
 
 /** Result from CopyTree dry run test */

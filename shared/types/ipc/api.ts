@@ -79,6 +79,7 @@ import type {
 import type {
   CopyTreeResult,
   CopyTreeOptions,
+  CopyTreeTestConfigOptions,
   FileTreeNode,
   CopyTreeProgress,
 } from "./copyTree.js";
@@ -341,7 +342,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getFileTree(worktreeId: string, dirPath?: string): Promise<FileTreeNode[]>;
     testConfig(
       worktreeId: string,
-      options?: CopyTreeOptions
+      options?: CopyTreeTestConfigOptions
     ): Promise<import("./copyTree.js").CopyTreeTestConfigResult>;
     onProgress(callback: (progress: CopyTreeProgress) => void): () => void;
   };

@@ -123,6 +123,29 @@ describe("copyTree handlers", () => {
     );
   });
 
+  it("accepts null-cleared fields in test-config payloads", async () => {
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_TEST_CONFIG);
+
+    // copyTree channels share the "fileOps" rate-limit bucket; advance past the
+    // window so earlier handler calls in this suite don't preempt validation.
+    vi.useFakeTimers();
+    try {
+      vi.advanceTimersByTime(11_000);
+      await expect(
+        handler(mockEvent, {
+          worktreeId: "wt-1",
+          options: { maxTotalSize: null, charLimit: null, exclude: null, always: null, sort: null },
+        })
+      ).resolves.toEqual(
+        expect.objectContaining({
+          error: expect.not.stringMatching(/^Invalid payload$/),
+        })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("throws a sanitized ValidationError without Zod detail for invalid file tree requests", async () => {
     const handler = getInvokeHandler(CHANNELS.COPYTREE_GET_FILE_TREE);
 
@@ -194,6 +217,68 @@ describe("mergeCopyTreeOptions", () => {
     expect(result.charLimit).toBe(3000);
     expect(result.sort).toBe("name");
     expect(result.always).toEqual(["README.md"]);
+  });
+
+  it("does not back-fill project settings over explicitly cleared (null) fields", () => {
+    const projectSettings = {
+      excludedPaths: ["node_modules"],
+      copyTreeSettings: {
+        maxContextSize: 1000,
+        maxFileSize: 2000,
+        charLimit: 3000,
+        strategy: "modified",
+        alwaysInclude: ["README.md"],
+        alwaysExclude: ["dist"],
+      } as never,
+    };
+
+    const backfilled = mergeCopyTreeOptions(projectSettings, {});
+    const cleared = mergeCopyTreeOptions(projectSettings, {
+      exclude: null,
+      always: null,
+      maxFileSize: null,
+      maxTotalSize: null,
+      charLimit: null,
+      sort: null,
+    });
+
+    // The same settings that back-fill absent fields must not survive cleared ones.
+    expect(backfilled.maxTotalSize).toBeDefined();
+    expect(backfilled.maxFileSize).toBeDefined();
+    expect(backfilled.charLimit).toBeDefined();
+    expect(backfilled.sort).toBeDefined();
+    expect(backfilled.always).toBeDefined();
+    expect(backfilled.exclude).toBeDefined();
+
+    expect(cleared).toEqual({});
+  });
+
+  it("treats cleared, absent, and set fields independently in one merge", () => {
+    const copyTreeSettings = {
+      maxContextSize: 1000,
+      maxFileSize: 2000,
+      charLimit: 3000,
+    };
+    const result = mergeCopyTreeOptions(
+      { excludedPaths: [], copyTreeSettings: copyTreeSettings as never },
+      { maxTotalSize: null, charLimit: 50 }
+    );
+
+    expect(result.maxTotalSize).toBeUndefined(); // cleared → no back-fill
+    expect(result.maxFileSize).toBe(copyTreeSettings.maxFileSize); // absent → back-filled
+    expect(result.charLimit).toBe(50); // runtime wins
+  });
+
+  it("strips null sentinels so the result only carries values or absent keys", () => {
+    const result = mergeCopyTreeOptions(undefined, {
+      format: "xml",
+      maxTotalSize: null,
+      exclude: null,
+    });
+
+    expect(result.format).toBe("xml");
+    expect("maxTotalSize" in result).toBe(false);
+    expect("exclude" in result).toBe(false);
   });
 });
 
