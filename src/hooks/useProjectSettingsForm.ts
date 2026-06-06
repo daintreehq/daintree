@@ -34,6 +34,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     saveSettings: saveProjectSettings,
     isLoading: projectIsLoading,
     error: projectError,
+    refresh: refreshProjectSettings,
   } = useProjectSettings(projectId ?? "");
   const projects = useProjectStore((state) => state.projects);
   const updateProject = useProjectStore((state) => state.updateProject);
@@ -524,6 +525,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     projectSettings,
     projectIsLoading,
     projectError,
+    refreshProjectSettings,
     currentProject,
     enableInRepoSettings,
     disableInRepoSettings,
