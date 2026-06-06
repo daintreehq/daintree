@@ -17,6 +17,8 @@ function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
 }
 
+const FILE_PREVIEW_COUNT = 10;
+
 function parsePositiveInt(value: string): number | undefined {
   if (!value) return undefined;
   const num = Number(value);
@@ -43,6 +45,7 @@ export function ContextTab({
 }: ContextTabProps) {
   const [testConfigResult, setTestConfigResult] = useState<CopyTreeTestConfigResult | null>(null);
   const [isTestingConfig, setIsTestingConfig] = useState(false);
+  const [showAllFiles, setShowAllFiles] = useState(false);
 
   const testingSkeletonGate = useSkeletonGate(isTestingConfig);
   const showTestingSkeleton = useSkeletonFloor(testingSkeletonGate);
@@ -75,6 +78,7 @@ export function ContextTab({
     const runId = ++runIdRef.current;
     setIsTestingConfig(true);
     setTestConfigResult(null);
+    setShowAllFiles(false);
 
     try {
       // Send the complete form state so the dry run reflects exactly what is
@@ -459,20 +463,42 @@ export function ContextTab({
                         ({formatBytes(testConfigResult.includedSize)})
                       </span>
                     </div>
-                    <div className="text-xs text-daintree-text/60 space-y-1">
-                      <p>
-                        Excluded by pattern:{" "}
-                        <span className="font-mono">{testConfigResult.excluded.byPattern}</span>
-                      </p>
-                      <p>
-                        Excluded by size:{" "}
-                        <span className="font-mono">{testConfigResult.excluded.bySize}</span>
-                      </p>
-                      <p>
-                        Excluded by truncation:{" "}
-                        <span className="font-mono">{testConfigResult.excluded.byTruncation}</span>
-                      </p>
-                    </div>
+                    {testConfigResult.files && testConfigResult.files.length > 0 && (
+                      <div className="space-y-1">
+                        <ul className="max-h-60 overflow-y-auto space-y-1">
+                          {(showAllFiles
+                            ? testConfigResult.files
+                            : testConfigResult.files.slice(0, FILE_PREVIEW_COUNT)
+                          ).map((file) => (
+                            <li
+                              key={file.path}
+                              className="flex items-center justify-between gap-2 text-xs"
+                            >
+                              <span
+                                className="font-mono text-daintree-text/80 truncate"
+                                title={file.path}
+                              >
+                                {file.path}
+                              </span>
+                              <span className="text-daintree-text/40 shrink-0">
+                                {formatBytes(file.size)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                        {testConfigResult.files.length > FILE_PREVIEW_COUNT && (
+                          <button
+                            type="button"
+                            onClick={() => setShowAllFiles((value) => !value)}
+                            className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors"
+                          >
+                            {showAllFiles
+                              ? "Show fewer"
+                              : `Show ${testConfigResult.files.length - FILE_PREVIEW_COUNT} more`}
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

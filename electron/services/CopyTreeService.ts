@@ -222,7 +222,7 @@ class CopyTreeService {
           bySize: 0,
           byPattern: 0,
         },
-        files: undefined,
+        files: result.manifest ?? [],
       };
     } catch (error: unknown) {
       if (error instanceof Error && error.name === "AbortError") {
