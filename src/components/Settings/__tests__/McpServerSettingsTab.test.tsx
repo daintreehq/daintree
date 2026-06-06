@@ -73,6 +73,12 @@ function createMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {})
       configuredPort: 9020,
       apiKey: "dnt-key-abc123",
     }),
+    getRuntimeState: vi.fn().mockResolvedValue({
+      enabled: true,
+      state: "ready",
+      port: 9020,
+      lastError: null,
+    }),
     setEnabled: vi.fn(),
     setPort: vi.fn(),
     listActiveClients: vi.fn().mockResolvedValue([]),
@@ -1242,8 +1248,8 @@ describe("McpServerSettingsTab", () => {
     });
 
     it("populates the clients row when a runtime-state change fires after mount", async () => {
-      let runtimeCb: (() => void) | undefined;
-      const onRuntimeStateChanged = vi.fn((cb: () => void) => {
+      let runtimeCb: ((snapshot: unknown) => void) | undefined;
+      const onRuntimeStateChanged = vi.fn((cb: (snapshot: unknown) => void) => {
         runtimeCb = cb;
         return vi.fn();
       });
@@ -1261,7 +1267,7 @@ describe("McpServerSettingsTab", () => {
       await waitForContent(container, "API key active");
       expect(container.textContent).not.toContain("External clients");
 
-      runtimeCb?.();
+      runtimeCb?.({ enabled: true, state: "ready", port: 9020, lastError: null });
       await waitForContent(container, "External clients (1)");
     });
 
@@ -1284,6 +1290,125 @@ describe("McpServerSettingsTab", () => {
       );
       await waitForContent(container, "API key active");
       expect(container.textContent).not.toContain("Kept alive by Daintree Assistant");
+    });
+  });
+
+  describe("Connection section runtime state", () => {
+    it("renders the running tree, URL block, and copy button when state is ready", async () => {
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+      expect(container.textContent).toContain("Running on port");
+      expect(container.textContent).toContain("9020");
+      expect(container.textContent).toContain("http://127.0.0.1:9020/sse");
+      expect(screen.getByRole("button", { name: /copy mcp config/i })).toBeTruthy();
+    });
+
+    it("renders the starting copy and hides the URL block when state is starting", async () => {
+      installMcpApi({
+        getRuntimeState: vi.fn().mockResolvedValue({
+          enabled: true,
+          state: "starting",
+          port: null,
+          lastError: null,
+        }),
+      });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+      expect(container.textContent).toContain("Server is starting…");
+      expect(container.textContent).not.toContain("http://127.0.0.1");
+      expect(container.textContent).not.toContain("Copy MCP config");
+    });
+
+    it("renders the failed banner with lastError when state is failed and an error is set", async () => {
+      installMcpApi({
+        getRuntimeState: vi.fn().mockResolvedValue({
+          enabled: true,
+          state: "failed",
+          port: null,
+          lastError: "EADDRINUSE: port 45454 already in use",
+        }),
+      });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "MCP server failed to start");
+      expect(container.textContent).toContain("EADDRINUSE: port 45454 already in use");
+      expect(container.textContent).not.toContain("Server is starting…");
+      expect(container.textContent).not.toContain("Copy MCP config");
+    });
+
+    it("renders the failed banner with fallback copy when state is failed and lastError is null", async () => {
+      installMcpApi({
+        getRuntimeState: vi.fn().mockResolvedValue({
+          enabled: true,
+          state: "failed",
+          port: null,
+          lastError: null,
+        }),
+      });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "MCP server failed to start");
+      expect(container.textContent).toContain("Check the logs for details.");
+      expect(container.textContent).not.toContain("Server is starting…");
+    });
+
+    it("transitions the Connection section from ready to failed when a runtime push fires", async () => {
+      let runtimeCb: ((snapshot: unknown) => void) | undefined;
+      const onRuntimeStateChanged = vi.fn((cb: (snapshot: unknown) => void) => {
+        runtimeCb = cb;
+        return vi.fn();
+      });
+      installMcpApi({
+        onRuntimeStateChanged,
+        getRuntimeState: vi.fn().mockResolvedValue({
+          enabled: true,
+          state: "ready",
+          port: 9020,
+          lastError: null,
+        }),
+        getStatus: vi.fn().mockResolvedValue({
+          enabled: true,
+          port: null,
+          configuredPort: 9020,
+          apiKey: "dnt-key-abc123",
+        }),
+      });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+      expect(container.textContent).toContain("Running on port");
+
+      runtimeCb?.({
+        enabled: true,
+        state: "failed",
+        port: null,
+        lastError: "listen EACCES: permission denied",
+      });
+
+      await waitForContent(container, "MCP server failed to start");
+      expect(container.textContent).toContain("listen EACCES: permission denied");
+      expect(container.textContent).not.toContain("Running on port");
     });
   });
 });
