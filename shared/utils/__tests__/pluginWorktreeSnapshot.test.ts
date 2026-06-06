@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { toPluginWorktreeSnapshot } from "../pluginWorktreeSnapshot.js";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "../forgeProviderIds.js";
 import type { WorktreeSnapshot } from "../../types/workspace-host.js";
 
 function makeSnapshot(extra: Partial<WorktreeSnapshot> = {}): WorktreeSnapshot {
@@ -29,10 +30,10 @@ describe("toPluginWorktreeSnapshot — linked projection", () => {
       })
     );
     expect(out.linked).not.toBeNull();
-    expect(out.linked?.providerId).toBe("github");
+    expect(out.linked?.providerId).toBe(BUILTIN_GITHUB_PROVIDER_ID);
     expect(out.linked?.pr).toEqual({
       ref: {
-        providerId: "github",
+        providerId: BUILTIN_GITHUB_PROVIDER_ID,
         owner: "",
         repo: "",
         number: 42,
@@ -49,10 +50,10 @@ describe("toPluginWorktreeSnapshot — linked projection", () => {
     const out = toPluginWorktreeSnapshot(
       makeSnapshot({ issueNumber: 7, issueTitle: "Bug report" })
     );
-    expect(out.linked?.providerId).toBe("github");
+    expect(out.linked?.providerId).toBe(BUILTIN_GITHUB_PROVIDER_ID);
     expect(out.linked?.issue).toEqual({
       ref: {
-        providerId: "github",
+        providerId: BUILTIN_GITHUB_PROVIDER_ID,
         owner: "",
         repo: "",
         number: 7,
@@ -87,7 +88,7 @@ describe("toPluginWorktreeSnapshot — linked projection", () => {
       })
     );
     const providerId = out.linked?.providerId;
-    expect(providerId).toBe("github");
+    expect(providerId).toBe(BUILTIN_GITHUB_PROVIDER_ID);
     expect(out.linked?.pr?.ref.providerId).toBe(providerId);
     expect(out.linked?.issue?.ref.providerId).toBe(providerId);
   });
@@ -305,5 +306,16 @@ describe("toPluginWorktreeSnapshot — linked is the source of truth (#8452)", (
 
   it("returns null only when linked is null AND no flat fields are present", () => {
     expect(toPluginWorktreeSnapshot(makeSnapshot({ linked: null })).linked).toBeNull();
+  });
+});
+
+describe("BUILTIN_GITHUB_PROVIDER_ID — constant pin", () => {
+  // Localized guard: if `BUILTIN_GITHUB_PROVIDER_ID` is ever silently renamed
+  // to a non-canonical form, every assertion in this file that compares against
+  // it would start failing with the projection test name in the stack — pinning
+  // the literal here gives the next maintainer a single named failure pointing
+  // at the constant itself.
+  it("resolves to the canonical built-in GitHub forge provider id", () => {
+    expect(BUILTIN_GITHUB_PROVIDER_ID).toBe("daintree.github.github");
   });
 });
