@@ -3,6 +3,10 @@ import type { BrowserHistory } from "@shared/types/browser";
 import type { DevPreviewStatus } from "@/hooks/useDevServer";
 import { normalizeBrowserUrl } from "../../Browser/browserUtils";
 import { computeDevServerUrl } from "../urlSync";
+import {
+  webviewLoadErrorHeading,
+  type WebviewLoadErrorCode,
+} from "../useDevPreviewLoadLifecycle";
 
 // ─── Browser History Logic ──────────────────────────────────────────
 // Extracted from DevPreviewPane to enable pure-function testing
@@ -99,25 +103,6 @@ function determineRenderState(
   if (status === "error" && hasError) return "error";
   if (!currentUrl) return "waiting";
   return "webview";
-}
-
-// ─── Webview load-error heading ─────────────────────────────────────
-// Mirrors the heading ternary in DevPreviewPane's webviewLoadError overlay.
-// All headings use sentence case (first word capitalized only).
-function webviewErrorHeading(code: string): string {
-  return code === "timed_out"
-    ? "Page load timed out"
-    : code === "aborted"
-      ? "Load cancelled"
-      : code === "connection_refused"
-        ? "Dev server unreachable"
-        : code === "name_not_resolved"
-          ? "Couldn't resolve address"
-          : code === "internet_disconnected"
-            ? "No internet connection"
-            : code === "cert" || code === "ssl_protocol"
-              ? "Certificate error"
-              : "Page load failed";
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────
@@ -603,27 +588,29 @@ describe("DevPreviewPane", () => {
 
   describe("webview load-error heading", () => {
     it("uses sentence case for the certificate error heading (cert and ssl_protocol)", () => {
-      expect(webviewErrorHeading("cert")).toBe("Certificate error");
-      expect(webviewErrorHeading("ssl_protocol")).toBe("Certificate error");
+      expect(webviewLoadErrorHeading("cert")).toBe("Certificate error");
+      expect(webviewLoadErrorHeading("ssl_protocol")).toBe("Certificate error");
     });
 
-    it("renders every heading in sentence case (only the first character is uppercase)", () => {
-      const codes = [
-        "timed_out",
+    it("renders every WebviewLoadErrorCode in sentence case with no trailing period", () => {
+      const codes: WebviewLoadErrorCode[] = [
         "aborted",
-        "connection_refused",
+        "timeout",
         "name_not_resolved",
         "internet_disconnected",
+        "connection_refused",
         "cert",
         "ssl_protocol",
-        "unknown_code",
+        "failed",
       ];
       for (const code of codes) {
-        const heading = webviewErrorHeading(code);
-        // Sentence-case invariant: no interior word starts with an uppercase
-        // letter (proper nouns aside — none here), and there is no trailing period.
+        const heading = webviewLoadErrorHeading(code);
+        // Sentence-case invariant: the first character is uppercase, no interior
+        // word starts with an uppercase letter, and there is no trailing period.
+        const firstChar = heading.charAt(0);
+        expect(firstChar).toBe(firstChar.toUpperCase());
         const interiorWords = heading.split(" ").slice(1);
-        expect(interiorWords.every((w) => w === "" || w[0] !== w[0].toUpperCase())).toBe(true);
+        expect(interiorWords.every((w) => w === w.toLowerCase())).toBe(true);
         expect(heading.endsWith(".")).toBe(false);
       }
     });

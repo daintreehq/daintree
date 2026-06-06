@@ -283,6 +283,18 @@ describe("BrowserToolbar ARIA semantics", () => {
     expect(onCaptureScreenshot).toHaveBeenCalledOnce();
   });
 
+  it("screenshot button keeps its accessible name while disabled", () => {
+    const onCaptureScreenshot = vi.fn();
+    const { getByRole } = renderToolbar({
+      onCaptureScreenshot,
+      isWebviewReady: false,
+    });
+    const button = getByRole("button", { name: "Copy screenshot to clipboard" });
+    expect(button).toHaveProperty("disabled", true);
+    fireEvent.click(button);
+    expect(onCaptureScreenshot).not.toHaveBeenCalled();
+  });
+
   it("copy success announces in a polite live region", async () => {
     const { container, getByRole } = renderToolbar();
 
