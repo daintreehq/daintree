@@ -65,6 +65,7 @@ vi.mock("../../../window/portDistribution.js", () => ({
 
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
+import { distributePortsToView } from "../../../window/portDistribution.js";
 import { registerProjectCrudHandlers } from "../projectCrud/index.js";
 import type { HandlerDependencies } from "../../types.js";
 import type {
@@ -772,5 +773,135 @@ describe("project:switch provenance (#9859)", () => {
     const switchId = (call![1] as { switchId: string }).switchId;
     expect(typeof switchId).toBe("string");
     expect(switchId.length).toBeGreaterThan(0);
+  });
+});
+
+describe("project:switch PTY port ordering (#10075)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function setup(opts: { isNew: boolean; loadProject: () => Promise<void> }) {
+    const sendMock = vi.fn();
+    const mockView = {
+      webContents: { id: 300, isDestroyed: () => false, send: sendMock },
+    };
+    const pvm = {
+      switchTo: vi.fn().mockResolvedValue({ view: mockView, isNew: opts.isNew }),
+      getProjectIdForWebContents: vi.fn(),
+    };
+
+    mockGetWindowForWebContents.mockReturnValue({ id: 7, isDestroyed: () => false });
+
+    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-old");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New Project",
+      path: "/projects/new",
+    });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+
+    const ptyClient = { onProjectSwitch: vi.fn() };
+    const worktreeService = {
+      loadProject: vi.fn(opts.loadProject),
+      attachDirectPort: vi.fn(),
+      getHostForProject: vi.fn(() => null),
+    };
+    const windowRegistry = makeWindowRegistry([makeWindowContext(7, 300)]);
+    (
+      windowRegistry as unknown as { registerAppViewWebContents: unknown }
+    ).registerAppViewWebContents = vi.fn();
+
+    const deps = {
+      mainWindow: { id: 7 } as unknown,
+      projectViewManager: pvm,
+      worktreeService: worktreeService as never,
+      ptyClient: ptyClient as never,
+      windowRegistry,
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+
+    const invoke = () =>
+      handleMap.get(CHANNELS.PROJECT_SWITCH)!({ sender: { id: 300 } }, "proj-new");
+
+    return { invoke, ptyClient, worktreeService };
+  }
+
+  it("rebrokers the PTY port before the worktree git load resolves on a warm switch", async () => {
+    // A deferred loadProject lets us observe state at the moment the handler
+    // reaches the (slow) git-load await — the PTY work must already be done by
+    // then, otherwise terminal output would queue behind the load (#10075).
+    let resolveLoad: () => void = () => {};
+    const loadGate = new Promise<void>((resolve) => {
+      resolveLoad = resolve;
+    });
+
+    const { invoke, ptyClient, worktreeService } = setup({
+      isNew: false,
+      loadProject: () => loadGate,
+    });
+    const distributeMock = vi.mocked(distributePortsToView);
+
+    const handlerPromise = invoke();
+
+    await vi.waitFor(() => expect(worktreeService.loadProject).toHaveBeenCalled());
+
+    expect(ptyClient.onProjectSwitch).toHaveBeenCalledWith(7, "proj-new", "/projects/new");
+    expect(distributeMock).toHaveBeenCalledTimes(1);
+    // Port goes to the sender's window/context and carries the live ptyClient —
+    // routing to the wrong window would silently drop terminal data.
+    expect(distributeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 7 }),
+      expect.any(Object),
+      expect.objectContaining({ id: 300 }),
+      ptyClient
+    );
+    // PTY-host routing must be updated before the renderer port opens, else the
+    // port is connected while the host still points at the old project.
+    expect(ptyClient.onProjectSwitch.mock.invocationCallOrder[0]).toBeLessThan(
+      distributeMock.mock.invocationCallOrder[0]
+    );
+
+    resolveLoad();
+    await handlerPromise;
+  });
+
+  it("still rebrokers the PTY port even when the worktree load rejects", async () => {
+    const { invoke, ptyClient } = setup({
+      isNew: false,
+      loadProject: async () => {
+        throw new Error("Not a git repository");
+      },
+    });
+    const distributeMock = vi.mocked(distributePortsToView);
+
+    await invoke();
+
+    // The reorder runs PTY work before loadProject, so a git-load failure must
+    // not retroactively undo terminal connectivity (#10075).
+    expect(ptyClient.onProjectSwitch).toHaveBeenCalledWith(7, "proj-new", "/projects/new");
+    expect(distributeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not redistribute the PTY port for a cold-started view (isNew guard)", async () => {
+    const { invoke, ptyClient } = setup({
+      isNew: true,
+      loadProject: async () => undefined,
+    });
+    const distributeMock = vi.mocked(distributePortsToView);
+
+    await invoke();
+
+    // Cold-start views get their first PTY port from
+    // ProjectViewManager.onViewReady; redistributing here would race it.
+    expect(distributeMock).not.toHaveBeenCalled();
+    // onProjectSwitch still fires regardless of new/warm.
+    expect(ptyClient.onProjectSwitch).toHaveBeenCalledWith(7, "proj-new", "/projects/new");
   });
 });

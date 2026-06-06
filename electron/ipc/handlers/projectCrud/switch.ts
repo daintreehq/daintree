@@ -224,14 +224,50 @@ async function activateProjectView(
     deps.worktreeService.resumeProject(project.path);
   }
 
+  const senderWindow = getWindowForWebContents(event.sender);
+  const windowId = senderWindow?.id ?? deps.mainWindow?.id;
+
+  // Notify the PTY host of the active project and distribute a fresh
+  // MessagePort to the reactivated view BEFORE the worktree git load. On warm
+  // switches `loadProject` below can take several hundred ms (prune/list/status
+  // sync/LFS probe); running it first would leave the just-swapped view showing
+  // stale buffered terminal output until the git load resolves, because new PTY
+  // data has nowhere to flow until the renderer holds its new port (#10075).
+  // PTY rebrokering has no dependency on `loadProject` or the WorkspaceClient
+  // windowToProject mapping, so it is safe to run first — this matches the
+  // legacy ProjectSwitchService ordering (onProjectSwitch before loadProject).
+  if (windowId !== undefined) {
+    // Best-effort: the PTY rebrokering now runs before the worktree load, so an
+    // unexpected throw here must not abort the switch and skip `loadProject`
+    // (which would leave the WorkspaceClient windowToProject mapping stale).
+    try {
+      if (deps.ptyClient) {
+        deps.ptyClient.onProjectSwitch(windowId, projectId, project.path);
+      }
+
+      // Cold-started views receive their first PTY MessagePort from
+      // ProjectViewManager.onViewReady during did-finish-load. Replacing that
+      // port again here can race with the first terminal prompt after the view
+      // becomes interactive. Cached reactivations do not reload, so they still
+      // need a fresh port here.
+      const win = senderWindow ?? deps.mainWindow;
+      if (!isNew && win && deps.windowRegistry && !view.webContents.isDestroyed()) {
+        const ctx = deps.windowRegistry.getByWindowId(win.id);
+        if (ctx) {
+          distributePortsToView(win, ctx, view.webContents, deps.ptyClient ?? null);
+        }
+      }
+    } catch (err) {
+      console.error(`${options.logPrefix} Failed to rebroker PTY port:`, err);
+    }
+  }
+
   // Always call loadProject so the WorkspaceClient's windowToProject
   // mapping points to the correct project.  Without this, reactivating a
   // cached view leaves the mapping pointing at the *previous* project,
   // causing sendToEntryWindows to route the old project's IPC events to
   // the newly-active view (cross-project worktree contamination).
   if (deps.worktreeService) {
-    const senderWindow = getWindowForWebContents(event.sender);
-    const windowId = senderWindow?.id ?? deps.mainWindow?.id;
     if (windowId !== undefined) {
       // Forward-fail: the view swap already committed to the new project, so a
       // load failure surfaces as a Tier 3 recovery banner rather than reverting
@@ -269,29 +305,6 @@ async function activateProjectView(
     // Register the new view's webContents in WindowRegistry
     if (isNew && deps.windowRegistry && senderWindow) {
       deps.windowRegistry.registerAppViewWebContents(senderWindow.id, view.webContents.id);
-    }
-  }
-
-  // Notify PTY host of the active project and distribute a fresh
-  // MessagePort to the new/reactivated view so terminal data flows.
-  const senderWindow = getWindowForWebContents(event.sender);
-  const windowId = senderWindow?.id ?? deps.mainWindow?.id;
-  if (windowId !== undefined) {
-    if (deps.ptyClient) {
-      deps.ptyClient.onProjectSwitch(windowId, projectId, project.path);
-    }
-
-    // Cold-started views receive their first PTY MessagePort from
-    // ProjectViewManager.onViewReady during did-finish-load. Replacing that
-    // port again here can race with the first terminal prompt after the view
-    // becomes interactive. Cached reactivations do not reload, so they still
-    // need a fresh port here.
-    const win = senderWindow ?? deps.mainWindow;
-    if (!isNew && win && deps.windowRegistry && !view.webContents.isDestroyed()) {
-      const ctx = deps.windowRegistry.getByWindowId(win.id);
-      if (ctx) {
-        distributePortsToView(win, ctx, view.webContents, deps.ptyClient ?? null);
-      }
     }
   }
 }
