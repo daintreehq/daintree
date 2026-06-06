@@ -1326,7 +1326,7 @@ describe("getRateLimit", () => {
       throttleMultiplier: 3,
     } as never);
 
-    await expect(githubForgeProvider.getRateLimit()).resolves.toEqual({
+    await expect(githubForgeProvider.getRateLimit!()).resolves.toEqual({
       limit: null,
       remaining: null,
       resetAt: null,
@@ -1340,7 +1340,7 @@ describe("getRateLimit", () => {
       kind: null,
     } as never);
 
-    const info = await githubForgeProvider.getRateLimit();
+    const info = await githubForgeProvider.getRateLimit!();
     expect(info.throttleMultiplier).toBe(1);
   });
 
@@ -1352,7 +1352,7 @@ describe("getRateLimit", () => {
       throttleMultiplier: 8,
     } as never);
 
-    await expect(githubForgeProvider.getRateLimit()).resolves.toEqual({
+    await expect(githubForgeProvider.getRateLimit!()).resolves.toEqual({
       limit: null,
       remaining: 0,
       resetAt: 123,
