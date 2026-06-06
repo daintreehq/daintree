@@ -72,11 +72,12 @@ jobs:
       - name: Check (typecheck + lint + format)
         run: npm run check
 
-  # Unit tests, sharded across 4 runners via vitest's native --shard. Vitest
-  # splits test files deterministically across shards with no merge step (we
-  # don't collect coverage in CI). Each shard pays its own npm ci, but they run
-  # in parallel so the test phase wall-clock drops to ~1/4. To change the shard
-  # count, update both the `shard:` matrix list and the `/4` denominator below.
+  # Unit tests, sharded across SHARD_TOTAL runners via vitest's native --shard.
+  # Vitest splits test files deterministically across shards with no merge step
+  # (we don't collect coverage in CI). Each shard pays its own npm ci, but they
+  # run in parallel so the test phase wall-clock drops to ~1/SHARD_TOTAL. To
+  # change the shard count, update SHARD_TOTAL and keep the `shard:` matrix
+  # list as [1, 2, ..., SHARD_TOTAL].
   test:
     strategy:
       fail-fast: false
@@ -85,6 +86,8 @@ jobs:
         shard: [1, 2, 3, 4]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    env:
+      SHARD_TOTAL: 4
 
     steps:
       - name: Check out repository
@@ -105,8 +108,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Test (vitest unit, shard ${{ matrix.shard }}/4)
-        run: npm run test -- --shard=${{ matrix.shard }}/4
+      - name: Test (vitest unit, shard ${{ matrix.shard }}/${{ env.SHARD_TOTAL }})
+        run: npm run test -- --shard=${{ matrix.shard }}/${{ env.SHARD_TOTAL }}
 
   build:
     runs-on: ubuntu-latest
