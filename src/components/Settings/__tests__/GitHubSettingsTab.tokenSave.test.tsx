@@ -148,7 +148,33 @@ describe("GitHubSettingsTab handleSaveToken", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save token" }));
 
     await waitFor(() => {
-      expect(screen.getByText(/failed to save token/i)).toBeTruthy();
+      expect(screen.getByText(/couldn't save token/i)).toBeTruthy();
+    });
+
+    expect(mockedNotify).not.toHaveBeenCalled();
+  });
+
+  it("shows inline error when token validation IPC fails", async () => {
+    mockedDispatch.mockImplementation(async (actionId: string) => {
+      if (actionId === "forge.validateToken") {
+        return { ok: false, error: { message: "IPC down" } } as never;
+      }
+      return { ok: true, result: undefined } as never;
+    });
+
+    render(
+      <SettingsValidationProvider>
+        <GitHubSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    fireEvent.change(screen.getByLabelText(/github personal access token/i), {
+      target: { value: "ghp_token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Test token" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/couldn't validate token/i)).toBeTruthy();
     });
 
     expect(mockedNotify).not.toHaveBeenCalled();

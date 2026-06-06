@@ -78,7 +78,7 @@ test.describe.serial("Core: GitHub settings token flow", () => {
     await window.locator(SEL.github.tokenInput).fill("ghp_invalid_token");
     await window.locator(SEL.github.testButton).click();
 
-    await expect(window.locator("text=Failed to validate token")).toBeVisible({
+    await expect(window.locator("text=Couldn't validate token")).toBeVisible({
       timeout: T_MEDIUM,
     });
     // The settings surface stays intact (no error-boundary fallback).
@@ -95,7 +95,7 @@ test.describe.serial("Core: GitHub settings token flow", () => {
     await window.locator(SEL.github.tokenInput).fill("ghp_unsavable_token");
     await window.locator(SEL.github.saveButton).click();
 
-    await expect(window.locator("text=Failed to save token")).toBeVisible({ timeout: T_MEDIUM });
+    await expect(window.locator("text=Couldn't save token")).toBeVisible({ timeout: T_MEDIUM });
     await expect(window.locator(SEL.errorBoundary.fallback)).not.toBeVisible();
   });
 
@@ -111,7 +111,7 @@ test.describe.serial("Core: GitHub settings token flow", () => {
     await expect(window.locator(SEL.github.connectedBadge)).toBeVisible({ timeout: T_MEDIUM });
     const clearButton = window
       .locator(SEL.github.tokenBlock)
-      .getByRole("button", { name: "Clear" });
+      .getByRole("button", { name: "Clear token" });
     await expect(clearButton).toBeVisible();
 
     // Clearing removes the token and the connected affordances disappear.
