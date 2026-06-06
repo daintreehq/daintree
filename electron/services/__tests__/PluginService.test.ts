@@ -93,6 +93,7 @@ vi.mock("../forgeProviderRegistry.js", () => ({
   unregisterForgeProviderImpl: vi.fn(),
   unregisterForgeProviderImpls: vi.fn(),
   getForgeProviderImpl: vi.fn(),
+  getRegisteredForgeProviders: vi.fn(() => []),
   clearForgeProviderImplRegistry: vi.fn(),
 }));
 // Mocked so unload-cascade tests can simulate a throwing decoration unregister
@@ -4054,6 +4055,60 @@ describe("createHost — registerForgeProvider", () => {
     // path during unloadPlugin — independent from the bulk unregisterForgeProviderImpls
     // belt-and-suspenders call.
     expect(unregisterForgeProviderImpl).toHaveBeenCalledWith("acme.forge-flush", "github", impl);
+  });
+
+  it("replays a persisted credential into the freshly bound impl (#9983)", async () => {
+    await writePlugin("forge-replay", forgeManifest("acme.forge-replay"));
+    storeMock._state.set("forgeCredentials", {
+      "acme.forge-replay.github": JSON.stringify({ token: "stored-secret" }),
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.forge-replay"
+    );
+
+    const setCredentials = vi.fn();
+    host.registerForgeProvider({ id: "github" }, { setCredentials });
+
+    expect(setCredentials).toHaveBeenCalledWith({ kind: "bearer", value: "stored-secret" });
+  });
+
+  it("does not call setCredentials on bind when no credential is stored (#9983)", async () => {
+    await writePlugin("forge-noreplay", forgeManifest("acme.forge-noreplay"));
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.forge-noreplay"
+    );
+
+    const setCredentials = vi.fn();
+    host.registerForgeProvider({ id: "github" }, { setCredentials });
+
+    expect(setCredentials).not.toHaveBeenCalled();
+  });
+
+  it("survives a setCredentials throw during replay without aborting registration (#9983)", async () => {
+    await writePlugin("forge-replaythrow", forgeManifest("acme.forge-replaythrow"));
+    storeMock._state.set("forgeCredentials", {
+      "acme.forge-replaythrow.github": JSON.stringify({ token: "stored-secret" }),
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.forge-replaythrow"
+    );
+
+    const setCredentials = vi.fn(() => {
+      throw new Error("boom");
+    });
+    // A plugin's setCredentials throwing must not propagate out of binding.
+    const dispose = host.registerForgeProvider({ id: "github" }, { setCredentials });
+    expect(setCredentials).toHaveBeenCalled();
+    expect(typeof dispose).toBe("function");
   });
 });
 
