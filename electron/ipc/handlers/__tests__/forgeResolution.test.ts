@@ -41,7 +41,9 @@ const gitServiceMock = vi.hoisted(() => ({
   listWorktrees: vi.fn(),
   getRepositoryRoot: vi.fn(),
 }));
-const gitServiceCacheMock = vi.hoisted(() => ({ getGitService: vi.fn(() => gitServiceMock) }));
+const gitServiceCacheMock = vi.hoisted(() => ({
+  getGitService: vi.fn<() => typeof gitServiceMock | null>(() => gitServiceMock),
+}));
 
 vi.mock("../../../services/GitServiceCache.js", () => ({
   gitServiceCache: gitServiceCacheMock,
