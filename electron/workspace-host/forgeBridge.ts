@@ -72,8 +72,8 @@ export class ForgeBridge {
     remoteUrl: string | null;
     forgeProviderOverride: string | null;
     globalDefaultProviderId: string | null;
-  }): Promise<ForgeResolveProviderResult | null> {
-    return this.invoke<ForgeResolveProviderResult | null>("resolveProvider", undefined, [opts]);
+  }): Promise<ForgeResolveProviderResult> {
+    return this.invoke<ForgeResolveProviderResult>("resolveProvider", undefined, [opts]);
   }
 
   findPRByBranch(namespacedId: string, repo: RepoRef, branch: string): Promise<PR | null> {

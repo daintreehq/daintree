@@ -418,6 +418,10 @@ export type WorkspaceHostRequest =
   | { type: "has-resource-config"; requestId: string; rootPath: string }
   // Forge credential propagation
   | { type: "update-forge-credentials"; providerId: string; credentials: Credentials | null }
+  // A forge provider descriptor was registered in main's plugin registry
+  // (startup scan or runtime install/enable). Hosts paused on a "no-match"
+  // resolution re-evaluate their provider on receipt (#9997).
+  | { type: "forge:provider-registry-updated" }
   // User-triggered retry of auth-suspended fetches (e.g. clicking the auth-failed sync badge)
   | { type: "retry-auth-fetch" }
   // Project environment variable propagation
@@ -491,11 +495,18 @@ export type ForgeRpcMethod =
   | "getRateLimit"
   | "clearPullRequestCaches";
 
-/** Result shape for `resolveProvider` — used by typed parsing of `forge:rpc-result.value`. */
-export interface ForgeResolveProviderResult {
-  namespacedId: string;
-  repo: RepoRef;
-}
+/**
+ * Result shape for `resolveProvider` — used by typed parsing of
+ * `forge:rpc-result.value`. Discriminated so the workspace-host can tell a
+ * transient miss from a permanent one (#9997): `"not-ready"` means the plugin
+ * registry hasn't finished its startup scan yet (retry soon), `"no-match"`
+ * means the scan is complete and no registered provider matches this project's
+ * remote (stop polling until forge settings or the plugin registry change).
+ */
+export type ForgeResolveProviderResult =
+  | { status: "resolved"; namespacedId: string; repo: RepoRef }
+  | { status: "no-match" }
+  | { status: "not-ready" };
 
 /**
  * Events sent from Workspace Host → Main.

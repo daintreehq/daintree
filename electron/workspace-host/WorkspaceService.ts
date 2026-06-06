@@ -2725,6 +2725,16 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     void pullRequestService.refresh();
   }
 
+  /**
+   * Main registered a new forge provider descriptor (startup scan or runtime
+   * plugin install/enable). Wake the PR service if its polling paused on a
+   * "no provider matches" resolution (#9997). Routed straight to the
+   * singleton, mirroring `updateForgeSettings` above.
+   */
+  notifyForgeProviderRegistryUpdated(): void {
+    pullRequestService.notifyForgeProviderRegistryUpdated();
+  }
+
   updateForgeCredentials(
     providerId: string,
     credentials: import("../../shared/types/forge.js").Credentials | null

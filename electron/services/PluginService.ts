@@ -658,6 +658,17 @@ export class PluginService {
   }
 
   /**
+   * Whether the manifest scan phase ({@link initialize}) has settled. Forge
+   * provider descriptors register at scan-time, so once this is true a
+   * hostname-match miss in `resolveForgeProvider` is a definitive "no
+   * provider matches" rather than a cold-start race (#9997). Distinct from
+   * {@link waitForInit}, which also waits for startup activation.
+   */
+  get isPluginScanComplete(): boolean {
+    return this.initialized;
+  }
+
+  /**
    * Stop forwarding shared registry events to the renderer. Intended for
    * tests that need a clean teardown — production code holds a single
    * `pluginService` singleton for the app lifetime. Also drops any pending
@@ -1070,6 +1081,10 @@ export class PluginService {
 
     if (manifest.contributes.forgeProviders.length > 0) {
       registerForgeProviders(manifest.name, manifest.contributes.forgeProviders);
+      // Wake workspace-hosts whose PR polling paused on a "no provider
+      // matches" resolution so they re-evaluate against the new descriptor
+      // (#9997). Covers both the startup scan and runtime install/enable.
+      this.workspaceClient?.notifyForgeProviderRegistryUpdated();
     }
 
     if (manifest.contributes.fileDecorationProviders.length > 0) {
