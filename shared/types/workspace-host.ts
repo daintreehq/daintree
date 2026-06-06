@@ -329,7 +329,7 @@ export type WorkspaceHostRequest =
   | { type: "get-all-states"; requestId: string }
   | { type: "get-monitor"; requestId: string; worktreeId: string }
   // Worktree operations
-  | { type: "set-active"; requestId: string; worktreeId: string }
+  | { type: "set-active"; requestId: string; worktreeId: string; silent?: boolean }
   | { type: "refresh"; requestId: string; worktreeId?: string }
   | { type: "refresh-on-wake"; requestId: string }
   | { type: "refresh-prs"; requestId: string }
@@ -592,7 +592,18 @@ export type WorkspaceHostEvent =
   // `deleteWorktree`). Separate surface from the legacy
   // `CHANNELS.WORKTREE_ACTIVATED` echo path that PR #3603's `silent` flag
   // suppresses for renderer-initiated IPC.
-  | { type: "worktree-activated"; worktreeId: string; epoch: string; seq: number }
+  // `silent` is propagated from the originating `set-active` request; when
+  // true, the main-process router must skip the plugin-bus emit so callers
+  // that explicitly marked the activation silent (the renderer IPC path)
+  // do not double-notify subscribers that the legacy
+  // `CHANNELS.WORKTREE_ACTIVATED` path already suppresses.
+  | {
+      type: "worktree-activated";
+      worktreeId: string;
+      epoch: string;
+      seq: number;
+      silent?: boolean;
+    }
   // Per-worktree lifecycle setup failure surfaced to the renderer's error
   // banner. Emitted from sites that previously swallowed errors to
   // `console.warn` (the `createWorktree` async tail and the

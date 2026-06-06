@@ -217,4 +217,50 @@ describe("WorktreeStoreProvider worktree-activated handler (#9945)", () => {
 
     expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-active");
   });
+
+  it("early-returns when worktree-activated echoes the already-active id (#9512 invariant)", async () => {
+    // The host's MessagePort echoes `worktree-activated` for both
+    // Main-originated and host-originated activations. A redundant call
+    // into `selectWorktree(activeId)` (default source: "user") would
+    // update `restoreWorktreeId` and persist the active id — breaking
+    // the focus-promotion invariant (#9512) by pinning a focus-promoted
+    // id as the durable restore target. The listener's early-return
+    // preserves the already-active path.
+    const store = await renderProvider();
+    act(() => {
+      store.getState().applyUpdate(
+        makeWorktree("wt-main", { isMainWorktree: true, branch: "main" }),
+        { epoch: "test", seq: 1 }
+      );
+    });
+    // Mark wt-main as active AND as the current restore target — the
+    // host's echo must not perturb either.
+    act(() => {
+      useWorktreeSelectionStore.setState({
+        activeWorktreeId: "wt-main",
+        restoreWorktreeId: "wt-main",
+        pendingWorktreeId: null,
+      });
+    });
+    const restoreBefore = useWorktreeSelectionStore.getState().restoreWorktreeId;
+    const pendingBefore = useWorktreeSelectionStore.getState().pendingWorktreeId;
+
+    act(() => {
+      emit("worktree-activated", {
+        type: "worktree-activated",
+        worktreeId: "wt-main",
+      });
+    });
+
+    const after = useWorktreeSelectionStore.getState();
+    expect(after.activeWorktreeId).toBe("wt-main");
+    // The early-return must leave restoreWorktreeId and pendingWorktreeId
+    // untouched. If the listener had called selectWorktree("wt-main")
+    // with source: "user", it would have re-confirmed restoreWorktreeId
+    // (idempotent here, but a future focus-promoted id would have been
+    // wrongly pinned) and cleared pendingWorktreeId via the
+    // already-active branch.
+    expect(after.restoreWorktreeId).toBe(restoreBefore);
+    expect(after.pendingWorktreeId).toBe(pendingBefore);
+  });
 });

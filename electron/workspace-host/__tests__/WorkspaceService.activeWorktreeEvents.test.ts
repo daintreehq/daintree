@@ -234,6 +234,53 @@ describe("WorkspaceService active-worktree event emission (#9945)", () => {
     expect(mainMonitor.isCurrent).toBe(true);
   });
 
+  it("propagates the silent flag from the originating set-active request (#9945)", () => {
+    createAndRegisterMonitor({
+      id: pathResolve("/test/main"),
+      path: pathResolve("/test/main"),
+      isMainWorktree: true,
+    });
+    service["activeWorktreeId"] = null;
+
+    service["setActiveWorktree"]("port-1", pathResolve("/test/main"), { silent: true });
+
+    const activated = eventOfType("worktree-activated");
+    expect(activated).toBeDefined();
+    expect(activated?.silent).toBe(true);
+
+    // Default (no options) leaves silent undefined.
+    service["setActiveWorktree"]("port-2", pathResolve("/test/main"));
+    const activatedDefault = sentEvents
+      .filter((e) => e.type === "worktree-activated")
+      .at(-1);
+    expect(activatedDefault?.silent).toBeUndefined();
+  });
+
+  it("rejects unknown worktree ids with success:false and does not emit worktree-activated", () => {
+    createAndRegisterMonitor({
+      id: pathResolve("/test/main"),
+      path: pathResolve("/test/main"),
+      isMainWorktree: true,
+    });
+    const unknownId = pathResolve("/test/does-not-exist");
+    service["activeWorktreeId"] = null;
+
+    service["setActiveWorktree"]("port-bad", unknownId);
+
+    // No worktree-activated event for an unknown id — the per-view renderer
+    // would otherwise call selectWorktree(unknown) and leave the sidebar in
+    // a half-state.
+    expect(eventOfType("worktree-activated")).toBeUndefined();
+    // The IPC contract still receives a set-active-result so the caller
+    // learns the activation was rejected.
+    const result = eventOfType("set-active-result");
+    expect(result).toBeDefined();
+    expect(result?.success).toBe(false);
+    expect(result?.requestId).toBe("port-bad");
+    // activeWorktreeId is untouched.
+    expect(service["activeWorktreeId"]).toBeNull();
+  });
+
   it("auto-switch in runTopologyReconcile emits worktree-removed then worktree-activated, in that order (#9945)", async () => {
     // Register main + active worktrees.
     const mainPath = pathResolve("/test/main");

@@ -118,6 +118,15 @@ export class WorkspaceHostEventRouter {
         // plugin bus so `PluginService.subscribeWorktreeEvent(pluginId,
         // "worktree-activated", ...)` still receives host-originated
         // activations on the same payload shape.
+        //
+        // Respect the `silent` flag propagated from the originating
+        // `set-active` IPC request. PR #3603's silent contract suppresses
+        // the legacy `CHANNELS.WORKTREE_ACTIVATED` echo and the
+        // `WorkspaceClient`-level plugin-bus emit; this router case must
+        // mirror that suppression or plugin subscribers to
+        // `onDidChangeActiveWorktree` would receive notifications for
+        // activations the caller explicitly marked silent.
+        if (event.silent) break;
         this.emit("worktree-activated", {
           worktreeId: event.worktreeId,
           projectPath: entry.projectPath,

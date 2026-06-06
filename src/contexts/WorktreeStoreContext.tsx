@@ -423,6 +423,20 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       worktreePort.onEvent("worktree-activated", (data) => {
         const event = data as WorktreeActivatedEvent;
         const selectionStore = useWorktreeSelectionStore.getState();
+        // Skip the worktree-activated handler if the active id already
+        // matches the event's id. The host's MessagePort echoes
+        // `worktree-activated` for both Main-originated and host-originated
+        // activations, and a redundant call into `selectWorktree(id)` (with
+        // default source: "user") would update `restoreWorktreeId` and
+        // persist the active id — breaking the focus-promotion invariant
+        // (#9512) by pinning a focus-promoted id as the durable restore
+        // target. The early-return preserves the already-active path; the
+        // host-originated auto-switch case (the #9945 fix) is unaffected
+        // because the active id has just been cleared to null by the
+        // preceding `worktree-removed` event.
+        if (selectionStore.activeWorktreeId === event.worktreeId) {
+          return;
+        }
         selectionStore.setPendingWorktree(event.worktreeId);
         selectionStore.selectWorktree(event.worktreeId);
         if (store.getState().worktrees.has(event.worktreeId)) {

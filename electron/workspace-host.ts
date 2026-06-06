@@ -428,7 +428,9 @@ port.on("message", async (rawMsg: any) => {
         break;
 
       case "set-active":
-        workspaceService.setActiveWorktree(request.requestId, request.worktreeId);
+        workspaceService.setActiveWorktree(request.requestId, request.worktreeId, {
+          silent: request.silent,
+        });
         break;
 
       case "refresh":

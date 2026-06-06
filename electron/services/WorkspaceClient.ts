@@ -437,6 +437,12 @@ export class WorkspaceClient extends EventEmitter {
           type: "set-active",
           requestId,
           worktreeId,
+          // Propagate the silent flag so the host's `worktree-activated` event
+          // carries the same gating intent. The main-process router suppresses
+          // the plugin-bus emit when silent so we don't double-notify
+          // subscribers that the legacy `CHANNELS.WORKTREE_ACTIVATED` path
+          // (gated by this same flag below) already suppresses.
+          silent: options?.silent,
         });
         accepted = true;
         break;

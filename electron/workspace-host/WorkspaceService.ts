@@ -1617,7 +1617,23 @@ export class WorkspaceService {
     });
   }
 
-  setActiveWorktree(requestId: string, worktreeId: string): void {
+  setActiveWorktree(
+    requestId: string,
+    worktreeId: string,
+    options?: { silent?: boolean }
+  ): void {
+    // Reject unknown worktree ids with success:false. Pre-PR, an unknown id
+    // would mutate `this.activeWorktreeId` to a value the renderer could not
+    // resolve; the new `worktree-activated` emit would propagate that miss
+    // to the per-view store via MessagePort, where the listener would call
+    // `selectWorktree(unknown)` and leave the sidebar in a half-state until
+    // the next event. The new contract: unknown id → no-op + reject the
+    // IPC request so the caller can surface the error.
+    if (!this.monitors.has(worktreeId)) {
+      this.sendEvent({ type: "set-active-result", requestId, success: false });
+      return;
+    }
+
     const previousActiveId = this.activeWorktreeId;
     this.activeWorktreeId = worktreeId;
 
@@ -1673,11 +1689,15 @@ export class WorkspaceService {
     // IPC. The legacy echo reaches `window.electron.worktree.onActivated`
     // (no per-view consumer since the #9327276d7 migration); this MessagePort
     // event is what the per-view `WorktreeStoreContext` actually listens to.
+    // `silent` is propagated so the main-process router can mirror the
+    // legacy `silent` contract on the plugin bus and avoid double-notifying
+    // subscribers that the legacy path already suppressed.
     this.sendEvent({
       type: "worktree-activated",
       worktreeId,
       epoch: this.epoch,
       seq: this.nextSeq(),
+      silent: options?.silent,
     });
 
     this.sendEvent({ type: "set-active-result", requestId, success: true });
