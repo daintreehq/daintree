@@ -105,6 +105,38 @@ export interface DemoPressKeyPayload {
   selector?: string;
 }
 
+/** Named special keys the demo engine can send into a terminal panel. */
+export type DemoTerminalKey =
+  | "up"
+  | "down"
+  | "left"
+  | "right"
+  | "enter"
+  | "tab"
+  | "escape"
+  | "backspace"
+  | "ctrl-c"
+  | "ctrl-d"
+  | "ctrl-u"
+  | "home"
+  | "end"
+  | "pageup"
+  | "pagedown";
+
+export interface DemoTypeInTerminalPayload {
+  /** Selector resolving to (or inside) a terminal panel's `[data-panel-id]`. */
+  selector: string;
+  text: string;
+  /** Characters per second; humanized around this rate. Defaults to 12. */
+  cps?: number;
+}
+
+export interface DemoSendKeyToTerminalPayload {
+  /** Selector resolving to (or inside) a terminal panel's `[data-panel-id]`. */
+  selector: string;
+  key: DemoTerminalKey;
+}
+
 export interface DemoSpotlightPayload {
   selector: string;
   padding?: number;

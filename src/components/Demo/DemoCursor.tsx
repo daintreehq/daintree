@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { isMac } from "@/lib/platform";
 import { EditorView } from "@codemirror/view";
 import { Transaction } from "@codemirror/state";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import type {
   DemoMoveToPayload,
   DemoMoveToSelectorPayload,
@@ -12,6 +13,8 @@ import type {
   DemoDragPayload,
   DemoPressKeyPayload,
   DemoWaitForIdlePayload,
+  DemoTypeInTerminalPayload,
+  DemoSendKeyToTerminalPayload,
 } from "@shared/types/ipc/demo";
 
 const CURSOR_SVG_PATH = "M2.5 1L17.5 13.5H9.5L14 22L11 23.5L6.5 15L2.5 19.5V1Z";
@@ -65,6 +68,51 @@ function getTypingDelay(char: string, prevChar: string, baseMean: number): numbe
     stdev = baseMean * 0.12;
   }
   return gaussianRandom(mean, stdev);
+}
+
+// Escape sequences for special keys sent into a terminal. Arrow keys have a
+// separate application-cursor-mode (DECCKM) form used by TUIs (vim, less); the
+// renderer reads the live xterm mode to pick the right one. All other keys are
+// mode-independent.
+const TERMINAL_KEY_NORMAL: Record<string, string> = {
+  up: "\x1b[A",
+  down: "\x1b[B",
+  right: "\x1b[C",
+  left: "\x1b[D",
+  home: "\x1b[H",
+  end: "\x1b[F",
+  pageup: "\x1b[5~",
+  pagedown: "\x1b[6~",
+  enter: "\r",
+  tab: "\t",
+  escape: "\x1b",
+  backspace: "\x7f",
+  "ctrl-c": "\x03",
+  "ctrl-d": "\x04",
+  "ctrl-u": "\x15",
+};
+
+const TERMINAL_KEY_APP: Record<string, string> = {
+  up: "\x1bOA",
+  down: "\x1bOB",
+  right: "\x1bOC",
+  left: "\x1bOD",
+};
+
+function resolveTerminalKey(key: string, appCursorMode: boolean): string | null {
+  if (appCursorMode && key in TERMINAL_KEY_APP) {
+    return TERMINAL_KEY_APP[key]!;
+  }
+  return TERMINAL_KEY_NORMAL[key] ?? null;
+}
+
+// Resolve a terminal panel id from a selector that either targets the panel
+// root (`[data-panel-id="x"]`) or any element inside it.
+function getPanelIdFromSelector(selector: string): string | null {
+  const el = document.querySelector(selector);
+  if (!el) return null;
+  const panel = el.closest("[data-panel-id]");
+  return panel?.getAttribute("data-panel-id") ?? null;
 }
 
 function cubicBezier(t: number, p0: number, p1: number, p2: number, p3: number): number {
@@ -416,6 +464,62 @@ export function DemoCursor() {
               prevChar = char;
             }
           }
+          sendDone(payload.requestId);
+        } catch (err) {
+          sendDone(payload.requestId, String(err));
+        }
+      })
+    );
+
+    // --- type-in-terminal: humanized char-by-char PTY write into a terminal ---
+    cleanups.push(
+      demo.onExecCommand("demo:exec-type-in-terminal", async (raw: Record<string, unknown>) => {
+        const payload = raw as unknown as DemoTypeInTerminalPayload & { requestId: string };
+        try {
+          await waitIfPaused();
+          const panelId = getPanelIdFromSelector(payload.selector);
+          if (!panelId) {
+            sendDone(payload.requestId, `Terminal panel not found: ${payload.selector}`);
+            return;
+          }
+
+          const cps = Math.max(1, payload.cps ?? 12);
+          const baseMean = 1000 / cps;
+          let prevChar = "";
+          for (const char of payload.text) {
+            await waitIfPaused();
+            window.electron.terminal.write(panelId, char);
+            await pauseAwareDelay(getTypingDelay(char, prevChar, baseMean));
+            prevChar = char;
+          }
+          sendDone(payload.requestId);
+        } catch (err) {
+          sendDone(payload.requestId, String(err));
+        }
+      })
+    );
+
+    // --- send-key-to-terminal: write a special-key escape sequence to the PTY ---
+    cleanups.push(
+      demo.onExecCommand("demo:exec-send-key-to-terminal", async (raw: Record<string, unknown>) => {
+        const payload = raw as unknown as DemoSendKeyToTerminalPayload & { requestId: string };
+        try {
+          await waitIfPaused();
+          const panelId = getPanelIdFromSelector(payload.selector);
+          if (!panelId) {
+            sendDone(payload.requestId, `Terminal panel not found: ${payload.selector}`);
+            return;
+          }
+
+          const appCursorMode =
+            terminalInstanceService.get(panelId)?.terminal.modes.applicationCursorKeysMode ?? false;
+          const seq = resolveTerminalKey(payload.key, appCursorMode);
+          if (seq === null) {
+            sendDone(payload.requestId, `Unknown terminal key: ${payload.key}`);
+            return;
+          }
+
+          window.electron.terminal.write(panelId, seq);
           sendDone(payload.requestId);
         } catch (err) {
           sendDone(payload.requestId, String(err));

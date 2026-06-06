@@ -2689,6 +2689,10 @@ const api: ElectronAPI = {
             modifiers?: Array<"mod" | "ctrl" | "shift" | "alt" | "meta">,
             selector?: string
           ) => _unwrappingInvoke(CHANNELS.DEMO_PRESS_KEY, { key, code, modifiers, selector }),
+          typeInTerminal: (selector: string, text: string, cps?: number) =>
+            _unwrappingInvoke(CHANNELS.DEMO_TYPE_IN_TERMINAL, { selector, text, cps }),
+          sendKeyToTerminal: (selector: string, key: string) =>
+            _unwrappingInvoke(CHANNELS.DEMO_SEND_KEY_TO_TERMINAL, { selector, key }),
           spotlight: (selector: string, padding?: number) =>
             _unwrappingInvoke(CHANNELS.DEMO_SPOTLIGHT, { selector, padding }),
           dismissSpotlight: () => _unwrappingInvoke(CHANNELS.DEMO_DISMISS_SPOTLIGHT),

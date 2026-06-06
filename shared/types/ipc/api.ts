@@ -75,6 +75,7 @@ import type {
   DemoAnnotateResult,
   DemoAnnotationPlacement,
   DemoAnnotationSize,
+  DemoTerminalKey,
 } from "./demo.js";
 import type {
   CopyTreeResult,
@@ -1642,6 +1643,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       modifiers?: Array<"mod" | "ctrl" | "shift" | "alt" | "meta">,
       selector?: string
     ): Promise<void>;
+    typeInTerminal(selector: string, text: string, cps?: number): Promise<void>;
+    sendKeyToTerminal(selector: string, key: DemoTerminalKey): Promise<void>;
     spotlight(selector: string, padding?: number): Promise<void>;
     dismissSpotlight(): Promise<void>;
     annotate(

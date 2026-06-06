@@ -160,6 +160,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./demo.js").DemoScrollPayload];
     result: void;
   };
+  "demo:send-key-to-terminal": {
+    args: [payload: import("./demo.js").DemoSendKeyToTerminalPayload];
+    result: void;
+  };
   "demo:sleep": {
     args: [payload: import("./demo.js").DemoSleepPayload];
     result: void;
@@ -178,6 +182,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "demo:type": {
     args: [payload: import("./demo.js").DemoTypePayload];
+    result: void;
+  };
+  "demo:type-in-terminal": {
+    args: [payload: import("./demo.js").DemoTypeInTerminalPayload];
     result: void;
   };
   "demo:wait-for-idle": {
