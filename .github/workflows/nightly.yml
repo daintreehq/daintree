@@ -610,6 +610,22 @@ jobs:
             --include "latest*.yml" \
             --cache-control "no-cache, no-store, must-revalidate"
 
+      - name: Verify macOS metadata at CDN edge
+        shell: bash
+        env:
+          PUBLISH_URL: https://updates.daintree.org/nightly/
+          UPDATE_METADATA_PREFIX: latest
+          METADATA_SUFFIX: "-mac"
+        run: node scripts/ci/verify-r2-metadata.mjs
+
+      - name: Verify Linux metadata at CDN edge
+        shell: bash
+        env:
+          PUBLISH_URL: https://updates.daintree.org/nightly/
+          UPDATE_METADATA_PREFIX: latest
+          METADATA_SUFFIX: "-linux"
+        run: node scripts/ci/verify-r2-metadata.mjs
+
       - name: Clean up old nightly builds
         shell: bash
         env:
