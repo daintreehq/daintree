@@ -32,6 +32,7 @@ import { VIEWPORT_PRESET_LIST } from "@/panels/dev-preview/viewportPresets";
 import { logError } from "@/utils/logger";
 
 const LONG_PRESS_MS = 400;
+const COPIED_FEEDBACK_RESET_MS = 2000;
 
 const ZOOM_PRESETS = [
   { value: 0.25, label: "25%" },
@@ -450,7 +451,7 @@ export function BrowserToolbar({
         throw new Error(result.error.message);
       }
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setTimeout(() => setCopied(false), COPIED_FEEDBACK_RESET_MS);
     } catch (err) {
       logError("Failed to copy URL", err);
     }
@@ -461,7 +462,10 @@ export function BrowserToolbar({
     await onCaptureScreenshot();
     setScreenshotCopied(true);
     if (screenshotCopiedTimerRef.current) clearTimeout(screenshotCopiedTimerRef.current);
-    screenshotCopiedTimerRef.current = setTimeout(() => setScreenshotCopied(false), 2000);
+    screenshotCopiedTimerRef.current = setTimeout(
+      () => setScreenshotCopied(false),
+      COPIED_FEEDBACK_RESET_MS
+    );
   }, [onCaptureScreenshot]);
 
   const handleZoomStep = useCallback(
