@@ -121,6 +121,40 @@ describe("injectDataLossMarker", () => {
     expect(text).not.toContain("57301");
   });
 
+  it("still renders the marker after a hibernate/wake cycle (#9907)", async () => {
+    createManagedTerminal("dl-wake");
+    terminalInstanceService.hibernate("dl-wake");
+    terminalInstanceService.unhibernate("dl-wake");
+
+    terminalInstanceService.injectDataLossMarker("dl-wake", 512);
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    // Regression guard: the wake path used to recreate the parser handler
+    // without the onDataLoss callback, so the OSC 57301 signal was silently
+    // consumed and no marker rendered post-wake.
+    const text = terminalInstanceService.captureBufferText("dl-wake");
+    expect(text).toContain("Output dropped (~512 bytes)");
+    expect(text).not.toContain("57301");
+  });
+
+  it("keeps rendering the marker across repeated hibernate/wake cycles (#9907)", async () => {
+    createManagedTerminal("dl-cycles");
+    terminalInstanceService.hibernate("dl-cycles");
+    terminalInstanceService.unhibernate("dl-cycles");
+    terminalInstanceService.hibernate("dl-cycles");
+    terminalInstanceService.unhibernate("dl-cycles");
+
+    terminalInstanceService.injectDataLossMarker("dl-cycles", 512);
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    // Each cycle disposes the old parser handler and re-registers a fresh
+    // one; the callback must survive every wake, not just the first.
+    const text = terminalInstanceService.captureBufferText("dl-cycles");
+    expect(text).toContain("Output dropped (~512 bytes)");
+  });
+
   it("uses a generic label when the dropped byte count is zero", async () => {
     createManagedTerminal("dl-4");
     terminalInstanceService.injectDataLossMarker("dl-4", 0);

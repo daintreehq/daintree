@@ -52,10 +52,21 @@ vi.mock("../TerminalAddonManager", () => ({
   })),
 }));
 
+// Captures the onDataLoss (3rd) constructor arg of the most recently
+// constructed parser handler so tests can assert the wake path re-wires it
+// (#9907).
+let lastParserOnDataLoss: ((droppedBytes: number) => void) | undefined;
+
 vi.mock("../TerminalParserHandler", () => ({
   TerminalParserHandler: class {
     dispose = vi.fn();
-    constructor(_managed: unknown, _onResize: () => void) {}
+    constructor(
+      _managed: unknown,
+      _onResize: () => void,
+      onDataLoss?: (droppedBytes: number) => void
+    ) {
+      lastParserOnDataLoss = onDataLoss;
+    }
   },
 }));
 
@@ -157,6 +168,7 @@ function makeMockDeps(managed?: ManagedTerminal): HibernationManagerDeps {
     clearResizeJob: vi.fn(),
     clearSettledTimer: vi.fn(),
     applyDeferredResize: vi.fn(),
+    drawDataLossMarker: vi.fn(),
     ensureDeferredAddons: vi.fn(),
     onHibernationChanged: vi.fn(),
     getIsBackgrounded: vi.fn(() => false),
@@ -460,6 +472,18 @@ describe("TerminalHibernationManager", () => {
       callback!();
 
       expect(onWriteParsedReflow).toHaveBeenCalledWith(managed);
+    });
+
+    it("re-wires the data-loss callback to deps.drawDataLossMarker (#9907)", () => {
+      lastParserOnDataLoss = undefined;
+      manager.unhibernate("t1");
+
+      // The wake path must pass the onDataLoss callback as the 3rd parser
+      // arg, mirroring getOrCreate(); without it, post-wake data-loss
+      // markers stop rendering.
+      expect(lastParserOnDataLoss).toBeTypeOf("function");
+      lastParserOnDataLoss!(512);
+      expect(deps.drawDataLossMarker).toHaveBeenCalledWith("t1", 512);
     });
 
     it("should reset lastReflowAt so next reflow fires immediately", () => {
