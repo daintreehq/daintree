@@ -244,6 +244,33 @@ export interface McpGrantRecord {
 export type McpLogRecord = McpAuditRecord | McpGrantRecord;
 
 /**
+ * Runtime guard for the `type` discriminator on `McpGrantRecord`. The check
+ * is intentionally the same as the main-process filter at
+ * `electron/services/mcp-server/auditLog.ts` so renderer consumers and the
+ * ring-buffer filter cannot drift on what counts as a grant record. The
+ * legacy on-disk shape (no `type` field on `McpAuditRecord`) is load-bearing;
+ * any future expansion of `McpGrantRecordType` widens this guard naturally.
+ */
+export function isGrantRecord(record: McpLogRecord): record is McpGrantRecord {
+  return (
+    typeof record === "object" &&
+    record !== null &&
+    "type" in record &&
+    typeof (record as { type: unknown }).type === "string"
+  );
+}
+
+/**
+ * Inverse of {@link isGrantRecord} — narrows to `McpAuditRecord` by
+ * complement. Kept as a positive form so consumers can call it at the
+ * prop boundary without writing `!isGrantRecord(r)` and reasoning about
+ * the legacy no-`type` invariant at every site.
+ */
+export function isAuditRecord(record: McpLogRecord): record is McpAuditRecord {
+  return !isGrantRecord(record);
+}
+
+/**
  * Live event payload broadcast to the pinned renderer for a grant
  * transition. Mirrors `McpGrantRecord` because renderers want the same
  * fields they'd see in the audit log. Send is targeted (never broadcast)

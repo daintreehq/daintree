@@ -30,7 +30,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import {
   type McpActiveClientInfo,
-  type McpAuditRecord,
+  type McpLogRecord,
   type AssistantTurnRecord,
   type McpAuditStats,
   type ActiveBearerRecord,
@@ -76,7 +76,7 @@ export function McpServerSettingsTab() {
   const auditCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditExportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [auditRecords, setAuditRecords] = useState<McpAuditRecord[]>([]);
+  const [auditRecords, setAuditRecords] = useState<McpLogRecord[]>([]);
   const [turnRecords, setTurnRecords] = useState<AssistantTurnRecord[]>([]);
   const [auditStats, setAuditStats] = useState<McpAuditStats | null>(null);
   const [auditEnabled, setAuditEnabled] = useState(true);
@@ -129,7 +129,7 @@ export function McpServerSettingsTab() {
   const refreshAuditRecords = async (): Promise<void> => {
     try {
       const [recordsResult, turnsResult, statsResult] = await Promise.allSettled([
-        window.electron.mcpServer.getAuditRecords(),
+        window.electron.mcpServer.getLogRecords(),
         window.electron.mcpServer.getTurnOutcomeRecords(),
         window.electron.mcpServer.getAuditStats(),
       ]);
@@ -165,7 +165,7 @@ export function McpServerSettingsTab() {
     Promise.all([
       window.electron.mcpServer.getStatus(),
       window.electron.mcpServer.getAuditConfig(),
-      window.electron.mcpServer.getAuditRecords(),
+      window.electron.mcpServer.getLogRecords(),
       window.electron.mcpServer.getTurnOutcomeRecords(),
       window.electron.mcpServer.getAuditStats(),
     ])
@@ -415,7 +415,7 @@ export function McpServerSettingsTab() {
     setShowClearConfirm(false);
   };
 
-  const handleCopyAuditAsJson = async (records: McpAuditRecord[]) => {
+  const handleCopyAuditAsJson = async (records: McpLogRecord[]) => {
     try {
       setError(null);
       await navigator.clipboard.writeText(JSON.stringify(records, null, 2));
@@ -433,7 +433,7 @@ export function McpServerSettingsTab() {
     }
   };
 
-  const handleExportAuditLog = async (records: McpAuditRecord[]) => {
+  const handleExportAuditLog = async (records: McpLogRecord[]) => {
     if (isExporting) return;
     setIsExporting(true);
     try {

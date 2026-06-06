@@ -15,6 +15,7 @@ import type {
   McpAuditRecord,
   McpAuditStats,
   McpIssueGrantResult,
+  McpLogRecord,
   McpRevokeSessionGrantsResult,
   McpRuntimeSnapshot,
   McpServerStatusSnapshot,
@@ -86,6 +87,18 @@ export const mcpServerNamespace = defineIpcNamespace({
         return svc.getAuditRecords();
       }
     ),
+    // Sibling of getAuditRecords that returns the full McpLogRecord union
+    // (dispatch + grant lifecycle). Used by the audit-log viewer and NDJSON
+    // export. Dispatch-only consumers (latency table, recent-calls popover)
+    // keep using getAuditRecords so their `result`/`durationMs` reads stay
+    // type-safe — see #10027.
+    getLogRecords: op(
+      MCP_SERVER_METHOD_CHANNELS.getLogRecords,
+      async (): Promise<McpLogRecord[]> => {
+        const svc = await getMcpServerService();
+        return svc.getLogRecords();
+      }
+    ),
     getAuditConfig: op(
       MCP_SERVER_METHOD_CHANNELS.getAuditConfig,
       async (): Promise<{ enabled: boolean; maxRecords: number }> => {
@@ -151,7 +164,7 @@ export const mcpServerNamespace = defineIpcNamespace({
     ),
     exportAuditLog: op(
       MCP_SERVER_METHOD_CHANNELS.exportAuditLog,
-      async (ctx, records: McpAuditRecord[]): Promise<boolean> => {
+      async (ctx, records: McpLogRecord[]): Promise<boolean> => {
         if (!Array.isArray(records)) throw new Error("records must be an array");
         const ndjsonLines = records.map((rawRecord) => {
           const record = rawRecord as unknown as Record<string, unknown>;

@@ -1,15 +1,15 @@
 import React, { useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { McpAuditRecord } from "@shared/types";
+import { type McpLogRecord, isAuditRecord } from "@shared/types";
 
 interface McpAuditLatencyTableProps {
-  records: McpAuditRecord[];
+  records: McpLogRecord[];
   /**
    * Predicate applied before stats are computed — used by the Privacy
    * section to hide `external` MCP traffic, mirroring the row viewer.
    */
-  includeRecord?: (record: McpAuditRecord) => boolean;
+  includeRecord?: (record: McpLogRecord) => boolean;
 }
 
 interface ToolLatencyBlock {
@@ -68,6 +68,9 @@ export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatency
     const successBuckets = new Map<string, number[]>();
     const failedBuckets = new Map<string, number[]>();
     for (const record of records) {
+      // Grant-lifecycle records have no `result`/`durationMs`; skip them
+      // — the latency table is a dispatch-only surface.
+      if (!isAuditRecord(record)) continue;
       if (includeRecord && !includeRecord(record)) continue;
       const map = record.result === "success" ? successBuckets : failedBuckets;
       const list = map.get(record.toolId);

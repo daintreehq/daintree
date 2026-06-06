@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { AuditService, type AuditOutcome } from "../auditLog.js";
-import type { McpAuditResult } from "../../../../shared/types/ipc/mcpServer.js";
+import {
+  type McpAuditResult,
+  isAuditRecord,
+  isGrantRecord,
+} from "../../../../shared/types/ipc/mcpServer.js";
 
 function makeFixture(initialConfig: Record<string, unknown> = {}) {
   const config: Record<string, unknown> = {
@@ -820,5 +824,111 @@ describe("AuditService anomaly detection", () => {
     const p95 = stats.anomalySignals.filter((s) => s.kind === "p95-z-score");
     expect(p95.length).toBeGreaterThanOrEqual(1);
     expect(p95[0]!.toolId).toBe("tool.e");
+  });
+});
+
+describe("shared narrowers — isGrantRecord / isAuditRecord (#10027)", () => {
+  it("classifies a legacy dispatch record (no `type` field) as audit", () => {
+    const record = {
+      id: "audit-1",
+      timestamp: 1,
+      toolId: "agent.launch",
+      sessionId: "sess-1",
+      tier: "action",
+      argsSummary: "{}",
+      result: "success" as const,
+      durationMs: 5,
+      schemaVersion: 1,
+      severity: "info" as const,
+    };
+    expect(isGrantRecord(record)).toBe(false);
+    expect(isAuditRecord(record)).toBe(true);
+  });
+
+  it("classifies a grant record (with `type`) as grant", () => {
+    const record = {
+      type: "grant.issued" as const,
+      id: "grant-1",
+      timestamp: 1,
+      sessionId: "sess-1",
+      toolId: "files.search",
+      ttlMs: 60000,
+    };
+    expect(isGrantRecord(record)).toBe(true);
+    expect(isAuditRecord(record)).toBe(false);
+  });
+
+  it("rejects a record with a non-string `type` discriminator", () => {
+    // Defensive: a malformed on-disk record that survived hydration should
+    // be treated as the implicit dispatch kind, not as a grant record.
+    const record = {
+      id: "x",
+      timestamp: 1,
+      toolId: "t",
+      sessionId: "s",
+      tier: "action",
+      argsSummary: "{}",
+      result: "success" as const,
+      durationMs: 0,
+      schemaVersion: 1,
+      severity: "info" as const,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- intentionally malformed
+      type: 123 as any,
+    };
+    expect(isGrantRecord(record as never)).toBe(false);
+    expect(isAuditRecord(record as never)).toBe(true);
+  });
+
+  it("accepts every McpGrantRecordType value", () => {
+    const types = [
+      "grant.issued",
+      "grant.expired",
+      "grant.revoked",
+      "tier.elevated",
+      "tier.decayed",
+    ] as const;
+    for (const t of types) {
+      const record = {
+        type: t,
+        id: "g",
+        timestamp: 1,
+        sessionId: "s",
+        toolId: "*",
+        ttlMs: 0,
+      };
+      expect(isGrantRecord(record)).toBe(true);
+    }
+  });
+});
+
+describe("AuditService.getLogRecords — union preservation (#10027)", () => {
+  it("returns grant and dispatch records interleaved chronologically (newest-first)", async () => {
+    const { service } = makeFixture();
+    service.appendRecord({
+      toolId: "agent.launch",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 5,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+    // Wait a tick so timestamps differ — appendRecord stamps Date.now() each
+    // call but rapid back-to-back calls can collide on coarse-resolution
+    // clocks; the ordering assertion is structural, not timestamp-strict.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    service.appendGrantRecord({
+      type: "tier.elevated",
+      sessionId: "sess-1",
+      toolId: "*",
+      ttlMs: 1800000,
+      tier: "action",
+      previousTier: "workbench",
+    });
+    const log = service.getLogRecords();
+    expect(log).toHaveLength(2);
+    // Newest-first: the grant was appended last, so it leads.
+    expect(isGrantRecord(log[0]!)).toBe(true);
+    expect(isAuditRecord(log[1]!)).toBe(true);
   });
 });

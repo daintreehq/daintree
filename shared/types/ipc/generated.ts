@@ -440,7 +440,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./mcpServer.js").DisconnectBearerResult;
   };
   "mcp-server:export-audit-log": {
-    args: [records: import("./mcpServer.js").McpAuditRecord[]];
+    args: [records: import("./mcpServer.js").McpLogRecord[]];
     result: boolean;
   };
   "mcp-server:get-audit-config": {
@@ -458,6 +458,10 @@ export interface GeneratedIpcInvokeMap {
   "mcp-server:get-config-snippet": {
     args: [];
     result: string;
+  };
+  "mcp-server:get-log-records": {
+    args: [];
+    result: import("./mcpServer.js").McpLogRecord[];
   };
   "mcp-server:get-runtime-state": {
     args: [];

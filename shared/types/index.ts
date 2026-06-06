@@ -342,6 +342,10 @@ export type {
   McpAuditStats,
   McpAuditSeverity,
   McpConfirmationDecision,
+  McpGrantRecord,
+  McpGrantRecordType,
+  McpGrantRevokedReason,
+  McpLogRecord,
   AssistantTurnRecord,
   TurnOutcomeClass,
   McpAnomalySeverity,
@@ -356,6 +360,8 @@ export {
   MCP_AUDIT_MIN_RECORDS,
   MCP_AUDIT_MAX_RECORDS,
   MCP_AUDIT_DEFAULT_MAX_RECORDS,
+  isAuditRecord,
+  isGrantRecord,
 } from "./ipc/mcpServer.js";
 export type {
   PluginActionAuditRecord,

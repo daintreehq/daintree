@@ -38,10 +38,11 @@ import { useHelpPanelStore } from "@/store/helpPanelStore";
 import type {
   HelpAssistantSettings,
   HelpAssistantTier,
-  McpAuditRecord,
   McpAuditStats,
+  McpLogRecord,
   AssistantTurnRecord,
 } from "@shared/types";
+import { isAuditRecord } from "@shared/types";
 import {
   HELP_TIER_CUMULATIVE,
   HELP_TIER_INCREMENTAL,
@@ -124,7 +125,7 @@ export function DaintreeAssistantSettingsTab() {
   const [showRotateConfirm, setShowRotateConfirm] = useState(false);
   const [isRotating, setIsRotating] = useState(false);
   const [showBlastRadius, setShowBlastRadius] = useState(false);
-  const [auditRecords, setAuditRecords] = useState<McpAuditRecord[]>([]);
+  const [auditRecords, setAuditRecords] = useState<McpLogRecord[]>([]);
   const [auditStats, setAuditStats] = useState<McpAuditStats | null>(null);
   const [turnRecords, setTurnRecords] = useState<AssistantTurnRecord[]>([]);
   const [auditLoading, setAuditLoading] = useState(true);
@@ -232,7 +233,7 @@ export function DaintreeAssistantSettingsTab() {
   // `allSettled` so a stats failure doesn't silently blank the record list.
   const refreshAuditRecords = async (): Promise<void> => {
     const [recordsResult, statsResult, turnsResult] = await Promise.allSettled([
-      window.electron.mcpServer.getAuditRecords(),
+      window.electron.mcpServer.getLogRecords(),
       window.electron.mcpServer.getAuditStats(),
       window.electron.mcpServer.getTurnOutcomeRecords(),
     ]);
@@ -258,7 +259,7 @@ export function DaintreeAssistantSettingsTab() {
     setAuditLoading(true);
     safeFireAndForget(
       Promise.allSettled([
-        window.electron.mcpServer.getAuditRecords(),
+        window.electron.mcpServer.getLogRecords(),
         window.electron.mcpServer.getAuditStats(),
         window.electron.mcpServer.getTurnOutcomeRecords(),
       ])
@@ -291,7 +292,7 @@ export function DaintreeAssistantSettingsTab() {
     };
   }, []);
 
-  const handleCopyAuditAsJson = async (records: McpAuditRecord[]) => {
+  const handleCopyAuditAsJson = async (records: McpLogRecord[]) => {
     try {
       await navigator.clipboard.writeText(JSON.stringify(records, null, 2));
       setAuditCopied(true);
@@ -308,7 +309,7 @@ export function DaintreeAssistantSettingsTab() {
     }
   };
 
-  const handleExportAuditAsNdjson = async (records: McpAuditRecord[]) => {
+  const handleExportAuditAsNdjson = async (records: McpLogRecord[]) => {
     if (isExportingAudit) return;
     setIsExportingAudit(true);
     try {
@@ -664,13 +665,16 @@ export function DaintreeAssistantSettingsTab() {
           onCopy={handleCopyAuditAsJson}
           onClear={() => setShowClearAuditConfirm(true)}
           copyFlashActive={auditCopied}
-          includeRecord={(record) => record.tier !== "external"}
+          // Privacy section hides external MCP traffic. Grant-lifecycle
+          // events stay visible — they're tied to this Daintree's own
+          // help-session bearers, not external API-key clients.
+          includeRecord={(record) => !isAuditRecord(record) || record.tier !== "external"}
           onExport={handleExportAuditAsNdjson}
           exportFlashActive={auditExported}
         />
         <McpAuditLatencyTable
           records={auditRecords}
-          includeRecord={(record) => record.tier !== "external"}
+          includeRecord={(record) => !isAuditRecord(record) || record.tier !== "external"}
         />
         {auditStats && auditStats.auth401Count > 0 && (
           <p className="text-xs text-daintree-text/60 select-text">

@@ -16,6 +16,8 @@ import {
   MCP_AUDIT_MIN_RECORDS,
   MCP_AUDIT_SCHEMA_VERSION,
   computeMcpAuditSeverity,
+  isAuditRecord,
+  isGrantRecord,
 } from "../../../shared/types/ipc/mcpServer.js";
 import type { McpTier } from "./shared.js";
 import {
@@ -46,17 +48,6 @@ function percentile(values: number[], p: number): number {
   const lower = sorted[k]!;
   const upper = sorted[k + 1] ?? lower;
   return lower + f * (upper - lower);
-}
-
-/**
- * Hydrate predicate: existing on-disk records predate the discriminated
- * union (#8442) and have no `type` field; new entries written by
- * `appendGrantRecord` carry one. The union narrows on the presence of
- * the field, never on a sentinel value, so legacy records remain plain
- * `McpAuditRecord` instances.
- */
-function isGrantRecord(record: McpLogRecord): record is McpGrantRecord {
-  return "type" in record && typeof (record as McpGrantRecord).type === "string";
 }
 
 export class AuditService {
@@ -259,7 +250,7 @@ export class AuditService {
       const existing = this.records.find((r) => r.id === this.lastPreAuthRecordId);
       // Narrow to McpAuditRecord — grant records carry a `type` discriminator;
       // audit records do not. See `McpLogRecord` in shared/types/ipc/mcpServer.ts.
-      if (existing && !("type" in existing) && existing.errorCode === PRE_AUTH_FAILED_CODE) {
+      if (existing && isAuditRecord(existing) && existing.errorCode === PRE_AUTH_FAILED_CODE) {
         existing.timestamp = now;
         existing.repeatCount = (existing.repeatCount ?? 1) + 1;
         this.lastPreAuthRecordAt = now;

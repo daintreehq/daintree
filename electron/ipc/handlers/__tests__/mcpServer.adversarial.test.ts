@@ -17,6 +17,7 @@ const serviceMock = vi.hoisted(() => ({
   rotateApiKey: vi.fn().mockResolvedValue("k-new"),
   getConfigSnippet: vi.fn(() => "snippet"),
   getAuditRecords: vi.fn(() => []),
+  getLogRecords: vi.fn(() => []),
   getAuditConfig: vi.fn(() => ({ enabled: true, maxRecords: 500 })),
   clearAuditLog: vi.fn(),
   getTurnOutcomeRecords: vi.fn(() => []),
@@ -240,8 +241,8 @@ describe("mcpServer IPC adversarial", () => {
     expect(serviceMock.disconnectBearer).toHaveBeenCalledWith(valid);
   });
 
-  it("cleanup removes all twenty-one registered handlers", () => {
-    expect(ipcHandlers.size).toBe(21);
+  it("cleanup removes all twenty-two registered handlers", () => {
+    expect(ipcHandlers.size).toBe(22);
     cleanup();
     expect(ipcHandlers.size).toBe(0);
   });

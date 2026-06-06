@@ -238,6 +238,9 @@ export interface GeneratedElectronAPI {
     getConfigSnippet(
       ...args: IpcInvokeMap["mcp-server:get-config-snippet"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:get-config-snippet"]["result"]>;
+    getLogRecords(
+      ...args: IpcInvokeMap["mcp-server:get-log-records"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:get-log-records"]["result"]>;
     getRuntimeState(
       ...args: IpcInvokeMap["mcp-server:get-runtime-state"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:get-runtime-state"]["result"]>;
