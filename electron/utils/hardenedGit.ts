@@ -111,18 +111,10 @@ export function getGitLocaleEnv(
   return { LC_CTYPE: "C.UTF-8", GIT_OPTIONAL_LOCKS: "0" };
 }
 
-export function createHardenedGit(
-  cwd: string,
-  signal?: AbortSignal,
+export function buildHardenedGitEnv(
   platform: NodeJS.Platform = process.platform
-): SimpleGit {
-  return simpleGit({
-    baseDir: cwd,
-    config: [...HARDENED_GIT_CONFIG],
-    timeout: { block: GIT_BLOCK_TIMEOUT_MS },
-    ...(signal ? { abort: signal } : {}),
-    unsafe: UNSAFE_FLAGS,
-  }).env({
+): NodeJS.ProcessEnv {
+  return {
     ...getSanitizedProcessEnv(),
     ...getGitLocaleEnv(platform),
     // Clear inherited LC_ALL so the more specific LC_CTYPE / LC_MESSAGES
@@ -151,7 +143,21 @@ export function createHardenedGit(
     // dialogs in background processes where no user can interact. No effect
     // on POSIX or on local read operations.
     GCM_INTERACTIVE: "Never",
-  });
+  };
+}
+
+export function createHardenedGit(
+  cwd: string,
+  signal?: AbortSignal,
+  platform: NodeJS.Platform = process.platform
+): SimpleGit {
+  return simpleGit({
+    baseDir: cwd,
+    config: [...HARDENED_GIT_CONFIG],
+    timeout: { block: GIT_BLOCK_TIMEOUT_MS },
+    ...(signal ? { abort: signal } : {}),
+    unsafe: UNSAFE_FLAGS,
+  }).env(buildHardenedGitEnv(platform));
 }
 
 export interface WslGitInvocation {

@@ -1,6 +1,6 @@
 import * as fs from "fs/promises";
 import * as path from "path";
-import { createHardenedGit } from "../utils/hardenedGit.js";
+import { checkIgnoredPaths } from "../utils/gitCheckIgnore.js";
 import type { FileTreeNode } from "../../shared/types/ipc.js";
 
 const _baseRealpathCache = new Map<string, Promise<string>>();
@@ -69,13 +69,28 @@ export class FileTreeService {
       const ignoredPaths = new Set<string>();
 
       try {
-        const git = createHardenedGit(resolvedBasePath);
         if (pathsToCheck.length > 0) {
-          const ignored = await git.checkIgnore(pathsToCheck);
-          ignored.forEach((p) => ignoredPaths.add(toGitPath(p)));
+          const ignored = await checkIgnoredPaths(resolvedBasePath, pathsToCheck);
+          for (const p of ignored) {
+            ignoredPaths.add(p);
+          }
         }
-      } catch (_e) {
-        // ignore
+      } catch (error) {
+        // Fail closed: if the check-ignore invocation errors (E2BIG, ENOMEM,
+        // missing git, broken repo, …) populate the set with every path we
+        // tried to check so the downstream filter hides all of them. This
+        // is the same shape as "everything in this dir is gitignored" and
+        // prevents gitignored entries (build output, dependency folders,
+        // secret-like files) from leaking into the tree. A transient
+        // failure self-heals on the next successful call.
+        console.warn("git check-ignore failed; hiding checked entries to prevent leak", {
+          code: (error as NodeJS.ErrnoException)?.code,
+          message: error instanceof Error ? error.message : String(error),
+          entryCount: pathsToCheck.length,
+        });
+        for (const p of pathsToCheck) {
+          ignoredPaths.add(p);
+        }
       }
 
       const statResults = await Promise.all(
