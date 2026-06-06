@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { ActionManifestEntry, ActionId } from "../../../../shared/types/actions.js";
 
 vi.mock("electron", () => ({
   app: {
@@ -200,17 +201,15 @@ async function listTools(server: ReturnType<typeof createSessionServer>) {
   ) as Promise<{ tools: Array<{ name: string }> }>;
 }
 
-function makeManifestEntry(
-  id: string
-): import("../../../shared/types/actions.js").ActionManifestEntry {
+function makeManifestEntry(id: string): ActionManifestEntry {
   return {
-    id: id as import("../../../shared/types/actions.js").ActionId,
+    id: id as ActionId,
     name: id,
     title: id,
     description: `description for ${id}`,
     category: "test",
     kind: "query",
-    danger: "safe",
+    danger: "safe" as const,
     enabled: true,
     requiresArgs: false,
     inputSchema: { type: "object", properties: {} },
@@ -271,7 +270,7 @@ describe("sessionServer tools/list handler", () => {
       requestManifest: vi.fn().mockRejectedValue(new Error("Manifest request timed out")),
       getCachedManifest: vi.fn(() => [
         makeManifestEntry("allowed_tool"),
-        { ...makeManifestEntry("restricted_tool"), danger: "restricted" },
+        { ...makeManifestEntry("restricted_tool"), danger: "restricted" as const },
       ]),
     });
     const server = createSessionServer("tools-list-filtered-cache", deps);
