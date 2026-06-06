@@ -818,6 +818,18 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
       expect(event.preventDefault).toHaveBeenCalledTimes(1);
     });
+
+    it("safely treats a webview with no resolvable session partition as non-browser", () => {
+      // contents.session is absent on the mock; the optional-chaining guard must
+      // not throw and must fall back to the restrictive (localhost-only) path.
+      const contents = createMockWebContents("webview");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      expect(() => handler(event, "https://github.com/login")).not.toThrow();
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

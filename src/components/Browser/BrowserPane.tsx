@@ -108,9 +108,14 @@ export function BrowserPane({
   const setBrowserHistory = usePanelStore((state) => state.setBrowserHistory);
   const setBrowserZoom = usePanelStore((state) => state.setBrowserZoom);
   const isDragging = useIsDragging();
-  const projectId = useProjectStore((state) => state.currentProject?.id);
+  const storeProjectId = useProjectStore((state) => state.currentProject?.id);
   // Per-project Chromium session partition so cookies/localStorage/IndexedDB are
   // isolated between projects sharing an origin (e.g. localhost:3000) (#9965).
+  // `currentProject` resolves asynchronously, but Electron ignores `partition`
+  // changes once the <webview> is attached — so fall back to the project id seeded
+  // synchronously by preload (mirrors projectStore.getLocationProjectId) to attach
+  // with the correct partition on first render rather than persist:browser-default.
+  const projectId = storeProjectId ?? window.__DAINTREE_INITIAL_PROJECT__?.id;
   const webviewPartition = useMemo(() => buildBrowserPartition(projectId), [projectId]);
   const devServerLoadTimeout = useProjectSettingsStore(
     (state) => state.settings?.devServerLoadTimeout
@@ -974,6 +979,10 @@ export function BrowserPane({
               {findInPage.isOpen && <FindBar find={findInPage} />}
               <webview
                 ref={setWebviewNode}
+                // Remount if the partition ever changes after attach (e.g. a window
+                // seeded only via ?projectId= where the store resolves later) so the
+                // webview never keeps a stale cross-project session (#9965).
+                key={webviewPartition}
                 src={currentUrl}
                 partition={webviewPartition}
                 // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
