@@ -10,6 +10,7 @@ import {
   Play,
   RotateCw,
   Settings,
+  WifiOff,
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -225,6 +226,35 @@ function DevPreviewStuckBanner({
           <BannerOverflowMenu actions={overflowActions} ariaLabel="More dev server options" />
         ) : undefined
       }
+    />
+  );
+}
+
+/**
+ * Surfaces a dead Vite HMR socket (#9975). The dev server keeps logging
+ * `[vite] hmr update` on every save — which fires the "Compiling" phase and
+ * reads as "live reload is working" — but with a custom `server.hmr.*` config
+ * the browser's socket connects off the proxy origin or fails outright, so
+ * the preview is silently stale. `useDevPreviewConsoleCapture` catches Vite's
+ * own failure log and flips `hmrDead`; this is a Tier 3 running-state failure
+ * with a pane-local recovery (reload reconnects the socket).
+ */
+function DevPreviewHmrDeadBanner({ onReload }: { onReload: () => void }) {
+  return (
+    <InlineStatusBanner
+      icon={WifiOff}
+      severity="error"
+      title="Live reload disconnected"
+      description="Vite's hot-reload socket dropped, so saved changes won't show up in the preview. Reload to reconnect, or drop the custom server.hmr.* config if it keeps happening."
+      role="alert"
+      ariaLive="assertive"
+      action={{
+        id: "dev-preview-hmr-dead-reload",
+        label: "Reload",
+        icon: RotateCw,
+        variant: "primary",
+        onClick: onReload,
+      }}
     />
   );
 }
@@ -1200,7 +1230,20 @@ export function DevPreviewPane({
   // Wire the guest-page CDP console capture into the renderer store. The hook
   // owns start/stop keyed on the ready/eviction lifecycle; here we only mirror
   // the live webContentsId so lazy object inspection can reach the right guest.
-  useDevPreviewConsoleCapture(id, webviewElement, isWebviewReady, isEvicted);
+  const { hmrDead, resetHmrDead } = useDevPreviewConsoleCapture(
+    id,
+    webviewElement,
+    isWebviewReady,
+    isEvicted
+  );
+
+  // A dead HMR socket is a per-load condition. Webview reloads/navigations
+  // clear it inside the hook (the guest execution context is torn down), so
+  // here we only need to cover the dev-server lifecycle: clear the warning
+  // whenever the server leaves the running state (restart/stop/crash).
+  useEffect(() => {
+    if (status !== "running") resetHmrDead();
+  }, [status, resetHmrDead]);
 
   useEffect(() => {
     if (!isWebviewReady || isEvicted) {
@@ -1479,6 +1522,8 @@ export function DevPreviewPane({
             onRemedy={handleStuckRemedy}
           />
         )}
+
+        {status === "running" && hmrDead && <DevPreviewHmrDeadBanner onReload={handleReload} />}
 
         <div
           className={cn(

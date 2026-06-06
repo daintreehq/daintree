@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { renderHook, waitFor, act } from "@testing-library/react";
 import { useDevPreviewConsoleCapture } from "../useDevPreviewConsoleCapture";
 import { useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 import { usePanelStore } from "@/store";
@@ -198,5 +198,110 @@ describe("useDevPreviewConsoleCapture", () => {
 
     unmount();
     expect(useConsoleCaptureStore.getState().getMessages(PANE_ID)).toHaveLength(1);
+  });
+});
+
+describe("useDevPreviewConsoleCapture — HMR liveness", () => {
+  it("starts with hmrDead false", () => {
+    const webview = makeWebviewElement();
+    const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
+    expect(result.current.hmrDead).toBe(false);
+  });
+
+  it("flips hmrDead when Vite logs a failed websocket connection", () => {
+    const webview = makeWebviewElement();
+    const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
+    act(() => {
+      messageCb?.(row({ summaryText: "[vite] failed to connect to websocket." }));
+    });
+    expect(result.current.hmrDead).toBe(true);
+  });
+
+  it("flips hmrDead when Vite logs a lost server connection", () => {
+    const webview = makeWebviewElement();
+    const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
+    act(() => {
+      messageCb?.(row({ summaryText: "[vite] server connection lost. Polling for restart..." }));
+    });
+    expect(result.current.hmrDead).toBe(true);
+  });
+
+  it("matches the failure string case-insensitively", () => {
+    const webview = makeWebviewElement();
+    const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
+    act(() => {
+      messageCb?.(row({ summaryText: "[VITE] FAILED TO CONNECT TO WEBSOCKET." }));
+    });
+    expect(result.current.hmrDead).toBe(true);
+  });
+
+  it("ignores ordinary HMR update logs", () => {
+    const webview = makeWebviewElement();
+    const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
+    act(() => {
+      messageCb?.(row({ level: "info", summaryText: "[vite] hmr update /src/App.tsx" }));
+    });
+    expect(result.current.hmrDead).toBe(false);
+  });
+
+  it("ignores failure logs from a different pane", () => {
+    const webview = makeWebviewElement();
+    const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
+    act(() => {
+      messageCb?.(
+        row({ paneId: "other-pane", summaryText: "[vite] failed to connect to websocket." })
+      );
+    });
+    expect(result.current.hmrDead).toBe(false);
+  });
+
+  it("clears hmrDead when the guest execution context is cleared (reload/navigation)", () => {
+    const webview = makeWebviewElement();
+    const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
+    act(() => {
+      messageCb?.(row({ summaryText: "[vite] failed to connect to websocket." }));
+    });
+    expect(result.current.hmrDead).toBe(true);
+
+    act(() => {
+      clearedCb?.({ paneId: PANE_ID, navigationGeneration: 2 });
+    });
+    expect(result.current.hmrDead).toBe(false);
+  });
+
+  it("does not clear hmrDead when a different pane's context is cleared", () => {
+    const webview = makeWebviewElement();
+    const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
+    act(() => {
+      messageCb?.(row({ summaryText: "[vite] failed to connect to websocket." }));
+    });
+    act(() => {
+      clearedCb?.({ paneId: "other-pane", navigationGeneration: 2 });
+    });
+    expect(result.current.hmrDead).toBe(true);
+  });
+
+  it("clears hmrDead when resetHmrDead is called", () => {
+    const webview = makeWebviewElement();
+    const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
+    act(() => {
+      messageCb?.(row({ summaryText: "[vite] failed to connect to websocket." }));
+    });
+    expect(result.current.hmrDead).toBe(true);
+
+    act(() => {
+      result.current.resetHmrDead();
+    });
+    expect(result.current.hmrDead).toBe(false);
+  });
+
+  it("keeps a stable resetHmrDead identity across rerenders", () => {
+    const webview = makeWebviewElement();
+    const { result, rerender } = renderHook(() =>
+      useDevPreviewConsoleCapture(PANE_ID, webview, true, false)
+    );
+    const first = result.current.resetHmrDead;
+    rerender();
+    expect(result.current.resetHmrDead).toBe(first);
   });
 });

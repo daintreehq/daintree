@@ -1,7 +1,35 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 import { usePanelStore } from "@/store";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+
+/**
+ * Vite's HMR client logs these JS console errors when its WebSocket can't
+ * connect (custom `server.hmr.host`/`clientPort`/`protocol` pointing the
+ * browser socket off the stable proxy origin) or drops after connecting.
+ * They arrive through the same CDP console-capture stream as every other
+ * guest row, so matching them is the only browser-side signal we get that
+ * live reload is dead while the server keeps logging `[vite] hmr update`
+ * (which fires the misleading "Compiling" phase). Native Chromium socket
+ * errors (`net::ERR_CONNECTION_REFUSED`) bypass the JS console channel, so
+ * detection depends on Vite reaching the point of logging the failure.
+ */
+const VITE_HMR_FAILURE_PATTERN =
+  /\[vite\] (failed to connect to websocket|server connection lost)/i;
+
+function isViteHmrFailureMessage(summaryText: string): boolean {
+  return VITE_HMR_FAILURE_PATTERN.test(summaryText);
+}
+
+export interface DevPreviewConsoleCapture {
+  /**
+   * `true` once Vite has reported its HMR socket as dead for this pane.
+   * Sticky until `resetHmrDead` is called (on reload / restart / stop) so a
+   * single failure row keeps the warning up while the webview stays stale.
+   */
+  hmrDead: boolean;
+  resetHmrDead: () => void;
+}
 
 /**
  * Wires the main-process CDP console-capture pipeline to the renderer
@@ -20,7 +48,10 @@ export function useDevPreviewConsoleCapture(
   webviewElement: Electron.WebviewTag | null,
   isWebviewReady: boolean,
   isEvicted: boolean
-): void {
+): DevPreviewConsoleCapture {
+  const [hmrDead, setHmrDead] = useState(false);
+  const resetHmrDead = useCallback(() => setHmrDead(false), []);
+
   useEffect(() => {
     if (!webviewElement || isEvicted) return;
 
@@ -47,12 +78,18 @@ export function useDevPreviewConsoleCapture(
 
     const offMessage = window.electron.webview.onConsoleMessage((row) => {
       if (row.paneId !== paneId) return;
+      if (isViteHmrFailureMessage(row.summaryText)) setHmrDead(true);
       store.addStructuredMessage(row);
     });
 
     const offCleared = window.electron.webview.onConsoleContextCleared(
       ({ paneId: clearedPaneId, navigationGeneration }) => {
         if (clearedPaneId !== paneId) return;
+        // A cleared execution context means the guest page reloaded or
+        // navigated, so any prior HMR-dead observation is stale. If the socket
+        // is still misconfigured, Vite re-logs the failure in the new context
+        // and we flip back. This is the reset point for user-driven reloads.
+        setHmrDead(false);
         store.markStale(paneId, navigationGeneration);
       }
     );
@@ -83,4 +120,6 @@ export function useDevPreviewConsoleCapture(
       }
     };
   }, [paneId]);
+
+  return { hmrDead, resetHmrDead };
 }
