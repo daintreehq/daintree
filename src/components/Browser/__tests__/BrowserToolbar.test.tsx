@@ -267,6 +267,22 @@ describe("BrowserToolbar ARIA semantics", () => {
     expect(defaultProps.onOpenExternal).toHaveBeenCalledOnce();
   });
 
+  it("screenshot button accessible name matches its visible tooltip (WCAG 2.5.3)", () => {
+    const onCaptureScreenshot = vi.fn();
+    const { getByRole, queryByRole } = renderToolbar({
+      onCaptureScreenshot,
+      isWebviewReady: true,
+    });
+    // The visible tooltip reads "Copy screenshot to clipboard"; the accessible
+    // name (aria-label) must contain it, so the stale "Capture screenshot" name
+    // must be gone.
+    expect(queryByRole("button", { name: "Capture screenshot" })).toBeNull();
+    const button = getByRole("button", { name: "Copy screenshot to clipboard" });
+    expect(button).toBeTruthy();
+    fireEvent.click(button);
+    expect(onCaptureScreenshot).toHaveBeenCalledOnce();
+  });
+
   it("copy success announces in a polite live region", async () => {
     const { container, getByRole } = renderToolbar();
 

@@ -1763,7 +1763,7 @@ export function DevPreviewPane({
                                   ? "No internet connection"
                                   : webviewLoadError.code === "cert" ||
                                       webviewLoadError.code === "ssl_protocol"
-                                    ? "Certificate Error"
+                                    ? "Certificate error"
                                     : "Page load failed"}
                       </h3>
                       <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">

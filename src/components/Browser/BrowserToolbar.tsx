@@ -1016,7 +1016,7 @@ export function BrowserToolbar({
                 buttonClass,
                 "disabled:hover:bg-transparent disabled:hover:shadow-none"
               )}
-              aria-label="Capture screenshot"
+              aria-label="Copy screenshot to clipboard"
             >
               {screenshotCopied ? (
                 <Check className="w-4 h-4 text-status-success" />

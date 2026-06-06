@@ -101,6 +101,25 @@ function determineRenderState(
   return "webview";
 }
 
+// ─── Webview load-error heading ─────────────────────────────────────
+// Mirrors the heading ternary in DevPreviewPane's webviewLoadError overlay.
+// All headings use sentence case (first word capitalized only).
+function webviewErrorHeading(code: string): string {
+  return code === "timed_out"
+    ? "Page load timed out"
+    : code === "aborted"
+      ? "Load cancelled"
+      : code === "connection_refused"
+        ? "Dev server unreachable"
+        : code === "name_not_resolved"
+          ? "Couldn't resolve address"
+          : code === "internet_disconnected"
+            ? "No internet connection"
+            : code === "cert" || code === "ssl_protocol"
+              ? "Certificate error"
+              : "Page load failed";
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────
 
 describe("DevPreviewPane", () => {
@@ -579,6 +598,34 @@ describe("DevPreviewPane", () => {
       const renderState = determineRenderState("stopped", false, "");
       const showWarning = renderState === "waiting" && !devCommand;
       expect(showWarning).toBe(false);
+    });
+  });
+
+  describe("webview load-error heading", () => {
+    it("uses sentence case for the certificate error heading (cert and ssl_protocol)", () => {
+      expect(webviewErrorHeading("cert")).toBe("Certificate error");
+      expect(webviewErrorHeading("ssl_protocol")).toBe("Certificate error");
+    });
+
+    it("renders every heading in sentence case (only the first character is uppercase)", () => {
+      const codes = [
+        "timed_out",
+        "aborted",
+        "connection_refused",
+        "name_not_resolved",
+        "internet_disconnected",
+        "cert",
+        "ssl_protocol",
+        "unknown_code",
+      ];
+      for (const code of codes) {
+        const heading = webviewErrorHeading(code);
+        // Sentence-case invariant: no interior word starts with an uppercase
+        // letter (proper nouns aside — none here), and there is no trailing period.
+        const interiorWords = heading.split(" ").slice(1);
+        expect(interiorWords.every((w) => w === "" || w[0] !== w[0].toUpperCase())).toBe(true);
+        expect(heading.endsWith(".")).toBe(false);
+      }
     });
   });
 });
