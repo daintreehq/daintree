@@ -69,6 +69,30 @@ describe("corpus-replay", () => {
     });
   });
 
+  describe("crush corpus replay", () => {
+    it("achieves >= 90% accuracy on crush sample corpus", () => {
+      const result = replayCorpus(path.join(CORPUS_DIR, "crush_sample.jsonl"), "crush");
+      expect(result.total).toBeGreaterThan(0);
+      expect(result.accuracy).toBeGreaterThanOrEqual(MIN_ACCURACY);
+    });
+  });
+
+  describe("goose corpus replay", () => {
+    it("achieves >= 90% accuracy on goose sample corpus", () => {
+      const result = replayCorpus(path.join(CORPUS_DIR, "goose_sample.jsonl"), "goose");
+      expect(result.total).toBeGreaterThan(0);
+      expect(result.accuracy).toBeGreaterThanOrEqual(MIN_ACCURACY);
+    });
+  });
+
+  describe("qwen corpus replay", () => {
+    it("achieves >= 90% accuracy on qwen sample corpus", () => {
+      const result = replayCorpus(path.join(CORPUS_DIR, "qwen_sample.jsonl"), "qwen");
+      expect(result.total).toBeGreaterThan(0);
+      expect(result.accuracy).toBeGreaterThanOrEqual(MIN_ACCURACY);
+    });
+  });
+
   describe("replay result structure", () => {
     it("returns detailed wrong entries for debugging", () => {
       const result = replayCorpus(path.join(CORPUS_DIR, "claude_sample.jsonl"), "claude");
