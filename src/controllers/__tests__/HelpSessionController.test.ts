@@ -945,6 +945,72 @@ describe("HelpSessionController — launch error routing", () => {
   });
 });
 
+describe("HelpSessionController — resume banner gating (#10057)", () => {
+  const provisionMock = () =>
+    window.electron.help.provisionSession as unknown as ReturnType<typeof vi.fn>;
+
+  function primeResumeInputs(ctrl: HelpSessionController) {
+    helpPanelState.preferredAgentId = "claude";
+    ctrl["_launchGen"] = 7;
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = vi.fn().mockResolvedValue(null);
+    provisionMock().mockResolvedValueOnce({
+      sessionId: "sess-1",
+      sessionPath: "/help",
+      token: "tok-1",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("term-resumed");
+  }
+
+  it("does not show the resume banner when the hibernation sessionId is empty (resume-latest path)", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeResumeInputs(ctrl);
+    // Empty sessionId is the sentinel from main's LRU-eviction race.
+    helpPanelState.hibernateSessions["p1"] = {
+      sessionId: "",
+      cwd: "/repo",
+      agentId: "claude",
+    };
+
+    await ctrl["_executeAutoLaunch"](7, "claude", { id: "p1", path: "/repo" });
+
+    // The phase still reached live (the spawn succeeded via --continue) but
+    // the resume-banner claim is suppressed because we never had a real id.
+    expect(ctrl.getSnapshot().phase).toBe("live");
+    expect(ctrl.getSnapshot().showResumeBanner).toBe(false);
+    // The hibernate entry is still consumed so a future auto-launch doesn't
+    // loop on the same --continue attempt.
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1");
+    // The spawn still happened — the renderer attempted the agent heuristic.
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "terminal" })
+    );
+    ctrl.stop();
+  });
+
+  it("shows the resume banner when the hibernation sessionId is specific", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeResumeInputs(ctrl);
+    helpPanelState.hibernateSessions["p1"] = {
+      sessionId: "abc-123",
+      cwd: "/repo",
+      agentId: "claude",
+    };
+
+    await ctrl["_executeAutoLaunch"](7, "claude", { id: "p1", path: "/repo" });
+
+    expect(ctrl.getSnapshot().phase).toBe("live");
+    expect(ctrl.getSnapshot().showResumeBanner).toBe(true);
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1");
+    ctrl.stop();
+  });
+});
+
 describe("HelpSessionController — MCP tool activity strip (#9759)", () => {
   function startCtrl() {
     const ctrl = new HelpSessionController();

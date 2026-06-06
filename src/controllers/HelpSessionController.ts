@@ -53,6 +53,21 @@ export interface VersionTooOld {
   requiredVersion: string;
 }
 
+/**
+ * Outcome of `_spawnResumed` — pairs the spawned panel id with which resume
+ * sub-kind actually ran. `"specific"` means we had a real session id and used
+ * `buildResumeCommand`; `"latest"` means the hibernation entry carried the
+ * empty-string sentinel and we fell through to the agent's `--continue`/
+ * `resume --last` heuristic, whose result the renderer cannot verify (#10057).
+ * The arm sites gate the "Resumed your previous session." banner on
+ * `resumeKind === "specific"` to avoid falsely claiming a specific-session
+ * restore when only the latest-conversation heuristic ran.
+ */
+export interface ResumeSpawnResult {
+  panelId: string;
+  resumeKind: "specific" | "latest";
+}
+
 export interface TierMismatchState {
   sessionId: string;
   toolId: string;
@@ -1253,6 +1268,15 @@ export class HelpSessionController {
       const pending = await window.electron.help.takePendingHibernation(projectId);
       if (!pending) return;
       if (gen !== this._launchGen) return;
+      // `pending.agentSessionId` can be the empty-string sentinel when main's
+      // `revokeSession({ captureHibernation: true })` placeholder write raced
+      // the agent's real session-id echo (LRU eviction of the per-project
+      // WebContentsView, #10057). The empty sentinel flows through to
+      // `_spawnResumed`, which classifies the resume as `"latest"` and the
+      // arm sites skip the "Resumed your previous session." banner on that
+      // branch — see the comment in `_spawnResumed` and `ResumeSpawnResult`.
+      // The root-cause capture race is in main; the fix here is the
+      // renderer-side truth-in-trigger only.
       useHelpPanelStore.getState().setHibernateSession(projectId, {
         sessionId: pending.agentSessionId,
         cwd: pending.cwd,
@@ -1486,10 +1510,11 @@ export class HelpSessionController {
     hibernated: { sessionId: string; cwd: string },
     session: HelpSessionRef | null,
     folderPath: string
-  ): Promise<string | null> {
+  ): Promise<ResumeSpawnResult | null> {
     const customLaunchFlags = await loadCustomLaunchFlags();
     const flags = customLaunchFlags.length > 0 ? customLaunchFlags : undefined;
-    const command = hibernated.sessionId
+    const hasSpecificSessionId = hibernated.sessionId.length > 0;
+    const command = hasSpecificSessionId
       ? (buildResumeCommand(launchAgentId, hibernated.sessionId, flags) ??
         buildResumeLatestCommand(launchAgentId, flags))
       : buildResumeLatestCommand(launchAgentId, flags);
@@ -1510,7 +1535,16 @@ export class HelpSessionController {
       ...(env && { env }),
       ...(customLaunchFlags.length > 0 && { agentLaunchFlags: customLaunchFlags }),
     });
-    return newId ?? null;
+    if (!newId) return null;
+    // The empty `sessionId` sentinel flows from main's `revokeSession({ captureHibernation: true })`
+    // race during LRU eviction (#10057) — we still attempt the spawn via the agent's
+    // `--continue`/`-r latest`/`resume --last` heuristic, but the renderer cannot
+    // verify whether that heuristic actually found a prior session, so the
+    // "Resumed your previous session." banner is suppressed on this branch.
+    const resumeKind: ResumeSpawnResult["resumeKind"] = hasSpecificSessionId
+      ? "specific"
+      : "latest";
+    return { panelId: newId, resumeKind };
   }
 
   private async _executeAutoLaunch(
@@ -1598,30 +1632,39 @@ export class HelpSessionController {
       }
       const hibernated = useHelpPanelStore.getState().hibernateSessions[launchProject.id];
       if (hibernated && hibernated.agentId === launchAgentId) {
-        const resumedId = await this._spawnResumed(launchAgentId, hibernated, session, folderPath);
+        const resumed = await this._spawnResumed(launchAgentId, hibernated, session, folderPath);
         if (gen !== this._launchGen) {
-          if (resumedId) usePanelStore.getState().removePanel(resumedId);
+          if (resumed) usePanelStore.getState().removePanel(resumed.panelId);
           this._abandonInFlightLaunch(null, session, { resetAutoLaunch: true });
           return;
         }
-        if (resumedId) {
+        if (resumed) {
           // Stale-launch guard: handleClose may have revoked the pending
           // session while addPanel was in flight.
           const expectedSessionId = session.sessionId;
           if (this._pendingSessionId !== expectedSessionId) {
-            usePanelStore.getState().removePanel(resumedId);
+            usePanelStore.getState().removePanel(resumed.panelId);
             this._hasAutoLaunched = false;
             return;
           }
           useHelpPanelStore.getState().clearHibernateSession(launchProject.id);
-          useHelpPanelStore.getState().setTerminal(resumedId, launchAgentId, session.sessionId);
+          useHelpPanelStore
+            .getState()
+            .setTerminal(resumed.panelId, launchAgentId, session.sessionId);
           this._pendingSessionId = null;
-          window.electron.help.markTerminal(resumedId).catch((err) => {
+          window.electron.help.markTerminal(resumed.panelId).catch((err) => {
             logError("Failed to mark help terminal", err);
           });
           reached = true;
-          this._patch({ phase: "live", showResumeBanner: true });
-          this._armResumeBannerAutoDismiss();
+          this._patch({ phase: "live" });
+          // Only claim a specific-session restore when we actually had a
+          // specific session id — the latest-conversation heuristic
+          // (`--continue` / `resume --last`) may or may not have found a
+          // prior session, and the renderer cannot tell from outside.
+          if (resumed.resumeKind === "specific") {
+            this._patch({ showResumeBanner: true });
+            this._armResumeBannerAutoDismiss();
+          }
           return;
         }
         // Resume failed — drop the stale entry so we don't loop, then fall
@@ -1825,32 +1868,36 @@ export class HelpSessionController {
         }
         const hibernated = useHelpPanelStore.getState().hibernateSessions[launchProject.id];
         if (hibernated && hibernated.agentId === launchAgentId && folderPath) {
-          const resumedId = await this._spawnResumed(
-            launchAgentId,
-            hibernated,
-            session,
-            folderPath
-          );
+          const resumed = await this._spawnResumed(launchAgentId, hibernated, session, folderPath);
           if (gen !== this._launchGen) {
-            if (resumedId) usePanelStore.getState().removePanel(resumedId);
+            if (resumed) usePanelStore.getState().removePanel(resumed.panelId);
             this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
             return;
           }
-          if (resumedId) {
+          if (resumed) {
             const expectedSessionId = session.sessionId;
             if (this._pendingSessionId !== expectedSessionId) {
-              usePanelStore.getState().removePanel(resumedId);
+              usePanelStore.getState().removePanel(resumed.panelId);
               return;
             }
             useHelpPanelStore.getState().clearHibernateSession(launchProject.id);
-            useHelpPanelStore.getState().setTerminal(resumedId, launchAgentId, session.sessionId);
+            useHelpPanelStore
+              .getState()
+              .setTerminal(resumed.panelId, launchAgentId, session.sessionId);
             this._pendingSessionId = null;
-            window.electron.help.markTerminal(resumedId).catch((err) => {
+            window.electron.help.markTerminal(resumed.panelId).catch((err) => {
               logError("Failed to mark help terminal", err);
             });
             reached = true;
-            this._patch({ phase: "live", showResumeBanner: true });
-            this._armResumeBannerAutoDismiss();
+            this._patch({ phase: "live" });
+            // Only claim a specific-session restore when we actually had a
+            // specific session id — the latest-conversation heuristic
+            // (`--continue` / `resume --last`) may or may not have found a
+            // prior session, and the renderer cannot tell from outside.
+            if (resumed.resumeKind === "specific") {
+              this._patch({ showResumeBanner: true });
+              this._armResumeBannerAutoDismiss();
+            }
             return;
           }
           useHelpPanelStore.getState().clearHibernateSession(launchProject.id);
