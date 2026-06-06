@@ -307,7 +307,6 @@ describe("githubClient import boundary", () => {
     "src/hooks/useGitHubTokenHealth.ts",
     "src/hooks/useProjectHealth.ts",
     "src/components/Layout/GitHubStatsToolbarButton.tsx",
-    "src/components/Worktree/IssuePickerDialog.tsx",
   ]);
 
   function collectSrcFiles(dir: string): string[] {

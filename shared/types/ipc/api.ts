@@ -211,7 +211,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     delete(worktreeId: string, force?: boolean, deleteBranch?: boolean): Promise<void>;
     attachIssue(payload: AttachIssuePayload): Promise<void>;
     detachIssue(worktreeId: string): Promise<void>;
-    getIssueAssociation(worktreeId: string): Promise<IssueAssociation | null>;
     getAllIssueAssociations(): Promise<Record<string, IssueAssociation>>;
     restartService(): Promise<void>;
     retryProjectLoad(): Promise<void>;

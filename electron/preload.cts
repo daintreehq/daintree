@@ -824,9 +824,6 @@ const api: ElectronAPI = {
     detachIssue: (worktreeId: string) =>
       _unwrappingInvoke(CHANNELS.WORKTREE_DETACH_ISSUE, { worktreeId }),
 
-    getIssueAssociation: (worktreeId: string): Promise<IssueAssociation | null> =>
-      _unwrappingInvoke(CHANNELS.WORKTREE_GET_ISSUE_ASSOCIATION, worktreeId),
-
     getAllIssueAssociations: (): Promise<Record<string, IssueAssociation>> =>
       _unwrappingInvoke(CHANNELS.WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS),
 
