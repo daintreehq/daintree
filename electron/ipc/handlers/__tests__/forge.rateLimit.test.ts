@@ -201,6 +201,8 @@ describe("forge handlers — rate limiting", () => {
 
       await expect(handler({}, "fake_token")).rejects.toThrow("Rate limit exceeded");
       expect(fakeImpl.validateToken).not.toHaveBeenCalled();
+      // The guard fires before provider lookup, not just before the API call.
+      expect(storeMock.get).not.toHaveBeenCalled();
     });
   });
 
@@ -217,6 +219,18 @@ describe("forge handlers — rate limiting", () => {
         "Rate limit exceeded"
       );
       expect(resolveForCwdMock).not.toHaveBeenCalled();
+    });
+
+    it("still collapses resolution failures to null when the guard passes", async () => {
+      resolveForCwdMock.mockRejectedValueOnce(new Error("No remote URL found"));
+      const handler = getInvokeHandler(CHANNELS.FORGE_CLASSIFY_PUSH_ERROR);
+
+      await expect(handler({}, { cwd: "/tmp/project", stderr: "boom" })).resolves.toBeNull();
+      expect(checkRateLimitMock).toHaveBeenCalledWith(
+        CHANNELS.FORGE_CLASSIFY_PUSH_ERROR,
+        10,
+        10_000
+      );
     });
   });
 

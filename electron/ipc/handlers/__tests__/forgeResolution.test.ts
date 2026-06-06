@@ -241,7 +241,7 @@ describe("resolveForCwd — cwd validation", () => {
     expect(gitServiceCacheMock.getGitService).not.toHaveBeenCalled();
   });
 
-  it.each(["./relative", "relative/path", "../escape"])(
+  it.each(["./relative", "relative/path", "../escape", "   "])(
     "rejects the non-absolute cwd %s before touching git",
     async (cwd) => {
       await expect(resolveForCwd(cwd)).rejects.toThrow(
