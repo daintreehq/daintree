@@ -13,7 +13,7 @@ function fail(message) {
 // the gate. This mirrors the predicate in the "Extract failing spec manifest"
 // step of .github/workflows/e2e.yml; keep the two in lockstep.
 function specFailed(spec) {
-  return (spec.tests ?? []).some((test) => {
+  return (Array.isArray(spec.tests) ? spec.tests : []).some((test) => {
     if (test.status === "flaky") return true;
     const lastResult = test.results?.[test.results.length - 1];
     const lastStatus = lastResult?.status;
@@ -22,15 +22,15 @@ function specFailed(spec) {
 }
 
 function walk(suite, failed) {
-  for (const child of suite.suites ?? []) walk(child, failed);
-  for (const spec of suite.specs ?? []) {
+  for (const child of Array.isArray(suite.suites) ? suite.suites : []) walk(child, failed);
+  for (const spec of Array.isArray(suite.specs) ? suite.specs : []) {
     if (spec.file && specFailed(spec)) failed.add(spec.file);
   }
 }
 
 export function extractFailedSpecPaths(report) {
   const failed = new Set();
-  if (!report?.suites) return [];
+  if (!Array.isArray(report?.suites)) return [];
   for (const suite of report.suites) walk(suite, failed);
   return [...failed].sort();
 }

@@ -130,4 +130,40 @@ describe("extractFailedSpecPaths", () => {
     };
     expect(extractFailedSpecPaths(report)).toEqual([]);
   });
+
+  it("returns [] for a non-array suites shape rather than throwing", () => {
+    expect(extractFailedSpecPaths({ suites: null })).toEqual([]);
+    expect(extractFailedSpecPaths({ suites: 42 })).toEqual([]);
+    expect(() => extractFailedSpecPaths({ suites: { not: "an array" } })).not.toThrow();
+    expect(extractFailedSpecPaths({ suites: { not: "an array" } })).toEqual([]);
+  });
+
+  it("includes a spec when any of its tests failed (any-failure semantics)", () => {
+    const report = {
+      suites: [
+        {
+          specs: [
+            {
+              file: "e2e/core/multi.spec.ts",
+              tests: [
+                { status: "expected", results: [{ status: "passed" }] },
+                { status: "unexpected", results: [{ status: "failed" }] },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    expect(extractFailedSpecPaths(report)).toEqual(["e2e/core/multi.spec.ts"]);
+  });
+
+  it("excludes a test with an empty results array and a non-flaky status", () => {
+    // Playwright always populates results for a test that ran; an empty results
+    // array means nothing ran, so there is no last-result failure to report and
+    // the spec is intentionally excluded (matches the manifest-step predicate).
+    const report = {
+      suites: [{ specs: [{ file: "e2e/core/noresult.spec.ts", tests: [{ results: [] }] }] }],
+    };
+    expect(extractFailedSpecPaths(report)).toEqual([]);
+  });
 });
