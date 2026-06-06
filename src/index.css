@@ -886,6 +886,19 @@ code.hljs {
     display: none;
   }
 
+  /* Mitigate xterm #5893 / #9812: the DOM renderer applies negative inline
+     letter-spacing to emoji spans because OffscreenCanvas.measureText mismeasures
+     them. Author !important wins over the inline style at the same origin. We clamp
+     to 0 rather than `initial` because Daintree sets letterSpacing: 0 (xtermConfig.ts),
+     so the .xterm-rows baseline is ~0px. Only negative values are matched: positive
+     corrections for wide glyphs (CJK) are measured correctly and left alone; sub-pixel
+     bleed from clamping a rare legitimate negative correction beats the multi-px emoji
+     collapse. Assumes Chromium serializes `letter-spacing: -Npx` with a space. Remove
+     when on @xterm/xterm >=7.0.0. */
+  .xterm-rows span[style*="letter-spacing: -"] {
+    letter-spacing: 0 !important;
+  }
+
   /* Consistent monospace font stack */
   code,
   kbd,
