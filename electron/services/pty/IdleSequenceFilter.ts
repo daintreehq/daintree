@@ -17,7 +17,7 @@
 // maxBytesPerFrame cap is the secondary defense for those cases.
 //
 // `?2026h` / `?2026l` (DEC mode 2026 — Synchronized Output) is stripped here
-// for the renderer-bound and byte-volume paths, but the headless terminal in
+// for the byte-volume / activity-gate path, but the headless terminal in
 // TerminalProcess writes the raw PTY data straight through, which lets
 // SynchronizedFrameDetector hook xterm's parser for frame-close events
 // (#6668). Removing 2026 from this list would re-introduce the false-positive

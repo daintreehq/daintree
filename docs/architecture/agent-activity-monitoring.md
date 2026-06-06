@@ -70,10 +70,10 @@ Spinner and time-counter frames are activity evidence. Cosmetic-only frames can 
 State codes follow the de-facto ConEmu spec that Claude Code adopted (v2.0.56):
 
 - `1` (normal/determinate) and `3` (indeterminate) mean working;
-- `0` (remove/hide) is emitted between every tool call, so the idle path is debounced (200ms) — any working state inside that window cancels it;
+- `0` (remove/hide) is emitted between every tool call, so it is treated as advisory only — `onOscProgressIdle` is a deliberate no-op; real idle comes from natural `lastActivityTimestamp` decay through the 8s gate;
 - `2` (error) and `4` (paused) are ignored — there is no matching agent state.
 
-The parser is a read-only side channel. `IdleSequenceFilter.stripIdleTerminalSequences` still removes the sequence from the byte-volume and renderer-bound paths downstream, so other detectors stay clean. `onOscProgressWorking` acts as a heartbeat: it refreshes the working hold without bypassing focus suppression or the `MAX_WORKING_SILENCE_MS` safety net.
+The parser is a read-only side channel. `IdleSequenceFilter.stripIdleTerminalSequences` still removes the sequence from the ActivityMonitor byte-volume / activity-gate path, so those detectors stay clean (the renderer keeps the raw bytes and renders the progress bar). `onOscProgressWorking` acts as a heartbeat: it refreshes the working hold without bypassing focus suppression or the `MAX_WORKING_SILENCE_MS` safety net.
 
 ### Visible-Tail Temperature Layer
 

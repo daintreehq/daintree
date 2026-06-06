@@ -1595,8 +1595,9 @@ export class TerminalProcess {
     // Tap OSC 9;4 progress sequences upstream of the rest of the pipeline so
     // the agent-state signal is viewport-independent (#8701). The parser is
     // a read-only side channel; `IdleSequenceFilter.stripIdleTerminalSequences`
-    // still removes the sequence from the byte-volume / renderer paths
-    // downstream, so other detectors stay clean.
+    // still removes the sequence from the ActivityMonitor byte-volume /
+    // activity-gate path, so those detectors stay clean (the renderer keeps
+    // the raw bytes — see TerminalProcess.osc.test.ts).
     this.osc94Parser.feed(data, now);
 
     if (this.activityMonitor) {
