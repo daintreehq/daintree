@@ -1,4 +1,5 @@
 // eager-import-allow: reads forge-resolution config via store.get synchronously in the IPC handler
+import path from "node:path";
 import { store } from "../../store.js";
 import { getForgeProviderImpl } from "../../services/forgeProviderRegistry.js";
 import { resolveForgeProvider } from "../../services/forgeProviderResolver.js";
@@ -31,6 +32,9 @@ export interface ResolvedForgeContext {
 export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> {
   if (typeof cwd !== "string" || !cwd) {
     throw new Error("Invalid working directory");
+  }
+  if (!path.isAbsolute(cwd)) {
+    throw new Error("Working directory must be an absolute path");
   }
 
   const gitService = gitServiceCache.getGitService(cwd);

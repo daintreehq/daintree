@@ -1,5 +1,5 @@
 import { CHANNELS } from "../channels.js";
-import { typedHandle } from "../utils.js";
+import { checkRateLimit, typedHandle } from "../utils.js";
 import { resolveForCwd } from "./forgeResolution.js";
 import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAuditService.js";
 import type { ListOptions } from "../../../shared/types/forge.js";
@@ -7,8 +7,10 @@ import type { ListOptions } from "../../../shared/types/forge.js";
 /**
  * Provider-agnostic forge *data* handlers (list/get queries). The sibling
  * `forge.ts` owns side-effectful actions (open in browser, assign);
- * `forgeSettings.ts` owns config CRUD. Splitting queries out keeps
- * rate-limit/error handling for reads from tangling with the action surface.
+ * `forgeSettings.ts` owns config CRUD. Splitting queries out keeps the read
+ * surface from tangling with the action surface. Every handler opens with a
+ * `checkRateLimit` guard whose budget matches the `github.*` channel it
+ * replaced (#9956).
  *
  * Every handler resolves `cwd → ForgeProviderImpl` via {@link resolveForCwd}
  * and delegates to the normalized contract — the renderer never sees
@@ -95,6 +97,7 @@ export function registerForgeDataHandlers(): () => void {
     typedHandle(
       CHANNELS.FORGE_LIST_ISSUES,
       async (payload: { cwd: string; opts?: ListOptions }) => {
+        checkRateLimit(CHANNELS.FORGE_LIST_ISSUES, 10, 10_000);
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
         }
@@ -119,6 +122,7 @@ export function registerForgeDataHandlers(): () => void {
 
   cleanups.push(
     typedHandle(CHANNELS.FORGE_LIST_PRS, async (payload: { cwd: string; opts?: ListOptions }) => {
+      checkRateLimit(CHANNELS.FORGE_LIST_PRS, 10, 10_000);
       if (!payload || typeof payload !== "object") {
         throw new Error("Invalid payload");
       }
@@ -142,6 +146,7 @@ export function registerForgeDataHandlers(): () => void {
 
   cleanups.push(
     typedHandle(CHANNELS.FORGE_GET_ISSUE, async (payload: { cwd: string; issueNumber: number }) => {
+      checkRateLimit(CHANNELS.FORGE_GET_ISSUE, 25, 10_000);
       if (!payload || typeof payload !== "object") {
         throw new Error("Invalid payload");
       }
@@ -166,6 +171,7 @@ export function registerForgeDataHandlers(): () => void {
 
   cleanups.push(
     typedHandle(CHANNELS.FORGE_GET_PR, async (payload: { cwd: string; prNumber: number }) => {
+      checkRateLimit(CHANNELS.FORGE_GET_PR, 25, 10_000);
       if (!payload || typeof payload !== "object") {
         throw new Error("Invalid payload");
       }
@@ -190,6 +196,7 @@ export function registerForgeDataHandlers(): () => void {
 
   cleanups.push(
     typedHandle(CHANNELS.FORGE_GET_REPO_METADATA, async (payload: { cwd: string }) => {
+      checkRateLimit(CHANNELS.FORGE_GET_REPO_METADATA, 10, 10_000);
       if (!payload || typeof payload !== "object") {
         throw new Error("Invalid payload");
       }

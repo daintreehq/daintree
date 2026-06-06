@@ -222,3 +222,39 @@ describe("resolveForCwd", () => {
     expect(resolverMock.resolveForgeProvider).not.toHaveBeenCalled();
   });
 });
+
+describe("resolveForCwd — cwd validation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    gitServiceCacheMock.getGitService.mockReturnValue(null);
+  });
+
+  it("rejects an empty cwd before touching git", async () => {
+    await expect(resolveForCwd("")).rejects.toThrow("Invalid working directory");
+    expect(gitServiceCacheMock.getGitService).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-string cwd", async () => {
+    await expect(resolveForCwd(42 as unknown as string)).rejects.toThrow(
+      "Invalid working directory"
+    );
+    expect(gitServiceCacheMock.getGitService).not.toHaveBeenCalled();
+  });
+
+  it.each(["./relative", "relative/path", "../escape"])(
+    "rejects the non-absolute cwd %s before touching git",
+    async (cwd) => {
+      await expect(resolveForCwd(cwd)).rejects.toThrow(
+        "Working directory must be an absolute path"
+      );
+      expect(gitServiceCacheMock.getGitService).not.toHaveBeenCalled();
+    }
+  );
+
+  it("lets an absolute cwd through to git resolution", async () => {
+    // gitService is null in this fixture, so passing the path gate surfaces
+    // the next failure in the chain rather than the validation error.
+    await expect(resolveForCwd("/abs/path")).rejects.toThrow("Not a git repository");
+    expect(gitServiceCacheMock.getGitService).toHaveBeenCalledWith("/abs/path");
+  });
+});
