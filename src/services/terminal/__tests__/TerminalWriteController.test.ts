@@ -193,6 +193,17 @@ describe("TerminalWriteController.write", () => {
       expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3);
       expect(deps.acknowledgeData).not.toHaveBeenCalled();
     });
+
+    it("deferred-restore path: never acks the IPC ledger even for non-ASCII strings", () => {
+      // The IPC ledger is drained when the deferred chunk replays through the
+      // normal path after restore. Acking here would double-drain it. The port
+      // ack stays in UTF-16 code units (1 for the single box-drawing char).
+      managed.isSerializedRestoreInProgress = true;
+      controller.write("t1", "│");
+
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 1);
+      expect(deps.acknowledgeData).not.toHaveBeenCalled();
+    });
   });
 
   it("registers a new lastActivityMarker on each write in the normal buffer", () => {
