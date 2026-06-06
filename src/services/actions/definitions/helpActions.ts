@@ -89,7 +89,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
           caption: "The worktree dashboard",
         },
         description:
-          "A daintree-docs result returned this screenshot and it directly illustrates the answer — pin it, then write `[image #1]` at the relevant point in the reply.",
+          "A daintree-docs result returned this screenshot and it directly illustrates the answer — pin it, then write the returned `figureLabel` (e.g. `[image #N]`) at the relevant point in the reply.",
       },
       {
         args: { url: "https://daintree.org/img/docs/terminal-grid.png" },
