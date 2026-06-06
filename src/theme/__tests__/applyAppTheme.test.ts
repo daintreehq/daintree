@@ -1,13 +1,28 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { APP_THEME_TOKEN_KEYS, getAppThemeById, type AppColorScheme } from "@shared/theme";
+import {
+  APP_THEME_TOKEN_KEYS,
+  getAppThemeById,
+  getAppThemeCssVariables,
+  type AppColorScheme,
+} from "@shared/theme";
+import { RED_GREEN_OVERRIDES } from "@shared/theme/colorVisionOverrides";
 import {
   ALL_CVD_TOKENS,
   applyAppThemeToRoot,
   applyColorVisionMode,
   applyDefaultAppTheme,
 } from "../applyAppTheme";
+
+const DIFF_TOKENS = [
+  "--theme-diff-insert-background",
+  "--theme-diff-insert-edit-background",
+  "--theme-diff-gutter-insert",
+  "--theme-diff-delete-background",
+  "--theme-diff-delete-edit-background",
+  "--theme-diff-gutter-delete",
+] as const;
 
 function createTestScheme(
   id: string,
@@ -124,9 +139,9 @@ describe("applyColorVisionMode", () => {
   it("ALL_CVD_TOKENS covers the expected token count", () => {
     // Canary: if someone adds or removes tokens from either map,
     // this size changes and the test catches it for review.
-    // 33 red-green (incl. 2 status surfaces) + 28 blue-yellow (incl. 2 status
-    // surfaces) = 61 total, 43 unique after dedup
-    expect(ALL_CVD_TOKENS.size).toBe(43);
+    // 39 red-green (incl. 2 status surfaces + 6 diff tokens) + 28 blue-yellow
+    // (incl. 2 status surfaces) = 67 total, 49 unique after dedup
+    expect(ALL_CVD_TOKENS.size).toBe(49);
   });
 
   it("switches from blue-yellow to red-green clearing blue-yellow-only tokens", () => {
@@ -147,6 +162,74 @@ describe("applyColorVisionMode", () => {
     expect(root.style.getPropertyValue("--theme-syntax-keyword")).toBe("");
     expect(root.style.getPropertyValue("--theme-syntax-string")).toBe("");
     expect(root.style.getPropertyValue("--theme-category-blue")).toBe("");
+    expect(root.dataset.colorblind).toBeUndefined();
+  });
+});
+
+describe("applyColorVisionMode diff token restoration", () => {
+  // Regression: the --theme-diff-* tokens (consumed by .light .diff-viewer) and
+  // --theme-status-* have no stylesheet fallback. A mode that doesn't override
+  // them must restore their base values, not strip them to undefined, when the
+  // active scheme is supplied. Use a real built-in light scheme so
+  // getAppThemeCssVariables produces the genuine derived diff/status values.
+  const lightScheme = getAppThemeById("bondi")!;
+  const base = getAppThemeCssVariables(lightScheme);
+
+  it("red-green overrides the diff gutters to the CVD palette", () => {
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, lightScheme);
+    applyColorVisionMode(root, "red-green", lightScheme);
+
+    expect(root.style.getPropertyValue("--theme-diff-gutter-insert")).toBe(
+      RED_GREEN_OVERRIDES["--theme-diff-gutter-insert"]
+    );
+    expect(root.style.getPropertyValue("--theme-diff-gutter-delete")).toBe(
+      RED_GREEN_OVERRIDES["--theme-diff-gutter-delete"]
+    );
+    // Differs from the base scheme — the override actually took effect.
+    expect(root.style.getPropertyValue("--theme-diff-gutter-insert")).not.toBe(
+      base["--theme-diff-gutter-insert"]
+    );
+  });
+
+  it("blue-yellow restores base diff and status tokens instead of stripping them", () => {
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, lightScheme);
+    applyColorVisionMode(root, "blue-yellow", lightScheme);
+
+    for (const token of DIFF_TOKENS) {
+      expect(root.style.getPropertyValue(token), `${token} should keep its base value`).toBe(
+        base[token]
+      );
+    }
+    expect(root.style.getPropertyValue("--theme-status-success")).toBe(
+      base["--theme-status-success"]
+    );
+    expect(root.style.getPropertyValue("--theme-status-danger")).toBe(
+      base["--theme-status-danger"]
+    );
+  });
+
+  it("switching red-green to blue-yellow restores diff tokens to base", () => {
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, lightScheme);
+    applyColorVisionMode(root, "red-green", lightScheme);
+    applyColorVisionMode(root, "blue-yellow", lightScheme);
+
+    for (const token of DIFF_TOKENS) {
+      expect(root.style.getPropertyValue(token)).toBe(base[token]);
+    }
+  });
+
+  it("switching red-green to default restores diff tokens to base", () => {
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, lightScheme);
+    applyColorVisionMode(root, "red-green", lightScheme);
+    applyColorVisionMode(root, "default", lightScheme);
+
+    for (const token of DIFF_TOKENS) {
+      expect(root.style.getPropertyValue(token)).toBe(base[token]);
+    }
     expect(root.dataset.colorblind).toBeUndefined();
   });
 });

@@ -43,10 +43,27 @@ export function applyAppThemeToRoot(root: HTMLElement, scheme: AppColorScheme): 
   root.classList.toggle("light", scheme.type === "light");
 }
 
-export function applyColorVisionMode(root: HTMLElement, mode: ColorVisionMode): void {
-  // Remove all previous CVD inline overrides so base theme values show through
+export function applyColorVisionMode(
+  root: HTMLElement,
+  mode: ColorVisionMode,
+  scheme?: AppColorScheme
+): void {
+  // Undo any previous CVD override. The --theme-* tokens have no stylesheet
+  // fallback — they exist only as the inline styles written by
+  // applyAppThemeToRoot — so removing the inline property leaves them undefined
+  // rather than revealing a base value. When the active scheme is known, restore
+  // each token to its base value; this matters for tokens a mode doesn't itself
+  // override (e.g. blue-yellow leaves status-success/-danger and the light-mode
+  // diff fills derived from them, which a bare removeProperty would erase). Fall
+  // back to removeProperty when no scheme is supplied.
+  const baseVariables = scheme ? getAppThemeCssVariables(scheme) : null;
   for (const token of ALL_CVD_TOKENS) {
-    root.style.removeProperty(token);
+    const baseValue = baseVariables?.[token];
+    if (baseValue != null) {
+      root.style.setProperty(token, baseValue);
+    } else {
+      root.style.removeProperty(token);
+    }
   }
 
   if (mode === "default") {
@@ -56,8 +73,8 @@ export function applyColorVisionMode(root: HTMLElement, mode: ColorVisionMode): 
 
   root.dataset.colorblind = mode;
 
-  // Re-apply base theme values for tokens we're about to override,
-  // then set CVD overrides as inline styles (same specificity as base theme)
+  // Layer the CVD overrides on top as inline styles (same specificity as the
+  // base theme).
   const overrides = CVD_OVERRIDES[mode];
   if (overrides) {
     for (const [name, value] of Object.entries(overrides)) {

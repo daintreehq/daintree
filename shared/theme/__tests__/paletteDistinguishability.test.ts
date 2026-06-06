@@ -290,11 +290,12 @@ describe("palette distinguishability", () => {
 
   describe("CVD override maps internal distinguishability", () => {
     // Only the opaque signal colors must be mutually distinguishable. The
-    // derived status-*-surface washes are translucent backgrounds, not signals,
-    // so they're excluded from this gate.
+    // derived status-*-surface and diff-*-background washes are translucent
+    // rgba() backgrounds, not signals (and unparseable by culori), so they're
+    // excluded from this gate.
     const signalHexValues = (map: Record<string, string>) =>
       Object.entries(map)
-        .filter(([token]) => !token.endsWith("-surface"))
+        .filter(([token]) => !token.endsWith("-surface") && !token.endsWith("-background"))
         .map(([, value]) => normHex(value));
     const RED_GREEN_UNIQUE = [...new Set(signalHexValues(RED_GREEN_OVERRIDES))];
     const BLUE_YELLOW_UNIQUE = [...new Set(signalHexValues(BLUE_YELLOW_OVERRIDES))];
@@ -349,5 +350,91 @@ describe("palette distinguishability", () => {
     testOverrideMap("RED_GREEN_OVERRIDES", RED_GREEN_UNIQUE, ["protanopia", "deuteranopia"]);
 
     testOverrideMap("BLUE_YELLOW_OVERRIDES", BLUE_YELLOW_UNIQUE, ["tritanopia"]);
+  });
+
+  describe("CVD diff token coverage", () => {
+    // The light-mode diff viewer reads pre-baked --color-diff-* tokens, which
+    // mirror --theme-diff-*. A CVD override must re-derive these from the
+    // overridden status colors or light-mode diff fills/gutters keep the
+    // original (non-CVD) hue. Only red-green overrides status-success/-danger,
+    // so only it should gain diff tokens; blue-yellow overrides neither.
+    const DIFF_TOKENS = [
+      "--theme-diff-insert-background",
+      "--theme-diff-insert-edit-background",
+      "--theme-diff-gutter-insert",
+      "--theme-diff-delete-background",
+      "--theme-diff-delete-edit-background",
+      "--theme-diff-gutter-delete",
+    ] as const;
+
+    // Floor for insert-vs-delete diff gutters under red-green CVD. Well above
+    // the 0.005 identity JND but below the Okabe-Ito calibration (~0.09) so it
+    // gates accidental collapse without locking the hand-tuned hex values.
+    const DIFF_DISTINGUISHABILITY_FLOOR = 0.05;
+
+    it("RED_GREEN_OVERRIDES defines all six diff tokens; BLUE_YELLOW_OVERRIDES defines none", () => {
+      for (const token of DIFF_TOKENS) {
+        expect(RED_GREEN_OVERRIDES, `red-green should define ${token}`).toHaveProperty(token);
+        expect(BLUE_YELLOW_OVERRIDES, `blue-yellow should not define ${token}`).not.toHaveProperty(
+          token
+        );
+      }
+    });
+
+    it("red-green diff gutters stay distinguishable under protanopia and deuteranopia", () => {
+      const insert = RED_GREEN_OVERRIDES["--theme-diff-gutter-insert"]!;
+      const del = RED_GREEN_OVERRIDES["--theme-diff-gutter-delete"]!;
+
+      for (const deficiency of ["protanopia", "deuteranopia"] as const) {
+        const dist = minPairwiseDistance([insert, del], deficiency);
+        expect(dist, `${deficiency}: gutter insert/delete distance`).not.toBeNull();
+        expect(
+          dist!,
+          `${deficiency}: insert/delete gutter distance ${dist?.toFixed(4)} below floor ${DIFF_DISTINGUISHABILITY_FLOOR}`
+        ).toBeGreaterThan(DIFF_DISTINGUISHABILITY_FLOOR);
+      }
+    });
+
+    it("red-green diff gutters mirror the overridden status colors", () => {
+      expect(normHex(RED_GREEN_OVERRIDES["--theme-diff-gutter-insert"]!)).toBe(
+        normHex(RED_GREEN_OVERRIDES["--theme-status-success"]!)
+      );
+      expect(normHex(RED_GREEN_OVERRIDES["--theme-diff-gutter-delete"]!)).toBe(
+        normHex(RED_GREEN_OVERRIDES["--theme-status-danger"]!)
+      );
+    });
+
+    it("red-green diff backgrounds are the overridden status hue at the light-mode alphas", () => {
+      // Derive the expected rgba from the override's own status hex so a wrong
+      // alpha or a swapped insert/delete derivation fails — not a literal match.
+      const rgb = (hex: string) => {
+        const c = parse(hex)!;
+        const to255 = (v: number) => Math.round((v as number) * 255);
+        // culori.parse() always returns RGB values (0-1 range), even when a mode is
+        // active, so we can safely access r, g, b as an any-typed object to avoid
+        // type errors from the discriminated union type.
+        const color = c as unknown as { r: number; g: number; b: number };
+        return {
+          r: to255(color.r),
+          g: to255(color.g),
+          b: to255(color.b),
+        };
+      };
+      const success = rgb(RED_GREEN_OVERRIDES["--theme-status-success"]!);
+      const danger = rgb(RED_GREEN_OVERRIDES["--theme-status-danger"]!);
+
+      expect(RED_GREEN_OVERRIDES["--theme-diff-insert-background"]).toBe(
+        `rgba(${success.r}, ${success.g}, ${success.b}, 0.1)`
+      );
+      expect(RED_GREEN_OVERRIDES["--theme-diff-insert-edit-background"]).toBe(
+        `rgba(${success.r}, ${success.g}, ${success.b}, 0.2)`
+      );
+      expect(RED_GREEN_OVERRIDES["--theme-diff-delete-background"]).toBe(
+        `rgba(${danger.r}, ${danger.g}, ${danger.b}, 0.1)`
+      );
+      expect(RED_GREEN_OVERRIDES["--theme-diff-delete-edit-background"]).toBe(
+        `rgba(${danger.r}, ${danger.g}, ${danger.b}, 0.2)`
+      );
+    });
   });
 });
