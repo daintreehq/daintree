@@ -1397,6 +1397,13 @@ describe("CrashRecoveryService", () => {
       // surface the live session's terminal count.
       const backupDir = path.join(userData, "backups");
       fs.mkdirSync(backupDir, { recursive: true });
+
+      const svc = makeService();
+      svc.initialize();
+
+      // capturedAt must be >= sessionStartMs (the freshness gate at
+      // line 131 of CrashRecoveryService.ts) — write the snapshot AFTER
+      // initialize() so the timestamp is deterministically fresh.
       fs.writeFileSync(
         path.join(backupDir, "session-state.json"),
         JSON.stringify({
@@ -1411,9 +1418,6 @@ describe("CrashRecoveryService", () => {
           },
         })
       );
-
-      const svc = makeService();
-      svc.initialize();
 
       expect(svc.getBackupPanelCount()).toBeNull();
       expect(svc.getBackupPanelCount(true)).toBe(4);
