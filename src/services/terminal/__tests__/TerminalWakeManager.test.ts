@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
 
-const { wakeMock, setScrollbackRestoreErrorMock } = vi.hoisted(() => ({
-  wakeMock: vi.fn(),
-  setScrollbackRestoreErrorMock: vi.fn(),
-}));
+const { wakeMock, setScrollbackRestoreErrorMock, clearScrollbackRestoreErrorMock } = vi.hoisted(
+  () => ({
+    wakeMock: vi.fn(),
+    setScrollbackRestoreErrorMock: vi.fn(),
+    clearScrollbackRestoreErrorMock: vi.fn(),
+  })
+);
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -16,6 +19,7 @@ vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
     getState: () => ({
       setScrollbackRestoreError: setScrollbackRestoreErrorMock,
+      clearScrollbackRestoreError: clearScrollbackRestoreErrorMock,
     }),
   },
 }));
@@ -34,6 +38,7 @@ describe("TerminalWakeManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setScrollbackRestoreErrorMock.mockReset();
+    clearScrollbackRestoreErrorMock.mockReset();
   });
 
   it("returns false when wake request fails instead of rejecting", async () => {
@@ -454,10 +459,13 @@ describe("TerminalWakeManager", () => {
   describe("replay failure surfaces classified error (#9896)", () => {
     const longState = "x".repeat(2_000_000); // > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes
 
-    function makeFailureDeps(managed: MockManagedTerminal, options: {
-      smallOk: boolean;
-      incrementalOk: boolean;
-    }): WakeManagerDeps {
+    function makeFailureDeps(
+      managed: MockManagedTerminal,
+      options: {
+        smallOk: boolean;
+        incrementalOk: boolean;
+      }
+    ): WakeManagerDeps {
       return {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
@@ -555,9 +563,11 @@ describe("TerminalWakeManager", () => {
     });
 
     it("does not record lastWakeTime when the wake fails (rate limit window stays open)", async () => {
-      // The downstream `triggerWake` records `lastWakeTime.set(id, startedAt)` only
-      // on success. A failed wake must leave the entry deleted so a follow-up
-      // wake (e.g. a tab switch) can retry immediately.
+      // A failed wake must return false so the upstream triggerWake callback
+      // deletes any stale lastWakeTime entry, letting a follow-up wake fire
+      // immediately (no rate-limit coalescing for a known-failed replay).
+      // We verify the boolean return is what triggerWake observes, not the
+      // private lastWakeTime map (which is implementation detail).
       vi.useFakeTimers();
       try {
         wakeMock.mockResolvedValue({ state: "serialized-state" });
@@ -572,22 +582,79 @@ describe("TerminalWakeManager", () => {
           isAltBuffer: false,
           lastScrollbackRestoreError: restoreError,
         };
-        const manager = new TerminalWakeManager(
-          makeFailureDeps(managed, { smallOk: false, incrementalOk: true })
-        );
+        const restoreFn = vi.fn(() => false);
+        const deps: WakeManagerDeps = {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+          getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
+          hasInstance: vi.fn(() => true),
+          restoreFromSerialized: restoreFn,
+          restoreFromSerializedIncremental: vi.fn(async () => true),
+        };
+        const manager = new TerminalWakeManager(deps);
 
-        manager.wake("term-rate-fail");
+        const first = manager.wakeAndRestore("term-rate-fail");
         await vi.advanceTimersByTimeAsync(0);
-        // No trailing-edge schedule should be queued — the failure kept the
-        // window open, so the next wake fires immediately.
-        manager.wake("term-rate-fail");
+        const firstResult = await first;
+        expect(firstResult).toBe(false); // signals failure to triggerWake
+
+        // Second wake fires immediately (no rate-limit coalescing) because
+        // triggerWake observed `false` and did not record lastWakeTime.
+        const second = manager.wakeAndRestore("term-rate-fail");
         await vi.advanceTimersByTimeAsync(0);
+        await second;
+        expect(restoreFn).toHaveBeenCalledTimes(2);
         expect(wakeMock).toHaveBeenCalledTimes(2);
 
         manager.dispose();
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it("clears any prior banner on successful restore (recovery without manual dismiss)", async () => {
+      // Mirror of hydration's retry path (#8535): a previous failed wake may
+      // have left a banner in the panel store. Once the wake succeeds, the
+      // banner must be cleared so the user doesn't see a stale error after
+      // the replay has recovered.
+      wakeMock.mockResolvedValueOnce({ state: "serialized-state" });
+      const managed: MockManagedTerminal = {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+        terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+        isAltBuffer: false,
+      };
+      const manager = new TerminalWakeManager(
+        makeFailureDeps(managed, { smallOk: true, incrementalOk: true })
+      );
+
+      const result = await manager.wakeAndRestore("term-recover");
+
+      expect(result).toBe(true);
+      expect(setScrollbackRestoreErrorMock).not.toHaveBeenCalled();
+      expect(clearScrollbackRestoreErrorMock).toHaveBeenCalledTimes(1);
+      expect(clearScrollbackRestoreErrorMock).toHaveBeenCalledWith("term-recover");
+    });
+
+    it("does not clear a banner when the wake fails (failure is preserved)", async () => {
+      wakeMock.mockResolvedValueOnce({ state: "serialized-state" });
+      const restoreError: TerminalScrollbackRestoreError = {
+        type: "parse",
+        message: "Parser error",
+        timestamp: 1,
+      };
+      const managed: MockManagedTerminal = {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+        terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+        isAltBuffer: false,
+        lastScrollbackRestoreError: restoreError,
+      };
+      const manager = new TerminalWakeManager(
+        makeFailureDeps(managed, { smallOk: false, incrementalOk: true })
+      );
+
+      const result = await manager.wakeAndRestore("term-fail-no-clear");
+
+      expect(result).toBe(false);
+      expect(clearScrollbackRestoreErrorMock).not.toHaveBeenCalled();
     });
   });
 });
