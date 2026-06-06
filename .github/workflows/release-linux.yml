@@ -206,6 +206,7 @@ jobs:
           PACKAGED_BINARY: ${{ github.workspace }}/squashfs-root/AppRun
           NODE_ENV: production
           ELECTRON_ENABLE_LOGGING: "1"
+          DBUS_SESSION_BUS_ADDRESS: /dev/null
           SMOKE_TIMEOUT_MS: "210000"
           SMOKE_RETRIES: "1"
         run: |
@@ -305,6 +306,7 @@ jobs:
       - name: Run packaged smoke
         env:
           PACKAGED_BINARY: ${{ steps.extract.outputs.packaged_binary }}
+          DBUS_SESSION_BUS_ADDRESS: /dev/null
         run: xvfb-run --auto-servernum node scripts/run-packaged-smoke.mjs
 
   publish-daintree:
