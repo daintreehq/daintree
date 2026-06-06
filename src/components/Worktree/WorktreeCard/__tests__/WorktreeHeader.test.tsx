@@ -1389,10 +1389,18 @@ describe("WorktreeHeader upstream sync indicator", () => {
         isGitHubRemote: true,
       },
     });
-    const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator).toBeDefined();
+    const indicator = screen.getByRole("button", { name: /GitHub authentication failed/ });
     expect(indicator.getAttribute("data-fetch-auth-failed")).toBe("true");
     expect(indicator.textContent).toContain("—");
+    // Recovery path must be reachable on the no-linked-data path too — the
+    // badge owns the only per-worktree way out of the auth-suspended fetch.
+    fireEvent.click(indicator);
+    expect(mockRetryAuthFetch).toHaveBeenCalledTimes(1);
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "code-forge", subtab: "daintree.github.github", sectionId: "github-token" },
+      { source: "user" }
+    );
   });
 
   it("falls through to regular count display for non-GitHub auth failures", () => {

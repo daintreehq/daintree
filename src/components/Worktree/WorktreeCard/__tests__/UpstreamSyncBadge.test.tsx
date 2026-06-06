@@ -1,8 +1,8 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -19,7 +19,10 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn() },
 }));
 
+import { actionService } from "@/services/ActionService";
 import { UpstreamSyncBadge } from "../UpstreamSyncBadge";
+
+const mockRetryAuthFetch = vi.fn().mockResolvedValue(undefined);
 
 type Props = Parameters<typeof UpstreamSyncBadge>[0];
 
@@ -48,6 +51,44 @@ function renderBadge(extra: Partial<Props> = {}) {
 
 afterEach(() => {
   cleanup();
+});
+
+describe("UpstreamSyncBadge — auth-failed sign-in branch (issue #9982)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("electron", { worktree: { retryAuthFetch: mockRetryAuthFetch } });
+    mockRetryAuthFetch.mockClear();
+    vi.mocked(actionService.dispatch).mockClear();
+  });
+
+  it("renders a real <button> with the auth-failed aria-label and clicking it fires retry + dispatch", () => {
+    renderBadge({
+      aheadCount: 0,
+      behindCount: 0,
+      fetchAuthFailed: true,
+      hasAuthFailedSignIn: true,
+    });
+    const button = screen.getByRole("button", { name: /GitHub authentication failed/ });
+    expect(button.getAttribute("data-fetch-auth-failed")).toBe("true");
+    expect(button.textContent).toContain("—");
+    fireEvent.click(button);
+    expect(mockRetryAuthFetch).toHaveBeenCalledTimes(1);
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "code-forge", subtab: "daintree.github.github", sectionId: "github-token" },
+      { source: "user" }
+    );
+  });
+
+  it("does not render the sign-in branch when hasAuthFailedSignIn is false even with auth-failed fetch", () => {
+    renderBadge({
+      aheadCount: 0,
+      behindCount: 0,
+      fetchAuthFailed: true,
+      hasAuthFailedSignIn: false,
+    });
+    // No counts + no auth-failed-sign-in affordance + no base divergence → null
+    expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
+  });
 });
 
 describe("UpstreamSyncBadge — base-divergence layout", () => {
@@ -231,31 +272,5 @@ describe("UpstreamSyncBadge — value-change flash", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-});
-
-describe("UpstreamSyncBadge — auth-failed sign-in branch (issue #9982)", () => {
-  it("renders the dimmed placeholder when fetchAuthFailed + hasAuthFailedSignIn and no counts", () => {
-    renderBadge({
-      aheadCount: 0,
-      behindCount: 0,
-      fetchAuthFailed: true,
-      hasAuthFailedSignIn: true,
-    });
-    const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator).toBeDefined();
-    expect(indicator.getAttribute("data-fetch-auth-failed")).toBe("true");
-    expect(indicator.textContent).toContain("—");
-  });
-
-  it("does not render the sign-in branch when hasAuthFailedSignIn is false even with auth-failed fetch", () => {
-    renderBadge({
-      aheadCount: 0,
-      behindCount: 0,
-      fetchAuthFailed: true,
-      hasAuthFailedSignIn: false,
-    });
-    // No counts + no auth-failed-sign-in affordance + no base divergence → null
-    expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
   });
 });
