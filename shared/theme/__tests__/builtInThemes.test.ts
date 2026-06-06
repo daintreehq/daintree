@@ -443,6 +443,7 @@ describe("built-in themes", () => {
       // toolbar-stats-bg fill tint instead, leaving the seams invisible (#10029).
       const toolbarDivider = extensions["toolbar-divider"];
       const statsDivider = extensions["toolbar-stats-divider"];
+      const statsBg = extensions["toolbar-stats-bg"];
       if (
         toolbarDivider !== undefined &&
         statsDivider !== undefined &&
@@ -451,6 +452,19 @@ describe("built-in themes", () => {
         failures.push(
           `${source.id} toolbar-stats-divider ("${statsDivider}") must equal toolbar-divider ` +
             `("${toolbarDivider}"); the stats pill uses the toolbar's separator ink (#10029)`
+        );
+      }
+      if (statsDivider !== undefined && statsDivider === statsBg) {
+        failures.push(
+          `${source.id} toolbar-stats-divider ("${statsDivider}") matches the toolbar-stats-bg ` +
+            `fill tint; the seams would be invisible against the pill fill (#10029)`
+        );
+      }
+      if (statsBg !== undefined && statsDivider === undefined) {
+        failures.push(
+          `${source.id} styles the stats pill (toolbar-stats-bg) without toolbar-stats-divider; ` +
+            `the seams would fall back to --theme-border-subtle instead of the toolbar's ` +
+            `separator ink (#10029)`
         );
       }
 
