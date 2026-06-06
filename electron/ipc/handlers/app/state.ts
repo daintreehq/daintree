@@ -139,11 +139,11 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           focusPanelStateToUse = globalAppState.focusPanelState;
 
           // Save the migrated focus mode to per-project state
-          await projectStore.saveProjectState(projectId, {
-            ...projectState,
+          await projectStore.enqueueProjectStateUpdate(projectId, (existing) => ({
+            ...(existing ?? projectState),
             focusMode: focusModeToUse,
             focusPanelState: focusPanelStateToUse,
-          });
+          }));
 
           console.log(
             `[AppHydrate] Migrated focusMode (${focusModeToUse}) to per-project state for ${currentProject?.name}`
@@ -184,14 +184,14 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             : undefined;
 
           // Include focus mode in migration
-          await projectStore.saveProjectState(projectId, {
+          await projectStore.enqueueProjectStateUpdate(projectId, () => ({
             projectId,
             activeWorktreeId: globalAppState.activeWorktreeId,
             sidebarWidth: globalAppState.sidebarWidth ?? 350,
             terminals: migratedTerminals,
             focusMode: globalAppState.focusMode,
             focusPanelState: normalizedFocusPanelState,
-          });
+          }));
 
           console.log(
             `[AppHydrate] Migrated ${migratedTerminals.length} terminals and focusMode to per-project state`
@@ -212,14 +212,14 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             : undefined;
 
           // No terminals to migrate but still save empty state to mark migration complete
-          await projectStore.saveProjectState(projectId, {
+          await projectStore.enqueueProjectStateUpdate(projectId, () => ({
             projectId,
             activeWorktreeId: globalAppState.activeWorktreeId,
             sidebarWidth: globalAppState.sidebarWidth ?? 350,
             terminals: [],
             focusMode: globalAppState.focusMode,
             focusPanelState: normalizedFocusPanelState,
-          });
+          }));
         }
       } else {
         // Normalize legacy focusPanelState
@@ -237,14 +237,18 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           : undefined;
 
         // No per-project state and no global terminals - create fresh state with focus mode migration
-        await projectStore.saveProjectState(projectId, {
+        await projectStore.enqueueProjectStateUpdate(
           projectId,
-          activeWorktreeId: globalAppState.activeWorktreeId,
-          sidebarWidth: globalAppState.sidebarWidth ?? 350,
-          terminals: [],
-          focusMode: globalAppState.focusMode,
-          focusPanelState: normalizedFocusPanelState,
-        });
+          (existing) =>
+            existing ?? {
+              projectId,
+              activeWorktreeId: globalAppState.activeWorktreeId,
+              sidebarWidth: globalAppState.sidebarWidth ?? 350,
+              terminals: [],
+              focusMode: globalAppState.focusMode,
+              focusPanelState: normalizedFocusPanelState,
+            }
+        );
       }
     } else {
       // No project - use global terminals (legacy/fallback)
