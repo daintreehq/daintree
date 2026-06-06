@@ -525,3 +525,228 @@ describe("decodeFleetSavedScopes (internal)", () => {
     expect((result?.[0] as { usageHistory?: unknown } | undefined)?.usageHistory).toBeUndefined();
   });
 });
+
+describe("decodeCopyTreeSettings (internal)", () => {
+  it("returns undefined for null/undefined/non-object/array", () => {
+    expect(__internal.decodeCopyTreeSettings(null)).toBeUndefined();
+    expect(__internal.decodeCopyTreeSettings(undefined)).toBeUndefined();
+    expect(__internal.decodeCopyTreeSettings("s")).toBeUndefined();
+    expect(__internal.decodeCopyTreeSettings(42)).toBeUndefined();
+    expect(__internal.decodeCopyTreeSettings(true)).toBeUndefined();
+    expect(__internal.decodeCopyTreeSettings([1, 2])).toBeUndefined();
+  });
+
+  it("returns undefined for an empty object", () => {
+    expect(__internal.decodeCopyTreeSettings({})).toBeUndefined();
+  });
+
+  it("parses a valid full object", () => {
+    expect(
+      __internal.decodeCopyTreeSettings({
+        maxContextSize: 1_000_000,
+        maxFileSize: 50_000,
+        charLimit: 8000,
+        strategy: "modified",
+        alwaysInclude: ["README.md"],
+        alwaysExclude: ["dist", "node_modules"],
+      })
+    ).toEqual({
+      maxContextSize: 1_000_000,
+      maxFileSize: 50_000,
+      charLimit: 8000,
+      strategy: "modified",
+      alwaysInclude: ["README.md"],
+      alwaysExclude: ["dist", "node_modules"],
+    });
+  });
+
+  it("parses strategy 'all' and 'modified' only", () => {
+    expect(__internal.decodeCopyTreeSettings({ strategy: "all" })).toEqual({ strategy: "all" });
+    expect(__internal.decodeCopyTreeSettings({ strategy: "modified" })).toEqual({
+      strategy: "modified",
+    });
+  });
+
+  it("drops invalid strategy values", () => {
+    expect(__internal.decodeCopyTreeSettings({ strategy: "changed" })).toBeUndefined();
+    expect(__internal.decodeCopyTreeSettings({ strategy: "" })).toBeUndefined();
+    expect(__internal.decodeCopyTreeSettings({ strategy: null })).toBeUndefined();
+    expect(__internal.decodeCopyTreeSettings({ strategy: 1 })).toBeUndefined();
+  });
+
+  it("drops non-finite numerics (Infinity, -Infinity, NaN)", () => {
+    expect(
+      __internal.decodeCopyTreeSettings({
+        maxContextSize: Number.POSITIVE_INFINITY,
+        maxFileSize: Number.NEGATIVE_INFINITY,
+        charLimit: Number.NaN,
+      })
+    ).toBeUndefined();
+  });
+
+  it("drops numeric strings (no coercion)", () => {
+    expect(
+      __internal.decodeCopyTreeSettings({
+        maxContextSize: "100000",
+        maxFileSize: "50000",
+        charLimit: "8000",
+      })
+    ).toBeUndefined();
+  });
+
+  it("filters bad elements inside alwaysInclude/alwaysExclude", () => {
+    expect(
+      __internal.decodeCopyTreeSettings({
+        alwaysInclude: ["README.md", 1, null, "src/**", false],
+        alwaysExclude: ["dist", {}, ["nested"], "node_modules"],
+      })
+    ).toEqual({
+      alwaysInclude: ["README.md", "src/**"],
+      alwaysExclude: ["dist", "node_modules"],
+    });
+  });
+
+  it("drops empty arrays and arrays with no valid strings", () => {
+    expect(__internal.decodeCopyTreeSettings({ alwaysInclude: [] })).toBeUndefined();
+    expect(__internal.decodeCopyTreeSettings({ alwaysExclude: [1, null, false] })).toBeUndefined();
+  });
+
+  it("regression #10001: string alwaysExclude is dropped", () => {
+    // Pre-fix: "dist".length > 0, spread turns into single chars.
+    expect(__internal.decodeCopyTreeSettings({ alwaysExclude: "dist" })).toBeUndefined();
+  });
+
+  it("regression #10001: { length: 1 } alwaysExclude is dropped", () => {
+    // Pre-fix: passes the .length > 0 guard, then throws on spread.
+    expect(__internal.decodeCopyTreeSettings({ alwaysExclude: { length: 1 } })).toBeUndefined();
+  });
+
+  it("regression #10001: string maxContextSize is dropped", () => {
+    expect(__internal.decodeCopyTreeSettings({ maxContextSize: "100000" })).toBeUndefined();
+  });
+
+  it("regression #10001: string alwaysInclude is dropped", () => {
+    expect(__internal.decodeCopyTreeSettings({ alwaysInclude: "README.md" })).toBeUndefined();
+  });
+
+  it("keeps valid siblings when one field is invalid", () => {
+    expect(
+      __internal.decodeCopyTreeSettings({
+        maxContextSize: 1_000_000,
+        alwaysInclude: "README.md",
+        alwaysExclude: ["dist"],
+      })
+    ).toEqual({ maxContextSize: 1_000_000, alwaysExclude: ["dist"] });
+  });
+
+  test.prop([fc.anything()])("never throws on arbitrary input", (raw) => {
+    expect(() => __internal.decodeCopyTreeSettings(raw)).not.toThrow();
+  });
+});
+
+describe("decodeResourceEnvironments (internal)", () => {
+  it("returns undefined for null/undefined/non-object/array", () => {
+    expect(__internal.decodeResourceEnvironments(null)).toBeUndefined();
+    expect(__internal.decodeResourceEnvironments(undefined)).toBeUndefined();
+    expect(__internal.decodeResourceEnvironments("s")).toBeUndefined();
+    expect(__internal.decodeResourceEnvironments(42)).toBeUndefined();
+    expect(__internal.decodeResourceEnvironments([{ provision: ["a"] }])).toBeUndefined();
+  });
+
+  it("returns undefined for an empty object", () => {
+    expect(__internal.decodeResourceEnvironments({})).toBeUndefined();
+  });
+
+  it("parses a full valid environment", () => {
+    expect(
+      __internal.decodeResourceEnvironments({
+        staging: {
+          provision: ["npm ci"],
+          teardown: ["rm -rf build"],
+          resume: ["docker start x"],
+          pause: ["docker stop x"],
+          status: "echo ok",
+          connect: "ssh staging",
+          icon: "database",
+        },
+      })
+    ).toEqual({
+      staging: {
+        provision: ["npm ci"],
+        teardown: ["rm -rf build"],
+        resume: ["docker start x"],
+        pause: ["docker stop x"],
+        status: "echo ok",
+        connect: "ssh staging",
+        icon: "database",
+      },
+    });
+  });
+
+  it("filters bad elements inside command arrays", () => {
+    expect(
+      __internal.decodeResourceEnvironments({
+        s: { provision: ["a", 1, null, "b", { cmd: "x" }] },
+      })
+    ).toEqual({ s: { provision: ["a", "b"] } });
+  });
+
+  it("drops command fields that are not arrays", () => {
+    expect(
+      __internal.decodeResourceEnvironments({
+        s: {
+          provision: "npm install",
+          teardown: { length: 1 },
+          resume: null,
+          pause: 42,
+        },
+      })
+    ).toBeUndefined();
+  });
+
+  it("drops empty command arrays and arrays with no valid strings", () => {
+    expect(__internal.decodeResourceEnvironments({ s: { provision: [] } })).toBeUndefined();
+    expect(
+      __internal.decodeResourceEnvironments({ s: { provision: [1, null, false] } })
+    ).toBeUndefined();
+  });
+
+  it("preserves valid scalar string fields", () => {
+    expect(
+      __internal.decodeResourceEnvironments({
+        s: { status: "echo ok", connect: "ssh x", icon: "database" },
+      })
+    ).toEqual({ s: { status: "echo ok", connect: "ssh x", icon: "database" } });
+  });
+
+  it("drops invalid scalar fields (arrays, numbers, null)", () => {
+    expect(
+      __internal.decodeResourceEnvironments({
+        s: { status: ["echo ok"], connect: 123, icon: null },
+      })
+    ).toBeUndefined();
+  });
+
+  it("keeps valid sibling environments when one entry is invalid", () => {
+    expect(
+      __internal.decodeResourceEnvironments({
+        good: { provision: ["echo"] },
+        bad: { provision: "not-an-array" },
+      })
+    ).toEqual({ good: { provision: ["echo"] } });
+  });
+
+  it("returns undefined when every environment entry is invalid", () => {
+    expect(
+      __internal.decodeResourceEnvironments({
+        a: "not-an-object",
+        b: ["also", "wrong"],
+        c: null,
+      })
+    ).toBeUndefined();
+  });
+
+  test.prop([fc.anything()])("never throws on arbitrary input", (raw) => {
+    expect(() => __internal.decodeResourceEnvironments(raw)).not.toThrow();
+  });
+});
