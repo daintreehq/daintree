@@ -93,3 +93,52 @@ describe("useQuickSwitcher isLoading", () => {
     expect(result.current.isLoading).toBe(false);
   });
 });
+
+describe("useQuickSwitcher MRU prune", () => {
+  beforeEach(() => {
+    usePanelStore.setState({ panelsById: {}, panelIds: [], mruList: [] });
+    useWorktreeStoreMock.mockReset();
+  });
+
+  it("does not prune while the item set is empty (panels still hydrating) (#9922)", () => {
+    // Panels and worktrees populate asynchronously; pruning against an empty
+    // item set here would gut the whole MRU list before this project's items load.
+    const pruneMru = vi.fn();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      mruList: ["terminal:t-1", "worktree:wt-1"],
+      pruneMru,
+    });
+    seedWorktreeState({ isInitialized: true });
+
+    renderHook(() => useQuickSwitcher());
+
+    expect(pruneMru).not.toHaveBeenCalled();
+  });
+
+  it("prunes against the current item set once items are present", () => {
+    const pruneMru = vi.fn();
+    usePanelStore.setState({
+      panelsById: {
+        "t-1": {
+          id: "t-1",
+          title: "T1",
+          kind: "terminal",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: ["t-1"],
+      mruList: ["terminal:t-1", "terminal:gone"],
+      pruneMru,
+    });
+    seedWorktreeState({ isInitialized: true });
+
+    renderHook(() => useQuickSwitcher());
+
+    expect(pruneMru).toHaveBeenCalledWith(new Set(["terminal:t-1"]));
+  });
+});

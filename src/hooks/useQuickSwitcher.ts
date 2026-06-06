@@ -112,9 +112,13 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     return result;
   }, [panelIds, panelsById, worktrees, worktreeMap]);
 
-  // Prune stale MRU entries when item set or MRU list changes (e.g. after hydration)
+  // Prune stale MRU entries when item set or MRU list changes (e.g. after hydration).
+  // Bail while items is empty: panels and worktrees populate asynchronously during
+  // hydration, and pruning against an empty item set would gut the whole list before
+  // the current project's items have loaded (#9922).
   useEffect(() => {
     if (mruList.length === 0) return;
+    if (items.length === 0) return;
     const validIds = new Set(items.map((item) => item.id));
     pruneMru(validIds);
   }, [items, mruList, pruneMru]);

@@ -190,6 +190,8 @@ export interface ProjectState {
   terminalSizes?: Record<string, { cols: number; rows: number }>;
   /** Hybrid input bar draft text per terminal ID (preserved across project switches) */
   draftInputs?: Record<string, string>;
+  /** Quick-switcher MRU list (terminal:/worktree: ids) — per-project so opening another project's view can't gut it */
+  mruList?: string[];
 }
 
 /** Recipe terminal type */
