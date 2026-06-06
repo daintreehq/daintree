@@ -722,7 +722,7 @@ export class TerminalProcess {
     this.terminalInfo.lastObservedTitle = title;
   }
 
-  acknowledgeData(_charCount: number): void {
+  acknowledgeData(_byteCount: number): void {
     // No-op: SAB-based backpressure in pty-host.ts handles all flow control
   }
 

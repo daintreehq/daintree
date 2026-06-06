@@ -2,6 +2,23 @@ import type { ManagedTerminal } from "./types";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 
+// Reused across writes — TextEncoder holds no state between encode() calls, so
+// a single module-level instance avoids re-allocating one per write.
+const utf8Encoder = new TextEncoder();
+
+/**
+ * UTF-8 byte length of a string chunk — the unit the pty-host's IPC
+ * flow-control ledger is denominated in (the host charges
+ * `Buffer.byteLength(data, "utf8")` before sending). The renderer must
+ * acknowledge in the SAME unit; using JS `string.length` (UTF-16 code units)
+ * under-reports every non-ASCII char — box-drawing/CJK are 3 UTF-8 bytes vs 1
+ * code unit, emoji are 4 vs 2 — so the host queue drifts toward its high
+ * watermark and triggers spurious backpressure pauses (#9893).
+ */
+function utf8ByteLength(data: string): number {
+  return utf8Encoder.encode(data).byteLength;
+}
+
 export interface WriteControllerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
   acknowledgePortData: (id: string, bytes: number) => void;
@@ -42,6 +59,12 @@ export class TerminalWriteController {
     if (managed.isHibernated) {
       const bytes = typeof data === "string" ? data.length : data.byteLength;
       this.deps.acknowledgePortData(id, bytes);
+      // Hibernated output is dropped, never replayed — IPC-delivered chunks
+      // (always strings) were charged to the host's IPC ledger, so ack them
+      // here in UTF-8 bytes or the ledger leaks into permanent backpressure.
+      if (typeof data === "string") {
+        this.deps.acknowledgeData(id, utf8ByteLength(data));
+      }
       this.deps.notifyWriteComplete(id, bytes);
       return;
     }
@@ -76,12 +99,18 @@ export class TerminalWriteController {
     this.perfWriteSampleCounter += 1;
     const shouldSample = this.perfWriteSampleCounter % 64 === 0;
 
-    const sampledBytes = shouldSample
-      ? typeof data === "string"
-        ? data.length
-        : data.byteLength
-      : 0;
-    const acknowledgedBytes = typeof data === "string" ? data.length : data.byteLength;
+    // renderedBytes (UTF-16 code units / raw byte length) denominates the
+    // renderer-side ingest ledger (TerminalOutputIngestService.inFlightBytes,
+    // incremented via the same chunkByteSize) and perf sampling. The host's
+    // IPC flow-control ledger is a separate ledger in UTF-8 bytes — see
+    // ackBytes below.
+    const renderedBytes = typeof data === "string" ? data.length : data.byteLength;
+    const sampledBytes = shouldSample ? renderedBytes : 0;
+    // Only string chunks travel the IPC path (Uint8Array chunks arrive via
+    // MessagePort and are acked through acknowledgePortData's queued count).
+    // null = no IPC ack: sending one for a port-delivered chunk would
+    // spuriously drain the host's IPC ledger.
+    const ackBytes = typeof data === "string" ? utf8ByteLength(data) : null;
 
     if (shouldSample) {
       markRendererPerformance(PERF_MARKS.TERMINAL_DATA_PARSED, {
@@ -103,9 +132,11 @@ export class TerminalWriteController {
       managed.pendingWrites = Math.max(0, (managed.pendingWrites ?? 1) - 1);
       managed.lastWriteAt = Date.now();
 
-      this.deps.acknowledgePortData(id, acknowledgedBytes);
-      this.deps.acknowledgeData(id, acknowledgedBytes);
-      this.deps.notifyWriteComplete(id, acknowledgedBytes);
+      this.deps.acknowledgePortData(id, renderedBytes);
+      if (ackBytes !== null) {
+        this.deps.acknowledgeData(id, ackBytes);
+      }
+      this.deps.notifyWriteComplete(id, renderedBytes);
 
       if (shouldSample) {
         const writeDurationMs =

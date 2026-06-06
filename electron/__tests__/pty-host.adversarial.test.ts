@@ -872,7 +872,7 @@ describe("pty-host adversarial", () => {
     const resumeCallsBefore = terminal.ptyProcess.resume.mock.calls.length;
     const statusCountBefore = terminalStatusPayloads(parentPort).length;
 
-    parentPort.emit("message", { type: "acknowledge-data", id: "t1", charCount: 60 });
+    parentPort.emit("message", { type: "acknowledge-data", id: "t1", byteCount: 60 });
     await flushMicrotasks();
 
     expect(terminal.ptyProcess.resume).toHaveBeenCalledTimes(resumeCallsBefore);
