@@ -21,6 +21,8 @@ import {
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./dockPanelPortalContext";
+import { useDockPopoverResize } from "./useDockPopoverResize";
+import { DockPopoverResizeHandle } from "./DockPopoverResizeHandle";
 import {
   getDockDisplayAgentState,
   isDockAgentStateDeprioritized,
@@ -306,6 +308,21 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
   const isDeprioritized = !isOpen && isDockAgentStateDeprioritized(agentState);
 
+  // Re-fit the terminal once a resize gesture settles on a new popover height.
+  const {
+    height: popoverHeight,
+    isResizing,
+    handleProps,
+  } = useDockPopoverResize(() => {
+    requestAnimationFrame(() => {
+      try {
+        terminalInstanceService.fit(terminal.id);
+      } catch {
+        // fit() guards zero-dimension cases internally; ignore transient throws.
+      }
+    });
+  });
+
   return (
     <DockPopoverChildProvider>
       <Popover open={isOpen} onOpenChange={handleOpenChange}>
@@ -395,7 +412,8 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
         </div>
 
         <PopoverContent
-          className="w-[700px] max-w-[90vw] h-[500px] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-[120ms] data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1"
+          className="w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-[120ms] data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1"
+          style={{ height: popoverHeight }}
           side="top"
           align="start"
           sideOffset={10}
@@ -411,6 +429,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
           }}
         >
           <div className="relative w-full h-full group">
+            <DockPopoverResizeHandle handleProps={handleProps} isResizing={isResizing} />
             {/* Portal target - content is rendered in DockPanelOffscreenContainer and portaled here */}
             <div
               ref={portalContainerRef}

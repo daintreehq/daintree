@@ -43,6 +43,8 @@ import {
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./dockPanelPortalContext";
+import { useDockPopoverResize } from "./useDockPopoverResize";
+import { DockPopoverResizeHandle } from "./DockPopoverResizeHandle";
 import {
   useDockBlockedState,
   getDockDisplayAgentState,
@@ -471,6 +473,24 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     );
   }, [panels, agentSettingsAll, ccrPresetsByAgent, projectPresetsByAgent]);
 
+  // Re-fit the active tab's terminal once a resize gesture settles on a new
+  // height. Declared before the early return below so the hook order stays
+  // stable when the group transiently empties (Rules of Hooks).
+  const {
+    height: popoverHeight,
+    isResizing,
+    handleProps,
+  } = useDockPopoverResize(() => {
+    if (!activePanelId) return;
+    requestAnimationFrame(() => {
+      try {
+        terminalInstanceService.fit(activePanelId);
+      } catch {
+        // fit() guards zero-dimension cases internally; ignore transient throws.
+      }
+    });
+  });
+
   if (!activePanel || panels.length === 0) {
     return null;
   }
@@ -595,7 +615,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         </TerminalContextMenu>
 
         <PopoverContent
-          className="w-[700px] max-w-[90vw] h-[500px] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
+          className="w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
+          style={{ height: popoverHeight }}
           side="top"
           align="start"
           sideOffset={10}
@@ -610,6 +631,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
             event.preventDefault();
           }}
         >
+          <DockPopoverResizeHandle handleProps={handleProps} isResizing={isResizing} />
           {/* Tab bar at top of popover */}
           <DndContext
             sensors={tabSensors}
@@ -621,7 +643,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           >
             <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
               <LayoutGroup id={`dock-tabs-${group.id}`}>
-                <div className="group flex items-stretch border-b border-divider bg-daintree-sidebar shrink-0">
+                <div className="group flex items-stretch border-b border-divider bg-daintree-sidebar shrink-0 pt-2">
                   <div
                     ref={setTabListEl}
                     className="flex items-center min-w-0 flex-1 overflow-x-auto overscroll-x-none scrollbar-none"
