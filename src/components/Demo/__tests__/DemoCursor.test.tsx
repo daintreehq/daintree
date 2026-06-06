@@ -653,6 +653,138 @@ describe("DemoCursor", () => {
     }
   });
 
+  it.each([
+    ["enter", "\r"],
+    ["tab", "\t"],
+    ["escape", "\x1b"],
+    ["backspace", "\x7f"],
+    ["down", "\x1b[B"],
+    ["right", "\x1b[C"],
+    ["left", "\x1b[D"],
+    ["home", "\x1b[H"],
+    ["end", "\x1b[F"],
+    ["pageup", "\x1b[5~"],
+    ["pagedown", "\x1b[6~"],
+    ["ctrl-d", "\x04"],
+    ["ctrl-u", "\x15"],
+  ])("sendKeyToTerminal writes the correct byte sequence for %s", async (key, expected) => {
+    const panel = document.createElement("div");
+    panel.setAttribute("data-panel-id", "term-map");
+    document.body.appendChild(panel);
+    terminalGetMock.mockReturnValue(null);
+
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-send-key-to-terminal", {
+        selector: '[data-panel-id="term-map"]',
+        key,
+        requestId: `req-key-${key}`,
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(terminalWriteMock).toHaveBeenCalledWith("term-map", expected);
+      expect(demoMock.sendCommandDone).toHaveBeenCalledWith(`req-key-${key}`, undefined);
+    } finally {
+      document.body.removeChild(panel);
+    }
+  });
+
+  it("sendKeyToTerminal rejects an unknown key without writing", async () => {
+    const panel = document.createElement("div");
+    panel.setAttribute("data-panel-id", "term-unknown");
+    document.body.appendChild(panel);
+    terminalGetMock.mockReturnValue(null);
+
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-send-key-to-terminal", {
+        selector: '[data-panel-id="term-unknown"]',
+        key: "ctrl-z",
+        requestId: "req-key-unknown",
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(terminalWriteMock).not.toHaveBeenCalled();
+      expect(demoMock.sendCommandDone).toHaveBeenCalledWith(
+        "req-key-unknown",
+        "Unknown terminal key: ctrl-z"
+      );
+    } finally {
+      document.body.removeChild(panel);
+    }
+  });
+
+  it("sendKeyToTerminal resolves a selector that targets the panel root directly", async () => {
+    const panel = document.createElement("div");
+    panel.setAttribute("data-panel-id", "term-root");
+    document.body.appendChild(panel);
+    terminalGetMock.mockReturnValue(null);
+
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-send-key-to-terminal", {
+        selector: '[data-panel-id="term-root"]',
+        key: "enter",
+        requestId: "req-key-root",
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(terminalWriteMock).toHaveBeenCalledWith("term-root", "\r");
+    } finally {
+      document.body.removeChild(panel);
+    }
+  });
+
+  it("sendKeyToTerminal reports an error when the element has no panel ancestor", async () => {
+    const orphan = document.createElement("div");
+    orphan.id = "orphan-no-panel";
+    document.body.appendChild(orphan);
+
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-send-key-to-terminal", {
+        selector: "#orphan-no-panel",
+        key: "enter",
+        requestId: "req-key-orphan",
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(terminalWriteMock).not.toHaveBeenCalled();
+      expect(demoMock.sendCommandDone).toHaveBeenCalledWith(
+        "req-key-orphan",
+        "Terminal panel not found: #orphan-no-panel"
+      );
+    } finally {
+      document.body.removeChild(orphan);
+    }
+  });
+
+  it("typeInTerminal sends done and writes nothing for empty text", async () => {
+    const panel = document.createElement("div");
+    panel.setAttribute("data-panel-id", "term-empty");
+    document.body.appendChild(panel);
+
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-type-in-terminal", {
+        selector: '[data-panel-id="term-empty"]',
+        text: "",
+        requestId: "req-term-empty",
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(terminalWriteMock).not.toHaveBeenCalled();
+      expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-term-empty", undefined);
+    } finally {
+      document.body.removeChild(panel);
+    }
+  });
+
   it("waitForSelector resolves immediately when element exists", async () => {
     const el = document.createElement("div");
     el.id = "test-target";

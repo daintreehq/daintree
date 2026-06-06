@@ -94,13 +94,18 @@ test.describe.serial("Demo mode — terminal typing and keys", () => {
 
     // 3. Press Ctrl-C — aborts the recalled line without running it. The
     //    terminal must stay interactive afterwards, proven by running a fresh
-    //    sentinel command.
-    await window.evaluate(async (sel) => {
-      const d = window.electron.demo!;
-      await d.sendKeyToTerminal(sel, "ctrl-c");
-      await d.typeInTerminal(sel, "echo DAINTREE_DEMO_KEYS_OK", 1000);
-      await d.sendKeyToTerminal(sel, "enter");
-    }, selector);
-    await waitForTerminalText(panel, "DAINTREE_DEMO_KEYS_OK", T_LONG);
+    //    sentinel command. The sentinel is unique per run so the assertion is
+    //    immune to anything already in the scrollback.
+    const sentinel = `DAINTREE_DEMO_KEYS_OK_${Date.now()}`;
+    await window.evaluate(
+      async ({ sel, token }) => {
+        const d = window.electron.demo!;
+        await d.sendKeyToTerminal(sel, "ctrl-c");
+        await d.typeInTerminal(sel, `echo ${token}`, 1000);
+        await d.sendKeyToTerminal(sel, "enter");
+      },
+      { sel: selector, token: sentinel }
+    );
+    await waitForTerminalText(panel, sentinel, T_LONG);
   });
 });
