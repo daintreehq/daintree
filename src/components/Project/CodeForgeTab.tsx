@@ -88,7 +88,7 @@ export function CodeForgeTab({
     );
 
   return (
-    <div className="space-y-6">
+    <div id="project-code-forge-remote" className="space-y-6">
       <div>
         <label className="block text-sm font-medium text-daintree-text mb-1">Forge remote</label>
         <p className="text-xs text-daintree-text/60 mb-2">

@@ -310,7 +310,7 @@ export function GeneralTab({
   return (
     <>
       {currentProject && (
-        <div className="mb-6 pb-6 border-b border-daintree-border">
+        <div id="project-name" className="mb-6 pb-6 border-b border-daintree-border">
           <h3 className="text-sm font-semibold text-daintree-text/80 mb-2">Project Identity</h3>
           <p className="text-xs text-daintree-text/60 mb-4">
             Customize how your project appears in the sidebar and dashboard.
@@ -441,7 +441,7 @@ export function GeneralTab({
         </div>
       )}
 
-      <div className="mb-6 pb-6 border-b border-daintree-border">
+      <div id="project-dev-server" className="mb-6 pb-6 border-b border-daintree-border">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <Rocket className="h-4 w-4" />
           Dev Server Command
@@ -649,7 +649,7 @@ export function GeneralTab({
       </div>
 
       {/* In-Repository Settings */}
-      <div className="mt-6">
+      <div id="project-in-repo-settings" className="mt-6">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <FolderGit2 className="h-4 w-4" />
           In-Repository Settings

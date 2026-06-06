@@ -132,7 +132,7 @@ export function ContextTab({
 
   return (
     <>
-      <div className="mb-6 pb-6 border-b border-daintree-border">
+      <div id="project-excluded-paths" className="mb-6 pb-6 border-b border-daintree-border">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <FolderX className="h-4 w-4" />
           Excluded paths
@@ -195,7 +195,7 @@ export function ContextTab({
       </div>
 
       {/* CopyTree Settings */}
-      <div className="mb-6 pb-6 border-b border-daintree-border">
+      <div id="project-copy-tree" className="mb-6 pb-6 border-b border-daintree-border">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <FileCode className="h-4 w-4" />
           Context generation settings

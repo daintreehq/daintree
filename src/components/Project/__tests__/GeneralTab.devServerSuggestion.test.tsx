@@ -217,3 +217,52 @@ describe("GeneralTab dev server suggestion", () => {
     expect(screen.queryByText(/Detected:/)).toBeNull();
   });
 });
+
+describe("GeneralTab — DOM anchors for settings deep-links", () => {
+  const baseProject = {
+    id: "test-project",
+    path: "/Users/test/Projects/sample",
+    name: "Sample",
+    emoji: "🌲",
+    lastOpened: 0,
+  } as const;
+
+  it("exposes the project-name anchor for settings deep-links", () => {
+    const { container } = render(
+      <GeneralTab
+        currentProject={baseProject}
+        name="Sample"
+        onNameChange={vi.fn()}
+        emoji="🌲"
+        onEmojiChange={vi.fn()}
+        color={undefined}
+        onColorChange={vi.fn()}
+        devServerCommand=""
+        onDevServerCommandChange={vi.fn()}
+        devServerLoadTimeout={undefined}
+        onDevServerLoadTimeoutChange={vi.fn()}
+        turbopackEnabled={true}
+        onTurbopackEnabledChange={vi.fn()}
+        daintreeMcpTier="off"
+        onDaintreeMcpTierChange={vi.fn()}
+        projectIconSvg={undefined}
+        onProjectIconSvgChange={vi.fn()}
+        enableInRepoSettings={vi.fn()}
+        disableInRepoSettings={vi.fn()}
+        projectId="test-project"
+        isOpen={true}
+      />
+    );
+    expect(container.querySelector("#project-name")).not.toBeNull();
+  });
+
+  it("exposes the project-dev-server anchor for settings deep-links", () => {
+    const { container } = renderGeneralTab();
+    expect(container.querySelector("#project-dev-server")).not.toBeNull();
+  });
+
+  it("exposes the project-in-repo-settings anchor for settings deep-links", () => {
+    const { container } = renderGeneralTab();
+    expect(container.querySelector("#project-in-repo-settings")).not.toBeNull();
+  });
+});
