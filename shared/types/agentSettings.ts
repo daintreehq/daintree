@@ -79,6 +79,13 @@ export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
   cursor: "--force",
   interpreter: "--auto_run",
   amp: "--dangerously-allow-all",
+  aider: "--yes-always",
+  qwen: "--yolo",
+  kimi: "--yolo",
+  crush: "--yolo",
+  kiro: "--trust-all-tools",
+  // opencode intentionally absent: --dangerously-skip-permissions exists only
+  // on the `run` subcommand, not the bare TUI launch (verified on 1.14.48)
 };
 
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
@@ -284,11 +291,33 @@ export function generateAgentCommand(
         break;
 
       case "gemini":
-        // Gemini: -i for interactive with prompt, otherwise just the prompt
+        // Gemini: -i for interactive with prompt; bare positional launches
+        // the interactive TUI (verified on 0.41.2), so headless needs -p
         if (interactive) {
           parts.push("-i", escapedPrompt);
         } else {
-          parts.push(escapedPrompt);
+          parts.push("-p", escapedPrompt);
+        }
+        break;
+
+      case "qwen":
+        // Qwen Code (Gemini-CLI fork): explicit -i/-p flags — bare-positional
+        // semantics have drifted between fork generations, flags are stable
+        if (interactive) {
+          parts.push("-i", escapedPrompt);
+        } else {
+          parts.push("-p", escapedPrompt);
+        }
+        break;
+
+      case "antigravity":
+        // Antigravity (agy): rejects bare positional prompts ("Error: empty
+        // prompt"), so the mode flag is mandatory — -i (--prompt-interactive)
+        // or -p (--print)
+        if (interactive) {
+          parts.push("-i", escapedPrompt);
+        } else {
+          parts.push("-p", escapedPrompt);
         }
         break;
 
@@ -301,12 +330,88 @@ export function generateAgentCommand(
         break;
 
       case "copilot":
-        // Copilot: -i flag for initial prompt injection (interactive mode)
+        // Copilot: -i for interactive prompt injection, -p for one-shot
         if (interactive) {
           parts.push("-i", escapedPrompt);
         } else {
-          parts.push(escapedPrompt);
+          parts.push("-p", escapedPrompt);
         }
+        break;
+
+      case "opencode":
+        // opencode: bare positional is a project PATH (verified on 1.14.48);
+        // --prompt seeds the TUI, the run subcommand is the one-shot path
+        if (interactive) {
+          parts.push("--prompt", escapedPrompt);
+        } else {
+          parts.push("run", escapedPrompt);
+        }
+        break;
+
+      case "aider":
+        // Aider: positionals are filenames; -m sends one message then exits
+        // (no interactive-with-prompt mode exists)
+        parts.push("-m", escapedPrompt);
+        break;
+
+      case "goose": {
+        // goose session accepts no prompt (verified on 1.33.1) — swap the
+        // registry's `session` arg (pushed shell-escaped above) for `run -t`,
+        // staying interactive after the initial input when requested
+        const sessionIdx = parts.findIndex(
+          (p) => p === "session" || p === escapeShellArg("session")
+        );
+        if (sessionIdx !== -1) {
+          parts[sessionIdx] = "run";
+        } else {
+          parts.splice(1, 0, "run");
+        }
+        parts.push("-t", escapedPrompt);
+        if (interactive) {
+          parts.push("--interactive");
+        }
+        break;
+      }
+
+      case "amp":
+        // Amp: -x/--execute runs one-shot; the TUI ignores positionals, so
+        // interactive launches keep the (best-effort) positional form
+        if (!interactive) {
+          parts.push("-x");
+        }
+        parts.push(escapedPrompt);
+        break;
+
+      case "crush":
+        // Crush: the run subcommand is the only prompt path; the root TUI
+        // has no pre-seed flag, so interactive keeps the positional form
+        if (!interactive) {
+          parts.push("run");
+        }
+        parts.push(escapedPrompt);
+        break;
+
+      case "kimi":
+        // Kimi: no bare-positional prompt form; --prompt/-p runs the query
+        // in both modes
+        parts.push("-p", escapedPrompt);
+        break;
+
+      case "mistral":
+        // Vibe: bare positional seeds the TUI; headless needs --prompt
+        if (!interactive) {
+          parts.push("--prompt");
+        }
+        parts.push(escapedPrompt);
+        break;
+
+      case "kiro":
+        // Kiro: bare positional seeds the implicit chat TUI; headless needs
+        // the explicit chat --no-interactive form
+        if (!interactive) {
+          parts.push("chat", "--no-interactive");
+        }
+        parts.push(escapedPrompt);
         break;
 
       default:

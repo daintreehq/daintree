@@ -612,8 +612,9 @@ describe("amp configuration", () => {
     expect(config?.name).toBe("Amp");
   });
 
-  it("declares the @sourcegraph/amp npm package", () => {
-    expect(getAgentConfig("amp")?.packages?.npm).toBe("@sourcegraph/amp");
+  it("declares the @ampcode/cli npm package", () => {
+    // Renamed from @sourcegraph/amp; the old alias is removed June 15, 2026
+    expect(getAgentConfig("amp")?.packages?.npm).toBe("@ampcode/cli");
   });
 
   it("probes ~/.amp/bin/amp as a native install path", () => {
@@ -978,11 +979,11 @@ describe("resume configuration", () => {
     }
   });
 
-  it("kiro is project-scoped and produces --resume args without an ID", () => {
+  it("kiro is project-scoped and produces chat --resume args without an ID", () => {
     const resume = getAgentConfig("kiro")?.resume;
     expect(resume?.kind).toBe("project-scoped");
     if (resume?.kind === "project-scoped") {
-      expect(resume.args()).toEqual(["--resume"]);
+      expect(resume.args()).toEqual(["chat", "--resume"]);
       expect(resume.quitCommand).toBe("/quit");
     }
   });

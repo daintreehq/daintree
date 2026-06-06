@@ -84,9 +84,12 @@ export const config: AgentConfig = {
   // Kiro uses directory-based sessions: no session ID is emitted on quit
   // and `--resume` takes no argument. `project-scoped` skips the PTY host's
   // session-ID capture loop while still firing the graceful `/quit`.
+  // `--resume` is documented on the `chat` subcommand, not as a global flag,
+  // so use the explicit `chat --resume` form rather than the implicit-chat
+  // default.
   resume: {
     kind: "project-scoped",
-    args: () => ["--resume"],
+    args: () => ["chat", "--resume"],
     quitCommand: "/quit",
   },
   help: {

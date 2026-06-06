@@ -10,7 +10,7 @@ export const config: AgentConfig = {
   tooltip: "Sourcegraph's agentic coding tool",
   usageUrl: "https://ampcode.com/",
   packages: {
-    npm: "@sourcegraph/amp",
+    npm: "@ampcode/cli",
   },
   // The native installer drops the binary at ~/.amp/bin/amp and symlinks
   // ~/.local/bin/amp. Probe both — the symlink may not be on PATH for
@@ -22,11 +22,11 @@ export const config: AgentConfig = {
   supportsWsl: true,
   version: {
     args: ["--version"],
-    npmPackage: "@sourcegraph/amp",
+    npmPackage: "@ampcode/cli",
   },
   update: {
     curl: "curl -fsSL https://ampcode.com/install.sh | bash",
-    npm: "npm install -g @sourcegraph/amp@latest",
+    npm: "npm install -g @ampcode/cli@latest",
   },
   install: {
     docsUrl: "https://ampcode.com/manual",
@@ -38,7 +38,7 @@ export const config: AgentConfig = {
         },
         {
           label: "npm",
-          commands: ["npm install -g @sourcegraph/amp"],
+          commands: ["npm install -g @ampcode/cli"],
         },
       ],
       linux: [
@@ -48,13 +48,13 @@ export const config: AgentConfig = {
         },
         {
           label: "npm",
-          commands: ["npm install -g @sourcegraph/amp"],
+          commands: ["npm install -g @ampcode/cli"],
         },
       ],
       windows: [
         {
           label: "npm",
-          commands: ["npm install -g @sourcegraph/amp"],
+          commands: ["npm install -g @ampcode/cli"],
           notes: ["Native Windows binary is not published — npm or WSL is required"],
         },
       ],
