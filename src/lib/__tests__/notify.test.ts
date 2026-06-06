@@ -963,6 +963,8 @@ describe("notify()", () => {
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
       expect(id).toBe("");
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(false);
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
     });
 
     it("returns empty string when disabled", () => {
