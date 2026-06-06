@@ -119,6 +119,35 @@ describe("ContextTab test-config button", () => {
     expect(button.getAttribute("aria-busy")).toBe("true");
   });
 
+  it("clears aria-busy after the dry-run resolves successfully", async () => {
+    testConfigMock.mockResolvedValue(successResult);
+    renderTab();
+
+    const button = screen.getByRole("button", { name: "Test config" });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("5 files would be included")).toBeTruthy();
+    });
+    expect(button.getAttribute("aria-busy")).not.toBe("true");
+  });
+
+  it("clears aria-busy after the dry-run fails", async () => {
+    testConfigMock.mockRejectedValue(new Error("nope"));
+    renderTab();
+
+    const button = screen.getByRole("button", { name: "Test config" });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+
+    await waitFor(() => {
+      expect(button.getAttribute("aria-busy")).not.toBe("true");
+    });
+  });
+
   it("shows the deferred skeleton only after the gate threshold while pending", async () => {
     vi.useFakeTimers();
     testConfigMock.mockReturnValue(new Promise<CopyTreeTestConfigResult>(() => {}));
@@ -130,13 +159,34 @@ describe("ContextTab test-config button", () => {
     });
 
     // Before the 200ms skeleton gate, nothing is shown
+    await act(async () => {
+      vi.advanceTimersByTime(150);
+    });
     expect(screen.queryByRole("status", { name: "Running test configuration" })).toBeNull();
 
+    // Crossing the 200ms gate reveals the skeleton
     await act(async () => {
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(100);
+    });
+    expect(screen.getByRole("status", { name: "Running test configuration" })).toBeTruthy();
+  });
+
+  it("never shows the skeleton when the dry-run resolves before the gate", async () => {
+    vi.useFakeTimers();
+    testConfigMock.mockResolvedValue(successResult);
+    renderTab();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Test config" }));
+    });
+    // Resolves in a microtask, well before the 200ms gate — advancing past it
+    // must not surface a skeleton.
+    await act(async () => {
+      vi.advanceTimersByTime(500);
     });
 
-    expect(screen.getByRole("status", { name: "Running test configuration" })).toBeTruthy();
+    expect(screen.queryByRole("status", { name: "Running test configuration" })).toBeNull();
+    expect(screen.getByText("5 files would be included")).toBeTruthy();
   });
 
   it("renders the result card and hides the skeleton once the dry-run resolves", async () => {

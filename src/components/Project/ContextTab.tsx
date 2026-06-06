@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { FolderX, Plus, Trash2, AlertTriangle, Play, Check, FileCode } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -47,8 +47,14 @@ export function ContextTab({
   const testingSkeletonGate = useSkeletonGate(isTestingConfig);
   const showTestingSkeleton = useSkeletonFloor(testingSkeletonGate);
 
+  // Invalidation token for in-flight dry-runs: bumped when the tab closes or a
+  // new run starts, so a late-resolving testConfig promise can't write a stale
+  // result onto a closed/superseded tab.
+  const runIdRef = useRef(0);
+
   useEffect(() => {
     if (!isOpen) {
+      runIdRef.current++;
       setTestConfigResult(null);
       setIsTestingConfig(false);
     }
@@ -66,6 +72,7 @@ export function ContextTab({
       return;
     }
 
+    const runId = ++runIdRef.current;
     setIsTestingConfig(true);
     setTestConfigResult(null);
 
@@ -105,9 +112,11 @@ export function ContextTab({
       }
 
       const result = await copyTreeClient.testConfig(mainWorktree.id, testOptions);
+      if (runIdRef.current !== runId) return;
       setTestConfigResult(result);
     } catch (error) {
       logError("Failed to test config", error);
+      if (runIdRef.current !== runId) return;
       setTestConfigResult({
         includedFiles: 0,
         includedSize: 0,
@@ -115,7 +124,9 @@ export function ContextTab({
         error: formatErrorMessage(error, "Failed to test configuration"),
       });
     } finally {
-      setIsTestingConfig(false);
+      if (runIdRef.current === runId) {
+        setIsTestingConfig(false);
+      }
     }
   };
 
@@ -425,19 +436,19 @@ export function ContextTab({
               </Button>
             </div>
 
-            {showTestingSkeleton && !testConfigResult && (
+            {showTestingSkeleton && (
               <Skeleton
                 label="Running test configuration"
                 className="mt-4 p-4 rounded-[var(--radius-md)] border border-daintree-border space-y-3"
               >
-                <SkeletonBone className="h-4 w-2/3" />
-                <SkeletonBone className="h-3 w-1/2" />
-                <SkeletonBone className="h-3 w-2/3" />
-                <SkeletonBone className="h-3 w-1/3" />
+                <SkeletonBone immediate className="h-4 w-2/3" />
+                <SkeletonBone immediate className="h-3 w-1/2" />
+                <SkeletonBone immediate className="h-3 w-2/3" />
+                <SkeletonBone immediate className="h-3 w-1/3" />
               </Skeleton>
             )}
 
-            {testConfigResult && (
+            {testConfigResult && !showTestingSkeleton && (
               <div
                 className={cn(
                   "mt-4 p-4 rounded-[var(--radius-md)] border",
