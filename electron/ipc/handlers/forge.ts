@@ -1,7 +1,7 @@
 // eager-import-allow: reads forge config via store.get synchronously in the IPC handler
 import { CHANNELS } from "../channels.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
-import { typedHandle } from "../utils.js";
+import { checkRateLimit, typedHandle } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { store } from "../../store.js";
 import {
@@ -21,6 +21,7 @@ async function handleForgeUnassignIssue(payload: {
   issueNumber: number;
   username: string;
 }): Promise<void> {
+  checkRateLimit(CHANNELS.FORGE_UNASSIGN_ISSUE, 5, 10_000);
   if (!payload || typeof payload !== "object") {
     throw new Error("Invalid payload");
   }
@@ -64,6 +65,7 @@ export function registerForgeHandlers(): () => void {
 
   cleanups.push(
     typedHandle(CHANNELS.FORGE_OPEN_ISSUES, async (cwd: string, query?: string, state?: string) => {
+      checkRateLimit(CHANNELS.FORGE_OPEN_ISSUES, 20, 10_000);
       const { namespaceId, repoRef } = await resolveForCwd(cwd);
       const impl = getImplForNamespace(namespaceId);
       const url = impl.buildIssuesUrl(repoRef, { query, state });
@@ -73,6 +75,7 @@ export function registerForgeHandlers(): () => void {
 
   cleanups.push(
     typedHandle(CHANNELS.FORGE_OPEN_PRS, async (cwd: string, query?: string, state?: string) => {
+      checkRateLimit(CHANNELS.FORGE_OPEN_PRS, 20, 10_000);
       const { namespaceId, repoRef } = await resolveForCwd(cwd);
       const impl = getImplForNamespace(namespaceId);
       const url = impl.buildPRsUrl(repoRef, { query, state });
@@ -82,6 +85,7 @@ export function registerForgeHandlers(): () => void {
 
   cleanups.push(
     typedHandle(CHANNELS.FORGE_OPEN_COMMITS, async (cwd: string, branch?: string) => {
+      checkRateLimit(CHANNELS.FORGE_OPEN_COMMITS, 20, 10_000);
       if (branch !== undefined && (typeof branch !== "string" || !branch.trim())) {
         throw new Error("Invalid branch name");
       }
@@ -96,6 +100,7 @@ export function registerForgeHandlers(): () => void {
     typedHandle(
       CHANNELS.FORGE_OPEN_ISSUE,
       async (payload: { cwd: string; issueNumber: number }) => {
+        checkRateLimit(CHANNELS.FORGE_OPEN_ISSUE, 20, 10_000);
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
         }
@@ -121,6 +126,7 @@ export function registerForgeHandlers(): () => void {
     typedHandle(
       CHANNELS.FORGE_GET_ISSUE_URL,
       async (payload: { cwd: string; issueNumber: number }) => {
+        checkRateLimit(CHANNELS.FORGE_GET_ISSUE_URL, 10, 10_000);
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
         }
@@ -145,6 +151,7 @@ export function registerForgeHandlers(): () => void {
     typedHandle(
       CHANNELS.FORGE_ASSIGN_ISSUE,
       async (payload: { cwd: string; issueNumber: number; username: string }) => {
+        checkRateLimit(CHANNELS.FORGE_ASSIGN_ISSUE, 5, 10_000);
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
         }
@@ -182,6 +189,7 @@ export function registerForgeHandlers(): () => void {
 
   cleanups.push(
     typedHandle(CHANNELS.FORGE_VALIDATE_TOKEN, async (token: string) => {
+      checkRateLimit(CHANNELS.FORGE_VALIDATE_TOKEN, 5, 10_000);
       if (typeof token !== "string" || !token.trim()) {
         return { valid: false as const, error: "Token is required" };
       }
@@ -234,6 +242,7 @@ export function registerForgeHandlers(): () => void {
         providerId: string;
         classification: PushErrorClassification | null;
       } | null> => {
+        checkRateLimit(CHANNELS.FORGE_CLASSIFY_PUSH_ERROR, 10, 10_000);
         if (
           !payload ||
           typeof payload !== "object" ||

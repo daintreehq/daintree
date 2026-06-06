@@ -60,6 +60,7 @@ vi.mock("../../../services/GitServiceCache.js", () => ({
 }));
 
 import { registerForgeSettingsHandlers } from "../forgeSettings.js";
+import { _resetRateLimitQueuesForTest } from "../../utils.js";
 import { forgeAuditService } from "../../../services/forge/forgeAuditService.js";
 
 function findHandler(channel: string): (...args: unknown[]) => unknown {
@@ -71,6 +72,7 @@ function findHandler(channel: string): (...args: unknown[]) => unknown {
 describe("registerForgeSettingsHandlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetRateLimitQueuesForTest();
     for (const key of Object.keys(storeMock._data)) {
       delete storeMock._data[key];
     }
@@ -446,6 +448,24 @@ describe("registerForgeSettingsHandlers", () => {
     await setCredential(null, "acme.gitea", { token: "nope" });
 
     expect(setCredentials).not.toHaveBeenCalled();
+  });
+
+  it("setCredential rate-limits after 5 calls in the window and skips validation (#9956)", async () => {
+    registerGiteaProvider();
+    const validateToken = vi.fn().mockResolvedValue({ valid: true, scopes: ["repo"] });
+    registryMock.getForgeProviderImpl.mockReturnValue({ validateToken });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    for (let i = 0; i < 5; i++) {
+      await setCredential(null, "acme.gitea", { token: `secret-${i}` });
+    }
+    expect(validateToken).toHaveBeenCalledTimes(5);
+
+    await expect(setCredential(null, "acme.gitea", { token: "secret-6" })).rejects.toThrow(
+      "Rate limit exceeded"
+    );
+    expect(validateToken).toHaveBeenCalledTimes(5);
   });
 
   it("setCredential does not persist or sync when validation fails", async () => {

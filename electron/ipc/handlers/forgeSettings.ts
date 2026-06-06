@@ -1,7 +1,7 @@
 // eager-import-allow: reads forge settings via store.get synchronously in the IPC handler
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
-import { typedHandle } from "../utils.js";
+import { checkRateLimit, typedHandle } from "../utils.js";
 import {
   getForgeProviderImpl,
   getRegisteredForgeProviders,
@@ -160,6 +160,9 @@ export function registerForgeSettingsHandlers(): () => void {
     typedHandle(
       CHANNELS.FORGE_SET_CREDENTIAL,
       async (providerId: unknown, credentials: unknown): Promise<AuthValidation> => {
+        // Same budget as github:set-token — each call hits the provider's
+        // token-validation API (#9956).
+        checkRateLimit(CHANNELS.FORGE_SET_CREDENTIAL, 5, 10_000);
         if (typeof providerId !== "string" || providerId.length === 0) {
           return { valid: false, error: "Provider id is required" };
         }
