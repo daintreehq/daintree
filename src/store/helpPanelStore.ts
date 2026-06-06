@@ -175,7 +175,17 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
         })),
 
       clearTerminal: () =>
-        set({ terminalId: null, agentId: null, sessionId: null, conversationTouched: false }),
+        set({
+          terminalId: null,
+          agentId: null,
+          sessionId: null,
+          conversationTouched: false,
+          // Figures are session-scoped — unbinding the terminal must drop them
+          // (and any active highlight) so a relaunched session can't navigate
+          // to a previous session's image (#9830).
+          figures: [],
+          activeFigureNumber: null,
+        }),
 
       setPreferredAgent: (agentId) =>
         set({ preferredAgentId: agentId, droppedPreferredAgentId: null }),

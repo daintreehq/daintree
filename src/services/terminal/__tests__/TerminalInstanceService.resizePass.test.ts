@@ -125,6 +125,7 @@ function makeManaged(visible = true): ManagedTerminal {
     imageAddon: null,
     searchAddon: {} as ManagedTerminal["searchAddon"],
     fileLinksDisposable: null,
+    imageLinksDisposable: null,
     webLinksAddon: null,
     hoveredLink: null,
   } as ManagedTerminal;

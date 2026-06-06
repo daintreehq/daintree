@@ -145,6 +145,26 @@ describe("ImageLinksAddon", () => {
       });
     });
 
+    it("stays inert for figure #0 when 0 is not a known figure", () => {
+      return new Promise<void>((resolve) => {
+        const { addon } = setup("[image #0]", [1, 2]);
+        addon.provideLinks(1, (links) => {
+          expect(links).toBeUndefined();
+          resolve();
+        });
+      });
+    });
+
+    it("stays inert for an out-of-range figure number", () => {
+      return new Promise<void>((resolve) => {
+        const { addon } = setup("[image #9007199254740993]", [1, 2]);
+        addon.provideLinks(1, (links) => {
+          expect(links).toBeUndefined();
+          resolve();
+        });
+      });
+    });
+
     it("does not match a missing figure number", () => {
       return new Promise<void>((resolve) => {
         const { addon } = setup("see [image #] here", [1, 2]);

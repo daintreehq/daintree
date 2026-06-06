@@ -74,6 +74,11 @@ export class ImageLinksAddon implements ILinkProvider {
   dispose(): void {}
 }
 
+// No hover/leave callbacks on purpose: those feed `ManagedTerminal.hoveredLink`,
+// which drives the right-click "Open link" / "Copy link address" menu and the
+// open-hovered-link shortcut. An `[image #N]` reference is not a URL or path, so
+// surfacing it there would be misleading — the pointer/underline decorations are
+// the affordance, and click activation routes through the provider directly.
 class ImageLink implements ILink {
   decorations = { pointerCursor: true, underline: true };
 

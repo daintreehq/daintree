@@ -703,6 +703,25 @@ describe("helpPanelStore persistence migration", () => {
       expect(store.getState().activeFigureNumber).toBeNull();
     });
 
+    it("clearTerminal drops figures and the active figure (session-scoped reset)", async () => {
+      installLocalStorage({});
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().addFigure({
+        imageId: "img-1",
+        figureNumber: 1,
+        figureLabel: "image #1",
+        url: "https://daintree.org/a.png",
+      });
+      store.getState().setActiveFigureNumber(1);
+      expect(store.getState().figures).toHaveLength(1);
+      expect(store.getState().activeFigureNumber).toBe(1);
+
+      store.getState().clearTerminal();
+      expect(store.getState().figures).toHaveLength(0);
+      expect(store.getState().activeFigureNumber).toBeNull();
+    });
+
     it("activeFigureNumber is NOT persisted", async () => {
       const backing = installLocalStorage({});
 
