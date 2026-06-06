@@ -38,6 +38,8 @@ const GOLDEN_QUERIES = [
   { query: "appearance", expectedTopResults: ["tab-nav-terminalAppearance", "appearance-theme"] },
   { query: "hibernate", expectedTopResults: ["general-hibernation"] },
   { query: "github", expectedTopResults: ["github-token", "tab-nav-code-forge"] },
+  { query: "remote resources", expectedTopResults: ["tab-nav-project:environments"] },
+  { query: "docker akash", expectedTopResults: ["tab-nav-project:environments"] },
 ] as const;
 
 describe("filterSettings", () => {
@@ -200,6 +202,7 @@ describe("subtab-aware search", () => {
         id: "test-entry",
         tab: "agents" as const,
         scope: "global" as const,
+        kind: "section" as const,
         tabLabel: "CLI agents",
         section: "Settings",
         title: "Some Setting",
@@ -219,6 +222,7 @@ describe("subtab-aware search", () => {
         id: "sub-entry",
         tab: "agents" as const,
         scope: "global" as const,
+        kind: "section" as const,
         tabLabel: "CLI agents",
         section: "Runtime",
         title: "Enable Agent",
@@ -239,6 +243,7 @@ describe("subtab-aware search", () => {
         id: "no-subtab",
         tab: "general" as const,
         scope: "global" as const,
+        kind: "section" as const,
         tabLabel: "General",
         section: "About",
         title: "App Version",
@@ -256,6 +261,7 @@ describe("subtab-aware search", () => {
         id: "a",
         tab: "agents" as const,
         scope: "global" as const,
+        kind: "section" as const,
         tabLabel: "CLI agents",
         section: "S",
         title: "Enable",
@@ -266,6 +272,7 @@ describe("subtab-aware search", () => {
         id: "b",
         tab: "agents" as const,
         scope: "global" as const,
+        kind: "section" as const,
         tabLabel: "CLI agents",
         section: "S",
         title: "Enable Gemini",
@@ -449,7 +456,7 @@ describe("tab-name ranking", () => {
     for (const query of queries) {
       const results = filterSettings(SETTINGS_SEARCH_INDEX, query);
       expect(
-        results[0]?.id.startsWith("tab-nav-"),
+        results[0]?.kind === "tab-nav",
         `"${query}" should return a tab-nav entry first, got "${results[0]?.id}"`
       ).toBe(true);
     }
@@ -469,7 +476,7 @@ describe("tab-name ranking", () => {
     for (const group of groups) {
       const results = filterSettings(SETTINGS_SEARCH_INDEX, group);
       expect(
-        results.some((r) => r.id.startsWith("tab-nav-")),
+        results.some((r) => r.kind === "tab-nav"),
         `"${group}" should return at least one tab-nav result`
       ).toBe(true);
     }
@@ -524,6 +531,7 @@ describe("fuzzy matching", () => {
         id: "a",
         tab: "general" as const,
         scope: "global" as const,
+        kind: "section" as const,
         tabLabel: "General",
         section: "S",
         title: "Font Size",
@@ -533,6 +541,7 @@ describe("fuzzy matching", () => {
         id: "b",
         tab: "general" as const,
         scope: "global" as const,
+        kind: "section" as const,
         tabLabel: "General",
         section: "S",
         title: "Color Scheme",
@@ -868,4 +877,100 @@ describe("golden-query ranking", () => {
       }
     }
   );
+});
+
+describe("Resources section ranking (#10044)", () => {
+  // The Resources section keeps a historical id of "tab-nav-project:environments"
+  // for deep-link backward compat (see settingsTabRegistry.tsx). Pre-fix, the
+  // post-scoring pass classified entries by `id.startsWith("tab-nav-")` and
+  // applied a -3 penalty to multi-token queries, so the Resources section was
+  // wrongly demoted in favor of the Worktree Setup tab-nav row when both
+  // matched. With `kind: "section"` on the Resources entry, the ranker now
+  // correctly classifies it as a content section and applies no penalty.
+  const resourcesEntry = {
+    id: "tab-nav-project:environments",
+    tab: "project:automation" as const,
+    scope: "project" as const,
+    kind: "section" as const,
+    tabLabel: "Worktree Setup",
+    section: "Resource Environments",
+    title: "Resources",
+    description: "Remote resource definitions and default worktree mode",
+    keywords: ["project", "resources", "environments", "remote", "docker", "akash", "worktree"],
+  };
+
+  // The Worktree Setup tab-nav row is configured to also surface the term
+  // "resources" via its description so it matches the multi-token query
+  // alongside the Resources row — this is what makes the relative-ordering
+  // test meaningful. In the real registry the Worktree Setup tab-nav row
+  // doesn't currently match "remote resources" / "docker akash", but the
+  // GOLDEN_QUERIES entries above verify the real-index path end-to-end.
+  const worktreeSetupNav = {
+    id: "tab-nav-project:automation",
+    tab: "project:automation" as const,
+    scope: "project" as const,
+    kind: "tab-nav" as const,
+    tabLabel: "Worktree Setup",
+    section: "Settings Navigation",
+    title: "Worktree Setup",
+    description: "Worktree recipes, resource environments, and remote docker akash setup",
+    keywords: [
+      "project",
+      "automation",
+      "worktree",
+      "setup",
+      "resources",
+      "remote",
+      "docker",
+      "akash",
+    ],
+  };
+
+  // Use `as never` to satisfy the strict SettingsTab union without importing
+  // the full SettingsTab enum at this test site — the ranker only reads
+  // tab/tabLabel/scope/kind/id, not exhaustive tab constraints.
+  const fixtureIndex = [resourcesEntry, worktreeSetupNav] as never;
+
+  for (const query of ["remote resources", "docker akash"]) {
+    it(`"${query}" ranks Resources content section above the Worktree Setup tab-nav row`, () => {
+      const results = filterSettings(fixtureIndex, query);
+      const resourcesIdx = results.findIndex((r) => r.id === "tab-nav-project:environments");
+      const tabNavIdx = results.findIndex((r) => r.id === "tab-nav-project:automation");
+      expect(
+        resourcesIdx,
+        `Resources entry must be present in results for "${query}"`
+      ).toBeGreaterThanOrEqual(0);
+      expect(
+        tabNavIdx,
+        `tab-nav entry must be present in results for "${query}"`
+      ).toBeGreaterThanOrEqual(0);
+      expect(
+        resourcesIdx,
+        `Resources content entry should outrank the Worktree Setup tab-nav row for "${query}"`
+      ).toBeLessThan(tabNavIdx);
+    });
+  }
+
+  it("'resources' (single token) is not penalised by the multi-token tab-nav branch", () => {
+    // Single-token queries hit neither branch of the if/else — the kind
+    // discriminator is still correctly applied, but the penalty only fires
+    // for tokens.length > 1. Sanity check that the ranker doesn't regress
+    // the single-token case.
+    const results = filterSettings(fixtureIndex, "resources");
+    expect(results[0]?.id).toBe("tab-nav-project:environments");
+  });
+
+  it("a tab-nav row that matches a multi-token query is still correctly penalised", () => {
+    // Confirms the other direction of the discriminator: a real tab-nav
+    // row that *does* have `kind: "tab-nav"` still gets the -3 penalty
+    // for compound queries that don't match its tab label exactly.
+    const results = filterSettings(fixtureIndex, "remote docker");
+    const tabNavIdx = results.findIndex((r) => r.id === "tab-nav-project:automation");
+    const resourcesIdx = results.findIndex((r) => r.id === "tab-nav-project:environments");
+    expect(tabNavIdx).toBeGreaterThanOrEqual(0);
+    expect(resourcesIdx).toBeGreaterThanOrEqual(0);
+    expect(resourcesIdx, "Resources content row should still outrank the tab-nav row").toBeLessThan(
+      tabNavIdx
+    );
+  });
 });

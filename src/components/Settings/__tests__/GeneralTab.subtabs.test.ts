@@ -45,7 +45,7 @@ describe("GeneralTab subtab derivation logic", () => {
 
 describe("General tab search index subtab metadata", () => {
   const generalFieldEntries = SETTINGS_SEARCH_INDEX.filter(
-    (e) => e.tab === "general" && !e.id.startsWith("tab-nav-")
+    (e) => e.tab === "general" && e.kind === "section"
   );
 
   it("all General field entries have valid subtab metadata", () => {
