@@ -1425,6 +1425,89 @@ describe("PullRequestService", () => {
       pullRequestService.destroy();
     });
 
+    it("transitions from not-ready retries to a no-match pause when the scan settles mid-session", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderUnresolved({ status: "not-ready" });
+      const bridge = lastMockBridge!;
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+      );
+
+      await pullRequestService.start(0);
+      const callsAfterStart = bridge.resolveProvider.mock.calls.length;
+
+      // Plugin scan finishes between ticks — the next retry gets the
+      // definitive answer and the loop must pause instead of spinning on.
+      bridge.resolveProvider.mockResolvedValue({ status: "no-match" });
+      await vi.advanceTimersByTimeAsync(5_000);
+      const callsAtNoMatch = bridge.resolveProvider.mock.calls.length;
+      expect(callsAtNoMatch).toBe(callsAfterStart + 1);
+
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      expect(bridge.resolveProvider.mock.calls.length).toBe(callsAtNoMatch);
+
+      pullRequestService.destroy();
+    });
+
+    it("is harmless when forge:provider-registry-updated arrives before start()", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderUnresolved({ status: "no-match" });
+      const bridge = lastMockBridge!;
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      pullRequestService.initialize("/repo");
+      pullRequestService.notifyForgeProviderRegistryUpdated();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(bridge.resolveProvider).not.toHaveBeenCalled();
+
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+      );
+      await pullRequestService.start(0);
+      expect(bridge.resolveProvider).toHaveBeenCalled();
+
+      pullRequestService.destroy();
+    });
+
+    it("does not re-resolve when a worktree update fires while paused on no-match", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderUnresolved({ status: "no-match" });
+      const bridge = lastMockBridge!;
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+      );
+
+      await pullRequestService.start(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      const callsWhilePaused = bridge.resolveProvider.mock.calls.length;
+
+      // New candidate triggers the debounced check, but the cached no-match
+      // must keep blocking resolution (no fresh git-config spawns, #9997).
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-2", branch: "feature/other" })
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(bridge.resolveProvider.mock.calls.length).toBe(callsWhilePaused);
+
+      pullRequestService.destroy();
+    });
+
     it("re-resolves after a no-match when forge settings change (setForgeSettings + refresh)", async () => {
       vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderUnresolved({ status: "no-match" });
