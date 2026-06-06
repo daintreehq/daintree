@@ -277,6 +277,99 @@ describe("ContextTab test-config payload", () => {
   });
 });
 
+describe("ContextTab file-list preview", () => {
+  function makeFiles(count: number) {
+    return Array.from({ length: count }, (_, i) => ({
+      path: `src/file-${String(i).padStart(2, "0")}.ts`,
+      size: 100 + i,
+    }));
+  }
+
+  function resultWithFiles(files: Array<{ path: string; size: number }>): CopyTreeTestConfigResult {
+    return {
+      includedFiles: files.length,
+      includedSize: files.reduce((sum, file) => sum + file.size, 0),
+      excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
+      files,
+    };
+  }
+
+  async function runTestConfig() {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Test config" }));
+    });
+  }
+
+  it("shows the first 10 files with a show-more toggle when more exist", async () => {
+    testConfigMock.mockResolvedValue(resultWithFiles(makeFiles(12)));
+    renderTab();
+
+    await runTestConfig();
+    await waitFor(() => {
+      expect(screen.getByText("12 files would be included")).toBeTruthy();
+    });
+
+    expect(screen.getByText("src/file-09.ts")).toBeTruthy();
+    expect(screen.queryByText("src/file-10.ts")).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Show 2 more" }));
+    });
+
+    expect(screen.getByText("src/file-10.ts")).toBeTruthy();
+    expect(screen.getByText("src/file-11.ts")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show fewer" })).toBeTruthy();
+  });
+
+  it("renders all files without a toggle when at the preview cap", async () => {
+    testConfigMock.mockResolvedValue(resultWithFiles(makeFiles(10)));
+    renderTab();
+
+    await runTestConfig();
+    await waitFor(() => {
+      expect(screen.getByText("10 files would be included")).toBeTruthy();
+    });
+
+    expect(screen.getByText("src/file-00.ts")).toBeTruthy();
+    expect(screen.getByText("src/file-09.ts")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /show \d+ more/i })).toBeNull();
+  });
+
+  it("renders the summary without a file list when files is empty", async () => {
+    testConfigMock.mockResolvedValue(resultWithFiles([]));
+    renderTab();
+
+    await runTestConfig();
+    await waitFor(() => {
+      expect(screen.getByText("0 files would be included")).toBeTruthy();
+    });
+
+    expect(screen.queryByRole("list")).toBeNull();
+  });
+
+  it("collapses the expanded list when a new test run starts", async () => {
+    testConfigMock.mockResolvedValue(resultWithFiles(makeFiles(12)));
+    renderTab();
+
+    await runTestConfig();
+    await waitFor(() => {
+      expect(screen.getByText("12 files would be included")).toBeTruthy();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Show 2 more" }));
+    });
+    expect(screen.getByText("src/file-11.ts")).toBeTruthy();
+
+    await runTestConfig();
+    await waitFor(() => {
+      expect(screen.getByText("12 files would be included")).toBeTruthy();
+    });
+
+    expect(screen.queryByText("src/file-10.ts")).toBeNull();
+    expect(screen.getByRole("button", { name: "Show 2 more" })).toBeTruthy();
+  });
+});
+
 describe("ContextTab — DOM anchors for settings deep-links", () => {
   it("exposes the project-excluded-paths anchor for settings deep-links", () => {
     const { container } = renderTab();
