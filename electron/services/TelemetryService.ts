@@ -83,13 +83,11 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
   // silently. Fail closed on unexpected input rather than leaking unscrubbed
   // data by returning the event as-is.
   //
-  // Deliberately skips deep-walking event.tags / event.user / event.contexts.
-  // This is safe only while: zero Sentry.setUser() calls exist in the codebase;
-  // the sole setTag() call (setOnboardingCompleteTag) passes fixed "true"/"false"
-  // strings; initial-scope tags are process-controlled (platform, arch, node);
-  // and @sentry/electron's MainContext integration does not capture process.argv
-  // into app_arguments. Adding user-populated data to any of these fields would
-  // silently bypass scrubbing with no warning at the call site.
+  // event.tags / event.user / event.contexts are deep-walked below: renderer
+  // error paths (ErrorBoundary, onUncaughtError) inject caller-supplied tags
+  // and contexts (e.g. React componentStack), so these fields can carry user
+  // data. New Sentry scope-setter call sites outside this file are lint-banned
+  // (see eslint.config.js, #10047).
   try {
     if (Array.isArray(event.exception?.values)) {
       for (const ex of event.exception.values) {
@@ -132,7 +130,8 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
           u.hash = "";
           u.username = "";
           u.password = "";
-          event.request.url = u.toString();
+          // Path segments can still carry user paths or token-shaped strings.
+          event.request.url = sanitizeString(u.toString());
         } catch {
           // Not parseable as an absolute URL (relative path, mailto:, etc.)
           // Still scrub any inline free-text secrets before giving up.
@@ -168,6 +167,15 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
     }
     if (event.extra && typeof event.extra === "object") {
       event.extra = sanitizeStringsDeep(event.extra) as Record<string, unknown>;
+    }
+    if (event.tags && typeof event.tags === "object") {
+      event.tags = sanitizeStringsDeep(event.tags) as Record<string, unknown>;
+    }
+    if (event.user && typeof event.user === "object") {
+      event.user = sanitizeStringsDeep(event.user) as Record<string, unknown>;
+    }
+    if (event.contexts && typeof event.contexts === "object") {
+      event.contexts = sanitizeStringsDeep(event.contexts) as Record<string, unknown>;
     }
     return event;
   } catch {
@@ -468,6 +476,7 @@ export function addActionBreadcrumb(crumb: ActionBreadcrumb): void {
 
 export function setOnboardingCompleteTag(completed: boolean): void {
   try {
+    // eslint-disable-next-line no-restricted-syntax -- sentry-scope-setter: ok — sole authorized scope mutator; fixed "true"/"false" values
     sentryModule?.setTag("onboarding_complete", completed ? "true" : "false");
   } catch {
     // never let telemetry errors escape into product code paths
