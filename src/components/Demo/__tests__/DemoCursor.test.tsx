@@ -499,7 +499,7 @@ describe("DemoCursor", () => {
   it("after overshoot, a click reads the real target — not the overshoot peak", async () => {
     const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.05);
     const origElementFromPoint = document.elementFromPoint;
-    const efp = vi.fn(() => null);
+    const efp = vi.fn((_x: number, _y: number) => null);
     document.elementFromPoint = efp as unknown as typeof document.elementFromPoint;
     try {
       render(<DemoCursor />);
