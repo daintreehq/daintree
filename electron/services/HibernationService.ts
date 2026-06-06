@@ -9,6 +9,8 @@ import { logInfo, logError } from "../utils/logger.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { writeHibernatedMarker } from "./pty/terminalSessionPersistence.js";
+import type { PtyClient } from "./PtyClient.js";
+import { getPtyClient } from "../window/serviceRefs.js";
 
 export interface HibernationConfig {
   enabled: boolean;
@@ -53,6 +55,17 @@ export class HibernationService {
   private readonly CHECK_INTERVAL_MS = 60 * 60 * 1000; // Every hour
   private readonly hibernationCallbacks: Array<(projectId: string) => void | Promise<void>> = [];
   private memoryPressureInactiveMs = DEFAULT_MEMORY_PRESSURE_INACTIVE_MS;
+  private ptyClient: PtyClient | null = null;
+
+  /**
+   * Inject the live PtyClient so hibernation reads the real terminal registry
+   * in the pty-host process and routes kills through it. The main-process
+   * `getPtyManager()` singleton is never populated (#10054). Passing `null`
+   * clears the reference on shutdown.
+   */
+  setPtyClient(client: PtyClient | null): void {
+    this.ptyClient = client;
+  }
 
   setMemoryPressureThresholdMs(ms: number): void {
     this.memoryPressureInactiveMs = ms;
@@ -178,6 +191,10 @@ export class HibernationService {
       clearTimeout(this.initialCheckTimer);
       this.initialCheckTimer = null;
     }
+
+    // Clear the injected PtyClient ref on shutdown so we don't pin a stale
+    // host client across a restart (lesson #8637).
+    this.ptyClient = null;
   }
 
   private async checkAndHibernate(): Promise<void> {
@@ -192,11 +209,9 @@ export class HibernationService {
     const now = Date.now();
     const thresholdMs = config.inactiveThresholdHours * 60 * 60 * 1000;
 
-    // Dynamically import to avoid circular dependencies
-    const { getPtyManager } = await import("./PtyManager.js");
-
-    const ptyManager = getPtyManager();
-    const allTerminals = ptyManager.getAll();
+    if (!this.ptyClient) return;
+    const ptyClient = this.ptyClient;
+    const allTerminals = await ptyClient.getAllTerminalsAsync();
 
     for (const project of projects) {
       // Never hibernate the active project
@@ -247,7 +262,7 @@ export class HibernationService {
           project.id,
           project.name,
           "scheduled",
-          ptyManager
+          ptyClient
         );
 
         logInfo("scheduled-hibernate-complete", {
@@ -269,9 +284,9 @@ export class HibernationService {
     const projects = projectStore.getAllProjects();
     const now = Date.now();
 
-    const { getPtyManager } = await import("./PtyManager.js");
-    const ptyManager = getPtyManager();
-    const allTerminals = ptyManager.getAll();
+    if (!this.ptyClient) return;
+    const ptyClient = this.ptyClient;
+    const allTerminals = await ptyClient.getAllTerminalsAsync();
 
     for (const project of projects) {
       if (project.id === currentProjectId) continue;
@@ -305,7 +320,7 @@ export class HibernationService {
       });
 
       try {
-        await this.hibernateProject(project.id, project.name, "memory-pressure", ptyManager);
+        await this.hibernateProject(project.id, project.name, "memory-pressure", ptyClient);
       } catch (error) {
         logError("memory-pressure-hibernate-failed", error, {
           project: project.name,
@@ -317,31 +332,27 @@ export class HibernationService {
 
   /**
    * Public entry point for hibernating a project on demand (e.g. from the
-   * idle-terminal "Close Them" action). Dynamically resolves PtyManager and
-   * runs the same flow as scheduled hibernation so DevPreview callbacks fire
-   * and the renderer sees the standard `hibernation:project-hibernated` event.
+   * idle-terminal "Close Them" action). Routes through the injected PtyClient
+   * and runs the same flow as scheduled hibernation so DevPreview callbacks
+   * fire and the renderer sees the standard `hibernation:project-hibernated`
+   * event. No-op if the PtyClient has not been injected yet.
    */
   async hibernateProjectOnDemand(
     projectId: string,
     projectName: string,
     reason: "scheduled" | "memory-pressure" = "scheduled"
   ): Promise<number> {
-    const { getPtyManager } = await import("./PtyManager.js");
-    return this.hibernateProject(projectId, projectName, reason, getPtyManager());
+    if (!this.ptyClient) return 0;
+    return this.hibernateProject(projectId, projectName, reason, this.ptyClient);
   }
 
   private async hibernateProject(
     projectId: string,
     projectName: string,
     reason: "scheduled" | "memory-pressure",
-    ptyManager: {
-      gracefulKillByProject: (
-        id: string,
-        opts?: { preserveSession?: boolean }
-      ) => Promise<Array<{ id: string; agentSessionId: string | null }>>;
-    }
+    ptyClient: PtyClient
   ): Promise<number> {
-    const results = await ptyManager.gracefulKillByProject(projectId, { preserveSession: true });
+    const results = await ptyClient.gracefulKillByProject(projectId, { preserveSession: true });
     const terminalsKilled = results.length;
 
     // Write hibernation markers for each killed terminal
@@ -413,6 +424,7 @@ export function getHibernationService(): HibernationService {
 
 export function initializeHibernationService(): HibernationService {
   const service = getHibernationService();
+  service.setPtyClient(getPtyClient());
   service.start();
   return service;
 }

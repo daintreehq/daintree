@@ -164,7 +164,12 @@ export type PtyHostRequest =
     }
   | { type: "set-ipc-data-mirror"; id: string; enabled: boolean }
   | { type: "graceful-kill"; id: string; requestId: string }
-  | { type: "graceful-kill-by-project"; projectId: string; requestId: string }
+  | {
+      type: "graceful-kill-by-project";
+      projectId: string;
+      requestId: string;
+      preserveSession?: boolean;
+    }
   | { type: "trim-state"; targetLines: number }
   | { type: "set-resource-monitoring"; enabled: boolean }
   | { type: "set-session-persist-suppressed"; suppressed: boolean }

@@ -30,6 +30,8 @@ export function mapTerminalInfo(t: NonNullable<TerminalInfoLike>, ctx: HostConte
     agentState: t.agentState,
     waitingReason: t.waitingReason,
     lastStateChange: t.lastStateChange,
+    lastInputTime: t.lastInputTime,
+    lastOutputTime: t.lastOutputTime,
     spawnedAt: t.spawnedAt,
     isTrashed: ctx.ptyManager.isInTrash(t.id),
     trashExpiresAt: t.trashExpiresAt,

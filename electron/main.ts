@@ -369,6 +369,14 @@ if (!gotTheLock) {
     });
     setProjectViewManager(pvm);
 
+    // Seed the eviction guard's agent-state cache from the pty-host registry.
+    // hasActiveAgent() is read synchronously during LRU scoring, so it can't
+    // await the host; this fire-and-forget seed + event subscription keeps an
+    // instance-level cache fresh (#10054). No-op if the PtyClient isn't up yet
+    // — the cache simply stays empty (conservative: nothing treated as active).
+    const pvmPtyClient = getPtyClient();
+    if (pvmPtyClient) void pvm.initAgentStateCache(pvmPtyClient);
+
     // E2E hooks: expose PVM accessor and heap-snapshot writer so the
     // nightly evicted-view leak spec can read main-process state and
     // dump a v8 snapshot from app.evaluate(). Mirrors the

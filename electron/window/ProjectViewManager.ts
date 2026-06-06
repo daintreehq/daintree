@@ -23,7 +23,8 @@ import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { forgetBlinkSample, forgetEluSample } from "../services/ProcessMemoryMonitor.js";
-import { getPtyManager } from "../services/PtyManager.js";
+import type { PtyClient } from "../services/PtyClient.js";
+import { events } from "../services/events.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { logInfo, logWarn } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -48,7 +49,7 @@ import {
   throttleCpuWebContents,
   unthrottleCpuWebContents,
 } from "../utils/webContentsLifecycle.js";
-import { ACTIVE_AGENT_STATES } from "../../shared/types/agent.js";
+import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 import {
   beginWindowRecreating,
@@ -242,6 +243,16 @@ export class ProjectViewManager {
   } | null = null;
   private disposed = false;
   private cachedMemoryTimerCleanup: (() => void) | null = null;
+
+  // Agent-state cache for hasActiveAgent(). The main-process getPtyManager()
+  // singleton is never populated (#10054), so the real terminal registry lives
+  // in the pty-host and is read async via PtyClient. Eviction scoring is
+  // synchronous, so we maintain instance-level maps seeded from the host and
+  // kept fresh via the typed event bus. Instance-level (not module-level) so
+  // each window's manager scopes to its own terminals (lesson #8607).
+  private projectByTerminal = new Map<string, string>();
+  private agentStateByTerminal = new Map<string, AgentState>();
+  private agentCacheCleanup: Array<() => void> = [];
 
   constructor(win: BrowserWindow, opts: ProjectViewManagerOptions) {
     this.win = win;
@@ -921,6 +932,11 @@ export class ProjectViewManager {
   dispose(): void {
     this.disposed = true;
 
+    for (const cleanup of this.agentCacheCleanup) cleanup();
+    this.agentCacheCleanup = [];
+    this.projectByTerminal.clear();
+    this.agentStateByTerminal.clear();
+
     if (this.cachedMemoryTimerCleanup) {
       this.cachedMemoryTimerCleanup();
       this.cachedMemoryTimerCleanup = null;
@@ -1572,12 +1588,61 @@ export class ProjectViewManager {
     this.views.delete(projectId);
   }
 
+  /**
+   * Seed and maintain the agent-state cache used by the synchronous
+   * `hasActiveAgent()` eviction guard. Fire-and-forget: until the first seed
+   * resolves the maps are empty and `hasActiveAgent()` returns false (the
+   * conservative pre-regression behavior — an in-flight view is never wrongly
+   * treated as protected). Idempotent listener wiring: cleanup callbacks are
+   * cleared first so re-invocation doesn't double-subscribe.
+   */
+  initAgentStateCache(ptyClient: PtyClient): Promise<void> {
+    for (const cleanup of this.agentCacheCleanup) cleanup();
+    this.agentCacheCleanup = [];
+
+    const seed = async () => {
+      try {
+        const terminals = await ptyClient.getAllTerminalsAsync();
+        if (this.disposed) return;
+        this.projectByTerminal.clear();
+        this.agentStateByTerminal.clear();
+        for (const t of terminals) {
+          if (t.projectId) this.projectByTerminal.set(t.id, t.projectId);
+          if (t.agentState) this.agentStateByTerminal.set(t.id, t.agentState);
+        }
+      } catch {
+        // Host unavailable — leave maps as-is; hasActiveAgent stays conservative.
+      }
+    };
+
+    const onStateChanged = (payload: { terminalId?: string; state: AgentState }) => {
+      // No projectId on this event — the seed map owns the terminal→project
+      // link. Skip terminals we haven't seeded yet (a spawn-result reseed will
+      // pick them up).
+      if (!payload.terminalId) return;
+      this.agentStateByTerminal.set(payload.terminalId, payload.state);
+    };
+    const offStateChanged = events.on("agent:state-changed", onStateChanged);
+
+    const onSpawnResult = () => void seed();
+    const onHostCrash = () => void seed();
+    ptyClient.on("spawn-result", onSpawnResult);
+    ptyClient.on("host-crash", onHostCrash);
+
+    this.agentCacheCleanup.push(offStateChanged);
+    this.agentCacheCleanup.push(() => ptyClient.off("spawn-result", onSpawnResult));
+    this.agentCacheCleanup.push(() => ptyClient.off("host-crash", onHostCrash));
+
+    return seed();
+  }
+
   private hasActiveAgent(projectId: string): boolean {
-    const terminals = getPtyManager().getAll();
-    return terminals.some(
-      (t) =>
-        t.projectId === projectId && t.agentState != null && ACTIVE_AGENT_STATES.has(t.agentState)
-    );
+    for (const [terminalId, termProjectId] of this.projectByTerminal) {
+      if (termProjectId !== projectId) continue;
+      const state = this.agentStateByTerminal.get(terminalId);
+      if (state != null && ACTIVE_AGENT_STATES.has(state)) return true;
+    }
+    return false;
   }
 
   private evictStaleViews(reason: EvictionReason): void {

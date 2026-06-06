@@ -146,11 +146,6 @@ vi.mock("../../utils/logger.js", () => ({
   })),
 }));
 
-const mockGetAll = vi.fn<() => Array<{ projectId?: string; agentState?: string }>>(() => []);
-vi.mock("../../services/PtyManager.js", () => ({
-  getPtyManager: vi.fn(() => ({ getAll: mockGetAll })),
-}));
-
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { logInfo } from "../../utils/logger.js";
 
@@ -187,8 +182,6 @@ describe("ProjectViewManager — preload eval cost (#9770)", () => {
     nextWebContentsId = 100;
     nextOsProcessId = 1000;
     vi.clearAllMocks();
-    mockGetAll.mockReset();
-    mockGetAll.mockReturnValue([]);
     mockGetAppMetrics.mockReset();
     mockGetAppMetrics.mockReturnValue([]);
     win = createMockWindow();
