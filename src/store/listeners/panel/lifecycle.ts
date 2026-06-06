@@ -229,7 +229,15 @@ export function setupLifecycleListeners(): DisposableStore {
           updates.previousFocusedId = null;
         }
         if (state.maximizedId === id) {
+          // Backend-driven trash (e.g. PTY-host TTL) arrives here, not via
+          // the `trashPanel`/`trashPanelGroup` wrappers, so this listener
+          // owns the trio-clear on its own. Drop target and snapshot too —
+          // a dangling `maximizeTarget` would mislabel the next
+          // `TerminalContextMenu` render and stall the post-restore
+          // `toggleMaximize` (#9935).
           updates.maximizedId = null;
+          updates.maximizeTarget = null;
+          updates.preMaximizeLayout = null;
         }
         if (state.activeDockTerminalId === id) {
           updates.activeDockTerminalId = null;

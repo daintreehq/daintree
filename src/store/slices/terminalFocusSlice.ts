@@ -108,9 +108,13 @@ export interface TerminalFocusSlice {
   ) => void;
   /**
    * Atomically clear `maximizedId`, `maximizeTarget`, and `preMaximizeLayout`.
-   * The three fields encode one piece of UI state and must move together —
-   * dropping only the id strands a stale target and the next `toggleMaximize`
-   * treats it as an unmaximize request (#9935).
+   * Use this when the underlying panel (or the whole panel grid) is being
+   * removed — trash, group trash, reset, project switch, fleet scope exit.
+   * The three fields must move together in those paths: dropping only the
+   * id strands a stale target and the next `toggleMaximize` treats the
+   * target as an unmaximize request (#9935). Plain `toggleMaximize`
+   * unmaximize is intentionally NOT routed through this — it preserves
+   * `preMaximizeLayout` so the next maximize can reuse the snapshot.
    */
   clearMaximize: () => void;
   clearPreMaximizeLayout: () => void;

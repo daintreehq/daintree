@@ -25,6 +25,9 @@ vi.mock("@/utils/logger", () => ({
 }));
 
 const restoredHandlers = vi.hoisted(() => [] as Array<(data: { id: string }) => void>);
+const trashedHandlers = vi.hoisted(
+  () => [] as Array<(data: { id: string; expiresAt: number }) => void>
+);
 const reliabilityMetricHandlers = vi.hoisted(
   () =>
     [] as Array<
@@ -40,7 +43,10 @@ vi.mock("@/controllers", () => {
   return {
     terminalRegistryController: {
       onFallbackTriggered: vi.fn(noopSub),
-      onTrashed: vi.fn(noopSub),
+      onTrashed: vi.fn((handler: (data: { id: string; expiresAt: number }) => void) => {
+        trashedHandlers.push(handler);
+        return () => {};
+      }),
       onRestored: vi.fn((handler: (data: { id: string }) => void) => {
         restoredHandlers.push(handler);
         return () => {};
@@ -360,6 +366,64 @@ describe("onRestored — dock popover preservation (#8368)", () => {
 
     expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
     expect(usePanelStore.getState().focusedId).toBe("term-1");
+  });
+});
+
+// Issue #9935: the backend-driven `onTrashed` listener (PTY-host TTL or
+// external trash) bypasses the `trashPanel`/`trashPanelGroup` wrappers, so
+// it must own the maximize-trio clear itself — otherwise a dangling
+// `maximizeTarget` survives into the post-restore render.
+describe("onTrashed — maximize trio clear (#9935)", () => {
+  function getTrashedHandler(): (data: { id: string; expiresAt: number }) => void {
+    trashedHandlers.length = 0;
+    setupLifecycleListeners();
+    const handler = trashedHandlers.at(-1);
+    if (!handler) throw new Error("onTrashed handler was not registered");
+    return handler;
+  }
+
+  it("clears the maximize trio when the trashed panel was the maximized one", () => {
+    setupPanel();
+    usePanelStore.setState({
+      focusedId: "term-1",
+      maximizedId: "term-1",
+      maximizeTarget: { type: "panel", id: "term-1" },
+      preMaximizeLayout: { gridCols: 2, gridItemCount: 1, worktreeId: undefined },
+    });
+
+    getTrashedHandler()({ id: "term-1", expiresAt: Date.now() + 60_000 });
+
+    const state = usePanelStore.getState();
+    expect(state.maximizedId).toBeNull();
+    expect(state.maximizeTarget).toBeNull();
+    expect(state.preMaximizeLayout).toBeNull();
+  });
+
+  it("leaves the maximize trio alone when the trashed panel was not the maximized one", () => {
+    setupPanel();
+    usePanelStore.setState({
+      panelsById: {
+        "term-1": { id: "term-1", kind: "terminal", location: "grid" as const } as never,
+        "term-2": { id: "term-2", kind: "terminal", location: "grid" as const } as never,
+      },
+      panelIds: ["term-1", "term-2"],
+      focusedId: "term-2",
+      maximizedId: "term-2",
+      maximizeTarget: { type: "panel", id: "term-2" },
+      preMaximizeLayout: { gridCols: 2, gridItemCount: 2, worktreeId: undefined },
+    });
+
+    getTrashedHandler()({ id: "term-1", expiresAt: Date.now() + 60_000 });
+
+    const state = usePanelStore.getState();
+    // Trashing an unrelated panel must not disturb term-2's maximize state.
+    expect(state.maximizedId).toBe("term-2");
+    expect(state.maximizeTarget).toEqual({ type: "panel", id: "term-2" });
+    expect(state.preMaximizeLayout).toEqual({
+      gridCols: 2,
+      gridItemCount: 2,
+      worktreeId: undefined,
+    });
   });
 });
 

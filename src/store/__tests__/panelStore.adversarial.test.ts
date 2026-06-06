@@ -136,6 +136,8 @@ describe("panelStore adversarial", () => {
       panelIds: ["p1", "p2"],
       focusedId: "p1",
       maximizedId: "p1",
+      maximizeTarget: { type: "panel", id: "p1" },
+      preMaximizeLayout: { gridCols: 2, gridItemCount: 2, worktreeId: undefined },
       commandQueue: [
         {
           id: "q1",
@@ -159,6 +161,8 @@ describe("panelStore adversarial", () => {
     expect(s.panelsById).toEqual({});
     expect(s.focusedId).toBeNull();
     expect(s.maximizedId).toBeNull();
+    expect(s.maximizeTarget).toBeNull();
+    expect(s.preMaximizeLayout).toBeNull();
     expect(s.commandQueue).toEqual([]);
     expect(s.commandQueueCountById).toEqual({});
     expect(s.mruList).toEqual([]);
