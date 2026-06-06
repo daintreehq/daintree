@@ -396,11 +396,12 @@ export function BrowserPane({
   }, []);
 
   const handleBack = useCallback(() => {
-    isInitialRestoredLoadRef.current = false;
     const webview = webviewRef.current;
-    // Only enter the loading state once we know navigation will actually fire —
-    // otherwise no load event ever clears isLoading and the spinner sticks.
+    // Only mutate state once we know navigation will actually fire — otherwise no
+    // load event ever clears isLoading (stuck spinner) and a no-op Back would
+    // wrongly flip the initial-restored-load heuristic / dismiss banners.
     if (webview && isWebviewReady && webview.canGoBack()) {
+      isInitialRestoredLoadRef.current = false;
       setBlockedNav(null);
       setIsLoading(true);
       setLoadError(null);
@@ -409,11 +410,12 @@ export function BrowserPane({
   }, [isWebviewReady]);
 
   const handleForward = useCallback(() => {
-    isInitialRestoredLoadRef.current = false;
     const webview = webviewRef.current;
-    // Only enter the loading state once we know navigation will actually fire —
-    // otherwise no load event ever clears isLoading and the spinner sticks.
+    // Only mutate state once we know navigation will actually fire — otherwise no
+    // load event ever clears isLoading (stuck spinner) and a no-op Forward would
+    // wrongly flip the initial-restored-load heuristic / dismiss banners.
     if (webview && isWebviewReady && webview.canGoForward()) {
+      isInitialRestoredLoadRef.current = false;
       setBlockedNav(null);
       setIsLoading(true);
       setLoadError(null);

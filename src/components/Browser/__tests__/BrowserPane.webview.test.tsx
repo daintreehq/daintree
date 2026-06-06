@@ -548,6 +548,35 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(webview.goForward).toHaveBeenCalledTimes(1);
       expect(getLoadingOverlay(container)).not.toBeNull();
     });
+
+    it("does not dismiss the blocked-navigation banner when back is a no-op", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settleLoaded(webview);
+      webview.canGoBack.mockReturnValue(false);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const onBlocked = (window as any).electron.webview.onNavigationBlocked.mock.calls.at(-1)![0];
+      act(() => {
+        onBlocked({
+          panelId: "browser-panel-1",
+          url: "https://oauth.example.com/authorize",
+          canOpenExternal: true,
+        });
+        vi.advanceTimersByTime(150);
+      });
+      expect(container.textContent).toContain("oauth.example.com");
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-back", { detail: { id: "browser-panel-1" } })
+        );
+      });
+
+      // A no-op Back must not clear the banner — setBlockedNav(null) is gated.
+      expect(webview.goBack).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("oauth.example.com");
+    });
   });
 
   describe("history dropdown navigation (#9942)", () => {
@@ -625,6 +654,30 @@ describe("BrowserPane webview lifecycle regression", () => {
       const goToHistoryIndex = (window as any).electron.webview.goToHistoryIndex;
       expect(goToHistoryIndex).not.toHaveBeenCalled();
       expect(container.textContent).not.toContain("Allow");
+    });
+
+    it("requires host approval before navigating to an unapproved history entry", async () => {
+      const { container } = await renderWithSnapshot({
+        entries: [
+          { index: 0, url: "http://localhost:5173/a", title: "A" },
+          { index: 1, url: "https://example.com/page", title: "Example" },
+        ],
+        activeIndex: 0,
+        canGoBack: false,
+        canGoForward: true,
+      });
+
+      const goTo = getOnGoToHistoryIndex();
+      await act(async () => {
+        await goTo(1);
+      });
+
+      // Unapproved host: surface the approval prompt, do not navigate yet.
+      expect(container.textContent).toContain("example.com");
+      expect(container.textContent).toContain("Allow browser panel to load");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const goToHistoryIndex = (window as any).electron.webview.goToHistoryIndex;
+      expect(goToHistoryIndex).not.toHaveBeenCalled();
     });
   });
 
