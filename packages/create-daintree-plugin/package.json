@@ -15,7 +15,8 @@
   },
   "scripts": {
     "build": "tsup",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepare": "tsup"
   },
   "dependencies": {
     "daintree-plugin": "^0.1.0"
