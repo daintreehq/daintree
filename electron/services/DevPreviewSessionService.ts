@@ -141,8 +141,15 @@ function parseUrlEndpoint(url: string | null): { port: number; isHttps: boolean 
   if (!url) return null;
   try {
     const parsed = new URL(url);
-    if (!parsed.port) return null;
-    return { port: Number(parsed.port), isHttps: parsed.protocol === "https:" };
+    const isHttps = parsed.protocol === "https:";
+    if (!isHttps && parsed.protocol !== "http:") return null;
+    // WHATWG URL strips the port when it equals the scheme default, so `https://localhost/` and
+    // `https://localhost:443/` both surface an empty `parsed.port`. Fall back to the scheme's
+    // default port rather than discarding the endpoint (which would otherwise dial the wrong port
+    // over plain HTTP via the registry fallback).
+    const port = parsed.port ? Number(parsed.port) : isHttps ? 443 : 80;
+    if (!Number.isInteger(port) || port <= 0) return null;
+    return { port, isHttps };
   } catch {
     return null;
   }

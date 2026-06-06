@@ -296,6 +296,31 @@ describe("DevPreviewProxyService", () => {
     expect(reply).toBe("echo:ping");
   });
 
+  it("preserves the request path and query string on a WSS (TLS) upgrade (#9974)", async () => {
+    let seenUrl: string | undefined;
+    tlsUpstream = https.createServer({ cert: TLS_CERT, key: TLS_KEY });
+    const upstreamPort = await listenTls(tlsUpstream);
+    wss = new WebSocketServer({ server: tlsUpstream });
+    wss.on("connection", (socket, req) => {
+      seenUrl = req.url;
+      socket.send("ok");
+    });
+
+    proxy = new DevPreviewProxyService(() => ({ port: upstreamPort, isHttps: true }));
+    const proxyPort = await proxy.start();
+
+    const client = new WebSocket(`ws://127.0.0.1:${proxyPort}/@vite/client?t=123`, {
+      headers: { host: `dp-test.localhost:${proxyPort}` },
+    });
+    await new Promise<void>((resolve, reject) => {
+      client.on("message", () => resolve());
+      client.on("error", reject);
+    });
+    client.close();
+
+    expect(seenUrl).toBe("/@vite/client?t=123");
+  });
+
   it("strips the Domain attribute from upstream Set-Cookie headers", async () => {
     upstream = http.createServer((_req, res) => {
       res.writeHead(200, { "Set-Cookie": "sid=abc; Domain=localhost; Path=/" });

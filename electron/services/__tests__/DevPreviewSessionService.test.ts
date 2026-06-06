@@ -1649,6 +1649,21 @@ describe("DevPreviewSessionService", () => {
       });
     });
 
+    it("resolves the scheme-default port when an HTTPS URL omits the port (#9974)", async () => {
+      // WHATWG URL strips the default port, so `https://localhost/` surfaces an empty port — the
+      // resolver must still dial 443 over HTTPS rather than falling back to the wrong port/scheme.
+      const started = await service.ensure(baseRequest);
+      ptyClient.emitData(started.terminalId!, "ready at https://localhost/\n");
+
+      const subdomain = buildDevPreviewSubdomain(baseRequest.projectId, baseRequest.panelId);
+      await vi.waitFor(() => {
+        expect(service.getUpstreamPortForSubdomain(subdomain)).toEqual({
+          port: 443,
+          isHttps: true,
+        });
+      });
+    });
+
     it("returns null once the session is stopped even though the registry entry lingers", async () => {
       vi.spyOn(portAllocator, "allocatePort").mockImplementation(
         async (registry: Map<string, number>, key: string) => {
