@@ -141,6 +141,60 @@ describe("portalStore", () => {
     expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(false);
   });
 
+  it("does not show the next active tab over an open overlay after a close", async () => {
+    vi.mocked(document.getElementById).mockReturnValue({
+      getBoundingClientRect: () => ({ x: 0, y: 0, width: 800, height: 600 }),
+    } as HTMLElement);
+
+    usePortalStore.setState({
+      isOpen: true,
+      tabs: [
+        { id: "tab-1", title: "One", url: "https://example.com/1" },
+        { id: "tab-2", title: "Two", url: "https://example.com/2" },
+      ],
+      activeTabId: "tab-1",
+      createdTabs: new Set<string>(["tab-1", "tab-2"]),
+    });
+    useUIStore.getState().addOverlayClaim("settings");
+
+    usePortalStore.getState().closeTab("tab-1");
+    await vi.runAllTimersAsync();
+
+    // The tab still becomes active in the store; only the WebContentsView show is suppressed.
+    expect(usePortalStore.getState().activeTabId).toBe("tab-2");
+    expect(window.electron.portal.show).not.toHaveBeenCalled();
+
+    useUIStore.setState({ overlayStack: [] });
+  });
+
+  it("shows the next active tab when the overlay clears before restore runs", async () => {
+    vi.mocked(document.getElementById).mockReturnValue({
+      getBoundingClientRect: () => ({ x: 0, y: 0, width: 800, height: 600 }),
+    } as HTMLElement);
+
+    usePortalStore.setState({
+      isOpen: true,
+      tabs: [
+        { id: "tab-1", title: "One", url: "https://example.com/1" },
+        { id: "tab-2", title: "Two", url: "https://example.com/2" },
+      ],
+      activeTabId: "tab-1",
+      createdTabs: new Set<string>(["tab-1", "tab-2"]),
+    });
+    useUIStore.getState().addOverlayClaim("settings");
+
+    usePortalStore.getState().closeTab("tab-1");
+    // Overlay clears before the deferred restore macro-task runs — the guard reads
+    // state at show-time, so the show proceeds.
+    useUIStore.setState({ overlayStack: [] });
+    await vi.runAllTimersAsync();
+
+    expect(window.electron.portal.show).toHaveBeenCalledWith({
+      tabId: "tab-2",
+      bounds: { x: 0, y: 0, width: 800, height: 600 },
+    });
+  });
+
   describe("width clamping", () => {
     it("clamps width below minimum to PORTAL_MIN_WIDTH", () => {
       usePortalStore.getState().setWidth(PORTAL_MIN_WIDTH - 1);
