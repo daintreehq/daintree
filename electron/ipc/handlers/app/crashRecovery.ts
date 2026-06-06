@@ -29,7 +29,15 @@ export function registerCrashRecoveryHandlers(): () => void {
         if (ok) {
           service.setPanelFilter(action.panelIds);
         } else {
-          console.warn("[CrashRecovery] restoreBackup returned false — no backup or read error");
+          // Propagate the failure to the renderer. `restoreBackup` returns
+          // false for: no parseable snapshot, zero-match panel filter, no
+          // restorable content, or apply-time exceptions. Throwing here
+          // routes the failure through the dialog's existing
+          // "Recovery failed" inline banner (and skips the false-positive
+          // "Session restored" confirmation on the auto-restore path).
+          // The backup is preserved on disk by the service so the user can
+          // retry — see FILTER_WITH_NO_MATCHES_KEEPS_RECOVERY_SOURCE_FOR_RETRY.
+          throw new Error("Crash recovery restore failed");
         }
       } else {
         service.resetToFresh();

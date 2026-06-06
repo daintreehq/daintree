@@ -581,7 +581,9 @@ function AppInner() {
   // the dialog would be visible but unclickable until hydration finishes
   // (which it can't, since the user must resolve the crash first).
   useEffect(() => {
-    if (crashState.status === "pending") removeStartupSkeleton();
+    if (crashState.status === "pending" || crashState.status === "failed") {
+      removeStartupSkeleton();
+    }
   }, [crashState.status]);
   useEffect(() => {
     void useNotificationSettingsStore.getState().hydrate();
@@ -756,7 +758,7 @@ function AppInner() {
     );
   }
 
-  if (crashState.status === "pending") {
+  if (crashState.status === "pending" || crashState.status === "failed") {
     return (
       <div className="h-screen w-screen bg-daintree-bg">
         <Suspense fallback={null}>
@@ -765,6 +767,7 @@ function AppInner() {
             config={crashState.config}
             onResolve={resolveCrash}
             onUpdateConfig={updateCrashConfig}
+            {...(crashState.status === "failed" && { initialError: crashState.errorMessage })}
           />
         </Suspense>
         {/* Diagnostics host stays reachable while the crash dialog is blocking

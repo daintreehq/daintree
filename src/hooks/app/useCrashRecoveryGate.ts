@@ -5,11 +5,18 @@ import { isElectronAvailable } from "../useElectron";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import { startRendererSpan } from "@/utils/performance";
 import { PERF_MARKS } from "@shared/perf/marks";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export type CrashRecoveryGateState =
   | { status: "loading" }
   | { status: "none" }
-  | { status: "pending"; crash: PendingCrash; config: CrashRecoveryConfig };
+  | { status: "pending"; crash: PendingCrash; config: CrashRecoveryConfig }
+  | {
+      status: "failed";
+      crash: PendingCrash;
+      config: CrashRecoveryConfig;
+      errorMessage: string;
+    };
 
 /**
  * Derive crash-gate state from the batched boot payload. The pending/config
@@ -85,9 +92,20 @@ export function useCrashRecoveryGate(bootResult: BootResult | null): {
             .showRestoreConfirmation({ suspectCount, crashCount });
           setState({ status: "none" });
         })
-        .catch(() => {
+        .catch((err: unknown) => {
           done();
-          setState({ status: "none" });
+          // The IPC handler rejects when `restoreBackup()` returns false
+          // (no snapshot, zero-match filter, no restorable content, or apply
+          // exception). Keep the dialog mounted via a `failed` state — the
+          // recovery source is preserved on disk by the service, so the user
+          // can retry from the manual path. This also avoids emitting a
+          // false "Session restored" confirmation.
+          setState({
+            status: "failed",
+            crash: pending,
+            config,
+            errorMessage: formatErrorMessage(err, "Crash recovery restore failed"),
+          });
         });
       return;
     }
@@ -112,7 +130,10 @@ export function useCrashRecoveryGate(bootResult: BootResult | null): {
     if (!isElectronAvailable()) return;
     const updated = await window.electron.crashRecovery.setConfig(patch);
     setState((prev) => {
-      if (prev.status !== "pending") return prev;
+      // The dialog can also be visible in `failed` state (after an
+      // auto-restore rejection). Keep the local config in sync so the
+      // auto-restore switch reflects the user's choice during retry.
+      if (prev.status !== "pending" && prev.status !== "failed") return prev;
       return { ...prev, config: updated };
     });
   };
