@@ -131,12 +131,18 @@ const CRASH_LOOP_BACKOFF_MULTIPLIER = 1.5;
 const CRASH_LOOP_MAX_DELAY_MS = 3000;
 const CRASH_LOOP_MAX_ATTEMPTS = 5;
 
-/** Parse the numeric port out of a detected dev-server URL, or null if absent/unparseable. */
-function parseUrlPort(url: string | null): number | null {
+/**
+ * Parse both the port AND the transport scheme out of a detected dev-server URL (#9974).
+ * Returns null if absent/unparseable. `isHttps` is true only when the URL scheme is
+ * `https:` — a dev server running over TLS (Vite `server.https`, Next.js
+ * `--experimental-https`, mkcert) must be dialed over HTTPS, not plain HTTP.
+ */
+function parseUrlEndpoint(url: string | null): { port: number; isHttps: boolean } | null {
   if (!url) return null;
   try {
-    const port = new URL(url).port;
-    return port ? Number(port) : null;
+    const parsed = new URL(url);
+    if (!parsed.port) return null;
+    return { port: Number(parsed.port), isHttps: parsed.protocol === "https:" };
   } catch {
     return null;
   }
@@ -301,20 +307,24 @@ export class DevPreviewSessionService {
    * We rebuild the expected subdomain per session and match on equality — avoiding any
    * ambiguous split of a label whose sanitized tokens may themselves contain hyphens.
    */
-  getUpstreamPortForSubdomain(subdomain: string): number | null {
+  getUpstreamPortForSubdomain(subdomain: string): { port: number; isHttps: boolean } | null {
     for (const session of this.sessions.values()) {
       if (buildDevPreviewSubdomain(session.projectId, session.panelId) !== subdomain) continue;
       // Only forward to a live server. After an explicit stop the registry entry lingers
       // (the success path doesn't release it), so a stale port could otherwise be handed to
       // whatever process later binds it.
       if (!RUNNING_STATES.has(session.status)) return null;
-      // Prefer the port the dev server actually bound — UrlDetector overwrites session.url
-      // when the server lands on a different port than the one allocated (a command that
-      // ignores the injected PORT). Fall back to the allocated port while still starting,
-      // before any URL has been detected.
-      const detectedPort = parseUrlPort(session.url);
-      if (detectedPort !== null) return detectedPort;
-      return this.portRegistry.get(createSessionKey(session.projectId, session.panelId)) ?? null;
+      // Prefer the port AND scheme the dev server actually bound — UrlDetector overwrites
+      // session.url when the server lands on a different port than the one allocated (a command
+      // that ignores the injected PORT), and the URL carries the scheme (http vs https) so an
+      // HTTPS dev server is dialed over TLS instead of getting a 502 (#9974). Fall back to the
+      // allocated port (always plain HTTP) while still starting, before any URL has been detected.
+      const detected = parseUrlEndpoint(session.url);
+      if (detected !== null) return detected;
+      const fallbackPort = this.portRegistry.get(
+        createSessionKey(session.projectId, session.panelId)
+      );
+      return fallbackPort !== undefined ? { port: fallbackPort, isHttps: false } : null;
     }
     return null;
   }

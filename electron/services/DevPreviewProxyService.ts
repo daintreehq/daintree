@@ -51,10 +51,12 @@ interface BrowserTokenPayload {
 
 /**
  * Resolves an incoming dev-preview subdomain (e.g. `dp-proj-panel`) to the live upstream
- * dev-server port, or null when no session owns that subdomain. Injected so the proxy stays
- * decoupled from DevPreviewSessionService internals.
+ * dev-server port AND transport scheme, or null when no session owns that subdomain. The
+ * `isHttps` flag lets the proxy dial a TLS dev server (Vite `server.https`, Next.js
+ * `--experimental-https`, mkcert) over HTTPS instead of 502-ing on a plain-HTTP dial (#9974).
+ * Injected so the proxy stays decoupled from DevPreviewSessionService internals.
  */
-export type ResolveUpstreamPort = (subdomain: string) => number | null;
+export type ResolveUpstream = (subdomain: string) => { port: number; isHttps: boolean } | null;
 
 /**
  * Fixed-port reverse proxy that gives every dev-preview panel a stable `*.localhost` origin
@@ -87,7 +89,7 @@ export class DevPreviewProxyService {
   private readonly pendingTokens = new Map<string, number>();
   private reaper: NodeJS.Timeout | null = null;
 
-  constructor(private readonly resolveUpstreamPort: ResolveUpstreamPort) {}
+  constructor(private readonly resolveUpstreamFn: ResolveUpstream) {}
 
   /** The port the proxy actually bound to (43000, or an OS-assigned fallback). 0 until started. */
   get port(): number {
@@ -189,13 +191,21 @@ export class DevPreviewProxyService {
       return;
     }
 
-    const port = this.resolvePort(req.headers.host);
-    if (port === null) {
+    const upstream = this.resolveUpstream(req.headers.host);
+    if (upstream === null) {
       this.send502(res, "No dev server is registered for this preview.");
       return;
     }
     try {
-      await this.proxy!.web(req, res, { target: `http://${UPSTREAM_HOST}:${port}` });
+      // Dial https:// for a TLS dev server, http:// otherwise — httpxy picks https.request vs
+      // http.request from the target scheme. `secure: false` accepts the self-signed loopback
+      // cert (Vite/Next dev TLS); the upstream is always `localhost`, so this stays loopback-only
+      // and never disables verification for a remote host (#9974).
+      const scheme = upstream.isHttps ? "https" : "http";
+      await this.proxy!.web(req, res, {
+        target: `${scheme}://${UPSTREAM_HOST}:${upstream.port}`,
+        ...(upstream.isHttps ? { secure: false } : {}),
+      });
     } catch {
       this.send502(res, "The dev server isn't responding.");
     }
@@ -209,18 +219,25 @@ export class DevPreviewProxyService {
     this.sockets.add(socket);
     socket.once("close", () => this.sockets.delete(socket));
 
-    const port = this.resolvePort(req.headers.host);
-    if (port === null) {
+    const upstream = this.resolveUpstream(req.headers.host);
+    if (upstream === null) {
       socket.destroy();
       return;
     }
     try {
       // The 'upgrade' event types the socket as Duplex; httpxy's ws() wants net.Socket, which
-      // is exactly the concrete type Node provides here.
+      // is exactly the concrete type Node provides here. Use wss:// for a TLS dev server so
+      // HMR/WebSocket upgrades reach an HTTPS upstream instead of failing the handshake; httpxy's
+      // isSSL check matches both `wss` and `https`, and `secure: false` accepts the self-signed
+      // loopback cert (#9974).
+      const scheme = upstream.isHttps ? "wss" : "http";
       await this.proxy!.ws(
         req,
         socket as Socket,
-        { target: `http://${UPSTREAM_HOST}:${port}` },
+        {
+          target: `${scheme}://${UPSTREAM_HOST}:${upstream.port}`,
+          ...(upstream.isHttps ? { secure: false } : {}),
+        },
         head
       );
     } catch {
@@ -228,10 +245,10 @@ export class DevPreviewProxyService {
     }
   }
 
-  private resolvePort(host: string | undefined): number | null {
+  private resolveUpstream(host: string | undefined): { port: number; isHttps: boolean } | null {
     const subdomain = parseDevPreviewProxyHost(host);
     if (!subdomain) return null;
-    return this.resolveUpstreamPort(subdomain);
+    return this.resolveUpstreamFn(subdomain);
   }
 
   private send502(res: http.ServerResponse, message: string): void {

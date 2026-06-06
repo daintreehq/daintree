@@ -1,10 +1,72 @@
 import http from "node:http";
+import https from "node:https";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { DevPreviewProxyService } from "../DevPreviewProxyService.js";
 
+// A self-signed cert/key for `localhost`, valid for 100 years, used to stand up a real TLS
+// upstream so the proxy's HTTPS path (#9974) is exercised end-to-end. The proxy dials with
+// `secure: false`, so cert validity is never checked on the proxy→upstream leg — the only
+// requirement is that https.createServer accepts the pair. Static so the test needs no openssl
+// or extra dependency at run time.
+const TLS_CERT = `-----BEGIN CERTIFICATE-----
+MIIDJzCCAg+gAwIBAgIUd5lHuFW2jPIhjMPtLtk+qyD6nV4wDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MDYwNjE4NTUxOFoYDzIxMjYw
+NTEzMTg1NTE4WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwggEiMA0GCSqGSIb3DQEB
+AQUAA4IBDwAwggEKAoIBAQDKUZfRfHBM/L/qO8t1YUyiXytEb2K7CiyeNjtg1P3v
+O31d9yJez1S5h8Bsdf0/aGmKh8awxTA712A7D3xeioPYPCgzogeGhlXLIlMvEMDM
+mcP9dCJdEeqeWxFpJBDmMtQ6ye3OGGdYAd5WXJ38uGpcbifiL1xnPM3czft0efWD
+JklK7ou0QZhiliVLuDTJSb/KE5tSCo9HV4ognxyY1BEk25HgQT6YsGtJBgtG1QW4
+swzdRGCbbbTdSBE0Vf0c/C66VwReSmPaqyiQytxNtjuF/CjmtXUkselRoiPPileF
+/kUsOQJPo/T+eE7XlqPYZo8oeH2jX0+TYYERJ5ktrS3vAgMBAAGjbzBtMB0GA1Ud
+DgQWBBRP0Q6ccyHBJCBvkQwvMXKmvVIEgDAfBgNVHSMEGDAWgBRP0Q6ccyHBJCBv
+kQwvMXKmvVIEgDAPBgNVHRMBAf8EBTADAQH/MBoGA1UdEQQTMBGCCWxvY2FsaG9z
+dIcEfwAAATANBgkqhkiG9w0BAQsFAAOCAQEAuEPF9RQD1gSDulkRHe+Yosm5dCvv
+JM8oz+h/QFPSboEaDc/+IGFGzQoVNiAqoJJnFMT2N/Fr/c5rAG7pn9JlFR5ZGskM
+aMBfUDUZ3sNDRGW4Ck7hCpNM4P6Ng40STy68QoChIW+HJUyFPOmnSQCTg0pAGYtD
+ctdDEYvgjudRbtc77vJH1eB79mnyHStg+KbrKkvP5KKDfJIx9xUbc61sEomFlSqw
+CqQ2POpyTKAVRq4DynrN19R5FgRg9fjze0+k6iRc9nReB/As7XD3KA04qFXTpuIB
+8aUneA5Et8htP8zGKtPvZ2seWZobUf5GxFX3RYl+CFEMDSifjmq68BKnVQ==
+-----END CERTIFICATE-----
+`;
+const TLS_KEY = `-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDKUZfRfHBM/L/q
+O8t1YUyiXytEb2K7CiyeNjtg1P3vO31d9yJez1S5h8Bsdf0/aGmKh8awxTA712A7
+D3xeioPYPCgzogeGhlXLIlMvEMDMmcP9dCJdEeqeWxFpJBDmMtQ6ye3OGGdYAd5W
+XJ38uGpcbifiL1xnPM3czft0efWDJklK7ou0QZhiliVLuDTJSb/KE5tSCo9HV4og
+nxyY1BEk25HgQT6YsGtJBgtG1QW4swzdRGCbbbTdSBE0Vf0c/C66VwReSmPaqyiQ
+ytxNtjuF/CjmtXUkselRoiPPileF/kUsOQJPo/T+eE7XlqPYZo8oeH2jX0+TYYER
+J5ktrS3vAgMBAAECggEAPP9ypW8+MIf3mLhkdERcpYvJ8L0gaEH+B8lUB7LPyMQH
+3T+4dhtOcQ1zv3+nVem2AFVFW2BoVXJvCf92QM7ER3qDqGWOnUl9Llxv9f24Eze8
+9nqALc1MDmhojGmaSr1CbWMaNov3BHqzvRf5bgtvzeRMVA5xbpLPgmX8DTcEBYEJ
+TIgUZJwbIC7HE00fQkRl2JUewG40HHxhKi4V933C71D9RzveZ8PBEfbADf8+QSiM
+PxceeGqmtE47dCqMGiYzZaO6Q5fgUKGnDJ/+saoZta5lpCRPLE23Kz9B0OVZxUuD
+H5zqTYyhWZxwMCLN+nPaChcZezvizC7OO7m2q2MpMQKBgQDpI6e6N9Ub1pR4epHV
+4E0rVJ/ZYqHFxnuJND6TfLVMU2InazVvfW8GaC6rPgR1+3TeKVOLrCV80qM4R2s6
+cHZ2slQE4UTKKNrWMlIMZfRVd1gI4Ht6SgyS1qCbcjOHLEp0LsayxV2Wz/ysotbK
+zGqZtvuugN9KD+PIIKA3ggtjpwKBgQDeKET0HywPJESkVGfh8XozdOHunRzU0W1Z
+kyhyVqWByENyJnchFagFibAUN+6nwTJzr5vRxDbhzmLGNi8TGLO4DyzBv5AM+LkY
+dutnptzk9XCowZk6rlMMIDQ3WRZcikwSP5ZHKho6SjzZ0bnSXv8MhNeZJG0AZSPa
+do+DSk7MeQKBgQDMaPOlpVBXcSOKIsV9BYYDqNXibsUyN92WpdT70YrQGgfkUe5v
+C0ZuEqhggia9HzUPmKJkwxG3SKPNM2lDutlTJvXdtXlv2rRMu6AOuNGqodHxLol0
+5jnyAPaedFnTebTp+x1CHyP4l/GNl9TFyMbqcXJoRRwBvr7TeC+hm4bK3wKBgDHh
+gtH5adAgiZUIKqcNrC1/kfccqcuTFmVlaFB76f+A8rvfrSHtleNgbfusL1bVRzm4
+dVkdIGGFEKKGqf00r62lIpyCIZr4Ab9ffC2yxqhV/6y0g24slBMF7BN9Wkr+9mOm
+iVyDNI5f+tfBgmKc19F8xlfpWNwc2XcE5eZJufWpAoGAAUl4oGptD1l4cM15Jt3O
+2GTUNwI14gU/+A/Ht0tFz4L0L059PrE0e+5tpPPH6YHDQQBCQywSSYz6a4hnOovA
+eKhMdxcFUL4ump1TiBK9mci/EeN5QPFQ5MirHkPgm5Hqi/4MK3pbF+yWHHNuKN1v
++gRGPjjegyhNAcadNKTocko=
+-----END PRIVATE KEY-----
+`;
+
 function listen(server: http.Server): Promise<number> {
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port));
+  });
+}
+
+function listenTls(server: https.Server): Promise<number> {
   return new Promise((resolve) => {
     server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port));
   });
@@ -89,6 +151,7 @@ function splitBootstrapUrl(bootstrapUrl: string): { host: string; path: string }
 describe("DevPreviewProxyService", () => {
   let proxy: DevPreviewProxyService | null = null;
   let upstream: http.Server | null = null;
+  let tlsUpstream: https.Server | null = null;
   let wss: WebSocketServer | null = null;
 
   afterEach(() => {
@@ -96,6 +159,8 @@ describe("DevPreviewProxyService", () => {
     proxy = null;
     upstream?.close();
     upstream = null;
+    tlsUpstream?.close();
+    tlsUpstream = null;
     wss?.close();
     wss = null;
   });
@@ -109,7 +174,9 @@ describe("DevPreviewProxyService", () => {
     });
     const upstreamPort = await listen(upstream);
 
-    proxy = new DevPreviewProxyService((sub) => (sub === "dp-test" ? upstreamPort : null));
+    proxy = new DevPreviewProxyService((sub) =>
+      sub === "dp-test" ? { port: upstreamPort, isHttps: false } : null
+    );
     const proxyPort = await proxy.start();
 
     const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
@@ -135,7 +202,9 @@ describe("DevPreviewProxyService", () => {
       // Sanity-check the fixture: the old 127.0.0.1 upstream target can't reach this server.
       await expectIpv4Refused(upstreamPort);
 
-      proxy = new DevPreviewProxyService((sub) => (sub === "dp-test" ? upstreamPort : null));
+      proxy = new DevPreviewProxyService((sub) =>
+        sub === "dp-test" ? { port: upstreamPort, isHttps: false } : null
+      );
       const proxyPort = await proxy.start();
 
       const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
@@ -161,7 +230,7 @@ describe("DevPreviewProxyService", () => {
         socket.on("message", (msg) => socket.send(`echo:${msg}`));
       });
 
-      proxy = new DevPreviewProxyService(() => upstreamPort);
+      proxy = new DevPreviewProxyService(() => ({ port: upstreamPort, isHttps: false }));
       const proxyPort = await proxy.start();
 
       const client = new WebSocket(`ws://127.0.0.1:${proxyPort}/`, {
@@ -178,6 +247,55 @@ describe("DevPreviewProxyService", () => {
     }
   );
 
+  it("forwards an HTTP request to an HTTPS (TLS) upstream with a self-signed cert (#9974)", async () => {
+    let seenHost: string | undefined;
+    tlsUpstream = https.createServer({ cert: TLS_CERT, key: TLS_KEY }, (req, res) => {
+      seenHost = req.headers.host;
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("hello over tls");
+    });
+    const upstreamPort = await listenTls(tlsUpstream);
+
+    proxy = new DevPreviewProxyService((sub) =>
+      sub === "dp-test" ? { port: upstreamPort, isHttps: true } : null
+    );
+    const proxyPort = await proxy.start();
+
+    const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
+
+    // Without the isHttps fix the proxy dials http:// against a TLS socket and 502s. The fix
+    // dials https:// with secure:false, so the self-signed cert is accepted and the request lands.
+    expect(res.status).toBe(200);
+    expect(res.body).toBe("hello over tls");
+    expect(seenHost).toContain("localhost");
+    expect(seenHost).toContain(String(upstreamPort));
+  });
+
+  it("forwards a WebSocket upgrade to a WSS (TLS) upstream with a self-signed cert (#9974)", async () => {
+    tlsUpstream = https.createServer({ cert: TLS_CERT, key: TLS_KEY });
+    const upstreamPort = await listenTls(tlsUpstream);
+    wss = new WebSocketServer({ server: tlsUpstream });
+    wss.on("connection", (socket) => {
+      socket.on("message", (msg) => socket.send(`echo:${msg}`));
+    });
+
+    proxy = new DevPreviewProxyService(() => ({ port: upstreamPort, isHttps: true }));
+    const proxyPort = await proxy.start();
+
+    const client = new WebSocket(`ws://127.0.0.1:${proxyPort}/`, {
+      headers: { host: `dp-test.localhost:${proxyPort}` },
+    });
+    const reply = await new Promise<string>((resolve, reject) => {
+      client.on("open", () => client.send("ping"));
+      client.on("message", (data) => resolve(data.toString()));
+      client.on("error", reject);
+    });
+    client.close();
+
+    // The upgrade must target wss:// (not http://) so the HMR socket reaches the TLS upstream.
+    expect(reply).toBe("echo:ping");
+  });
+
   it("strips the Domain attribute from upstream Set-Cookie headers", async () => {
     upstream = http.createServer((_req, res) => {
       res.writeHead(200, { "Set-Cookie": "sid=abc; Domain=localhost; Path=/" });
@@ -185,7 +303,7 @@ describe("DevPreviewProxyService", () => {
     });
     const upstreamPort = await listen(upstream);
 
-    proxy = new DevPreviewProxyService(() => upstreamPort);
+    proxy = new DevPreviewProxyService(() => ({ port: upstreamPort, isHttps: false }));
     const proxyPort = await proxy.start();
 
     const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
@@ -207,7 +325,7 @@ describe("DevPreviewProxyService", () => {
     });
     const upstreamPort = await listen(upstream);
 
-    proxy = new DevPreviewProxyService(() => upstreamPort);
+    proxy = new DevPreviewProxyService(() => ({ port: upstreamPort, isHttps: false }));
     const proxyPort = await proxy.start();
 
     const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
@@ -230,7 +348,7 @@ describe("DevPreviewProxyService", () => {
   });
 
   it("returns 502 for a host that is not a dev-preview proxy subdomain", async () => {
-    proxy = new DevPreviewProxyService(() => 9999);
+    proxy = new DevPreviewProxyService(() => ({ port: 9999, isHttps: false }));
     const proxyPort = await proxy.start();
 
     const res = await request(proxyPort, "example.com");
@@ -239,7 +357,7 @@ describe("DevPreviewProxyService", () => {
 
   it("returns 502 when the upstream is unreachable", async () => {
     // Resolve to a port nothing is listening on.
-    proxy = new DevPreviewProxyService(() => 1);
+    proxy = new DevPreviewProxyService(() => ({ port: 1, isHttps: false }));
     const proxyPort = await proxy.start();
 
     const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
@@ -263,7 +381,7 @@ describe("DevPreviewProxyService", () => {
       socket.on("message", (msg) => socket.send(`echo:${msg}`));
     });
 
-    proxy = new DevPreviewProxyService(() => upstreamPort);
+    proxy = new DevPreviewProxyService(() => ({ port: upstreamPort, isHttps: false }));
     const proxyPort = await proxy.start();
 
     // Node doesn't map *.localhost to loopback (only Chromium does), so connect to the loopback
@@ -291,7 +409,7 @@ describe("DevPreviewProxyService", () => {
       socket.send("ok");
     });
 
-    proxy = new DevPreviewProxyService(() => upstreamPort);
+    proxy = new DevPreviewProxyService(() => ({ port: upstreamPort, isHttps: false }));
     const proxyPort = await proxy.start();
 
     const client = new WebSocket(`ws://127.0.0.1:${proxyPort}/@vite/client?t=123`, {
