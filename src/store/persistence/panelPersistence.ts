@@ -371,6 +371,15 @@ export class PanelPersistence {
   }
 
   /**
+   * Drop the cached previous-snapshot entry for a project so the next
+   * `primeProject` reseeds it. Used when a project is removed and in tests that
+   * need a clean cache (the cache is otherwise process-lived).
+   */
+  clearProjectSnapshotCache(projectId: string): void {
+    this.persistedTerminalsByProject.delete(projectId);
+  }
+
+  /**
    * Returns a map of panel id → most-recent snapshot for the given project,
    * or `undefined` if no snapshots are tracked. Used by callers outside the
    * debounced save path (e.g., the synchronous outgoing-state capture on
