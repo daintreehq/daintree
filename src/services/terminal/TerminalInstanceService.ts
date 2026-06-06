@@ -18,6 +18,7 @@ import {
   setupTerminalAddons,
   createImageAddon,
   createFileLinksAddon,
+  createImageLinksAddon,
   createWebLinksAddon,
 } from "./TerminalAddonManager";
 import { TerminalOutputIngestService } from "./TerminalOutputIngestService";
@@ -43,6 +44,7 @@ import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackControl
 import { DEFAULT_TERMINAL_FONT_FAMILY, onTerminalFontArrivedLate } from "@/config/terminalFont";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { usePanelStore } from "@/store/panelStore";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { yieldToScheduler } from "@/lib/schedulerYield";
 import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
@@ -244,6 +246,14 @@ class TerminalInstanceService {
               /* ignore */
             }
             managed.fileLinksDisposable = null;
+          }
+          if (managed.imageLinksDisposable) {
+            try {
+              managed.imageLinksDisposable.dispose();
+            } catch {
+              /* ignore */
+            }
+            managed.imageLinksDisposable = null;
           }
           if (managed.webLinksAddon) {
             try {
@@ -1135,6 +1145,12 @@ class TerminalInstanceService {
       }
       managed.fileLinksDisposable = null;
       try {
+        managed.imageLinksDisposable?.dispose();
+      } catch {
+        /* ignore */
+      }
+      managed.imageLinksDisposable = null;
+      try {
         managed.webLinksAddon?.dispose();
       } catch {
         /* ignore */
@@ -1513,6 +1529,26 @@ class TerminalInstanceService {
         );
       } catch (err) {
         logWarn("Failed to create FileLinksAddon", { id, error: err });
+      }
+    }
+    // `[image #N]` references are clickable only in the assistant terminal,
+    // where the help session owns the figure state (#9830). Gating on the
+    // bound help terminal keeps grid terminals that happen to print the token
+    // inert, and the provider rebuilds with the rest on tier promotion.
+    if (!managed.imageLinksDisposable && useHelpPanelStore.getState().terminalId === id) {
+      try {
+        managed.imageLinksDisposable = createImageLinksAddon(
+          managed.terminal,
+          () => useHelpPanelStore.getState().figures.map((f) => f.figureNumber),
+          (figureNumber, openLightbox) => {
+            useHelpPanelStore.getState().setActiveFigureNumber(figureNumber);
+            // Lightbox open on modified-click lands with the figure rail
+            // (#9829); the highlight is the interim affordance until then.
+            void openLightbox;
+          }
+        );
+      } catch (err) {
+        logWarn("Failed to create ImageLinksAddon", { id, error: err });
       }
     }
     if (!managed.webLinksAddon) {
@@ -2855,6 +2891,11 @@ class TerminalInstanceService {
         managed.fileLinksDisposable?.dispose();
       } catch (error) {
         logWarn("Error disposing file links", { error });
+      }
+      try {
+        managed.imageLinksDisposable?.dispose();
+      } catch (error) {
+        logWarn("Error disposing image links", { error });
       }
       try {
         managed.webLinksAddon?.dispose();

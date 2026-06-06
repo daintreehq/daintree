@@ -74,6 +74,12 @@ interface HelpPanelState {
    * empty, so stale image references can't survive an app restart.
    */
   figures: HelpFigure[];
+  /**
+   * The figure a clickable `[image #N]` reference last activated (#9830). The
+   * figure rail (#9829) consumes this to scroll-to and highlight the matching
+   * thumbnail. Session-scoped and never persisted — cleared on session reset.
+   */
+  activeFigureNumber: number | null;
 }
 
 interface HelpPanelActions {
@@ -96,6 +102,8 @@ interface HelpPanelActions {
   addFigure: (figure: HelpFigure) => void;
   /** Drop all figures — called when the conversation/terminal resets. */
   clearFigures: () => void;
+  /** Set the figure a clickable `[image #N]` reference activated (#9830). */
+  setActiveFigureNumber: (figureNumber: number | null) => void;
 }
 
 const initialState: HelpPanelState = {
@@ -111,6 +119,7 @@ const initialState: HelpPanelState = {
   hibernateSessions: {},
   focusRequest: 0,
   figures: [],
+  activeFigureNumber: null,
 };
 
 function isRecordOfUnknown(value: unknown): value is Record<string, unknown> {
@@ -208,7 +217,17 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
           return { figures: next };
         }),
 
-      clearFigures: () => set((s) => (s.figures.length === 0 ? s : { figures: [] })),
+      clearFigures: () =>
+        set((s) =>
+          s.figures.length === 0 && s.activeFigureNumber === null
+            ? s
+            : { figures: [], activeFigureNumber: null }
+        ),
+
+      setActiveFigureNumber: (figureNumber) =>
+        set((s) =>
+          s.activeFigureNumber === figureNumber ? s : { activeFigureNumber: figureNumber }
+        ),
     }),
     {
       name: "help-panel-storage",
