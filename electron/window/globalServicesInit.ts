@@ -18,10 +18,6 @@ import { preAgentSnapshotService } from "../services/PreAgentSnapshotService.js"
 import { getActionBreadcrumbService } from "../services/ActionBreadcrumbService.js";
 import { getPluginActionAuditService } from "../services/PluginActionAuditService.js";
 import {
-  getPluginMcpAuditService,
-  getPluginMcpConsentService,
-} from "../services/plugin-mcp/instances.js";
-import {
   initializeHibernationService,
   getHibernationService,
 } from "../services/HibernationService.js";
@@ -272,14 +268,6 @@ export async function initGlobalServices(
     isPlaintextEnabled: () => store.get("appState")?.developerMode?.pluginAuditPlaintext === true,
   });
 
-  // Plugin-MCP inbound audit + TOFU consent stores (#9234). Hydrate eagerly so
-  // the first plugin-MCP tool call from the supervisor (#9233, TODO) does not
-  // race the lazy store read. The consent service has no subscribers itself —
-  // it's invoked synchronously from the supervisor's tools/call interception
-  // path once that lands.
-  getPluginMcpAuditService().hydrate();
-  getPluginMcpConsentService();
-
   registerDeferredTask({
     name: "agent-notification-service",
     run: async () => {
@@ -377,6 +365,19 @@ export async function initGlobalServices(
       },
     });
   }
+
+  // Plugin-MCP inbound audit log (#9234) — warm the hydrate() store read off
+  // the cold-boot path (#10073). hydrate() is idempotent, and append() demand-
+  // hydrates anyway, so this is purely pre-warming for when the supervisor
+  // (#9233) lands. The consent service is not pre-warmed: its constructor is
+  // bare allocation and PluginInstaller already constructs it lazily on demand.
+  registerDeferredTask({
+    name: "plugin-mcp-audit-warm",
+    run: async () => {
+      const { getPluginMcpAuditService } = await import("../services/plugin-mcp/instances.js");
+      getPluginMcpAuditService().hydrate();
+    },
+  });
 
   // ── Deferred global service starts ──
   // These were previously run on the same tick as loadRenderer(), contending
