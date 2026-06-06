@@ -184,7 +184,8 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             : undefined;
 
           // Include focus mode in migration
-          await projectStore.enqueueProjectStateUpdate(projectId, () => ({
+          await projectStore.enqueueProjectStateUpdate(projectId, (existing) => ({
+            ...(existing ?? {}),
             projectId,
             activeWorktreeId: globalAppState.activeWorktreeId,
             sidebarWidth: globalAppState.sidebarWidth ?? 350,
@@ -212,11 +213,12 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             : undefined;
 
           // No terminals to migrate but still save empty state to mark migration complete
-          await projectStore.enqueueProjectStateUpdate(projectId, () => ({
+          await projectStore.enqueueProjectStateUpdate(projectId, (existing) => ({
+            ...(existing ?? {}),
             projectId,
             activeWorktreeId: globalAppState.activeWorktreeId,
             sidebarWidth: globalAppState.sidebarWidth ?? 350,
-            terminals: [],
+            terminals: existing?.terminals ?? [],
             focusMode: globalAppState.focusMode,
             focusPanelState: normalizedFocusPanelState,
           }));

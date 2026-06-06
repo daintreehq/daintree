@@ -214,6 +214,24 @@ describe("ProjectStateManager.enqueueProjectStateUpdate concurrency", () => {
     expect(order).toEqual(["fast", "slow"]);
   });
 
+  it("both concurrent updates survive a disk read by a fresh manager instance", async () => {
+    await Promise.all([
+      manager.enqueueProjectStateUpdate(projectId, (existing) => ({
+        ...(existing ?? makeState()),
+        sidebarWidth: 640,
+      })),
+      manager.enqueueProjectStateUpdate(projectId, (existing) => ({
+        ...(existing ?? makeState()),
+        draftInputs: { t1: "draft" },
+      })),
+    ]);
+
+    const freshManager = new ProjectStateManager(tempDir);
+    const result = await freshManager.getProjectState(projectId);
+    expect(result!.sidebarWidth).toBe(640);
+    expect(result!.draftInputs).toEqual({ t1: "draft" });
+  });
+
   it("sequential updates after the queue drains still see committed state", async () => {
     await manager.enqueueProjectStateUpdate(projectId, () => makeState({ sidebarWidth: 1 }));
     await manager.enqueueProjectStateUpdate(projectId, (existing) => ({
