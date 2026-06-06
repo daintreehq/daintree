@@ -82,6 +82,24 @@ describe("createActionDefinitions", () => {
     expect(missing).toEqual([]);
   });
 
+  it("does not register the removed github.* one-release aliases", async () => {
+    const actions = await createRegistry();
+
+    // These forwarded to forge.* for one release and have since been removed.
+    // Guards against accidental re-registration (which the round-trip test above,
+    // driven by BUILT_IN_ACTION_IDS, would not catch on its own).
+    const removedAliases = [
+      "github.openIssues",
+      "github.openPRs",
+      "github.openCommits",
+      "github.openIssue",
+      "github.assignIssue",
+      "github.validateToken",
+    ];
+    const stillRegistered = removedAliases.filter((id) => actions.has(id as any));
+    expect(stillRegistered).toEqual([]);
+  });
+
   it("registers action.repeatLast with nonRepeatable set", async () => {
     const actions = await createRegistry();
 

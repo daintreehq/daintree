@@ -133,7 +133,7 @@ Columns:
 
 ### GitHub-side
 
-The current GitHub action set is read-only (`openIssues`, `listPullRequests`, etc.) plus token management. No PR merge, no issue close, no comment-post is wired through `ActionService` yet.
+The current GitHub action set is read-only (`forge.openIssues`, `github.listPullRequests`, etc.) plus token management. No PR merge, no issue close, no comment-post is wired through `ActionService` yet.
 
 | Action / call site | Current | UI confirm | Consent in breadcrumb | Reversibility | Blast | Tier | Recommendation | Follow-up |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |

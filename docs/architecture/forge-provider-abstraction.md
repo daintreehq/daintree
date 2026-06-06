@@ -356,7 +356,7 @@ The refactor lands across multiple PRs in this order:
 4. **Built-in plugin loader.** `PluginService` scans `plugins/builtin/` before user plugins. Built-ins skip the install-time capability dialog.
 5. **GitHub built-in plugin: services.** Rehome `electron/services/github/*` into `plugins/builtin/github/main/`. Register via the new contribution point.
 6. **GitHub built-in plugin: components.** Move `src/components/GitHub/*` and the three Zustand stores into the plugin's renderer entry.
-7. **GitHub built-in plugin: actions.** Migrate `github.*` actions to host-owned `forge.*` with `github.*` aliases for one release.
+7. **GitHub built-in plugin: actions.** Migrate `github.*` actions to host-owned `forge.*` with `github.*` aliases for one release (aliases since removed).
 8. **`PRIntegrationService` rewrite.** Replace direct GitHub calls with `ForgeProviderRegistry.getActiveProvider(...).findPRByBranch(...)`. Snapshot consumers updated to read `linked.*`.
 9. **Settings UI.** Provider section in Preferences → Forge Integrations, rendering the GitHub plugin's auth UI.
 
