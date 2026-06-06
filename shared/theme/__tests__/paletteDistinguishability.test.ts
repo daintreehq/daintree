@@ -410,10 +410,14 @@ describe("palette distinguishability", () => {
       const rgb = (hex: string) => {
         const c = parse(hex)!;
         const to255 = (v: number) => Math.round((v as number) * 255);
+        // culori.parse() always returns RGB values (0-1 range), even when a mode is
+        // active, so we can safely access r, g, b as an any-typed object to avoid
+        // type errors from the discriminated union type.
+        const color = c as unknown as { r: number; g: number; b: number };
         return {
-          r: to255((c as Record<string, number>).r),
-          g: to255((c as Record<string, number>).g),
-          b: to255((c as Record<string, number>).b),
+          r: to255(color.r),
+          g: to255(color.g),
+          b: to255(color.b),
         };
       };
       const success = rgb(RED_GREEN_OVERRIDES["--theme-status-success"]!);
