@@ -1057,6 +1057,7 @@ describe("createIssue", () => {
     expect(init.method).toBe("POST");
     const headers = init.headers as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer test-token");
+    expect(headers.Accept).toBe("application/vnd.github+json");
     expect(headers["X-GitHub-Api-Version"]).toBe("2022-11-28");
     expect(headers["Content-Type"]).toBe("application/json");
     expect(init.signal).toBeInstanceOf(AbortSignal);
@@ -1148,6 +1149,28 @@ describe("createIssue", () => {
       });
 
     await expect(githubForgeProvider.createIssue(repo, { title: "x" })).rejects.toThrow(/HTTP 422/);
+  });
+
+  it("rejects when the response body cannot be parsed as JSON", async () => {
+    (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        status: 201,
+        json: vi.fn().mockRejectedValue(new Error("invalid json")),
+      });
+
+    await expect(githubForgeProvider.createIssue(repo, { title: "x" })).rejects.toThrow(
+      /invalid json/i
+    );
+  });
+
+  it("rejects a malformed success body missing number or html_url", async () => {
+    mockFetchOk({ title: "only a title" });
+
+    await expect(githubForgeProvider.createIssue(repo, { title: "x" })).rejects.toThrow(
+      /missing issue number or URL/i
+    );
   });
 
   it("propagates a TimeoutError from the transport", async () => {

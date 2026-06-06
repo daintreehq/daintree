@@ -1221,6 +1221,11 @@ export const githubForgeProvider: ForgeProviderImpl = {
       );
     }
     const data = (await response.json()) as Record<string, unknown>;
+    // Guard the mutation result: a malformed body must not surface as
+    // "Issue #undefined created" with an empty URL after caches are cleared.
+    if (typeof data.number !== "number" || typeof data.html_url !== "string") {
+      throw new Error("Unexpected response from GitHub: missing issue number or URL.");
+    }
     return restToForgeIssue(data);
   },
 

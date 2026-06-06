@@ -66,6 +66,13 @@ describe("githubCreateIssueCommand", () => {
     ).resolves.toMatchObject({ success: false, error: { code: "NO_TOKEN" } });
   });
 
+  it("returns NO_CWD when no working directory is in context", async () => {
+    const result = await githubCreateIssueCommand.execute({} as never, { title: "No cwd" });
+
+    expect(result).toMatchObject({ success: false, error: { code: "NO_CWD" } });
+    expect(resolveForCwdMock).not.toHaveBeenCalled();
+  });
+
   it("returns NOT_GIT_REPO when provider resolution throws", async () => {
     resolveForCwdMock.mockRejectedValue(new Error("No forge provider registered"));
 
