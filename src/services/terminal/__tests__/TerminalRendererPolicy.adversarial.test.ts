@@ -322,6 +322,69 @@ describe("TerminalRendererPolicy adversarial", () => {
     );
   });
 
+  it("DEDUPE_SEQUENCE_COLLAPSES_REDUNDANT_ACTIVE_TO_TWO_HOST_CALLS (#9799)", async () => {
+    // Folded in from closed issue #9799. A renderer-side burst of
+    // active→active→background outbound tier sets must reach the host as
+    // exactly TWO setActivityTier calls, not three: the second "active" is a
+    // same-tier no-op that setBackendTier's dedupe (lastBackendTier ===
+    // incoming tier) swallows. Proving the count is 2 (derived from the 3-call
+    // input minus the 1 deduped call) is a behavioral assertion — it fails if
+    // the dedupe is removed (3 calls) or if a real transition is wrongly
+    // dropped (1 call). The exact arg sequence proves WHICH call was collapsed.
+    const managed = createManagedTerminal();
+    const deps: RendererPolicyDeps = {
+      getInstance: vi.fn(() => managed),
+      wakeAndRestore: vi.fn(async () => true),
+    };
+
+    const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+    const { terminalClient } = await import("@/clients");
+    const policy = new TerminalRendererPolicy(deps);
+
+    policy.setBackendTier("terminal-1", "active"); // real: undefined → active
+    policy.setBackendTier("terminal-1", "active"); // deduped: active → active
+    policy.setBackendTier("terminal-1", "background"); // real: active → background
+
+    const calls = vi.mocked(terminalClient.setActivityTier).mock.calls;
+    expect(calls).toHaveLength(2);
+    // The surviving calls are the two real transitions, in order — the
+    // duplicate "active" is absent.
+    expect(calls.map((c) => c[1])).toEqual(["active", "background"]);
+  });
+
+  it("HOST_PUSHED_TIER_AND_RENDERER_CACHE_AGREE_AFTER_EACH_TRANSITION (#9798)", async () => {
+    // Folded in from closed issue #9798. The renderer's cached view of the
+    // backend tier (getLastBackendTier) must never diverge from the tier it
+    // last agreed with the host on. Two directions of agreement:
+    //   1. host→renderer: a host-pushed tier (initializeBackendTier, the
+    //      tier-changed message from recomputeActivityTiers) is reflected by
+    //      getLastBackendTier with no outbound call.
+    //   2. renderer→host: a renderer-driven setBackendTier ships a value to
+    //      the host that is byte-for-byte the same value getLastBackendTier
+    //      then reports — the cache and the wire never disagree.
+    const managed = createManagedTerminal();
+    const deps: RendererPolicyDeps = {
+      getInstance: vi.fn(() => managed),
+      wakeAndRestore: vi.fn(async () => true),
+    };
+
+    const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+    const { terminalClient } = await import("@/clients");
+    const policy = new TerminalRendererPolicy(deps);
+
+    // host→renderer: a host demotion seeds the cache without an outbound call.
+    policy.initializeBackendTier("terminal-1", "background");
+    expect(policy.getLastBackendTier("terminal-1")).toBe("background");
+    expect(terminalClient.setActivityTier).not.toHaveBeenCalled();
+
+    // renderer→host: the value sent to the host equals the value the cache
+    // then reports — they agree, no divergence.
+    policy.setBackendTier("terminal-1", "active");
+    const sentTier = vi.mocked(terminalClient.setActivityTier).mock.calls.at(-1)?.[1];
+    expect(sentTier).toBe(policy.getLastBackendTier("terminal-1"));
+    expect(policy.getLastBackendTier("terminal-1")).toBe("active");
+  });
+
   it("CLEAR_TIER_STATE_CANCELS_PENDING_WAKE_AND_RELEASES_GENERATION", async () => {
     const wake = deferred<boolean>();
     const managed = createManagedTerminal({
