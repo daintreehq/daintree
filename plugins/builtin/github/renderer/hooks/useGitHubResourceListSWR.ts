@@ -1,4 +1,12 @@
-import { useState, useEffect, useMemo, useCallback, useRef, useLayoutEffect } from "react";
+import {
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  useRef,
+  useLayoutEffect,
+  useContext,
+} from "react";
 import { useDebounce } from "@/hooks/useDebounce";
 import {
   buildCacheKey,
@@ -11,6 +19,7 @@ import { isRateLimitError, isTokenRelatedError, isTransientNetworkError } from "
 import { githubClient } from "@/clients/githubClient";
 import { useGitHubRateLimitStore } from "@/store/githubRateLimitStore";
 import { useSystemWakeStore } from "@/store/systemWakeStore";
+import { FixedDropdownVisibleContext } from "@/components/ui/fixed-dropdown";
 import type { GitHubIssue, GitHubPR, GitHubSortOrder } from "@shared/types/github";
 import { parseNumberQuery } from "@/lib/parseNumberQuery";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -509,6 +518,10 @@ export function useGitHubResourceListSWR({
     return () => abortController.abort();
   }, [debouncedSearch, filterState, projectPath, type, fetchData, numberQuery, cacheKey]);
 
+  // Default `true` keeps non-dropdown callers and external mounts unaffected;
+  // gate the focus + wake revalidation paths on the dropdown's real visibility (#10125).
+  const dropdownVisible = useContext(FixedDropdownVisibleContext);
+
   // Background revalidation when the window regains focus. CI status flips
   // on every push, so a user returning from another app expects the list to
   // refresh — without this, stale green ticks can linger for the full backend
@@ -530,6 +543,7 @@ export function useGitHubResourceListSWR({
       if (Date.now() - lastFetchAttemptRef.current < REVALIDATE_THROTTLE_MS) {
         return;
       }
+      if (!dropdownVisible) return;
       const gen = nextGeneration(cacheKey);
       void fetchData(null, false, abortController.signal, {
         revalidating: true,
@@ -544,7 +558,7 @@ export function useGitHubResourceListSWR({
       window.removeEventListener("focus", maybeRevalidate);
       abortController.abort();
     };
-  }, [fetchData, cacheKey, numberQuery]);
+  }, [fetchData, cacheKey, numberQuery, dropdownVisible]);
 
   // Wake-coordinator subscription (#8066). Bypasses the 30-second throttle
   // gate that applies to focus events: a system wake is rare enough that we
@@ -566,6 +580,10 @@ export function useGitHubResourceListSWR({
     // the now-stale wake doesn't replay as a spurious revalidation.
     lastSeenWakeEpochRef.current = wakeEpoch;
     if (numberQuery !== null) return;
+    // Same consume-while-gated pattern as the numeric-search skip above: a
+    // wake that lands while the dropdown body is hidden must not replay as a
+    // redundant fetch on next open (#10125).
+    if (!dropdownVisible) return;
     const abortController = new AbortController();
     const gen = nextGeneration(cacheKey);
     void fetchData(null, false, abortController.signal, {
@@ -574,7 +592,7 @@ export function useGitHubResourceListSWR({
       cacheKey,
     });
     return () => abortController.abort();
-  }, [wakeEpoch, numberQuery, fetchData, cacheKey]);
+  }, [wakeEpoch, numberQuery, fetchData, cacheKey, dropdownVisible]);
 
   // Numeric query effect — handles single number (#42), multi-number
   // (#1, #2, #3), range (#10-20), and open-ended (#>=100) searches.

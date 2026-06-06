@@ -10,6 +10,7 @@ import { useGitHubFilterStore } from "../stores/githubFilterStore";
 import { useIssueSelectionStore } from "@/store/issueSelectionStore";
 import { useGitHubRateLimitStore } from "@/store/githubRateLimitStore";
 import { useSystemWakeStore } from "@/store/systemWakeStore";
+import { FixedDropdownVisibleContext } from "@/components/ui/fixed-dropdown";
 
 const mockListIssues = vi.fn();
 const mockListPRs = vi.fn();
@@ -861,6 +862,36 @@ describe("GitHubResourceList focus/visibility revalidation", () => {
 
     expect(mockListIssues).toHaveBeenCalledTimes(1);
   });
+
+  it("does not revalidate on focus when the keepMounted dropdown body is hidden (#10125)", async () => {
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(cacheKey, {
+      items: [makeIssue(1)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+
+    render(
+      <FixedDropdownVisibleContext.Provider value={false}>
+        <GitHubResourceList type="issue" projectPath="/test/proj" />
+      </FixedDropdownVisibleContext.Provider>
+    );
+
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledTimes(1);
+    });
+
+    // Advance past the 30s revalidation throttle.
+    await vi.advanceTimersByTimeAsync(31_000);
+    window.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Focus while the dropdown body is hidden must NOT trigger a revalidate.
+    expect(mockListIssues).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("GitHubResourceList wake-coordinator revalidation", () => {
@@ -989,6 +1020,59 @@ describe("GitHubResourceList wake-coordinator revalidation", () => {
     // consume-during-numeric-search fix guarantees the stale wake doesn't
     // replay when numberQuery transitions back to null. waitFor on the exact
     // count so CI doesn't race the second effect flush.
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("consumes the wake epoch even when the dropdown body is hidden so a later open doesn't replay it (#10125)", async () => {
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(cacheKey, {
+      items: [makeIssue(1)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+
+    mockListIssues
+      .mockResolvedValueOnce(makeResponse([makeIssue(1)]))
+      .mockResolvedValueOnce(makeResponse([makeIssue(1), makeIssue(5)]));
+
+    // Mount with the dropdown body hidden.
+    const { rerender } = render(
+      <FixedDropdownVisibleContext.Provider value={false}>
+        <GitHubResourceList type="issue" projectPath="/test/proj" />
+      </FixedDropdownVisibleContext.Provider>
+    );
+
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledTimes(1);
+    });
+
+    // Wake fires while hidden — must NOT refetch.
+    await act(async () => {
+      useSystemWakeStore.setState((s) => ({ wakeEpoch: s.wakeEpoch + 1 }));
+    });
+    expect(mockListIssues).toHaveBeenCalledTimes(1);
+
+    // Reopen (now visible). If the hidden wake had NOT been consumed, the
+    // wake effect's next run would see the new wakeEpoch plus a stale ref
+    // and refetch immediately on the visibility flip. Consumed means the
+    // ref is already at the latest epoch — a fresh wake is the only thing
+    // that triggers a fetch. Bump again: with consume-fix in place, exactly
+    // one new call. Without it, two new calls.
+    await act(async () => {
+      rerender(
+        <FixedDropdownVisibleContext.Provider value={true}>
+          <GitHubResourceList type="issue" projectPath="/test/proj" />
+        </FixedDropdownVisibleContext.Provider>
+      );
+    });
+
+    await act(async () => {
+      useSystemWakeStore.setState((s) => ({ wakeEpoch: s.wakeEpoch + 1 }));
+    });
+
     await waitFor(() => {
       expect(mockListIssues).toHaveBeenCalledTimes(2);
     });
