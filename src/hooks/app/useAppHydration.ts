@@ -4,10 +4,7 @@ import { isElectronAvailable } from "../useElectron";
 import { setStartupQuietPeriod } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { usePanelStore } from "@/store";
-import {
-  suppressMruRecording,
-  useWorktreeSelectionStore,
-} from "@/store/worktreeStore";
+import { suppressMruRecording, useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import {
   useDiagnosticsStore,

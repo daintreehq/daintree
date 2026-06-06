@@ -2322,10 +2322,7 @@ describe("lastActiveAt propagation (issue #9933)", () => {
     // Orphans are panels alive in the backend but missing from the
     // saved snapshot — there is no recency data to recover, so the
     // builder deliberately doesn't accept or emit `lastActiveAt`.
-    const result = buildArgsForOrphanedTerminal(
-      { id: "t1", cwd: "/p" },
-      "/p"
-    );
+    const result = buildArgsForOrphanedTerminal({ id: "t1", cwd: "/p" }, "/p");
     expect(result).not.toHaveProperty("lastActiveAt");
   });
 });
