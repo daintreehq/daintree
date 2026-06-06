@@ -279,4 +279,146 @@ describe("panelStore adversarial", () => {
 
     expect(usePanelStore.getState().lastClosedConfig).toBe(priorSnapshot);
   });
+
+  describe("maximize state cleared on out-of-grid moves (#9936)", () => {
+    function makePanel(id: string, overrides: Record<string, unknown> = {}) {
+      return {
+        id,
+        title: id,
+        cwd: "/a",
+        location: "grid",
+        createdAt: 1,
+        type: "terminal",
+        kind: "terminal",
+        worktreeId: "wt-1",
+        ...overrides,
+      } as unknown as never;
+    }
+
+    function makeGroup() {
+      return {
+        id: "g1",
+        location: "grid",
+        activeTabId: "p1",
+        panelIds: ["p1", "p2"],
+        worktreeId: "wt-1",
+      };
+    }
+
+    function seedMaximizedPanel() {
+      usePanelStore.setState({
+        panelsById: { p1: makePanel("p1"), p2: makePanel("p2") },
+        panelIds: ["p1", "p2"],
+        panelIdsByWorktreeId: { "wt-1": ["p1", "p2"] },
+        maximizedId: "p1",
+        maximizeTarget: { type: "panel", id: "p1" },
+        preMaximizeLayout: { kind: "snapshot" } as unknown as never,
+      });
+    }
+
+    function seedMaximizedGroup() {
+      usePanelStore.setState({
+        panelsById: { p1: makePanel("p1"), p2: makePanel("p2") },
+        panelIds: ["p1", "p2"],
+        panelIdsByWorktreeId: { "wt-1": ["p1", "p2"] },
+        tabGroups: new Map([["g1", makeGroup()]]) as never,
+        // Group-maximize tracks the triggering PANEL in maximizedId; the group
+        // id lives in maximizeTarget.id.
+        maximizedId: "p1",
+        maximizeTarget: { type: "group", id: "g1" },
+        preMaximizeLayout: { kind: "snapshot" } as unknown as never,
+      });
+    }
+
+    function expectMaximizeCleared() {
+      const s = usePanelStore.getState();
+      expect(s.maximizedId).toBeNull();
+      expect(s.maximizeTarget).toBeNull();
+      expect(s.preMaximizeLayout).toBeNull();
+    }
+
+    it("backgroundTerminal clears maximize when the maximized panel is sent to background", () => {
+      seedMaximizedPanel();
+      usePanelStore.getState().backgroundTerminal("p1");
+      expectMaximizeCleared();
+    });
+
+    it("backgroundTerminal clears maximize when a sibling of the maximized group is backgrounded", () => {
+      seedMaximizedGroup();
+      // Background p2 — not the tracking panel (p1) but a member of the
+      // maximized group, so maximize must still clear.
+      usePanelStore.getState().backgroundTerminal("p2");
+      expectMaximizeCleared();
+    });
+
+    it("backgroundPanelGroup clears maximize when the maximized group is backgrounded", () => {
+      seedMaximizedGroup();
+      usePanelStore.getState().backgroundPanelGroup("p1");
+      expectMaximizeCleared();
+    });
+
+    it("moveTerminalToWorktree clears maximize when the maximized panel changes worktree", () => {
+      seedMaximizedPanel();
+      usePanelStore.getState().moveTerminalToWorktree("p1", "wt-2");
+      expectMaximizeCleared();
+    });
+
+    it("moveTabGroupToWorktree clears maximize when the maximized group changes worktree", () => {
+      seedMaximizedGroup();
+      usePanelStore.getState().moveTabGroupToWorktree("g1", "wt-2");
+      expectMaximizeCleared();
+    });
+
+    it("moveTabGroupToLocation clears maximize when the maximized group is dragged into the dock", () => {
+      seedMaximizedGroup();
+      usePanelStore.getState().moveTabGroupToLocation("g1", "dock");
+      expectMaximizeCleared();
+    });
+
+    it("moveTerminalToDock clears maximize when a sibling of the maximized group is docked", () => {
+      seedMaximizedGroup();
+      // p2 is in the maximized group; p1 is the tracking panel. Docking p2
+      // routes through moveTabGroupToLocation internally.
+      usePanelStore.getState().moveTerminalToDock("p2");
+      expectMaximizeCleared();
+    });
+
+    it("backgroundPanelGroup clears maximize for an ungrouped maximized panel via delegation", () => {
+      seedMaximizedPanel();
+      usePanelStore.getState().backgroundPanelGroup("p1");
+      expectMaximizeCleared();
+    });
+
+    it("moveTerminalToPosition clears maximize when the maximized panel is dragged into the dock", () => {
+      seedMaximizedPanel();
+      usePanelStore.getState().moveTerminalToPosition("p1", 0, "dock");
+      expectMaximizeCleared();
+    });
+
+    it("leaves maximize untouched when an unrelated panel is moved out of grid scope", () => {
+      seedMaximizedPanel();
+      // p2 is neither the maximized panel nor in its group.
+      usePanelStore.getState().backgroundTerminal("p2");
+      const s = usePanelStore.getState();
+      expect(s.maximizedId).toBe("p1");
+      expect(s.maximizeTarget).toEqual({ type: "panel", id: "p1" });
+      expect(s.preMaximizeLayout).not.toBeNull();
+    });
+
+    it("leaves maximize untouched on a within-grid reposition (location stays grid)", () => {
+      seedMaximizedPanel();
+      usePanelStore.getState().moveTerminalToPosition("p1", 1, "grid");
+      const s = usePanelStore.getState();
+      expect(s.maximizedId).toBe("p1");
+      expect(s.maximizeTarget).toEqual({ type: "panel", id: "p1" });
+    });
+
+    it("leaves maximize untouched on a same-worktree no-op move", () => {
+      seedMaximizedPanel();
+      usePanelStore.getState().moveTerminalToWorktree("p1", "wt-1");
+      const s = usePanelStore.getState();
+      expect(s.maximizedId).toBe("p1");
+      expect(s.maximizeTarget).toEqual({ type: "panel", id: "p1" });
+    });
+  });
 });
