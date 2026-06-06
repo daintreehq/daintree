@@ -299,6 +299,33 @@ describe("computeTestRatioReport", () => {
     expect(report.windowCompleted).toBe(true);
   });
 
+  // Regression for #10035: the window is sized by *eligible* PRs, so a batch
+  // padded with skipped release/version-bump PRs must still complete the window
+  // (the fetch now paginates until 100 eligible PRs are collected). The gate
+  // self-disabled when windowCompleted went false just because skipped PRs ate
+  // into a fixed 100-PR fetch.
+  it("windowCompleted stays true when skipped PRs accompany a full eligible window", () => {
+    const eligible = Array.from({ length: 100 }, (_, i) => ({
+      number: i + 1,
+      title: "feat: item",
+      isFix: false,
+      touchesTests: false,
+      isSkipped: false,
+    }));
+    const skipped = Array.from({ length: 5 }, (_, i) => ({
+      number: 1000 + i,
+      title: `v1.0.${i}`,
+      isFix: false,
+      touchesTests: false,
+      isSkipped: true,
+      skipReason: "release/version bump",
+    }));
+    const report = computeTestRatioReport([...skipped, ...eligible], 100);
+    expect(report.windowCompleted).toBe(true);
+    expect(report.totalCount).toBe(100);
+    expect(report.skippedCount).toBe(5);
+  });
+
   it("fixWithTestRatio is 0 when no fix PRs exist", () => {
     const classified = [
       { number: 1, title: "feat: a", isFix: false, touchesTests: true, isSkipped: false },

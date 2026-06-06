@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 // Compares the fix-with-test ratio against the checked-in
-// test-ratio-baseline.json. The ratio is computed from the last 100 merged
-// PRs via the GitHub GraphQL API.
+// test-ratio-baseline.json. The ratio is computed from the last 100 eligible
+// merged PRs, paginating the GitHub GraphQL API until that many are collected
+// (release/version-bump PRs are filtered out and don't count toward the window).
 //
 // Usage:
 //   node scripts/check-test-ratio.mjs                    # check mode (CI)
@@ -12,7 +13,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { graphql } from "@octokit/graphql";
+import { graphql, GraphqlResponseError } from "@octokit/graphql";
 import {
   classifyPR,
   computeTestRatioReport,
@@ -21,6 +22,7 @@ import {
   formatBaseline,
   formatMarkdown,
   wilsonLowerBound,
+  isEligiblePR,
 } from "./test-ratio-lib.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -28,7 +30,17 @@ const ROOT = path.resolve(path.dirname(__filename), "..");
 const BASELINE_FILE = path.join(ROOT, "test-ratio-baseline.json");
 const SUMMARY_FILE = path.join(ROOT, "dist", "test-ratio-summary.md");
 const ROLLING_WINDOW_SIZE = 100;
-const API_TIMEOUT_MS = 15_000;
+// GraphQL `search` caps `first` at 100 per page. We paginate until we've
+// collected ROLLING_WINDOW_SIZE *eligible* PRs (post-skip-filter) so a batch
+// containing release/version-bump PRs doesn't shrink the window below the gate
+// threshold and silently self-disable the regression check (issue #10035).
+const PAGE_SIZE = 100;
+// Runaway guard: 10 pages × 100 = 1000 raw PRs. GitHub's search API hard-caps
+// at 1000 results anyway, so hasNextPage goes false by page 10 regardless.
+const MAX_SEARCH_PAGES = 10;
+// Covers the whole paginated loop (up to MAX_SEARCH_PAGES sequential requests),
+// not a single request — a tighter per-request budget would falsely time out.
+const API_TIMEOUT_MS = 60_000;
 const UPDATE_SHRINKAGE_THRESHOLD = 0.1;
 
 function readJson(file, label, hint) {
@@ -49,8 +61,9 @@ function readJson(file, label, hint) {
 
 const SEARCH_QUERY = `is:pr is:merged -label:documentation -label:dependencies repo:daintreehq/daintree sort:created-desc`;
 
-const PR_QUERY = `query($q: String!) {
-  search(query: $q, type: ISSUE, first: 100) {
+const PR_QUERY = `query($q: String!, $cursor: String) {
+  search(query: $q, type: ISSUE, first: ${PAGE_SIZE}, after: $cursor) {
+    pageInfo { hasNextPage endCursor }
     nodes {
       ... on PullRequest {
         number
@@ -66,39 +79,68 @@ async function fetchMergedPullRequests(token) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
 
-  let result;
+  const allNodes = [];
+  let eligibleCount = 0;
+  let cursor = null;
+  let pageCount = 0;
+
   try {
-    result = await graphql({
-      query: PR_QUERY,
-      q: SEARCH_QUERY,
-      headers: { authorization: `token ${token}` },
-      request: { signal: controller.signal },
-    });
-  } catch (err) {
-    if (err.name === "AbortError") {
-      console.error(`::error::GitHub GraphQL request timed out after ${API_TIMEOUT_MS / 1000}s`);
-    } else {
-      console.error(`::error::GitHub GraphQL request failed: ${err.message ?? err}`);
+    while (pageCount < MAX_SEARCH_PAGES) {
+      let result;
+      try {
+        result = await graphql({
+          query: PR_QUERY,
+          q: SEARCH_QUERY,
+          cursor,
+          headers: { authorization: `token ${token}` },
+          request: { signal: controller.signal },
+        });
+      } catch (err) {
+        if (err.name === "AbortError") {
+          console.error(
+            `::error::GitHub GraphQL request timed out after ${API_TIMEOUT_MS / 1000}s`
+          );
+        } else if (err instanceof GraphqlResponseError) {
+          console.error(`::error::GitHub GraphQL query failed: ${err.message}`);
+        } else {
+          console.error(`::error::GitHub GraphQL request failed: ${err.message ?? err}`);
+        }
+        process.exit(1);
+      }
+
+      const search = result?.search;
+      const nodes = search?.nodes;
+      if (!Array.isArray(nodes)) {
+        console.error("::error::GraphQL response did not contain search.nodes array");
+        console.error("   Verify the GH_TOKEN has read permissions and the query is valid.");
+        process.exit(1);
+      }
+
+      for (const node of nodes) {
+        if (isEligiblePR(node)) eligibleCount += 1;
+      }
+      allNodes.push(...nodes);
+      pageCount += 1;
+
+      // Stop once the window is full of eligible PRs; trailing skipped PRs in a
+      // later page would only be discarded by buildReport anyway.
+      if (eligibleCount >= ROLLING_WINDOW_SIZE) break;
+
+      const pageInfo = search?.pageInfo;
+      if (!pageInfo?.hasNextPage) break;
+      cursor = pageInfo.endCursor;
     }
-    process.exit(1);
   } finally {
     clearTimeout(timeout);
   }
 
-  const nodes = result?.search?.nodes;
-  if (!Array.isArray(nodes)) {
-    console.error("::error::GraphQL response did not contain search.nodes array");
-    console.error("   Verify the GH_TOKEN has read permissions and the query is valid.");
-    process.exit(1);
-  }
-
-  if (nodes.length === 0) {
+  if (allNodes.length === 0) {
     console.error("::error::GraphQL search returned zero PRs");
     console.error(`   Search query: ${SEARCH_QUERY}`);
     process.exit(1);
   }
 
-  return nodes;
+  return allNodes;
 }
 
 function buildReport(prs) {
