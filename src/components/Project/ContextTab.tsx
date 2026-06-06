@@ -1,15 +1,8 @@
-import { useState, useEffect } from "react";
-import {
-  FolderX,
-  Plus,
-  Trash2,
-  AlertTriangle,
-  Play,
-  Check,
-  Settings,
-  FileCode,
-} from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { FolderX, Plus, Trash2, AlertTriangle, Play, Check, FileCode } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { useSkeletonGate, useSkeletonFloor } from "@/hooks/useDeferredLoading";
 import { cn } from "@/lib/utils";
 import { copyTreeClient } from "@/clients/copyTreeClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -51,8 +44,17 @@ export function ContextTab({
   const [testConfigResult, setTestConfigResult] = useState<CopyTreeTestConfigResult | null>(null);
   const [isTestingConfig, setIsTestingConfig] = useState(false);
 
+  const testingSkeletonGate = useSkeletonGate(isTestingConfig);
+  const showTestingSkeleton = useSkeletonFloor(testingSkeletonGate);
+
+  // Invalidation token for in-flight dry-runs: bumped when the tab closes or a
+  // new run starts, so a late-resolving testConfig promise can't write a stale
+  // result onto a closed/superseded tab.
+  const runIdRef = useRef(0);
+
   useEffect(() => {
     if (!isOpen) {
+      runIdRef.current++;
       setTestConfigResult(null);
       setIsTestingConfig(false);
     }
@@ -70,6 +72,7 @@ export function ContextTab({
       return;
     }
 
+    const runId = ++runIdRef.current;
     setIsTestingConfig(true);
     setTestConfigResult(null);
 
@@ -109,9 +112,11 @@ export function ContextTab({
       }
 
       const result = await copyTreeClient.testConfig(mainWorktree.id, testOptions);
+      if (runIdRef.current !== runId) return;
       setTestConfigResult(result);
     } catch (error) {
       logError("Failed to test config", error);
+      if (runIdRef.current !== runId) return;
       setTestConfigResult({
         includedFiles: 0,
         includedSize: 0,
@@ -119,7 +124,9 @@ export function ContextTab({
         error: formatErrorMessage(error, "Failed to test configuration"),
       });
     } finally {
-      setIsTestingConfig(false);
+      if (runIdRef.current === runId) {
+        setIsTestingConfig(false);
+      }
     }
   };
 
@@ -128,11 +135,11 @@ export function ContextTab({
       <div className="mb-6 pb-6 border-b border-daintree-border">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <FolderX className="h-4 w-4" />
-          Excluded Paths
+          Excluded paths
         </h3>
         <p className="text-xs text-daintree-text/60 mb-4">
           Glob patterns to exclude from monitoring and context injection (e.g., node_modules/**,
-          dist/**, .git/**).
+          dist/**, .git/**)
         </p>
 
         <div className="space-y-2">
@@ -182,7 +189,7 @@ export function ContextTab({
             className="w-full"
           >
             <Plus />
-            Add Path Pattern
+            Add path pattern
           </Button>
         </div>
       </div>
@@ -191,7 +198,7 @@ export function ContextTab({
       <div className="mb-6 pb-6 border-b border-daintree-border">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <FileCode className="h-4 w-4" />
-          Context Generation Settings
+          Context generation settings
         </h3>
         <p className="text-xs text-daintree-text/60 mb-4">
           Configure how CopyTree generates context for AI agents. These settings apply when
@@ -203,7 +210,7 @@ export function ContextTab({
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs text-daintree-text/60 mb-1">
-                Max Context Size (bytes)
+                Max context size (bytes)
               </label>
               <input
                 type="number"
@@ -221,7 +228,7 @@ export function ContextTab({
             </div>
             <div>
               <label className="block text-xs text-daintree-text/60 mb-1">
-                Max File Size (bytes)
+                Max file size (bytes)
               </label>
               <input
                 type="number"
@@ -243,7 +250,7 @@ export function ContextTab({
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs text-daintree-text/60 mb-1">
-                Char Limit (per file)
+                Char limit (per file)
               </label>
               <input
                 type="number"
@@ -263,7 +270,7 @@ export function ContextTab({
             </div>
             <div>
               <label className="block text-xs text-daintree-text/60 mb-1">
-                File Priority Strategy
+                File priority strategy
               </label>
               <select
                 value={copyTreeSettings.strategy ?? ""}
@@ -287,11 +294,11 @@ export function ContextTab({
           {/* Always Include Patterns */}
           <div>
             <label className="block text-xs text-daintree-text/60 mb-1">
-              Always Include (glob patterns)
+              Always include (glob patterns)
             </label>
             <p className="text-xs text-daintree-text/40 mb-2">
               Files matching these patterns will always be included, even if they would otherwise be
-              excluded.
+              excluded
             </p>
             <div className="space-y-2">
               {(copyTreeSettings.alwaysInclude || []).map((pattern, index) => (
@@ -342,7 +349,7 @@ export function ContextTab({
                 className="w-full"
               >
                 <Plus />
-                Add Include Pattern
+                Add include pattern
               </Button>
             </div>
           </div>
@@ -350,10 +357,10 @@ export function ContextTab({
           {/* Always Exclude Patterns */}
           <div>
             <label className="block text-xs text-daintree-text/60 mb-1">
-              Always Exclude (glob patterns)
+              Always exclude (glob patterns)
             </label>
             <p className="text-xs text-daintree-text/40 mb-2">
-              Additional exclusion patterns beyond the default excluded paths above.
+              Additional exclusion patterns beyond the default excluded paths above
             </p>
             <div className="space-y-2">
               {(copyTreeSettings.alwaysExclude || []).map((pattern, index) => (
@@ -404,7 +411,7 @@ export function ContextTab({
                 className="w-full"
               >
                 <Plus />
-                Add Exclude Pattern
+                Add exclude pattern
               </Button>
             </div>
           </div>
@@ -413,7 +420,7 @@ export function ContextTab({
           <div className="mt-6 pt-4 border-t border-daintree-border">
             <div className="flex items-center justify-between">
               <div>
-                <h4 className="text-sm font-medium text-daintree-text/80">Test Configuration</h4>
+                <h4 className="text-sm font-medium text-daintree-text/80">Test configuration</h4>
                 <p className="text-xs text-daintree-text/40">
                   Preview what files would be included with current settings
                 </p>
@@ -421,23 +428,27 @@ export function ContextTab({
               <Button
                 variant="outline"
                 onClick={handleTestConfig}
-                disabled={isTestingConfig || worktrees.length === 0}
+                loading={isTestingConfig}
+                disabled={worktrees.length === 0}
               >
-                {isTestingConfig ? (
-                  <>
-                    <Settings className="h-4 w-4 animate-spin" />
-                    Testing...
-                  </>
-                ) : (
-                  <>
-                    <Play className="h-4 w-4" />
-                    Test Config
-                  </>
-                )}
+                <Play className="h-4 w-4" />
+                Test config
               </Button>
             </div>
 
-            {testConfigResult && (
+            {showTestingSkeleton && (
+              <Skeleton
+                label="Running test configuration"
+                className="mt-4 p-4 rounded-[var(--radius-md)] border border-daintree-border space-y-3"
+              >
+                <SkeletonBone immediate className="h-4 w-2/3" />
+                <SkeletonBone immediate className="h-3 w-1/2" />
+                <SkeletonBone immediate className="h-3 w-2/3" />
+                <SkeletonBone immediate className="h-3 w-1/3" />
+              </Skeleton>
+            )}
+
+            {testConfigResult && !showTestingSkeleton && (
               <div
                 className={cn(
                   "mt-4 p-4 rounded-[var(--radius-md)] border",
