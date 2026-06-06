@@ -4,7 +4,9 @@
 // arrived. `crossOrigin = "anonymous"` makes the preload's request mode
 // match the @font-face fetch, letting the preload satisfy the CSS request.
 export function ensureLatin400Preload(href: string): void {
-  if (document.head.querySelector(`link[rel="preload"][href="${href}"]`)) return;
+  for (const existing of document.head.querySelectorAll('link[rel="preload"]')) {
+    if (existing.getAttribute("href") === href) return;
+  }
   const link = document.createElement("link");
   link.rel = "preload";
   link.as = "font";

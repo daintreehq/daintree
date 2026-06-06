@@ -111,7 +111,7 @@ bootstrap().catch((error: unknown) => {
       error instanceof Error
         ? { name: error.name, message: error.message, stack: error.stack }
         : { message: String(error) };
-    window.electron?.logs?.write("error", `Bootstrap failed: ${JSON.stringify(errObj)}`);
+    void window.electron?.logs?.write("error", `Bootstrap failed: ${JSON.stringify(errObj)}`);
   } catch {
     // IPC may not be available
   }
