@@ -301,8 +301,10 @@ export async function hydrateAppState(
     // Start the backend-terminal lookup alongside the other prefetch promises so
     // its IPC round-trip overlaps with draft-input restore and the rest of the
     // synchronous hydration work. The result is consumed inside the panel-restore
-    // block below; any rejection is captured and re-thrown there so the existing
-    // outer try/catch still logs and skips terminal restore.
+    // block below; any rejection is logged inline and converted to `[]` so saved
+    // panel restore still proceeds without live backend data — otherwise a failed
+    // query would skip restore and the first post-boot save would wipe the saved
+    // session (#9928).
     //
     // Perf span is split into startRendererSpan + manual finishGetForProject so
     // the `:end` mark only fires once `checkCurrent()` has confirmed the run is
@@ -310,7 +312,6 @@ export async function hydrateAppState(
     // emit `:end` after `hydrateAppState`'s `finally` flushes the buffer when a
     // mid-flight supersede happens, polluting the next run's marks with the
     // wrong `switchId`.
-    let terminalFetchError: unknown = null;
     const finishGetForProjectSpan = currentProjectId
       ? startRendererSpan(PERF_MARKS.HYDRATE_GET_TERMINALS, {
           switchId: _switchId ?? null,
@@ -318,7 +319,9 @@ export async function hydrateAppState(
       : null;
     const getForProjectPromise: Promise<BackendTerminalInfo[]> = currentProjectId
       ? terminalClient.getForProject(currentProjectId).catch((error: unknown) => {
-          terminalFetchError = error;
+          logWarn("Failed to query backend terminals; continuing with saved panel restore", {
+            error,
+          });
           return [];
         })
       : Promise.resolve([]);
@@ -342,7 +345,6 @@ export async function hydrateAppState(
         const backendTerminals = await getForProjectPromise;
         if (!checkCurrent()) return;
         finishGetForProjectSpan?.();
-        if (terminalFetchError) throw terminalFetchError;
 
         logHydrationInfo(
           `Found ${backendTerminals.length} running terminals for project ${currentProjectId}`
@@ -450,7 +452,7 @@ export async function hydrateAppState(
           });
         }
       } catch (error) {
-        logWarn("Failed to query backend terminals", { error });
+        logWarn("Failed to restore panels during hydration", { error });
       }
 
       // Restore tab groups after terminals are restored

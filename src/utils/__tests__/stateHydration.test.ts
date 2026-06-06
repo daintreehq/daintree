@@ -133,6 +133,7 @@ vi.mock("@/lib/notify", () => ({
 }));
 
 const { hydrateAppState } = await import("../stateHydration");
+const { panelPersistence } = await import("@/store/persistence/panelPersistence");
 
 function makeMockManagedTerminal(id: string) {
   const hostElement = document.createElement("div");
@@ -668,6 +669,63 @@ describe("hydrateAppState", () => {
     // Scrollback restore is deferred to background — flush to verify
     await flushPostTasks();
     expect(fetchAndRestoreMock).toHaveBeenCalledWith("agent-1");
+  });
+
+  it("restores saved panels and primes persistence when getForProject rejects (#9928)", async () => {
+    // Regression: a rejected backend-terminal query must not skip session restore.
+    // Previously the rejection was re-thrown into the outer catch, leaving the panel
+    // store empty so the first post-boot save wiped the saved session. The fetch
+    // failure should degrade to an empty backend map and let saved panels respawn.
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "agent-1",
+            kind: "terminal",
+            type: "claude",
+            agentId: "claude",
+            title: "Claude Agent",
+            cwd: "/project",
+            location: "grid",
+            command: "claude",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    terminalClientMock.getForProject.mockRejectedValue(new Error("terminal query failed"));
+
+    const primeProjectSpy = vi.spyOn(panelPersistence, "primeProject");
+    const addPanel = vi.fn().mockResolvedValue("agent-1");
+
+    await hydrateAppState({
+      addPanel,
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    // Persistence cache is primed with the saved panels before any save can fire,
+    // so the first post-boot save compares against the real snapshot, not an empty one.
+    expect(primeProjectSpy).toHaveBeenCalledWith(
+      "project-1",
+      expect.arrayContaining([expect.objectContaining({ id: "agent-1" })])
+    );
+
+    // Saved panel is respawned from disk (empty backend map → respawn path).
+    expect(addPanel).toHaveBeenCalledTimes(1);
+    expect(addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "terminal",
+        requestedId: "agent-1",
+      })
+    );
+
+    primeProjectSpy.mockRestore();
   });
 
   it("schedules scrollback restore as background tasks, not blocking hydration", async () => {
