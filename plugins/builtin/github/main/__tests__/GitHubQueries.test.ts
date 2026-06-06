@@ -7,7 +7,6 @@ import {
   buildBatchRequiredChecksQuery,
   buildBatchIssuesQuery,
   buildBatchPRsQuery,
-  REPO_STATS_QUERY,
   LIST_PRS_QUERY,
   REPO_STATS_AND_PAGE_QUERY,
   SEARCH_QUERY,
@@ -410,15 +409,11 @@ describe("buildBatchPRQuery", () => {
   });
 
   describe("rateLimit field", () => {
-    it("includes rateLimit at operation root in REPO_STATS_QUERY", () => {
-      expect(REPO_STATS_QUERY).toContain("rateLimit {");
-      expect(REPO_STATS_QUERY).toContain("cost");
-      expect(REPO_STATS_QUERY).toContain("remaining");
-      expect(REPO_STATS_QUERY).toContain("resetAt");
-    });
-
-    it("includes rateLimit in REPO_STATS_AND_PAGE_QUERY", () => {
+    it("includes rateLimit at operation root in REPO_STATS_AND_PAGE_QUERY", () => {
       expect(REPO_STATS_AND_PAGE_QUERY).toContain("rateLimit {");
+      expect(REPO_STATS_AND_PAGE_QUERY).toContain("cost");
+      expect(REPO_STATS_AND_PAGE_QUERY).toContain("remaining");
+      expect(REPO_STATS_AND_PAGE_QUERY).toContain("resetAt");
     });
 
     it("includes rateLimit in PROJECT_HEALTH_QUERY", () => {

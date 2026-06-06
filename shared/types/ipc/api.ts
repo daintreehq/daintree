@@ -117,6 +117,7 @@ import type {
   GitHubRateLimitDetails,
   GitHubTokenHealthPayload,
   RepoStatsAndPagePayload,
+  RepoCountsUpdatedPayload,
   GitHubFirstPageCachePayload,
   PRDetectedPayload,
   PRClearedPayload,
@@ -761,6 +762,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getRateLimitDetails(): Promise<GitHubRateLimitDetails | null>;
     onTokenHealthChanged(callback: (data: GitHubTokenHealthPayload) => void): () => void;
     onRepoStatsAndPageUpdated(callback: (data: RepoStatsAndPagePayload) => void): () => void;
+    onRepoCountsUpdated(callback: (data: RepoCountsUpdatedPayload) => void): () => void;
     getTokenHealth(): Promise<GitHubTokenHealthPayload>;
   };
   // getState comes from GeneratedElectronAPI; onServiceChanged is a renderer-only subscription.

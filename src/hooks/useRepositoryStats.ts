@@ -482,6 +482,39 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     return cleanup;
   }, [applyStatsResult]);
 
+  // Subscribe to the count-only push from the cheap REST background poll
+  // (issue #10122). Carries no page items — only the toolbar counts — so it
+  // skips the cache seeding above and just applies the stats, behind the same
+  // project filter and freshness guard as the combined push.
+  useEffect(() => {
+    const cleanup = githubClient.onRepoCountsUpdated((payload) => {
+      if (!mountedRef.current) return;
+      projectClient
+        .getCurrent()
+        .then((project) => {
+          if (!project || project.path !== payload.projectPath) return;
+          if (!mountedRef.current) return;
+
+          const pushedLastUpdated = payload.stats.lastUpdated ?? null;
+          if (
+            pushedLastUpdated !== null &&
+            lastUpdatedRef.current !== null &&
+            pushedLastUpdated <= lastUpdatedRef.current
+          ) {
+            return;
+          }
+
+          applyStatsResult(payload.stats, { projectPath: payload.projectPath });
+        })
+        .catch(() => {
+          // Project lookup races during teardown / project switch are
+          // expected and benign — swallow rather than producing an
+          // unhandled rejection.
+        });
+    });
+    return cleanup;
+  }, [applyStatsResult]);
+
   // Coalesce sleep-wake fetches onto the shared wake-coordinator slice
   // (#8066). The store bumps `wakeEpoch` once per qualifying wake; every
   // consumer reacts to the same epoch instead of independently registering

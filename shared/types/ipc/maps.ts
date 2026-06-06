@@ -86,6 +86,7 @@ import type {
   GitHubRateLimitDetails,
   GitHubTokenHealthPayload,
   RepoStatsAndPagePayload,
+  RepoCountsUpdatedPayload,
   GitHubFirstPageCachePayload,
   PRDetectedPayload,
   PRClearedPayload,
@@ -1602,6 +1603,10 @@ export interface IpcEventMap {
   // after every successful poll. Lets renderers prime githubResourceCache
   // for the (open, created) default-filter cache key with no click-time fetch.
   "github:repo-stats-and-page-updated": RepoStatsAndPagePayload;
+
+  // Count-only stats push from the cheap REST background poll (issue #10122).
+  // No page items — the dropdown loads its own first page on open.
+  "github:repo-counts-updated": RepoCountsUpdatedPayload;
 
   // Per-service connectivity state push
   "connectivity:service-changed": ServiceConnectivityPayload;

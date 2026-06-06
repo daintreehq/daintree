@@ -8,6 +8,7 @@ import type {
   GitHubRateLimitDetails,
   GitHubTokenHealthPayload,
   RepoStatsAndPagePayload,
+  RepoCountsUpdatedPayload,
   GitHubFirstPageCachePayload,
   PRDetectedPayload,
   PRClearedPayload,
@@ -149,6 +150,10 @@ export const githubClient = {
 
   onRepoStatsAndPageUpdated: (callback: (data: RepoStatsAndPagePayload) => void): (() => void) => {
     return window.electron.github.onRepoStatsAndPageUpdated(callback);
+  },
+
+  onRepoCountsUpdated: (callback: (data: RepoCountsUpdatedPayload) => void): (() => void) => {
+    return window.electron.github.onRepoCountsUpdated(callback);
   },
 
   getTokenHealth: (): Promise<GitHubTokenHealthPayload> => {

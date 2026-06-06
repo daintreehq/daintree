@@ -1,20 +1,5 @@
 import type { PRCheckCandidate } from "./types.js";
 
-export const REPO_STATS_QUERY = `
-  query GetRepoStats($owner: String!, $repo: String!) {
-    repository(owner: $owner, name: $repo) {
-      issues(states: OPEN) { totalCount }
-      pullRequests(states: OPEN) { totalCount }
-    }
-    rateLimit {
-      cost
-      remaining
-      resetAt
-      limit
-    }
-  }
-`;
-
 // Combined poll query: returns the count badges AND the first page of open
 // issues + open PRs (default filter + sort) in a single round-trip. Cost on
 // GitHub's GraphQL rate limit is dominated by nested `first:` connections —
