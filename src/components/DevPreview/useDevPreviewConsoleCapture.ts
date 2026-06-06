@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 import { usePanelStore } from "@/store";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -26,6 +26,10 @@ export interface DevPreviewConsoleCapture {
    * `true` once Vite has reported its HMR socket as dead for this pane.
    * Sticky until `resetHmrDead` is called (on reload / restart / stop) so a
    * single failure row keeps the warning up while the webview stays stale.
+   * Lives in component state, so it resets on a grid tab-switch unmount; the
+   * captured rows survive in the store, and Vite re-logs on the next failed
+   * poll, so the worst case is a transient gap in the warning, not a stuck
+   * webview without any console trail.
    */
   hmrDead: boolean;
   resetHmrDead: () => void;
@@ -51,6 +55,13 @@ export function useDevPreviewConsoleCapture(
 ): DevPreviewConsoleCapture {
   const [hmrDead, setHmrDead] = useState(false);
   const resetHmrDead = useCallback(() => setHmrDead(false), []);
+  // The newest navigation generation observed for this pane. A dev-server
+  // restart leaves the old guest page polling and logging `[vite] server
+  // connection lost` from its now-defunct generation; once the page reloads
+  // into the fresh server the context clears and this advances. Gating
+  // `setHmrDead(true)` on the current generation keeps those stale, lower-
+  // generation failures from resurrecting the banner over a healthy reload.
+  const currentGenerationRef = useRef(0);
 
   useEffect(() => {
     if (!webviewElement || isEvicted) return;
@@ -78,7 +89,12 @@ export function useDevPreviewConsoleCapture(
 
     const offMessage = window.electron.webview.onConsoleMessage((row) => {
       if (row.paneId !== paneId) return;
-      if (isViteHmrFailureMessage(row.summaryText)) setHmrDead(true);
+      if (
+        isViteHmrFailureMessage(row.summaryText) &&
+        row.navigationGeneration >= currentGenerationRef.current
+      ) {
+        setHmrDead(true);
+      }
       store.addStructuredMessage(row);
     });
 
@@ -89,6 +105,9 @@ export function useDevPreviewConsoleCapture(
         // navigated, so any prior HMR-dead observation is stale. If the socket
         // is still misconfigured, Vite re-logs the failure in the new context
         // and we flip back. This is the reset point for user-driven reloads.
+        // Advance the generation first so late stragglers from the old page
+        // can't re-arm the banner after the reset.
+        currentGenerationRef.current = navigationGeneration;
         setHmrDead(false);
         store.markStale(paneId, navigationGeneration);
       }
