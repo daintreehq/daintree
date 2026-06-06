@@ -82,7 +82,7 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     captureId: string;
     outputPath: string;
     writeStream: fs.WriteStream;
-    frameCount: number;
+    chunkCount: number;
     stopping: boolean;
     finalized: boolean;
     finalizePromise: Promise<DemoStopCaptureResult>;
@@ -109,12 +109,13 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     if (!active || active.captureId !== payload.captureId || active.finalized) return;
     const buf = Buffer.from(payload.data.buffer, payload.data.byteOffset, payload.data.byteLength);
     active.writeStream.write(buf);
+    active.chunkCount += 1;
   };
 
   const onCaptureStop = (_event: Electron.IpcMainEvent, payload: DemoCaptureStopPayload) => {
     const active = captureSession;
     if (!active || active.captureId !== payload.captureId || active.finalized) return;
-    active.frameCount = payload.frameCount;
+    active.chunkCount = payload.chunkCount;
     active.finalized = true;
     const rendererError = payload.error;
     active.writeStream.end(() => {
@@ -124,7 +125,7 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
       } else {
         active.resolveFinalizeWith({
           outputPath: active.outputPath,
-          frameCount: active.frameCount,
+          chunkCount: active.chunkCount,
         });
       }
     });
@@ -255,7 +256,7 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
             captureId,
             outputPath,
             writeStream,
-            frameCount: 0,
+            chunkCount: 0,
             stopping: false,
             finalized: false,
             finalizePromise,
@@ -322,7 +323,7 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
         async (): Promise<DemoCaptureStatus> => {
           return {
             active: captureSession !== null && !captureSession.finalized,
-            frameCount: captureSession?.frameCount ?? 0,
+            chunkCount: captureSession?.chunkCount ?? 0,
             outputPath: captureSession?.outputPath ?? null,
           };
         }

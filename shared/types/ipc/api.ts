@@ -1654,7 +1654,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     waitForIdle(settleMs?: number, timeoutMs?: number): Promise<void>;
     startCapture(payload: DemoStartCapturePayload): Promise<DemoStartCaptureResult>;
     sendCaptureChunk(captureId: string, data: Uint8Array): void;
-    sendCaptureStop(captureId: string, frameCount: number, error?: string): void;
+    sendCaptureStop(captureId: string, chunkCount: number, error?: string): void;
     stopCapture(): Promise<DemoStopCaptureResult>;
     getCaptureStatus(): Promise<DemoCaptureStatus>;
     onExecCommand(
