@@ -16,23 +16,35 @@ const artifactStore = new Map<string, Artifact[]>();
 const listeners = new Set<(terminalId: string, artifacts: Artifact[]) => void>();
 const refState = { count: 0, unsubscribe: null as (() => void) | null };
 
+// Tombstone for terminal ids that have been torn down. While an id is
+// tombstoned, the `onDetected` IPC handler refuses to re-insert into the
+// store — this closes the millisecond-scale race where a packet already
+// queued by the main process lands on a now-removed terminal. The tombstone
+// is cleared by the per-terminal mount effect so a re-spawn that happens to
+// reuse the same id (e.g. fast re-spawn in the same worktree) isn't
+// permanently blackholed.
+const removedTerminals = new Set<string>();
+
 function notifyListeners(terminalId: string, artifacts: Artifact[]) {
   listeners.forEach((listener) => listener(terminalId, artifacts));
 }
 
 /**
- * Drop the per-terminal entry from the module-level artifact store and notify
- * any still-mounted listeners with an empty array. Called from the
- * `panelIds` subscriber in `rendererStoreOrchestrator.ts` so force-removed
- * panels (browser/dev-preview, or worktree teardown shrinking `panelIds`
- * without a PTY exit) do not leak their content strings for the lifetime of
- * the renderer. Safe to call for unknown ids (`Map.delete` is a no-op) and
- * safe to call twice. Mirrors the shape of `unregisterInputController` and
+ * Drop the per-terminal entry from the module-level artifact store, add the
+ * id to the removed-ids tombstone, and notify any still-mounted listeners
+ * with an empty array. Called from the `panelIds` and `trashedTerminals`
+ * subscribers in `rendererStoreOrchestrator.ts` so force-removed panels
+ * (browser/dev-preview, worktree teardown shrinking `panelIds` without a
+ * PTY exit, and the user-close trash path that doesn't shrink `panelIds`)
+ * do not leak their content strings for the lifetime of the renderer.
+ * Safe to call for unknown ids (`Map.delete` is a no-op) and safe to call
+ * twice. Mirrors the shape of `unregisterInputController` and
  * `useResourceMonitoringStore.removePanel` so the orchestrator's teardown
  * loop remains the single convergence point.
  */
 export function removeArtifactsForTerminal(terminalId: string): void {
   artifactStore.delete(terminalId);
+  removedTerminals.add(terminalId);
   notifyListeners(terminalId, []);
 }
 
@@ -40,6 +52,7 @@ export function removeArtifactsForTerminal(terminalId: string): void {
 export function __test_resetArtifactStore(): void {
   artifactStore.clear();
   listeners.clear();
+  removedTerminals.clear();
   refState.count = 0;
   if (refState.unsubscribe) {
     refState.unsubscribe();
@@ -60,6 +73,29 @@ export function __test_getArtifactStoreSize(): number {
 /** Test-only: peek the seeded entry for a terminal id. */
 export function __test_getArtifactsFor(terminalId: string): Artifact[] | undefined {
   return artifactStore.get(terminalId);
+}
+
+/** Test-only: peek the removed-ids tombstone. */
+export function __test_isTombstoned(terminalId: string): boolean {
+  return removedTerminals.has(terminalId);
+}
+
+/** Test-only: simulate a main-process `ARTIFACT_DETECTED` IPC landing in
+ *  the renderer's `onDetected` handler. Honors the tombstone — the same
+ *  contract the production handler uses to guard against in-flight packets
+ *  on torn-down terminals (#10023). */
+export function __test_simulateArtifactDetected(
+  terminalId: string,
+  artifacts: Artifact[]
+): boolean {
+  if (removedTerminals.has(terminalId)) {
+    return false;
+  }
+  const currentArtifacts = artifactStore.get(terminalId) || [];
+  const newArtifacts = [...currentArtifacts, ...artifacts];
+  artifactStore.set(terminalId, newArtifacts);
+  notifyListeners(terminalId, newArtifacts);
+  return true;
 }
 
 /** Test-only: subscribe a listener to the artifact store. Returns unsubscribe. */
@@ -115,6 +151,10 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
 
     if (refState.count === 1 && !refState.unsubscribe) {
       refState.unsubscribe = artifactClient.onDetected((payload: ArtifactDetectedPayload) => {
+        // Drop packets for terminal ids that have been torn down — closes the
+        // millisecond-scale race where a packet already queued by the main
+        // process lands on a now-removed terminal (#10023).
+        if (removedTerminals.has(payload.terminalId)) return;
         const currentArtifacts = artifactStore.get(payload.terminalId) || [];
         const newArtifacts = [...currentArtifacts, ...payload.artifacts];
         artifactStore.set(payload.terminalId, newArtifacts);
@@ -134,6 +174,12 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
   }, []);
 
   useEffect(() => {
+    // A re-spawn that reuses this `terminalId` must not be permanently
+    // blackholed by the tombstone left behind by the previous teardown
+    // (#10023). Clear it on every per-terminal mount; the tombstone is
+    // bounded by the user's working set and re-cleared on each new mount.
+    removedTerminals.delete(terminalId);
+
     const listener = (tid: string, arts: Artifact[]) => {
       if (tid === terminalId) {
         setArtifacts(arts);

@@ -6,6 +6,8 @@ import {
   __test_getArtifactStoreSize,
   __test_getArtifactsFor,
   __test_subscribeArtifactStore,
+  __test_isTombstoned,
+  __test_simulateArtifactDetected,
 } from "@/hooks/useArtifacts";
 import type { Artifact } from "@shared/types";
 
@@ -37,6 +39,32 @@ describe("useArtifacts module-level store teardown", () => {
     expect(__test_getArtifactsFor("t2")).toHaveLength(1);
   });
 
+  it("tombstones the id so in-flight ARTIFACT_DETECTED packets are dropped", () => {
+    __test_seedArtifactStore("t1", [makeArtifact({ id: "a1" })]);
+
+    removeArtifactsForTerminal("t1");
+    expect(__test_isTombstoned("t1")).toBe(true);
+
+    // Simulate the production `artifactClient.onDetected` handler firing
+    // after teardown — the tombstone must block re-insertion.
+    const accepted = __test_simulateArtifactDetected("t1", [makeArtifact({ id: "a-late" })]);
+    expect(accepted).toBe(false);
+    expect(__test_getArtifactStoreSize()).toBe(0);
+  });
+
+  it("tombstone does not block other terminals' packets", () => {
+    __test_seedArtifactStore("t1", [makeArtifact({ id: "a1" })]);
+    __test_seedArtifactStore("t2", [makeArtifact({ id: "b1" })]);
+
+    removeArtifactsForTerminal("t1");
+    expect(__test_isTombstoned("t1")).toBe(true);
+    expect(__test_isTombstoned("t2")).toBe(false);
+
+    const accepted = __test_simulateArtifactDetected("t2", [makeArtifact({ id: "b2" })]);
+    expect(accepted).toBe(true);
+    expect(__test_getArtifactsFor("t2")).toHaveLength(2);
+  });
+
   it("notifies subscribers with an empty array for the removed terminal", () => {
     __test_seedArtifactStore("t1", [makeArtifact({ id: "a1" })]);
 
@@ -51,7 +79,7 @@ describe("useArtifacts module-level store teardown", () => {
     unsubscribe();
   });
 
-  it("is a no-op for an unknown terminal id", () => {
+  it("is a no-op for an unknown terminal id (no throw, no store growth)", () => {
     __test_seedArtifactStore("t1", [makeArtifact({ id: "a1" })]);
     const beforeSize = __test_getArtifactStoreSize();
 
@@ -71,6 +99,7 @@ describe("useArtifacts module-level store teardown", () => {
     expect(listener).toHaveBeenNthCalledWith(1, "t1", []);
     expect(listener).toHaveBeenNthCalledWith(2, "t1", []);
     expect(__test_getArtifactStoreSize()).toBe(0);
+    expect(__test_isTombstoned("t1")).toBe(true);
 
     unsubscribe();
   });
