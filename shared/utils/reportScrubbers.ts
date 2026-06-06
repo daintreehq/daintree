@@ -23,6 +23,15 @@ export { scrubSecrets };
 export function scrubReportPath(str: string): string {
   return (
     str
+      // WSL UNC paths — `\\wsl$\<distro>\home\USER` and
+      // `\\wsl.localhost\<distro>\home\USER`. The username lives after the
+      // distro segment, so the generic /home/ pattern can't reach it (it uses
+      // backslash separators). `[$.]` matches both the `wsl$` and
+      // `wsl.localhost` prefixes without `$` acting as an end-of-line anchor.
+      // Handle the JSON-doubled backslash form before the raw form. The distro
+      // is kept (useful WSL signal); only the username is redacted.
+      .replace(/(\\\\\\\\wsl[$.][^\\"]*\\\\[^\\"]+\\\\home\\\\)[^\\"]+/gi, "$1USER")
+      .replace(/(\\\\wsl[$.][^\\"]*\\[^\\"]+\\home\\)[^\\"]+/gi, "$1USER")
       // macOS / Linux — the username is the segment after /Users/ or /home/,
       // ending at a path separator, JSON-string quote, or end of string. Matching
       // only the username (not requiring a trailing slash) also catches paths that
@@ -30,11 +39,13 @@ export function scrubReportPath(str: string): string {
       .replace(/(\/Users\/)[^/"\\]+/g, "$1USER")
       .replace(/(\/home\/)[^/"\\]+/g, "$1USER")
       // Windows backslash — JSON.stringify doubles backslashes, so handle the
-      // double-backslash form before the single-backslash (raw path) form.
-      .replace(/(C:\\\\Users\\\\)[^\\"]+/gi, "$1USER")
-      .replace(/(C:\\Users\\)[^\\"]+/gi, "$1USER")
+      // double-backslash form before the single-backslash (raw path) form. The
+      // drive letter is generalized to any letter so non-`C:` profiles
+      // (e.g. `D:\Users\alice`) are scrubbed too.
+      .replace(/([A-Za-z]:\\\\Users\\\\)[^\\"]+/gi, "$1USER")
+      .replace(/([A-Za-z]:\\Users\\)[^\\"]+/gi, "$1USER")
       // Windows forward-slash form (e.g. from a posix-normalized path).
-      .replace(/(C:\/Users\/)[^/"\\]+/gi, "$1USER")
+      .replace(/([A-Za-z]:\/Users\/)[^/"\\]+/gi, "$1USER")
   );
 }
 

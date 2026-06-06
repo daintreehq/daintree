@@ -131,6 +131,39 @@ describe("sanitizePath", () => {
     const result = sanitizePath("/Users/alice/foo and /Users/bob/bar");
     expect(result).toBe("/Users/USER/foo and /Users/USER/bar");
   });
+
+  it("redacts a bare user path with no trailing separator", () => {
+    expect(sanitizePath("/Users/alice")).toBe("/Users/USER");
+    expect(sanitizePath("/home/bob")).toBe("/home/USER");
+    expect(sanitizePath("C:\\Users\\Carol")).toBe("C:\\Users\\USER");
+  });
+
+  it("redacts Windows user profiles on non-C drives", () => {
+    expect(sanitizePath("D:\\Users\\alice\\project\\file.ts")).toBe(
+      "D:\\Users\\USER\\project\\file.ts"
+    );
+    expect(sanitizePath("E:/Users/bob/code")).toBe("E:/Users/USER/code");
+  });
+
+  it("redacts WSL UNC paths", () => {
+    const result = sanitizePath("\\\\wsl$\\Ubuntu\\home\\alice\\project");
+    expect(result).not.toContain("alice");
+    expect(result).toContain("Ubuntu");
+    expect(result).toContain("home\\USER");
+  });
+
+  it("redacts WSL localhost UNC paths", () => {
+    const result = sanitizePath("\\\\wsl.localhost\\Debian\\home\\bob\\src");
+    expect(result).not.toContain("bob");
+    expect(result).toContain("Debian");
+  });
+
+  it("redacts JSON-doubled WSL UNC paths", () => {
+    const json = JSON.stringify({ cwd: "\\\\wsl$\\Ubuntu\\home\\alice" });
+    const result = sanitizePath(json);
+    expect(result).not.toContain("alice");
+    expect(result).toContain("Ubuntu");
+  });
 });
 
 describe("sanitizeEvent", () => {
