@@ -655,10 +655,7 @@ export function useDevPreviewLoadLifecycle({
       "render-process-gone",
       handleRenderProcessGone as unknown as EventListener
     );
-    webview.addEventListener(
-      "did-frame-navigate",
-      handleDidFrameNavigate as unknown as EventListener
-    );
+    webview.addEventListener("did-frame-navigate", handleDidFrameNavigate);
     webview.addEventListener("did-navigate", handleDidNavigate as unknown as EventListener);
     webview.addEventListener(
       "did-navigate-in-page",
@@ -675,10 +672,7 @@ export function useDevPreviewLoadLifecycle({
         "render-process-gone",
         handleRenderProcessGone as unknown as EventListener
       );
-      webview.removeEventListener(
-        "did-frame-navigate",
-        handleDidFrameNavigate as unknown as EventListener
-      );
+      webview.removeEventListener("did-frame-navigate", handleDidFrameNavigate);
       webview.removeEventListener("did-navigate", handleDidNavigate as unknown as EventListener);
       webview.removeEventListener(
         "did-navigate-in-page",
