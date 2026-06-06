@@ -734,6 +734,26 @@ describe("createWslHardenedGit", () => {
     ).toThrow("UNC path");
   });
 
+  it("rejects when supplied distro does not match parsed UNC distro", () => {
+    expect(() =>
+      createWslHardenedGit({
+        distro: "Ubuntu",
+        uncPath: "\\\\wsl$\\Debian\\home\\user\\proj",
+        posixPath: "/home/user/proj",
+      })
+    ).toThrow("distro does not match");
+  });
+
+  it("rejects when supplied posixPath does not match parsed UNC remainder", () => {
+    expect(() =>
+      createWslHardenedGit({
+        distro: "Ubuntu",
+        uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
+        posixPath: "/some/other/path",
+      })
+    ).toThrow("posix path does not match");
+  });
+
   it("uses the UNC path as baseDir so simple-git's statSync succeeds on Windows", () => {
     createWslHardenedGit({
       distro: "Ubuntu",

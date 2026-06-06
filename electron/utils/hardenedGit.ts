@@ -210,8 +210,17 @@ export function createWslHardenedGit(
   if (typeof posixPath !== "string" || !posixPath.startsWith("/")) {
     throw new Error("WSL posix path must start with /");
   }
-  if (typeof uncPath !== "string" || detectWslPath(uncPath) === null) {
+  const parsed = detectWslPath(uncPath);
+  if (typeof uncPath !== "string" || parsed === null) {
     throw new Error("WSL UNC path is not a valid WSL UNC");
+  }
+  // Defense in depth: verify the supplied distro/posixPath match the parsed
+  // UNC, so a caller can't bypass the route with mismatched metadata.
+  if (parsed.distro.toLowerCase() !== distro.trim().toLowerCase()) {
+    throw new Error("WSL distro does not match parsed UNC");
+  }
+  if (parsed.posixPath !== posixPath) {
+    throw new Error("WSL posix path does not match parsed UNC");
   }
 
   return simpleGit({
