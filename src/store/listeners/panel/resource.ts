@@ -41,12 +41,20 @@ export function setupResourceListeners(): DisposableStore {
     )
   );
 
-  // Flush pending terminal persistence on window close to prevent data loss
-  const beforeUnloadHandler = () => {
+  // Flush pending terminal persistence before the view is torn down to
+  // prevent data loss. `beforeunload` does NOT fire on WebContentsView detach
+  // (project switch, window close, app quit) in Electron — `visibilitychange`
+  // is the reliable signal, firing on detach while the renderer is still alive
+  // and IPC channels are open, so the async flush completes (#9914). Matches
+  // the pattern documented in `useFlushOnHide`.
+  const handleVisibilityChange = () => {
+    if (!document.hidden) return;
     flushPanelPersistence();
   };
-  window.addEventListener("beforeunload", beforeUnloadHandler);
-  d.add(toDisposable(() => window.removeEventListener("beforeunload", beforeUnloadHandler)));
+  document.addEventListener("visibilitychange", handleVisibilityChange);
+  d.add(
+    toDisposable(() => document.removeEventListener("visibilitychange", handleVisibilityChange))
+  );
 
   return d;
 }
