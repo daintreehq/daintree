@@ -899,7 +899,7 @@ export function notify(payload: NotifyPayload): string {
             title,
             message: historyMessage,
             correlationId,
-            seenAsToast: !isQuiet,
+            seenAsToast: !isQuiet && notificationsEnabled,
             countable: payload.countable,
             actions: historyActions.length > 0 ? historyActions : undefined,
             context,
