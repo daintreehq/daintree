@@ -927,7 +927,12 @@ if (typeof window !== "undefined" && window.electron?.project) {
   if (typeof projectClient.onSwitch === "function" && !listenerState.switchRegistered) {
     listenerState.switchRegistered = true;
     projectClient.onSwitch((payload) => {
-      useProjectStore.setState({ lastSwitchId: payload.switchId });
+      // Only a string switchId flips the cold-launch guard. A missing/undefined
+      // switchId (preload drift, partial test double) must not become a truthy
+      // non-null value that silently bypasses the #9094 no-respawn-on-launch path.
+      if (typeof payload.switchId === "string") {
+        useProjectStore.setState({ lastSwitchId: payload.switchId });
+      }
     });
   }
 }
