@@ -1503,6 +1503,96 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("ERR_FILE_NOT_FOUND");
     });
 
+    it("cancels pending connection-refused retry when ERR_FILE_NOT_FOUND arrives", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      // Fire a connection-refused to schedule a retry at 500ms
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -102,
+          errorDescription: "ERR_CONNECTION_REFUSED",
+          isMainFrame: true,
+          validatedURL: "http://localhost:5173/",
+        });
+      });
+
+      // Before the retry fires, a file-not-found error arrives
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -6,
+          errorDescription: "ERR_FILE_NOT_FOUND",
+          isMainFrame: true,
+          validatedURL: "http://localhost:5173/missing",
+        });
+      });
+
+      // Advance past the retry timeout
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      // The stale retry must NOT have called loadURL
+      expect(webview.loadURL).not.toHaveBeenCalled();
+      // Failure overlay must be visible
+      expect(container.textContent).toContain("Page load failed");
+      expect(container.textContent).toContain("ERR_FILE_NOT_FOUND");
+    });
+
+    it("ignores subframe ERR_FILE_NOT_FOUND failures", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -6,
+          errorDescription: "ERR_FILE_NOT_FOUND",
+          isMainFrame: false,
+          validatedURL: "http://localhost:5173/iframe-asset",
+        });
+      });
+
+      expect(container.textContent).not.toContain("Page load failed");
+    });
+
+    it("falls back to the numeric error code when errorDescription is empty", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -6,
+          errorDescription: "",
+          isMainFrame: true,
+          validatedURL: "http://localhost:5173/missing",
+        });
+      });
+
+      expect(container.textContent).toContain("Page load failed");
+      expect(container.textContent).toContain("Error code -6");
+    });
+
+    it("does not schedule a retry for ERR_FILE_NOT_FOUND", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -6,
+          errorDescription: "ERR_FILE_NOT_FOUND",
+          isMainFrame: true,
+          validatedURL: "http://localhost:5173/missing",
+        });
+      });
+
+      // Advance beyond every backoff window
+      act(() => {
+        vi.advanceTimersByTime(8000);
+      });
+
+      expect(webview.loadURL).not.toHaveBeenCalled();
+    });
+
     it("retry-exhausted error includes URL", () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       const webview = getWebviewElement(container);

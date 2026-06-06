@@ -469,9 +469,14 @@ export function useDevPreviewLoadLifecycle({
         }
       }
 
-      // Catch-all for unhandled error codes (-2 ERR_FAILED, -7 ERR_TIMED_OUT,
-      // -104 ERR_CONNECTION_FAILED, and any other unexpected codes).
+      // Catch-all for unhandled error codes (-2 ERR_FAILED, -6 ERR_FILE_NOT_FOUND,
+      // -7 ERR_TIMED_OUT, -104 ERR_CONNECTION_FAILED, and any other unexpected codes).
       // Without this branch the webview shows a blank white screen with no error.
+      if (failLoadRetryRef.current) {
+        clearTimeout(failLoadRetryRef.current);
+        failLoadRetryRef.current = null;
+      }
+      failLoadRetryCountRef.current = 0;
       const desc = e.errorDescription || `Error code ${e.errorCode}`;
       setWebviewLoadError({
         code: "failed",
