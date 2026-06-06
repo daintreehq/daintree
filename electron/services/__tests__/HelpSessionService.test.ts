@@ -104,7 +104,7 @@ async function makeBundledHelpFolder(root: string): Promise<string> {
         deny: [
           "Write(**)",
           "Edit(**)",
-          "MultiEdit(**)",
+          "NotebookEdit(**)",
           "Bash(gh issue create*)",
           "Bash(gh pr create*)",
           "Bash(gh pr merge*)",
@@ -2177,7 +2177,7 @@ describe("HelpSessionService", () => {
             deny: [
               "Write(**)",
               "Edit(**)",
-              "MultiEdit(**)",
+              "NotebookEdit(**)",
               "Bash(gh issue create*)",
               "Bash(gh pr create*)",
               "Bash(gh pr merge*)",

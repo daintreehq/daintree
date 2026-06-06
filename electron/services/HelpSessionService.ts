@@ -1579,7 +1579,7 @@ export class HelpSessionService {
         deny: [
           "Write(**)",
           "Edit(**)",
-          "MultiEdit(**)",
+          "NotebookEdit(**)",
           "Bash(gh issue create*)",
           "Bash(gh pr create*)",
           "Bash(gh pr merge*)",
