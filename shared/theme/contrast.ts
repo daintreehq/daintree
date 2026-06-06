@@ -570,22 +570,52 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
 const ACCENT_MIN_CONTRAST = 4.5;
 const ACCENT_OUTLINE_MIN_CONTRAST = 3.0;
 
-export function accentOverrideHasLowContrast(scheme: AppColorScheme): boolean {
-  const accent = scheme.tokens["accent-primary"];
-  if (!isHexColor(accent)) return false;
+// Structured result describing how an accent override fails its contrast gate, so
+// the theme picker can render a specific, actionable warning instead of a generic
+// one-liner. `mode` distinguishes the two materially different failures:
+//   - "foreground": accent-foreground text/icons are illegible on the accent fill
+//     (e.g. a button label vanishing into its own button)
+//   - "surface": the accent color itself is hard to see on a theme background
+// `worstRatio` is the lowest contrast ratio found for the reported mode, and
+// `worstSurface` names the offending background in surface mode (null otherwise).
+export type AccentContrastFailure = {
+  mode: "foreground" | "surface";
+  worstRatio: number;
+  worstSurface: AppThemeTokenKey | null;
+};
 
+export function accentOverrideHasLowContrast(scheme: AppColorScheme): AccentContrastFailure | null {
+  const accent = scheme.tokens["accent-primary"];
+  if (!isHexColor(accent)) return null;
+
+  // Foreground-first precedence: text-on-accent-button legibility is a higher-
+  // severity failure than accent-tint-on-background, so report it before scanning
+  // surfaces. The user should fix this before discovering any surface issue.
   const accentForeground = scheme.tokens["accent-foreground"];
-  if (
-    isHexColor(accentForeground) &&
-    contrastRatio(accentForeground, accent) < ACCENT_MIN_CONTRAST
-  ) {
-    return true;
+  if (isHexColor(accentForeground)) {
+    const fgRatio = contrastRatio(accentForeground, accent);
+    if (fgRatio < ACCENT_MIN_CONTRAST) {
+      return { mode: "foreground", worstRatio: fgRatio, worstSurface: null };
+    }
   }
 
-  return DISPLAY_SURFACES.some((key) => {
+  let worstRatio = Infinity;
+  let worstSurface: AppThemeTokenKey | null = null;
+  for (const key of DISPLAY_SURFACES) {
     const background = scheme.tokens[key];
-    return isHexColor(background) && contrastRatio(accent, background) < ACCENT_MIN_CONTRAST;
-  });
+    if (!isHexColor(background)) continue;
+    const ratio = contrastRatio(accent, background);
+    if (ratio < worstRatio) {
+      worstRatio = ratio;
+      worstSurface = key;
+    }
+  }
+
+  if (worstSurface !== null && worstRatio < ACCENT_MIN_CONTRAST) {
+    return { mode: "surface", worstRatio, worstSurface };
+  }
+
+  return null;
 }
 
 // ── Round-2 light validation matrix (E6) ─────────────────────────────────────

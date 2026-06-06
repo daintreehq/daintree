@@ -16,6 +16,7 @@ import {
   accentOverrideHasLowContrast,
   applyAccentOverrideToScheme,
   resolveAppTheme,
+  type AccentContrastFailure,
 } from "@shared/theme";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { Button } from "@/components/ui/button";
@@ -166,8 +167,8 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
 
   // Warn — non-blocking — when an accent override drops below WCAG AA 4.5:1 against the
   // active theme, either as button-label text or as accent-tinted text on the theme surfaces.
-  const accentContrastFail = useMemo(() => {
-    if (!accentColorOverride) return false;
+  const accentContrastFail = useMemo<AccentContrastFailure | null>(() => {
+    if (!accentColorOverride) return null;
     return accentOverrideHasLowContrast(
       applyAccentOverrideToScheme(selectedScheme, accentColorOverride)
     );
@@ -478,7 +479,9 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
         >
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-warning" />
           <p className="min-w-0 text-xs text-daintree-text">
-            Low contrast on {selectedScheme.name}
+            {accentContrastFail.mode === "foreground"
+              ? `Low contrast: button text scores only ${accentContrastFail.worstRatio.toFixed(2)}:1 on the accent color — pick a lighter or darker accent`
+              : `Low contrast: the accent scores only ${accentContrastFail.worstRatio.toFixed(2)}:1 on ${selectedScheme.name} surfaces — pick a more distinct accent`}
           </p>
         </div>
       )}
