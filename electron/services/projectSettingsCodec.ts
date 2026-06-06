@@ -254,6 +254,12 @@ function decodeResourceEnvironments(raw: unknown): Record<string, ResourceEnviro
   const src = raw as Record<string, unknown>;
   const result: Record<string, ResourceEnvironment> = {};
   for (const [name, value] of Object.entries(src)) {
+    // Defend against `__proto__` keys reaching the assignment — `result[name]`
+    // would otherwise invoke the `__proto__` setter and pollute the result's
+    // prototype chain. JSON.parse normally hides these (sets the prototype
+    // instead of an own property) but a hand-crafted or post-processed
+    // settings object can surface them.
+    if (name === "__proto__") continue;
     const env = decodeResourceEnvironment(value);
     if (env) result[name] = env;
   }

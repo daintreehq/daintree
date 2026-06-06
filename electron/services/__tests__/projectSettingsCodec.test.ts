@@ -127,6 +127,93 @@ describe("decode", () => {
     expect(result.settings.runCommands).toHaveLength(1);
     expect(result.settings.runCommands[0]?.id).toBe("ok");
   });
+
+  it("regression #10001: string alwaysExclude is dropped through public decode()", () => {
+    const result = decode({ runCommands: [], copyTreeSettings: { alwaysExclude: "dist" } });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.settings.copyTreeSettings).toBeUndefined();
+  });
+
+  it("regression #10001: { length: 1 } alwaysExclude is dropped through public decode()", () => {
+    const result = decode({
+      runCommands: [],
+      copyTreeSettings: { alwaysExclude: { length: 1 } },
+    });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.settings.copyTreeSettings).toBeUndefined();
+  });
+
+  it("regression #10001: string maxContextSize is dropped through public decode()", () => {
+    const result = decode({
+      runCommands: [],
+      copyTreeSettings: { maxContextSize: "100000" },
+    });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.settings.copyTreeSettings).toBeUndefined();
+  });
+
+  it("regression #10001: string alwaysInclude is dropped through public decode()", () => {
+    const result = decode({
+      runCommands: [],
+      copyTreeSettings: { alwaysInclude: "README.md" },
+    });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.settings.copyTreeSettings).toBeUndefined();
+  });
+
+  it("regression #10001: well-formed copyTreeSettings round-trips through public decode()", () => {
+    const result = decode({
+      runCommands: [],
+      copyTreeSettings: {
+        maxContextSize: 1_000_000,
+        strategy: "modified",
+        alwaysInclude: ["README.md"],
+        alwaysExclude: ["dist", "node_modules"],
+      },
+    });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.settings.copyTreeSettings).toEqual({
+      maxContextSize: 1_000_000,
+      strategy: "modified",
+      alwaysInclude: ["README.md"],
+      alwaysExclude: ["dist", "node_modules"],
+    });
+  });
+
+  it("drops resourceEnvironments whose every command array is non-string", () => {
+    const result = decode({
+      runCommands: [],
+      resourceEnvironments: { s: { provision: [1, null, false] } },
+    });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.settings.resourceEnvironments).toBeUndefined();
+  });
+
+  it("preserves valid resourceEnvironments siblings when one entry is invalid", () => {
+    const result = decode({
+      runCommands: [],
+      resourceEnvironments: {
+        good: { provision: ["echo"] },
+        bad: { provision: "not-an-array" },
+      },
+    });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.settings.resourceEnvironments).toEqual({ good: { provision: ["echo"] } });
+  });
+
+  it("guards against __proto__ pollution in resourceEnvironments keys", () => {
+    // JSON.parse on a string with "__proto__" sets the prototype rather than
+    // an own property, so this construction is the realistic hostile-input
+    // shape. The decoder must not let a __proto__ entry slip through and
+    // pollute the result's prototype chain.
+    const hostile = JSON.parse('{"__proto__":{"provision":["x"]},"good":{"provision":["ok"]}}');
+    const result = decode({ runCommands: [], resourceEnvironments: hostile });
+    if (!result.ok) throw new Error("expected ok");
+    const envs = result.settings.resourceEnvironments as Record<string, unknown>;
+    expect(envs).toBeDefined();
+    expect("provision" in envs).toBe(false);
+    expect(envs.good).toEqual({ provision: ["ok"] });
+  });
 });
 
 describe("encodeEnvelope", () => {
