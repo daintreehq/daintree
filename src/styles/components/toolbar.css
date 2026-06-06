@@ -125,6 +125,7 @@
  * hover and :active, preserving both the source-order tiebreaker above and
  * the momentary :active background on other pressed buttons. */
 .toolbar-icon-button[aria-pressed="true"]:where(:not([data-sidebar-toggle])),
+.toolbar-icon-button[aria-checked="true"],
 .toolbar-icon-button[aria-expanded="true"],
 .toolbar-icon-button[data-state="open"],
 .toolbar-agent-button[aria-pressed="true"],
@@ -152,6 +153,7 @@
  * override still wins on light. Dark never matches this block. */
 :where(.light, [data-color-mode="light"])
   .toolbar-icon-button[aria-pressed="true"]:where(:not([data-sidebar-toggle])),
+:where(.light, [data-color-mode="light"]) .toolbar-icon-button[aria-checked="true"],
 :where(.light, [data-color-mode="light"]) .toolbar-icon-button[aria-expanded="true"],
 :where(.light, [data-color-mode="light"]) .toolbar-icon-button[data-state="open"],
 :where(.light, [data-color-mode="light"]) .toolbar-agent-button[aria-pressed="true"],
@@ -504,6 +506,7 @@
    opt-out) to keep the same scope. */
 @media (forced-colors: active) {
   .toolbar-icon-button[aria-pressed="true"]:where(:not([data-sidebar-toggle])),
+  .toolbar-icon-button[aria-checked="true"],
   .toolbar-icon-button[aria-expanded="true"],
   .toolbar-icon-button[data-state="open"],
   .toolbar-agent-button[aria-pressed="true"],

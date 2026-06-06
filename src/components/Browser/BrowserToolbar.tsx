@@ -506,7 +506,7 @@ export function BrowserToolbar({
   }, [url]);
 
   const buttonClass =
-    "p-1.5 rounded hover:bg-overlay-medium disabled:opacity-30 disabled:cursor-not-allowed transition-colors";
+    "toolbar-icon-button p-1.5 rounded disabled:opacity-30 disabled:cursor-not-allowed";
 
   return (
     <div className="flex items-center gap-1.5 px-2 py-1.5 bg-surface border-b border-overlay">
@@ -691,7 +691,7 @@ export function BrowserToolbar({
 
       {/* Viewport preset selector (dev-preview only) */}
       {onViewportPresetChange && (
-        <div className="flex items-center">
+        <div className="flex items-center gap-1">
           <Tooltip>
             <TooltipTrigger asChild>
               <button
@@ -703,10 +703,7 @@ export function BrowserToolbar({
                     onViewportPresetChange(lastViewportPresetRef.current);
                   }
                 }}
-                className={cn(
-                  buttonClass,
-                  viewportPreset && "bg-overlay-emphasis text-daintree-text"
-                )}
+                className={cn(buttonClass, viewportPreset && "text-daintree-text")}
                 aria-label="Viewport preset"
                 aria-pressed={!!viewportPreset}
               >
@@ -720,7 +717,7 @@ export function BrowserToolbar({
               ref={chipRowRef}
               role="radiogroup"
               aria-label="Select viewport preset"
-              className="flex items-center ml-0.5"
+              className="flex items-center gap-0.5 rounded-md bg-overlay-subtle p-0.5"
             >
               {VIEWPORT_PRESET_LIST.map((preset, index) => {
                 const isSelected = viewportPreset === preset.id;
@@ -732,19 +729,23 @@ export function BrowserToolbar({
                     aria-checked={isSelected}
                     aria-label={preset.label}
                     data-viewport-preset-id={preset.id}
-                    tabIndex={isSelected || chipFocusedIndex === index ? 0 : -1}
+                    tabIndex={
+                      chipFocusedIndex >= 0
+                        ? chipFocusedIndex === index
+                          ? 0
+                          : -1
+                        : isSelected
+                          ? 0
+                          : -1
+                    }
                     onClick={() => {
                       if (!isSelected) onViewportPresetChange(preset.id);
                     }}
                     onFocus={() => setChipFocusedIndex(index)}
                     onBlur={() => setChipFocusedIndex(-1)}
                     className={cn(
-                      "px-1.5 py-1 rounded text-[10px] font-medium transition-colors",
-                      "hover:bg-overlay-medium",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
-                      isSelected
-                        ? "bg-overlay-emphasis text-daintree-text"
-                        : "text-daintree-text/50"
+                      "toolbar-icon-button px-1.5 py-1 rounded text-xs font-medium",
+                      isSelected ? "text-daintree-text" : "text-daintree-text/50"
                     )}
                   >
                     {preset.label}
@@ -754,85 +755,77 @@ export function BrowserToolbar({
             </div>
           )}
           {viewportPreset && (
-            <div className="flex items-center ml-1 pl-1.5 border-l border-overlay">
-              {onViewportRotateToggle && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={onViewportRotateToggle}
-                      className={cn(
-                        buttonClass,
-                        viewportRotated && "bg-overlay-emphasis text-daintree-text"
-                      )}
-                      aria-label="Rotate viewport"
-                      aria-pressed={viewportRotated}
-                    >
-                      <RotateCw className="w-4 h-4" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {viewportRotated ? "Portrait" : "Landscape"}
-                  </TooltipContent>
-                </Tooltip>
-              )}
-              {onViewportDprChange && (
-                <div
-                  ref={dprRowRef}
-                  role="radiogroup"
-                  aria-label="Device pixel ratio"
-                  className="flex items-center ml-0.5"
-                >
-                  {([1, 2, 3] as const).map((dpr) => {
-                    const isSelected = viewportDpr === dpr;
-                    return (
+            <>
+              <div aria-hidden="true" className="toolbar-divider w-px h-5 shrink-0" />
+              <div className="flex items-center gap-1">
+                {onViewportRotateToggle && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
                       <button
-                        key={dpr}
                         type="button"
-                        role="radio"
-                        aria-checked={isSelected}
-                        aria-label={`Device pixel ratio ${dpr}x`}
-                        data-dpr={dpr}
-                        tabIndex={isSelected ? 0 : -1}
-                        onClick={() => {
-                          if (!isSelected) onViewportDprChange(dpr);
-                        }}
-                        className={cn(
-                          "px-1.5 py-1 rounded text-[10px] font-medium transition-colors",
-                          "hover:bg-overlay-medium",
-                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
-                          isSelected
-                            ? "bg-overlay-emphasis text-daintree-text"
-                            : "text-daintree-text/50"
-                        )}
+                        onClick={onViewportRotateToggle}
+                        className={cn(buttonClass, viewportRotated && "text-daintree-text")}
+                        aria-label="Rotate viewport"
+                        aria-pressed={viewportRotated}
                       >
-                        {dpr}×
+                        <RotateCw className="w-4 h-4" />
                       </button>
-                    );
-                  })}
-                </div>
-              )}
-              {onViewportFitToggle && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={onViewportFitToggle}
-                      className={cn(
-                        buttonClass,
-                        "ml-0.5",
-                        viewportFit && "bg-overlay-emphasis text-daintree-text"
-                      )}
-                      aria-label="Zoom to fit"
-                      aria-pressed={viewportFit}
-                    >
-                      <Maximize2 className="w-4 h-4" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Zoom to fit</TooltipContent>
-                </Tooltip>
-              )}
-            </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {viewportRotated ? "Portrait" : "Landscape"}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+                {onViewportDprChange && (
+                  <div
+                    ref={dprRowRef}
+                    role="radiogroup"
+                    aria-label="Device pixel ratio"
+                    className="flex items-center gap-0.5 rounded-md bg-overlay-subtle p-0.5"
+                  >
+                    {([1, 2, 3] as const).map((dpr) => {
+                      const isSelected = viewportDpr === dpr;
+                      return (
+                        <button
+                          key={dpr}
+                          type="button"
+                          role="radio"
+                          aria-checked={isSelected}
+                          aria-label={`Device pixel ratio ${dpr}x`}
+                          data-dpr={dpr}
+                          tabIndex={isSelected ? 0 : -1}
+                          onClick={() => {
+                            if (!isSelected) onViewportDprChange(dpr);
+                          }}
+                          className={cn(
+                            "toolbar-icon-button px-1.5 py-1 rounded text-xs font-medium",
+                            isSelected ? "text-daintree-text" : "text-daintree-text/50"
+                          )}
+                        >
+                          {dpr}×
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {onViewportFitToggle && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={onViewportFitToggle}
+                        className={cn(buttonClass, viewportFit && "text-daintree-text")}
+                        aria-label="Zoom to fit"
+                        aria-pressed={viewportFit}
+                      >
+                        <Maximize2 className="w-4 h-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Zoom to fit</TooltipContent>
+                  </Tooltip>
+                )}
+              </div>
+            </>
           )}
         </div>
       )}
@@ -844,11 +837,13 @@ export function BrowserToolbar({
             {isHttps ? (
               <Lock
                 data-testid="browser-url-scheme-lock"
+                aria-hidden="true"
                 className="absolute left-2 w-3.5 h-3.5 text-daintree-text/40 pointer-events-none"
               />
             ) : (
               <Globe
                 data-testid="browser-url-scheme-globe"
+                aria-hidden="true"
                 className="absolute left-2 w-3.5 h-3.5 text-daintree-text/40 pointer-events-none"
               />
             )}
@@ -880,6 +875,7 @@ export function BrowserToolbar({
                 "w-full pl-7 pr-2 py-1 text-xs rounded",
                 "bg-daintree-bg border border-overlay",
                 "focus:outline-hidden focus:border-border-strong",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
                 "text-daintree-text placeholder:text-daintree-text/40",
                 error && "border-status-error/50"
               )}
@@ -977,6 +973,7 @@ export function BrowserToolbar({
       </div>
 
       {/* Action buttons */}
+      <div aria-hidden="true" className="toolbar-divider w-px h-5 shrink-0" />
       <Tooltip>
         <TooltipTrigger asChild>
           <button type="button" onClick={handleCopy} className={buttonClass} aria-label="Copy URL">
@@ -997,7 +994,10 @@ export function BrowserToolbar({
               type="button"
               onClick={onCaptureScreenshot}
               disabled={!isWebviewReady}
-              className={cn(buttonClass, "disabled:hover:bg-transparent")}
+              className={cn(
+                buttonClass,
+                "disabled:hover:bg-transparent disabled:hover:shadow-none"
+              )}
               aria-label="Capture screenshot"
             >
               <Camera className="w-4 h-4" />
@@ -1013,7 +1013,7 @@ export function BrowserToolbar({
             <button
               type="button"
               onClick={onToggleConsole}
-              className={cn(buttonClass, isConsoleOpen && "bg-overlay-emphasis text-daintree-text")}
+              className={cn(buttonClass, isConsoleOpen && "text-daintree-text")}
               aria-label="Toggle console"
               aria-pressed={isConsoleOpen}
             >
@@ -1033,7 +1033,10 @@ export function BrowserToolbar({
               type="button"
               onClick={onToggleDevTools}
               disabled={!isWebviewReady}
-              className={cn(buttonClass, "disabled:hover:bg-transparent")}
+              className={cn(
+                buttonClass,
+                "disabled:hover:bg-transparent disabled:hover:shadow-none"
+              )}
               aria-label="Toggle DevTools"
             >
               <Code className="w-4 h-4" />
@@ -1062,7 +1065,12 @@ export function BrowserToolbar({
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <button type="button" onClick={onOpenExternal} className={buttonClass}>
+          <button
+            type="button"
+            onClick={onOpenExternal}
+            className={buttonClass}
+            aria-label="Open in browser"
+          >
             <ExternalLink className="w-4 h-4" />
           </button>
         </TooltipTrigger>

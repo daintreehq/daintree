@@ -259,6 +259,14 @@ describe("BrowserToolbar ARIA semantics", () => {
     expect(button).toBeTruthy();
   });
 
+  it("Open in browser button is exposed by accessible name", () => {
+    const { getByRole } = renderToolbar();
+    const button = getByRole("button", { name: "Open in browser" });
+    expect(button).toBeTruthy();
+    fireEvent.click(button);
+    expect(defaultProps.onOpenExternal).toHaveBeenCalledOnce();
+  });
+
   it("copy success announces in a polite live region", async () => {
     const { container, getByRole } = renderToolbar();
 
@@ -421,6 +429,29 @@ describe("BrowserToolbar address-bar scheme icon and input", () => {
     const reload = getByTestId("browser-reload");
     expect(reload.className).not.toContain("animate-spin");
   });
+
+  it("scheme icon is decorative and hidden from the accessibility tree", () => {
+    const lock = renderToolbar({ url: "https://example.com/" }).getByTestId(
+      "browser-url-scheme-lock"
+    );
+    expect(lock.getAttribute("aria-hidden")).toBe("true");
+
+    const globe = renderToolbar({ url: "http://localhost:3000/" }).getByTestId(
+      "browser-url-scheme-globe"
+    );
+    expect(globe.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("address bar exposes a focus-visible ring without suppressing the forced-colors outline", () => {
+    const { getByTestId } = renderToolbar();
+    const input = getByTestId("browser-address-bar");
+    // A focus-visible indicator must be present (the accent ring is the address bar's
+    // sole accent signal per CLAUDE.md) and outline-hidden must be preserved so the
+    // transparent forced-colors outline survives (lesson #6185 — never outline-none).
+    expect(input.className).toContain("focus-visible:outline-daintree-accent");
+    expect(input.className).toContain("focus:outline-hidden");
+    expect(input.className).not.toContain("outline-none");
+  });
 });
 
 describe("BrowserToolbar viewport presets", () => {
@@ -480,6 +511,31 @@ describe("BrowserToolbar viewport presets", () => {
 
       const galaxyRadio = document.querySelector('[data-viewport-preset-id="galaxy"]');
       expect(galaxyRadio!.getAttribute("aria-label")).toBe("Galaxy S25");
+    });
+  });
+
+  describe("armed-state styling", () => {
+    it("selected preset chip drives state via toolbar-icon-button + aria-checked, not a hardcoded fill", () => {
+      renderWithViewport();
+      const selected = document.querySelector('[data-viewport-preset-id="iphone"]')! as HTMLElement;
+      // The selected chip must participate in the theme-aware armed-state recipe
+      // (toolbar.css keys off .toolbar-icon-button[aria-checked="true"]) rather than
+      // hardcoding bg-overlay-emphasis, which reads as a dark smudge on light themes.
+      expect(selected.getAttribute("aria-checked")).toBe("true");
+      expect(selected.className).toContain("toolbar-icon-button");
+      expect(selected.className).not.toContain("bg-overlay-emphasis");
+    });
+
+    it("selected DPR chip uses the same armed-state contract", () => {
+      renderWithViewport({ onViewportDprChange: vi.fn(), viewportDpr: 2 });
+      const dprGroup = document.querySelector('[aria-label="Device pixel ratio"]')!;
+      const selected = Array.from(dprGroup.querySelectorAll('[role="radio"]')).find(
+        (r) => r.getAttribute("aria-checked") === "true"
+      ) as HTMLElement;
+      expect(selected).toBeTruthy();
+      expect(selected.getAttribute("data-dpr")).toBe("2");
+      expect(selected.className).toContain("toolbar-icon-button");
+      expect(selected.className).not.toContain("bg-overlay-emphasis");
     });
   });
 
@@ -715,6 +771,25 @@ describe("BrowserToolbar viewport presets", () => {
       expect(pixelRadio.getAttribute("tabindex")).toBe("0");
     });
 
+    it("keeps exactly one radio tabbable after ArrowRight (no transient dual tab stop)", () => {
+      // The roving-tabindex contract requires a single tab stop. Before the fix,
+      // the freshly focused chip AND the still-selected chip both reported
+      // tabIndex=0 until the parent rerendered with the new preset, briefly
+      // exposing two tab stops to keyboard/AT users.
+      renderWithViewport();
+      const iphoneRadio = document.querySelector(
+        '[data-viewport-preset-id="iphone"]'
+      )! as HTMLElement;
+
+      iphoneRadio.focus();
+      fireEvent.keyDown(iphoneRadio, { key: "ArrowRight" });
+
+      const tabbable = Array.from(document.querySelectorAll('[role="radio"]')).filter(
+        (r) => r.getAttribute("tabindex") === "0"
+      );
+      expect(tabbable.length).toBe(1);
+    });
+
     it("ArrowRight on the focused radio activates the next preset immediately (APG automatic activation)", () => {
       renderWithViewport();
       const iphoneRadio = document.querySelector(
@@ -789,6 +864,57 @@ describe("BrowserToolbar viewport presets", () => {
       fireEvent.keyDown(iphoneRadio, { key: "ArrowRight" });
 
       expect(document.activeElement).toBe(pixelRadio);
+    });
+  });
+
+  describe("DPR radiogroup keyboard navigation", () => {
+    function renderWithDpr(overrides = {}) {
+      return renderWithViewport({ onViewportDprChange: vi.fn(), viewportDpr: 1, ...overrides });
+    }
+
+    function dprRadios() {
+      const group = document.querySelector('[aria-label="Device pixel ratio"]')!;
+      return Array.from(group.querySelectorAll('[role="radio"]')) as HTMLElement[];
+    }
+
+    it("renders a DPR radiogroup with one radio per ratio", () => {
+      renderWithDpr();
+      const radios = dprRadios();
+      expect(radios.map((r) => r.getAttribute("data-dpr"))).toEqual(["1", "2", "3"]);
+    });
+
+    it("ArrowRight moves focus to the next ratio and selection follows focus", () => {
+      const onViewportDprChange = vi.fn();
+      renderWithDpr({ onViewportDprChange });
+      const radios = dprRadios();
+
+      radios[0]!.focus();
+      fireEvent.keyDown(radios[0]!, { key: "ArrowRight" });
+
+      expect(document.activeElement).toBe(radios[1]);
+      expect(onViewportDprChange).toHaveBeenCalledWith(2);
+    });
+
+    it("ArrowRight wraps from the last ratio back to the first", () => {
+      renderWithDpr({ viewportDpr: 3 });
+      const radios = dprRadios();
+
+      radios[2]!.focus();
+      fireEvent.keyDown(radios[2]!, { key: "ArrowRight" });
+
+      expect(document.activeElement).toBe(radios[0]);
+    });
+
+    it("Home/End jump to the first and last ratios", () => {
+      renderWithDpr({ viewportDpr: 2 });
+      const radios = dprRadios();
+
+      radios[1]!.focus();
+      fireEvent.keyDown(radios[1]!, { key: "Home" });
+      expect(document.activeElement).toBe(radios[0]);
+
+      fireEvent.keyDown(radios[0]!, { key: "End" });
+      expect(document.activeElement).toBe(radios[2]);
     });
   });
 });
