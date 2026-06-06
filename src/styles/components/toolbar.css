@@ -359,6 +359,25 @@
  *    reinforces a high-signal indicator instead of adding ring noise.
  */
 
+/* ── Shared pip geometry ──
+ * The semantic-status pips (AssistantButton MCP/agent pips, AgentButton and
+ * AgentTrayButton running-state pips) all float at the same corner offset with
+ * the same 6px circle and sidebar-colored ring cut-out. This class owns that
+ * geometry so render sites stop re-typing the literals; it carries no color and
+ * no visibility — color comes from a per-surface class, visibility/motion from
+ * .toolbar-badge. No forced-colors entry is needed here (no background-color of
+ * its own); the composed .toolbar-badge already covers that. The ring matches
+ * `ring-1 ring-daintree-sidebar`. */
+.toolbar-pip {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  height: 6px;
+  width: 6px;
+  border-radius: 9999px;
+  box-shadow: 0 0 0 1px var(--color-daintree-sidebar);
+}
+
 /* ── Badge entrance / exit ──
  * Tier 2 timing from animationUtils.ts: 200ms enter (UI_ENTER_DURATION),
  * 120ms exit (UI_EXIT_DURATION). @starting-style + allow-discrete handle

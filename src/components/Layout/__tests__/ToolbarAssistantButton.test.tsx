@@ -117,7 +117,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     setPanel("t-1", "idle");
 
     const { queryByTestId } = render(<ToolbarAssistantButton />);
-    expect(queryByTestId("assistant-working-pip")).toBeNull();
+    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
   });
 
   it("renders a green pip when the assistant terminal's agentState is working", () => {
@@ -126,7 +126,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
 
     const { queryByTestId } = render(<ToolbarAssistantButton />);
     const pip = queryByTestId("assistant-working-pip");
-    expect(pip).not.toBeNull();
+    expect(pip?.getAttribute("data-visible")).toBe("true");
     expect(pip!.className).toMatch(/bg-state-working/);
     expect(pip!.className).not.toMatch(/animate-pulse/);
     expect(pip!.className).not.toMatch(/accent/);
@@ -140,7 +140,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
 
     const { queryByTestId, container } = render(<ToolbarAssistantButton />);
     const pip = queryByTestId("assistant-working-pip");
-    expect(pip).not.toBeNull();
+    expect(pip?.getAttribute("data-visible")).toBe("true");
     expect(pip!.className).toMatch(/bg-state-working/);
     expect(pip!.getAttribute("data-agent-state")).toBe("directing");
     // Coarse-signal design: directing intentionally surfaces as "working" in
@@ -157,7 +157,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
 
     const { queryByTestId } = render(<ToolbarAssistantButton />);
     const pip = queryByTestId("assistant-working-pip");
-    expect(pip).not.toBeNull();
+    expect(pip?.getAttribute("data-visible")).toBe("true");
     expect(pip!.className).toMatch(/bg-state-waiting/);
     expect(pip!.className).not.toMatch(/animate-pulse/);
     expect(pip!.getAttribute("data-agent-state")).toBe("waiting");
@@ -167,20 +167,20 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     setHelpPanel({ isOpen: false, terminalId: "t-c" });
     setPanel("t-c", "completed");
     const { queryByTestId, rerender } = render(<ToolbarAssistantButton />);
-    expect(queryByTestId("assistant-working-pip")).toBeNull();
+    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
 
     act(() => {
       setPanel("t-c", "exited");
     });
     rerender(<ToolbarAssistantButton />);
-    expect(queryByTestId("assistant-working-pip")).toBeNull();
+    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
   });
 
   it("does not render the pip when there is no assistant terminal", () => {
     setHelpPanel({ isOpen: false, terminalId: null });
 
     const { queryByTestId } = render(<ToolbarAssistantButton />);
-    expect(queryByTestId("assistant-working-pip")).toBeNull();
+    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
   });
 
   it("hides the pip when the panel is open (the user can already see the state)", () => {
@@ -188,7 +188,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     setPanel("t-3", "working");
 
     const { queryByTestId } = render(<ToolbarAssistantButton />);
-    expect(queryByTestId("assistant-working-pip")).toBeNull();
+    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
   });
 
   it("hides the pip when the panel is open even for waiting state", () => {
@@ -196,7 +196,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     setPanel("t-3w", "waiting");
 
     const { queryByTestId } = render(<ToolbarAssistantButton />);
-    expect(queryByTestId("assistant-working-pip")).toBeNull();
+    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
   });
 
   it("MCP-health failed pip takes precedence over the agent pip when both would apply", () => {
@@ -209,7 +209,10 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     setPanel("t-4", "working");
 
     const { container, queryByTestId } = render(<ToolbarAssistantButton />);
-    expect(queryByTestId("assistant-working-pip")).toBeNull();
+    const pip = queryByTestId("assistant-working-pip");
+    expect(pip?.getAttribute("data-visible")).toBe("true");
+    expect(pip!.className).toMatch(/bg-status-danger/);
+    expect(pip!.className).not.toMatch(/bg-state-/);
     expect(container.querySelector(".bg-status-danger")).not.toBeNull();
   });
 
@@ -223,7 +226,12 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     setPanel("t-4w", "waiting");
 
     const { container, queryByTestId } = render(<ToolbarAssistantButton />);
-    expect(queryByTestId("assistant-working-pip")).toBeNull();
+    const pip = queryByTestId("assistant-working-pip");
+    expect(pip?.getAttribute("data-visible")).toBe("true");
+    expect(pip!.className).toMatch(/bg-status-warning/);
+    // `starting` is the delayed (pulsing) MCP state — preserved through the
+    // always-in-DOM conversion.
+    expect(pip!.className).toMatch(/animate-pulse-delayed/);
     expect(container.querySelector(".bg-status-warning")).not.toBeNull();
   });
 
@@ -238,13 +246,13 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     act(() => {
       useHelpPanelStore.setState({ isOpen: true });
     });
-    expect(queryByTestId("assistant-working-pip")).toBeNull();
+    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
 
     // Closing without a state change leaves the pip suppressed.
     act(() => {
       useHelpPanelStore.setState({ isOpen: false });
     });
-    expect(queryByTestId("assistant-working-pip")).toBeNull();
+    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
   });
 
   it("re-shows the pip after acknowledgement when the agent state changes again", () => {
@@ -254,13 +262,13 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     const { queryByTestId } = render(<ToolbarAssistantButton />);
     act(() => useHelpPanelStore.setState({ isOpen: true }));
     act(() => useHelpPanelStore.setState({ isOpen: false }));
-    expect(queryByTestId("assistant-working-pip")).toBeNull();
+    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
 
     act(() => {
       setPanel("t-ack2", "waiting");
     });
     const pip = queryByTestId("assistant-working-pip");
-    expect(pip).not.toBeNull();
+    expect(pip?.getAttribute("data-visible")).toBe("true");
     expect(pip!.className).toMatch(/bg-state-waiting/);
   });
 
@@ -272,7 +280,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     // Acknowledge "waiting" on the old terminal.
     act(() => useHelpPanelStore.setState({ isOpen: true }));
     act(() => useHelpPanelStore.setState({ isOpen: false }));
-    expect(queryByTestId("assistant-working-pip")).toBeNull();
+    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
 
     // Respawn: a brand-new assistant terminal lands on the same state value.
     // The user has not seen *this* session, so the pip should fire.
@@ -281,7 +289,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
       useHelpPanelStore.setState({ terminalId: "t-new" });
     });
     const pip = queryByTestId("assistant-working-pip");
-    expect(pip).not.toBeNull();
+    expect(pip?.getAttribute("data-visible")).toBe("true");
     expect(pip!.className).toMatch(/bg-state-waiting/);
   });
 
@@ -290,7 +298,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     setPanel("t-ack3", "working");
 
     const { queryByTestId } = render(<ToolbarAssistantButton />);
-    expect(queryByTestId("assistant-working-pip")).toBeNull();
+    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
 
     // State changes while panel is open — user can already see it via the
     // panel header, so closing afterwards must not flash the pip.
@@ -300,7 +308,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     act(() => {
       useHelpPanelStore.setState({ isOpen: false });
     });
-    expect(queryByTestId("assistant-working-pip")).toBeNull();
+    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
   });
 
   describe("gesture-hidden desync", () => {
@@ -349,7 +357,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
 
       const { queryByTestId } = render(<ToolbarAssistantButton />);
       const pip = queryByTestId("assistant-working-pip");
-      expect(pip).not.toBeNull();
+      expect(pip?.getAttribute("data-visible")).toBe("true");
       expect(pip!.className).toMatch(/bg-state-working/);
 
       // Agent transitions while gesture-hidden — pip tracks the new state
@@ -358,7 +366,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
         setPanel("t-gh-3", "waiting");
       });
       const pip2 = queryByTestId("assistant-working-pip");
-      expect(pip2).not.toBeNull();
+      expect(pip2?.getAttribute("data-visible")).toBe("true");
       expect(pip2!.className).toMatch(/bg-state-waiting/);
     });
 
@@ -405,7 +413,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
 
     const { queryByTestId } = render(<ToolbarAssistantButton />);
     let pip = queryByTestId("assistant-working-pip");
-    expect(pip).not.toBeNull();
+    expect(pip?.getAttribute("data-visible")).toBe("true");
     expect(pip!.className).toMatch(/bg-state-working/);
 
     act(() => {
@@ -413,13 +421,13 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     });
 
     pip = queryByTestId("assistant-working-pip");
-    expect(pip).not.toBeNull();
+    expect(pip?.getAttribute("data-visible")).toBe("true");
     expect(pip!.className).toMatch(/bg-state-waiting/);
 
     act(() => {
       setPanel("t-5", "idle");
     });
 
-    expect(queryByTestId("assistant-working-pip")).toBeNull();
+    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
   });
 });
