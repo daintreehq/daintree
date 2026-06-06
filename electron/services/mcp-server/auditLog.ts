@@ -86,8 +86,12 @@ export class AuditService {
     );
     const backfilled = safe.map((r: Record<string, unknown>) => {
       // Grant records (post-#8442) carry a `type` discriminator and never
-      // need audit-specific backfilling — pass them through unchanged.
-      if ("type" in r && typeof r.type === "string") {
+      // need audit-specific backfilling — pass them through unchanged,
+      // but only when the discriminator is a known `McpGrantRecordType`
+      // value. A stringly-typed `type: "dispatch"` (or any unknown
+      // discriminator) would otherwise be misclassified as a grant and
+      // misrendered in the viewer (#10027).
+      if (isGrantRecord(r as unknown as McpLogRecord)) {
         return r as unknown as McpLogRecord;
       }
       return {

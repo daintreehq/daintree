@@ -195,6 +195,38 @@ describe("mcpServer IPC adversarial", () => {
     expect((result as unknown[]).length).toBe(1);
   });
 
+  it("getLogRecords returns the full union (dispatch + grant) and does not call the dispatch variant (#10027)", async () => {
+    const mixed = [
+      {
+        id: "a",
+        timestamp: 2,
+        toolId: "t",
+        sessionId: "s",
+        tier: "unknown",
+        argsSummary: "{}",
+        result: "success",
+        durationMs: 0,
+      },
+      {
+        id: "g",
+        timestamp: 1,
+        type: "grant.issued",
+        sessionId: "s",
+        toolId: "files.search",
+        ttlMs: 60000,
+      },
+    ] as never;
+    serviceMock.getLogRecords.mockReturnValueOnce(mixed);
+    const result = await getHandler(CHANNELS.MCP_SERVER_GET_LOG_RECORDS)(fakeEvent());
+    expect(Array.isArray(result)).toBe(true);
+    expect((result as unknown[]).length).toBe(2);
+    expect(serviceMock.getLogRecords).toHaveBeenCalledTimes(1);
+    // Make sure the new channel routes to the union accessor, not the
+    // legacy dispatch-only one — a typo in the handler would silently
+    // re-introduce the original bug.
+    expect(serviceMock.getAuditRecords).not.toHaveBeenCalled();
+  });
+
   it("clearAuditLog calls service clear", async () => {
     await getHandler(CHANNELS.MCP_SERVER_CLEAR_AUDIT_LOG)(fakeEvent());
     expect(serviceMock.clearAuditLog).toHaveBeenCalledTimes(1);

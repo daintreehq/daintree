@@ -375,6 +375,33 @@ describe("AuditService hydrate — backward compat", () => {
     expect(records[0]!.schemaVersion).toBe(1);
     expect(records[0]!.severity).toBe("info");
   });
+
+  it("reclassifies a malformed persisted record with `type: 'dispatch'` as audit (#10027)", () => {
+    // A forward-compat dispatch-record discriminator on a persisted row
+    // would otherwise be misclassified as a grant and bypass severity
+    // backfill. Lock down the hydrate-path guard to match the
+    // `isGrantRecord` literal-union check.
+    const malformed = {
+      id: "mal-1",
+      timestamp: 1000,
+      toolId: "agent.launch",
+      sessionId: "sess-1",
+      tier: "action",
+      argsSummary: "{}",
+      result: "success",
+      durationMs: 50,
+      type: "dispatch",
+    };
+    const { service } = makeFixture({ auditLog: [malformed] });
+    const records = service.getLogRecords();
+    expect(records).toHaveLength(1);
+    // The record survives hydrate (the string `type` field is preserved),
+    // but isAuditRecord narrows it to the dispatch kind — getRecords() sees it.
+    expect(service.getRecords()).toHaveLength(1);
+    // "type" stays in the persisted shape for round-trip safety; the
+    // union consumer narrows by isGrantRecord at read time.
+    expect((records[0] as { type?: unknown }).type).toBe("dispatch");
+  });
 });
 
 describe("AuditService.appendGrantRecord — tier records (#9151)", () => {
@@ -877,6 +904,41 @@ describe("shared narrowers — isGrantRecord / isAuditRecord (#10027)", () => {
     };
     expect(isGrantRecord(record as never)).toBe(false);
     expect(isAuditRecord(record as never)).toBe(true);
+  });
+
+  it("rejects a record with an unknown `type` discriminator value", () => {
+    // Forward-compat hazard: a future dispatch-record discriminator (or a
+    // malformed persisted row) would otherwise be misclassified as a grant
+    // and misrendered with `undefined` for its `type` field.
+    const record = {
+      id: "x",
+      timestamp: 1,
+      toolId: "t",
+      sessionId: "s",
+      tier: "action",
+      argsSummary: "{}",
+      result: "success" as const,
+      durationMs: 0,
+      schemaVersion: 1,
+      severity: "info" as const,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- intentionally unknown discriminator
+      type: "dispatch" as any,
+    };
+    expect(isGrantRecord(record as never)).toBe(false);
+    expect(isAuditRecord(record as never)).toBe(true);
+  });
+
+  it("rejects case-mismatched `type` discriminators (lowercase grant.issued only)", () => {
+    const record = {
+      id: "x",
+      timestamp: 1,
+      sessionId: "s",
+      toolId: "*",
+      ttlMs: 0,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- intentionally case-mismatched
+      type: "Grant.Expired" as any,
+    };
+    expect(isGrantRecord(record as never)).toBe(false);
   });
 
   it("accepts every McpGrantRecordType value", () => {

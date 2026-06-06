@@ -110,12 +110,15 @@ export function groupRecordsByTurn(
   const sessionByTurn = new Map<string, Set<string>>();
   const unassociated: McpLogRecord[] = [];
   const unassociatedGrants: McpGrantRecord[] = [];
-  const unassociatedSessions = new Set<string>();
+  // `unassociatedDispatchSessions` collects session ids of dispatches that
+  // landed in the `unassociated` bucket, NOT all grant sessions — otherwise
+  // the second-pass check would always be true and orphan grants would
+  // never reach the trailing `lifecycle` section.
+  const unassociatedDispatchSessions = new Set<string>();
 
   for (const r of records) {
     if (isGrantRecord(r)) {
       unassociatedGrants.push(r);
-      unassociatedSessions.add(r.sessionId);
       continue;
     }
     if (r.turnId && turnById.has(r.turnId)) {
@@ -130,6 +133,7 @@ export function groupRecordsByTurn(
       set.add(r.sessionId);
     } else {
       unassociated.push(r);
+      unassociatedDispatchSessions.add(r.sessionId);
     }
   }
 
@@ -150,10 +154,11 @@ export function groupRecordsByTurn(
       }
     }
     if (!routed) {
-      // Only surface grants for sessions that have at least one unassociated
-      // dispatch too — pure lifecycle events (no dispatches in the ring)
-      // would orphan a section header.
-      if (unassociatedSessions.has(grant.sessionId)) {
+      // A grant whose session has at least one unassociated dispatch rides
+      // along under that session's unassociated block. A pure orphan grant
+      // (no associated dispatch at all) goes to standalone `lifecycle` so
+      // the trailing "Lifecycle events" section actually surfaces them.
+      if (unassociatedDispatchSessions.has(grant.sessionId)) {
         unassociated.push(grant);
       } else {
         lifecycle.push(grant);
@@ -325,11 +330,12 @@ export function McpAuditLogViewer({
     return visibleRecords.filter((record) => {
       if (cutoffMs !== undefined && record.timestamp < cutoffMs) return false;
       // The result filter is dispatch-taxonomy; grant records have no
-      // `result` field. Show them only under "All results" so a focused
-      // tier-rejection query doesn't silently drop lifecycle events.
-      if (resultFilter !== "all") {
-        if (isGrantRecord(record)) return false;
-        if (isAuditRecord(record) && record.result !== resultFilter) return false;
+      // `result` field, so they pass through the result filter unchanged.
+      // The export must include them — forensic export of a tier-rejection
+      // incident must still surface the grant.issued/grant.revoked events
+      // for that session (#10027).
+      if (resultFilter !== "all" && isAuditRecord(record) && record.result !== resultFilter) {
+        return false;
       }
       // Tool filter and search work against the union's common fields.
       if (needle.length > 0 && !record.toolId.toLowerCase().includes(needle)) return false;

@@ -167,6 +167,9 @@ export const mcpServerNamespace = defineIpcNamespace({
       async (ctx, records: McpLogRecord[]): Promise<boolean> => {
         if (!Array.isArray(records)) throw new Error("records must be an array");
         const ndjsonLines = records.map((rawRecord) => {
+          if (rawRecord === null || typeof rawRecord !== "object") {
+            throw new Error("each record must be a non-null object");
+          }
           const record = rawRecord as unknown as Record<string, unknown>;
           const cleaned: Record<string, unknown> = {};
           for (const [key, value] of Object.entries(record)) {

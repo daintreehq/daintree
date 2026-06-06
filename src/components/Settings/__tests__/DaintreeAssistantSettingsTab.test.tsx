@@ -207,6 +207,7 @@ function installApi(
     getConfigSnippet: vi.fn().mockResolvedValue('{ "url": "http://127.0.0.1:45454/sse" }'),
     onRuntimeStateChanged: vi.fn(() => () => {}),
     getAuditRecords: vi.fn().mockResolvedValue([]),
+    getLogRecords: vi.fn().mockResolvedValue([]),
     getAuditStats: vi.fn().mockResolvedValue({ auth401Count: 0 }),
     getTurnOutcomeRecords: vi.fn().mockResolvedValue([]),
     clearAuditLog: vi.fn().mockResolvedValue(undefined),

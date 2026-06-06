@@ -249,14 +249,26 @@ export type McpLogRecord = McpAuditRecord | McpGrantRecord;
  * `electron/services/mcp-server/auditLog.ts` so renderer consumers and the
  * ring-buffer filter cannot drift on what counts as a grant record. The
  * legacy on-disk shape (no `type` field on `McpAuditRecord`) is load-bearing;
- * any future expansion of `McpGrantRecordType` widens this guard naturally.
+ * the discriminator must be a member of the literal `McpGrantRecordType`
+ * union — a stringly-typed `type: "dispatch"` (or any other unknown
+ * discriminator) on a hydrated dispatch record would otherwise be silently
+ * reclassified as a grant and misrendered in the viewer (#10027).
  */
+const GRANT_RECORD_TYPES: ReadonlySet<McpGrantRecordType> = new Set([
+  "grant.issued",
+  "grant.expired",
+  "grant.revoked",
+  "tier.elevated",
+  "tier.decayed",
+]);
+
 export function isGrantRecord(record: McpLogRecord): record is McpGrantRecord {
   return (
     typeof record === "object" &&
     record !== null &&
     "type" in record &&
-    typeof (record as { type: unknown }).type === "string"
+    typeof (record as { type: unknown }).type === "string" &&
+    GRANT_RECORD_TYPES.has((record as { type: string }).type as McpGrantRecordType)
   );
 }
 
