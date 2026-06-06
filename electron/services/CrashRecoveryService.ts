@@ -103,9 +103,34 @@ export class CrashRecoveryService {
     return info.exists && typeof info.timestamp === "number" ? info.timestamp : null;
   }
 
-  getBackupPanelCount(): number | null {
-    const appState = this.cachedBackupSnapshot?.appState as Record<string, unknown> | undefined;
-    const terminals = appState?.terminals;
+  getBackupPanelCount(allowDiskFallback: boolean = false): number | null {
+    // Cache wins unconditionally. It reflects the snapshot at the moment
+    // consumeMarker() learned about the main-process crash, so later disk
+    // state (rotations from a normal session tick) must not override it.
+    // Without this guard, a "simplify to disk-first" refactor would silently
+    // re-introduce the bleed-into-fresh-boot bug pinned by the test at
+    // CrashRecoveryService.test.ts:1346.
+    if (this.cachedBackupSnapshot) {
+      const appState = this.cachedBackupSnapshot.appState as Record<string, unknown> | undefined;
+      const terminals = appState?.terminals;
+      return Array.isArray(terminals) ? terminals.length : null;
+    }
+    if (!allowDiskFallback) return null;
+    // Renderer-crash mid-session: no marker was ever consumed, so the cache
+    // is empty. readBackupInfo() resolves the parseable rotation file
+    // (current → previous) and readBackupFile() returns null on torn
+    // writes or non-restorable content. Both helpers are observation-only —
+    // they never mutate marker or backup state.
+    const info = this.readBackupInfo();
+    if (!info.exists || !info.path) return null;
+    const snapshot = this.readBackupFile(info.path);
+    if (!snapshot) return null;
+    // Freshness gate: a snapshot from a previous session must not surface a
+    // panel count on the current session's recovery page. Mirrors the
+    // watchdog freshness check at consumeWatchdogKillFlag (line 637).
+    if (snapshot.capturedAt < this.sessionStartMs) return null;
+    const fallbackState = snapshot.appState as Record<string, unknown> | undefined;
+    const terminals = fallbackState?.terminals;
     return Array.isArray(terminals) ? terminals.length : null;
   }
 

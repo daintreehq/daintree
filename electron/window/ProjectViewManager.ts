@@ -1433,7 +1433,7 @@ export class ProjectViewManager {
           if (backupTimestamp !== null) {
             params.set("backupTimestamp", String(backupTimestamp));
           }
-          const panelCount = recoverySvc.getBackupPanelCount();
+          const panelCount = recoverySvc.getBackupPanelCount(true);
           if (panelCount !== null) {
             params.set("panelCount", String(panelCount));
           }
