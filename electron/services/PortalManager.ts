@@ -21,6 +21,12 @@ export class PortalManager {
   private activeTabId: string | null = null;
   private lruOrder = new Map<string, true>();
   private lastShownTabId: string | null = null;
+  // Tabs in the create→show restore window. The renderer restores a tab by
+  // calling create, polling DOM bounds (up to ~1s), then show — activeTabId is
+  // only set at the end of showTab(), so without this guard a concurrent
+  // createTab() could LRU-evict the tab mid-restore (#9971). Entries are
+  // cleared by showTab() or destroyView().
+  private restoringTabIds = new Set<string>();
   // True while the active view is parked offscreen by hideAll(). Guards
   // updateBounds() so a window resize during an open overlay does not pull
   // the hidden view back on top of the overlay.
@@ -59,6 +65,7 @@ export class PortalManager {
     this.viewMap.delete(tabId);
     this.lruOrder.delete(tabId);
     this.lastShownBounds.delete(tabId);
+    this.restoringTabIds.delete(tabId);
 
     // Any attached view (active or parked offscreen) must be detached from the
     // contentView child list before its webContents is closed — otherwise the
@@ -99,6 +106,7 @@ export class PortalManager {
 
     for (const tabId of this.lruOrder.keys()) {
       if (tabId === this.activeTabId) continue;
+      if (this.restoringTabIds.has(tabId)) continue;
       if (!this.viewMap.has(tabId)) {
         this.lruOrder.delete(tabId);
         continue;
@@ -112,6 +120,15 @@ export class PortalManager {
     }
   }
 
+  /**
+   * Shield a tab from LRU eviction during the create→show restore window.
+   * Cleared by showTab() or destroyView(); createTab() clears it on failure so
+   * a tab that never materializes can't leak a permanent guard entry.
+   */
+  markRestoring(tabId: string): void {
+    this.restoringTabIds.add(tabId);
+  }
+
   createTab(tabId: string, url: string, partition: string = "persist:portal"): void {
     console.log(`[PortalManager] Creating tab ${tabId} for ${url} on ${partition}`);
     if (this.viewMap.has(tabId)) return;
@@ -123,6 +140,7 @@ export class PortalManager {
       }
     } catch (error) {
       console.error(`[PortalManager] Invalid URL for tab ${tabId}:`, error);
+      this.restoringTabIds.delete(tabId);
       return;
     }
 
@@ -183,6 +201,7 @@ export class PortalManager {
         this.viewMap.delete(tabId);
         this.lruOrder.delete(tabId);
         this.lastShownBounds.delete(tabId);
+        this.restoringTabIds.delete(tabId);
         // Detach if attached — covers both the active view and any view parked
         // offscreen via hideAll().
         if (this.attachedViews.has(view)) {
@@ -338,6 +357,7 @@ export class PortalManager {
       this.evictIfNeeded();
     } catch (error) {
       console.error(`[PortalManager] Failed to create tab ${tabId}:`, error);
+      this.restoringTabIds.delete(tabId);
       throw error;
     }
   }
@@ -368,6 +388,8 @@ export class PortalManager {
     });
     this.activeView = view;
     this.activeTabId = tabId;
+    // Restore complete — the activeTabId guard takes over eviction protection.
+    this.restoringTabIds.delete(tabId);
     this.hidden = false;
     this.touchLru(tabId);
     this.evictIfNeeded();
@@ -505,5 +527,6 @@ export class PortalManager {
     this.hidden = false;
     this.attachedViews.clear();
     this.lastShownBounds.clear();
+    this.restoringTabIds.clear();
   }
 }

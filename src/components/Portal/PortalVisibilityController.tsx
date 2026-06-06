@@ -45,7 +45,9 @@ export function PortalVisibilityController(): null {
           // keeps its shared session after eviction/restart instead of silently
           // reverting to the default portal session.
           const partition = state.tabs.find((t) => t.id === tabId)?.partition;
-          await window.electron.portal.create({ tabId, url: tabUrl, partition });
+          // isRestore shields the tab from LRU eviction during the bounds
+          // polling below — activeTabId only protects it after show completes.
+          await window.electron.portal.create({ tabId, url: tabUrl, partition, isRestore: true });
           const postCreateState = usePortalStore.getState();
           const stillExists = postCreateState.tabs.some((t) => t.id === tabId);
           if (!stillExists) {
