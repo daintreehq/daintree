@@ -1062,6 +1062,10 @@ describe("DemoCursor", () => {
       const { container } = render(<DemoCursor />);
       const cursorEl = container.querySelector("[data-demo-cursor]") as HTMLElement;
 
+      let moveCount = 0;
+      const onMove = () => moveCount++;
+      document.addEventListener("pointermove", onMove);
+
       try {
         emit("demo:exec-drag", {
           fromSelector: "#drag-src3",
@@ -1073,18 +1077,109 @@ describe("DemoCursor", () => {
         await vi.advanceTimersByTimeAsync(150);
         emit("demo:exec-pause", { requestId: "req-drag3-pause" });
         const pausedLeft = parseFloat(cursorEl.style.left);
+        const pausedMoveCount = moveCount;
 
-        // While paused, frames keep firing but progress is frozen.
+        // While paused, frames keep firing but progress is frozen and no
+        // further move events are dispatched.
         await vi.advanceTimersByTimeAsync(400);
         expect(parseFloat(cursorEl.style.left)).toBe(pausedLeft);
+        expect(moveCount).toBe(pausedMoveCount);
         expect(demoMock.sendCommandDone).not.toHaveBeenCalledWith("req-drag3", undefined);
 
         // Resume and run to completion.
         emit("demo:exec-resume", { requestId: "req-drag3-resume" });
         await vi.advanceTimersByTimeAsync(600);
         expect(parseFloat(cursorEl.style.left)).toBeCloseTo(500);
+        expect(moveCount).toBeGreaterThan(pausedMoveCount);
         expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-drag3", undefined);
       } finally {
+        document.removeEventListener("pointermove", onMove);
+        document.body.removeChild(src);
+        document.body.removeChild(dst);
+      }
+    });
+
+    it("keeps glyph and move events on the same coordinates for a diagonal drag", async () => {
+      const src = makeDragTarget("drag-src4", 100, 100);
+      const dst = makeDragTarget("drag-dst4", 500, 400);
+      const { container } = render(<DemoCursor />);
+      const cursorEl = container.querySelector("[data-demo-cursor]") as HTMLElement;
+
+      // Sample event coords against the glyph position at dispatch time.
+      const samples: Array<{ ex: number; ey: number; gx: number; gy: number }> = [];
+      const onMove = (e: Event) => {
+        const pe = e as PointerEvent;
+        samples.push({
+          ex: pe.clientX,
+          ey: pe.clientY,
+          gx: parseFloat(cursorEl.style.left),
+          gy: parseFloat(cursorEl.style.top),
+        });
+      };
+      document.addEventListener("pointermove", onMove);
+
+      try {
+        emit("demo:exec-drag", {
+          fromSelector: "#drag-src4",
+          toSelector: "#drag-dst4",
+          durationMs: 500,
+          requestId: "req-drag4",
+        });
+        await vi.advanceTimersByTimeAsync(800);
+
+        expect(samples.length).toBeGreaterThan(2);
+        // Glyph and events share the exact same coordinate each frame (no desync,
+        // and Y is tracked — a missing top update would break this).
+        for (const s of samples) {
+          expect(s.ex).toBe(s.gx);
+          expect(s.ey).toBe(s.gy);
+        }
+        // Both axes actually move (not parked, not single-axis).
+        expect(new Set(samples.map((s) => s.ex)).size).toBeGreaterThan(2);
+        expect(new Set(samples.map((s) => s.ey)).size).toBeGreaterThan(2);
+        // Lands on the target.
+        expect(parseFloat(cursorEl.style.left)).toBeCloseTo(500);
+        expect(parseFloat(cursorEl.style.top)).toBeCloseTo(400);
+        expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-drag4", undefined);
+      } finally {
+        document.removeEventListener("pointermove", onMove);
+        document.body.removeChild(src);
+        document.body.removeChild(dst);
+      }
+    });
+
+    it("handles a zero-distance drag without NaN or hanging", async () => {
+      const src = makeDragTarget("drag-src5", 300, 300);
+      const dst = makeDragTarget("drag-dst5", 300, 300);
+      const { container } = render(<DemoCursor />);
+      const cursorEl = container.querySelector("[data-demo-cursor]") as HTMLElement;
+
+      const seen = new Set<string>();
+      const record = (e: Event) => seen.add(e.type);
+      for (const type of ["pointerdown", "pointerup", "pointermove"]) {
+        document.addEventListener(type, record);
+      }
+
+      try {
+        emit("demo:exec-drag", {
+          fromSelector: "#drag-src5",
+          toSelector: "#drag-dst5",
+          durationMs: 300,
+          requestId: "req-drag5",
+        });
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(Number.isNaN(parseFloat(cursorEl.style.left))).toBe(false);
+        expect(Number.isNaN(parseFloat(cursorEl.style.top))).toBe(false);
+        expect(parseFloat(cursorEl.style.left)).toBeCloseTo(300);
+        expect(parseFloat(cursorEl.style.top)).toBeCloseTo(300);
+        expect(seen.has("pointerdown")).toBe(true);
+        expect(seen.has("pointerup")).toBe(true);
+        expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-drag5", undefined);
+      } finally {
+        for (const type of ["pointerdown", "pointerup", "pointermove"]) {
+          document.removeEventListener(type, record);
+        }
         document.body.removeChild(src);
         document.body.removeChild(dst);
       }

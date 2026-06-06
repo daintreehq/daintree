@@ -826,7 +826,6 @@ export function DemoCursor() {
             // Drive the visible glyph and the synthetic move events from the
             // same arced coordinates each frame, paced by wall-clock elapsed
             // time, so the cursor travels with the drag instead of teleporting.
-            const el = cursorRef.current;
             const duration = payload.durationMs ?? 500;
             const seed = Math.random() * 1000;
 
@@ -836,6 +835,13 @@ export function DemoCursor() {
               let pausedTotal = 0;
 
               function frame(timestamp: number) {
+                const el = cursorRef.current;
+                // Component unmounted mid-drag — stop the loop (also breaks the
+                // reschedule-forever path when unmounted while paused).
+                if (!el) {
+                  resolve();
+                  return;
+                }
                 if (startTs === null) startTs = timestamp;
 
                 if (pausedRef.current) {
@@ -853,11 +859,9 @@ export function DemoCursor() {
                 const t = duration > 0 ? Math.min(elapsed / duration, 1) : 1;
                 const { x: cx, y: cy } = computeBezierPoint(fromX, fromY, toX, toY, seed, t);
 
-                if (el) {
-                  el.style.left = `${cx}px`;
-                  el.style.top = `${cy}px`;
-                  el.style.transform = "";
-                }
+                el.style.left = `${cx}px`;
+                el.style.top = `${cy}px`;
+                el.style.transform = "";
 
                 const moveTarget = document.elementFromPoint(cx, cy) ?? sourceTarget;
                 moveTarget.dispatchEvent(
