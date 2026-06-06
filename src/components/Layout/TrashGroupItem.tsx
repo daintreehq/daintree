@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useSyncExternalStore } from "react";
 import { RotateCcw, X, Layers, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store";
@@ -11,6 +11,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { isUselessTitle } from "@shared/utils/isUselessTitle";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import {
+  subscribeToPluginAgentRegistry,
+  getPluginAgentRegistrySnapshot,
+} from "@shared/config/pluginAgentRegistry";
 import { cn } from "@/lib/utils";
 
 const COUNTDOWN_CRITICAL_SECONDS = 5;
@@ -37,6 +41,10 @@ export function TrashGroupItem({
   const restoreTerminal = usePanelStore((s) => s.restoreTerminal);
   const removePanel = usePanelStore((s) => s.removePanel);
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+  // Re-render when a plugin loads/unloads mid-session so trashed terminals'
+  // icon/name pick up the updated registry (#9879). Subscription is the
+  // mechanism; the value itself is read via getEffectiveAgentConfig below.
+  useSyncExternalStore(subscribeToPluginAgentRegistry, getPluginAgentRegistrySnapshot);
 
   const [isExpanded, setIsExpanded] = useState(false);
 

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import {
   getLaunchOptions,
   getMoreAgentsOption,
@@ -12,6 +12,10 @@ import type { WorktreeState } from "@/types";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { actionService } from "@/services/ActionService";
 import { getEffectiveAgentIds } from "@shared/config/agentRegistry";
+import {
+  subscribeToPluginAgentRegistry,
+  getPluginAgentRegistrySnapshot,
+} from "@shared/config/pluginAgentRegistry";
 import { isAgentInstalled } from "../../shared/utils/agentAvailability";
 
 interface UseNewTerminalPaletteProps {
@@ -43,8 +47,17 @@ export function useNewTerminalPalette({
   const addPanel = usePanelStore((state) => state.addPanel);
   const availability = useCliAvailabilityStore((state) => state.availability);
   const isAvailabilityInitialized = useCliAvailabilityStore((state) => state.isInitialized);
+  // Re-render when a plugin loads/unloads mid-session so its agents appear /
+  // disappear in the launch list (#9879).
+  const pluginAgentRegistry = useSyncExternalStore(
+    subscribeToPluginAgentRegistry,
+    getPluginAgentRegistrySnapshot
+  );
 
   const options = useMemo(() => {
+    // Referenced so this memo re-derives when plugins load/unload mid-session;
+    // getEffectiveAgentIds() below reads the merged (incl. plugin) registry (#9879).
+    void pluginAgentRegistry;
     const allOptions = getLaunchOptions();
     const registryAgentIds = new Set(getEffectiveAgentIds());
 
@@ -62,7 +75,7 @@ export function useNewTerminalPalette({
     filtered.push(getMoreAgentsOption());
 
     return filtered;
-  }, [availability, isAvailabilityInitialized]);
+  }, [availability, isAvailabilityInitialized, pluginAgentRegistry]);
 
   const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<LaunchOption>({
     items: options,

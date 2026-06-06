@@ -63,6 +63,10 @@ import {
 import { MenuActionSourceContext } from "@/components/ui/menu-source";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { getEffectiveAgentIds } from "@shared/config/agentRegistry";
+import {
+  subscribeToPluginAgentRegistry,
+  getPluginAgentRegistrySnapshot,
+} from "@shared/config/pluginAgentRegistry";
 import { getAgentConfig } from "@/config/agents";
 import {
   DockLaunchMenuItems,
@@ -251,16 +255,23 @@ export function useContentGridContext({
   const hasDevPreview = useProjectSettingsStore((s) =>
     Boolean(s.settings?.devServerCommand?.trim())
   );
-
-  const gridSelectedAgentIds = useMemo(
-    () =>
-      computeGridSelectedAgentIds(
-        isAvailabilityInitialized,
-        agentAvailability,
-        getEffectiveAgentIds()
-      ),
-    [isAvailabilityInitialized, agentAvailability]
+  // Re-derive grid agents when a plugin loads/unloads mid-session so its agents
+  // appear / disappear with current icon/name/color (#9879).
+  const pluginAgentRegistry = useSyncExternalStore(
+    subscribeToPluginAgentRegistry,
+    getPluginAgentRegistrySnapshot
   );
+
+  const gridSelectedAgentIds = useMemo(() => {
+    // Referenced so this memo re-derives when plugins load/unload mid-session;
+    // getEffectiveAgentIds() reads the merged (incl. plugin) registry (#9879).
+    void pluginAgentRegistry;
+    return computeGridSelectedAgentIds(
+      isAvailabilityInitialized,
+      agentAvailability,
+      getEffectiveAgentIds()
+    );
+  }, [isAvailabilityInitialized, agentAvailability, pluginAgentRegistry]);
   const isProjectSwitching = false;
   const { projectIconSvg } = useProjectBranding(currentProject?.id);
   const { worktreeMap, isInitialized: isWorktreeInitialized } = useWorktrees();
@@ -674,6 +685,9 @@ export function useContentGridContext({
   // Build the same `DockLaunchAgent[]` shape the dock uses so the grid menu
   // renders identical brand icons, then split/order by toolbar pin state.
   const { sorted: gridLaunchAgents, pinnedCount: gridAgentPinnedCount } = useMemo(() => {
+    // Referenced so this memo re-derives when plugins load/unload mid-session;
+    // getEffectiveAgentIds/getAgentConfig read the merged (incl. plugin) registry (#9879).
+    void pluginAgentRegistry;
     const agents: DockLaunchAgent[] = getEffectiveAgentIds()
       .filter((id) => !gridSelectedAgentIds || gridSelectedAgentIds.has(id))
       .map((id) => {
@@ -687,7 +701,7 @@ export function useContentGridContext({
         };
       });
     return sortAgentsByToolbarPin(agents, leftButtons, agentSettings);
-  }, [agentAvailability, gridSelectedAgentIds, leftButtons, agentSettings]);
+  }, [agentAvailability, gridSelectedAgentIds, leftButtons, agentSettings, pluginAgentRegistry]);
 
   const handleGridLaunch = useCallback(
     (agentId: string) => {
