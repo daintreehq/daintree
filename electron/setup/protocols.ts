@@ -25,6 +25,7 @@ import {
   isDevPreviewProxyUrl,
   isSafeNavigationUrl,
 } from "../../shared/utils/urlUtils.js";
+import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 import { getWebviewDialogService } from "../services/WebviewDialogService.js";
 import { looksLikeOAuthUrl } from "../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -642,8 +643,12 @@ export function setupWebviewCSP(): void {
   // dev-preview partitions are wired dynamically via will-attach-webview below.
   applyCSP("persist:daintree");
 
-  // Singleton for the browser partition session — used for identity comparison in navigation handlers.
-  const browserSession = session.fromPartition("persist:browser");
+  // Browser panel sessions are per-project (persist:browser-*) and created lazily,
+  // so navigation handlers below discriminate by the webContents' partition string
+  // rather than against a single cached session object.
+  const isBrowserPanelContents = (contents: Electron.WebContents): boolean =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Electron typing gap: Session.partition is not exposed
+    isBrowserPartition((contents.session as any)?.partition ?? "");
 
   // Monitor for dynamic dev-preview partitions
   app.on("web-contents-created", (_event, contents) => {
@@ -652,7 +657,7 @@ export function setupWebviewCSP(): void {
       const panelId = dialogService.getPanelId(contents.id);
       if (!panelId) return;
 
-      const isDevPreview = contents.session !== browserSession;
+      const isDevPreview = !isBrowserPanelContents(contents);
       if (
         isDevPreview &&
         looksLikeOAuthUrl(url) &&
@@ -708,7 +713,7 @@ export function setupWebviewCSP(): void {
         // the blocked-nav banner so the user can use "Sign in via Browser" (loopback flow).
         // Without this, window.open() OAuth popups bypass the banner and go straight
         // to the system browser, losing the PKCE sessionStorage state.
-        const isDevPreview = contents.session !== browserSession;
+        const isDevPreview = !isBrowserPanelContents(contents);
         if (url && isDevPreview && looksLikeOAuthUrl(url)) {
           notifyBlockedNavigation(url);
           return { action: "deny" };
@@ -730,7 +735,7 @@ export function setupWebviewCSP(): void {
       // Browser partition allows cross-origin http/https for OAuth/OIDC flows.
       // Dev-preview and other partitions remain restricted to localhost only.
       contents.on("will-navigate", (event, navigationUrl) => {
-        const isBrowserPanel = contents.session === browserSession;
+        const isBrowserPanel = isBrowserPanelContents(contents);
 
         const blocked = isBrowserPanel
           ? !isSafeNavigationUrl(navigationUrl)
@@ -745,7 +750,7 @@ export function setupWebviewCSP(): void {
       });
 
       contents.on("will-redirect", (event, redirectUrl) => {
-        const isBrowserPanel = contents.session === browserSession;
+        const isBrowserPanel = isBrowserPanelContents(contents);
 
         const blocked = isBrowserPanel
           ? !isSafeNavigationUrl(redirectUrl)

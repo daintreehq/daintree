@@ -42,3 +42,35 @@ export const DEV_PREVIEW_PARTITION_PATTERN =
 export function isDevPreviewPartition(value: unknown): value is string {
   return typeof value === "string" && DEV_PREVIEW_PARTITION_PATTERN.test(value);
 }
+
+/**
+ * Build the per-project `persist:browser-*` partition for a Browser panel.
+ *
+ * Browser sessions are scoped by project (cookies/localStorage/IndexedDB for a
+ * site like `localhost:3000` or `github.com` belong to the project context, not
+ * a single worktree or panel instance), so this needs only `projectId`. A
+ * missing id sanitizes to `persist:browser-default`.
+ */
+export function buildBrowserPartition(projectId: string | undefined): string {
+  return `persist:browser-${sanitizePartitionToken(projectId)}`;
+}
+
+/**
+ * Matches a Browser panel partition. Accepts both the scoped
+ * `persist:browser-{token}` form produced by `buildBrowserPartition` and the
+ * legacy bare `persist:browser` string so sessions created by older builds (or
+ * still cached by Electron) keep being classified and locked down correctly.
+ */
+export const BROWSER_PARTITION_PATTERN = /^persist:browser(-[a-z0-9_-]+)?$/;
+
+/**
+ * True when `value` is a syntactically valid Browser panel partition.
+ *
+ * Returns a plain `boolean` rather than a `value is string` predicate: callers
+ * pass an already-typed `string` and chain this in `||` with other partition
+ * checks, where a negative type-guard branch would wrongly narrow `string` to
+ * `never` (a non-browser partition is still a string).
+ */
+export function isBrowserPartition(value: unknown): boolean {
+  return typeof value === "string" && BROWSER_PARTITION_PATTERN.test(value);
+}

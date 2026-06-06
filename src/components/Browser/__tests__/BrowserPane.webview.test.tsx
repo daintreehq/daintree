@@ -70,7 +70,9 @@ const {
   );
   (usePanelStoreMock as unknown as { getState: () => typeof terminalStoreState }).getState = () =>
     terminalStoreState;
-  const projectStoreState = { currentProject: { id: "test-project" } };
+  const projectStoreState: { currentProject: { id: string } | null } = {
+    currentProject: { id: "test-project" },
+  };
   const useProjectStoreMock = vi.fn((selector: (state: typeof projectStoreState) => unknown) =>
     selector(projectStoreState)
   );
@@ -266,6 +268,45 @@ describe("BrowserPane webview lifecycle regression", () => {
     const { container } = render(<BrowserPane {...baseProps} />);
     const webview = getWebviewElement(container);
     expect(webview.hasAttribute("allowpopups")).toBe(true);
+  });
+
+  describe("per-project session partition (#9965)", () => {
+    const restoreProjectMock = () =>
+      useProjectStoreMock.mockImplementation((selector) =>
+        selector({ currentProject: { id: "test-project" } })
+      );
+
+    afterEach(() => {
+      restoreProjectMock();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (window as any).__DAINTREE_INITIAL_PROJECT__;
+    });
+
+    it("scopes the webview partition to the current project", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      expect(webview.getAttribute("partition")).toBe("persist:browser-test-project");
+    });
+
+    it("falls back to the synchronously-seeded project id when the store has not resolved", () => {
+      useProjectStoreMock.mockImplementation((selector) => selector({ currentProject: null }));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__DAINTREE_INITIAL_PROJECT__ = { id: "seeded-project" };
+
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      // Must NOT attach with the shared default partition — that would leak the
+      // session across projects, which is the bug this fix closes.
+      expect(webview.getAttribute("partition")).toBe("persist:browser-seeded-project");
+    });
+
+    it("uses the default partition only when no project id is available at all", () => {
+      useProjectStoreMock.mockImplementation((selector) => selector({ currentProject: null }));
+
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      expect(webview.getAttribute("partition")).toBe("persist:browser-default");
+    });
   });
 
   it("does not pass console-toggle props to BrowserToolbar (regression #7495)", () => {

@@ -1,11 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { isLocalhostUrl } from "../../../shared/utils/urlUtils.js";
+import { isLocalhostUrl, isDevPreviewProxyUrl } from "../../../shared/utils/urlUtils.js";
+import { isBrowserPartition } from "../../../shared/utils/partitionUtils.js";
 
 /**
  * Tests the will-attach-webview handler logic from createWindow.ts.
  *
  * The handler is inlined in setupBrowserWindow, so we replicate its exact
- * logic here to verify the partition preservation fix (#4564).
+ * logic here to verify the partition preservation fix (#4564) and the
+ * per-project browser partition support (#9965).
  *
  * If createWindow.ts changes, these tests should be updated to match.
  */
@@ -14,11 +16,12 @@ function simulateWillAttachWebview(
   webPreferences: Record<string, unknown>,
   params: { src: string; partition?: string }
 ): { prevented: boolean } {
-  const allowedPartitions = ["persist:browser", "persist:dev-preview"];
-  const isAllowedLocalhostUrl = isLocalhostUrl(params.src);
+  const isAllowedLocalhostUrl = isLocalhostUrl(params.src) || isDevPreviewProxyUrl(params.src);
+  const partition = params.partition ?? "";
   const isValidPartition =
-    allowedPartitions.includes(params.partition || "") ||
-    (params.partition?.startsWith("persist:dev-preview-") ?? false);
+    isBrowserPartition(partition) ||
+    partition === "persist:dev-preview" ||
+    partition.startsWith("persist:dev-preview-");
 
   if (!isAllowedLocalhostUrl || !isValidPartition) {
     return { prevented: true };
@@ -37,11 +40,26 @@ function simulateWillAttachWebview(
 }
 
 describe("will-attach-webview partition preservation (#4564)", () => {
-  it("sets webPreferences.partition for persist:browser", () => {
+  it("sets webPreferences.partition for a per-project browser partition", () => {
     const webPreferences: Record<string, unknown> = {
       preload: "/some/path",
       nodeIntegration: true,
     };
+
+    const result = simulateWillAttachWebview(webPreferences, {
+      src: "http://localhost:3000",
+      partition: "persist:browser-project-1",
+    });
+
+    expect(result.prevented).toBe(false);
+    expect(webPreferences.partition).toBe("persist:browser-project-1");
+    expect(webPreferences.sandbox).toBe(true);
+    expect(webPreferences.nodeIntegration).toBe(false);
+    expect(webPreferences.preload).toBeUndefined();
+  });
+
+  it("still accepts the legacy bare persist:browser partition", () => {
+    const webPreferences: Record<string, unknown> = {};
 
     const result = simulateWillAttachWebview(webPreferences, {
       src: "http://localhost:3000",
@@ -50,9 +68,18 @@ describe("will-attach-webview partition preservation (#4564)", () => {
 
     expect(result.prevented).toBe(false);
     expect(webPreferences.partition).toBe("persist:browser");
-    expect(webPreferences.sandbox).toBe(true);
-    expect(webPreferences.nodeIntegration).toBe(false);
-    expect(webPreferences.preload).toBeUndefined();
+  });
+
+  it("blocks browser-like partitions that are not valid (over-match guard)", () => {
+    const webPreferences: Record<string, unknown> = {};
+
+    const result = simulateWillAttachWebview(webPreferences, {
+      src: "http://localhost:3000",
+      partition: "persist:browserish",
+    });
+
+    expect(result.prevented).toBe(true);
+    expect(webPreferences.partition).toBeUndefined();
   });
 
   it("sets webPreferences.partition for dynamic dev-preview partition", () => {
