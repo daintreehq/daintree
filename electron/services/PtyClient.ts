@@ -937,8 +937,8 @@ export class PtyClient extends EventEmitter {
   /**
    * Acknowledge data processing for flow control.
    */
-  acknowledgeData(id: string, charCount: number): void {
-    this.send({ type: "acknowledge-data", id, charCount });
+  acknowledgeData(id: string, byteCount: number): void {
+    this.send({ type: "acknowledge-data", id, byteCount });
   }
 
   /**

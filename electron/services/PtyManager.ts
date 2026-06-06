@@ -365,10 +365,10 @@ export class PtyManager extends EventEmitter {
    * No-op in SAB mode (which is always enabled in production).
    * Kept for backwards compatibility with IPC fallback mode.
    */
-  acknowledgeData(id: string, charCount: number): void {
+  acknowledgeData(id: string, byteCount: number): void {
     const terminal = this.registry.get(id);
     if (terminal) {
-      terminal.acknowledgeData(charCount);
+      terminal.acknowledgeData(byteCount);
     }
   }
 

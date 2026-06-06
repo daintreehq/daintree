@@ -151,7 +151,7 @@ export type PtyHostRequest =
   | { type: "connect-port"; windowId: number }
   | { type: "get-terminal-info"; id: string; requestId: string }
   | { type: "force-resume"; id: string }
-  | { type: "acknowledge-data"; id: string; charCount: number }
+  | { type: "acknowledge-data"; id: string; byteCount: number }
   | { type: "set-analysis-enabled"; id: string; enabled: boolean }
   | { type: "get-available-terminals"; requestId: string }
   | { type: "get-terminals-by-state"; state: AgentState; requestId: string }

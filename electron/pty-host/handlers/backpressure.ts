@@ -16,7 +16,7 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
 
   return {
     "acknowledge-data": (msg) => {
-      const acknowledgedBytes = msg.charCount ?? 0;
+      const acknowledgedBytes = msg.byteCount ?? 0;
       ipcQueueManager.removeBytes(msg.id, acknowledgedBytes);
       ipcQueueManager.tryResume(msg.id);
 
