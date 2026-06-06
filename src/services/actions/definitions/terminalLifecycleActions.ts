@@ -48,7 +48,11 @@ export function registerTerminalLifecycleActions(
       const targetId =
         terminalId ??
         state.focusedId ??
-        state.panelIds.find((id) => state.panelsById[id]?.location !== "trash");
+        state.panelIds.find(
+          (id) =>
+            state.panelsById[id]?.location !== "trash" &&
+            state.panelsById[id]?.location !== "background"
+        );
       if (!targetId) return;
       // Optimistic close: hide the panel now, trash it after the removal has
       // painted. The coordinator advances focus synchronously so a rapid Cmd+W

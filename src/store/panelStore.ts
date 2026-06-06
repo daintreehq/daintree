@@ -664,6 +664,115 @@ export const usePanelStore = create<PanelGridState>()(
         }
       },
 
+      backgroundTerminal: (id: string) => {
+        const state = get();
+        // Resolve the kind's policy and agent flag BEFORE the registry
+        // mutation — mirrors trashPanel so the fallback pick reads
+        // pre-background grid contents (#9937).
+        const terminalToBackground = state.panelsById[id];
+        const policy = resolvePanelKindPolicy(terminalToBackground?.kind);
+        const preferAgent = Boolean(
+          terminalToBackground && isRuntimeAgentTerminal(terminalToBackground)
+        );
+
+        registrySlice.backgroundTerminal(id);
+
+        // The slice declines missing/trash/overlay panels — skip focus repair
+        // when nothing was backgrounded so a no-op can't steal focus.
+        if (get().panelsById[id]?.location !== "background") return;
+
+        const updates: Partial<PanelGridState> = {};
+
+        if (state.focusedId === id) {
+          updates.focusedId = pickFallbackFocusId(
+            state,
+            new Set([id]),
+            getActiveWorktreeId() ?? undefined,
+            policy,
+            preferAgent
+          );
+          updates.previousFocusedId = null;
+        } else if (state.previousFocusedId === id) {
+          updates.previousFocusedId = null;
+        }
+
+        if (state.maximizedId === id) {
+          updates.maximizedId = null;
+        }
+
+        if (state.activeDockTerminalId === id) {
+          updates.activeDockTerminalId = null;
+        }
+
+        // A hidden panel must not keep a live ping highlight. The ping timer's
+        // callback checks `pingedId === id` before clearing, so nulling here
+        // can't race it.
+        if (state.pingedId === id) {
+          updates.pingedId = null;
+        }
+
+        if (Object.keys(updates).length > 0) {
+          set(updates);
+        }
+      },
+
+      backgroundPanelGroup: (panelId: string) => {
+        const state = get();
+        const group = registrySlice.getPanelGroup(panelId);
+
+        // No group — delegate to the wrapped single-panel path instead of
+        // letting the slice's internal fallthrough re-enter this store layer.
+        if (!group) {
+          get().backgroundTerminal(panelId);
+          return;
+        }
+
+        const panelIdsInGroup = [...group.panelIds];
+
+        // Resolve the kind's policy from the FOCUSED panel of the group —
+        // mirrors trashPanelGroup (see the mixed-kind note there).
+        const focusedTerminal =
+          state.focusedId !== null ? state.panelsById[state.focusedId] : undefined;
+        const policy = resolvePanelKindPolicy(focusedTerminal?.kind);
+        const preferAgent = Boolean(focusedTerminal && isRuntimeAgentTerminal(focusedTerminal));
+
+        registrySlice.backgroundPanelGroup(panelId);
+
+        const updates: Partial<PanelGridState> = {};
+
+        if (panelIdsInGroup.includes(state.focusedId ?? "")) {
+          updates.focusedId = pickFallbackFocusId(
+            state,
+            new Set(panelIdsInGroup),
+            getActiveWorktreeId() ?? undefined,
+            policy,
+            preferAgent
+          );
+          updates.previousFocusedId = null;
+        } else if (
+          state.previousFocusedId !== null &&
+          panelIdsInGroup.includes(state.previousFocusedId)
+        ) {
+          updates.previousFocusedId = null;
+        }
+
+        if (state.maximizedId && panelIdsInGroup.includes(state.maximizedId)) {
+          updates.maximizedId = null;
+        }
+
+        if (state.activeDockTerminalId && panelIdsInGroup.includes(state.activeDockTerminalId)) {
+          updates.activeDockTerminalId = null;
+        }
+
+        if (state.pingedId && panelIdsInGroup.includes(state.pingedId)) {
+          updates.pingedId = null;
+        }
+
+        if (Object.keys(updates).length > 0) {
+          set(updates);
+        }
+      },
+
       restoreTerminal: (id: string, targetWorktreeId?: string) => {
         registrySlice.restoreTerminal(id, targetWorktreeId);
         const previousFocusedId = get().focusedId;
