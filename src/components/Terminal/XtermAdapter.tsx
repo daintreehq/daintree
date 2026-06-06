@@ -530,7 +530,10 @@ export function XtermAdapter({
   // forwarded — a theme hover must not refit every mounted terminal, and an
   // unchanged scrollback write must not touch xterm's CircularList. The
   // applied-vs-current check also makes this a no-op on the commits where the
-  // attach effect already passed current options to getOrCreate.
+  // attach effect already passed current options to getOrCreate. The five
+  // diffed keys are the only runtime-variable outputs of getXtermOptions —
+  // everything else is a static BASE_TERMINAL_OPTIONS constant; extend the
+  // diff if a new option ever becomes user-configurable.
   useLayoutEffect(() => {
     const applied = appliedOptionsRef.current;
     appliedOptionsRef.current = terminalOptions;

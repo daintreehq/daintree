@@ -477,7 +477,11 @@ describe("XtermAdapter lifecycle", () => {
     const view = renderAdapter();
 
     await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
-    // Mount applies options through getOrCreate — no redundant updateOptions call.
+    // Mount applies options through getOrCreate — no redundant updateOptions
+    // call. (The real getOrCreate routes existing instances through
+    // updateOptions internally; the adapter records what it passed to
+    // getOrCreate as applied, which is what keeps this assertion valid with
+    // the simplified mock.)
     expect(mocks.terminalInstanceService.updateOptions).not.toHaveBeenCalled();
 
     const newTheme = { background: "#ff0000" };
@@ -548,5 +552,62 @@ describe("XtermAdapter lifecycle", () => {
     );
     expect(mocks.terminalInstanceService.detach).not.toHaveBeenCalled();
     expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call updateOptions when appearance is unchanged across rerenders (#9929)", async () => {
+    const view = renderAdapter();
+
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
+
+    view.rerender(
+      <Suspense fallback={null}>
+        <XtermAdapter
+          terminalId="term-1"
+          launchAgentId="claude"
+          onReady={vi.fn()}
+          onExit={vi.fn()}
+          onInput={vi.fn()}
+          getRefreshTier={() => TerminalRefreshTier.FOCUSED}
+          cwd="/repo/next"
+        />
+      </Suspense>
+    );
+
+    expect(mocks.terminalInstanceService.updateOptions).not.toHaveBeenCalled();
+    expect(mocks.terminalInstanceService.detach).not.toHaveBeenCalled();
+    expect(mocks.terminalInstanceService.getOrCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("batches simultaneous appearance changes into a single delta call (#9929)", async () => {
+    const view = renderAdapter();
+
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
+
+    const newTheme = { background: "#00ff00" };
+    mocks.appearance.effectiveTheme = newTheme;
+    mocks.appearance.fontSize = 18;
+
+    view.rerender(
+      <Suspense fallback={null}>
+        <XtermAdapter
+          terminalId="term-1"
+          launchAgentId="claude"
+          onReady={vi.fn()}
+          onExit={vi.fn()}
+          onInput={vi.fn()}
+          getRefreshTier={() => TerminalRefreshTier.FOCUSED}
+          cwd="/repo/initial"
+        />
+      </Suspense>
+    );
+
+    await waitFor(() =>
+      expect(mocks.terminalInstanceService.updateOptions).toHaveBeenCalledWith("term-1", {
+        theme: newTheme,
+        fontSize: 18,
+      })
+    );
+    expect(mocks.terminalInstanceService.updateOptions).toHaveBeenCalledTimes(1);
+    expect(mocks.terminalInstanceService.detach).not.toHaveBeenCalled();
   });
 });
