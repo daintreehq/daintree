@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { loadBudgetConfig, getScenarioBudget } from "./lib/budgets";
 import { compareSamples } from "./lib/comparison";
+import { evaluateScenarioBudget } from "./lib/gate";
 import { appendJsonLine, readJson, writeJson, writeText, ensureDir } from "./lib/io";
 import { mean, percentile, round, stdDev } from "./lib/stats";
 import { buildMarkdownReport } from "./report/generate";
@@ -50,7 +51,6 @@ const DEFAULT_ITERATIONS: Record<PerfMode, Record<ScenarioTier, number>> = {
 };
 
 const MODES: ReadonlySet<string> = new Set(["smoke", "ci", "nightly", "soak"]);
-const MIN_REGRESSION_BASELINE_MS = 5;
 
 function parseArgs(argv: string[]): CliOptions {
   const args = new Map<string, string>();
@@ -207,42 +207,16 @@ async function run(): Promise<void> {
     }
 
     const budget = getScenarioBudget(budgetConfig, scenarioId);
-    let failedBudget = false;
-    const reasons: string[] = [];
-
-    if (budget.p95Ms !== undefined && p95Ms > budget.p95Ms) {
-      failedBudget = true;
-      reasons.push(`p95 ${round(p95Ms)}ms > budget ${budget.p95Ms}ms`);
-    }
-
-    if (budget.maxMetricValues) {
-      for (const [metricName, maxValue] of Object.entries(budget.maxMetricValues)) {
-        const actual = metricAverages[metricName];
-        if (actual !== undefined && actual > maxValue) {
-          failedBudget = true;
-          reasons.push(`${metricName} ${round(actual)} > max ${maxValue}`);
-        }
-      }
-    }
-
     const baselineP95 = baseline?.p95ByScenario?.[scenarioId];
-    if (
-      baselineP95 !== undefined &&
-      baselineP95 >= MIN_REGRESSION_BASELINE_MS &&
-      budget.maxRegressionPct !== undefined
-    ) {
-      const regressionPct = ((p95Ms - baselineP95) / baselineP95) * 100;
-      if (regressionPct > budget.maxRegressionPct) {
-        failedBudget = true;
-        reasons.push(
-          `regression ${round(regressionPct)}% exceeds ${budget.maxRegressionPct}% baseline gate`
-        );
-      }
-    }
-
-    if (!baseline && budgetConfig.criticalScenarios.includes(scenarioId)) {
-      reasons.push("baseline missing - regression gate skipped");
-    }
+    const { failedBudget, reasons } = evaluateScenarioBudget({
+      scenarioId,
+      p95Ms,
+      metricAverages,
+      budget,
+      baselineP95,
+      isCritical: budgetConfig.criticalScenarios.includes(scenarioId),
+      hasBaselineFile: baseline !== null,
+    });
 
     if (failedBudget) {
       failedScenarios.push(scenarioId);
@@ -286,6 +260,20 @@ async function run(): Promise<void> {
       const baseArmData = await runBaselineArm(mergeBase, cli, baseOutDir);
 
       comparisonAggregates = computeComparisons(aggregateById, baseArmData, budgetConfig);
+
+      const expectedComparisons = [...aggregateById.keys()].filter(
+        (id) => getScenarioBudget(budgetConfig, id).comparison !== undefined
+      );
+      if (expectedComparisons.length > 0 && comparisonAggregates.length === 0) {
+        console.error(
+          `[perf:compare] FAIL comparison arm produced no data for ${expectedComparisons.length} scenario(s) with comparison budgets — baseline arm did not run`
+        );
+        for (const id of expectedComparisons) {
+          if (!failedScenarios.includes(id)) {
+            failedScenarios.push(id);
+          }
+        }
+      }
 
       for (const comp of comparisonAggregates) {
         if (comp.comparison.regression) {
