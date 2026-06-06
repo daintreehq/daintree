@@ -319,9 +319,13 @@ export async function hydrateAppState(
       : null;
     const getForProjectPromise: Promise<BackendTerminalInfo[]> = currentProjectId
       ? terminalClient.getForProject(currentProjectId).catch((error: unknown) => {
-          logWarn("Failed to query backend terminals; continuing with saved panel restore", {
-            error,
-          });
+          // Don't log for superseded runs — the project switch that started this
+          // query was already cancelled, so the failure is no longer relevant.
+          if (checkCurrent()) {
+            logWarn("Failed to query backend terminals; continuing with saved panel restore", {
+              error,
+            });
+          }
           return [];
         })
       : Promise.resolve([]);

@@ -699,7 +699,11 @@ describe("hydrateAppState", () => {
 
     terminalClientMock.getForProject.mockRejectedValue(new Error("terminal query failed"));
 
-    const primeProjectSpy = vi.spyOn(panelPersistence, "primeProject");
+    // panelPersistence is a real singleton whose previous-snapshot cache survives
+    // across tests; clear project-1 so primeProject actually seeds (it early-returns
+    // when an entry already exists) and the assertion below reflects this run.
+    panelPersistence.clearProjectSnapshotCache("project-1");
+
     const addPanel = vi.fn().mockResolvedValue("agent-1");
 
     await hydrateAppState({
@@ -710,11 +714,10 @@ describe("hydrateAppState", () => {
     });
 
     // Persistence cache is primed with the saved panels before any save can fire,
-    // so the first post-boot save compares against the real snapshot, not an empty one.
-    expect(primeProjectSpy).toHaveBeenCalledWith(
-      "project-1",
-      expect.arrayContaining([expect.objectContaining({ id: "agent-1" })])
-    );
+    // so the first post-boot save compares against the real snapshot, not an empty
+    // one — this is what stops the destructive overwrite (#9928).
+    const primedSnapshots = panelPersistence.getPreviousSnapshotMap("project-1");
+    expect(primedSnapshots?.has("agent-1")).toBe(true);
 
     // Saved panel is respawned from disk (empty backend map → respawn path).
     expect(addPanel).toHaveBeenCalledTimes(1);
@@ -724,8 +727,6 @@ describe("hydrateAppState", () => {
         requestedId: "agent-1",
       })
     );
-
-    primeProjectSpy.mockRestore();
   });
 
   it("schedules scrollback restore as background tasks, not blocking hydration", async () => {
