@@ -662,4 +662,80 @@ describe("helpPanelStore persistence migration", () => {
       expect(store.getState().introDismissed).toBe(true);
     });
   });
+
+  describe("activeFigureNumber (#9830)", () => {
+    it("starts as null on a fresh install", async () => {
+      installLocalStorage({});
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+      expect(store.getState().activeFigureNumber).toBeNull();
+    });
+
+    it("setActiveFigureNumber updates the active figure", async () => {
+      installLocalStorage({});
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().setActiveFigureNumber(3);
+
+      expect(store.getState().activeFigureNumber).toBe(3);
+
+      store.getState().setActiveFigureNumber(null);
+      expect(store.getState().activeFigureNumber).toBeNull();
+    });
+
+    it("clearFigures resets the active figure alongside the figures list", async () => {
+      installLocalStorage({});
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().addFigure({
+        imageId: "img-1",
+        figureNumber: 1,
+        figureLabel: "image #1",
+        url: "https://daintree.org/a.png",
+      });
+      store.getState().setActiveFigureNumber(1);
+      expect(store.getState().figures).toHaveLength(1);
+      expect(store.getState().activeFigureNumber).toBe(1);
+
+      store.getState().clearFigures();
+      expect(store.getState().figures).toHaveLength(0);
+      expect(store.getState().activeFigureNumber).toBeNull();
+    });
+
+    it("clearTerminal drops figures and the active figure (session-scoped reset)", async () => {
+      installLocalStorage({});
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().addFigure({
+        imageId: "img-1",
+        figureNumber: 1,
+        figureLabel: "image #1",
+        url: "https://daintree.org/a.png",
+      });
+      store.getState().setActiveFigureNumber(1);
+      expect(store.getState().figures).toHaveLength(1);
+      expect(store.getState().activeFigureNumber).toBe(1);
+
+      store.getState().clearTerminal();
+      expect(store.getState().figures).toHaveLength(0);
+      expect(store.getState().activeFigureNumber).toBeNull();
+    });
+
+    it("activeFigureNumber is NOT persisted", async () => {
+      const backing = installLocalStorage({});
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().setActiveFigureNumber(2);
+
+      const written = backing.get(STORAGE_KEY);
+      expect(written).toBeDefined();
+      const parsed = JSON.parse(written!) as {
+        version: number;
+        state: Record<string, unknown>;
+      };
+      expect(parsed.state).not.toHaveProperty("activeFigureNumber");
+      expect(store.getState().activeFigureNumber).toBe(2);
+    });
+  });
 });

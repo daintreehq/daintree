@@ -6,6 +6,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { FileLinksAddon, HoverCallback } from "./FileLinksAddon";
+import { ImageLinksAddon, OnActivateFigure } from "./ImageLinksAddon";
 
 const IMAGE_ADDON_OPTIONS = { pixelLimit: 2_000_000, storageLimit: 8 };
 
@@ -17,6 +18,7 @@ export interface TerminalAddons {
   imageAddon: ImageAddon | null;
   searchAddon: SearchAddon;
   fileLinksDisposable: IDisposable | null;
+  imageLinksDisposable: IDisposable | null;
   webLinksAddon: WebLinksAddon | null;
 }
 
@@ -59,6 +61,7 @@ export function setupTerminalAddons(terminal: Terminal): TerminalAddons {
     imageAddon: null,
     searchAddon,
     fileLinksDisposable: null,
+    imageLinksDisposable: null,
     webLinksAddon: null,
   };
 }
@@ -75,6 +78,15 @@ export function createFileLinksAddon(
   onHover?: HoverCallback
 ): IDisposable {
   const addon = new FileLinksAddon(terminal, getCwd, onHover);
+  return terminal.registerLinkProvider(addon);
+}
+
+export function createImageLinksAddon(
+  terminal: Terminal,
+  getFigureNumbers: () => readonly number[],
+  onActivate: OnActivateFigure
+): IDisposable {
+  const addon = new ImageLinksAddon(terminal, getFigureNumbers, onActivate);
   return terminal.registerLinkProvider(addon);
 }
 
