@@ -33,6 +33,9 @@ export function getWorstSeverity(entries: NotificationHistoryEntry[]): Notificat
  * `correlationId`, decides whether the notification warrants re-toasting a
  * thread that would otherwise update its inbox row silently.
  *
+ * Kind-agnostic on purpose: severity escalation re-toast is a global rule
+ * across all kinds in `EVENT_POLICY`, not a per-kind opt-in.
+ *
  * Re-toast when any of:
  *  1. The payload is `urgent` (explicit critical override).
  *  2. The incoming severity strictly exceeds the thread's worst *active*

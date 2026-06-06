@@ -63,11 +63,6 @@ export interface EventPolicy {
    * values — `"toast"`/`"inbox"`/`"frame"` are not standalone placements.
    */
   preferredSurface: "grid-bar" | "auto";
-  /**
-   * Declarative hint: this kind should re-surface as a toast when its severity
-   * escalates. Reserved for future escalation wiring — not behavioral yet.
-   */
-  reToastOnSeverityEscalation: boolean;
   /** Default auto-dismiss (ms) when the caller omits `duration`; falls through to `TOAST_DURATION[type]`. */
   defaultDurationMs?: number;
   /** Persisted user-facing toggle that silences this kind, when one exists. */
@@ -78,58 +73,48 @@ export const EVENT_POLICY: Record<NotificationEventKind, EventPolicy> = {
   completed: {
     baseInterruption: "active",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: false,
     userOverrideKey: "completedEnabled",
   },
   waiting: {
     baseInterruption: "active",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: false,
     userOverrideKey: "waitingEnabled",
   },
   workingPulse: {
     baseInterruption: "passive",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: false,
     userOverrideKey: "workingPulseEnabled",
   },
   uiFeedback: {
     baseInterruption: "passive",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: false,
     userOverrideKey: "uiFeedbackSoundEnabled",
   },
   agent: {
     baseInterruption: "active",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: false,
   },
   git: {
     baseInterruption: "active",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: false,
     // Git operation confirmations are brief — shorter than the per-type default.
     defaultDurationMs: 6000,
   },
   host: {
     baseInterruption: "time-sensitive",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: true,
   },
   recovery: {
     baseInterruption: "active",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: true,
   },
   settings: {
     baseInterruption: "passive",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: false,
   },
   connectivity: {
     baseInterruption: "active",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: false,
   },
 };
 
