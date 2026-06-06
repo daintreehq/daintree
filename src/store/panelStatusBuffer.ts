@@ -161,6 +161,12 @@ export function flushPanelStatusBuffer(): void {
         const terminal = nextById[id];
         if (!terminal || !isPtyPanel(terminal)) continue;
 
+        // A late flow event for a terminal that has already exited must not
+        // revive the "paused" pill. `deriveRuntimeStatus` already pins
+        // runtimeStatus at "exited", but flowStatus drives the header pill
+        // directly, so guard the write here too (#9899).
+        if (terminal.runtimeStatus === "exited") continue;
+
         const prevTs = terminal.flowStatusTimestamp;
         if (prevTs !== undefined && patch.timestamp < prevTs) continue;
 

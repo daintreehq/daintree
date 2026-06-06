@@ -29,6 +29,7 @@ import { saveNormalized } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { deriveRuntimeStatus } from "./helpers";
 import { cancelReconnectErrorDebounce } from "./browser";
+import { cancelTerminalFlowState } from "@/store/panelStatusBuffer";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import {
   buildAgentLaunchFlagsForRuntimeSettings,
@@ -190,6 +191,12 @@ export const createRestartActions = (
     // after we've cleared the error inline below.
     cancelReconnectErrorDebounce(id);
 
+    // Evict any buffered flow-status/held-duration patch so a pending RAF flush
+    // can't resurrect the previous process's "paused" pill after the clear
+    // below (#9899). onExit skips this for restarts (markTerminalRestarting),
+    // so the restart path must do it itself.
+    cancelTerminalFlowState(id);
+
     // Also set the store flag for UI and other consumers
     // Track whether we're restarting from a failed spawn so we can clear
     // spawnStatus (allowing XtermAdapter to mount) and restore it on failure.
@@ -206,9 +213,12 @@ export const createRestartActions = (
         // process must not survive into it or the paused pill would linger
         // (#9899). The host only re-emits flow status on a pause/resume
         // transition, so without this the stale value persists indefinitely.
+        // Re-derive runtimeStatus too — dock pills and tab labels read it, and
+        // it would otherwise keep folding the now-cleared paused flow status.
         flowStatus: undefined,
         flowStatusTimestamp: undefined,
         heldDurationMs: undefined,
+        runtimeStatus: deriveRuntimeStatus(t.isVisible, undefined, t.runtimeStatus),
         isRestarting: true,
         // The user is explicitly starting a fresh session, so the
         // session-lost restore signal has been acknowledged — clear it so the

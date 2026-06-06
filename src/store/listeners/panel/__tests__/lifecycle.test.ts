@@ -592,4 +592,45 @@ describe("onExit — stale flow state cleared (#9899)", () => {
 
     expect(getPanel("term-1")?.flowStatus).toBeUndefined();
   });
+
+  it("a late flow event after exit does not revive the pill", () => {
+    setupPanel();
+    getExitHandler()("term-1", 1);
+    expect(getPanel("term-1")?.runtimeStatus).toBe("exited");
+
+    // A flow event arrives from the dead PTY after exit was processed.
+    enqueueFlowStatusUpdate("term-1", "paused-backpressure", 5000);
+    flushPanelStatusBuffer();
+
+    expect(getPanel("term-1")?.flowStatus).toBeUndefined();
+    expect(getPanel("term-1")?.runtimeStatus).toBe("exited");
+  });
+
+  it("evicting one terminal's buffer leaves another terminal's pending patch intact", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "term-1": { id: "term-1", kind: "terminal", title: "T1", cwd: "/tmp", location: "grid" },
+        "term-2": {
+          id: "term-2",
+          kind: "terminal",
+          title: "T2",
+          cwd: "/tmp",
+          location: "grid",
+          isVisible: true,
+        },
+      },
+      panelIds: ["term-1", "term-2"],
+    });
+
+    // Both terminals have a pending flow patch; only term-1 exits.
+    enqueueFlowStatusUpdate("term-1", "paused-backpressure", 100);
+    enqueueFlowStatusUpdate("term-2", "paused-backpressure", 100);
+
+    getExitHandler()("term-1", 1);
+    flushPanelStatusBuffer();
+
+    // term-1's patch was evicted; term-2's still applies.
+    expect(getPanel("term-1")?.flowStatus).toBeUndefined();
+    expect(getPanel("term-2")?.flowStatus).toBe("paused-backpressure");
+  });
 });

@@ -2,6 +2,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
+import { enqueueFlowStatusUpdate, flushPanelStatusBuffer } from "@/store/panelStatusBuffer";
 
 vi.mock("@/utils/logger", () => ({
   logInfo: vi.fn(),
@@ -154,6 +155,31 @@ describe("onBackendReady — stale flow state cleared on host recovery (#9899)",
     getBackendReadyHandler()();
 
     expect(usePanelStore.getState().panelsById["browser-1"]).toEqual(browserPanel);
+  });
+
+  it("a flow patch buffered before the crash does not resurrect the pill after recovery", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "term-1": {
+          ...ptyBase,
+          id: "term-1",
+          isVisible: true,
+          runtimeStatus: "running",
+        },
+      },
+      panelIds: ["term-1"],
+    });
+
+    // A flow event was enqueued just before the host crashed; it never flushed.
+    enqueueFlowStatusUpdate("term-1", "paused-backpressure", 999);
+
+    getBackendReadyHandler()();
+
+    // Recovery cancels the buffer; a later flush must not write the stale patch.
+    flushPanelStatusBuffer();
+
+    expect(getPanel("term-1")?.flowStatus).toBeUndefined();
+    expect(getPanel("term-1")?.runtimeStatus).toBe("running");
   });
 
   it("does not rewrite already-clean PTY panels (referential stability)", () => {

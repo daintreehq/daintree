@@ -613,13 +613,15 @@ describe("restartTerminal stale flow state cleared (#9899)", () => {
     });
   });
 
-  it("clears flowStatus, flowStatusTimestamp, and heldDurationMs on restart", async () => {
+  it("clears flowStatus, flowStatusTimestamp, heldDurationMs, and re-derives runtimeStatus on restart", async () => {
     const paused = {
       ...agentPanelBase,
       agentState: "working" as const,
+      isVisible: true,
       flowStatus: "paused-backpressure" as const,
       flowStatusTimestamp: 12345,
       heldDurationMs: 7000,
+      runtimeStatus: "paused-backpressure" as const,
     };
     usePanelStore.setState({
       panelsById: { [paused.id]: paused },
@@ -632,6 +634,9 @@ describe("restartTerminal stale flow state cleared (#9899)", () => {
     expect(after?.flowStatus).toBeUndefined();
     expect(after?.flowStatusTimestamp).toBeUndefined();
     expect(after?.heldDurationMs).toBeUndefined();
+    // Dock pills / tab labels read runtimeStatus directly — it must not keep
+    // folding the now-cleared paused flow status.
+    expect(after?.runtimeStatus).not.toBe("paused-backpressure");
   });
 });
 
