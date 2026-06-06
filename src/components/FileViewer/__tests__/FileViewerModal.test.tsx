@@ -97,26 +97,25 @@ const { mockDiffViewerControl } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/components/Worktree/DiffViewer", () => ({
-  DiffViewer: forwardRef<HTMLDivElement, { onRetry?: () => void; onExpand?: () => void }>(
-    ({ onRetry, onExpand }, ref) => {
+  DiffViewer: forwardRef<HTMLDivElement, { onRetry?: () => void; onToggleCollapse?: () => void }>(
+    ({ onRetry, onToggleCollapse }, ref) => {
       // Mirrors the real DiffViewer: when a file is collapsed by default, its
       // hunk rows are absent from the DOM until the user expands, at which point
-      // it fires onExpand so the modal can re-scan. See #10013.
+      // it fires onToggleCollapse so the modal can re-scan. Collapsing again
+      // removes the rows and fires the callback once more. See #10013.
       const [expanded, setExpanded] = useState(!mockDiffViewerControl.startCollapsed);
       return (
         <div ref={ref} data-testid="diff-viewer" data-has-retry={onRetry ? "true" : "false"}>
-          {!expanded && (
-            <button
-              type="button"
-              data-testid="expand-trigger"
-              onClick={() => {
-                onExpand?.();
-                setExpanded(true);
-              }}
-            >
-              Show diff
-            </button>
-          )}
+          <button
+            type="button"
+            data-testid="collapse-toggle"
+            onClick={() => {
+              onToggleCollapse?.();
+              setExpanded((prev) => !prev);
+            }}
+          >
+            {expanded ? "Hide diff" : "Show diff"}
+          </button>
           {expanded && (
             // Two stub hunk rows so hunk-nav tests have predictable targets.
             // Each tbody must contain a tr:first-child for the IntersectionObserver
@@ -1046,7 +1045,7 @@ describe("FileViewerModal", () => {
       render(<FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />);
 
       await waitFor(() => {
-        expect(screen.getByTestId("expand-trigger")).toBeTruthy();
+        expect(screen.getByTestId("collapse-toggle")).toBeTruthy();
       });
 
       // Collapsed: no hunk rows, so no observer and no indicator yet.
@@ -1054,8 +1053,8 @@ describe("FileViewerModal", () => {
       expect(mockObserverInstances.length).toBe(0);
       expect(screen.queryByTestId("hunk-position-indicator")).toBeNull();
 
-      // Expand the file — onExpand bumps expandRevision, re-running the scan.
-      fireEvent.click(screen.getByTestId("expand-trigger"));
+      // Expand the file — onToggleCollapse bumps collapseRevision, re-running the scan.
+      fireEvent.click(screen.getByTestId("collapse-toggle"));
 
       await waitFor(() => {
         expect(mockObserverInstances.length).toBe(1);
@@ -1068,6 +1067,33 @@ describe("FileViewerModal", () => {
 
       await waitFor(() => {
         expect(screen.getByTestId("hunk-position-indicator").textContent).toBe("Hunk 1 of 2");
+      });
+    });
+
+    // Regression for #10013: re-collapsing after expand must clear the indicator —
+    // the hunk rows are gone, so "Hunk X of Y" should not linger over an empty body.
+    it("clears the indicator when an expanded file is re-collapsed", async () => {
+      render(<FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+
+      // Start expanded (default): observer fires, indicator shows.
+      const observer = mockObserverInstances[0]!;
+      const hunk0Row = screen.getByTestId("hunk-0").querySelector("tr");
+      fireObserver(observer, [makeEntry(hunk0Row!, 0.8)]);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("hunk-position-indicator").textContent).toBe("Hunk 1 of 2");
+      });
+
+      // Collapse — onToggleCollapse re-runs the scan, which finds 0 hunks.
+      fireEvent.click(screen.getByTestId("collapse-toggle"));
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("hunk-0")).toBeNull();
+        expect(screen.queryByTestId("hunk-position-indicator")).toBeNull();
       });
     });
   });

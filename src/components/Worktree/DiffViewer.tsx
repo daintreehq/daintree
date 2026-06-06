@@ -82,8 +82,8 @@ export interface DiffViewerProps {
   /** Absolute path to the worktree root, used to resolve per-file open-in-editor paths */
   rootPath?: string;
   onRetry?: () => void;
-  /** Fired when a collapsed file is expanded, so consumers can re-scan the newly rendered hunk rows */
-  onExpand?: () => void;
+  /** Fired when a collapsible file is expanded or collapsed, so consumers can re-scan the hunk rows that just appeared or disappeared */
+  onToggleCollapse?: () => void;
 }
 
 function useTokens(
@@ -136,7 +136,7 @@ function useTokens(
 }
 
 export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function DiffViewer(
-  { diff, viewType = "split", rootPath, onRetry, onExpand },
+  { diff, viewType = "split", rootPath, onRetry, onToggleCollapse },
   ref
 ) {
   const files = useMemo(() => {
@@ -213,7 +213,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           file={file}
           viewType={viewType}
           rootPath={rootPath}
-          onExpand={onExpand}
+          onToggleCollapse={onToggleCollapse}
         />
       ))}
     </div>
@@ -224,11 +224,11 @@ interface FileDiffProps {
   file: ReturnType<typeof parseDiff>[0];
   viewType: ViewType;
   rootPath?: string;
-  /** Fired when this file transitions from collapsed to expanded */
-  onExpand?: () => void;
+  /** Fired whenever this file's collapse state is toggled (expand or collapse) */
+  onToggleCollapse?: () => void;
 }
 
-function FileDiff({ file, viewType, rootPath, onExpand }: FileDiffProps) {
+function FileDiff({ file, viewType, rootPath, onToggleCollapse }: FileDiffProps) {
   const relPath = getFilePath(file);
   const language = useMemo(() => {
     const derived = getLanguageForFile(relPath);
@@ -277,9 +277,10 @@ function FileDiff({ file, viewType, rootPath, onExpand }: FileDiffProps) {
   };
 
   const handleToggleCollapse = () => {
-    // Notify consumers on collapse→expand so they can re-scan the now-rendered
-    // hunk rows (the hunk indicator / scroll tracking attaches to live DOM).
-    if (isCollapsed) onExpand?.();
+    // Notify consumers on every toggle so they can re-scan the hunk rows that
+    // just appeared (expand) or disappeared (collapse) — the hunk indicator and
+    // scroll tracking attach to live DOM and must follow both transitions.
+    onToggleCollapse?.();
     setIsCollapsed((prev) => !prev);
   };
 

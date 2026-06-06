@@ -229,4 +229,27 @@ describe("DiffViewer collapse behavior", () => {
     expect(screen.queryByTestId("diff-element")).toBeNull();
     expect(screen.getByText("Show diff")).toBeTruthy();
   });
+
+  // #10013: consumers re-scan hunk rows on toggle, so the callback must fire on
+  // both expand and collapse — once per transition.
+  it("fires onToggleCollapse on each expand and collapse transition", () => {
+    const onToggleCollapse = vi.fn();
+    render(
+      wrap(
+        <DiffViewer
+          diff={LOCKFILE_DIFF}
+          filePath="package-lock.json"
+          onToggleCollapse={onToggleCollapse}
+        />
+      )
+    );
+
+    expect(onToggleCollapse).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText("Show diff"));
+    expect(onToggleCollapse).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText("Hide diff"));
+    expect(onToggleCollapse).toHaveBeenCalledTimes(2);
+  });
 });
