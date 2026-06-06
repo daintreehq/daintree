@@ -239,6 +239,40 @@ describe("backgroundTerminal focus repair (#9937)", () => {
 
     expect(usePanelStore.getState().focusedId).toBe("shell-1");
   });
+
+  it("clears pingedId when the backgrounded panel has an active ping", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "shell-1": makeTerminal("shell-1"),
+        "shell-2": makeTerminal("shell-2"),
+      },
+      panelIds: ["shell-1", "shell-2"],
+      focusedId: "shell-1",
+      pingedId: "shell-2",
+    });
+
+    usePanelStore.getState().backgroundTerminal("shell-2");
+
+    expect(usePanelStore.getState().pingedId).toBeNull();
+  });
+
+  it("is idempotent when called twice on the same panel", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "shell-1": makeTerminal("shell-1"),
+        "shell-2": makeTerminal("shell-2"),
+      },
+      panelIds: ["shell-1", "shell-2"],
+      focusedId: "shell-1",
+    });
+
+    usePanelStore.getState().backgroundTerminal("shell-1");
+    expect(usePanelStore.getState().focusedId).toBe("shell-2");
+
+    usePanelStore.getState().backgroundTerminal("shell-1");
+    expect(usePanelStore.getState().focusedId).toBe("shell-2");
+    expect(usePanelStore.getState().panelsById["shell-1"]!.location).toBe("background");
+  });
 });
 
 describe("backgroundPanelGroup focus repair (#9937)", () => {
@@ -409,6 +443,59 @@ describe("backgroundPanelGroup focus repair (#9937)", () => {
     usePanelStore.getState().backgroundPanelGroup("tab-1");
 
     expect(usePanelStore.getState().focusedId).toBe("shell-same");
+  });
+
+  it("clears activeDockTerminalId pointing into the group while focus is outside", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "tab-1": { ...makeTerminal("tab-1"), location: "dock" as const },
+        "tab-2": { ...makeTerminal("tab-2"), location: "dock" as const },
+        "shell-1": makeTerminal("shell-1"),
+      },
+      panelIds: ["tab-1", "tab-2", "shell-1"],
+      tabGroups: new Map([
+        [
+          "group-1",
+          {
+            id: "group-1",
+            panelIds: ["tab-1", "tab-2"],
+            activeTabId: "tab-1",
+            location: "dock" as const,
+          },
+        ],
+      ]),
+      focusedId: "shell-1",
+      activeDockTerminalId: "tab-1",
+    });
+
+    usePanelStore.getState().backgroundPanelGroup("tab-1");
+
+    expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
+    expect(usePanelStore.getState().focusedId).toBe("shell-1");
+  });
+
+  it("does not steal focus when the group's panels no longer exist", () => {
+    usePanelStore.setState({
+      panelsById: { "shell-1": makeTerminal("shell-1") },
+      panelIds: ["shell-1"],
+      tabGroups: new Map([
+        [
+          "group-1",
+          {
+            id: "group-1",
+            panelIds: ["ghost-1", "ghost-2"],
+            activeTabId: "ghost-1",
+            location: "grid" as const,
+          },
+        ],
+      ]),
+      focusedId: "shell-1",
+    });
+
+    usePanelStore.getState().backgroundPanelGroup("ghost-1");
+
+    expect(usePanelStore.getState().focusedId).toBe("shell-1");
+    expect(usePanelStore.getState().tabGroups.has("group-1")).toBe(false);
   });
 
   it("sets focusedId to null when the group was the only grid content", () => {

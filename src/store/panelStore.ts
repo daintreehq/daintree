@@ -704,6 +704,13 @@ export const usePanelStore = create<PanelGridState>()(
           updates.activeDockTerminalId = null;
         }
 
+        // A hidden panel must not keep a live ping highlight. The ping timer's
+        // callback checks `pingedId === id` before clearing, so nulling here
+        // can't race it.
+        if (state.pingedId === id) {
+          updates.pingedId = null;
+        }
+
         if (Object.keys(updates).length > 0) {
           set(updates);
         }
@@ -755,6 +762,10 @@ export const usePanelStore = create<PanelGridState>()(
 
         if (state.activeDockTerminalId && panelIdsInGroup.includes(state.activeDockTerminalId)) {
           updates.activeDockTerminalId = null;
+        }
+
+        if (state.pingedId && panelIdsInGroup.includes(state.pingedId)) {
+          updates.pingedId = null;
         }
 
         if (Object.keys(updates).length > 0) {
