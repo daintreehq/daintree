@@ -369,6 +369,26 @@ describe("panelStore adversarial", () => {
       expectMaximizeCleared();
     });
 
+    it("moveTabGroupToLocation clears maximize when the maximized group is dragged into the dock", () => {
+      seedMaximizedGroup();
+      usePanelStore.getState().moveTabGroupToLocation("g1", "dock");
+      expectMaximizeCleared();
+    });
+
+    it("moveTerminalToDock clears maximize when a sibling of the maximized group is docked", () => {
+      seedMaximizedGroup();
+      // p2 is in the maximized group; p1 is the tracking panel. Docking p2
+      // routes through moveTabGroupToLocation internally.
+      usePanelStore.getState().moveTerminalToDock("p2");
+      expectMaximizeCleared();
+    });
+
+    it("backgroundPanelGroup clears maximize for an ungrouped maximized panel via delegation", () => {
+      seedMaximizedPanel();
+      usePanelStore.getState().backgroundPanelGroup("p1");
+      expectMaximizeCleared();
+    });
+
     it("moveTerminalToPosition clears maximize when the maximized panel is dragged into the dock", () => {
       seedMaximizedPanel();
       usePanelStore.getState().moveTerminalToPosition("p1", 0, "dock");
@@ -383,6 +403,22 @@ describe("panelStore adversarial", () => {
       expect(s.maximizedId).toBe("p1");
       expect(s.maximizeTarget).toEqual({ type: "panel", id: "p1" });
       expect(s.preMaximizeLayout).not.toBeNull();
+    });
+
+    it("leaves maximize untouched on a within-grid reposition (location stays grid)", () => {
+      seedMaximizedPanel();
+      usePanelStore.getState().moveTerminalToPosition("p1", 1, "grid");
+      const s = usePanelStore.getState();
+      expect(s.maximizedId).toBe("p1");
+      expect(s.maximizeTarget).toEqual({ type: "panel", id: "p1" });
+    });
+
+    it("leaves maximize untouched on a same-worktree no-op move", () => {
+      seedMaximizedPanel();
+      usePanelStore.getState().moveTerminalToWorktree("p1", "wt-1");
+      const s = usePanelStore.getState();
+      expect(s.maximizedId).toBe("p1");
+      expect(s.maximizeTarget).toEqual({ type: "panel", id: "p1" });
     });
   });
 });

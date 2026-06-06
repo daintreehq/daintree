@@ -472,17 +472,22 @@ export const usePanelStore = create<PanelGridState>()(
             ...(nextFocusedId !== previousFocusedId && { previousFocusedId }),
           });
         } else {
+          const updates: Partial<PanelGridState> = {};
           const focusedId = get().focusedId;
           if (focusedId && groupBeforeMove.panelIds.includes(focusedId)) {
             // The previously focused panel is now in the dock and `focusedId`
             // is being cleared as a side effect of the move, not a user
             // navigation. Clear the alternate pointer to keep round-trip
             // semantics tied to explicit focus changes.
-            set({
-              focusedId: null,
-              activeDockTerminalId: groupBeforeMove.activeTabId,
-              previousFocusedId: null,
-            });
+            updates.focusedId = null;
+            updates.activeDockTerminalId = groupBeforeMove.activeTabId;
+            updates.previousFocusedId = null;
+          }
+          // Dragging a maximized group into the dock takes it out of grid scope —
+          // clear maximize so the grid doesn't render blank (#9936).
+          Object.assign(updates, buildMaximizeClearPatch(get().maximizedId, "", groupBeforeMove));
+          if (Object.keys(updates).length > 0) {
+            set(updates);
           }
         }
 
