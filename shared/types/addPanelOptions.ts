@@ -111,6 +111,14 @@ export interface AddPanelOptionsBase {
   isUsingFallback?: boolean;
   /** Chain index consumed so far from the primary preset's fallback list. */
   fallbackChainIndex?: number;
+  /**
+   * PTY-only, transient. True when session restore fell through to a fresh
+   * agent launch because no resume command (neither exact-session nor
+   * resume-latest) was available — the prior conversation is unreachable.
+   * Drives the "Session no longer reachable" restart banner. Never persisted;
+   * cleared on the next restart. See `serializePtyPanel` (intentionally omitted).
+   */
+  sessionLostOnRestore?: boolean;
 }
 
 /**

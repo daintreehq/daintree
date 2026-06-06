@@ -350,6 +350,10 @@ export function buildArgsForRespawn(
   const isAgentPanel = Boolean(effectiveAgentId);
   const agentId = effectiveAgentId;
   let command = saved.command?.trim() || undefined;
+  // True when we fall through to a fresh agent launch because no resume command
+  // was available — the user's prior conversation is unreachable and we must
+  // surface it rather than silently respawning a clean session (issue #9802).
+  let sessionLostOnRestore = false;
   let presetEnv: Record<string, string> | undefined;
   let preset: AgentPreset | undefined;
   const savedPresetIdForRespawn = readPresetId(saved);
@@ -388,12 +392,14 @@ export function buildArgsForRespawn(
         command = resumeCmd;
       } else if (hasPersistedFlags) {
         command = buildFromPersistedFlags();
+        sessionLostOnRestore = true;
       } else if (agentSettings) {
         command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
           clipboardDirectory,
           modelId: saved.agentModelId,
           presetArgs: preset?.args?.join(" "),
         });
+        sessionLostOnRestore = true;
       }
     } else {
       // No session ID was captured (graceful-shutdown pattern match missed or
@@ -404,12 +410,14 @@ export function buildArgsForRespawn(
         command = resumeLatestCmd;
       } else if (hasPersistedFlags) {
         command = buildFromPersistedFlags();
+        sessionLostOnRestore = true;
       } else if (agentSettings) {
         command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
           clipboardDirectory,
           modelId: saved.agentModelId,
           presetArgs: preset?.args?.join(" "),
         });
+        sessionLostOnRestore = true;
       }
     }
   }
@@ -458,6 +466,7 @@ export function buildArgsForRespawn(
     originalPresetId: respawnOriginalPresetId,
     isUsingFallback: presetWasStale ? undefined : saved.isUsingFallback,
     fallbackChainIndex: presetWasStale ? undefined : saved.fallbackChainIndex,
+    sessionLostOnRestore: sessionLostOnRestore || undefined,
     env: presetEnv,
     extensionState: saved.extensionState,
     pluginId: saved.pluginId,

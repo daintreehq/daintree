@@ -56,6 +56,27 @@ export function TerminalRestartStatusBanner({
         />
       );
 
+    case "session-resume-unavailable":
+      return (
+        <InlineStatusBanner
+          icon={XCircle}
+          title={RESTART_BANNER_COPY["session-resume-unavailable"].title}
+          description={RESTART_BANNER_COPY["session-resume-unavailable"].description}
+          severity="error"
+          animated={false}
+          role="alert"
+          action={{
+            id: "start-new-session",
+            label: "Start new session",
+            icon: RotateCcw,
+            variant: "dangerFilled",
+            onClick: onRestart,
+            title: "Start new session",
+            ariaLabel: "Start new session",
+          }}
+        />
+      );
+
     case "exit-error":
       return (
         <InlineStatusBanner

@@ -203,6 +203,10 @@ export const createRestartActions = (
         spawnError: undefined,
         scrollbackRestoreError: undefined,
         isRestarting: true,
+        // The user is explicitly starting a fresh session, so the
+        // session-lost restore signal has been acknowledged — clear it so the
+        // banner doesn't linger across the restart (issue #9802).
+        sessionLostOnRestore: undefined,
         ...(wasFailed ? { spawnStatus: undefined } : {}),
       }))
     );

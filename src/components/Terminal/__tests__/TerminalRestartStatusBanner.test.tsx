@@ -115,4 +115,58 @@ describe("TerminalRestartStatusBanner", () => {
     fireEvent.click(button);
     expect(onDismiss).toHaveBeenCalledOnce();
   });
+
+  describe("session-resume-unavailable variant (issue #9802)", () => {
+    it("renders neutral title and a non-accusatory description", () => {
+      render(
+        <TerminalRestartStatusBanner
+          variant={{ type: "session-resume-unavailable" }}
+          onRestart={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      );
+      expect(screen.getByText("Session no longer reachable")).toBeTruthy();
+      // Neutral phrasing — must not blame the user/agent.
+      const description = screen.getByText(/couldn't be restored/i);
+      expect(description.textContent).not.toMatch(/expired|you lost|agent closed/i);
+    });
+
+    it("uses role=alert without aria-live for an assertive interrupt", () => {
+      render(
+        <TerminalRestartStatusBanner
+          variant={{ type: "session-resume-unavailable" }}
+          onRestart={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      );
+      const region = screen.getByRole("alert");
+      expect(region.hasAttribute("aria-live")).toBe(false);
+    });
+
+    it("exposes a verb-noun recovery action that calls onRestart", () => {
+      const onRestart = vi.fn();
+      render(
+        <TerminalRestartStatusBanner
+          variant={{ type: "session-resume-unavailable" }}
+          onRestart={onRestart}
+          onDismiss={vi.fn()}
+        />
+      );
+      const button = screen.getByRole("button", { name: /start new session/i });
+      fireEvent.click(button);
+      expect(onRestart).toHaveBeenCalledOnce();
+    });
+
+    it("has no dismiss control — the banner is the recovery surface", () => {
+      const onDismiss = vi.fn();
+      render(
+        <TerminalRestartStatusBanner
+          variant={{ type: "session-resume-unavailable" }}
+          onRestart={vi.fn()}
+          onDismiss={onDismiss}
+        />
+      );
+      expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+    });
+  });
 });

@@ -370,6 +370,7 @@ export const createAddPanelActions = (
       originalPresetId: options.originalPresetId ?? options.agentPresetId,
       isUsingFallback: options.isUsingFallback,
       fallbackChainIndex: options.fallbackChainIndex,
+      sessionLostOnRestore: options.sessionLostOnRestore,
       extensionState: options.extensionState,
       pluginId: ptyPluginId,
       spawnedBy: options.spawnedBy,

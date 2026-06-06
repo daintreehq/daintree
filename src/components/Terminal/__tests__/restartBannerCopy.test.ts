@@ -18,4 +18,24 @@ describe("RESTART_BANNER_COPY", () => {
       "Session exited with code 137"
     );
   });
+
+  // issue #9802 — the session-lost copy must satisfy the CLAUDE.md microcopy
+  // constraints (neutral, non-accusatory; title is a period-free noun phrase).
+  describe("session-resume-unavailable copy", () => {
+    const copy = RESTART_BANNER_COPY["session-resume-unavailable"];
+
+    it("provides a non-empty title and description", () => {
+      expect(copy.title.length).toBeGreaterThan(0);
+      expect(copy.description.length).toBeGreaterThan(0);
+    });
+
+    it("keeps the title a period-free noun phrase", () => {
+      expect(copy.title.endsWith(".")).toBe(false);
+    });
+
+    it("avoids accusatory or blame-assigning phrasing", () => {
+      const text = `${copy.title} ${copy.description}`.toLowerCase();
+      expect(text).not.toMatch(/expired|you lost|your fault|agent closed|killed/);
+    });
+  });
 });
