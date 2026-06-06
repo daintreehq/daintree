@@ -87,6 +87,23 @@ describe("findPackagedExecutable", () => {
 
     expect(findPackagedExecutable(root, "linux")).toBeNull();
   });
+
+  it("rejects a directory squatting at the executable path", () => {
+    // existsSync alone would accept this and hand Playwright a directory.
+    const root = makeProjectRoot();
+    fs.mkdirSync(path.join(root, "release", "linux-unpacked", "daintree"), { recursive: true });
+
+    expect(findPackagedExecutable(root, "linux")).toBeNull();
+  });
+
+  it("finds a binary in a daintree-prefixed directory via the fallback scan", () => {
+    const root = makeProjectRoot();
+    const binary = touch(
+      path.join(root, "release", "daintree-custom-build", "linux-unpacked", "daintree")
+    );
+
+    expect(findPackagedExecutable(root, "linux")).toBe(binary);
+  });
 });
 
 describe("getPackagedExecutablePath", () => {

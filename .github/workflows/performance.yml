@@ -85,7 +85,7 @@ jobs:
         run: npx electron-builder --config electron-builder.config.cjs --linux --dir --publish never
 
       - name: Verify packaged binary exists
-        run: test -x release/linux-unpacked/daintree
+        run: test -f release/linux-unpacked/daintree && test -x release/linux-unpacked/daintree
 
       - name: Install Linux runtime dependencies
         run: |

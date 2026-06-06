@@ -34,6 +34,17 @@ interface MarkRecord {
 const PRODUCT_NAME = "Daintree";
 const VARIANT = "daintree";
 
+// A candidate only counts when it is a regular file — existsSync alone would
+// accept a directory or dangling placeholder at the executable path and turn
+// a clear "binary not found" into a cryptic Playwright launch error.
+function isRegularFile(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
 export function getPackagedExecutablePath(
   projectRoot: string,
   platform: NodeJS.Platform = process.platform
@@ -53,7 +64,7 @@ export function getPackagedExecutablePath(
         path.join(releaseDir, `${VARIANT}-${arch}`, appBinary),
       ];
       for (const candidate of candidates) {
-        if (fs.existsSync(candidate)) return candidate;
+        if (isRegularFile(candidate)) return candidate;
       }
       return candidates[0];
     }
@@ -64,7 +75,7 @@ export function getPackagedExecutablePath(
         path.join(releaseDir, `${VARIANT}-${arch}`, `${PRODUCT_NAME}.exe`),
       ];
       for (const candidate of candidates) {
-        if (fs.existsSync(candidate)) return candidate;
+        if (isRegularFile(candidate)) return candidate;
       }
       return candidates[0];
     }
@@ -79,7 +90,7 @@ export function getPackagedExecutablePath(
         path.join(releaseDir, `${VARIANT}-${arch}`, "linux-unpacked", PRODUCT_NAME.toLowerCase()),
       ];
       for (const candidate of candidates) {
-        if (fs.existsSync(candidate)) return candidate;
+        if (isRegularFile(candidate)) return candidate;
       }
       return path.join(releaseDir, `${VARIANT}-${arch}`, `${PRODUCT_NAME}-${arch}.AppImage`);
     }
@@ -91,7 +102,7 @@ export function findPackagedExecutable(
   platform: NodeJS.Platform = process.platform
 ): string | null {
   const primary = getPackagedExecutablePath(projectRoot, platform);
-  if (fs.existsSync(primary)) return primary;
+  if (isRegularFile(primary)) return primary;
 
   // Fallback: scan release/ for any matching executable
   const releaseDir = path.resolve(projectRoot, "release");
@@ -113,13 +124,13 @@ export function findPackagedExecutable(
           "MacOS",
           PRODUCT_NAME
         );
-        if (fs.existsSync(appPath)) return appPath;
+        if (isRegularFile(appPath)) return appPath;
       } else if (platform === "win32") {
         const exePath = path.join(entryPath, `${PRODUCT_NAME}.exe`);
-        if (fs.existsSync(exePath)) return exePath;
+        if (isRegularFile(exePath)) return exePath;
       } else {
         const unpacked = path.join(entryPath, "linux-unpacked", PRODUCT_NAME.toLowerCase());
-        if (fs.existsSync(unpacked)) return unpacked;
+        if (isRegularFile(unpacked)) return unpacked;
       }
     }
   } catch {
