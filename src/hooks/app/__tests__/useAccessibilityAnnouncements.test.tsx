@@ -2,16 +2,17 @@
 import { renderHook, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { AgentState } from "@shared/types/agent";
-import type { PersistableFlowStatus } from "@shared/types/panel";
+import type { PanelLocation, PersistableFlowStatus } from "@shared/types/panel";
 
 interface Terminal {
   id: string;
   title: string;
-  kind?: "terminal";
+  kind?: string;
   agentState?: AgentState;
   stateChangeConfidence?: number;
   flowStatus?: PersistableFlowStatus;
   exitCode?: number;
+  location?: PanelLocation;
 }
 
 const { panelMockStore } = vi.hoisted(() => {
@@ -24,11 +25,13 @@ const { panelMockStore } = vi.hoisted(() => {
       panelsById: Record<string, Terminal>;
       panelIds: string[];
       commandQueueCountById: Record<string, number>;
+      maximizedId: string | null;
     }>(() => ({
       focusedId: null,
       panelsById: {},
       panelIds: [],
       commandQueueCountById: {},
+      maximizedId: null,
     })),
   };
 });
@@ -87,6 +90,10 @@ function setPanels(panels: Terminal[], queueCounts: Record<string, number> = {})
     panelIds: panels.map((p) => p.id),
     commandQueueCountById: queueCounts,
   });
+}
+
+function setMaximizedId(maximizedId: string | null) {
+  panelMockStore.setState({ maximizedId });
 }
 
 describe("useAccessibilityAnnouncements — agent-state announcements (#8937)", () => {
@@ -643,6 +650,196 @@ describe("useAccessibilityAnnouncements — badge-state announcements (#9204)", 
     act(() => {
       vi.advanceTimersByTime(500);
     });
+
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+});
+
+// #9932 — panel location changes (minimize → dock, restore → grid) and
+// maximize/unmaximize were silent to screen readers. They now route through the
+// global announcer immediately (discrete user actions — no debounce).
+describe("useAccessibilityAnnouncements — location and maximize announcements (#9932)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
+    panelMockStore.setState({
+      focusedId: null,
+      panelsById: {},
+      panelIds: [],
+      commandQueueCountById: {},
+      maximizedId: null,
+    });
+    hibernationState.clear();
+    hibernationListeners.clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("announces 'minimized to dock' on a grid → dock transition", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "dock" }]);
+    });
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A minimized to dock");
+  });
+
+  it("announces 'restored to grid' on a dock → grid transition", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "dock" }]);
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+    });
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A restored to grid");
+  });
+
+  it("announces location changes immediately without debounce", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "dock" }]);
+    });
+    rerender();
+
+    // No timer advance — the announcement is already present.
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A minimized to dock");
+  });
+
+  it("announces location changes for non-PTY panels (browser/dev-preview/review)", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      panelMockStore.setState({
+        focusedId: null,
+        panelsById: { b1: { id: "b1", title: "Preview", kind: "browser", location: "grid" } },
+        panelIds: ["b1"],
+        commandQueueCountById: {},
+      });
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      panelMockStore.setState({
+        panelsById: { b1: { id: "b1", title: "Preview", kind: "browser", location: "dock" } },
+      });
+    });
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Preview minimized to dock");
+  });
+
+  it("does not announce on first mount with a location set", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+    });
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+
+  it("does not announce for internal locations (grid → overlay, dock → trash)", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "overlay" }]);
+    });
+    rerender();
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "trash" }]);
+    });
+    rerender();
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+
+  it("announces 'maximized' when maximizedId goes null → id", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setMaximizedId("t1");
+    });
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A maximized");
+  });
+
+  it("announces 'unmaximized' when maximizedId goes id → null", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+      setMaximizedId("t1");
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setMaximizedId(null);
+    });
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A unmaximized");
+  });
+
+  it("does not announce on first mount when nothing is maximized", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+    });
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+
+  it("does not announce on first mount when a panel is already maximized", () => {
+    act(() => {
+      setMaximizedId("t1");
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+    });
+
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+    rerender();
 
     expect(useAnnouncerStore.getState().polite).toBeNull();
   });
