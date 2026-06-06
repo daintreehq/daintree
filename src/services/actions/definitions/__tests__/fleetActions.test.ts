@@ -633,7 +633,6 @@ describe("fleet.retryFailures", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
       payload: "ls\r",
-      recordedAt: Date.now(),
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
@@ -651,7 +650,6 @@ describe("fleet.retryFailures", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
       payload: "ls\r",
-      recordedAt: Date.now(),
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
@@ -739,7 +737,6 @@ describe("fleet.retryFailures", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
       payload: "ls\r",
-      recordedAt: Date.now(),
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
