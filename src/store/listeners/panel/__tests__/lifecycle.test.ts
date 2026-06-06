@@ -28,6 +28,7 @@ const restoredHandlers = vi.hoisted(() => [] as Array<(data: { id: string }) => 
 const trashedHandlers = vi.hoisted(
   () => [] as Array<(data: { id: string; expiresAt: number }) => void>
 );
+const exitHandlers = vi.hoisted(() => [] as Array<(id: string, exitCode: number) => void>);
 const reliabilityMetricHandlers = vi.hoisted(
   () =>
     [] as Array<
@@ -51,7 +52,10 @@ vi.mock("@/controllers", () => {
         restoredHandlers.push(handler);
         return () => {};
       }),
-      onExit: vi.fn(noopSub),
+      onExit: vi.fn((handler: (id: string, exitCode: number) => void) => {
+        exitHandlers.push(handler);
+        return () => {};
+      }),
       onStatus: vi.fn(noopSub),
       onReliabilityMetric: vi.fn(
         (
@@ -74,7 +78,7 @@ vi.mock("@/controllers", () => {
 
 import { handleFallbackTriggered, setupLifecycleListeners } from "../lifecycle";
 import { notify } from "@/lib/notify";
-import { flushPanelStatusBuffer } from "@/store/panelStatusBuffer";
+import { flushPanelStatusBuffer, enqueueFlowStatusUpdate } from "@/store/panelStatusBuffer";
 import { isPtyPanel } from "@shared/types/panel";
 
 function getPtyHeldDuration(id: string): number | undefined {
@@ -538,5 +542,54 @@ describe("onReliabilityMetric — pause-duration-gauge routing", () => {
     flushPanelStatusBuffer();
 
     expect(getPtyHeldDuration("term-1")).toBeUndefined();
+  });
+});
+
+describe("onExit — stale flow state cleared (#9899)", () => {
+  function getExitHandler(): (id: string, exitCode: number) => void {
+    exitHandlers.length = 0;
+    setupLifecycleListeners();
+    const handler = exitHandlers.at(-1);
+    if (!handler) throw new Error("onExit handler was not registered");
+    return handler;
+  }
+
+  function getPanel(id: string) {
+    const panel = usePanelStore.getState().panelsById[id];
+    if (!panel || !isPtyPanel(panel)) return undefined;
+    return panel;
+  }
+
+  it("clears flowStatus, flowStatusTimestamp, and heldDurationMs on exit", () => {
+    // Non-zero exit code preserves the panel so we can inspect the cleared fields.
+    setupPanel({
+      flowStatus: "paused-backpressure",
+      flowStatusTimestamp: 12345,
+      heldDurationMs: 8000,
+    });
+
+    getExitHandler()("term-1", 1);
+
+    const panel = getPanel("term-1");
+    expect(panel?.flowStatus).toBeUndefined();
+    expect(panel?.flowStatusTimestamp).toBeUndefined();
+    expect(panel?.heldDurationMs).toBeUndefined();
+    expect(panel?.runtimeStatus).toBe("exited");
+    expect(panel?.exitCode).toBe(1);
+  });
+
+  it("a buffered flow-status patch does not resurrect the pill after exit", () => {
+    setupPanel({ flowStatus: "paused-backpressure", flowStatusTimestamp: 1 });
+
+    // Simulate an in-flight RAF: enqueue a flow-status patch that has not yet
+    // flushed when the terminal exits.
+    enqueueFlowStatusUpdate("term-1", "paused-backpressure", 999);
+
+    getExitHandler()("term-1", 1);
+
+    // The exit handler evicts the buffered patch; flushing must not write it back.
+    flushPanelStatusBuffer();
+
+    expect(getPanel("term-1")?.flowStatus).toBeUndefined();
   });
 });

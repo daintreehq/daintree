@@ -202,6 +202,13 @@ export const createRestartActions = (
         reconnectError: undefined,
         spawnError: undefined,
         scrollbackRestoreError: undefined,
+        // A restart spins up a fresh PTY process; flow state from the previous
+        // process must not survive into it or the paused pill would linger
+        // (#9899). The host only re-emits flow status on a pause/resume
+        // transition, so without this the stale value persists indefinitely.
+        flowStatus: undefined,
+        flowStatusTimestamp: undefined,
+        heldDurationMs: undefined,
         isRestarting: true,
         // The user is explicitly starting a fresh session, so the
         // session-lost restore signal has been acknowledged — clear it so the

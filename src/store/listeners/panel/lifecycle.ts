@@ -13,6 +13,7 @@ import {
   enqueueFlowStatusUpdate,
   enqueueHeldDurationUpdate,
   clearHeldDuration,
+  cancelTerminalFlowState,
 } from "@/store/panelStatusBuffer";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { getMergedPresets } from "@/config/agents";
@@ -298,14 +299,28 @@ export function setupLifecycleListeners(): DisposableStore {
         // Clean up resource metrics for exited terminal
         useResourceMonitoringStore.getState().removePanel(id);
 
-        // Store exit code on the terminal before applying exit behavior
+        // Drop any buffered flow-status/held-duration patches for this terminal
+        // before committing the clear below, so a pending RAF flush can't
+        // resurrect a stale "paused" pill on the just-exited panel (#9899).
+        cancelTerminalFlowState(id);
+
+        // Store exit code and clear the flow state on the terminal before
+        // applying exit behavior. Flow status must not outlive the PTY process
+        // that owned the pause — clear it atomically with the exit-code write so
+        // the paused pill and derived runtime status reset on exit (#9899).
         usePanelStore.setState((s) => {
           const existing = s.panelsById[id];
           if (!existing) return s;
           return {
             panelsById: {
               ...s.panelsById,
-              [id]: { ...existing, exitCode },
+              [id]: {
+                ...existing,
+                exitCode,
+                flowStatus: undefined,
+                flowStatusTimestamp: undefined,
+                heldDurationMs: undefined,
+              },
             },
           };
         });

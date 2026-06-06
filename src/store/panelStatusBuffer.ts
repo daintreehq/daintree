@@ -217,3 +217,17 @@ export function cancelPanelStatusBuffer(): void {
   flowStatusBuffer.clear();
   heldDurationBuffer.clear();
 }
+
+/**
+ * Drop a single terminal's pending flow-status and held-duration patches
+ * without touching the shared RAF or other terminals' buffers. Called when a
+ * terminal exits: a flow-status patch enqueued earlier in the same frame would
+ * otherwise survive the flush and resurrect a stale "paused" state on the
+ * just-exited panel — the fold's timestamp guard can't catch it because exit
+ * clears `flowStatusTimestamp` to `undefined`, defeating the `< prevTs` check.
+ * Activity patches are left intact; they don't drive the paused pill.
+ */
+export function cancelTerminalFlowState(terminalId: string): void {
+  flowStatusBuffer.delete(terminalId);
+  heldDurationBuffer.delete(terminalId);
+}

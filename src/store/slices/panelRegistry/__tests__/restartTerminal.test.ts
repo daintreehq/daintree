@@ -591,6 +591,50 @@ describe("restartTerminal resume-latest fallback (#8787)", () => {
   });
 });
 
+describe("restartTerminal stale flow state cleared (#9899)", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    const { agentSettingsClient, projectClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (projectClient.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  it("clears flowStatus, flowStatusTimestamp, and heldDurationMs on restart", async () => {
+    const paused = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      flowStatus: "paused-backpressure" as const,
+      flowStatusTimestamp: 12345,
+      heldDurationMs: 7000,
+    };
+    usePanelStore.setState({
+      panelsById: { [paused.id]: paused },
+      panelIds: [paused.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
+    expect(after?.flowStatus).toBeUndefined();
+    expect(after?.flowStatusTimestamp).toBeUndefined();
+    expect(after?.heldDurationMs).toBeUndefined();
+  });
+});
+
 describe("restartTerminal input lock + parallel IPC (#9164)", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
