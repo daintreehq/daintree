@@ -1742,7 +1742,10 @@ class PullRequestService {
               worktreeId,
               prNumber: pr.number,
               prUrl: pr.url,
-              prState: pr.state,
+              // Read state from the live map entry, not the captured `pr` — a
+              // re-detection may have replaced the entry while this enrichment
+              // was in flight, and the stale capture would revert its state.
+              prState: detected.state,
               prCiStatus: pr.ciStatus,
               prTitle: pr.title,
               issueNumber: this.candidates.get(worktreeId)?.issueNumber,

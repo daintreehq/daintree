@@ -309,9 +309,12 @@ describe("PullRequestService", () => {
     );
 
     await pullRequestService.refresh();
+    await flushLoaders();
 
-    expect(detected).toHaveLength(1);
-    expect(detected[0].prState).toBe("declined");
+    // Phase-1 detection and the phase-2 CI enrichment re-emit both carry
+    // "declined" — the enrichment must not revert it from a stale capture.
+    expect(detected.length).toBeGreaterThanOrEqual(2);
+    expect(detected.every((p) => p.prState === "declined")).toBe(true);
 
     unsubscribe();
     pullRequestService.destroy();
@@ -342,6 +345,7 @@ describe("PullRequestService", () => {
     );
 
     await pullRequestService.refresh();
+    await flushLoaders();
     // Detection (and the fire-and-forget CI enrichment re-emit) carry "open".
     expect(detected.length).toBeGreaterThanOrEqual(1);
     expect(detected.every((p) => p.prState === "open")).toBe(true);
@@ -352,9 +356,13 @@ describe("PullRequestService", () => {
     await (
       pullRequestService as unknown as { revalidateResolvedPRs: () => Promise<void> }
     ).revalidateResolvedPRs();
+    await flushLoaders();
 
     const reemits = detected.slice(countBeforeRevalidation);
-    expect(reemits.map((p) => p.prState)).toContain("declined");
+    // Every re-emit carries the new state — a spurious "open"/"closed" emit
+    // alongside the correct one would mask the regression.
+    expect(reemits.length).toBeGreaterThanOrEqual(1);
+    expect(reemits.every((p) => p.prState === "declined")).toBe(true);
 
     unsubscribe();
     pullRequestService.destroy();

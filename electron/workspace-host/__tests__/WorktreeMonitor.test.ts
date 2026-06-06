@@ -626,6 +626,31 @@ describe("WorktreeMonitor", () => {
       expect(snapshot.prState).toBe("closed");
     });
 
+    it("clearLinked after a declined PR leaves no stale flat state (#9981)", () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      monitor.setLinked({
+        providerId: "acme.bitbucket",
+        pr: {
+          ref: {
+            providerId: "acme.bitbucket",
+            owner: "acme-corp",
+            repo: "my-project",
+            number: 5,
+            rawData: null,
+          },
+          url: "u",
+          state: "declined",
+        },
+      });
+      expect(monitor.getSnapshot().prState).toBe("closed");
+
+      monitor.clearLinked();
+      const snapshot = monitor.getSnapshot();
+      // null, not undefined — #8870 distinguishes "ran and cleared" from "never ran".
+      expect(snapshot.linked).toBeNull();
+      expect(snapshot.prState).toBeUndefined();
+    });
+
     it("falls back to legacy flat fields when linked is unset", () => {
       // `_linked` initializes to `undefined` (#8870 — distinguishes "PR
       // service hasn't run" from "ran and found no link"). The legacy flat
