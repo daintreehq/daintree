@@ -1784,6 +1784,74 @@ describe("KeybindingService", () => {
     });
   });
 
+  describe("loadOverrides degradation on IPC rejection — issue #9931", () => {
+    function mockElectronGetOverridesRejection(reason: unknown) {
+      vi.stubGlobal("window", {
+        electron: {
+          keybinding: {
+            getOverrides: vi.fn().mockRejectedValue(reason),
+            setOverride: vi.fn().mockResolvedValue(undefined),
+            removeOverride: vi.fn().mockResolvedValue(undefined),
+            resetAll: vi.fn().mockResolvedValue(undefined),
+          },
+        },
+      });
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it("resolves with defaults and warns when getOverrides rejects with an Error", async () => {
+      setPlatform("MacIntel");
+      mockElectronGetOverridesRejection(new Error("boom"));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const service = new KeybindingService();
+
+      await expect(service.loadOverrides()).resolves.toBeUndefined();
+
+      // Defaults remain active — no override installed because the IPC failed
+      expect(service.getOverride("terminal.close")).toBeUndefined();
+      expect(service.getEffectiveCombo("terminal.close")).toBe(
+        service.getDefaultCombo("terminal.close")
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "[KeybindingService] Failed to load keybinding overrides; using defaults: boom"
+        )
+      );
+    });
+
+    it("handles non-Error rejection values without throwing", async () => {
+      setPlatform("MacIntel");
+      mockElectronGetOverridesRejection("string-only failure");
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const service = new KeybindingService();
+
+      await expect(service.loadOverrides()).resolves.toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "[KeybindingService] Failed to load keybinding overrides; using defaults: string-only failure"
+        )
+      );
+    });
+
+    it("does not notify listeners on degradation (constructor seed is the stable state)", async () => {
+      setPlatform("MacIntel");
+      mockElectronGetOverridesRejection(new Error("boom"));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const service = new KeybindingService();
+      const listener = vi.fn();
+      service.subscribe(listener);
+
+      await service.loadOverrides();
+
+      expect(listener).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+  });
+
   describe("Windows shortcut conventions — issue #7943", () => {
     it("registers both Shift+F10 and ContextMenu as defaults for terminal.contextMenu", () => {
       const combos = DEFAULT_KEYBINDINGS.filter((b) => b.actionId === "terminal.contextMenu").map(

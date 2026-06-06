@@ -69,21 +69,33 @@ class KeybindingService {
 
   async loadOverrides(): Promise<void> {
     if (typeof window !== "undefined" && window.electron?.keybinding) {
-      const overrides = await window.electron.keybinding.getOverrides();
-      this.overrides.clear();
-      if (overrides && typeof overrides === "object") {
-        for (const [actionId, combos] of Object.entries(overrides)) {
-          if (!Array.isArray(combos)) continue;
-          if (!builtInActionIdSet.has(actionId) && !this.bindings.has(actionId)) {
-            console.warn(
-              `[KeybindingService] Dropping override for unknown action "${actionId}" — not a built-in or registered binding.`
-            );
-            continue;
+      try {
+        const overrides = await window.electron.keybinding.getOverrides();
+        this.overrides.clear();
+        if (overrides && typeof overrides === "object") {
+          for (const [actionId, combos] of Object.entries(overrides)) {
+            if (!Array.isArray(combos)) continue;
+            if (!builtInActionIdSet.has(actionId) && !this.bindings.has(actionId)) {
+              console.warn(
+                `[KeybindingService] Dropping override for unknown action "${actionId}" — not a built-in or registered binding.`
+              );
+              continue;
+            }
+            this.overrides.set(actionId, combos as string[]);
           }
-          this.overrides.set(actionId, combos as string[]);
         }
+        this.notifyListeners();
+      } catch (error) {
+        // Mirrors useUserAgentRegistryStore.initialize() — non-fatal degradation.
+        // `this.bindings` retains DEFAULT_KEYBINDINGS (seeded in constructor) and
+        // `this.overrides` is left empty, so the user gets stock shortcuts. The
+        // caller (hydrate bootstrap, settings tabs, settings-changed IPC) keeps
+        // running instead of aborting the entire session restore.
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[KeybindingService] Failed to load keybinding overrides; using defaults: ${message}`
+        );
       }
-      this.notifyListeners();
     }
   }
 
