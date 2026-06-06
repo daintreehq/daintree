@@ -666,5 +666,39 @@ describe("buildFleetTargetPreviews", () => {
       expect(previews[0]?.unresolvedVars).toEqual([]);
       expect(previews[0]?.resolvedPayload).toBe("see #9954");
     });
+
+    it("resolves {{number}} from prNumber when only a PR number is set", () => {
+      armOneEligible({ prNumber: 42 });
+      const previews = buildFleetTargetPreviews("see {{number}}");
+      expect(previews[0]?.unresolvedVars).toEqual([]);
+      expect(previews[0]?.resolvedPayload).toBe("see #42");
+    });
+
+    it("keeps warning and payload in agreement for mixed resolved/unknown drafts", () => {
+      // The original bug was a warning/payload disagreement, so both sides
+      // must be asserted together: the known var resolves, the unknown one
+      // stays literal, and neither shows up as unresolved.
+      armOneEligible({ branchName: "main" });
+      const previews = buildFleetTargetPreviews("{{branch_name}} {{foo}}");
+      expect(previews[0]?.unresolvedVars).toEqual([]);
+      expect(previews[0]?.resolvedPayload).toBe("main {{foo}}");
+    });
+
+    it("routes each target's own context (no cross-target context bleed)", () => {
+      seedPanels([makeAgent("t1"), makeAgent("t2")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      buildFleetBroadcastRecipeContextMock.mockImplementation((id: string) =>
+        id === "t1" ? { branchName: "main" } : {}
+      );
+
+      const previews = buildFleetTargetPreviews("on {{branch_name}}");
+      const t1 = previews.find((p) => p.terminalId === "t1");
+      const t2 = previews.find((p) => p.terminalId === "t2");
+      expect(t1?.unresolvedVars).toEqual([]);
+      expect(t1?.resolvedPayload).toBe("on main");
+      expect(t2?.unresolvedVars).toEqual(["branch_name"]);
+      expect(buildFleetBroadcastRecipeContextMock).toHaveBeenCalledWith("t1");
+      expect(buildFleetBroadcastRecipeContextMock).toHaveBeenCalledWith("t2");
+    });
   });
 });
