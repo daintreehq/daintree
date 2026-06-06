@@ -3,6 +3,7 @@ import { store } from "../../store.js";
 import { getForgeProviderImpl } from "../../services/forgeProviderRegistry.js";
 import { resolveForgeProvider } from "../../services/forgeProviderResolver.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
+import { projectStore } from "../../services/ProjectStore.js";
 import type { ForgeProviderImpl, RepoRef } from "../../../shared/types/forge.js";
 import {
   makeForgeProviderId,
@@ -42,11 +43,22 @@ export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> 
     throw new Error("No remote URL found for this repository");
   }
 
+  // The cwd may be a linked-worktree subdirectory, so an exact match against
+  // `project.path` would miss. `git worktree list` reports the main worktree
+  // first from anywhere inside the repo — that path is what ProjectStore keys on.
+  const worktrees = await gitService.listWorktrees().catch(() => []);
+  const mainWorktreePath = worktrees.find((wt) => wt.isMainWorktree)?.path ?? cwd;
+  const project = await projectStore.getProjectByPath(mainWorktreePath).catch(() => null);
+  const settings = project
+    ? await projectStore.getProjectSettings(project.id).catch(() => null)
+    : null;
+  const forgeProviderOverride = settings?.forgeProviderOverride ?? null;
+
   const globalDefaultProviderId = normalizeProviderId(store.get("forgeDefaultProviderId"));
 
   const resolved = resolveForgeProvider({
     remoteUrl,
-    forgeProviderOverride: null,
+    forgeProviderOverride,
     globalDefaultProviderId,
   });
 

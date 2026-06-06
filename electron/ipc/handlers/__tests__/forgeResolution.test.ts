@@ -1,0 +1,185 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { ForgeProviderEntry, ResolvedForgeProvider } from "../../../../shared/types/forge.js";
+import type { ResolveForgeProviderInputs } from "../../../services/forgeProviderResolver.js";
+
+const storeMock = vi.hoisted(() => {
+  const data: Record<string, unknown> = {};
+  return {
+    get: vi.fn((key: string) => data[key]),
+    set: vi.fn((key: string, value: unknown) => {
+      data[key] = value;
+    }),
+    _data: data,
+  };
+});
+
+vi.mock("../../../store.js", () => ({ store: storeMock }));
+
+const registryMock = vi.hoisted(() => ({
+  getForgeProviderImpl: vi.fn<(id: string) => unknown>(() => undefined),
+}));
+
+vi.mock("../../../services/forgeProviderRegistry.js", () => registryMock);
+
+const resolverMock = vi.hoisted(() => ({
+  resolveForgeProvider: vi.fn<(inputs: ResolveForgeProviderInputs) => ResolvedForgeProvider>(
+    () => ({ entry: null, resolvedVia: null })
+  ),
+}));
+
+vi.mock("../../../services/forgeProviderResolver.js", () => resolverMock);
+
+const projectStoreMock = vi.hoisted(() => ({
+  getProjectByPath: vi.fn(),
+  getProjectSettings: vi.fn(),
+}));
+
+vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStoreMock }));
+
+const gitServiceMock = vi.hoisted(() => ({
+  getRemoteUrl: vi.fn(),
+  listWorktrees: vi.fn(),
+}));
+const gitServiceCacheMock = vi.hoisted(() => ({ getGitService: vi.fn(() => gitServiceMock) }));
+
+vi.mock("../../../services/GitServiceCache.js", () => ({
+  gitServiceCache: gitServiceCacheMock,
+}));
+
+import { resolveForCwd } from "../forgeResolution.js";
+
+const giteaEntry: ForgeProviderEntry = {
+  pluginId: "acme",
+  contribution: { id: "gitea", name: "Gitea", matches: ["gitea.example.com"] },
+};
+
+function lastResolverInputs(): ResolveForgeProviderInputs {
+  const calls = resolverMock.resolveForgeProvider.mock.calls;
+  if (calls.length === 0) throw new Error("resolveForgeProvider was not called");
+  return calls[calls.length - 1]![0];
+}
+
+describe("resolveForCwd", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    for (const key of Object.keys(storeMock._data)) {
+      delete storeMock._data[key];
+    }
+    gitServiceCacheMock.getGitService.mockReturnValue(gitServiceMock);
+    gitServiceMock.getRemoteUrl.mockResolvedValue("https://gitea.example.com/owner/repo.git");
+    gitServiceMock.listWorktrees.mockResolvedValue([
+      { path: "/repo", branch: "main", bare: false, isMainWorktree: true },
+    ]);
+    projectStoreMock.getProjectByPath.mockResolvedValue({ id: "project-1", path: "/repo" });
+    projectStoreMock.getProjectSettings.mockResolvedValue({ runCommands: [] });
+    registryMock.getForgeProviderImpl.mockReturnValue(undefined);
+    resolverMock.resolveForgeProvider.mockReturnValue({ entry: null, resolvedVia: null });
+  });
+
+  it("passes the per-project forgeProviderOverride to the resolver (#9984)", async () => {
+    projectStoreMock.getProjectSettings.mockResolvedValue({
+      runCommands: [],
+      forgeProviderOverride: "acme.gitea",
+    });
+    const parseRemote = vi.fn(() => ({ owner: "owner", repo: "repo" }));
+    registryMock.getForgeProviderImpl.mockReturnValue({ parseRemote });
+    resolverMock.resolveForgeProvider.mockReturnValue({
+      entry: giteaEntry,
+      resolvedVia: "override",
+    });
+
+    const result = await resolveForCwd("/repo");
+
+    expect(lastResolverInputs()).toEqual({
+      remoteUrl: "https://gitea.example.com/owner/repo.git",
+      forgeProviderOverride: "acme.gitea",
+      globalDefaultProviderId: null,
+    });
+    expect(result.providerId).toBe("gitea");
+    expect(result.namespaceId).toBe("acme.gitea");
+    expect(result.repoRef).toEqual({ owner: "owner", repo: "repo" });
+    expect(parseRemote).toHaveBeenCalledWith("https://gitea.example.com/owner/repo.git");
+  });
+
+  it("looks up the project by the main worktree path, not the linked-worktree cwd", async () => {
+    gitServiceMock.listWorktrees.mockResolvedValue([
+      { path: "/repo", branch: "main", bare: false, isMainWorktree: true },
+      { path: "/repo-worktrees/feature", branch: "feature", bare: false, isMainWorktree: false },
+    ]);
+
+    await resolveForCwd("/repo-worktrees/feature/src").catch(() => null);
+
+    expect(projectStoreMock.getProjectByPath).toHaveBeenCalledWith("/repo");
+    expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith("project-1");
+  });
+
+  it("falls back to the cwd for project lookup when listWorktrees fails", async () => {
+    gitServiceMock.listWorktrees.mockRejectedValue(new Error("not a work tree"));
+
+    await resolveForCwd("/repo").catch(() => null);
+
+    expect(projectStoreMock.getProjectByPath).toHaveBeenCalledWith("/repo");
+    expect(lastResolverInputs().forgeProviderOverride).toBeNull();
+  });
+
+  it("passes a null override when no project matches the path", async () => {
+    projectStoreMock.getProjectByPath.mockResolvedValue(null);
+
+    await resolveForCwd("/repo").catch(() => null);
+
+    expect(projectStoreMock.getProjectSettings).not.toHaveBeenCalled();
+    expect(lastResolverInputs().forgeProviderOverride).toBeNull();
+  });
+
+  it("passes a null override when the project lookup rejects", async () => {
+    projectStoreMock.getProjectByPath.mockRejectedValue(new Error("db locked"));
+
+    await resolveForCwd("/repo").catch(() => null);
+
+    expect(lastResolverInputs().forgeProviderOverride).toBeNull();
+  });
+
+  it("passes a null override when the settings fetch rejects", async () => {
+    projectStoreMock.getProjectSettings.mockRejectedValue(new Error("db locked"));
+
+    await resolveForCwd("/repo").catch(() => null);
+
+    expect(lastResolverInputs().forgeProviderOverride).toBeNull();
+  });
+
+  it("passes a null override when project settings have no override set", async () => {
+    await resolveForCwd("/repo").catch(() => null);
+
+    expect(lastResolverInputs().forgeProviderOverride).toBeNull();
+  });
+
+  it("still forwards the global default provider id alongside the override", async () => {
+    storeMock._data["forgeDefaultProviderId"] = "daintree.github.github";
+    projectStoreMock.getProjectSettings.mockResolvedValue({
+      runCommands: [],
+      forgeProviderOverride: "acme.gitea",
+    });
+
+    await resolveForCwd("/repo").catch(() => null);
+
+    expect(lastResolverInputs()).toEqual({
+      remoteUrl: "https://gitea.example.com/owner/repo.git",
+      forgeProviderOverride: "acme.gitea",
+      globalDefaultProviderId: "daintree.github.github",
+    });
+  });
+
+  it("rejects invalid cwd payloads before any lookup", async () => {
+    await expect(resolveForCwd("")).rejects.toThrow("Invalid working directory");
+    expect(gitServiceCacheMock.getGitService).not.toHaveBeenCalled();
+    expect(resolverMock.resolveForgeProvider).not.toHaveBeenCalled();
+  });
+
+  it("rejects when no remote URL is found, without touching project settings", async () => {
+    gitServiceMock.getRemoteUrl.mockResolvedValue(null);
+
+    await expect(resolveForCwd("/repo")).rejects.toThrow("No remote URL found");
+    expect(projectStoreMock.getProjectByPath).not.toHaveBeenCalled();
+    expect(resolverMock.resolveForgeProvider).not.toHaveBeenCalled();
+  });
+});
