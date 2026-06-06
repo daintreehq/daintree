@@ -60,6 +60,7 @@ const RESIZE_STEP = 10;
 const RESIZE_PAGE_STEP = 50;
 
 const ASSISTANT_DOCS_URL = "https://daintree.org/assistant";
+const ASSISTANT_INSTALLER_URL = "https://daintree.org/download";
 
 interface HelpPanelProps {
   /**
@@ -569,6 +570,18 @@ export function HelpPanel({
     );
   }, []);
 
+  const handleOpenLogs = useCallback(() => {
+    void actionService.dispatch("errors.openLogs", undefined, { source: "user" });
+  }, []);
+
+  const handleOpenInstallerPage = useCallback(() => {
+    void actionService.dispatch(
+      "system.openExternal",
+      { url: ASSISTANT_INSTALLER_URL },
+      { source: "user" }
+    );
+  }, []);
+
   const handleRunAnyway = useCallback(() => {
     controller.runAnyway();
   }, [controller]);
@@ -705,6 +718,8 @@ export function HelpPanel({
           onRetryLaunch={retryLaunch}
           onDismissLaunchError={dismissLaunchError}
           onOpenAssistantSettings={handleOpenSettings}
+          onOpenLogs={handleOpenLogs}
+          onOpenInstallerPage={handleOpenInstallerPage}
         />
         {showTerminal ? (
           isMissingCli && agentId ? (

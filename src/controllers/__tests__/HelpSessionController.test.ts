@@ -859,6 +859,53 @@ describe("HelpSessionController — launch error routing", () => {
     ctrl.stop();
   });
 
+  it("surfaces the folder-unavailable banner when help folder path is null", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeInputs(ctrl, true);
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+
+    ctrl.launch({ agentId: "claude" });
+
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().launchError?.kind).toBe("folder-unavailable");
+    });
+    expect(notify).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("surfaces a folder-unavailable toast with the installer-page action when panel is closed", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeInputs(ctrl, false);
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+
+    ctrl.launch({ agentId: "claude" });
+
+    await vi.waitFor(() => {
+      expect(notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          title: "Assistant files missing",
+          action: expect.objectContaining({
+            label: "Open installer page",
+            actionId: "system.openExternal",
+          }),
+        })
+      );
+    });
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    // Toast body must not promise a Retry the click can't deliver.
+    const call = (notify as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c) =>
+        typeof c[0] === "object" &&
+        c[0] !== null &&
+        (c[0] as { title?: string }).title === "Assistant files missing"
+    );
+    expect(call?.[0]?.message).not.toMatch(/Try again/i);
+    ctrl.stop();
+  });
+
   it("dismissLaunchError clears the banner", async () => {
     const ctrl = new HelpSessionController();
     ctrl.start();
