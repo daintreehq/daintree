@@ -47,7 +47,10 @@ export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> 
   // `project.path` would miss. `git worktree list` reports the main worktree
   // first from anywhere inside the repo — that path is what ProjectStore keys on.
   const worktrees = await gitService.listWorktrees().catch(() => []);
-  const mainWorktreePath = worktrees.find((wt) => wt.isMainWorktree)?.path ?? cwd;
+  const mainWorktreePath =
+    worktrees.find((wt) => wt.isMainWorktree)?.path ??
+    (await gitService.getRepositoryRoot(cwd).catch(() => null)) ??
+    cwd;
   const project = await projectStore.getProjectByPath(mainWorktreePath).catch(() => null);
   const settings = project
     ? await projectStore.getProjectSettings(project.id).catch(() => null)

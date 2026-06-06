@@ -39,6 +39,7 @@ vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStore
 const gitServiceMock = vi.hoisted(() => ({
   getRemoteUrl: vi.fn(),
   listWorktrees: vi.fn(),
+  getRepositoryRoot: vi.fn(),
 }));
 const gitServiceCacheMock = vi.hoisted(() => ({ getGitService: vi.fn(() => gitServiceMock) }));
 
@@ -70,7 +71,10 @@ describe("resolveForCwd", () => {
     gitServiceMock.listWorktrees.mockResolvedValue([
       { path: "/repo", branch: "main", bare: false, isMainWorktree: true },
     ]);
-    projectStoreMock.getProjectByPath.mockResolvedValue({ id: "project-1", path: "/repo" });
+    gitServiceMock.getRepositoryRoot.mockResolvedValue("/repo");
+    projectStoreMock.getProjectByPath.mockImplementation(async (p: string) =>
+      p === "/repo" ? { id: "project-1", path: "/repo" } : null
+    );
     projectStoreMock.getProjectSettings.mockResolvedValue({ runCommands: [] });
     registryMock.getForgeProviderImpl.mockReturnValue(undefined);
     resolverMock.resolveForgeProvider.mockReturnValue({ entry: null, resolvedVia: null });
@@ -113,13 +117,37 @@ describe("resolveForCwd", () => {
     expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith("project-1");
   });
 
-  it("falls back to the cwd for project lookup when listWorktrees fails", async () => {
+  it("falls back to the repository root when listWorktrees fails and cwd is a subdirectory", async () => {
     gitServiceMock.listWorktrees.mockRejectedValue(new Error("not a work tree"));
+    projectStoreMock.getProjectSettings.mockResolvedValue({
+      runCommands: [],
+      forgeProviderOverride: "acme.gitea",
+    });
 
-    await resolveForCwd("/repo").catch(() => null);
+    await resolveForCwd("/repo/src").catch(() => null);
 
     expect(projectStoreMock.getProjectByPath).toHaveBeenCalledWith("/repo");
+    expect(lastResolverInputs().forgeProviderOverride).toBe("acme.gitea");
+  });
+
+  it("falls back to the raw cwd when both listWorktrees and getRepositoryRoot fail", async () => {
+    gitServiceMock.listWorktrees.mockRejectedValue(new Error("not a work tree"));
+    gitServiceMock.getRepositoryRoot.mockRejectedValue(new Error("not a git repo"));
+
+    await resolveForCwd("/repo/src").catch(() => null);
+
+    expect(projectStoreMock.getProjectByPath).toHaveBeenCalledWith("/repo/src");
     expect(lastResolverInputs().forgeProviderOverride).toBeNull();
+  });
+
+  it("falls back to the repository root when no worktree entry is marked main", async () => {
+    gitServiceMock.listWorktrees.mockResolvedValue([
+      { path: "/elsewhere", branch: "main", bare: false, isMainWorktree: false },
+    ]);
+
+    await resolveForCwd("/repo/src").catch(() => null);
+
+    expect(projectStoreMock.getProjectByPath).toHaveBeenCalledWith("/repo");
   });
 
   it("passes a null override when no project matches the path", async () => {
@@ -167,6 +195,17 @@ describe("resolveForCwd", () => {
       forgeProviderOverride: "acme.gitea",
       globalDefaultProviderId: "daintree.github.github",
     });
+  });
+
+  it("fails closed when the override names an unregistered provider", async () => {
+    projectStoreMock.getProjectSettings.mockResolvedValue({
+      runCommands: [],
+      forgeProviderOverride: "acme.unregistered",
+    });
+    resolverMock.resolveForgeProvider.mockReturnValue({ entry: null, resolvedVia: null });
+
+    await expect(resolveForCwd("/repo")).rejects.toThrow("No forge provider registered");
+    expect(lastResolverInputs().forgeProviderOverride).toBe("acme.unregistered");
   });
 
   it("rejects invalid cwd payloads before any lookup", async () => {
