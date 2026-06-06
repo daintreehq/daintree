@@ -15,18 +15,25 @@ function walkSuites(suites, parentPath = [], results = [], parentFile = null) {
     for (const spec of suite.specs ?? []) {
       const specPath = [...currentPath, spec.title];
       for (const test of spec.tests ?? []) {
-        for (const result of test.results ?? []) {
-          if (result.status === "passed" || result.status === "skipped") continue;
-          const primaryError = result.errors?.[0];
-          results.push({
-            file,
-            titlePath: specPath,
-            projectName: test.projectName,
-            status: result.status,
-            errorMessage: primaryError?.message ?? "Unknown error",
-            errorStack: primaryError?.stack ?? null,
-          });
-        }
+        // Gate on the test-level outcome so recovered flakes ("flaky" =
+        // failed then passed on retry) are not reported. When `status` is
+        // absent (partial schema), infer from the final attempt instead.
+        const lastResult = test.results?.at(-1);
+        const failed = test.status
+          ? test.status === "unexpected"
+          : lastResult != null &&
+            lastResult.status !== "passed" &&
+            lastResult.status !== "skipped";
+        if (!failed) continue;
+        const primaryError = lastResult?.errors?.[0];
+        results.push({
+          file,
+          titlePath: specPath,
+          projectName: test.projectName,
+          status: lastResult?.status ?? "failed",
+          errorMessage: primaryError?.message ?? "Unknown error",
+          errorStack: primaryError?.stack ?? null,
+        });
       }
     }
   }

@@ -87,6 +87,7 @@ it("extractFailures extracts failing tests", () => {
             tests: [
               {
                 projectName: "core",
+                status: "unexpected",
                 results: [
                   {
                     status: "failed",
@@ -197,7 +198,36 @@ it("extractFailures handles missing errors gracefully", () => {
   expect(failures[0].errorMessage).toBe("Unknown error");
 });
 
-it("extractFailures handles retries (multiple results per test)", () => {
+it("extractFailures emits one failure for a test that failed every retry", () => {
+  const report = {
+    suites: [
+      {
+        file: "spec.ts",
+        title: "root",
+        specs: [
+          {
+            title: "broken",
+            tests: [
+              {
+                projectName: "core",
+                status: "unexpected",
+                results: [
+                  { status: "failed", errors: [{ message: "first fail" }] },
+                  { status: "failed", errors: [{ message: "second fail" }] },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const failures = extractFailures(report);
+  expect(failures.length).toBe(1);
+  expect(failures[0].errorMessage).toBe("second fail");
+});
+
+it("extractFailures skips recovered flakes (failed then passed on retry)", () => {
   const report = {
     suites: [
       {
@@ -206,6 +236,33 @@ it("extractFailures handles retries (multiple results per test)", () => {
         specs: [
           {
             title: "flaky",
+            tests: [
+              {
+                projectName: "core",
+                status: "flaky",
+                results: [
+                  { status: "failed", errors: [{ message: "transient" }] },
+                  { status: "passed", errors: [] },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  expect(extractFailures(report)).toEqual([]);
+});
+
+it("extractFailures falls back to last result when test status is absent", () => {
+  const failing = {
+    suites: [
+      {
+        file: "spec.ts",
+        title: "root",
+        specs: [
+          {
+            title: "fails",
             tests: [
               {
                 projectName: "core",
@@ -220,8 +277,54 @@ it("extractFailures handles retries (multiple results per test)", () => {
       },
     ],
   };
+  const failures = extractFailures(failing);
+  expect(failures.length).toBe(1);
+  expect(failures[0].errorMessage).toBe("second fail");
+
+  const recovered = {
+    suites: [
+      {
+        file: "spec.ts",
+        title: "root",
+        specs: [
+          {
+            title: "recovers",
+            tests: [
+              {
+                projectName: "core",
+                results: [
+                  { status: "failed", errors: [{ message: "transient" }] },
+                  { status: "passed", errors: [] },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  expect(extractFailures(recovered)).toEqual([]);
+});
+
+it("extractFailures handles unexpected status with no results", () => {
+  const report = {
+    suites: [
+      {
+        file: "spec.ts",
+        title: "root",
+        specs: [
+          {
+            title: "interrupted",
+            tests: [{ projectName: "core", status: "unexpected", results: [] }],
+          },
+        ],
+      },
+    ],
+  };
   const failures = extractFailures(report);
-  expect(failures.length).toBe(2);
+  expect(failures.length).toBe(1);
+  expect(failures[0].status).toBe("failed");
+  expect(failures[0].errorMessage).toBe("Unknown error");
 });
 
 it("extractFailures handles multi-project reports", () => {
