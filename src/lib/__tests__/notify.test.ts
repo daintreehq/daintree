@@ -1777,9 +1777,12 @@ describe("notify()", () => {
       focusSpy.mockReturnValue(false);
       window.dispatchEvent(new Event("blur"));
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
-      // Well past SUPPRESS_GRACE_MS — the paused timer must not drop the entry.
+      // Well past SUPPRESS_GRACE_MS — the paused timer must not drop the entry
+      // (the grace entry is written seenAsToast=true for the inline-visible
+      // origin, so a drop while blurred would swallow the signal marked-read).
       vi.advanceTimersByTime(5_000);
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(true);
 
       // The worktree changed while blurred without a subscriber tick (e.g.
       // restored session state) — origin is no longer visible on refocus, so
@@ -1838,7 +1841,7 @@ describe("notify()", () => {
       expect(useNotificationStore.getState().notifications).toHaveLength(1);
     });
 
-    it("subscriber promotion while blurred cleans up the deferred refocus listener", () => {
+    it("context change while blurred defers promotion to refocus instead of toasting blind", () => {
       const focusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
       setActiveWorktree("wt-1");
       notify({
@@ -1849,12 +1852,15 @@ describe("notify()", () => {
       });
       focusSpy.mockReturnValue(false);
       window.dispatchEvent(new Event("blur"));
-      // A context change while blurred still promotes via the subscriber path.
+      // A subscriber tick while blurred must not toast into the invisible
+      // window — the armed refocus listener owns the promotion.
       setActiveWorktree("wt-2");
-      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
 
-      // Refocus must not double-promote — cleanup removed the one-shot listener.
       focusSpy.mockReturnValue(true);
+      window.dispatchEvent(new Event("focus"));
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+      // And only once — cleanup removed the one-shot listener.
       window.dispatchEvent(new Event("focus"));
       expect(useNotificationStore.getState().notifications).toHaveLength(1);
     });

@@ -1141,8 +1141,17 @@ function scheduleSuppressionGrace(
   };
 
   // If no subscriber is registered (very early startup), the timer is the
-  // sole gate — falls back to "suppress for 500ms then drop".
-  const unsubContext = subscriber ? subscriber(promote) : () => {};
+  // sole gate — falls back to "suppress for 500ms then drop". A context
+  // change while the window is blurred (programmatic worktree/panel switch)
+  // must not toast into the invisible window — the dispatch required focus,
+  // so any blur has already armed the refocus listener below, which promotes
+  // when the user returns.
+  const unsubContext = subscriber
+    ? subscriber(() => {
+        if (typeof document !== "undefined" && !document.hasFocus()) return;
+        promote();
+      })
+    : () => {};
 
   // Window blur during grace means the user can no longer see the inline
   // affordance, but no worktree/panel state changes to fire `subscriber`.

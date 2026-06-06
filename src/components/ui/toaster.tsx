@@ -201,6 +201,13 @@ function Toast({
     // Pure state flips — `document.hasFocus()` is stale inside blur handlers
     // in Chromium 148, so the event arrival itself is the signal.
     const handleBlur = (): void => {
+      // Eagerly clear the in-flight dismiss timer — waiting for the React
+      // re-render to run the effect cleanup leaves a window where a timer
+      // expiring right at blur dismisses the toast unseen.
+      if (dismissTimerRef.current) {
+        clearTimeout(dismissTimerRef.current);
+        dismissTimerRef.current = null;
+      }
       if (blurredSinceRef.current === null) blurredSinceRef.current = Date.now();
       setIsWindowBlurred(true);
     };
