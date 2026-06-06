@@ -761,6 +761,30 @@ describe("TerminalInstanceService - Hibernation", () => {
 
       vi.setSystemTime(new Date());
     });
+
+    it("should detach the host element from the shared hidden container (#9909)", () => {
+      // A hibernated terminal's host may have been parked in the shared
+      // offscreen container by detach()/detachForProjectSwitch() — a raw
+      // child of hiddenContainer, not a per-id slot. Destroy must still
+      // remove it, otherwise long multi-project sessions accumulate empty
+      // host divs in the shared container.
+      const managed = makeMockManaged({ isHibernated: true });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      const offscreen = (
+        service as unknown as {
+          offscreenManager: { ensureHiddenContainer: () => HTMLElement | null };
+        }
+      ).offscreenManager.ensureHiddenContainer();
+      expect(offscreen).not.toBeNull();
+      offscreen!.appendChild(managed.hostElement);
+      expect(offscreen!.contains(managed.hostElement)).toBe(true);
+
+      service.destroy("t1");
+
+      expect(managed.hostElement.parentElement).toBeNull();
+      expect(offscreen!.contains(managed.hostElement)).toBe(false);
+    });
   });
 
   describe("Listener leak prevention", () => {
