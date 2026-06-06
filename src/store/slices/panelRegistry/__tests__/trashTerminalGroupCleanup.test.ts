@@ -874,3 +874,106 @@ describe("trashPanelGroup anchor-removal regression (#8944)", () => {
     expect(state.panelsById["term-3"]!.location).toBe("grid");
   });
 });
+
+// Issue #9935: trashing a maximized panel must clear the entire maximize
+// trio (maximizedId, maximizeTarget, preMaximizeLayout) — leaving a stale
+// `maximizeTarget` strands the next `toggleMaximize` as an unmaximize
+// request, and `TerminalContextMenu` reads `maximizeTarget` alone to label
+// itself.
+describe("trashPanel / trashPanelGroup maximize-state clear (#9935)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    const { reset } = usePanelStore.getState();
+    reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      maximizeTarget: null,
+      preMaximizeLayout: null,
+      commandQueue: [],
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("trashPanel clears all three maximize fields when trashing the maximized panel", () => {
+    setTerminals([
+      { id: "term-1", title: "T1", cwd: "/t", cols: 80, rows: 24, location: "grid" },
+      { id: "term-2", title: "T2", cwd: "/t", cols: 80, rows: 24, location: "grid" },
+    ]);
+    usePanelStore.setState({
+      focusedId: "term-1",
+      maximizedId: "term-1",
+      maximizeTarget: { type: "panel", id: "term-1" },
+      preMaximizeLayout: { gridCols: 2, gridItemCount: 2, worktreeId: "worktree-1" },
+    });
+
+    usePanelStore.getState().trashPanel("term-1");
+
+    const state = usePanelStore.getState();
+    expect(state.maximizedId).toBeNull();
+    expect(state.maximizeTarget).toBeNull();
+    expect(state.preMaximizeLayout).toBeNull();
+  });
+
+  it("trashPanelGroup clears all three maximize fields when the maximized panel is in the group", () => {
+    const group: TabGroup = {
+      id: "group-1",
+      panelIds: ["term-1", "term-2"],
+      activeTabId: "term-1",
+      location: "grid",
+    };
+    setTerminals([
+      { id: "term-1", title: "T1", cwd: "/t", cols: 80, rows: 24, location: "grid" },
+      { id: "term-2", title: "T2", cwd: "/t", cols: 80, rows: 24, location: "grid" },
+    ]);
+    usePanelStore.setState({
+      tabGroups: new Map([["group-1", group]]),
+      focusedId: "term-1",
+      maximizedId: "term-1",
+      maximizeTarget: { type: "group", id: "group-1" },
+      preMaximizeLayout: { gridCols: 1, gridItemCount: 1, worktreeId: undefined },
+    });
+
+    usePanelStore.getState().trashPanelGroup("term-1");
+
+    const state = usePanelStore.getState();
+    expect(state.maximizedId).toBeNull();
+    expect(state.maximizeTarget).toBeNull();
+    expect(state.preMaximizeLayout).toBeNull();
+  });
+
+  it("trashPanel leaves the maximize trio untouched when trashing a non-maximized panel", () => {
+    setTerminals([
+      { id: "term-1", title: "T1", cwd: "/t", cols: 80, rows: 24, location: "grid" },
+      { id: "term-2", title: "T2", cwd: "/t", cols: 80, rows: 24, location: "grid" },
+    ]);
+    usePanelStore.setState({
+      focusedId: "term-2",
+      maximizedId: "term-2",
+      maximizeTarget: { type: "panel", id: "term-2" },
+      preMaximizeLayout: { gridCols: 2, gridItemCount: 2, worktreeId: "worktree-1" },
+    });
+
+    usePanelStore.getState().trashPanel("term-1");
+
+    const state = usePanelStore.getState();
+    // term-2 is still maximized — the trash of an unrelated panel must
+    // not touch its maximize state.
+    expect(state.maximizedId).toBe("term-2");
+    expect(state.maximizeTarget).toEqual({ type: "panel", id: "term-2" });
+    expect(state.preMaximizeLayout).toEqual({
+      gridCols: 2,
+      gridItemCount: 2,
+      worktreeId: "worktree-1",
+    });
+  });
+});

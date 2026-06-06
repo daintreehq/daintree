@@ -91,6 +91,21 @@ describe("panelStore adversarial", () => {
     expect(usePanelStore.getState().watchedPanels.size).toBe(0);
   });
 
+  it("clearTerminalStoreForSwitch clears maximizeTarget alongside maximizedId (#9935)", () => {
+    usePanelStore.setState({
+      maximizedId: "panel-1",
+      maximizeTarget: { type: "panel", id: "panel-1" },
+      preMaximizeLayout: { gridCols: 2, gridItemCount: 2, worktreeId: undefined },
+    });
+
+    usePanelStore.getState().clearTerminalStoreForSwitch();
+
+    const state = usePanelStore.getState();
+    expect(state.maximizedId).toBeNull();
+    expect(state.maximizeTarget).toBeNull();
+    expect(state.preMaximizeLayout).toBeNull();
+  });
+
   it("reset drains all panel state even when destroy and kill throw", async () => {
     vi.mocked(terminalInstanceService.destroy).mockImplementationOnce(() => {
       throw new Error("destroy failed");
