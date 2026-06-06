@@ -526,6 +526,100 @@ describe("HttpLifecycle", () => {
     });
   });
 
+  describe("buildSessionServerDeps — appendAuditRecord resultMeta for rate_limited (#10014)", () => {
+    function captureAppendInput(sessionId: string) {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      const deps_ = (
+        lc as unknown as {
+          buildSessionServerDeps: (sessionId: string) => {
+            appendAuditRecord: (input: Record<string, unknown>) => void;
+          };
+        }
+      ).buildSessionServerDeps(sessionId);
+      return { deps, deps_, appendInput: (input: Record<string, unknown>) => void 0 };
+    }
+
+    it("forwards resultMeta.retryAfter on rate_limited outcomes and omits resultSummary", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      const deps_ = (
+        lc as unknown as {
+          buildSessionServerDeps: (sessionId: string) => {
+            appendAuditRecord: (input: Record<string, unknown>) => void;
+          };
+        }
+      ).buildSessionServerDeps("session-rl");
+      deps_.appendAuditRecord({
+        toolId: "agent.terminal",
+        sessionId: "session-rl",
+        tier: "action",
+        args: {},
+        durationMs: 0,
+        outcome: { kind: "rate_limited", retryAfter: 5 },
+      });
+      expect(deps.auditService.appendRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ resultMeta: { retryAfter: 5 } })
+      );
+      const callArgs = (deps.auditService.appendRecord as ReturnType<typeof vi.fn>).mock
+        .calls[0]?.[0];
+      expect(callArgs.resultSummary).toBeUndefined();
+    });
+
+    it("does not attach resultMeta for unauthorized / dedup / collision outcomes", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      const deps_ = (
+        lc as unknown as {
+          buildSessionServerDeps: (sessionId: string) => {
+            appendAuditRecord: (input: Record<string, unknown>) => void;
+          };
+        }
+      ).buildSessionServerDeps("session-gate");
+      for (const outcome of [{ kind: "unauthorized" }, { kind: "dedup" }, { kind: "collision" }]) {
+        deps_.appendAuditRecord({
+          toolId: "agent.terminal",
+          sessionId: "session-gate",
+          tier: "action",
+          args: {},
+          durationMs: 0,
+          outcome,
+        });
+      }
+      const calls = (deps.auditService.appendRecord as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls).toHaveLength(3);
+      for (const call of calls) {
+        expect(call[0].resultMeta).toBeUndefined();
+        expect(call[0].resultSummary).toBeUndefined();
+      }
+    });
+
+    it("does not attach resultMeta for success outcomes (only rate_limited carries hints)", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      const deps_ = (
+        lc as unknown as {
+          buildSessionServerDeps: (sessionId: string) => {
+            appendAuditRecord: (input: Record<string, unknown>) => void;
+          };
+        }
+      ).buildSessionServerDeps("session-ok");
+      deps_.appendAuditRecord({
+        toolId: "agent.terminal",
+        sessionId: "session-ok",
+        tier: "action",
+        args: {},
+        durationMs: 5,
+        outcome: { kind: "result", value: { ok: true, result: null } },
+      });
+      const callArgs = (deps.auditService.appendRecord as ReturnType<typeof vi.fn>).mock
+        .calls[0]?.[0];
+      expect(callArgs.resultMeta).toBeUndefined();
+      // Success dispatches DO carry a resultSummary (tool output).
+      expect(callArgs.resultSummary).toBeDefined();
+    });
+  });
+
   describe("bearer register", () => {
     const authA = "Bearer secret-token-aaaa";
     const authB = "Bearer secret-token-bbbb";

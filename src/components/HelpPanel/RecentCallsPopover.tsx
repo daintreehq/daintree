@@ -165,7 +165,11 @@ function RecentCallRow({ record }: { record: McpAuditRecord }) {
           )}
           <div>
             <div className="text-daintree-text/40">Result</div>
-            {record.resultSummary ? (
+            {record.result === "rate_limited" && record.resultMeta?.retryAfter !== undefined ? (
+              <p className="mt-0.5 text-daintree-text/45">
+                Retry in {record.resultMeta.retryAfter}s
+              </p>
+            ) : record.resultSummary ? (
               <pre className="mt-0.5 max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-daintree-text/70">
                 {record.resultSummary}
               </pre>
