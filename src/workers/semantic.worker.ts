@@ -8,6 +8,7 @@
 
 import { SharedRingBuffer, PacketParser } from "../../shared/utils/SharedRingBuffer.js";
 import { extractArtifacts, stripAnsiCodes } from "./WorkerArtifactExtractor.js";
+import { appendToAnalysisBuffer, trimAnalysisBuffer } from "./WorkerBufferService.js";
 import {
   calculateStateChange,
   createTerminalState,
@@ -23,7 +24,6 @@ import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 const ACTIVE_POLL_MS = 20; // 50Hz when receiving data
 const IDLE_INTERVALS = [50, 100, 250] as const; // Progressive backoff when idle
-const MAX_ANALYSIS_BUFFER_SIZE = 5000; // 5KB sliding window per terminal
 
 let ringBuffer: SharedRingBuffer | null = null;
 let idleLevel = 0;
@@ -52,12 +52,15 @@ async function processPacket(terminalId: string, data: string): Promise<void> {
   // Strip ANSI codes for analysis (terminal renders them but they interfere with parsing)
   const cleanData = stripAnsiCodes(data);
 
-  // Maintain sliding window for artifact detection
-  state.analysisBuffer = (state.analysisBuffer + cleanData).slice(-MAX_ANALYSIS_BUFFER_SIZE);
+  // Maintain sliding window for artifact detection. Extraction runs on the
+  // untrimmed buffer: when a closing fence arrives, the open-fence anchor is
+  // released and the trim evicts the block — extracting first captures it.
+  const combined = appendToAnalysisBuffer(state.analysisBuffer, cleanData);
+  state.analysisBuffer = trimAnalysisBuffer(combined);
 
   // Extract artifacts asynchronously (uses Web Crypto API)
   try {
-    const artifacts = await extractArtifacts(state.analysisBuffer, state.seenArtifactIds);
+    const artifacts = await extractArtifacts(combined, state.seenArtifactIds);
     if (artifacts.length > 0) {
       postTypedMessage({
         type: "ARTIFACT_DETECTED",
