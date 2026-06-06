@@ -1732,4 +1732,27 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(remountedWebview.getAttribute("src")).toBe("http://localhost:5173/dashboard");
     });
   });
+
+  // #9941: BrowserPane must wire `validateUrl` into the toolbar so the address bar
+  // honors the extended host policy (allowedHosts defaults to [] here, i.e. LAN/
+  // reserved-TLD hosts are implicitly allowed). Removing the prop regresses this —
+  // the toolbar would fall back to strict localhost-only validation.
+  describe("address bar host policy (#9941)", () => {
+    it("passes an extended-policy validateUrl that accepts LAN hosts", () => {
+      render(<BrowserPane {...baseProps} />);
+      expect(browserToolbarPropsSpy).toHaveBeenCalled();
+      const props = browserToolbarPropsSpy.mock.calls.at(-1)![0] as Record<string, unknown>;
+      const validateUrl = props.validateUrl as
+        | ((url: string) => { url?: string; error?: string })
+        | undefined;
+
+      expect(typeof validateUrl).toBe("function");
+      // LAN host is implicitly allowed under the extended policy — no error.
+      expect(validateUrl!("192.168.1.10:3000")).toMatchObject({
+        url: "http://192.168.1.10:3000/",
+      });
+      // Reserved TLD likewise passes without error.
+      expect(validateUrl!("printer.local").error).toBeUndefined();
+    });
+  });
 });

@@ -2,6 +2,7 @@
 import { act, render, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { BrowserToolbar } from "../BrowserToolbar";
+import { normalizeBrowserUrl } from "../browserUtils";
 import type { ViewportPresetId } from "@shared/types/panel";
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -133,6 +134,57 @@ describe("BrowserToolbar handleSubmit", () => {
 
     expect(defaultProps.onReload).toHaveBeenCalledOnce();
     expect(defaultProps.onNavigate).not.toHaveBeenCalled();
+  });
+
+  // #9941: with no validateUrl prop the toolbar stays strict (DevPreview policy),
+  // rejecting LAN hosts before onNavigate fires.
+  it("rejects a LAN host in strict default mode (no validateUrl)", () => {
+    const { getByTestId, container } = renderToolbar();
+    const input = openDropdown(getByTestId);
+
+    fireEvent.change(input, { target: { value: "192.168.1.10:3000" } });
+    fireEvent.submit(input.closest("form")!);
+
+    expect(defaultProps.onNavigate).not.toHaveBeenCalled();
+    expect(defaultProps.onReload).not.toHaveBeenCalled();
+    // The inline error banner renders, confirming the host was actively rejected
+    // rather than the submit silently no-op'ing.
+    expect(container.querySelector(".text-status-error")).not.toBeNull();
+  });
+
+  // #9941: a validateUrl prop lets BrowserPane inject its extended policy so the
+  // toolbar forwards LAN hosts instead of rejecting them inline.
+  it("forwards a LAN host when validateUrl supplies extended policy", () => {
+    const { getByTestId } = renderToolbar({
+      validateUrl: (value: string) => normalizeBrowserUrl(value, { allowedHosts: [] }),
+    });
+    const input = openDropdown(getByTestId);
+
+    fireEvent.change(input, { target: { value: "192.168.1.10:3000" } });
+    fireEvent.submit(input.closest("form")!);
+
+    expect(defaultProps.onNavigate).toHaveBeenCalledWith("http://192.168.1.10:3000/");
+    expect(defaultProps.onReload).not.toHaveBeenCalled();
+  });
+
+  // #9941: requiresConfirmation is not an error — the toolbar forwards the URL and
+  // lets BrowserPane.handleNavigate raise the approval banner.
+  it("forwards the URL when validateUrl returns requiresConfirmation", () => {
+    const validateUrl = vi.fn(() => ({
+      url: "http://tunnel.example.com/",
+      requiresConfirmation: true,
+      hostname: "tunnel.example.com",
+    }));
+    const { getByTestId } = renderToolbar({ validateUrl });
+    const input = openDropdown(getByTestId);
+
+    fireEvent.change(input, { target: { value: "tunnel.example.com" } });
+    fireEvent.submit(input.closest("form")!);
+
+    // validateUrl receives the edited input, not the current `url` prop.
+    expect(validateUrl).toHaveBeenCalledWith("tunnel.example.com");
+    expect(defaultProps.onNavigate).toHaveBeenCalledWith("http://tunnel.example.com/");
+    expect(defaultProps.onReload).not.toHaveBeenCalled();
   });
 });
 

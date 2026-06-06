@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { normalizeBrowserUrl, getDisplayUrl } from "./browserUtils";
+import type { NormalizeResult } from "./browserUtils";
 import { actionService } from "@/services/ActionService";
 import { useUrlHistoryStore, getFrecencySuggestions } from "@/store/urlHistoryStore";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -63,6 +64,7 @@ interface BrowserToolbarProps {
   viewportRotated?: boolean;
   viewportDpr?: 1 | 2 | 3;
   viewportFit?: boolean;
+  validateUrl?: (url: string) => NormalizeResult;
   onNavigate: (url: string) => void;
   onBack: () => void;
   onForward: () => void;
@@ -98,6 +100,7 @@ export function BrowserToolbar({
   viewportRotated = false,
   viewportDpr = 1,
   viewportFit = false,
+  validateUrl,
   onNavigate,
   onBack,
   onForward,
@@ -348,7 +351,7 @@ export function BrowserToolbar({
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
-      const result = normalizeBrowserUrl(inputValue);
+      const result = validateUrl ? validateUrl(inputValue) : normalizeBrowserUrl(inputValue);
       if (result.error) {
         setError(result.error);
         return;
@@ -365,7 +368,7 @@ export function BrowserToolbar({
         }
       }
     },
-    [inputValue, url, onNavigate, onReload]
+    [inputValue, url, onNavigate, onReload, validateUrl]
   );
 
   const handleFocus = useCallback(() => {
