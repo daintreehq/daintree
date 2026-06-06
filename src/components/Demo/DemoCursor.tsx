@@ -813,8 +813,9 @@ export function DemoCursor() {
           const eventOpts = { bubbles: true, cancelable: true };
           // dnd-kit's PointerSensor hard-gates activation on isPrimary && button === 0,
           // and Radix Select reads pointerType/pointerId; without these a synthetic drag
-          // never starts a pointer-first sortable (#10145).
-          const pointerMeta = { pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0 };
+          // never starts a pointer-first sortable (#10145). `button` is set per-event
+          // (0 on down/up, -1 on move per the Pointer Events spec).
+          const pointerMeta = { pointerId: 1, pointerType: "mouse", isPrimary: true };
 
           // Move cursor to source first
           await animateCursor(fromX, fromY, Math.min(payload.durationMs ?? 500, 300));
@@ -825,6 +826,7 @@ export function DemoCursor() {
             new PointerEvent("pointerdown", {
               ...eventOpts,
               ...pointerMeta,
+              button: 0,
               clientX: fromX,
               clientY: fromY,
               buttons: 1,
@@ -885,6 +887,7 @@ export function DemoCursor() {
                   new PointerEvent("pointermove", {
                     ...eventOpts,
                     ...pointerMeta,
+                    button: -1,
                     clientX: cx,
                     clientY: cy,
                     buttons: 1,
@@ -911,6 +914,7 @@ export function DemoCursor() {
               new PointerEvent("pointerup", {
                 ...eventOpts,
                 ...pointerMeta,
+                button: 0,
                 clientX: toX,
                 clientY: toY,
                 buttons: 0,

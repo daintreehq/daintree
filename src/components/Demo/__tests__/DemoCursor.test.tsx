@@ -213,12 +213,16 @@ describe("DemoCursor", () => {
     const target = document.createElement("button");
     const events: string[] = [];
     let pointerDown: PointerEvent | undefined;
+    let pointerUp: PointerEvent | undefined;
     target.addEventListener("pointerdown", (e) => {
       events.push("pointerdown");
       pointerDown = e as PointerEvent;
     });
     target.addEventListener("mousedown", () => events.push("mousedown"));
-    target.addEventListener("pointerup", () => events.push("pointerup"));
+    target.addEventListener("pointerup", (e) => {
+      events.push("pointerup");
+      pointerUp = e as PointerEvent;
+    });
     target.addEventListener("mouseup", () => events.push("mouseup"));
     target.addEventListener("click", () => events.push("click"));
 
@@ -237,6 +241,10 @@ describe("DemoCursor", () => {
     expect(pointerDown?.isPrimary).toBe(true);
     expect(pointerDown?.pointerType).toBe("mouse");
     expect(pointerDown?.button).toBe(0);
+    // The release carries the same primary-mouse metadata so the full sequence is honored.
+    expect(pointerUp?.isPrimary).toBe(true);
+    expect(pointerUp?.pointerType).toBe("mouse");
+    expect(pointerUp?.buttons).toBe(0);
     // Verify elementFromPoint was called with cursor position (near viewport center, shifted by settle drift)
     const efp = document.elementFromPoint as ReturnType<typeof vi.fn>;
     const [calledX, calledY] = efp.mock.calls[0]!;
@@ -1210,9 +1218,12 @@ describe("DemoCursor", () => {
     const pointerDowns: PointerEvent[] = [];
     const pointerMoves: PointerEvent[] = [];
     const pointerUps: PointerEvent[] = [];
-    document.addEventListener("pointerdown", (e) => pointerDowns.push(e as PointerEvent));
-    document.addEventListener("pointermove", (e) => pointerMoves.push(e as PointerEvent));
-    document.addEventListener("pointerup", (e) => pointerUps.push(e as PointerEvent));
+    const onDown = (e: Event) => pointerDowns.push(e as PointerEvent);
+    const onMove = (e: Event) => pointerMoves.push(e as PointerEvent);
+    const onUp = (e: Event) => pointerUps.push(e as PointerEvent);
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
 
     // Fall back to the resolved from/to elements so dispatch targets are deterministic.
     const origElementFromPoint = document.elementFromPoint;
@@ -1247,10 +1258,14 @@ describe("DemoCursor", () => {
       expect(pointerDowns[0]!.buttons).toBe(1);
 
       expect(pointerMoves.length).toBeGreaterThan(0);
-      expect(pointerMoves.every((e) => e.buttons === 1 && e.pointerType === "mouse")).toBe(true);
+      // Moves signal a held button (buttons:1) but no button-state change (button:-1 per spec).
+      expect(
+        pointerMoves.every((e) => e.buttons === 1 && e.pointerType === "mouse" && e.button === -1)
+      ).toBe(true);
 
       expect(pointerUps.length).toBe(1);
       expect(pointerUps[0]!.pointerType).toBe("mouse");
+      expect(pointerUps[0]!.isPrimary).toBe(true);
       expect(pointerUps[0]!.buttons).toBe(0);
 
       // All events in the session must share the same pointerId for dnd-kit tracking.
@@ -1263,6 +1278,9 @@ describe("DemoCursor", () => {
     } finally {
       setTimeoutSpy.mockRestore();
       document.elementFromPoint = origElementFromPoint;
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
       document.body.removeChild(fromEl);
       document.body.removeChild(toEl);
     }
