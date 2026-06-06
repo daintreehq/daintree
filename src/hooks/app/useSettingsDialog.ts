@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { SettingsTab, SettingsNavTarget } from "@/components/Settings";
 import { isSettingsTab } from "@/components/Settings/settingsTabRegistry";
+import { BUILTIN_GITHUB_PROVIDER_ID, normalizeProviderId } from "@shared/utils/forgeProviderIds";
 
 export function useSettingsDialog() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -26,7 +27,7 @@ export function useSettingsDialog() {
       }
       normalized = {
         tab: "code-forge",
-        subtab: target.subtab ?? "github",
+        subtab: target.subtab ?? BUILTIN_GITHUB_PROVIDER_ID,
         sectionId: target.sectionId,
       };
     } else if (target.tab === "forge") {
@@ -43,7 +44,14 @@ export function useSettingsDialog() {
     }
     const tab = isSettingsTab(normalized.tab) ? normalized.tab : "general";
     setSettingsTab(tab);
-    setSettingsSubtab(normalized.subtab);
+    // Forge subtabs route on canonical `{pluginId}.{contributionId}` ids;
+    // normalize legacy bare forms ("github", "builtin.github") from in-flight
+    // callers at this read boundary. Other subtabs pass through unchanged.
+    const subtab =
+      tab === "code-forge" && normalized.subtab !== undefined && normalized.subtab !== "general"
+        ? (normalizeProviderId(normalized.subtab) ?? normalized.subtab)
+        : normalized.subtab;
+    setSettingsSubtab(subtab);
     setSettingsSectionId(normalized.sectionId);
     setIsSettingsOpen(true);
   }, []);

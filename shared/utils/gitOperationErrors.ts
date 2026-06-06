@@ -1,4 +1,5 @@
 import type { GitOperationReason, RecoveryAction } from "../types/ipc/errors.js";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "./forgeProviderIds.js";
 
 /**
  * Pure classifier for simple-git errors.
@@ -151,7 +152,7 @@ const RECOVERY_ACTIONS: Partial<Record<GitOperationReason, RecoveryAction>> = {
   "auth-failed": {
     label: "Sign in with GitHub",
     actionId: "app.settings.openTab",
-    args: { tab: "code-forge", subtab: "github" },
+    args: { tab: "code-forge", subtab: BUILTIN_GITHUB_PROVIDER_ID },
   },
   "push-rejected-outdated": { label: "Pull and rebase", actionId: "git.pullRebase" },
   "conflict-unresolved": { label: "Resolve conflicts", actionId: "worktree.openReviewHub" },

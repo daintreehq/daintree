@@ -1,0 +1,81 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { renderHook, act } from "@testing-library/react";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
+
+vi.mock("@/components/Settings/settingsTabRegistry", () => ({
+  isSettingsTab: (tab: string) => ["general", "code-forge", "appearance"].includes(tab),
+}));
+
+import { useSettingsDialog } from "../useSettingsDialog";
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("useSettingsDialog — forge subtab normalization", () => {
+  it("normalizes the legacy 'github' tab to code-forge with the canonical GitHub subtab", () => {
+    const { result } = renderHook(() => useSettingsDialog());
+
+    act(() => {
+      result.current.handleOpenSettingsTab({ tab: "github" });
+    });
+
+    expect(result.current.settingsTab).toBe("code-forge");
+    expect(result.current.settingsSubtab).toBe(BUILTIN_GITHUB_PROVIDER_ID);
+    expect(result.current.isSettingsOpen).toBe(true);
+  });
+
+  it("normalizes a legacy bare 'github' subtab on the code-forge tab to the canonical id", () => {
+    const { result } = renderHook(() => useSettingsDialog());
+
+    act(() => {
+      result.current.handleOpenSettingsTab({ tab: "code-forge", subtab: "github" });
+    });
+
+    expect(result.current.settingsTab).toBe("code-forge");
+    expect(result.current.settingsSubtab).toBe(BUILTIN_GITHUB_PROVIDER_ID);
+  });
+
+  it("passes an already-canonical forge subtab through unchanged", () => {
+    const { result } = renderHook(() => useSettingsDialog());
+
+    act(() => {
+      result.current.handleOpenSettingsTab({ tab: "code-forge", subtab: "acme.gitea" });
+    });
+
+    expect(result.current.settingsSubtab).toBe("acme.gitea");
+  });
+
+  it("leaves the 'general' forge subtab unchanged", () => {
+    const { result } = renderHook(() => useSettingsDialog());
+
+    act(() => {
+      result.current.handleOpenSettingsTab({ tab: "code-forge", subtab: "general" });
+    });
+
+    expect(result.current.settingsSubtab).toBe("general");
+  });
+
+  it("normalizes the legacy 'forge' tab to code-forge with the general subtab", () => {
+    const { result } = renderHook(() => useSettingsDialog());
+
+    act(() => {
+      result.current.handleOpenSettingsTab({ tab: "forge" });
+    });
+
+    expect(result.current.settingsTab).toBe("code-forge");
+    expect(result.current.settingsSubtab).toBe("general");
+  });
+
+  it("does not normalize subtabs on non-forge tabs", () => {
+    const { result } = renderHook(() => useSettingsDialog());
+
+    act(() => {
+      result.current.handleOpenSettingsTab({ tab: "appearance", subtab: "github" });
+    });
+
+    expect(result.current.settingsTab).toBe("appearance");
+    expect(result.current.settingsSubtab).toBe("github");
+  });
+});

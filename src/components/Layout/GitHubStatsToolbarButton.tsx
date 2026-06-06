@@ -25,6 +25,7 @@ import { useGitHubFilterStore } from "@github-renderer/stores/githubFilterStore"
 import { useRepositoryStats } from "@/hooks/useRepositoryStats";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { useGitHubTokenExpiryNotification } from "@/hooks/useGitHubTokenExpiryNotification";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import {
   GitHubResourceListSkeleton,
   CommitListSkeleton,
@@ -782,7 +783,7 @@ export const GitHubStatsToolbarButton = memo(
     const openSettingsForToken = useCallback(() => {
       void actionService.dispatch(
         "app.settings.openTab",
-        { tab: "code-forge", subtab: "github", sectionId: "github-token" },
+        { tab: "code-forge", subtab: BUILTIN_GITHUB_PROVIDER_ID, sectionId: "github-token" },
         { source: "user" }
       );
     }, []);
@@ -913,7 +914,11 @@ export const GitHubStatsToolbarButton = memo(
                   setIssueSearchQuery("");
                   void actionService.dispatch(
                     "app.settings.openTab",
-                    { tab: "code-forge", subtab: "github", sectionId: "github-token" },
+                    {
+                      tab: "code-forge",
+                      subtab: BUILTIN_GITHUB_PROVIDER_ID,
+                      sectionId: "github-token",
+                    },
                     { source: "user" }
                   );
                   return;
@@ -1021,7 +1026,11 @@ export const GitHubStatsToolbarButton = memo(
                   setPrSearchQuery("");
                   void actionService.dispatch(
                     "app.settings.openTab",
-                    { tab: "code-forge", subtab: "github", sectionId: "github-token" },
+                    {
+                      tab: "code-forge",
+                      subtab: BUILTIN_GITHUB_PROVIDER_ID,
+                      sectionId: "github-token",
+                    },
                     { source: "user" }
                   );
                   return;

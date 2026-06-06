@@ -1202,7 +1202,7 @@ describe("WorktreeHeader token-missing badge behavior", () => {
     fireEvent.click(issueButton);
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "app.settings.openTab",
-      { tab: "code-forge", subtab: "github", sectionId: "github-token" },
+      { tab: "code-forge", subtab: "daintree.github.github", sectionId: "github-token" },
       { source: "user" }
     );
     expect(onOpenIssue).not.toHaveBeenCalled();
@@ -1241,7 +1241,7 @@ describe("WorktreeHeader token-missing badge behavior", () => {
     fireEvent.click(prButton);
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "app.settings.openTab",
-      { tab: "code-forge", subtab: "github", sectionId: "github-token" },
+      { tab: "code-forge", subtab: "daintree.github.github", sectionId: "github-token" },
       { source: "user" }
     );
     expect(onOpenPR).not.toHaveBeenCalled();
@@ -1413,7 +1413,7 @@ describe("WorktreeHeader upstream sync indicator", () => {
     expect(mockRetryAuthFetch).toHaveBeenCalledTimes(1);
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "app.settings.openTab",
-      { tab: "code-forge", subtab: "github", sectionId: "github-token" },
+      { tab: "code-forge", subtab: "daintree.github.github", sectionId: "github-token" },
       { source: "user" }
     );
   });

@@ -102,14 +102,14 @@ describe("useGitHubTokenExpiryNotification", () => {
     expect(payload.action?.actionId).toBe("app.settings.openTab");
     expect(payload.action?.actionArgs).toEqual({
       tab: "code-forge",
-      subtab: "github",
+      subtab: "daintree.github.github",
       sectionId: "github-token",
     });
 
     payload.action?.onClick();
     expect(dispatchMock).toHaveBeenCalledWith(
       "app.settings.openTab",
-      { tab: "code-forge", subtab: "github", sectionId: "github-token" },
+      { tab: "code-forge", subtab: "daintree.github.github", sectionId: "github-token" },
       { source: "user" }
     );
   });

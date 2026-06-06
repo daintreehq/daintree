@@ -213,7 +213,7 @@ describe("WorkspaceService.fetchPRBranch", () => {
         recoveryAction: {
           label: "Sign in with GitHub",
           actionId: "app.settings.openTab",
-          args: { tab: "code-forge", subtab: "github" },
+          args: { tab: "code-forge", subtab: "daintree.github.github" },
         },
       })
     );

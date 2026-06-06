@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { DaintreeIcon, FolderGit2, Plug, McpServerIcon, Workflow } from "@/components/icons";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { GeneralTab } from "./GeneralTab";
 
@@ -1061,7 +1062,7 @@ export const SETTINGS_REGISTRY = [
     sections: [
       {
         id: "github-token",
-        subtab: "github",
+        subtab: BUILTIN_GITHUB_PROVIDER_ID,
         subtabLabel: "GitHub",
         section: "Personal access token",
         title: "GitHub personal access token",

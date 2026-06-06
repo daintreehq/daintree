@@ -247,10 +247,12 @@ export function registerForgeHandlers(): () => void {
         // unregistered provider, provider throwing) collapses to the generic
         // "push failed" banner rather than surfacing an error.
         try {
-          const { namespaceId, providerId } = await resolveForCwd(payload.cwd);
+          const { namespaceId } = await resolveForCwd(payload.cwd);
           const impl = getImplForNamespace(namespaceId);
           const classification = impl.classifyPushError?.(payload.stderr) ?? null;
-          return { providerId, classification };
+          // Return the canonical `{pluginId}.{contributionId}` id — the
+          // settings CTA routes the Code-forge subtab on canonical ids (#9968).
+          return { providerId: namespaceId, classification };
         } catch {
           return null;
         }

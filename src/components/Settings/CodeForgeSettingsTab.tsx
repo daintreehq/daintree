@@ -12,7 +12,7 @@ import { GitHubIcon } from "@/components/icons/brands";
 import type { ForgeProviderContribution, ForgeProviderEntry } from "@shared/types";
 import type { ForgeAuditRecord, ForgeAuditStats } from "@shared/types/ipc/forge";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "@shared/types/ipc/forge";
-import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
+import { makeForgeProviderId, BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
@@ -37,7 +37,7 @@ function getForgeIcon(id: string): ForgeIcon {
 }
 
 const GENERAL_ID = "general";
-const GITHUB_ID = "github";
+const GITHUB_ID = BUILTIN_GITHUB_PROVIDER_ID;
 const CREDENTIAL_RESULT_DISPLAY_MS = 5000;
 const COPY_FEEDBACK_MS = 2000;
 
@@ -191,7 +191,7 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
   const providerOptions = useMemo<ForgeProviderOption[]>(
     () =>
       providers.map((entry) => ({
-        id: entry.contribution.id,
+        id: makeForgeProviderId(entry.pluginId, entry.contribution.id),
         name: entry.contribution.name,
         pluginId: entry.pluginId,
       })),
@@ -209,7 +209,7 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
   const isGeneral = effectiveSubtab === GENERAL_ID;
   const isGitHub = effectiveSubtab === GITHUB_ID;
   const selectedEntry = !isGeneral
-    ? providers.find((p) => p.contribution.id === effectiveSubtab)
+    ? providers.find((p) => makeForgeProviderId(p.pluginId, p.contribution.id) === effectiveSubtab)
     : null;
 
   return (

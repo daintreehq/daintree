@@ -42,11 +42,12 @@ const {
   openPRMock: vi.fn().mockResolvedValue(undefined),
   openExternalMock: vi.fn().mockResolvedValue(undefined),
   // Mirrors the real GitHub forge provider: extracts a GH### code from stderr
-  // and reports the resolved provider id used to route the settings CTA.
+  // and reports the resolved canonical provider id used to route the
+  // settings CTA.
   classifyPushErrorMock: vi.fn(async (_cwd: string, stderr: string) => {
     const match = /\bGH\d{3,}\b/.exec(String(stderr));
     return {
-      providerId: "github",
+      providerId: "daintree.github.github",
       classification: match ? { code: match[0] } : null,
     };
   }),
@@ -405,7 +406,10 @@ describe("ReviewHub", () => {
     openExternalMock.mockReset().mockResolvedValue(undefined);
     classifyPushErrorMock.mockReset().mockImplementation(async (_cwd: string, stderr: string) => {
       const match = /\bGH\d{3,}\b/.exec(String(stderr));
-      return { providerId: "github", classification: match ? { code: match[0] } : null };
+      return {
+        providerId: "daintree.github.github",
+        classification: match ? { code: match[0] } : null,
+      };
     });
 
     Object.defineProperty(window, "electron", {
@@ -1826,7 +1830,7 @@ describe("ReviewHub", () => {
 
       expect(actionDispatchMock).toHaveBeenCalledWith(
         "app.settings.openTab",
-        { tab: "code-forge", subtab: "github" },
+        { tab: "code-forge", subtab: "daintree.github.github" },
         { source: "user" }
       );
     });
@@ -1893,7 +1897,7 @@ describe("ReviewHub", () => {
       expect(screen.queryByTestId("review-hub-push-error-code")).toBeNull();
 
       await act(async () => {
-        releaseSecond({ providerId: "github", classification: null });
+        releaseSecond({ providerId: "daintree.github.github", classification: null });
         await Promise.resolve();
       });
       expect(screen.queryByTestId("review-hub-push-error-code")).toBeNull();
