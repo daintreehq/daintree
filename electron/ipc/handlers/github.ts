@@ -25,31 +25,20 @@ import {
 } from "../../services/github/index.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../shared/utils/forgeProviderIds.js";
-import type { GitHubRateLimitPayload } from "../../../shared/types/ipc/github.js";
-import type { RateLimitInfo } from "../../../shared/types/forge.js";
+import { toRateLimitInfo } from "../../../shared/utils/rateLimitUtils.js";
 
-// Project a GitHub rate-limit payload onto the provider-agnostic RateLimitInfo
-// shape. Mirrors `toRateLimitInfo` in electron/workspace-host.ts — keep the
-// two in sync if the projection rule changes.
-function toRateLimitInfo(payload: GitHubRateLimitPayload): RateLimitInfo {
-  if (!payload.blocked) {
-    return {
-      limit: payload.limit ?? null,
-      remaining: payload.remaining ?? null,
-      resetAt: null,
-      throttleMultiplier: payload.throttleMultiplier,
-    };
+// Relay the fetch-throttle multiplier into every workspace host so worktree
+// monitor polling backs off as the shared GraphQL budget depletes. The hosts
+// stopped observing rate limits themselves when the forge RPC bridge moved
+// all GitHub HTTP calls into main (#8870), so main must push the state in.
+async function relayFetchThrottleToWorkspaceHosts(multiplier: number): Promise<void> {
+  try {
+    const { getWorkspaceClient } = await import("../../services/WorkspaceClient.js");
+    getWorkspaceClient().relayFetchThrottle(multiplier);
+  } catch {
+    // WorkspaceClient may not be initialized yet — hosts created later are
+    // seeded from the pool cache, and this relay fires again on every change.
   }
-  // When blocked, force `remaining: 0` — the renderer's GitHub-flavored
-  // projection treats `remaining === 0` as the "blocked" signal, so the exact
-  // (1–50) hard-stop-band count must not leak through as a non-zero value.
-  return {
-    limit: payload.limit ?? null,
-    remaining: 0,
-    resetAt: payload.resetAt ?? null,
-    ...(payload.kind === "secondary" ? { secondaryThrottled: true } : {}),
-    throttleMultiplier: payload.throttleMultiplier,
-  };
 }
 
 async function handleGitHubUnassignIssue(payload: {
@@ -103,6 +92,10 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       providerId: BUILTIN_GITHUB_PROVIDER_ID,
       state: toRateLimitInfo(state),
     });
+    // Pace workspace-host background fetch cadence against the observed
+    // GraphQL budget — read live from the callback arg, never a cached
+    // payload that could predate a token rotation.
+    void relayFetchThrottleToWorkspaceHosts(state.throttleMultiplier ?? 1);
   });
   handlers.push(unsubscribeRateLimit);
 

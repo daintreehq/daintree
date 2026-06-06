@@ -77,6 +77,10 @@ export class WorkspaceHostPool {
 
   private logLevelOverridesCache: Record<string, string> = readPersistedLogOverrides();
 
+  /** Last GitHub fetch-throttle multiplier relayed from main — seeded into
+   * hosts created after the rate-limit state last changed. */
+  private fetchThrottleMultiplierCache = 1;
+
   private emit: EmitFn;
   private onProjectSwitch?: (windowId: number) => void;
   private routeHostEventFn: RouteHostEventFn | null = null;
@@ -189,6 +193,7 @@ export class WorkspaceHostPool {
 
     const host = new WorkspaceHostProcess(normalizedPath, this.config);
     host.setLogLevelOverrides(this.logLevelOverridesCache);
+    host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
 
     const initPromise = (async () => {
       await host.waitForReady();
@@ -247,6 +252,7 @@ export class WorkspaceHostPool {
 
     const host = new WorkspaceHostProcess(normalizedPath, this.config);
     host.setLogLevelOverrides(this.logLevelOverridesCache);
+    host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
 
     const initPromise = (async () => {
       await host.waitForReady();
@@ -510,6 +516,15 @@ export class WorkspaceHostPool {
     this.logLevelOverridesCache = { ...overrides };
     for (const entry of this.entries.values()) {
       entry.host.setLogLevelOverrides(this.logLevelOverridesCache);
+    }
+  }
+
+  // ── Fetch throttle ──
+
+  relayFetchThrottle(multiplier: number): void {
+    this.fetchThrottleMultiplierCache = multiplier;
+    for (const entry of this.entries.values()) {
+      entry.host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
     }
   }
 

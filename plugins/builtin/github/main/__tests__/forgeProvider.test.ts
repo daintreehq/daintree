@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatErrorMessage } from "../../../../../shared/utils/errorMessage.js";
 import { MAX_REVIEW_THREAD_PAGES } from "../GitHubCaches.js";
 import type { ShouldBlockResult } from "../GitHubRateLimitService.js";
@@ -45,6 +45,7 @@ import {
   prTooltipCache,
 } from "../GitHubCaches.js";
 import { GitHubAuth } from "../GitHubAuth.js";
+import { gitHubRateLimitService } from "../GitHubRateLimitService.js";
 import type { RepoRef } from "../../../../../shared/types/forge.js";
 
 const repo: RepoRef = { host: "github.com", owner: "owner", repo: "repo", rawData: null };
@@ -1310,5 +1311,53 @@ describe("buildPRsUrl", () => {
       githubForgeProvider.buildPRsUrl(repo, { query: "bug", state: "all" })
     );
     expect(q).toBe("bug");
+  });
+});
+
+describe("getRateLimit", () => {
+  afterEach(() => {
+    vi.mocked(gitHubRateLimitService.getState).mockReturnValue({ blocked: false } as never);
+  });
+
+  it("includes throttleMultiplier when not blocked so the bridge path carries throttle state", async () => {
+    vi.mocked(gitHubRateLimitService.getState).mockReturnValue({
+      blocked: false,
+      kind: null,
+      throttleMultiplier: 3,
+    } as never);
+
+    await expect(githubForgeProvider.getRateLimit()).resolves.toEqual({
+      limit: null,
+      remaining: null,
+      resetAt: null,
+      throttleMultiplier: 3,
+    });
+  });
+
+  it("defaults throttleMultiplier to 1 when the state omits it", async () => {
+    vi.mocked(gitHubRateLimitService.getState).mockReturnValue({
+      blocked: false,
+      kind: null,
+    } as never);
+
+    const info = await githubForgeProvider.getRateLimit();
+    expect(info.throttleMultiplier).toBe(1);
+  });
+
+  it("includes throttleMultiplier and the secondary flag when blocked", async () => {
+    vi.mocked(gitHubRateLimitService.getState).mockReturnValue({
+      blocked: true,
+      kind: "secondary",
+      resetAt: 123,
+      throttleMultiplier: 8,
+    } as never);
+
+    await expect(githubForgeProvider.getRateLimit()).resolves.toEqual({
+      limit: null,
+      remaining: 0,
+      resetAt: 123,
+      secondaryThrottled: true,
+      throttleMultiplier: 8,
+    });
   });
 });

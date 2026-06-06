@@ -28,14 +28,10 @@ import { fileTreeService } from "./services/FileTreeService.js";
 import { projectPulseService } from "./services/ProjectPulseService.js";
 import type { CopyTreeProgress } from "../shared/types/ipc.js";
 import type { WorkspaceHostRequest, WorkspaceHostEvent } from "../shared/types/workspace-host.js";
-import type { RateLimitInfo } from "../shared/types/forge.js";
-import type { GitHubRateLimitPayload } from "../shared/types/ipc/github.js";
 import type { WorktreePortRequest } from "../shared/types/worktree-port.js";
 import { WorkspaceService } from "./workspace-host/WorkspaceService.js";
-import { gitHubRateLimitService } from "./services/github/GitHubRateLimitService.js";
 import { ensureSerializable } from "../shared/utils/serialization.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
-import { BUILTIN_GITHUB_PROVIDER_ID } from "../shared/utils/forgeProviderIds.js";
 import { initForgeBridge } from "./workspace-host/forgeBridge.js";
 import { fanoutEventToWorktreePorts } from "./workspace-host/worktreePortFanout.js";
 import { PERF_MARKS } from "../shared/perf/marks.js";
@@ -331,53 +327,6 @@ const workspaceService = new WorkspaceService(sendEvent);
 // `docs/architecture/forge-provider-abstraction.md` for the rationale.
 const forgeBridge = initForgeBridge(sendEvent);
 
-// Convert a GitHubRateLimitPayload (from gitHubRateLimitService.getState())
-// to the provider-agnostic RateLimitInfo shape so the forge-rate-limit-changed
-// event payload is provider-agnostic.
-function toRateLimitInfo(payload: GitHubRateLimitPayload): RateLimitInfo {
-  if (!payload.blocked) {
-    // Forward the observed GraphQL budget (if any) so the toolbar can show a
-    // remaining-quota indicator even while requests still flow.
-    return {
-      limit: payload.limit ?? null,
-      remaining: payload.remaining ?? null,
-      resetAt: null,
-      throttleMultiplier: payload.throttleMultiplier,
-    };
-  }
-  // When blocked, force `remaining: 0` — the renderer's GitHub-flavored
-  // projection treats `remaining === 0` as the "blocked" signal, so the exact
-  // (1–50) hard-stop-band count must not leak through as a non-zero value.
-  return {
-    limit: payload.limit ?? null,
-    remaining: 0,
-    resetAt: payload.resetAt ?? null,
-    ...(payload.kind === "secondary" ? { secondaryThrottled: true } : {}),
-    throttleMultiplier: payload.throttleMultiplier,
-  };
-}
-
-// Forward forge provider rate-limit state changes observed by
-// utility-process HTTP calls (e.g. PullRequestService polling) up to the
-// main process so they reach the toolbar countdown and block main-process
-// calls too. `broadcastToRenderer` is BrowserWindow-backed and therefore
-// main-only; this relay is how utility-side limits ever become visible
-// elsewhere. Register synchronously before `ready` is sent — otherwise the
-// first event emitted during startup racing polling would be silently
-// dropped.
-gitHubRateLimitService.onStateChange((state) => {
-  const rateLimitInfo = toRateLimitInfo(state);
-  sendEvent({
-    type: "forge-rate-limit-changed",
-    providerId: BUILTIN_GITHUB_PROVIDER_ID,
-    state: rateLimitInfo,
-  });
-  // Pace background fetch cadence against the observed GraphQL budget so
-  // multiple instances drawing on the same per-user token budget back off in
-  // step as it depletes — and snap back when it resets.
-  workspaceService.applyFetchThrottle(state.throttleMultiplier ?? 1);
-});
-
 // Handle requests from Main
 port.on("message", async (rawMsg: any) => {
   const msg =
@@ -542,6 +491,14 @@ port.on("message", async (rawMsg: any) => {
           const { pullRequestService } = await import("./services/PullRequestService.js");
           pullRequestService.setFocusCadence(request.focused);
         }
+        break;
+
+      // Pace background fetch cadence against the GraphQL budget observed in
+      // main (where all forge HTTP calls live post-#8870) so multiple
+      // instances drawing on the same per-user token budget back off in step
+      // as it depletes — and snap back when it resets.
+      case "apply-fetch-throttle":
+        workspaceService.applyFetchThrottle(request.multiplier);
         break;
 
       case "background":

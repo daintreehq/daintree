@@ -97,6 +97,11 @@ export class WorkspaceHostProcess extends EventEmitter {
    * until after `ready`, so pushing at fork time would silently drop. */
   private logLevelOverridesCache: Record<string, string> = {};
 
+  /** Last GitHub fetch-throttle multiplier relayed from main. Replayed on
+   * every `ready` (initial + restarts) so a host restart doesn't silently
+   * revert monitor fetch cadence to the unthrottled default. */
+  private fetchThrottleMultiplierCache = 1;
+
   /** Buffers for line-splitting stdout/stderr from the forked host. Forking
    * with `stdio:"pipe"` (instead of `"inherit"`) isolates the host from the
    * main process's fd 2 — critical on AppImage GUI launches where fd 2 points
@@ -233,6 +238,17 @@ export class WorkspaceHostProcess extends EventEmitter {
     this.logLevelOverridesCache = { ...overrides };
     if (this.isInitialized && this.child) {
       this.send({ type: "set-log-level-overrides", overrides: this.logLevelOverridesCache });
+    }
+  }
+
+  /**
+   * Update the cached fetch-throttle multiplier and push immediately if
+   * initialized. On restart, `ready` replays the cached value automatically.
+   */
+  relayFetchThrottle(multiplier: number): void {
+    this.fetchThrottleMultiplierCache = multiplier;
+    if (this.isInitialized && this.child) {
+      this.send({ type: "apply-fetch-throttle", multiplier: this.fetchThrottleMultiplierCache });
     }
   }
 
@@ -791,6 +807,14 @@ export class WorkspaceHostProcess extends EventEmitter {
 
         // Replay cached log-level overrides on every ready (initial + restarts).
         this.send({ type: "set-log-level-overrides", overrides: this.logLevelOverridesCache });
+
+        // Replay the cached fetch-throttle multiplier on every ready — a
+        // restarted host would otherwise run unthrottled until the next
+        // rate-limit state change, which can be hours away.
+        this.send({
+          type: "apply-fetch-throttle",
+          multiplier: this.fetchThrottleMultiplierCache,
+        });
 
         if (this.readyResolve) {
           this.readyResolve();
