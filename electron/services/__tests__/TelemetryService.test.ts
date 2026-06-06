@@ -145,6 +145,17 @@ describe("sanitizePath", () => {
     expect(sanitizePath("E:/Users/bob/code")).toBe("E:/Users/USER/code");
   });
 
+  it("redacts lowercase Windows drive letters", () => {
+    expect(sanitizePath("d:\\Users\\alice\\repo")).toBe("d:\\Users\\USER\\repo");
+  });
+
+  it("redacts JSON-doubled Windows paths", () => {
+    const json = JSON.stringify({ cwd: "D:\\Users\\carol\\repo" });
+    const result = sanitizePath(json);
+    expect(result).not.toContain("carol");
+    expect(result).toContain("USER");
+  });
+
   it("redacts WSL UNC paths", () => {
     const result = sanitizePath("\\\\wsl$\\Ubuntu\\home\\alice\\project");
     expect(result).not.toContain("alice");

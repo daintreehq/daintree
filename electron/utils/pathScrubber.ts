@@ -33,6 +33,8 @@ export function sanitizePath(str: string): string {
       // non-`C:` profiles (e.g. `D:\Users\alice`) are covered.
       .replace(/(\/Users\/)[^/"\\]+/g, "$1USER")
       .replace(/(\/home\/)[^/"\\]+/g, "$1USER")
+      // JSON.stringify doubles backslashes, so handle the doubled form first.
+      .replace(/([A-Za-z]:\\\\Users\\\\)[^\\"]+/gi, "$1USER")
       .replace(/([A-Za-z]:\\Users\\)[^\\"]+/gi, "$1USER")
       .replace(/([A-Za-z]:\/Users\/)[^/"\\]+/gi, "$1USER")
   );
