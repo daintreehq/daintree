@@ -268,6 +268,34 @@ describe("CodeForgeSettingsTab — canonical subtab routing", () => {
     expect(screen.queryByTestId("github-settings-tab")).toBeNull();
   });
 
+  it("routes the built-in GitHub card and a third-party 'github' contribution independently", async () => {
+    const { getCredentialStatus } = installForgeMocks({
+      providers: [
+        makeProvider("daintree.github", "github", "GitHub"),
+        makeProvider("acme", "github", "Acme GitHub", [
+          { id: "token", label: "API token", type: "password" },
+        ]),
+      ],
+    });
+
+    const { rerender } = render(
+      <CodeForgeSettingsTab activeSubtab="daintree.github.github" onSubtabChange={vi.fn()} />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("github-settings-tab")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("forge-credential-form")).toBeNull();
+
+    rerender(<CodeForgeSettingsTab activeSubtab="acme.github" onSubtabChange={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(getCredentialStatus).toHaveBeenCalledWith("acme.github");
+    });
+    expect(screen.getByTestId("forge-credential-form")).toBeTruthy();
+    expect(screen.queryByTestId("github-settings-tab")).toBeNull();
+  });
+
   it("falls back to the GitHub subtab for an unrecognized bare subtab id", async () => {
     installForgeMocks({
       providers: [
@@ -277,11 +305,15 @@ describe("CodeForgeSettingsTab — canonical subtab routing", () => {
       ],
     });
 
-    render(<CodeForgeSettingsTab activeSubtab="gitea" onSubtabChange={vi.fn()} />);
+    const onSubtabChange = vi.fn();
+    render(<CodeForgeSettingsTab activeSubtab="gitea" onSubtabChange={onSubtabChange} />);
 
     await waitFor(() => {
       expect(screen.getByTestId("github-settings-tab")).toBeTruthy();
     });
     expect(screen.queryByTestId("forge-credential-form")).toBeNull();
+    // The fallback is display-only — the component must not rewrite the
+    // caller's subtab state.
+    expect(onSubtabChange).not.toHaveBeenCalled();
   });
 });

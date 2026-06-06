@@ -32,8 +32,8 @@ import { logError } from "@/utils/logger";
 
 type ForgeIcon = ComponentType<{ className?: string; size?: number; "aria-hidden"?: boolean }>;
 
-function getForgeIcon(id: string): ForgeIcon {
-  return id === "github" ? GitHubIcon : GitBranch;
+function getForgeIcon(canonicalId: string): ForgeIcon {
+  return canonicalId === BUILTIN_GITHUB_PROVIDER_ID ? GitHubIcon : GitBranch;
 }
 
 const GENERAL_ID = "general";
@@ -275,7 +275,9 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
         {!isGeneral && !isGitHub && selectedEntry && (
           <ForgeProviderCard
             name={selectedEntry.contribution.name}
-            Icon={getForgeIcon(selectedEntry.contribution.id)}
+            Icon={getForgeIcon(
+              makeForgeProviderId(selectedEntry.pluginId, selectedEntry.contribution.id)
+            )}
           >
             <ProviderSettingsBody
               providerId={makeForgeProviderId(

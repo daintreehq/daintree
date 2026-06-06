@@ -68,6 +68,22 @@ describe("useSettingsDialog — forge subtab normalization", () => {
     expect(result.current.settingsSubtab).toBe("general");
   });
 
+  it("normalizes a legacy bare 'github' subtab arriving via the open-settings-tab event", () => {
+    const { result } = renderHook(() => useSettingsDialog());
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("daintree:open-settings-tab", {
+          detail: { tab: "code-forge", subtab: "github" },
+        })
+      );
+    });
+
+    expect(result.current.settingsTab).toBe("code-forge");
+    expect(result.current.settingsSubtab).toBe(BUILTIN_GITHUB_PROVIDER_ID);
+    expect(result.current.isSettingsOpen).toBe(true);
+  });
+
   it("does not normalize subtabs on non-forge tabs", () => {
     const { result } = renderHook(() => useSettingsDialog());
 
