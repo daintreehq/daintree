@@ -29,8 +29,9 @@ import {
   isTransientError,
   normalizeError,
   delay,
+  cancellableDelay,
   nextBackoffDelay,
-  MAX_AUTO_RETRIES,
+  MAX_TRANSIENT_RETRY_MS,
   QUEUE_CONCURRENCY,
   BACKOFF_BASE_MS,
   ASSIGNMENT_BACKOFF_CAP_MS,
@@ -306,9 +307,15 @@ export function BulkCreateWorktreeDialog({
           const itemNumber = planned.item.number;
           const tracked = tracking.get(itemNumber);
           let backoffDelay = BACKOFF_BASE_MS;
+          // Per-item-total deadline shared across worktree creation, terminal
+          // spawning, and assignment. Transient failures retry until this
+          // elapses; permanent errors fail immediately (see #10128).
+          const itemStart = performance.now();
+          let attempt = 0;
 
-          for (let attempt = 1; attempt <= MAX_AUTO_RETRIES + 1; attempt++) {
+          while (true) {
             if (runIdRef.current !== currentRunId) return;
+            attempt++;
 
             try {
               // Step 1: Worktree creation (skip if already created)
@@ -581,9 +588,15 @@ export function BulkCreateWorktreeDialog({
 
                   if (results.failed.length > 0) {
                     const hasTransient = results.failed.some((f) => isTransientError(f.error));
-                    if (attempt <= MAX_AUTO_RETRIES && hasTransient) {
+                    if (
+                      hasTransient &&
+                      performance.now() - itemStart < MAX_TRANSIENT_RETRY_MS
+                    ) {
                       backoffDelay = nextBackoffDelay(backoffDelay);
-                      await delay(backoffDelay);
+                      await cancellableDelay(
+                        backoffDelay,
+                        () => runIdRef.current !== currentRunId
+                      );
                       continue;
                     }
                     const errorMsg = `${results.failed.length} terminal(s) failed to spawn`;
@@ -612,20 +625,24 @@ export function BulkCreateWorktreeDialog({
                     issueNumber: itemNumber,
                   });
                   let assignBackoff = BACKOFF_BASE_MS;
-                  for (
-                    let assignAttempt = 1;
-                    assignAttempt <= MAX_AUTO_RETRIES + 1;
-                    assignAttempt++
-                  ) {
+                  let assignAttempt = 0;
+                  while (true) {
                     if (runIdRef.current !== currentRunId) return;
+                    assignAttempt++;
                     try {
                       await githubClient.assignIssue(rootPath, itemNumber, username);
                       break;
                     } catch (err) {
                       const assignErr = normalizeError(err);
-                      if (assignAttempt <= MAX_AUTO_RETRIES && isTransientError(assignErr)) {
+                      if (
+                        isTransientError(assignErr) &&
+                        performance.now() - itemStart < MAX_TRANSIENT_RETRY_MS
+                      ) {
                         assignBackoff = nextBackoffDelay(assignBackoff, ASSIGNMENT_BACKOFF_CAP_MS);
-                        await delay(assignBackoff);
+                        await cancellableDelay(
+                          assignBackoff,
+                          () => runIdRef.current !== currentRunId
+                        );
                         continue;
                       }
                       failedItems.add(itemNumber);
@@ -652,9 +669,12 @@ export function BulkCreateWorktreeDialog({
               if (runIdRef.current !== currentRunId) return;
               const errorMsg = normalizeError(err);
 
-              if (attempt <= MAX_AUTO_RETRIES && isTransientError(errorMsg)) {
+              if (
+                isTransientError(errorMsg) &&
+                performance.now() - itemStart < MAX_TRANSIENT_RETRY_MS
+              ) {
                 backoffDelay = nextBackoffDelay(backoffDelay);
-                await delay(backoffDelay);
+                await cancellableDelay(backoffDelay, () => runIdRef.current !== currentRunId);
                 continue;
               }
 

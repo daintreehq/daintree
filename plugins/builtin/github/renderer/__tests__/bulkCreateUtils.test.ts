@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 import {
   planIssueWorktrees,
@@ -6,11 +6,12 @@ import {
   isTransientError,
   normalizeError,
   delay,
+  cancellableDelay,
   nextBackoffDelay,
   BACKOFF_BASE_MS,
   BACKOFF_CAP_MS,
   ASSIGNMENT_BACKOFF_CAP_MS,
-  MAX_AUTO_RETRIES,
+  MAX_TRANSIENT_RETRY_MS,
 } from "../components/bulkCreateUtils";
 
 function makeIssue(overrides: Partial<GitHubIssue> = {}): GitHubIssue {
@@ -153,6 +154,12 @@ describe("isTransientError", () => {
     );
   });
 
+  it("matches the raw GitHub secondary rate limit message body", () => {
+    expect(
+      isTransientError("You have exceeded a secondary rate limit. Please wait a few minutes.")
+    ).toBe(true);
+  });
+
   it("rejects GitHub permission errors as non-transient", () => {
     expect(isTransientError("Issue not found")).toBe(false);
     expect(isTransientError("Forbidden — check token scopes")).toBe(false);
@@ -202,6 +209,58 @@ describe("delay", () => {
   });
 });
 
+describe("cancellableDelay", () => {
+  it("resolves after the full duration when never cancelled", async () => {
+    vi.useFakeTimers();
+    try {
+      const promise = cancellableDelay(5000, () => false);
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1000);
+      await promise;
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns early once the cancel guard flips, within one poll interval", async () => {
+    vi.useFakeTimers();
+    try {
+      let cancelled = false;
+      const promise = cancellableDelay(60000, () => cancelled);
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+      // Cancel mid-sleep; the poll interval is capped at 1s, so the next tick exits.
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(settled).toBe(false);
+      cancelled = true;
+      await vi.advanceTimersByTimeAsync(1000);
+      await promise;
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resolves immediately for a non-positive duration", async () => {
+    // No timers should be needed — a zero-ms wait must not block.
+    await expect(cancellableDelay(0, () => false)).resolves.toBeUndefined();
+  });
+
+  it("does not invoke the cancel guard after a non-positive duration", async () => {
+    const isCancelled = vi.fn(() => false);
+    await cancellableDelay(0, isCancelled);
+    expect(isCancelled).not.toHaveBeenCalled();
+  });
+});
+
 describe("nextBackoffDelay", () => {
   it("returns a value at least BACKOFF_BASE_MS", () => {
     for (let i = 0; i < 20; i++) {
@@ -237,11 +296,10 @@ describe("nextBackoffDelay", () => {
 });
 
 describe("constants", () => {
-  it("MAX_AUTO_RETRIES is 2", () => {
-    expect(MAX_AUTO_RETRIES).toBe(2);
-  });
-
-  it("ASSIGNMENT_BACKOFF_CAP_MS is 60s to cover GitHub secondary rate limit", () => {
-    expect(ASSIGNMENT_BACKOFF_CAP_MS).toBe(60000);
+  it("the transient retry ceiling outlasts the longest per-sleep backoff cap", () => {
+    // The wall-clock ceiling must leave room for several full-length backoff
+    // sleeps so a secondary rate limit can actually clear before we give up.
+    expect(MAX_TRANSIENT_RETRY_MS).toBeGreaterThan(ASSIGNMENT_BACKOFF_CAP_MS);
+    expect(MAX_TRANSIENT_RETRY_MS).toBeGreaterThan(BACKOFF_CAP_MS);
   });
 });
