@@ -18,7 +18,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "daintree-plugin": "*"
+    "daintree-plugin": "^0.1.0"
   },
   "devDependencies": {
     "tsup": "^8.5.0"
