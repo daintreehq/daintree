@@ -13,6 +13,7 @@ import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore"
 import { notify } from "@/lib/notify";
 import { systemClient } from "@/clients/systemClient";
 import { useRecipeStore } from "@/store/recipeStore";
+import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
 import { extractClosingIssueNumber } from "@/utils/closingIssueRef";
@@ -106,7 +107,7 @@ export function NewWorktreeDialog({
   const githubConfig = useGitHubConfigStore((s) => s.config);
   const initializeGitHubConfig = useGitHubConfigStore((s) => s.initialize);
   const refreshGitHubConfig = useGitHubConfigStore((s) => s.refresh);
-  const { recipes, runRecipe } = useRecipeStore();
+  const { recipes, runRecipeWithResults } = useRecipeStore();
   const currentProject = useProjectStore((s) => s.currentProject);
   const projectId = currentProject?.id ?? "";
   const lastSelectedWorktreeRecipeId = lastSelectedWorktreeRecipeIdByProject[projectId];
@@ -637,11 +638,20 @@ export function NewWorktreeDialog({
           }
         } else if (snapSelectedRecipe) {
           try {
-            await runRecipe(snapSelectedRecipe.id, snapWorktreePath, worktreeId, {
-              issueNumber: snapIssue?.number,
-              prNumber: snapInitialPR?.number,
-              worktreePath: snapWorktreePath,
-              branchName: fullBranchName,
+            const results = await runRecipeWithResults(
+              snapSelectedRecipe.id,
+              snapWorktreePath,
+              worktreeId,
+              {
+                issueNumber: snapIssue?.number,
+                prNumber: snapInitialPR?.number,
+                worktreePath: snapWorktreePath,
+                branchName: fullBranchName,
+              }
+            );
+            notifyRecipeSpawnFailures(results, {
+              recipeName: snapSelectedRecipe.name,
+              projectId,
             });
           } catch (recipeErr) {
             const message = formatErrorMessage(recipeErr, "Failed to run recipe");
@@ -662,9 +672,14 @@ export function NewWorktreeDialog({
                 {
                   label: "Retry recipe",
                   onClick: () => {
-                    runRecipe(recipeId, recipePath, recipeWorktreeId, recipeContext).catch((err) =>
-                      logError("Failed to run recipe", err)
-                    );
+                    runRecipeWithResults(recipeId, recipePath, recipeWorktreeId, recipeContext)
+                      .then((results) =>
+                        notifyRecipeSpawnFailures(results, {
+                          recipeName: snapSelectedRecipe.name,
+                          projectId,
+                        })
+                      )
+                      .catch((err) => logError("Failed to run recipe", err));
                   },
                 },
               ],

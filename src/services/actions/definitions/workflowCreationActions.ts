@@ -1,6 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
+import type { ActionContext } from "@shared/types/actions";
 // eslint-disable-next-line no-restricted-imports
 import { worktreeClient, githubClient, copyTreeClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
@@ -9,6 +10,7 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import { partialSuccessError, slugifyForBranch } from "./workflowHelpers";
 
 export function registerWorkflowCreationActions(
@@ -80,22 +82,27 @@ export function registerWorkflowCreationActions(
         worktreePath: z.string(),
         branch: z.string(),
         recipeLaunched: z.boolean(),
+        spawnedTerminalCount: z.number().int().nonnegative(),
+        failedTerminalCount: z.number().int().nonnegative(),
         assignedToSelf: z.boolean(),
         assignedUsername: z.string().nullable(),
         assignmentError: z.string().nullable(),
       }),
-      run: async ({
-        branchName,
-        baseBranch,
-        recipeId,
-        fromRemote,
-        useExistingBranch,
-        issueNumber,
-        pullRequestNumber,
-        assignToSelf,
-        spawnedBy,
-        focusPolicy,
-      }) => {
+      run: async (
+        {
+          branchName,
+          baseBranch,
+          recipeId,
+          fromRemote,
+          useExistingBranch,
+          issueNumber,
+          pullRequestNumber,
+          assignToSelf,
+          spawnedBy,
+          focusPolicy,
+        },
+        ctx: ActionContext
+      ) => {
         if (issueNumber !== undefined && pullRequestNumber !== undefined) {
           throw new Error("issueNumber and pullRequestNumber are mutually exclusive");
         }
@@ -182,6 +189,8 @@ export function registerWorkflowCreationActions(
         }
 
         let recipeLaunched = false;
+        let spawnedTerminalCount = 0;
+        let failedTerminalCount = 0;
         if (recipeId) {
           try {
             const recipeContext = {
@@ -190,15 +199,26 @@ export function registerWorkflowCreationActions(
               issueNumber,
               prNumber: pullRequestNumber,
             };
-            if (spawnedBy === undefined && focusPolicy === undefined) {
-              await useRecipeStore.getState().runRecipe(recipeId, path, worktreeId, recipeContext);
-            } else {
-              await useRecipeStore.getState().runRecipe(recipeId, path, worktreeId, recipeContext, {
+            // Forward dispatchSource so runRecipeWithResults applies the
+            // agent-source terminal cap to MCP-driven worktree+recipe combos,
+            // matching recipe.run.
+            const results = await useRecipeStore
+              .getState()
+              .runRecipeWithResults(recipeId, path, worktreeId, recipeContext, {
                 spawnedBy,
                 focusPolicy,
+                dispatchSource: ctx.dispatchSource,
               });
-            }
-            recipeLaunched = true;
+            // "Launched" means at least one terminal actually spawned — a run
+            // where every terminal was dropped (e.g. panel limit) must not
+            // report success to agent callers.
+            recipeLaunched = results.spawned.length > 0;
+            spawnedTerminalCount = results.spawned.length;
+            failedTerminalCount = results.failed.length;
+            notifyRecipeSpawnFailures(results, {
+              recipeName: useRecipeStore.getState().getRecipeById(recipeId)?.name,
+              projectId: currentProject.id,
+            });
           } catch (err) {
             throw partialSuccessError(
               `Recipe ${recipeId} failed to run: ${formatErrorMessage(err, "unknown error")}`,
@@ -207,6 +227,8 @@ export function registerWorkflowCreationActions(
                 worktreePath: path,
                 branch: effectiveBranch,
                 recipeLaunched: false,
+                spawnedTerminalCount: 0,
+                failedTerminalCount: 0,
                 assignedToSelf: false,
                 assignedUsername: null,
                 assignmentError: null,
@@ -242,6 +264,8 @@ export function registerWorkflowCreationActions(
           worktreePath: path,
           branch: effectiveBranch,
           recipeLaunched,
+          spawnedTerminalCount,
+          failedTerminalCount,
           assignedToSelf,
           assignedUsername,
           assignmentError,
@@ -303,22 +327,27 @@ export function registerWorkflowCreationActions(
         branch: z.string(),
         terminalId: z.string().nullable(),
         recipeLaunched: z.boolean(),
+        spawnedTerminalCount: z.number().int().nonnegative(),
+        failedTerminalCount: z.number().int().nonnegative(),
         assignedToSelf: z.boolean(),
         assignedUsername: z.string().nullable(),
         assignmentError: z.string().nullable(),
         contextInjected: z.boolean(),
       }),
-      run: async ({
-        issueNumber,
-        agentId,
-        branchName,
-        baseBranch,
-        recipeId,
-        assignToSelf,
-        injectContext,
-        spawnedBy,
-        focusPolicy,
-      }) => {
+      run: async (
+        {
+          issueNumber,
+          agentId,
+          branchName,
+          baseBranch,
+          recipeId,
+          assignToSelf,
+          injectContext,
+          spawnedBy,
+          focusPolicy,
+        },
+        ctx: ActionContext
+      ) => {
         const currentProject = useProjectStore.getState().currentProject;
         if (!currentProject) {
           throw new Error("No active project");
@@ -377,6 +406,8 @@ export function registerWorkflowCreationActions(
         }
 
         let recipeLaunched = false;
+        let spawnedTerminalCount = 0;
+        let failedTerminalCount = 0;
         if (recipeId) {
           try {
             const recipeContext = {
@@ -384,19 +415,26 @@ export function registerWorkflowCreationActions(
               branchName: availableBranch,
               issueNumber: issue.number,
             };
-            if (spawnedBy === undefined && focusPolicy === undefined) {
-              await useRecipeStore
-                .getState()
-                .runRecipe(recipeId, worktreePath, worktreeId, recipeContext);
-            } else {
-              await useRecipeStore
-                .getState()
-                .runRecipe(recipeId, worktreePath, worktreeId, recipeContext, {
-                  spawnedBy,
-                  focusPolicy,
-                });
-            }
-            recipeLaunched = true;
+            // Forward dispatchSource so runRecipeWithResults applies the
+            // agent-source terminal cap to MCP-driven worktree+recipe combos,
+            // matching recipe.run.
+            const results = await useRecipeStore
+              .getState()
+              .runRecipeWithResults(recipeId, worktreePath, worktreeId, recipeContext, {
+                spawnedBy,
+                focusPolicy,
+                dispatchSource: ctx.dispatchSource,
+              });
+            // "Launched" means at least one terminal actually spawned — a run
+            // where every terminal was dropped (e.g. panel limit) must not
+            // report success to agent callers.
+            recipeLaunched = results.spawned.length > 0;
+            spawnedTerminalCount = results.spawned.length;
+            failedTerminalCount = results.failed.length;
+            notifyRecipeSpawnFailures(results, {
+              recipeName: useRecipeStore.getState().getRecipeById(recipeId)?.name,
+              projectId: currentProject.id,
+            });
           } catch (err) {
             throw partialSuccessError(
               `Recipe ${recipeId} failed to run: ${formatErrorMessage(err, "unknown error")}`,
@@ -409,6 +447,8 @@ export function registerWorkflowCreationActions(
                 branch: availableBranch,
                 terminalId: null,
                 recipeLaunched: false,
+                spawnedTerminalCount: 0,
+                failedTerminalCount: 0,
                 assignedToSelf: false,
                 assignedUsername: null,
                 assignmentError: null,
@@ -443,6 +483,8 @@ export function registerWorkflowCreationActions(
               branch: availableBranch,
               terminalId: null,
               recipeLaunched,
+              spawnedTerminalCount,
+              failedTerminalCount,
               assignedToSelf: false,
               assignedUsername: null,
               assignmentError: null,
@@ -460,6 +502,8 @@ export function registerWorkflowCreationActions(
             branch: availableBranch,
             terminalId: null,
             recipeLaunched,
+            spawnedTerminalCount,
+            failedTerminalCount,
             assignedToSelf: false,
             assignedUsername: null,
             assignmentError: null,
@@ -509,6 +553,8 @@ export function registerWorkflowCreationActions(
           branch: availableBranch,
           terminalId,
           recipeLaunched,
+          spawnedTerminalCount,
+          failedTerminalCount,
           assignedToSelf,
           assignedUsername,
           assignmentError,

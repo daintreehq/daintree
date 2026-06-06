@@ -4,6 +4,7 @@ import { logError } from "@/utils/logger";
 import { actionService } from "@/services/ActionService";
 import { useMenuActionSource } from "@/components/ui/menu-source";
 import { useRecipeStore } from "@/store/recipeStore";
+import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -57,7 +58,7 @@ export function useWorktreeActions({
   onCopyTree: () => Promise<string | undefined> | void;
   teardownCommands: string[];
 }): UseWorktreeActionsResult {
-  const runRecipe = useRecipeStore((state) => state.runRecipe);
+  const runRecipeWithResults = useRecipeStore((state) => state.runRecipeWithResults);
 
   const [runningRecipeId, setRunningRecipeId] = useState<string | null>(null);
 
@@ -184,11 +185,16 @@ export function useWorktreeActions({
 
       setRunningRecipeId(recipeId);
       try {
-        await runRecipe(recipeId, worktree.path, worktree.id, {
+        const recipeState = useRecipeStore.getState();
+        const results = await runRecipeWithResults(recipeId, worktree.path, worktree.id, {
           issueNumber: worktree.issueNumber,
           prNumber: worktree.linked?.pr?.ref.number,
           worktreePath: worktree.path,
           branchName: worktree.branch,
+        });
+        notifyRecipeSpawnFailures(results, {
+          recipeName: recipeState.getRecipeById(recipeId)?.name,
+          projectId: recipeState.currentProjectId ?? undefined,
         });
       } catch (error) {
         logError("Failed to run recipe", error);
@@ -196,7 +202,7 @@ export function useWorktreeActions({
         setRunningRecipeId(null);
       }
     },
-    [runRecipe, worktree.path, worktree.id, runningRecipeId]
+    [runRecipeWithResults, worktree.path, worktree.id, runningRecipeId]
   );
 
   const handleDockAll = useCallback(() => {
