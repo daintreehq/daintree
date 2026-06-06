@@ -150,7 +150,12 @@ export function initStoreOrchestrator(): () => void {
           if (!focusedId) return;
           if (isMruRecordingSuppressed()) return;
           const panel = usePanelStore.getState().panelsById[focusedId];
+          // Only record panels the quick switcher can actually show — mirror
+          // its item filter (PTY kind, persisted, has a live PTY). Help/overlay
+          // terminals carry excludeFromPersistence and must not eat the cap.
           if (!panel || !isPtyPanel(panel)) return;
+          if (panel.excludeFromPersistence === true) return;
+          if (panel.hasPty === false) return;
           usePanelStore.getState().recordMru(`terminal:${focusedId}`);
           debouncedPersistMruList();
         }

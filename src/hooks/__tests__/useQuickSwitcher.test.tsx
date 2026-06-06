@@ -141,4 +141,26 @@ describe("useQuickSwitcher MRU prune", () => {
 
     expect(pruneMru).toHaveBeenCalledWith(new Set(["terminal:t-1"]));
   });
+
+  it("protects terminal entries while panels are still hydrating (worktrees loaded first) (#9922)", () => {
+    // Worktrees populate before panels during hydration. Pruning terminal
+    // entries here — when zero terminal items exist yet — would drop the
+    // restored MRU order. The not-yet-hydrated category must be protected.
+    const pruneMru = vi.fn();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      mruList: ["terminal:t-1", "worktree:wt-1"],
+      pruneMru,
+    });
+    seedWorktreeState({
+      isInitialized: true,
+      worktrees: new Map([["wt-1", { id: "wt-1", name: "WT1", path: "/wt1" }]]),
+    });
+
+    renderHook(() => useQuickSwitcher());
+
+    // worktree:wt-1 is a live item; terminal:t-1 is protected (no terminal items yet).
+    expect(pruneMru).toHaveBeenCalledWith(new Set(["worktree:wt-1", "terminal:t-1"]));
+  });
 });

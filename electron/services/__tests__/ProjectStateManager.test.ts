@@ -94,6 +94,30 @@ describe("ProjectStateManager clone isolation", () => {
     expect(result!.terminals[0].title).toBe("Terminal 1");
     expect(result!.sidebarWidth).toBe(350);
   });
+
+  it("round-trips mruList through disk so per-project MRU is read back (#9922)", async () => {
+    const state = makeState({ mruList: ["terminal:t1", "worktree:wt-2"] });
+    await manager.saveProjectState(projectId, state);
+
+    // Fresh manager forces a disk read (no in-memory cache) — proves the
+    // reconstruction whitelist actually rehydrates mruList rather than dropping it.
+    const freshManager = new ProjectStateManager(tempDir);
+    const result = await freshManager.getProjectState(projectId);
+    expect(result!.mruList).toEqual(["terminal:t1", "worktree:wt-2"]);
+  });
+
+  it("drops non-string mruList entries on read", async () => {
+    const state = makeState();
+    // Write a payload with a polluted mruList directly to disk.
+    await manager.saveProjectState(projectId, {
+      ...state,
+      mruList: ["terminal:t1", 42, null, "worktree:wt-2"] as unknown as string[],
+    });
+
+    const freshManager = new ProjectStateManager(tempDir);
+    const result = await freshManager.getProjectState(projectId);
+    expect(result!.mruList).toEqual(["terminal:t1", "worktree:wt-2"]);
+  });
 });
 
 describe("ProjectStateManager.enqueueProjectStateUpdate concurrency", () => {

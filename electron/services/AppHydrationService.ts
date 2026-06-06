@@ -28,9 +28,17 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
   let focusModeToUse = globalAppState.focusMode ?? false;
   let focusPanelStateToUse = globalAppState.focusPanelState;
   let activeWorktreeIdToUse = globalAppState.activeWorktreeId;
+  // Quick-switcher MRU: prefer per-project, fall back to the legacy global list
+  // so a switch can't serve the previous project's order (#9922).
+  let mruListToUse = globalAppState.mruList;
 
   const { state: projectState, quarantinedPath: projectStateQuarantinedPath } =
     await projectStore.getProjectStateWithRecovery(projectId);
+
+  // undefined means "not migrated yet" — fall through to the global list.
+  if (projectState?.mruList !== undefined) {
+    mruListToUse = projectState.mruList;
+  }
 
   if (projectState?.terminals !== undefined) {
     const validatedTerminals = filterValidTerminalEntries(
@@ -73,6 +81,7 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
     activeWorktreeId: activeWorktreeIdToUse,
     focusMode: focusModeToUse,
     focusPanelState: focusPanelStateToUse,
+    mruList: mruListToUse,
   };
 
   const gpuStatus = getGpuFeatureStatus();

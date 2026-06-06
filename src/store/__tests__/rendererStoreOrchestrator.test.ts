@@ -1037,6 +1037,38 @@ describe("rendererStoreOrchestrator", () => {
     }
   });
 
+  it("does not record MRU for excludeFromPersistence terminals (help/overlay) (#9922)", async () => {
+    vi.useFakeTimers();
+    try {
+      usePanelStore.setState({
+        panelsById: {
+          "help-1": {
+            id: "help-1",
+            title: "Help",
+            kind: "terminal" as const,
+            cwd: "/test",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+            excludeFromPersistence: true,
+          },
+        },
+        panelIds: ["help-1"],
+        mruList: [],
+      });
+
+      usePanelStore.setState({ focusedId: "help-1" });
+
+      vi.advanceTimersByTime(150);
+      await Promise.resolve();
+
+      expect(persistMruList).not.toHaveBeenCalled();
+      expect(usePanelStore.getState().mruList).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("debounced persist reads the live mruList at fire time, not schedule time (#9922)", async () => {
     vi.useFakeTimers();
     try {
