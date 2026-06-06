@@ -121,6 +121,13 @@ describe("classifyError", () => {
     expect(result.bucket).toBe("Product-Logic");
   });
 
+  it("matches the navigation-crash rule before the broader Page crashed rule", () => {
+    // "Navigation failed because page crashed!" contains "page crashed" as a
+    // substring — the more-specific rule must win or it is unreachable.
+    const result = classifyError("Navigation failed because page crashed!");
+    expect(result.label).toContain("Navigation");
+  });
+
   it("classifies Target crashed as Product-Logic", () => {
     const result = classifyError("locator.click: Target crashed");
     expect(result.bucket).toBe("Product-Logic");
@@ -132,6 +139,16 @@ describe("classifyError", () => {
     expect(result.bucket).toBe("Product-Logic");
   });
 
+  it("routes Target crashed to Product-Logic even with Target stale-ref text present", () => {
+    const result = classifyError("Target crashed\nTarget has been closed");
+    expect(result.bucket).toBe("Product-Logic");
+  });
+
+  it("classifies a crash string present only in the stack as Product-Logic", () => {
+    const result = classifyError("\nError: Page crashed\n    at ChromiumPage._didCrash");
+    expect(result.bucket).toBe("Product-Logic");
+  });
+
   it("keeps plain 'Page has been closed.' in Test-Logic (not a crash)", () => {
     const result = classifyError("Page has been closed.");
     expect(result.bucket).toBe("Test-Logic");
@@ -139,6 +156,13 @@ describe("classifyError", () => {
 
   it("classifies Playwright worker death as Infrastructure", () => {
     const result = classifyError("Error: worker process exited unexpectedly (code=1, signal=null)");
+    expect(result.bucket).toBe("Infrastructure");
+  });
+
+  it("keeps worker death as Infrastructure even when a crash string follows", () => {
+    // Design decision: a dead worker carries no app-specific signal, so the
+    // runner-level bucket wins over any crash text in the same message.
+    const result = classifyError("worker process exited unexpectedly (code=139)\nPage crashed");
     expect(result.bucket).toBe("Infrastructure");
   });
 });

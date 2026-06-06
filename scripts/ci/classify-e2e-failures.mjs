@@ -41,12 +41,12 @@ const CLASSIFICATION_RULES = [
   // Strings Playwright 1.x actually surfaces in error.message on a renderer
   // crash (playwright-core coreBundle.js: _didCrash openScope close, navigation
   // waiter, protocol "crashed" error type):
-  { regex: /Page crashed/i, bucket: "Product-Logic", label: "Page crashed" },
   {
     regex: /Navigation failed because page crashed/i,
     bucket: "Product-Logic",
     label: "Navigation failed (page crashed)",
   },
+  { regex: /Page crashed/i, bucket: "Product-Logic", label: "Page crashed" },
   { regex: /Target crashed/i, bucket: "Product-Logic", label: "Target crashed" },
   // Electron-internal phrasings, kept as secondary catches for errors that
   // reach the report via IPC/main-process paths rather than Playwright:
