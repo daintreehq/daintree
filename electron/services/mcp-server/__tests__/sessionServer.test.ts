@@ -176,6 +176,116 @@ async function callTool(
   ) as Promise<{ content: unknown; isError?: boolean; structuredContent?: unknown }>;
 }
 
+async function listTools(server: ReturnType<typeof createSessionServer>) {
+  const handlers = (
+    server as unknown as {
+      _requestHandlers: Map<string, (req: unknown, extra: unknown) => Promise<unknown>>;
+    }
+  )._requestHandlers;
+  const handler = handlers.get("tools/list");
+  if (!handler) throw new Error("tools/list handler not found");
+  return handler(
+    {
+      method: "tools/list",
+      params: {},
+      jsonrpc: "2.0",
+      id: 1,
+    },
+    {
+      signal: new AbortController().signal,
+      _meta: {},
+      sendNotification: vi.fn(),
+      requestId: 1,
+    }
+  ) as Promise<{ tools: Array<{ name: string }> }>;
+}
+
+function makeManifestEntry(
+  id: string
+): import("../../../shared/types/actions.js").ActionManifestEntry {
+  return {
+    id: id as import("../../../shared/types/actions.js").ActionId,
+    name: id,
+    title: id,
+    description: `description for ${id}`,
+    category: "test",
+    kind: "query",
+    danger: "safe",
+    enabled: true,
+    requiresArgs: false,
+    inputSchema: { type: "object", properties: {} },
+  };
+}
+
+describe("sessionServer tools/list handler", () => {
+  // tier "external" + fullToolSurface bypasses the per-id allowlist in
+  // shouldExposeTool, so any non-restricted entry surfaces — keeps these tests
+  // decoupled from TIER_ALLOWLISTS membership.
+  function fullSurfaceDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
+    return fakeDeps({
+      sessionStore: fakeSessionStore("external"),
+      getFullToolSurface: vi.fn(() => true),
+      ...overrides,
+    });
+  }
+
+  it("returns the live manifest when requestManifest succeeds", async () => {
+    const deps = fullSurfaceDeps({
+      requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("fresh_tool")]),
+      getCachedManifest: vi.fn(() => [makeManifestEntry("stale_tool")]),
+    });
+    const server = createSessionServer("tools-list-fresh", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await listTools(server);
+
+    expect(result.tools.map((t) => t.name)).toEqual(["fresh_tool"]);
+    expect(deps.getCachedManifest).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the cached manifest when requestManifest rejects", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const deps = fullSurfaceDeps({
+      requestManifest: vi.fn().mockRejectedValue(new Error("Manifest request timed out")),
+      getCachedManifest: vi.fn(() => [makeManifestEntry("cached_tool")]),
+    });
+    const server = createSessionServer("tools-list-fallback", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await listTools(server);
+
+    expect(result.tools.map((t) => t.name)).toEqual(["cached_tool"]);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    warnSpy.mockRestore();
+  });
+
+  it("fails closed when requestManifest rejects and no cache exists", async () => {
+    const deps = fullSurfaceDeps({
+      requestManifest: vi.fn().mockRejectedValue(new Error("MCP renderer bridge unavailable")),
+      getCachedManifest: vi.fn(() => null),
+    });
+    const server = createSessionServer("tools-list-failclosed", deps);
+    await server.connect(makeMockTransport());
+
+    await expect(listTools(server)).rejects.toMatchObject({
+      code: ErrorCode.InternalError,
+    });
+  });
+
+  it("treats an empty cached manifest as a valid zero-tool surface, not unavailable", async () => {
+    const deps = fullSurfaceDeps({
+      requestManifest: vi.fn().mockRejectedValue(new Error("MCP renderer bridge destroyed")),
+      getCachedManifest: vi.fn(() => []),
+    });
+    const server = createSessionServer("tools-list-empty-cache", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await listTools(server);
+
+    expect(result.tools).toEqual([]);
+  });
+});
+
 describe("sessionServer prompt handler", () => {
   it("renders start_issue prompt with valid string argument", async () => {
     const deps = fakeDeps();
