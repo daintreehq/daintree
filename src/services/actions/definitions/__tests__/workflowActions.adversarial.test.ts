@@ -789,11 +789,11 @@ describe("workflow.startWorkOnIssue", () => {
     )) as Record<string, unknown>;
     expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
-    expect(result.assignmentError).toBe("No GitHub username configured");
+    expect(result.assignmentError).toBe("No forge viewer available");
     expect(result.terminalId).toBe("term-1");
   });
 
-  it("preference fallback also surfaces 'No GitHub username configured' when assignToSelf is omitted", async () => {
+  it("preference fallback also surfaces 'No forge viewer available' when assignToSelf is omitted", async () => {
     githubClientMock.getIssueByNumber.mockResolvedValue({ number: 6609, title: "t", url: "u" });
     setGithubUser(null);
     setAssignPreference(true);
@@ -804,7 +804,7 @@ describe("workflow.startWorkOnIssue", () => {
     >;
     expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
-    expect(result.assignmentError).toBe("No GitHub username configured");
+    expect(result.assignmentError).toBe("No forge viewer available");
   });
 
   it("assignment failure does not clobber other result fields", async () => {
@@ -963,7 +963,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
     )) as Record<string, unknown>;
     expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
-    expect(result.assignmentError).toBe("No GitHub username configured");
+    expect(result.assignmentError).toBe("No forge viewer available");
   });
 
   it("assignToSelf without issueNumber is a no-op (nothing to assign)", async () => {

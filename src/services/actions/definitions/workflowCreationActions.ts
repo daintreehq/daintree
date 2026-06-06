@@ -252,10 +252,10 @@ export function registerWorkflowCreationActions(
                 assignmentError = formatErrorMessage(err, "Failed to assign issue");
               }
             } else {
-              assignmentError = "No GitHub username configured";
+              assignmentError = "No forge viewer available";
             }
           } catch (err) {
-            assignmentError = formatErrorMessage(err, "Failed to read GitHub config");
+            assignmentError = formatErrorMessage(err, "Failed to read forge viewer");
           }
         }
 
@@ -537,10 +537,10 @@ export function registerWorkflowCreationActions(
                 assignmentError = formatErrorMessage(err, "Failed to assign issue");
               }
             } else {
-              assignmentError = "No GitHub username configured";
+              assignmentError = "No forge viewer available";
             }
           } catch (err) {
-            assignmentError = formatErrorMessage(err, "Failed to read GitHub config");
+            assignmentError = formatErrorMessage(err, "Failed to read forge viewer");
           }
         }
 
