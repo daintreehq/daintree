@@ -494,30 +494,6 @@ export const usePanelStore = create<PanelGridState>()(
         return moved;
       },
 
-      backgroundTerminal: (id: string) => {
-        const { maximizedId } = get();
-        // Snapshot the group before the move — backgrounding dissolves it.
-        const group = registrySlice.getPanelGroup(id);
-        registrySlice.backgroundTerminal(id);
-        const patch = buildMaximizeClearPatch(maximizedId, id, group);
-        if (Object.keys(patch).length > 0) {
-          set(patch);
-        }
-      },
-
-      backgroundPanelGroup: (panelId: string) => {
-        const { maximizedId } = get();
-        // Snapshot the group before the move — backgrounding dissolves it. The
-        // ungrouped path delegates to the (wrapped) backgroundTerminal, which
-        // clears maximize on its own; this patch covers the grouped path.
-        const group = registrySlice.getPanelGroup(panelId);
-        registrySlice.backgroundPanelGroup(panelId);
-        const patch = buildMaximizeClearPatch(maximizedId, panelId, group);
-        if (Object.keys(patch).length > 0) {
-          set(patch);
-        }
-      },
-
       moveTerminalToWorktree: (id: string, worktreeId: string) => {
         const { maximizedId, panelsById } = get();
         const panel = panelsById[id];
@@ -674,6 +650,8 @@ export const usePanelStore = create<PanelGridState>()(
         const preferAgent = Boolean(
           terminalToBackground && isRuntimeAgentTerminal(terminalToBackground)
         );
+        // Snapshot the group before the move — backgrounding dissolves it (#9935).
+        const group = registrySlice.getPanelGroup(id);
 
         registrySlice.backgroundTerminal(id);
 
@@ -696,9 +674,9 @@ export const usePanelStore = create<PanelGridState>()(
           updates.previousFocusedId = null;
         }
 
-        if (state.maximizedId === id) {
-          updates.maximizedId = null;
-        }
+        // Clear the full maximize trio (#9935) when the backgrounded panel was
+        // maximized or belonged to the maximized group.
+        Object.assign(updates, buildMaximizeClearPatch(state.maximizedId, id, group));
 
         if (state.activeDockTerminalId === id) {
           updates.activeDockTerminalId = null;
@@ -756,9 +734,9 @@ export const usePanelStore = create<PanelGridState>()(
           updates.previousFocusedId = null;
         }
 
-        if (state.maximizedId && panelIdsInGroup.includes(state.maximizedId)) {
-          updates.maximizedId = null;
-        }
+        // Clear the full maximize trio (#9935) when the maximized panel was in
+        // the backgrounded group.
+        Object.assign(updates, buildMaximizeClearPatch(state.maximizedId, panelId, group));
 
         if (state.activeDockTerminalId && panelIdsInGroup.includes(state.activeDockTerminalId)) {
           updates.activeDockTerminalId = null;
