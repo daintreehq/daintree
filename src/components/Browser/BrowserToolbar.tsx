@@ -71,7 +71,7 @@ interface BrowserToolbarProps {
   onOpenExternal: () => void;
   onPromoteToPortal?: () => void;
   onZoomChange?: (zoomFactor: number) => void;
-  onCaptureScreenshot?: () => void;
+  onCaptureScreenshot?: () => void | Promise<void>;
   onToggleConsole?: () => void;
   onToggleDevTools?: () => void;
   onViewportPresetChange?: (preset: ViewportPresetId | undefined) => void;
@@ -118,6 +118,8 @@ export function BrowserToolbar({
   const [isEditing, setIsEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [screenshotCopied, setScreenshotCopied] = useState(false);
+  const screenshotCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [historyAnnouncement, setHistoryAnnouncement] = useState("");
@@ -179,6 +181,7 @@ export function BrowserToolbar({
   useEffect(() => {
     return () => {
       if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+      if (screenshotCopiedTimerRef.current) clearTimeout(screenshotCopiedTimerRef.current);
     };
   }, []);
 
@@ -453,6 +456,14 @@ export function BrowserToolbar({
     }
   }, [terminalId, url]);
 
+  const handleCaptureScreenshot = useCallback(async () => {
+    if (!onCaptureScreenshot) return;
+    await onCaptureScreenshot();
+    setScreenshotCopied(true);
+    if (screenshotCopiedTimerRef.current) clearTimeout(screenshotCopiedTimerRef.current);
+    screenshotCopiedTimerRef.current = setTimeout(() => setScreenshotCopied(false), 2000);
+  }, [onCaptureScreenshot]);
+
   const handleZoomStep = useCallback(
     (direction: "in" | "out") => {
       if (!onZoomChange) return;
@@ -515,6 +526,9 @@ export function BrowserToolbar({
       </span>
       <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {copied ? "Copied to clipboard" : ""}
+      </span>
+      <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {screenshotCopied ? "Screenshot copied to clipboard" : ""}
       </span>
       {/* Navigation buttons */}
       <div className="relative">
@@ -992,7 +1006,7 @@ export function BrowserToolbar({
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={onCaptureScreenshot}
+              onClick={handleCaptureScreenshot}
               disabled={!isWebviewReady}
               className={cn(
                 buttonClass,
@@ -1000,7 +1014,11 @@ export function BrowserToolbar({
               )}
               aria-label="Capture screenshot"
             >
-              <Camera className="w-4 h-4" />
+              {screenshotCopied ? (
+                <Check className="w-4 h-4 text-status-success" />
+              ) : (
+                <Camera className="w-4 h-4" />
+              )}
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Copy screenshot to clipboard</TooltipContent>

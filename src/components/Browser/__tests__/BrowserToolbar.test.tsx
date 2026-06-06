@@ -281,6 +281,25 @@ describe("BrowserToolbar ARIA semantics", () => {
     });
   });
 
+  it("screenshot capture announces success in a polite live region and flips to a check", async () => {
+    const onCaptureScreenshot = vi.fn(() => Promise.resolve());
+    const { container, getByRole } = renderToolbar({
+      onCaptureScreenshot,
+      isWebviewReady: true,
+    });
+
+    await act(async () => {
+      fireEvent.click(getByRole("button", { name: "Capture screenshot" }));
+    });
+
+    expect(onCaptureScreenshot).toHaveBeenCalledOnce();
+    await waitFor(() => {
+      const liveRegions = container.querySelectorAll('[role="status"]');
+      const texts = Array.from(liveRegions).map((node) => node.textContent);
+      expect(texts).toContain("Screenshot copied to clipboard");
+    });
+  });
+
   it("Shift+Delete on a highlighted suggestion announces removal", async () => {
     const { container, getByTestId } = renderToolbar();
     const input = openDropdown(getByTestId);

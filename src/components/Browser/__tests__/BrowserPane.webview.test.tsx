@@ -146,6 +146,13 @@ vi.mock("@/components/Browser/BrowserToolbar", () => ({
   },
 }));
 
+const { notifyMock } = vi.hoisted(() => ({
+  notifyMock: vi.fn(),
+}));
+vi.mock("@/lib/notify", () => ({
+  notify: notifyMock,
+}));
+
 vi.mock("@/components/Panel", () => ({
   ContentPanel: ({
     children,
@@ -372,7 +379,7 @@ describe("BrowserPane webview lifecycle regression", () => {
 
     expect(webview.stop).toHaveBeenCalledTimes(1);
     expect(webview.reload).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("Page Load Timed Out");
+    expect(container.textContent).toContain("Page load timed out");
   });
 
   it("clears stuck-load timeout on did-stop-loading", () => {
@@ -675,6 +682,36 @@ describe("BrowserPane webview lifecycle regression", () => {
       const mock = (window as any).electron.clipboard.writeImage;
       expect(mock).not.toHaveBeenCalled();
     });
+
+    it("surfaces an error notification when the clipboard write fails", async () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).electron.clipboard.writeImage.mockRejectedValueOnce(
+        new Error("clipboard unavailable")
+      );
+
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-capture-screenshot", {
+            detail: { id: "browser-panel-1" },
+          })
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", title: "Screenshot failed" })
+      );
+    });
   });
 
   describe("stale URL detection on initial load", () => {
@@ -809,7 +846,7 @@ describe("BrowserPane webview lifecycle regression", () => {
 
       expect(webview.stop).toHaveBeenCalledTimes(1);
       expect(webview.reload).not.toHaveBeenCalled();
-      expect(container.textContent).toContain("Page Load Timed Out");
+      expect(container.textContent).toContain("Page load timed out");
     });
 
     it("timeout error overlay shows Retry and Open External buttons", () => {
@@ -948,7 +985,7 @@ describe("BrowserPane webview lifecycle regression", () => {
         });
       });
 
-      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("Certificate error");
       expect(container.textContent).toContain("certificate couldn't be verified");
       expect(container.textContent).toContain("mkcert -install");
     });
@@ -966,7 +1003,7 @@ describe("BrowserPane webview lifecycle regression", () => {
         });
       });
 
-      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("Certificate error");
       expect(container.textContent).toContain("SSL/TLS handshake failed");
       // -107 is also raised on protocol mismatch — the mkcert hint is wrong here.
       expect(container.textContent).not.toContain("mkcert");
@@ -985,7 +1022,7 @@ describe("BrowserPane webview lifecycle regression", () => {
         });
       });
 
-      expect(container.textContent).toContain("Unable to Display Page");
+      expect(container.textContent).toContain("Unable to display page");
       expect(container.textContent).toContain("ERR_FILE_NOT_FOUND");
     });
 
@@ -1002,7 +1039,7 @@ describe("BrowserPane webview lifecycle regression", () => {
         });
       });
 
-      expect(container.textContent).not.toContain("Unable to Display Page");
+      expect(container.textContent).not.toContain("Unable to display page");
       expect(container.textContent).not.toContain("Couldn't resolve");
     });
 
@@ -1030,7 +1067,7 @@ describe("BrowserPane webview lifecycle regression", () => {
       });
 
       expect(webview.stop).toHaveBeenCalledTimes(1);
-      expect(container.textContent).toContain("Page Load Timed Out");
+      expect(container.textContent).toContain("Page load timed out");
     });
 
     it("stale ERR_ABORTED from a superseded navigation does not disarm new timers", () => {
@@ -1063,7 +1100,7 @@ describe("BrowserPane webview lifecycle regression", () => {
       });
 
       expect(webview.stop).toHaveBeenCalledTimes(1);
-      expect(container.textContent).toContain("Page Load Timed Out");
+      expect(container.textContent).toContain("Page load timed out");
     });
 
     it("shows connection-timeout message when validatedURL is empty", () => {
@@ -1079,9 +1116,9 @@ describe("BrowserPane webview lifecycle regression", () => {
         });
       });
 
-      expect(container.textContent).toContain("Connection Failed");
+      expect(container.textContent).toContain("Connection failed");
       expect(container.textContent).toContain("timed out");
-      expect(container.textContent).not.toContain("Unable to Display Page");
+      expect(container.textContent).not.toContain("Unable to display page");
     });
 
     it("cleans slow timer on unmount", () => {
@@ -1323,7 +1360,7 @@ describe("BrowserPane webview lifecycle regression", () => {
     it("clears stuck-load timer so a load timeout does not replace the crash banner", () => {
       // The load-error overlay is rendered as absolute z-30 over the entire
       // pane — without clearing the slow-load timer on crash, a pending 30s
-      // timeout would fire after the crash and stack a "Page Load Timed Out"
+      // timeout would fire after the crash and stack a "Page load timed out"
       // overlay on top of the in-flow crash banner, hiding it entirely.
       const { container } = render(<BrowserPane {...baseProps} />);
       const webview = getWebviewElement(container);
@@ -1344,7 +1381,7 @@ describe("BrowserPane webview lifecycle regression", () => {
 
       expect(webview.stop).not.toHaveBeenCalled();
       expect(container.textContent).toContain("Page process crashed");
-      expect(container.textContent).not.toContain("Page Load Timed Out");
+      expect(container.textContent).not.toContain("Page load timed out");
     });
 
     it("auto-reloads again on a crash that lands just outside the 60s window", () => {
