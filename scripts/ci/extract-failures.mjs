@@ -52,7 +52,11 @@ const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\
 const PORT_RE = /:\d{4,5}\b/g;
 
 export function normalizeError(message) {
+  // Match paths before flattening backslashes so WIN_PATH_RE can consume
+  // drive-letter paths (e.g. the C:\a\<repo> Actions workspace) whole, then
+  // again afterwards for any POSIX-style paths revealed by the flattening.
   return message
+    .replace(PATH_RE, "<path>")
     .replace(BSLASH_RE, "/")
     .replace(PATH_RE, "<path>")
     .replace(WIN_DRIVE_RE, "")

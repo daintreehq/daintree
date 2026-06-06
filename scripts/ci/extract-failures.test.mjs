@@ -254,6 +254,31 @@ it("extractFailures skips recovered flakes (failed then passed on retry)", () =>
   expect(extractFailures(report)).toEqual([]);
 });
 
+it("extractFailures trusts test status over a failed-looking last result", () => {
+  const makeReport = (status) => ({
+    suites: [
+      {
+        file: "spec.ts",
+        title: "root",
+        specs: [
+          {
+            title: "misleading",
+            tests: [
+              {
+                projectName: "core",
+                status,
+                results: [{ status: "failed", errors: [{ message: "noise" }] }],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  expect(extractFailures(makeReport("expected"))).toEqual([]);
+  expect(extractFailures(makeReport("skipped"))).toEqual([]);
+});
+
 it("extractFailures falls back to last result when test status is absent", () => {
   const failing = {
     suites: [
@@ -280,6 +305,32 @@ it("extractFailures falls back to last result when test status is absent", () =>
   const failures = extractFailures(failing);
   expect(failures.length).toBe(1);
   expect(failures[0].errorMessage).toBe("second fail");
+
+  const lateFailure = {
+    suites: [
+      {
+        file: "spec.ts",
+        title: "root",
+        specs: [
+          {
+            title: "degrades",
+            tests: [
+              {
+                projectName: "core",
+                results: [
+                  { status: "passed", errors: [] },
+                  { status: "failed", errors: [{ message: "late fail" }] },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const lateFailures = extractFailures(lateFailure);
+  expect(lateFailures.length).toBe(1);
+  expect(lateFailures[0].errorMessage).toBe("late fail");
 
   const recovered = {
     suites: [
@@ -325,6 +376,7 @@ it("extractFailures handles unexpected status with no results", () => {
   expect(failures.length).toBe(1);
   expect(failures[0].status).toBe("failed");
   expect(failures[0].errorMessage).toBe("Unknown error");
+  expect(failures[0].errorStack).toBeNull();
 });
 
 it("extractFailures handles multi-project reports", () => {
@@ -399,6 +451,12 @@ it("normalizeError normalizes Windows paths", () => {
   const posixErr = "Error at /Users/runner/work/repo/e2e/test.spec.ts:42";
   const winErr = "Error at C:\\Users\\runneradmin\\work\\repo\\e2e\\test.spec.ts:42";
   expect(normalizeError(winErr)).toBe(normalizeError(posixErr));
+});
+
+it("normalizeError normalizes GitHub Actions Windows runner paths", () => {
+  const result = normalizeError("Error at C:\\a\\daintree\\daintree\\e2e\\test.spec.ts:42:10");
+  expect(result).not.toContain("a/daintree");
+  expect(result).toContain("<path>");
 });
 
 it("computeSignature matches across OS path flavors", () => {
