@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
 import type {
   DemoSpotlightPayload,
   DemoAnnotatePayload,
@@ -256,6 +256,13 @@ export function DemoOverlay() {
     node.style.webkitMaskImage = url;
   }, []);
 
+  // Apply the current mask when the spotlight layer first mounts. The animation
+  // loop only reaches the node once it's in the DOM, so the initial frame would
+  // otherwise render unmasked.
+  useLayoutEffect(() => {
+    if (spotlightVisible && currentRectRef.current) applyMask(currentRectRef.current);
+  }, [spotlightVisible, applyMask]);
+
   const animateSpotlightRect = useCallback(
     (target: SpotlightState) => {
       spotlightAnimRef.current?.cancel();
@@ -459,14 +466,8 @@ export function DemoOverlay() {
             backdropFilter: `blur(${SPOTLIGHT_BLUR_PX}px)`,
             WebkitBackdropFilter: `blur(${SPOTLIGHT_BLUR_PX}px)`,
             // Mask out the spotlight rect so it stays sharp and unblurred. The
-            // animation loop updates this imperatively; the initial value here
-            // covers the first mount.
-            maskImage: currentRectRef.current
-              ? spotlightMaskImage(currentRectRef.current)
-              : undefined,
-            WebkitMaskImage: currentRectRef.current
-              ? spotlightMaskImage(currentRectRef.current)
-              : undefined,
+            // animation loop updates this imperatively; the first-mount value is
+            // applied by the layout effect below (refs can't be read in render).
             // Fade the whole focus layer in/out (opacity owned by the animation
             // via fill-mode `both`, so it never flashes). A stable per-phase
             // string means re-renders don't restart it.
