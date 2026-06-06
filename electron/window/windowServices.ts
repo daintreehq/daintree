@@ -144,7 +144,7 @@ export async function setupWindowServices(
   // readiness checks) and the E2E DAINTREE_E2E_DEFER_RENDERER_LOAD opt-in,
   // which keeps the WebContentsView load behind the BrowserWindow sentinel
   // for Playwright's CDP handshake.
-  const deferRendererLoadForE2E = shouldDeferRendererLoadForE2E({ env: process.env });
+  const deferRendererLoadForE2E = shouldDeferRendererLoadForE2E();
 
   let rendererLoadStarted = false;
   const startRendererLoad = (reason: string): void => {

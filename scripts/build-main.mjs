@@ -52,6 +52,14 @@ const common = {
           // non-empty value in prod would silently redirect the user-plugin
           // root, so it MUST be stripped alongside the other E2E flags.
           "process.env.DAINTREE_E2E_SIDELOAD_PLUGIN_DIR": JSON.stringify(""),
+          // Remaining main-process E2E flags (#10026). These were read
+          // ungated in main-process code but never stripped, so the names
+          // survived in dist-electron/electron/*.js. Strip them too — the
+          // check-preload-backdoors gate now scans the main bundles and the
+          // STRIPPED_BY_BUILD list there must match these keys.
+          "process.env.DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE": JSON.stringify(""),
+          "process.env.DAINTREE_E2E_CRASH_DUMPS_DIR": JSON.stringify(""),
+          "process.env.DAINTREE_E2E_DEFER_RENDERER_LOAD": JSON.stringify(""),
         }
       : {}),
   },
