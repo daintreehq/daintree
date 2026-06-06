@@ -134,12 +134,7 @@ export function AppLayout({
     const prefersReducedMotion =
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (
-      reduceAnimations ||
-      isSidebarResizing ||
-      prefersReducedMotion ||
-      layout.performanceMode
-    ) {
+    if (reduceAnimations || isSidebarResizing || prefersReducedMotion || layout.performanceMode) {
       setSidebarFullyHidden(true);
     }
   }, [showSidebar, reduceAnimations, isSidebarResizing, layout.performanceMode]);
@@ -151,11 +146,7 @@ export function AppLayout({
       // target === currentTarget to ignore bubbled child transitions. Re-check
       // visibility so a stale transitionend from a hide that was reversed
       // mid-animation (hide then show) doesn't clip the now-visible sidebar.
-      if (
-        event.propertyName === "width" &&
-        event.target === event.currentTarget &&
-        !showSidebar
-      ) {
+      if (event.propertyName === "width" && event.target === event.currentTarget && !showSidebar) {
         setSidebarFullyHidden(true);
       }
     },
