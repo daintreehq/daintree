@@ -504,7 +504,12 @@ export const usePanelStore = create<PanelGridState>()(
         }
 
         if (state.maximizedId === id) {
+          // Drop all three maximize fields atomically — the target and layout
+          // snapshot both reference the trashed panel and must not survive.
+          // #9935.
           updates.maximizedId = null;
+          updates.maximizeTarget = null;
+          updates.preMaximizeLayout = null;
         }
 
         if (state.activeDockTerminalId === id) {
@@ -562,7 +567,13 @@ export const usePanelStore = create<PanelGridState>()(
         }
 
         if (state.maximizedId && panelIdsInGroup.includes(state.maximizedId)) {
+          // The maximized panel is leaving the grid — clear target and layout
+          // snapshot so the next `toggleMaximize` after restore doesn't see
+          // a stale `maximizeTarget` and treat itself as an unmaximize.
+          // #9935.
           updates.maximizedId = null;
+          updates.maximizeTarget = null;
+          updates.preMaximizeLayout = null;
         }
 
         if (state.activeDockTerminalId && panelIdsInGroup.includes(state.activeDockTerminalId)) {
@@ -732,6 +743,7 @@ export const usePanelStore = create<PanelGridState>()(
           focusedId: null,
           previousFocusedId: null,
           maximizedId: null,
+          maximizeTarget: null,
           activeDockTerminalId: null,
           pingedId: null,
           preMaximizeLayout: null,
@@ -777,6 +789,7 @@ export const usePanelStore = create<PanelGridState>()(
           focusedId: null,
           previousFocusedId: null,
           maximizedId: null,
+          maximizeTarget: null,
           activeDockTerminalId: null,
           pingedId: null,
           preMaximizeLayout: null,
@@ -829,6 +842,7 @@ export const usePanelStore = create<PanelGridState>()(
           focusedId: null,
           previousFocusedId: null,
           maximizedId: null,
+          maximizeTarget: null,
           activeDockTerminalId: null,
           pingedId: null,
           preMaximizeLayout: null,

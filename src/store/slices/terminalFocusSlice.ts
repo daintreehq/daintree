@@ -106,6 +106,17 @@ export interface TerminalFocusSlice {
     getPanelGroup: (panelId: string) => { id: string; panelIds: string[] } | undefined,
     getTerminal: (id: string) => CarrierPanel | undefined
   ) => void;
+  /**
+   * Atomically clear `maximizedId`, `maximizeTarget`, and `preMaximizeLayout`.
+   * Use this when the underlying panel (or the whole panel grid) is being
+   * removed — trash, group trash, reset, project switch, fleet scope exit.
+   * The three fields must move together in those paths: dropping only the
+   * id strands a stale target and the next `toggleMaximize` treats the
+   * target as an unmaximize request (#9935). Plain `toggleMaximize`
+   * unmaximize is intentionally NOT routed through this — it preserves
+   * `preMaximizeLayout` so the next maximize can reuse the snapshot.
+   */
+  clearMaximize: () => void;
   clearPreMaximizeLayout: () => void;
   focusNext: () => void;
   focusPrevious: () => void;
@@ -297,7 +308,23 @@ export const createTerminalFocusSlice =
 
       validateMaximizeTarget: (getPanelGroup, getTerminal) => {
         const state = get();
-        if (!state.maximizeTarget || !state.maximizedId) return;
+        // Only skip when the target itself is null — a dangling target with a
+        // null id is exactly the case #9935 asks us to self-heal. The
+        // group-shrink downgrade and the trash/removed clear both run below.
+        if (!state.maximizeTarget) return;
+        if (!state.maximizedId) {
+          // Dangling target without a backing id — the trio can no longer
+          // resolve to a real panel, so clear all three defensively. The
+          // wrapper-level fix in `trashPanel` / `trashPanelGroup` covers the
+          // common case; this is a safety net for any future path that
+          // nulls `maximizedId` without touching `maximizeTarget`.
+          set({
+            maximizedId: null,
+            maximizeTarget: null,
+            preMaximizeLayout: null,
+          });
+          return;
+        }
 
         let shouldClear = false;
 
@@ -333,6 +360,13 @@ export const createTerminalFocusSlice =
 
       clearPreMaximizeLayout: () =>
         set({
+          preMaximizeLayout: null,
+        }),
+
+      clearMaximize: () =>
+        set({
+          maximizedId: null,
+          maximizeTarget: null,
           preMaximizeLayout: null,
         }),
 

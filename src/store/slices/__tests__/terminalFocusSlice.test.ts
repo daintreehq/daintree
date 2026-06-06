@@ -105,6 +105,48 @@ describe("TerminalFocusSlice - Layout Snapshot", () => {
     expect(state.preMaximizeLayout).toBe(null);
   });
 
+  it("should clear all three maximize fields via clearMaximize (#9935)", () => {
+    state.maximizedId = "term-1";
+    state.maximizeTarget = { type: "panel", id: "term-1" };
+    state.preMaximizeLayout = { gridCols: 2, gridItemCount: 4, worktreeId: "worktree-1" };
+
+    state.clearMaximize();
+
+    expect(state.maximizedId).toBe(null);
+    expect(state.maximizeTarget).toBe(null);
+    expect(state.preMaximizeLayout).toBe(null);
+  });
+
+  it("clearMaximize is a no-op when the trio is already null (#9935)", () => {
+    expect(state.maximizedId).toBe(null);
+    expect(state.maximizeTarget).toBe(null);
+    expect(state.preMaximizeLayout).toBe(null);
+
+    state.clearMaximize();
+
+    expect(state.maximizedId).toBe(null);
+    expect(state.maximizeTarget).toBe(null);
+    expect(state.preMaximizeLayout).toBe(null);
+  });
+
+  it("validateMaximizeTarget clears a dangling target even when maximizedId is null (#9935)", () => {
+    const mockGetPanelGroup = vi.fn(() => undefined);
+    const mockGetTerminal = vi.fn(() => undefined);
+
+    // Dangling target state — exactly the invariant violation #9935 describes.
+    state.maximizedId = null;
+    state.maximizeTarget = { type: "panel", id: "term-1" };
+    state.preMaximizeLayout = { gridCols: 2, gridItemCount: 4, worktreeId: "worktree-1" };
+
+    state.validateMaximizeTarget(mockGetPanelGroup, mockGetTerminal);
+
+    // The validation pass must sweep the dangling target and its layout
+    // snapshot so the next `toggleMaximize` doesn't see a stale target.
+    expect(state.maximizedId).toBe(null);
+    expect(state.maximizeTarget).toBe(null);
+    expect(state.preMaximizeLayout).toBe(null);
+  });
+
   it("should not capture snapshot when gridCols or gridItemCount is undefined", () => {
     state.toggleMaximize("term-1", undefined, undefined, mockGetPanelGroup);
 

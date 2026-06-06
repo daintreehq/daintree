@@ -70,6 +70,8 @@ describe("resetWithoutKilling", () => {
       backgroundedTerminals: new Map(),
       focusedId: null,
       maximizedId: null,
+      maximizeTarget: null,
+      preMaximizeLayout: null,
       commandQueue: [],
     });
     vi.clearAllMocks();
@@ -337,6 +339,8 @@ describe("resetWithoutKilling", () => {
       tabGroups: new Map(),
       focusedId: "term-1",
       maximizedId: "term-1",
+      maximizeTarget: { type: "panel", id: "term-1" },
+      preMaximizeLayout: { gridCols: 1, gridItemCount: 1, worktreeId: undefined },
       activeDockTerminalId: "term-2",
     });
 
@@ -345,6 +349,8 @@ describe("resetWithoutKilling", () => {
     const state = usePanelStore.getState();
     expect(state.focusedId).toBeNull();
     expect(state.maximizedId).toBeNull();
+    expect(state.maximizeTarget).toBeNull();
+    expect(state.preMaximizeLayout).toBeNull();
     expect(state.activeDockTerminalId).toBeNull();
   });
 
@@ -435,6 +441,8 @@ describe("resetWithoutKilling", () => {
       ]),
       focusedId: "term-1",
       maximizedId: "term-2",
+      maximizeTarget: { type: "group", id: "group-1" },
+      preMaximizeLayout: { gridCols: 2, gridItemCount: 3, worktreeId: "worktree-1" },
       activeDockTerminalId: "term-3",
       commandQueue: [
         {
@@ -459,6 +467,8 @@ describe("resetWithoutKilling", () => {
     expect(state.trashedTerminals.size).toBe(0);
     expect(state.focusedId).toBeNull();
     expect(state.maximizedId).toBeNull();
+    expect(state.maximizeTarget).toBeNull();
+    expect(state.preMaximizeLayout).toBeNull();
     expect(state.activeDockTerminalId).toBeNull();
     expect(state.commandQueue).toEqual([]);
   });
