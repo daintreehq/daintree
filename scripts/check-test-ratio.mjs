@@ -117,17 +117,22 @@ async function fetchMergedPullRequests(token) {
       }
 
       for (const node of nodes) {
+        // The search union can yield null entries for non-PR/permission-gated
+        // nodes; skip them so they never reach classifyPR (pr.files would throw).
+        if (!node || typeof node.title !== "string") continue;
         if (isEligiblePR(node)) eligibleCount += 1;
+        allNodes.push(node);
       }
-      allNodes.push(...nodes);
       pageCount += 1;
 
       // Stop once the window is full of eligible PRs; trailing skipped PRs in a
       // later page would only be discarded by buildReport anyway.
       if (eligibleCount >= ROLLING_WINDOW_SIZE) break;
 
+      // Guard endCursor too: hasNextPage:true with a null cursor would otherwise
+      // reset to page 1 and loop on duplicate data until MAX_SEARCH_PAGES.
       const pageInfo = search?.pageInfo;
-      if (!pageInfo?.hasNextPage) break;
+      if (!pageInfo?.hasNextPage || !pageInfo.endCursor) break;
       cursor = pageInfo.endCursor;
     }
   } finally {
@@ -140,7 +145,17 @@ async function fetchMergedPullRequests(token) {
     process.exit(1);
   }
 
-  return allNodes;
+  // The final page can push the eligible count past ROLLING_WINDOW_SIZE; trim to
+  // exactly the window so ratios are computed over a fixed sample, not a variable
+  // one that depends on how many skipped PRs happened to land in the last batch.
+  const window = [];
+  let kept = 0;
+  for (const node of allNodes) {
+    window.push(node);
+    if (isEligiblePR(node) && ++kept >= ROLLING_WINDOW_SIZE) break;
+  }
+
+  return window;
 }
 
 function buildReport(prs) {

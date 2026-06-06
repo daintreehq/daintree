@@ -688,6 +688,32 @@ describe("compareToBaseline", () => {
     expect(r.notices[0].kind).toBe("window-incomplete");
   });
 
+  // Regression for #10035: the full pipeline (classifyPR → computeTestRatioReport
+  // → compareToBaseline) must still flag a real ratio regression when the raw
+  // batch is padded with skipped release/version-bump PRs. Previously those PRs
+  // pushed the eligible window below 100, flipping windowCompleted false and
+  // short-circuiting the gate to ok:true regardless of the ratio.
+  it("still fires the gate on a real regression when skipped PRs pad the batch", () => {
+    const raw = [
+      // 100 eligible fix PRs, only 25 of which touch tests → ratio 0.25, well
+      // below the baseline's Wilson lower bound (≈0.583).
+      ...Array.from({ length: 100 }, (_, i) =>
+        pr({
+          number: i + 1,
+          title: "fix: bug",
+          files: { nodes: i < 25 ? [{ path: "a.test.ts" }] : [] },
+        })
+      ),
+      // Skipped release PRs that previously deflated the window below 100.
+      ...Array.from({ length: 8 }, (_, i) => pr({ number: 1000 + i, title: `v2.${i}.0` })),
+    ];
+    const report = computeTestRatioReport(raw.map(classifyPR), 100);
+    expect(report.windowCompleted).toBe(true);
+    const r = compareToBaseline(report, baseline);
+    expect(r.ok).toBe(false);
+    expect(r.errors.map((e: { kind: string }) => e.kind)).toContain("fix-with-test-regression");
+  });
+
   it("skips the fix-only gate below the fix-count floor", () => {
     const current = {
       fixWithTestRatio: 0.1,
