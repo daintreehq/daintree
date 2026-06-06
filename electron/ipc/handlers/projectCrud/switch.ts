@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../channels.js";
 import { typedHandleWithContext, broadcastToRenderer } from "../../utils.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
@@ -197,6 +198,25 @@ async function activateProjectView(
   // WebContentsView stores keep stale MRU timestamps and the next
   // `Cmd+Alt+=` / project switcher pick targets the wrong project.
   broadcastProjectSwitchUpdates(previousProjectId, projectId);
+
+  // Mark the activated view as reached via an explicit in-session switch (#9859).
+  // The legacy `ProjectSwitchService` path emits this on the single shared
+  // renderer; the PVM path swaps WebContentsViews, so without a targeted send the
+  // newly-activated view can't tell a mid-session switch from a cold app launch.
+  // That distinction is what lets a `restored-stopped` dev preview auto-start on
+  // first activation while still honoring the no-respawn-on-launch contract
+  // (#9094): the initial app-launch view is created via `createWindow`, never
+  // through this handler, so it never receives the event. Targeted send (not a
+  // broadcast) so LRU-cached other-project views aren't falsely marked switched.
+  // `switchTo` already awaited `did-finish-load`, so the renderer's listener is
+  // registered (mirrors the targeted `PROJECT_WORKTREE_LOAD_STATUS` send below).
+  if (!view.webContents.isDestroyed()) {
+    const switchedProject = projectStore.getProjectById(projectId) ?? project;
+    view.webContents.send(CHANNELS.PROJECT_ON_SWITCH, {
+      project: switchedProject,
+      switchId: randomUUID(),
+    });
+  }
 
   // Reopen requires the workspace host to be resumed BEFORE loadProject so
   // the host is ready to accept worktree IPC from the newly-active view.

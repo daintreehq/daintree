@@ -38,6 +38,9 @@ const projectClientMock = vi.hoisted(() => ({
   close: vi.fn(),
   createFolder: vi.fn(),
   onWorktreeLoadStatus: vi.fn(() => () => {}),
+  onSwitch: vi.fn<
+    (cb: (payload: { project: ProjectShape; switchId?: unknown }) => void) => () => void
+  >(() => () => {}),
 }));
 
 const notifyMock = vi.hoisted(() => vi.fn());
@@ -274,6 +277,53 @@ describe("projectStore adversarial", () => {
 
     updatedCallbacks[0]!(projectB);
     expect(useProjectStore.getState().projects).toEqual([projectB]);
+  });
+
+  it("records lastSwitchId only from a string switchId via onSwitch (#9859)", async () => {
+    const switchCallbacks: Array<(payload: { project: ProjectShape; switchId?: unknown }) => void> =
+      [];
+    projectClientMock.onSwitch.mockImplementation((callback) => {
+      switchCallbacks.push(callback);
+      return vi.fn();
+    });
+    installProjectApi({});
+    installLocalStorage(createStorageMock());
+
+    const { useProjectStore } = await import("../projectStore");
+
+    // Cold launch: no switch event has fired, so the guard value stays null.
+    expect(useProjectStore.getState().lastSwitchId).toBeNull();
+    expect(switchCallbacks).toHaveLength(1);
+
+    // A missing/non-string switchId must NOT flip the cold-launch guard (#9094).
+    switchCallbacks[0]!({ project: projectA });
+    expect(useProjectStore.getState().lastSwitchId).toBeNull();
+    switchCallbacks[0]!({ project: projectA, switchId: 123 });
+    expect(useProjectStore.getState().lastSwitchId).toBeNull();
+
+    // A real live switch records its provenance id.
+    switchCallbacks[0]!({ project: projectA, switchId: "switch-xyz" });
+    expect(useProjectStore.getState().lastSwitchId).toBe("switch-xyz");
+  });
+
+  it("never hydrates lastSwitchId from persisted storage (#9094 contract)", async () => {
+    installProjectApi({});
+    installLocalStorage(
+      createStorageMock({
+        // Storage poisoning: even if a stale/forged switch id is persisted, it
+        // must not survive a cold launch — only a live onSwitch event may set it,
+        // otherwise the no-respawn-on-relaunch guard would be defeated.
+        "project-storage": JSON.stringify({
+          state: { projects: [projectA], lastSwitchId: "stale-switch" },
+          version: 0,
+        }),
+      })
+    );
+
+    const { useProjectStore } = await import("../projectStore");
+
+    expect(useProjectStore.getState().projects).toEqual([projectA]);
+    expect(useProjectStore.getState().lastSwitchId).toBeNull();
   });
 
   it("ignores stale switch rejections once a newer switch has started", async () => {

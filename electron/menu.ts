@@ -1,4 +1,5 @@
 import { Menu, dialog, BrowserWindow, app, webContents } from "electron";
+import { randomUUID } from "node:crypto";
 import { projectStore } from "./services/ProjectStore.js";
 import { openExternalUrl } from "./utils/openExternal.js";
 import { CHANNELS } from "./ipc/channels.js";
@@ -602,6 +603,19 @@ export async function handleDirectoryOpen(
       // departing and activated rows so cached views' MRU timestamps stay
       // fresh; otherwise the next `Cmd+Alt+=` targets the wrong project.
       broadcastProjectSwitchUpdates(previousProjectId, project.id);
+
+      // Mark the activated view as reached via an explicit in-session switch
+      // (#9859), mirroring activateProjectView. Opening a returning project's
+      // folder is a first-activation path too, so its restored-stopped dev
+      // preview should auto-start rather than stall on the restart CTA. Targeted
+      // send to the activated view only; the initial app-launch view never flows
+      // through here, so the #9094 no-respawn-on-launch contract is preserved.
+      if (!view.webContents.isDestroyed()) {
+        view.webContents.send(CHANNELS.PROJECT_ON_SWITCH, {
+          project: projectStore.getProjectById(project.id) ?? project,
+          switchId: randomUUID(),
+        });
+      }
 
       // Re-attach producer ports for cached-view reactivation. The IPC switch
       // handler (projectCrud/switch.ts:activateProjectView) does this in the

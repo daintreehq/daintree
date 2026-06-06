@@ -111,7 +111,7 @@ describe("project:switch multi-window PVM routing", () => {
 
   it("uses window 2's PVM when the IPC sender is window 2", async () => {
     const mockView = {
-      webContents: { id: 200, isDestroyed: () => false },
+      webContents: { id: 200, isDestroyed: () => false, send: vi.fn() },
     };
 
     const pvm1 = {
@@ -166,7 +166,7 @@ describe("project:switch multi-window PVM routing", () => {
 
   it("falls back to deps.projectViewManager when windowRegistry lookup fails", async () => {
     const mockView = {
-      webContents: { id: 100, isDestroyed: () => false },
+      webContents: { id: 100, isDestroyed: () => false, send: vi.fn() },
     };
 
     const pvmFallback = {
@@ -252,7 +252,7 @@ describe("project:switch multi-window PVM routing", () => {
 
   it("resolves correct PVM for handleProjectReopen", async () => {
     const mockView = {
-      webContents: { id: 200, isDestroyed: () => false },
+      webContents: { id: 200, isDestroyed: () => false, send: vi.fn() },
     };
 
     const pvm1 = {
@@ -307,7 +307,7 @@ describe("project:switch activeWorktreeId pre-apply (#5000)", () => {
 
   it("persists activeWorktreeId from outgoingState on project switch", async () => {
     const mockView = {
-      webContents: { id: 100, isDestroyed: () => false },
+      webContents: { id: 100, isDestroyed: () => false, send: vi.fn() },
     };
 
     const pvm = {
@@ -356,7 +356,7 @@ describe("project:switch activeWorktreeId pre-apply (#5000)", () => {
 
   it("clears stale activeWorktreeId when outgoingState sends undefined", async () => {
     const mockView = {
-      webContents: { id: 100, isDestroyed: () => false },
+      webContents: { id: 100, isDestroyed: () => false, send: vi.fn() },
     };
 
     const pvm = {
@@ -411,7 +411,7 @@ describe("project:switch activeWorktreeId pre-apply (#5000)", () => {
 
   it("persists activeWorktreeId from outgoingState on project reopen", async () => {
     const mockView = {
-      webContents: { id: 200, isDestroyed: () => false },
+      webContents: { id: 200, isDestroyed: () => false, send: vi.fn() },
     };
 
     const pvm = {
@@ -471,7 +471,7 @@ describe("project:switch outgoing tabGroups pre-apply (#5001)", () => {
 
   it("persists tabGroups from outgoingState on project switch", async () => {
     const mockView = {
-      webContents: { id: 100, isDestroyed: () => false },
+      webContents: { id: 100, isDestroyed: () => false, send: vi.fn() },
     };
 
     const pvm = {
@@ -525,7 +525,7 @@ describe("project:switch outgoing tabGroups pre-apply (#5001)", () => {
 
   it("does not include tabGroups when outgoingState has no tabGroups", async () => {
     const mockView = {
-      webContents: { id: 100, isDestroyed: () => false },
+      webContents: { id: 100, isDestroyed: () => false, send: vi.fn() },
     };
 
     const pvm = {
@@ -574,7 +574,7 @@ describe("project:switch outgoing tabGroups pre-apply (#5001)", () => {
 
   it("clears stale tabGroups when outgoingState sends empty array", async () => {
     const mockView = {
-      webContents: { id: 100, isDestroyed: () => false },
+      webContents: { id: 100, isDestroyed: () => false, send: vi.fn() },
     };
 
     const pvm = {
@@ -696,5 +696,81 @@ describe("project:switch worktree-load-status (#8400)", () => {
       projectId: "proj-new",
       worktreeLoadError: null,
     });
+  });
+});
+
+describe("project:switch provenance (#9859)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function runActivation(channel: string, projectOverrides: Record<string, unknown> = {}) {
+    const sendMock = vi.fn();
+    const mockView = {
+      webContents: { id: 300, isDestroyed: () => false, send: sendMock },
+    };
+    const pvm = {
+      switchTo: vi.fn().mockResolvedValue({ view: mockView, isNew: false }),
+      getProjectIdForWebContents: vi.fn(),
+    };
+
+    mockGetWindowForWebContents.mockReturnValue(null);
+
+    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-old");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New Project",
+      path: "/projects/new",
+      ...projectOverrides,
+    });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+
+    const deps = {
+      mainWindow: { id: 1 } as unknown,
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+
+    await handleMap.get(channel)!({ sender: { id: 99 } }, "proj-new");
+    return sendMock;
+  }
+
+  it("emits PROJECT_ON_SWITCH with a string switchId to the activated view on switch", async () => {
+    const sendMock = await runActivation(CHANNELS.PROJECT_SWITCH);
+
+    const call = sendMock.mock.calls.find((c) => c[0] === CHANNELS.PROJECT_ON_SWITCH);
+    expect(call).toBeDefined();
+    const payload = call![1] as { project: { id: string }; switchId: string };
+    expect(payload.project).toEqual(expect.objectContaining({ id: "proj-new" }));
+    // Behavior, not a fixed literal: provenance must be a non-empty string so the
+    // renderer's cold-launch guard flips (a missing id would leave it null).
+    expect(typeof payload.switchId).toBe("string");
+    expect(payload.switchId.length).toBeGreaterThan(0);
+  });
+
+  it("emits a fresh switchId on each switch so repeat activations are distinguishable", async () => {
+    const first = await runActivation(CHANNELS.PROJECT_SWITCH);
+    const second = await runActivation(CHANNELS.PROJECT_SWITCH);
+
+    const idOf = (mock: ReturnType<typeof vi.fn>) =>
+      (mock.mock.calls.find((c) => c[0] === CHANNELS.PROJECT_ON_SWITCH)![1] as { switchId: string })
+        .switchId;
+    expect(idOf(first)).not.toBe(idOf(second));
+  });
+
+  it("emits PROJECT_ON_SWITCH on reopen as well", async () => {
+    const sendMock = await runActivation(CHANNELS.PROJECT_REOPEN, { status: "background" });
+
+    const call = sendMock.mock.calls.find((c) => c[0] === CHANNELS.PROJECT_ON_SWITCH);
+    expect(call).toBeDefined();
+    const switchId = (call![1] as { switchId: string }).switchId;
+    expect(typeof switchId).toBe("string");
+    expect(switchId.length).toBeGreaterThan(0);
   });
 });
