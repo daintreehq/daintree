@@ -135,17 +135,33 @@ export class CrashRecoveryService {
     this.crashRecorded = true;
 
     try {
-      fs.mkdirSync(this.crashesDir, { recursive: true });
-
       const entry = this.buildCrashEntry(error);
-      const logPath = path.join(this.crashesDir, `crash-${entry.id}.json`);
-      resilientAtomicWriteFileSync(logPath, JSON.stringify(entry, null, 2), "utf-8");
+      // The only call site is the uncaughtException handler, so the cause is
+      // always "uncaught-exception" — but the field is additive, default only
+      // when absent so a future caller passing a more specific cause is honored.
+      if (entry.crashCause === undefined) entry.crashCause = "uncaught-exception";
+      const logPath = this.writeCrashLog(entry);
       this.writeMarker(entry);
       this.pruneOldLogs();
       console.log("[CrashRecovery] Crash recorded:", logPath);
     } catch (err) {
       console.error("[CrashRecovery] Failed to record crash:", err);
     }
+  }
+
+  /**
+   * Persist a crash log to `crashesDir/crash-{id}.json` using the same
+   * `resilientAtomicWriteFileSync` channel as `recordCrash` (handles Windows
+   * AV/indexer lock retries). Shared by `recordCrash` and the marker-only
+   * branch of `consumeMarker` so both call sites produce a real on-disk
+   * artifact and the dialog's "Open log file" affordance always points at a
+   * file that exists.
+   */
+  private writeCrashLog(entry: CrashLogEntry): string {
+    fs.mkdirSync(this.crashesDir, { recursive: true });
+    const logPath = path.join(this.crashesDir, `crash-${entry.id}.json`);
+    resilientAtomicWriteFileSync(logPath, JSON.stringify(entry, null, 2), "utf-8");
+    return logPath;
   }
 
   startBackupTimer(): void {
@@ -427,7 +443,7 @@ export class CrashRecoveryService {
         return null;
       }
 
-      // Move the live backup aside BEFORE deleting the marker. A kill
+      // Move the live backup aside BEFORE any state mutations. A kill
       // between the two operations would otherwise wipe the marker (and
       // skip crash detection on the next launch) while session-state.json
       // is still present and recoverable. preserveBackupForRecovery is
@@ -435,7 +451,12 @@ export class CrashRecoveryService {
       // from a partially-completed prior attempt it is reused.
       this.crashedBackupPath = this.preserveBackupForRecovery(marker.sessionStartMs);
 
-      this.deleteMarker();
+      // NOTE: deleteMarker() is called AFTER the synthesized crash log is
+      // written below (per the #8728 preserve-before-delete ordering rule).
+      // If a kill happens in the gap, the next launch re-runs consumeMarker
+      // and surfaces the recovery dialog against the persisted log.
+      // (Watchdog annotation rewrites for an existing logPath fire earlier
+      // in this block and are unaffected.)
 
       // Gate hasBackup on parseability: a renamed crashed-* file that fails
       // to parse (corrupted write, partial flush) shouldn't surface a
@@ -516,12 +537,47 @@ export class CrashRecoveryService {
           }
         }
       }
+
+      // For marker-only crashes (no original crashLogPath — e.g. external kill,
+      // power loss, native crash), synthesize a real on-disk log so the
+      // recovery dialog's "Open log file" affordance points at a file that
+      // actually exists. Persist BEFORE deleteMarker (per #8728's
+      // preserve-before-delete ordering rule) so a kill in this window still
+      // leaves the marker pointing at a real on-disk log, and the next
+      // launch re-runs consumeMarker to surface the recovery dialog. Failure
+      // is non-fatal — the in-memory entry is the source of truth and the
+      // dialog falls back to a softer warning if the file later can't be
+      // opened.
+      let resolvedLogPath = logPath;
+      if (!resolvedLogPath) {
+        try {
+          resolvedLogPath = this.writeCrashLog(entry);
+          // Honor the same MAX_CRASH_LOGS retention as recordCrash so 25
+          // consecutive external kills don't accumulate crash-{id}.json
+          // files. recordCrash also calls pruneOldLogs; folding it here keeps
+          // retention behavior consistent across both code paths.
+          this.pruneOldLogs();
+        } catch (writeErr) {
+          console.error("[CrashRecovery] Failed to persist synthesized crash log:", writeErr);
+          // Fall back to the synthetic path so PendingCrash.logPath is stable
+          // for the renderer; the dialog's defensive openPath handler covers
+          // the missing-file case.
+          resolvedLogPath = path.join(this.crashesDir, `crash-${entry.id}.json`);
+        }
+      }
+
+      // Marker is unlinked LAST — after the synthesized crash log is on disk.
+      // A kill between preserveBackupForRecovery and this point still leaves
+      // the marker on disk and the next launch re-detects the crash against
+      // the persisted log.
+      this.deleteMarker();
+
       const panels = parseableBackupPath
         ? this.extractPanelSummaries(entry.timestamp, parseableBackupPath)
         : undefined;
 
       return {
-        logPath: logPath ?? path.join(this.crashesDir, `crash-${entry.id}.json`),
+        logPath: resolvedLogPath,
         entry,
         hasBackup: parseableBackupPath !== null,
         backupTimestamp,
@@ -841,6 +897,7 @@ export class CrashRecoveryService {
 
     this.enrichWithEnvironmentMetadata(entry);
     this.enrichWithPanelData(entry, this.readCrashedBackupAppState());
+    this.enrichWithRecentActions(entry);
 
     return entry;
   }

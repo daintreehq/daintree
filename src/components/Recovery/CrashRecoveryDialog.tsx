@@ -33,6 +33,7 @@ import {
   buildCrashReportUrl,
   buildCrashReportUrlFromBody,
 } from "@shared/utils/buildCrashReportUrl";
+import { getCrashCauseTitle, getCrashCauseDescription } from "@shared/utils/crashCauseCopy";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import type {
   PendingCrash,
@@ -180,11 +181,17 @@ export function CrashRecoveryDialog({
   const handleOpenLogFile = useCallback(() => {
     window.electron.system.openPath(crash.logPath).catch((err) => {
       logError("Failed to open crash log path", err);
+      // shell.openPath rejects when the file is missing or inaccessible. After
+      // the consumeMarker() persistence fix this is exceptional (corruption,
+      // AV lock), but a corrupt V1 log from an older build can still hit it.
+      // Soft warning — the cause-aware title above already tells the user why
+      // the session ended, so an error toast here is more noise than signal.
       // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({
         type: "error",
-        title: "Couldn't open log file",
-        message: formatErrorMessage(err, "Failed to open log file"),
+        priority: "low",
+        title: "Log file isn't available",
+        message: formatErrorMessage(err, "The on-disk crash log couldn't be opened"),
         duration: 6000,
       });
     });
@@ -243,13 +250,14 @@ export function CrashRecoveryDialog({
       >
         <AppDialog.Header>
           <AppDialog.Title icon={<AlertTriangle className="h-5 w-5 text-status-warning" />}>
-            Daintree closed unexpectedly
+            {getCrashCauseTitle(crash.entry.crashCause)}
           </AppDialog.Title>
         </AppDialog.Header>
 
         <AppDialog.Body className="space-y-4">
           <p className="text-sm text-daintree-text/80">
-            The previous session ended unexpectedly on {crashDate}.
+            {getCrashCauseDescription(crash.entry.crashCause)} The previous session ended on{" "}
+            {crashDate}.
             {hasPanels ? " Select which panels to restore:" : " Choose how to continue:"}
           </p>
 
