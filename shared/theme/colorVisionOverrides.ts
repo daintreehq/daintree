@@ -52,6 +52,9 @@ const STATUS_DIFF_TOKENS: Record<
   },
 };
 
+// Expects a 3- or 6-digit hex string (the form every override value uses).
+// Non-hex input (oklch(), rgb(), 8-digit hex) yields rgba(NaN, …), which CSS
+// silently drops — keep the maps hex-only.
 function hexToRgba(hex: string, alpha: number): string {
   const clean = hex.replace("#", "");
   const expanded =

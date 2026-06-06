@@ -403,5 +403,34 @@ describe("palette distinguishability", () => {
         normHex(RED_GREEN_OVERRIDES["--theme-status-danger"]!)
       );
     });
+
+    it("red-green diff backgrounds are the overridden status hue at the light-mode alphas", () => {
+      // Derive the expected rgba from the override's own status hex so a wrong
+      // alpha or a swapped insert/delete derivation fails — not a literal match.
+      const rgb = (hex: string) => {
+        const c = parse(hex)!;
+        const to255 = (v: number) => Math.round((v as number) * 255);
+        return {
+          r: to255((c as Record<string, number>).r),
+          g: to255((c as Record<string, number>).g),
+          b: to255((c as Record<string, number>).b),
+        };
+      };
+      const success = rgb(RED_GREEN_OVERRIDES["--theme-status-success"]!);
+      const danger = rgb(RED_GREEN_OVERRIDES["--theme-status-danger"]!);
+
+      expect(RED_GREEN_OVERRIDES["--theme-diff-insert-background"]).toBe(
+        `rgba(${success.r}, ${success.g}, ${success.b}, 0.1)`
+      );
+      expect(RED_GREEN_OVERRIDES["--theme-diff-insert-edit-background"]).toBe(
+        `rgba(${success.r}, ${success.g}, ${success.b}, 0.2)`
+      );
+      expect(RED_GREEN_OVERRIDES["--theme-diff-delete-background"]).toBe(
+        `rgba(${danger.r}, ${danger.g}, ${danger.b}, 0.1)`
+      );
+      expect(RED_GREEN_OVERRIDES["--theme-diff-delete-edit-background"]).toBe(
+        `rgba(${danger.r}, ${danger.g}, ${danger.b}, 0.2)`
+      );
+    });
   });
 });
