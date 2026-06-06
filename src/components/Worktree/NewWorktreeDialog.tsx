@@ -5,11 +5,10 @@ import { FolderGit2, Check, AlertCircle } from "lucide-react";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
-// eslint-disable-next-line no-restricted-imports
-import { worktreeClient, githubClient } from "@/clients";
+
+import { worktreeClient, forgeClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { usePreferencesStore } from "@/store/preferencesStore";
-import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
 import { notify } from "@/lib/notify";
 import { systemClient } from "@/clients/systemClient";
 import { useRecipeStore } from "@/store/recipeStore";
@@ -104,16 +103,18 @@ export function NewWorktreeDialog({
     (s) => s.setLastSelectedWorktreeRecipeIdByProject
   );
   const worktreeMap = useWorktreeStore((s) => s.worktrees);
-  const githubConfig = useGitHubConfigStore((s) => s.config);
-  const initializeGitHubConfig = useGitHubConfigStore((s) => s.initialize);
-  const refreshGitHubConfig = useGitHubConfigStore((s) => s.refresh);
   const { recipes, runRecipeWithResults } = useRecipeStore();
   const currentProject = useProjectStore((s) => s.currentProject);
   const projectId = currentProject?.id ?? "";
   const lastSelectedWorktreeRecipeId = lastSelectedWorktreeRecipeIdByProject[projectId];
 
-  const currentUser = githubConfig?.username;
-  const currentUserAvatar = githubConfig?.avatarUrl;
+  // Forge-agnostic viewer identity. Resolved per-cwd via the active forge
+  // provider's `identity` capability (GitHub today; GitLab/Gitea tomorrow)
+  // instead of the GitHub-specific `useGitHubConfigStore` so a non-GitHub
+  // project mirrors through the right identity. `null` means "no token /
+  // unsupported" — mirrors the old `!githubConfig?.username` path.
+  const [currentUser, setCurrentUser] = useState<string | undefined>(undefined);
+  const [currentUserAvatar, setCurrentUserAvatar] = useState<string | undefined>(undefined);
 
   const { projectSettings, configuredBranchPrefix } = useNewWorktreeProjectSettings({ isOpen });
 
@@ -280,17 +281,31 @@ export function NewWorktreeDialog({
     setLastSelectedWorktreeRecipeIdByProject,
   });
 
-  // --- GitHub config initialization ---
+  // --- Forge viewer identity ---
+  // Probe the active forge's `identity` capability whenever the dialog opens
+  // or the project root changes. The capability returns `null` (not throws)
+  // for "no token / no viewer", so we treat that as the no-user state without
+  // an assignmentError banner. An `isCurrent` ref guards against a stale
+  // resolution setting state after `rootPath` switches mid-flight.
   useEffect(() => {
-    initializeGitHubConfig();
-  }, [initializeGitHubConfig]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    if (githubConfig?.hasToken && !githubConfig.username) {
-      refreshGitHubConfig();
-    }
-  }, [isOpen, githubConfig?.hasToken, githubConfig?.username, refreshGitHubConfig]);
+    if (!isOpen || !rootPath) return;
+    let isCurrent = true;
+    forgeClient
+      .getCurrentUser(rootPath)
+      .then((user) => {
+        if (!isCurrent) return;
+        setCurrentUser(user?.login);
+        setCurrentUserAvatar(user?.avatarUrl);
+      })
+      .catch(() => {
+        if (!isCurrent) return;
+        setCurrentUser(undefined);
+        setCurrentUserAvatar(undefined);
+      });
+    return () => {
+      isCurrent = false;
+    };
+  }, [isOpen, rootPath]);
 
   // --- Bootstrap: load branches and reset top-level state on open ---
   useEffect(() => {
@@ -574,14 +589,14 @@ export function NewWorktreeDialog({
 
         if (!snapUseExisting && snapIssue && snapAssignToSelf && snapCurrentUser) {
           try {
-            await githubClient.assignIssue(rootPath, snapIssue.number, snapCurrentUser);
+            await forgeClient.assignIssue(rootPath, snapIssue.number, snapCurrentUser);
             const assignIssueNumber = snapIssue.number;
             const assignUsername = snapCurrentUser;
             const undoFiredRef = { current: false };
             const undoOnClick = (): void => {
               if (undoFiredRef.current) return;
               undoFiredRef.current = true;
-              void githubClient
+              void forgeClient
                 .unassignIssue(rootPath, assignIssueNumber, assignUsername)
                 .catch((err: unknown) => {
                   // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok

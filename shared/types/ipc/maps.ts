@@ -156,6 +156,7 @@ import type {
   Page,
   RepoMetadata,
   ListOptions,
+  ForgeUser,
 } from "../forge.js";
 import type { ForgeRateLimitChangedPayload, ForgeTokenHealthChangedPayload } from "./forge.js";
 
@@ -1200,6 +1201,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "forge:get-repo-metadata": {
     args: [payload: { cwd: string }];
     result: RepoMetadata;
+  };
+  "forge:get-current-user": {
+    args: [payload: { cwd: string }];
+    result: ForgeUser | null;
   };
   "forge:classify-push-error": {
     args: [payload: { cwd: string; stderr: string }];

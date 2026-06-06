@@ -28,6 +28,7 @@ import type {
   Page,
   RepoMetadata,
   ListOptions,
+  ForgeUser,
 } from "../forge.js";
 import type { ResourceProfilePayload } from "../resourceProfile.js";
 import type {
@@ -1340,6 +1341,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getPR(payload: { cwd: string; prNumber: number }): Promise<PR | null>;
     /** Fetch the normalized repository metadata roll-up. */
     getRepoMetadata(payload: { cwd: string }): Promise<RepoMetadata>;
+    /**
+     * Resolve the active forge provider's current authenticated viewer for a
+     * project, used by the renderer to drive provider-agnostic "assign issue
+     * to me" flows. Returns `null` when the provider doesn't carry a viewer
+     * concept, has no credentials, or the user is signed out — callers treat
+     * that as "skip self-assignment", not an error.
+     */
+    getCurrentUser(payload: { cwd: string }): Promise<ForgeUser | null>;
     /**
      * Provider-keyed rate-limit state push. Every forge provider (GitHub
      * included) flows through this channel tagged with its canonical

@@ -2383,6 +2383,8 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.FORGE_GET_PR, payload),
     getRepoMetadata: (payload: { cwd: string }) =>
       _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_METADATA, payload),
+    getCurrentUser: (payload: { cwd: string }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_GET_CURRENT_USER, payload),
     onRateLimitChanged: (
       callback: (data: import("../shared/types/ipc/forge.js").ForgeRateLimitChangedPayload) => void
     ) => _typedOn(CHANNELS.FORGE_RATE_LIMIT_CHANGED, callback),

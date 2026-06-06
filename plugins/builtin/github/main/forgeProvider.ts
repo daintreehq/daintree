@@ -8,6 +8,7 @@ import type {
   ForgeProviderImpl,
   ForgeUser,
   ForgeLabel,
+  IdentityCapability,
   Issue,
   ListOptions,
   NormalizedIssueState,
@@ -1091,6 +1092,24 @@ const reviewCapability: ReviewCapability = {
   getReviewThreads: getReviewThreadsImpl,
 };
 
+// Thin pass-through over `GitHubAuth.getConfigAsync()` — reuses the same
+// cached `username`/`avatarUrl` and the `pendingValidation` singleflight so a
+// cold-start probe (token present, cache empty) coalesces with any other
+// concurrent caller and doesn't double-hit `/user`. The provider surface
+// expects a `ForgeUser`, so the GitHub `{ login, avatarUrl }` shape is
+// projected and the raw `GitHubTokenConfig` stays inside the auth module.
+const identityCapability: IdentityCapability = {
+  async getCurrentUser(): Promise<ForgeUser | null> {
+    const config = await GitHubAuth.getConfigAsync();
+    if (!config.username) return null;
+    return {
+      login: config.username,
+      ...(config.avatarUrl ? { avatarUrl: config.avatarUrl } : {}),
+      rawData: { source: "GitHubAuth.cached" },
+    };
+  },
+};
+
 export const githubForgeProvider: ForgeProviderImpl = {
   async getCredentials(): Promise<Credentials | null> {
     const token = GitHubAuth.getToken();
@@ -1316,4 +1335,5 @@ export const githubForgeProvider: ForgeProviderImpl = {
   classifyPushError: classifyPushErrorImpl,
 
   reviews: reviewCapability,
+  identity: identityCapability,
 };

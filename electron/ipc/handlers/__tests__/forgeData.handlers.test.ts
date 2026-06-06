@@ -98,9 +98,9 @@ describe("registerForgeDataHandlers", () => {
     });
   });
 
-  it("registers five IPC handlers", () => {
+  it("registers six IPC handlers", () => {
     const cleanup = registerForgeDataHandlers();
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(5);
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(6);
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:list-issues", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:list-prs", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-issue", expect.any(Function));
@@ -109,6 +109,7 @@ describe("registerForgeDataHandlers", () => {
       "forge:get-repo-metadata",
       expect.any(Function)
     );
+    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-current-user", expect.any(Function));
     cleanup();
   });
 
@@ -195,6 +196,71 @@ describe("registerForgeDataHandlers", () => {
 
     expect(fakeImpl.getRepoMetadata).toHaveBeenCalledWith(repoRef);
     expect(result).toEqual(meta);
+  });
+
+  it("getCurrentUser returns the identity projection when the impl exposes one", async () => {
+    const user = {
+      login: "ada",
+      avatarUrl: "https://avatars.test/ada.png",
+      rawData: { source: "fake.provider" },
+    };
+    const implWithIdentity = {
+      ...fakeImpl,
+      identity: { getCurrentUser: vi.fn().mockResolvedValue(user) },
+    };
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: implWithIdentity as unknown as ForgeProviderImpl,
+    });
+    registerForgeDataHandlers();
+
+    const result = await findHandler("forge:get-current-user")(null, { cwd: "/repo" });
+
+    expect(implWithIdentity.identity.getCurrentUser).toHaveBeenCalledTimes(1);
+    expect(result).toEqual(user);
+  });
+
+  it("getCurrentUser returns null when the provider has no identity capability", async () => {
+    // No `identity` field on the impl — host falls back to `null` so callers
+    // treat it as "no viewer" rather than throwing.
+    registerForgeDataHandlers();
+
+    const result = await findHandler("forge:get-current-user")(null, { cwd: "/repo" });
+
+    expect(result).toBeNull();
+  });
+
+  it("getCurrentUser does not write an audit record (read probe, matches getRateLimit)", async () => {
+    // Lock in the no-audit-on-probe design intent. The audit ring should
+    // not be flooded by every render-time identity probe fired on dialog
+    // open; the `ForgeProviderMethodName` union carries the name for
+    // type-exhaustiveness in `summarizeForgeArgs`, not because we audit it.
+    fakeImpl.getRepoMetadata.mockResolvedValue({
+      defaultBranch: "main",
+      isPrivate: false,
+      isFork: false,
+      isArchived: false,
+      rawData: null,
+    });
+    const user = { login: "ada", rawData: null };
+    const implWithIdentity = {
+      ...fakeImpl,
+      identity: { getCurrentUser: vi.fn().mockResolvedValue(user) },
+    };
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: implWithIdentity as unknown as ForgeProviderImpl,
+    });
+    const auditSpy = vi.spyOn(forgeAuditService, "appendRecord");
+    registerForgeDataHandlers();
+
+    for (let i = 0; i < 5; i++) {
+      await findHandler("forge:get-current-user")(null, { cwd: "/repo" });
+    }
+
+    expect(auditSpy).not.toHaveBeenCalled();
   });
 
   it("rejects an invalid cwd before resolving a provider", async () => {

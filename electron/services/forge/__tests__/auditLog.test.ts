@@ -221,6 +221,10 @@ describe("summarizeForgeArgs redaction", () => {
     expect(summarizeForgeArgs("createIssue", { title: "No labels" })).toBe("{}");
   });
 
+  it("returns empty string for getCurrentUser — read probe, no args to summarize", () => {
+    expect(summarizeForgeArgs("getCurrentUser", { cwd: "/repo" })).toBe("");
+  });
+
   it("summarizes list filters as safe metadata only", () => {
     const summary = summarizeForgeArgs("listIssues", {
       state: "open",
