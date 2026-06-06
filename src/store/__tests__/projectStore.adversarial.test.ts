@@ -306,6 +306,26 @@ describe("projectStore adversarial", () => {
     expect(useProjectStore.getState().lastSwitchId).toBe("switch-xyz");
   });
 
+  it("never hydrates lastSwitchId from persisted storage (#9094 contract)", async () => {
+    installProjectApi({});
+    installLocalStorage(
+      createStorageMock({
+        // Storage poisoning: even if a stale/forged switch id is persisted, it
+        // must not survive a cold launch — only a live onSwitch event may set it,
+        // otherwise the no-respawn-on-relaunch guard would be defeated.
+        "project-storage": JSON.stringify({
+          state: { projects: [projectA], lastSwitchId: "stale-switch" },
+          version: 0,
+        }),
+      })
+    );
+
+    const { useProjectStore } = await import("../projectStore");
+
+    expect(useProjectStore.getState().projects).toEqual([projectA]);
+    expect(useProjectStore.getState().lastSwitchId).toBeNull();
+  });
+
   it("ignores stale switch rejections once a newer switch has started", async () => {
     installProjectApi({});
     installLocalStorage(createStorageMock());

@@ -769,6 +769,8 @@ describe("project:switch provenance (#9859)", () => {
 
     const call = sendMock.mock.calls.find((c) => c[0] === CHANNELS.PROJECT_ON_SWITCH);
     expect(call).toBeDefined();
-    expect((call![1] as { switchId: string }).switchId).toEqual(expect.any(String));
+    const switchId = (call![1] as { switchId: string }).switchId;
+    expect(typeof switchId).toBe("string");
+    expect(switchId.length).toBeGreaterThan(0);
   });
 });

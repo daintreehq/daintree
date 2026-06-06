@@ -1712,5 +1712,47 @@ describe("useDevServer adversarial races", () => {
         expect.objectContaining({ projectId: "project-1", devCommand: "npm run dev" })
       );
     });
+
+    it("auto-ensures when lastSwitchId flips null→string after mount (#9859 race)", async () => {
+      // The actual production sequence on a cold-started switched-to view: the
+      // panel hydrates restored-stopped (no ensure yet, lastSwitchId still null),
+      // THEN the PROJECT_ON_SWITCH event arrives and flips lastSwitchId to a
+      // string. The auto-ensure effect must re-run on that change and start the
+      // server — proving the bail at null isn't sticky.
+      getStateMock.mockImplementation(async (request: { projectId: string }) =>
+        buildState({
+          panelId: "panel-1",
+          projectId: request.projectId,
+          status: "restored-stopped",
+        })
+      );
+
+      const { result, rerender } = renderHook(() =>
+        useDevServer({
+          panelId: "panel-1",
+          devCommand: "npm run dev",
+          cwd: "/repo",
+        })
+      );
+
+      // Cold launch: restored-stopped surfaces, nothing auto-starts.
+      await waitFor(() => {
+        expect(result.current.status).toBe("restored-stopped");
+      });
+      expect(ensureMock).not.toHaveBeenCalled();
+
+      // The switch event lands → provenance flips non-null → effect re-runs.
+      act(() => {
+        projectState.lastSwitchId = "switch-late";
+      });
+      rerender();
+
+      await waitFor(() => {
+        expect(ensureMock).toHaveBeenCalledTimes(1);
+      });
+      expect(ensureMock).toHaveBeenCalledWith(
+        expect.objectContaining({ projectId: "project-1", devCommand: "npm run dev" })
+      );
+    });
   });
 });
