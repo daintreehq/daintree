@@ -3,6 +3,16 @@ import { WindowRegistry } from "../WindowRegistry.js";
 import { toDisposable } from "../../utils/lifecycle.js";
 import type { BrowserWindow } from "electron";
 
+const { mockRevokeByWindowId } = vi.hoisted(() => ({
+  mockRevokeByWindowId: vi.fn<(windowId: number) => Promise<void>>(),
+}));
+
+vi.mock("../../services/HelpSessionService.js", () => ({
+  helpSessionService: {
+    revokeByWindowId: mockRevokeByWindowId,
+  },
+}));
+
 function makeMockWindow(id: number, webContentsId: number, opts?: { focused?: boolean }) {
   const closedHandlers: Array<() => void> = [];
   const destroyedHandlers: Array<() => void> = [];
@@ -554,6 +564,78 @@ describe("WindowRegistry", () => {
       const ctx2 = registry.register(win2);
       expect(ctx2.abortController.signal.aborted).toBe(false);
       expect(ctx2.abortController).not.toBe(ctx1.abortController);
+    });
+  });
+
+  describe("help-session revoke wire-up (#10053)", () => {
+    it("unregister fires revokeByWindowId for the closing window", async () => {
+      const registry = new WindowRegistry();
+      const win = makeMockWindow(42, 100);
+      registry.register(win);
+
+      mockRevokeByWindowId.mockClear();
+      registry.unregister(42);
+
+      // Wire-up is fire-and-forget: import().then(revokeByWindowId). Wait one
+      // macrotask so the dynamic import resolves + the .then() runs.
+      await new Promise((r) => setTimeout(r, 0));
+      await Promise.resolve();
+
+      expect(mockRevokeByWindowId).toHaveBeenCalledWith(42);
+    });
+
+    it("unregister fires revokeByWindowId when the closed event fires (full lifecycle)", async () => {
+      const registry = new WindowRegistry();
+      const win = makeMockWindow(7, 100);
+      registry.register(win);
+
+      mockRevokeByWindowId.mockClear();
+      win._fireClosed();
+
+      await new Promise((r) => setTimeout(r, 0));
+      await Promise.resolve();
+
+      expect(mockRevokeByWindowId).toHaveBeenCalledWith(7);
+    });
+
+    it("unregister fires revokeByWindowId only once when both closed and destroyed fire (idempotent)", async () => {
+      const registry = new WindowRegistry();
+      const win = makeMockWindow(13, 100);
+      registry.register(win);
+
+      mockRevokeByWindowId.mockClear();
+      win._fireClosed();
+      win._fireDestroyed();
+
+      await new Promise((r) => setTimeout(r, 0));
+      await Promise.resolve();
+
+      // doUnregister's ctx._unregistered guard short-circuits the second
+      // call before the wire-up runs.
+      expect(mockRevokeByWindowId).toHaveBeenCalledTimes(1);
+      expect(mockRevokeByWindowId).toHaveBeenCalledWith(13);
+    });
+
+    it("unregister logs and swallows a revokeByWindowId rejection", async () => {
+      mockRevokeByWindowId.mockRejectedValueOnce(new Error("synthetic revoke failure"));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const registry = new WindowRegistry();
+      const win = makeMockWindow(99, 100);
+      registry.register(win);
+
+      // Must not throw — the unregister path is the hot shutdown-cleanup path.
+      expect(() => registry.unregister(99)).not.toThrow();
+
+      await new Promise((r) => setTimeout(r, 0));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[WindowRegistry] revokeByWindowId failed during unregister:",
+        expect.any(Error)
+      );
+      warnSpy.mockRestore();
     });
   });
 });
