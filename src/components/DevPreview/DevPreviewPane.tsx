@@ -387,7 +387,14 @@ export function DevPreviewPane({
       if (certCopyTimerRef.current) clearTimeout(certCopyTimerRef.current);
     };
   }, []);
-  const lastSetUrlRef = useRef<string>("");
+  // Seed `lastSetUrlRef` to the mount URL so the isWebviewReady navigation
+  // effect does not fire a redundant loadURL on first ready (#9940). The
+  // hard-restart path resets this to "" explicitly when unconfigured.
+  const lastSetUrlRef = useRef<string>(history.present);
+  // Seed value for the webview `src` attribute, captured once at mount. Never
+  // re-bound to navigation state — Electron's SrcAttribute observer would turn
+  // each guest navigation into a redundant full reload (#9940).
+  const initialUrlRef = useRef<string>(history.present);
   const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
   // Generation token to invalidate in-flight async scroll captures when the
   // user clears scroll state via hard restart. A pending executeJavaScript
@@ -622,7 +629,10 @@ export function DevPreviewPane({
       }
       webviewRef.current = node;
       if (node) {
-        lastSetUrlRef.current = "";
+        // Match the `src` seed so the isWebviewReady navigation effect does not
+        // re-load the same URL on first ready (#9940). The isUnconfigured effect
+        // resets this to "" afterward when there is no dev command.
+        lastSetUrlRef.current = initialUrlRef.current;
         clearRetryState();
       }
       setWebviewElement(node);
@@ -673,8 +683,11 @@ export function DevPreviewPane({
     if (proxyOrigin === undefined) return;
     const nextUrl = url ? computeDevServerUrl(url, currentUrl, proxyOrigin) : false;
     if (nextUrl !== false) {
+      // Push history only; the imperative navigation effect (keyed on currentUrl
+      // vs lastSetUrlRef) performs the actual loadURL. Pre-setting lastSetUrlRef
+      // here would make that effect skip — which used to be fine when `src`
+      // re-bound to currentUrl, but src is now seed-only (#9940).
       setHistory((prev) => pushBrowserHistory(prev, nextUrl));
-      lastSetUrlRef.current = nextUrl;
     }
   }, [url, currentUrl, isUnconfigured, proxyOrigin]);
 
@@ -696,8 +709,9 @@ export function DevPreviewPane({
   const handleNavigate = useCallback((rawUrl: string) => {
     const normalized = normalizeBrowserUrl(rawUrl);
     if (normalized.url) {
+      // Push history only; the imperative navigation effect drives loadURL now
+      // that `src` is seed-only (#9940). Mirrors handleBack/handleForward.
       setHistory((prev) => pushBrowserHistory(prev, normalized.url!));
-      lastSetUrlRef.current = normalized.url;
     }
   }, []);
 
@@ -1171,12 +1185,13 @@ export function DevPreviewPane({
         try {
           const loadedUrl = webviewElement.getURL();
           if (loadedUrl !== currentUrl) {
-            loadWebviewUrl(webviewElement, currentUrl, () => {
-              webviewElement.src = currentUrl;
-            });
+            // Imperative load only — never write `.src`, which would re-trigger
+            // Electron's SrcAttribute observer into a redundant reload (#9940).
+            loadWebviewUrl(webviewElement, currentUrl);
           }
         } catch {
-          webviewElement.src = currentUrl;
+          // getURL() threw — the webview is detaching/unready. The ready
+          // lifecycle re-drives the load on recovery; don't write `.src` here.
         }
       }
     }
@@ -1966,7 +1981,8 @@ export function DevPreviewPane({
                   >
                     <webview
                       ref={setWebviewNode}
-                      src={currentUrl}
+                      // Seed-only: never re-bind to navigation state (#9940).
+                      src={initialUrlRef.current}
                       partition={webviewPartition}
                       // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
                       allowpopups=""

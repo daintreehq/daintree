@@ -1658,4 +1658,78 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("Page process crashed");
     });
   });
+
+  describe("src binding regression (#9940)", () => {
+    it("seeds src once at mount", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("does not re-bind src or re-load after an in-page guest navigation", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      // A guest SPA navigation (pushState) is reported via did-navigate-in-page.
+      // The resulting history update must NOT feed back into the src attribute
+      // (which Electron's SrcAttribute observer would turn into a full reload).
+      webview.loadURL.mockClear();
+      const setAttributeSpy = vi.spyOn(webview, "setAttribute");
+
+      act(() => {
+        emitWebviewEvent(webview, "did-navigate-in-page", {
+          url: "http://localhost:5173/spa/route",
+          isMainFrame: true,
+        });
+      });
+
+      expect(webview.loadURL).not.toHaveBeenCalled();
+      expect(setAttributeSpy.mock.calls.filter(([name]) => name === "src")).toHaveLength(0);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("does not re-bind src or re-load after a full guest navigation", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      webview.loadURL.mockClear();
+      const setAttributeSpy = vi.spyOn(webview, "setAttribute");
+
+      act(() => {
+        emitWebviewEvent(webview, "did-navigate", {
+          url: "http://localhost:5173/page-2",
+        });
+      });
+
+      expect(webview.loadURL).not.toHaveBeenCalled();
+      expect(setAttributeSpy.mock.calls.filter(([name]) => name === "src")).toHaveLength(0);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("re-seeds src to the current URL when a partition change remounts the webview", () => {
+      const { container, rerender } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+
+      // Guest navigates to a new route.
+      act(() => {
+        emitWebviewEvent(webview, "did-navigate", { url: "http://localhost:5173/dashboard" });
+      });
+
+      // The project id resolves to a different value, changing webviewPartition,
+      // which remounts the <webview> via its key. The fresh element must seed to
+      // the URL the user is currently on — not the URL captured at mount (#9940).
+      useProjectStoreMock.mockImplementation(
+        (selector: (state: { currentProject: { id: string } | null }) => unknown) =>
+          selector({ currentProject: { id: "other-project" } })
+      );
+
+      act(() => {
+        rerender(<BrowserPane {...baseProps} />);
+      });
+
+      const remountedWebview = getWebviewElement(container);
+      expect(remountedWebview.getAttribute("src")).toBe("http://localhost:5173/dashboard");
+    });
+  });
 });
