@@ -198,6 +198,17 @@ const initialProjectId = process.argv
   .find((a) => a.startsWith(INITIAL_PROJECT_ID_ARG))
   ?.slice(INITIAL_PROJECT_ID_ARG.length);
 
+// Instance role passed from the main process via additionalArguments (#10123),
+// with a process.env fallback for contexts the main process did not seed
+// (process.env is polyfilled even under sandbox: true). Worker instances
+// suppress automatic background GitHub polling; only the exact value "worker"
+// opts in — anything else normalizes to "attended".
+const INSTANCE_ROLE_ARG = "--daintree-instance-role=";
+const rawInstanceRole =
+  process.argv.find((a) => a.startsWith(INSTANCE_ROLE_ARG))?.slice(INSTANCE_ROLE_ARG.length) ??
+  process.env.DAINTREE_INSTANCE_ROLE;
+const instanceRole: "attended" | "worker" = rawInstanceRole === "worker" ? "worker" : "attended";
+
 // Store MessagePort for direct Renderer ↔ Pty Host communication
 // Note: We cannot return MessagePort via contextBridge (it's not cloneable/transferable via that API).
 // Instead, we use window.postMessage to transfer it to the main world.
@@ -2928,6 +2939,14 @@ if (initialProjectId) {
     id: initialProjectId,
   });
 }
+
+// Surface the instance role so renderer pollers can suppress automatic
+// background GitHub polling in worker instances (#10123). Exposed
+// unconditionally — attended instances get { role: "attended" } so consumers
+// never need to null-guard the global.
+contextBridge.exposeInMainWorld("__DAINTREE_INSTANCE_ROLE__", {
+  role: instanceRole,
+});
 
 // Flush the per-view preload evaluation cost (#9770). Runs at preload bottom —
 // before any renderer page script — so the main process can attribute the

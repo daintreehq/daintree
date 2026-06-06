@@ -391,4 +391,59 @@ describe("PRIntegrationService", () => {
       expect(prServiceMock.refresh).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("worker role (#10123)", () => {
+    function makeWorkerService() {
+      return new PRIntegrationService(prServiceMock, eventBus, callbacks, { isWorker: true });
+    }
+
+    it("initialize() wires detection but never starts the polling loop", async () => {
+      const emitSpy = vi.spyOn(eventBus, "emit");
+      const service = makeWorkerService();
+
+      await service.initialize("/repo", () => [
+        { worktreeId: "wt-1", branch: "feature/foo", issueNumber: 7, isMainWorktree: false },
+      ]);
+
+      // Detection wiring is intact: candidates are still seeded…
+      expect(prServiceMock.initialize).toHaveBeenCalledWith("/repo");
+      const updateCalls = emitSpy.mock.calls.filter(([ev]) => ev === "sys:worktree:update");
+      expect(updateCalls).toHaveLength(1);
+      // …but the automatic polling loop never starts.
+      expect(prServiceMock.start).not.toHaveBeenCalled();
+    });
+
+    it("resume() is a no-op", () => {
+      const service = makeWorkerService();
+      service.resume();
+      expect(prServiceMock.start).not.toHaveBeenCalled();
+    });
+
+    it("resetPRState() reinitializes without restarting polling", () => {
+      const service = makeWorkerService();
+      service.resetPRState("/repo");
+      expect(prServiceMock.reset).toHaveBeenCalled();
+      expect(prServiceMock.initialize).toHaveBeenCalledWith("/repo");
+      expect(prServiceMock.start).not.toHaveBeenCalled();
+    });
+
+    it("updateForgeCredentials(null) reinitializes without restarting polling", () => {
+      const service = makeWorkerService();
+      service.updateForgeCredentials("builtin.github", null, "/repo");
+      expect(prServiceMock.initialize).toHaveBeenCalledWith("/repo");
+      expect(prServiceMock.start).not.toHaveBeenCalled();
+    });
+
+    it("keeps the on-demand refresh path functional", () => {
+      const service = makeWorkerService();
+      service.updateForgeCredentials("builtin.github", { kind: "bearer", value: "ghp_x" }, "/repo");
+      expect(prServiceMock.refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("attended remains the default when options are omitted", async () => {
+      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
+      await service.initialize("/repo", () => []);
+      expect(prServiceMock.start).toHaveBeenCalledTimes(1);
+    });
+  });
 });
