@@ -58,7 +58,7 @@ export function registerTerminalWorktreeActions(
   actions.set("terminal.openWorktreeIssue", () => ({
     id: "terminal.openWorktreeIssue",
     title: "Open Focused Terminal's Worktree Issue",
-    description: "Open the GitHub issue for the focused terminal's worktree",
+    description: "Open the issue associated with the focused terminal's worktree",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -95,7 +95,7 @@ export function registerTerminalWorktreeActions(
   actions.set("terminal.openWorktreePR", () => ({
     id: "terminal.openWorktreePR",
     title: "Open Focused Terminal's Worktree Pull Request",
-    description: "Open the GitHub pull request for the focused terminal's worktree",
+    description: "Open the pull request associated with the focused terminal's worktree",
     category: "terminal",
     kind: "command",
     danger: "safe",

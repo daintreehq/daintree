@@ -78,14 +78,18 @@ describe("worktree forge actions", () => {
       expect(githubClientMock.openIssue).not.toHaveBeenCalled();
     });
 
-    it("no-ops when worktree has no issue number", async () => {
+    it("throws when worktree has no issue number", async () => {
       mockWorktrees.set("wt1", { path: "/repo" });
-      await get("worktree.openIssue").run?.(undefined, ctx);
+      await expect(get("worktree.openIssue").run?.(undefined, ctx)).rejects.toThrow(
+        /Worktree has no associated issue/
+      );
       expect(forgeClientMock.openIssue).not.toHaveBeenCalled();
     });
 
-    it("no-ops when no target worktree resolves", async () => {
-      await get("worktree.openIssue").run?.(undefined, {} as ActionContext);
+    it("throws when no target worktree resolves", async () => {
+      await expect(get("worktree.openIssue").run?.(undefined, {} as ActionContext)).rejects.toThrow(
+        /No active worktree/
+      );
       expect(forgeClientMock.openIssue).not.toHaveBeenCalled();
     });
   });
@@ -104,19 +108,25 @@ describe("worktree forge actions", () => {
         path: "/repo",
         linked: { pr: { url: "file:///etc/passwd" } },
       });
-      await get("worktree.openPR").run?.(undefined, ctx);
+      await expect(get("worktree.openPR").run?.(undefined, ctx)).rejects.toThrow(
+        /Pull request URL must use http/
+      );
       expect(systemClientMock.openExternal).not.toHaveBeenCalled();
     });
 
     it("rejects an unparseable PR url", async () => {
       mockWorktrees.set("wt1", { path: "/repo", linked: { pr: { url: "not a url" } } });
-      await get("worktree.openPR").run?.(undefined, ctx);
+      await expect(get("worktree.openPR").run?.(undefined, ctx)).rejects.toThrow(
+        /Pull request URL is invalid/
+      );
       expect(systemClientMock.openExternal).not.toHaveBeenCalled();
     });
 
-    it("no-ops when worktree has no linked PR url", async () => {
+    it("throws when worktree has no linked PR url", async () => {
       mockWorktrees.set("wt1", { path: "/repo", linked: {} });
-      await get("worktree.openPR").run?.(undefined, ctx);
+      await expect(get("worktree.openPR").run?.(undefined, ctx)).rejects.toThrow(
+        /Worktree has no associated pull request/
+      );
       expect(systemClientMock.openExternal).not.toHaveBeenCalled();
     });
   });
