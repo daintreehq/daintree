@@ -1843,18 +1843,10 @@ describe("CrashRecoveryService", () => {
         if (String(target).endsWith("running.lock")) events.push("unlink-marker");
         return realUnlink(target);
       }) as typeof fs.unlinkSync);
-      utilsMock.resilientAtomicWriteFileSync.mockImplementation(((
-        fp: string,
-        data: string,
-        enc?: BufferEncoding
-      ) => {
+      utilsMock.resilientAtomicWriteFileSync.mockImplementation((fp, data, enc) => {
         if (fp.includes("crash-") && !fp.includes("session-state")) events.push("write-crash-log");
         fs.writeFileSync(fp, data, enc ?? "utf-8");
-      }) as typeof utilsMock.resilientAtomicWriteFileSync.mockImplementation extends (
-        ...args: infer _A
-      ) => infer _R
-        ? (...args: _A) => _R
-        : never);
+      });
       try {
         fs.writeFileSync(
           path.join(userData, "running.lock"),
