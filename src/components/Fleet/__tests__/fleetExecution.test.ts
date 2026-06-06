@@ -12,10 +12,23 @@ import { usePanelStore } from "@/store/panelStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import type { PtyPanelData, PanelInstance } from "@shared/types/panel";
 
+import type { RecipeContext } from "@/utils/recipeVariables";
+
 const submitMock = vi.fn<(id: string, text: string) => Promise<void>>();
 const notifyUserInputMock = vi.hoisted(() => vi.fn<(id: string, data?: string) => void>());
 const notifyEnterPressedMock = vi.hoisted(() => vi.fn<(id: string) => void>());
 const clearDirectingStateMock = vi.hoisted(() => vi.fn<(id: string) => void>());
+const buildFleetBroadcastRecipeContextMock = vi.hoisted(() =>
+  vi.fn<(id: string) => RecipeContext | undefined>()
+);
+
+vi.mock("../fleetBroadcast", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../fleetBroadcast")>();
+  return {
+    ...actual,
+    buildFleetBroadcastRecipeContext: buildFleetBroadcastRecipeContextMock,
+  };
+});
 
 vi.mock("@/clients", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/clients")>();
@@ -78,6 +91,8 @@ function reset() {
   notifyUserInputMock.mockReset();
   notifyEnterPressedMock.mockReset();
   clearDirectingStateMock.mockReset();
+  buildFleetBroadcastRecipeContextMock.mockReset();
+  buildFleetBroadcastRecipeContextMock.mockReturnValue({});
   useFleetArmingStore.setState({
     armedIds: new Set<string>(),
     armOrder: [],
@@ -608,5 +623,48 @@ describe("buildFleetTargetPreviews", () => {
     const ghost = previews.find((p) => p.terminalId === "ghost");
     expect(ghost?.excluded).toBe(true);
     expect(ghost?.title).toBe("Unknown");
+  });
+
+  describe("unresolved-variable detection (#9954)", () => {
+    function armOneEligible(ctx: RecipeContext) {
+      seedPanels([makeAgent("t1")]);
+      useFleetArmingStore.getState().armIds(["t1"]);
+      buildFleetBroadcastRecipeContextMock.mockReturnValue(ctx);
+    }
+
+    it("does NOT flag unknown placeholders that recipes leave literal", () => {
+      // The root cause: the fleet preview must match the actual sent payload.
+      // `replaceRecipeVariables` leaves `{{foo}}` literal, so the preview must
+      // not warn about it — the warning and the payload have to agree.
+      armOneEligible({});
+      const previews = buildFleetTargetPreviews("hello {{foo}}");
+      expect(previews[0]?.unresolvedVars).toEqual([]);
+      expect(previews[0]?.resolvedPayload).toBe("hello {{foo}}");
+    });
+
+    it("flags a known variable with no value in context", () => {
+      armOneEligible({});
+      const previews = buildFleetTargetPreviews("on {{branch_name}}");
+      expect(previews[0]?.unresolvedVars).toEqual(["branch_name"]);
+    });
+
+    it("flags only the known-missing var in a mixed known/unknown draft", () => {
+      armOneEligible({});
+      const previews = buildFleetTargetPreviews("{{branch_name}} {{foo}}");
+      expect(previews[0]?.unresolvedVars).toEqual(["branch_name"]);
+    });
+
+    it("flags {{number}} when neither issue nor PR number is set", () => {
+      armOneEligible({});
+      const previews = buildFleetTargetPreviews("see {{number}}");
+      expect(previews[0]?.unresolvedVars).toEqual(["number"]);
+    });
+
+    it("resolves {{number}} from issueNumber and reports no unresolved vars", () => {
+      armOneEligible({ issueNumber: 9954 });
+      const previews = buildFleetTargetPreviews("see {{number}}");
+      expect(previews[0]?.unresolvedVars).toEqual([]);
+      expect(previews[0]?.resolvedPayload).toBe("see #9954");
+    });
   });
 });
