@@ -29,7 +29,6 @@ import { saveNormalized } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { deriveRuntimeStatus } from "./helpers";
 import { cancelReconnectErrorDebounce } from "./browser";
-import { cancelTerminalFlowState } from "@/store/panelStatusBuffer";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import {
   buildAgentLaunchFlagsForRuntimeSettings,
@@ -194,7 +193,11 @@ export const createRestartActions = (
     // Evict any buffered flow-status/held-duration patch so a pending RAF flush
     // can't resurrect the previous process's "paused" pill after the clear
     // below (#9899). onExit skips this for restarts (markTerminalRestarting),
-    // so the restart path must do it itself.
+    // so the restart path must do it itself. Dynamic-import panelStatusBuffer
+    // to avoid a static slice→panelStore cycle (the cold-graph init gate in
+    // worktreeStore.circularInit.test.ts); the await lands after the
+    // synchronous markTerminalRestarting, so the exit-race guard is unaffected.
+    const { cancelTerminalFlowState } = await import("@/store/panelStatusBuffer");
     cancelTerminalFlowState(id);
 
     // Also set the store flag for UI and other consumers
