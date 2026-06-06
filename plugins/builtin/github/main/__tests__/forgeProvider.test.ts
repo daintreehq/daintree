@@ -1185,3 +1185,130 @@ describe("createIssue", () => {
     });
   });
 });
+
+function parseBuiltUrl(s: string) {
+  const url = new URL(s);
+  return { path: url.pathname, q: url.searchParams.get("q") };
+}
+
+describe("buildIssuesUrl", () => {
+  it("returns the bare /issues path with no q param when no options are given", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildIssuesUrl(repo));
+    expect(path).toBe("/owner/repo/issues");
+    expect(q).toBeNull();
+  });
+
+  it("returns the bare /issues path with no q param when options is empty", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildIssuesUrl(repo, {}));
+    expect(path).toBe("/owner/repo/issues");
+    expect(q).toBeNull();
+  });
+
+  it("passes a query through to q without a state qualifier", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildIssuesUrl(repo, { query: "bug" }));
+    expect(path).toBe("/owner/repo/issues");
+    expect(q).toBe("bug");
+  });
+
+  // Regression for #9986: the previous implementation gated the `is:<state>`
+  // qualifier on `query` being truthy, so `{ state: "closed" }` alone returned
+  // the bare /issues URL and silently dropped the filter.
+  it("applies the state filter as a q qualifier even when no query is given", () => {
+    const { path, q } = parseBuiltUrl(
+      githubForgeProvider.buildIssuesUrl(repo, { state: "closed" })
+    );
+    expect(path).toBe("/owner/repo/issues");
+    expect(q).toBe("is:closed");
+  });
+
+  it("treats an empty-string query as absent and still applies the state filter", () => {
+    const { q } = parseBuiltUrl(
+      githubForgeProvider.buildIssuesUrl(repo, { query: "", state: "closed" })
+    );
+    expect(q).toBe("is:closed");
+  });
+
+  it("appends the state qualifier after the query when both are present", () => {
+    const { path, q } = parseBuiltUrl(
+      githubForgeProvider.buildIssuesUrl(repo, { query: "bug", state: "closed" })
+    );
+    expect(path).toBe("/owner/repo/issues");
+    expect(q).toBe("bug is:closed");
+  });
+
+  it("treats state: 'all' as a no-op when given alone", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildIssuesUrl(repo, { state: "all" }));
+    expect(path).toBe("/owner/repo/issues");
+    expect(q).toBeNull();
+  });
+
+  it("treats state: 'all' as a no-op even when combined with a query", () => {
+    const { q } = parseBuiltUrl(
+      githubForgeProvider.buildIssuesUrl(repo, { query: "bug", state: "all" })
+    );
+    expect(q).toBe("bug");
+  });
+});
+
+describe("buildPRsUrl", () => {
+  it("returns the bare /pulls path with no q param when no options are given", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo));
+    expect(path).toBe("/owner/repo/pulls");
+    expect(q).toBeNull();
+  });
+
+  it("returns the bare /pulls path with no q param when options is empty", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo, {}));
+    expect(path).toBe("/owner/repo/pulls");
+    expect(q).toBeNull();
+  });
+
+  it("passes a query through to q without a state qualifier", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo, { query: "bug" }));
+    expect(path).toBe("/owner/repo/pulls");
+    expect(q).toBe("bug");
+  });
+
+  // Regression for #9986: see buildIssuesUrl counterpart.
+  it("applies the state filter as a q qualifier even when no query is given", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo, { state: "closed" }));
+    expect(path).toBe("/owner/repo/pulls");
+    expect(q).toBe("is:closed");
+  });
+
+  it("applies state: 'merged' as a q qualifier on its own", () => {
+    // PRs only — issues never use "merged" upstream, but the builder must
+    // round-trip whatever the caller supplies.
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo, { state: "merged" }));
+    expect(path).toBe("/owner/repo/pulls");
+    expect(q).toBe("is:merged");
+  });
+
+  it("treats an empty-string query as absent and still applies the state filter", () => {
+    const { q } = parseBuiltUrl(
+      githubForgeProvider.buildPRsUrl(repo, { query: "", state: "merged" })
+    );
+    expect(q).toBe("is:merged");
+  });
+
+  it("appends the state qualifier after the query when both are present", () => {
+    const { path, q } = parseBuiltUrl(
+      githubForgeProvider.buildPRsUrl(repo, { query: "bug", state: "closed" })
+    );
+    expect(path).toBe("/owner/repo/pulls");
+    expect(q).toBe("bug is:closed");
+  });
+
+  it("treats state: 'all' as a no-op when given alone", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo, { state: "all" }));
+    expect(path).toBe("/owner/repo/pulls");
+    expect(q).toBeNull();
+  });
+
+  it("treats state: 'all' as a no-op even when combined with a query", () => {
+    const { q } = parseBuiltUrl(
+      githubForgeProvider.buildPRsUrl(repo, { query: "bug", state: "all" })
+    );
+    expect(q).toBe("bug");
+  });
+});
