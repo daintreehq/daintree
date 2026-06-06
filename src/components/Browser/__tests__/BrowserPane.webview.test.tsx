@@ -476,6 +476,56 @@ describe("BrowserPane webview lifecycle regression", () => {
     expect(status.textContent).toContain("Loading…");
   });
 
+  it("announces the slow-load escalation via a polite live region (#9964)", () => {
+    // aria-busy on the status wrapper suppresses inner live regions, so the
+    // escalation must flow through the sibling aria-live span.
+    const { container } = render(<BrowserPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+
+    act(() => {
+      webview.setMockLoading(true);
+      emitWebviewEvent(webview, "did-start-loading");
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(401);
+    });
+
+    const liveRegion = container.querySelector('[aria-live="polite"]');
+    expect(liveRegion).not.toBeNull();
+    expect(liveRegion?.textContent).toBe("");
+
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(liveRegion?.textContent).toContain("taking longer than usual");
+  });
+
+  it("removes the loading status region after did-stop-loading (#9964)", () => {
+    const { container, queryByRole } = render(<BrowserPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+
+    act(() => {
+      webview.setMockLoading(true);
+      emitWebviewEvent(webview, "did-start-loading");
+    });
+    act(() => {
+      vi.advanceTimersByTime(401);
+    });
+    expect(queryByRole("status")).not.toBeNull();
+
+    act(() => {
+      webview.setMockLoading(false);
+      emitWebviewEvent(webview, "did-stop-loading");
+    });
+    act(() => {
+      vi.advanceTimersByTime(401);
+    });
+
+    expect(queryByRole("status")).toBeNull();
+  });
+
   describe("back/forward navigation guard (#9942)", () => {
     function getLoadingOverlay(container: HTMLElement): Element | null {
       return container.querySelector(".bg-daintree-bg.z-10");

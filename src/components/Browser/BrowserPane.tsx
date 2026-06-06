@@ -1011,14 +1011,19 @@ export function BrowserPane({
             <div className="relative flex-1 min-h-0">
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
               {showLoadingOverlay && (
-                <div
-                  className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg z-10 gap-3"
-                  role="status"
-                  aria-busy="true"
-                  aria-label="Loading…"
-                >
-                  <span className="sr-only">Loading…</span>
-                  <Spinner size="2xl" className="text-status-info" />
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg z-10 gap-3">
+                  {/* aria-busy on the status wrapper suppresses inner live regions,
+                      so the slow-load escalation announces via the sibling
+                      aria-live span below (SkeletonHint pattern). */}
+                  <div role="status" aria-busy="true" aria-label="Loading…">
+                    <span className="sr-only">Loading…</span>
+                    <Spinner size="2xl" className="text-status-info" />
+                  </div>
+                  <span className="sr-only" aria-live="polite" aria-atomic="true">
+                    {isSlowLoad
+                      ? "Loading is taking longer than usual. Select Cancel to stop."
+                      : ""}
+                  </span>
                   {isSlowLoad && (
                     <>
                       <p aria-hidden="true" className="text-xs text-daintree-text/50">
