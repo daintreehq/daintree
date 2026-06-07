@@ -123,9 +123,11 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
-   * Trim a single terminal's scrollback to `targetLines`. Returns false when the
-   * terminal is unknown so the caller can log a skipped id without a throw. Used by
-   * the governor's targeted pre-pause reclaim to trim the heaviest contributors only.
+   * Trim a single terminal's scrollback to `targetLines`. Returns false (rather
+   * than throwing) when the terminal is unknown — e.g. it was disposed between the
+   * governor's `getTerminalBufferSizes()` snapshot and this call — so a stale id in
+   * the targeted-trim map is a silent no-op. The bool is informational; callers may
+   * ignore it. Used by the governor's targeted pre-pause reclaim.
    */
   trimTerminalScrollback(id: string, targetLines: number): boolean {
     const terminal = this.registry.get(id);
