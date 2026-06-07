@@ -153,37 +153,14 @@ export function applyFleetBroadcastResult(payload: BroadcastWriteResultPayload):
 
 registerFleetInputBroadcastHandler(broadcastFleetRawInput);
 
-// Module-level subscription: HMR/test re-imports would otherwise stack
-// listeners. Stash a flag on globalThis the same way fleetArmingStore does
-// so a reload reuses the existing subscription instead of doubling up.
-const FLEET_BROADCAST_RESULT_SUB_KEY = "__daintreeFleetBroadcastResultSubscription";
-
-interface FleetBroadcastResultSubscriptionState {
-  registered: boolean;
+/**
+ * Subscribe `applyFleetBroadcastResult` to the main-process broadcast-write
+ * results IPC. Returns the IPC unsubscribe so the orchestrator's
+ * `DisposableStore` can drop it on teardown — HMR re-imports and
+ * `vi.resetModules()` rebuild the module fresh, so the previous listener
+ * (bound to the orphaned store set) must be unsubscribed before the new
+ * one is installed. Mirrors the `subscribeFleetArmingPanelPruning` pattern.
+ */
+export function subscribeFleetBroadcastResult(): () => void {
+  return terminalClient.onBroadcastResult(applyFleetBroadcastResult);
 }
-
-function getBroadcastResultSubscriptionState(): FleetBroadcastResultSubscriptionState {
-  const target = globalThis as typeof globalThis & {
-    [FLEET_BROADCAST_RESULT_SUB_KEY]?: FleetBroadcastResultSubscriptionState;
-  };
-  const existing = target[FLEET_BROADCAST_RESULT_SUB_KEY];
-  if (existing) return existing;
-  const created: FleetBroadcastResultSubscriptionState = { registered: false };
-  target[FLEET_BROADCAST_RESULT_SUB_KEY] = created;
-  return created;
-}
-
-(function registerBroadcastResultSubscription(): void {
-  if (typeof window === "undefined") return;
-  // `window.electron` is declared as required for the renderer, but unit tests
-  // run under jsdom without preload. Cast to a permissive shape so the runtime
-  // existence check is honest.
-  const win = window as unknown as {
-    electron?: { terminal?: { onBroadcastWriteResult?: unknown } };
-  };
-  if (typeof win.electron?.terminal?.onBroadcastWriteResult !== "function") return;
-  const subState = getBroadcastResultSubscriptionState();
-  if (subState.registered) return;
-  subState.registered = true;
-  terminalClient.onBroadcastResult(applyFleetBroadcastResult);
-})();
