@@ -184,8 +184,15 @@ function GitPullRebaseConfirmDialogInner() {
 }
 
 export function GitPullRebaseConfirmDialog() {
+  // Reset the boundary on each new request so a crashed inner dialog recovers
+  // when the next pull-rebase confirm arrives (#9918).
+  const requestSeq = useGitPullRebaseConfirmStore((s) => s.requestSeq);
   return (
-    <ErrorBoundary variant="component" componentName="GitPullRebaseConfirmDialog">
+    <ErrorBoundary
+      variant="component"
+      componentName="GitPullRebaseConfirmDialog"
+      resetKeys={[requestSeq]}
+    >
       <GitPullRebaseConfirmDialogInner />
     </ErrorBoundary>
   );

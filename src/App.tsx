@@ -590,7 +590,7 @@ function AppInner() {
   const mcpConfirmResetKey = useMcpConfirmStore((s) => s.current?.requestId ?? "");
   const pluginConfirmResetKey = usePluginConfirmStore((s) => s.current?.requestId ?? "");
   const pluginMcpConfirmResetKey = usePluginMcpConfirmStore((s) => s.current?.requestId ?? "");
-  const diagnosticsReviewResetKey = useDiagnosticsReviewStore((s) => Number(s.isOpen));
+  const diagnosticsReviewResetKey = useDiagnosticsReviewStore((s) => s.requestSeq);
   const [terminalInfoResetKey, setTerminalInfoResetKey] = useState(0);
   const [fileViewerResetKey, setFileViewerResetKey] = useState(0);
   useEffect(() => {

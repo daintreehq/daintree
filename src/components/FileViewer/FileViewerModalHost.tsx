@@ -17,6 +17,10 @@ interface FileViewState {
 
 export function FileViewerModalHost() {
   const [fileView, setFileView] = useState<FileViewState | null>(null);
+  // Monotonic open counter — `Number(fileView != null)` would stay `[1]` while a
+  // file is already open, so a crashed boundary would never reset when the user
+  // opens a different file. The counter changes on every open event (#9918).
+  const [openSeq, setOpenSeq] = useState(0);
   const currentProject = useProjectStore((s) => s.currentProject);
   const projectRootPath = currentProject?.path ?? "";
   const effectiveRootPath = fileView?.rootPath ?? projectRootPath;
@@ -34,6 +38,7 @@ export function FileViewerModalHost() {
         line: typeof d.line === "number" ? d.line : undefined,
         col: typeof d.col === "number" ? d.col : undefined,
       });
+      setOpenSeq((s) => s + 1);
     };
 
     const controller = new AbortController();
@@ -44,11 +49,7 @@ export function FileViewerModalHost() {
   if (!fileView) return null;
 
   return (
-    <ErrorBoundary
-      variant="component"
-      componentName="FileViewerModal"
-      resetKeys={[Number(fileView != null)]}
-    >
+    <ErrorBoundary variant="component" componentName="FileViewerModal" resetKeys={[openSeq]}>
       <Suspense
         fallback={
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim-medium">
