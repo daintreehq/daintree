@@ -34,6 +34,7 @@ import { useWorktreePalette } from "./hooks/useWorktreePalette";
 import { useQuickCreatePalette } from "./hooks/useQuickCreatePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
+import { useKeepMounted } from "./hooks/useKeepMounted";
 import { useMcpBridge } from "./hooks/useMcpBridge";
 import { usePluginBridge } from "./hooks/usePluginBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
@@ -473,6 +474,20 @@ function AppInner() {
   const cloneRepoDialogOpen = useProjectStore((state) => state.cloneRepoDialogOpen);
   const closeCloneRepoDialog = useProjectStore((state) => state.closeCloneRepoDialog);
   const handleCloneSuccess = useProjectStore((state) => state.handleCloneSuccess);
+
+  const shouldMountCreateFolderDialog = useKeepMounted(createFolderDialogOpen);
+  const shouldMountCloneRepoDialog = useKeepMounted(cloneRepoDialogOpen);
+  // GitInitDialog mounts on the directory path (its `directoryPath` prop is
+  // non-nullable), but closeGitInitDialog() clears both `gitInitDialogOpen` and
+  // `gitInitDirectoryPath` in one set(). Latch the last non-null path so the
+  // dialog keeps a valid prop through its exit animation window (#9917). On the
+  // next open the store sets the path before isOpen, so a fresh path wins.
+  const shouldMountGitInitDialog = useKeepMounted(gitInitDialogOpen);
+  const [latchedGitInitPath, setLatchedGitInitPath] = useState<string | null>(null);
+  useEffect(() => {
+    if (gitInitDirectoryPath) setLatchedGitInitPath(gitInitDirectoryPath);
+  }, [gitInitDirectoryPath]);
+  const effectiveGitInitPath = gitInitDirectoryPath ?? latchedGitInitPath;
   const { selectWorktree, activeWorktreeId, focusedWorktreeId } = useWorktreeSelectionStore(
     useShallow((state) => ({
       selectWorktree: state.selectWorktree,
@@ -495,10 +510,7 @@ function AppInner() {
     handleOpenSettingsTab,
     setIsSettingsOpen,
   } = useSettingsDialog();
-  const [hasOpenedSettings, setHasOpenedSettings] = useState(false);
-  useEffect(() => {
-    if (isSettingsOpen) setHasOpenedSettings(true);
-  }, [isSettingsOpen]);
+  const shouldMountSettings = useKeepMounted(isSettingsOpen);
 
   useThemeBrowserSettingsBridge(isSettingsOpen, setIsSettingsOpen);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
@@ -508,10 +520,7 @@ function AppInner() {
   const isPluginManagerOpen = usePluginManagerStore((s) => s.isOpen);
   // Keep the view mounted after its first open so the plugin list and any
   // pending operation state survive a close/reopen (mirrors SettingsDialog).
-  const [hasOpenedPluginManager, setHasOpenedPluginManager] = useState(false);
-  useEffect(() => {
-    if (isPluginManagerOpen) setHasOpenedPluginManager(true);
-  }, [isPluginManagerOpen]);
+  const shouldMountPluginManager = useKeepMounted(isPluginManagerOpen);
   // Close Settings when the manager opens so the two surfaces don't stack —
   // covers both entry points (the `app.pluginManager` action dispatched from
   // the Plugins settings tab, and the deep-link path below). Mirrors the
@@ -530,6 +539,28 @@ function AppInner() {
     openWorktreeOverview,
     closeWorktreeOverview,
   } = useWorktreeOverview();
+
+  // Keep each palette/dialog mounted after its first open so its exit animation
+  // (driven by useAnimatedPresence) can run — gating directly on `isOpen`
+  // unmounts in the same React commit that flips it false, killing the exit
+  // (#9917). The component still receives `isOpen` and gates its own DOM via
+  // `shouldRender`.
+  const isProjectSwitcherModalOpen =
+    projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal";
+  const shouldMountQuickSwitcher = useKeepMounted(quickSwitcher.isOpen);
+  const shouldMountSendToAgentPalette = useKeepMounted(sendToAgentPalette.isOpen);
+  const shouldMountNewTerminalPalette = useKeepMounted(newTerminalPalette.isOpen);
+  const shouldMountWorktreePalette = useKeepMounted(worktreePalette.isOpen);
+  const shouldMountQuickCreatePalette = useKeepMounted(quickCreatePalette.isOpen);
+  const shouldMountPanelPalette = useKeepMounted(panelPalette.isOpen);
+  const shouldMountProjectSwitcherModal = useKeepMounted(isProjectSwitcherModalOpen);
+  const shouldMountThemePalette = useKeepMounted(isThemePaletteOpen);
+  const shouldMountLogLevelPalette = useKeepMounted(isLogLevelPaletteOpen);
+  const shouldMountActionPalette = useKeepMounted(actionPalette.isOpen);
+  const shouldMountWorktreeOverview = useKeepMounted(isWorktreeOverviewOpen);
+  const shouldMountCrossDiffDialog = useKeepMounted(crossDiffDialog.isOpen);
+  const shouldMountShortcutsDialog = useKeepMounted(isShortcutsOpen);
+
   const onLayoutRender = useRenderProfiler("app-layout", { sampleRate: 0.15 });
   const onContentGridRender = useRenderProfiler("content-grid", { sampleRate: 0.15 });
 
@@ -869,7 +900,7 @@ function AppInner() {
               componentName="QuickSwitcher"
               resetKeys={[Number(quickSwitcher.isOpen)]}
             >
-              {quickSwitcher.isOpen && (
+              {shouldMountQuickSwitcher && (
                 <Suspense fallback={null}>
                   <LazyQuickSwitcher
                     isOpen={quickSwitcher.isOpen}
@@ -894,7 +925,7 @@ function AppInner() {
               componentName="SendToAgentPalette"
               resetKeys={[Number(sendToAgentPalette.isOpen)]}
             >
-              {sendToAgentPalette.isOpen && (
+              {shouldMountSendToAgentPalette && (
                 <Suspense fallback={null}>
                   <LazySendToAgentPalette
                     isOpen={sendToAgentPalette.isOpen}
@@ -917,7 +948,7 @@ function AppInner() {
               componentName="NewTerminalPalette"
               resetKeys={[Number(newTerminalPalette.isOpen)]}
             >
-              {newTerminalPalette.isOpen && (
+              {shouldMountNewTerminalPalette && (
                 <Suspense fallback={null}>
                   <LazyNewTerminalPalette
                     isOpen={newTerminalPalette.isOpen}
@@ -940,7 +971,7 @@ function AppInner() {
               componentName="WorktreePalette"
               resetKeys={[Number(worktreePalette.isOpen)]}
             >
-              {worktreePalette.isOpen && (
+              {shouldMountWorktreePalette && (
                 <Suspense fallback={null}>
                   <LazyWorktreePalette
                     isOpen={worktreePalette.isOpen}
@@ -965,7 +996,7 @@ function AppInner() {
               componentName="QuickCreatePalette"
               resetKeys={[Number(quickCreatePalette.isOpen)]}
             >
-              {quickCreatePalette.isOpen && (
+              {shouldMountQuickCreatePalette && (
                 <Suspense fallback={null}>
                   <LazyQuickCreatePalette palette={quickCreatePalette} />
                 </Suspense>
@@ -976,7 +1007,7 @@ function AppInner() {
               componentName="PanelPalette"
               resetKeys={[Number(panelPalette.isOpen)]}
             >
-              {panelPalette.isOpen && (
+              {shouldMountPanelPalette && (
                 <Suspense fallback={null}>
                   <LazyPanelPalette
                     isOpen={panelPalette.isOpen}
@@ -1071,16 +1102,12 @@ function AppInner() {
             <ErrorBoundary
               variant="component"
               componentName="ProjectSwitcherPalette"
-              resetKeys={[
-                Number(projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal"),
-              ]}
+              resetKeys={[Number(isProjectSwitcherModalOpen)]}
             >
-              {projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal" && (
+              {shouldMountProjectSwitcherModal && (
                 <Suspense fallback={null}>
                   <LazyProjectSwitcherPalette
-                    isOpen={
-                      projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal"
-                    }
+                    isOpen={isProjectSwitcherModalOpen}
                     query={projectSwitcherPalette.query}
                     results={projectSwitcherPalette.results}
                     selectedIndex={projectSwitcherPalette.selectedIndex}
@@ -1161,7 +1188,7 @@ function AppInner() {
               componentName="ThemePalette"
               resetKeys={[Number(isThemePaletteOpen)]}
             >
-              {isThemePaletteOpen && (
+              {shouldMountThemePalette && (
                 <Suspense fallback={null}>
                   <LazyThemePalette isOpen={isThemePaletteOpen} onClose={closeThemePalette} />
                 </Suspense>
@@ -1173,7 +1200,7 @@ function AppInner() {
               componentName="LogLevelPalette"
               resetKeys={[Number(isLogLevelPaletteOpen)]}
             >
-              {isLogLevelPaletteOpen && (
+              {shouldMountLogLevelPalette && (
                 <Suspense fallback={null}>
                   <LazyLogLevelPalette
                     isOpen={isLogLevelPaletteOpen}
@@ -1188,7 +1215,7 @@ function AppInner() {
               componentName="ActionPalette"
               resetKeys={[Number(actionPalette.isOpen)]}
             >
-              {actionPalette.isOpen && (
+              {shouldMountActionPalette && (
                 <Suspense fallback={null}>
                   <LazyActionPalette
                     isOpen={actionPalette.isOpen}
@@ -1218,7 +1245,7 @@ function AppInner() {
               componentName="WorktreeOverviewModal"
               resetKeys={[Number(isWorktreeOverviewOpen)]}
             >
-              {isWorktreeOverviewOpen && (
+              {shouldMountWorktreeOverview && (
                 <Suspense fallback={null}>
                   <LazyWorktreeOverviewModal
                     isOpen={isWorktreeOverviewOpen}
@@ -1245,7 +1272,7 @@ function AppInner() {
               componentName="CrossWorktreeDiff"
               resetKeys={[Number(crossDiffDialog.isOpen)]}
             >
-              {crossDiffDialog.isOpen && (
+              {shouldMountCrossDiffDialog && (
                 <Suspense fallback={null}>
                   <LazyCrossWorktreeDiff
                     isOpen={crossDiffDialog.isOpen}
@@ -1261,7 +1288,7 @@ function AppInner() {
               componentName="SettingsDialog"
               resetKeys={[Number(isSettingsOpen)]}
             >
-              {(isSettingsOpen || hasOpenedSettings) && (
+              {shouldMountSettings && (
                 <Suspense fallback={null}>
                   <LazySettingsDialog
                     isOpen={isSettingsOpen}
@@ -1281,7 +1308,7 @@ function AppInner() {
               componentName="ShortcutReferenceDialog"
               resetKeys={[Number(isShortcutsOpen)]}
             >
-              {isShortcutsOpen && (
+              {shouldMountShortcutsDialog && (
                 <Suspense fallback={null}>
                   <LazyShortcutReferenceDialog
                     isOpen={isShortcutsOpen}
@@ -1297,7 +1324,7 @@ function AppInner() {
               resetKeys={[Number(isPluginManagerOpen)]}
               onError={() => usePluginManagerStore.getState().close()}
             >
-              {(isPluginManagerOpen || hasOpenedPluginManager) && (
+              {shouldMountPluginManager && (
                 <Suspense fallback={null}>
                   <LazyPluginManagerView
                     deepLinkIntent={pluginDeepLink.intent}
@@ -1364,11 +1391,11 @@ function AppInner() {
               componentName="GitInitDialog"
               resetKeys={[Number(gitInitDialogOpen)]}
             >
-              {gitInitDirectoryPath && (
+              {shouldMountGitInitDialog && effectiveGitInitPath && (
                 <Suspense fallback={null}>
                   <LazyGitInitDialog
                     isOpen={gitInitDialogOpen}
-                    directoryPath={gitInitDirectoryPath}
+                    directoryPath={effectiveGitInitPath}
                     onSuccess={handleGitInitSuccess}
                     onCancel={closeGitInitDialog}
                   />
@@ -1381,7 +1408,7 @@ function AppInner() {
               componentName="CreateProjectFolderDialog"
               resetKeys={[Number(createFolderDialogOpen)]}
             >
-              {createFolderDialogOpen && (
+              {shouldMountCreateFolderDialog && (
                 <Suspense fallback={null}>
                   <LazyCreateProjectFolderDialog
                     isOpen={createFolderDialogOpen}
@@ -1396,7 +1423,7 @@ function AppInner() {
               componentName="CloneRepoDialog"
               resetKeys={[Number(cloneRepoDialogOpen)]}
             >
-              {cloneRepoDialogOpen && (
+              {shouldMountCloneRepoDialog && (
                 <Suspense fallback={null}>
                   <LazyCloneRepoDialog
                     isOpen={cloneRepoDialogOpen}
