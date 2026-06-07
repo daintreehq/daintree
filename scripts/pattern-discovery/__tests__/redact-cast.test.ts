@@ -93,7 +93,7 @@ describe("redactCastText", () => {
   });
 
   it("throws on a malformed event row with the line number", () => {
-    const input = cast("[0.5, \"o\"");
+    const input = cast('[0.5, "o"');
     expect(() => redactCastText(input)).toThrow(/line 2/);
   });
 

@@ -118,12 +118,8 @@ describe("scrubReportPath", () => {
   });
 
   it("redacts /tmp and /var/folders paths", () => {
-    expect(scrubReportPath("wrote /tmp/daintree-greg-1234/out.log")).toBe(
-      "wrote /tmp/REDACTED"
-    );
-    expect(scrubReportPath("/var/folders/ab/x1y2z3/T/session.sock")).toBe(
-      "/var/folders/REDACTED"
-    );
+    expect(scrubReportPath("wrote /tmp/daintree-greg-1234/out.log")).toBe("wrote /tmp/REDACTED");
+    expect(scrubReportPath("/var/folders/ab/x1y2z3/T/session.sock")).toBe("/var/folders/REDACTED");
     expect(scrubReportPath("/private/tmp/scratch/file")).toBe("/private/tmp/REDACTED");
   });
 

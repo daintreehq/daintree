@@ -169,9 +169,8 @@ function main(): void {
   const agentId = options.agentId ?? entries[0]?.agentId;
   const result = writeCastFixture(options.outBase, castText, buildStubExpected(agentId));
 
-  const mode = (options.lineEvents ?? corpusLooksSynthetic(entries))
-    ? "line-structured"
-    : "raw chunks";
+  const mode =
+    (options.lineEvents ?? corpusLooksSynthetic(entries)) ? "line-structured" : "raw chunks";
   console.log(`[jsonl-to-cast] Wrote ${result.castPath} (${entries.length} events, ${mode})`);
   if (result.wroteExpected) {
     console.log(`[jsonl-to-cast] Wrote stub ${result.expectedPath} — calibrate before committing`);
