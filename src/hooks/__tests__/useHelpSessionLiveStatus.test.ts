@@ -80,8 +80,8 @@ describe("useHelpSessionLiveStatus", () => {
     expect(onGrantLifecycle).toHaveBeenCalledTimes(1);
     expect(getLiveSessionStatus).toHaveBeenCalledWith({ sessionId: "help-1" });
     // Ordering matters: a push arriving in the mount→pull gap must not be missed.
-    expect(onGrantLifecycle.mock.invocationCallOrder[0]).toBeLessThan(
-      getLiveSessionStatus.mock.invocationCallOrder[0]
+    expect(onGrantLifecycle.mock.invocationCallOrder[0]!).toBeLessThan(
+      getLiveSessionStatus.mock.invocationCallOrder[0]!
     );
   });
 
