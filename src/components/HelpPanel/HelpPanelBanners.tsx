@@ -20,6 +20,11 @@ const GRANT_ENDED_BODY: Record<GrantEndReason, string> = {
   "grant-ceiling": "hit its 30-minute limit. The next call will ask to approve it again.",
 };
 
+// The countdown re-derives from `expiresAt` once a second — the tick only
+// drives a re-render, it isn't the source of truth, so a missed beat can't
+// drift the displayed value.
+const COUNTDOWN_TICK_MS = 1000;
+
 function formatRemaining(totalSeconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
@@ -55,7 +60,7 @@ function GrantActiveBanner({
     setRemainingSeconds(computeRemainingSeconds(grant.expiresAt));
     const id = setInterval(() => {
       setRemainingSeconds(computeRemainingSeconds(grant.expiresAt));
-    }, 1000);
+    }, COUNTDOWN_TICK_MS);
     return () => clearInterval(id);
   }, [grant.expiresAt]);
 

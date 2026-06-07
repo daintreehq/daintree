@@ -1026,6 +1026,20 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
     ctrl.stop();
   });
 
+  it("a failed revoke keeps the countdown banner up as the retry surface", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    issueGrant();
+    mockMcpRevokeSessionGrants.mockRejectedValueOnce(new Error("ipc boom"));
+    ctrl.revokeGrant();
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().isRevokingGrant).toBe(false);
+    });
+    // Revoke failed → the grant is still live, so the banner must stay put.
+    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t1");
+    ctrl.stop();
+  });
+
   it("a teardown mid-revoke does not leak a disabled Revoke button into the next grant", () => {
     const ctrl = new HelpSessionController();
     ctrl.start();

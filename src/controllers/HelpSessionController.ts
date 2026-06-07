@@ -986,12 +986,13 @@ export class HelpSessionController {
    * the session — the help session only ever holds one per-tool grant at a
    * time, so this maps to the single banner the user sees. Normally the
    * `grant.revoked` lifecycle event (reason `user`) clears the banner first;
-   * the `.finally` also clears `activeGrant` as a renderer-authoritative
-   * fallback so a dropped event (WebContents torn down before it fired) can't
-   * leave a zombie countdown. The clear is scoped to the exact `(session,
-   * toolId)` we revoked, so it never wipes a newer grant that arrived in the
-   * meantime. No `ConfirmDialog` — this is a D1 action whose inverse
-   * (re-approve) is one tool call away.
+   * the `.then` clears `activeGrant` as a renderer-authoritative fallback so a
+   * dropped event (WebContents torn down before it fired) can't leave a zombie
+   * countdown. The fallback runs only on success and is scoped to the exact
+   * `(session, toolId)` we revoked, so a failed revoke leaves the banner up as
+   * its own retry surface and a newer grant that arrived meanwhile survives.
+   * No `ConfirmDialog` — this is a D1 action whose inverse (re-approve) is one
+   * tool call away.
    */
   revokeGrant(): void {
     const active = this._snapshot.activeGrant;
@@ -1001,22 +1002,24 @@ export class HelpSessionController {
     safeFireAndForget(
       window.electron.mcpServer
         .revokeSessionGrants({ sessionId })
+        .then(() => {
+          // Renderer-authoritative clear on success: normally the
+          // `grant.revoked` (reason `user`) lifecycle event already cleared the
+          // banner; this covers a dropped event (WebContents torn down before
+          // it fired). Scoped to the exact `(session, toolId)` we revoked so a
+          // newer grant that arrived in the meantime survives.
+          const current = this._snapshot.activeGrant;
+          if (current?.sessionId === sessionId && current?.toolId === toolId) {
+            this._patch({ activeGrant: null });
+          }
+        })
         .catch((err) => {
+          // The grant is still live and its countdown banner stays put, so the
+          // banner itself is the retry surface — diagnostic only, no toast.
           logError("HelpPanel: revokeSessionGrants failed", err);
-          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-          notify({
-            type: "error",
-            title: "Couldn't revoke access",
-            message: formatErrorMessage(err, "Couldn't revoke this tool's access."),
-          });
         })
         .finally(() => {
-          const current = this._snapshot.activeGrant;
-          const stillSame = current?.sessionId === sessionId && current?.toolId === toolId;
-          this._patch({
-            isRevokingGrant: false,
-            ...(stillSame ? { activeGrant: null } : {}),
-          });
+          this._patch({ isRevokingGrant: false });
         }),
       { context: "HelpPanel:revokeGrant" }
     );
