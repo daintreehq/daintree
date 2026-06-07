@@ -3,6 +3,7 @@ import { createHardenedGit } from "../utils/hardenedGit.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { logInfo, logWarn } from "../utils/logger.js";
 import type { SnapshotInfo } from "../../shared/types/ipc/git.js";
+import type { NotificationPayload } from "../../shared/types/index.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 const STASH_PREFIX = "daintree:pre-agent:";
@@ -82,11 +83,16 @@ export class PreAgentSnapshotService {
         worktreeId,
         error: formatErrorMessage(err, "Failed to create pre-agent snapshot"),
       });
+      // timestamp satisfies EVENT_META["ui:notify"].requiresTimestamp so EventBuffer
+      // (live in this main process) records it without a validation warning. It is
+      // EventBuffer transport metadata, not part of the NotificationPayload domain
+      // shape, hence the cast rather than widening the type.
       events.emit("ui:notify", {
         type: "warning",
         message:
           "Could not create pre-agent file snapshot. Agent will continue without rollback capability.",
-      });
+        timestamp: Date.now(),
+      } as NotificationPayload & { timestamp: number });
     });
   }
 

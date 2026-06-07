@@ -1409,6 +1409,13 @@ describe("PullRequestService", () => {
         detectionStates.push(payload)
       );
 
+      // This service runs in the workspace-host UtilityProcess, where ui:notify has
+      // no consumer, so the breaker trip must NOT emit it — the ambient
+      // detection-state path is the only signal. Guard against the dead emit
+      // returning (#9976).
+      const notifications: DaintreeEventMap["ui:notify"][] = [];
+      const unsubNotify = events.on("ui:notify", (payload) => notifications.push(payload));
+
       pullRequestService.initialize("/repo");
       events.emit(
         "sys:worktree:update",
@@ -1430,7 +1437,9 @@ describe("PullRequestService", () => {
 
       expect(svc.consecutiveErrors).toBe(3);
       expect(detectionStates).toContainEqual(expect.objectContaining({ tripped: true }));
+      expect(notifications).toHaveLength(0);
 
+      unsubNotify();
       unsubscribe();
       pullRequestService.destroy();
     });

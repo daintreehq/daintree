@@ -1796,11 +1796,11 @@ class PullRequestService {
       const backoffMs = computeBackoff(this.consecutiveErrors);
       this.nextRetryAt = Date.now() + backoffMs;
       logWarn("Too many consecutive errors - pausing PR polling", { retryInMs: backoffMs });
-      events.emit("ui:notify", {
-        type: "warning",
-        message: "PR detection paused due to errors. Will retry automatically.",
-        id: "pr-service-circuit-breaker",
-      });
+      // No ui:notify here: this service runs in the workspace-host UtilityProcess,
+      // where the EventBuffer subscriber (main-process only) does not exist, so the
+      // emit was inert. The breaker trip is surfaced ambiently via setDetectionState
+      // (sys:pr:detection-state → PRDetectionPausedIndicator), the correct tier for
+      // auto-recovering state.
       this.setDetectionState(true);
     }
   }
