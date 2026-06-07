@@ -10,6 +10,7 @@ import type {
   ActiveBearerRecord,
   AssistantTurnRecord,
   DisconnectBearerResult,
+  HelpSessionBearerRecord,
   McpAuditRecord,
   McpAuditStats,
   McpGrantLifecyclePayload,
@@ -510,6 +511,16 @@ export class McpServerService {
    */
   listActiveBearers(): ActiveBearerRecord[] {
     return this.httpLifecycle.listActiveBearers();
+  }
+
+  /**
+   * Read-only inventory of the renderer-pinned help-session bearers (the
+   * Daintree Assistant's own internal MCP connections) for the separate
+   * "Daintree Assistant connections" settings row (#10036). Display fields
+   * only — no tokens or hashes cross IPC, and there is no disconnect action.
+   */
+  listHelpSessionBearers(): HelpSessionBearerRecord[] {
+    return this.httpLifecycle.listHelpSessionBearers();
   }
 
   /**

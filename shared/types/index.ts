@@ -358,6 +358,7 @@ export type {
   McpRuntimeSnapshot,
   McpRuntimeState,
   ActiveBearerRecord,
+  HelpSessionBearerRecord,
   DisconnectBearerResult,
 } from "./ipc/mcpServer.js";
 export {

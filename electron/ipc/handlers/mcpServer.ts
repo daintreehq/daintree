@@ -11,6 +11,7 @@ import type {
   ActiveBearerRecord,
   AssistantTurnRecord,
   DisconnectBearerResult,
+  HelpSessionBearerRecord,
   McpActiveClientInfo,
   McpAuditRecord,
   McpAuditStats,
@@ -283,6 +284,13 @@ export const mcpServerNamespace = defineIpcNamespace({
       async (): Promise<ActiveBearerRecord[]> => {
         const svc = await getMcpServerService();
         return svc.listActiveBearers();
+      }
+    ),
+    listHelpSessionBearers: op(
+      MCP_SERVER_METHOD_CHANNELS.listHelpSessionBearers,
+      async (): Promise<HelpSessionBearerRecord[]> => {
+        const svc = await getMcpServerService();
+        return svc.listHelpSessionBearers();
       }
     ),
     disconnectBearer: op(

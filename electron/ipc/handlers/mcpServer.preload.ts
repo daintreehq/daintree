@@ -23,6 +23,7 @@ export const MCP_SERVER_METHOD_CHANNELS = {
   revokeSessionGrants: "mcp-server:revoke-session-grants",
   resetDenialCounts: "mcp-server:reset-denial-counts",
   listActiveBearers: "mcp-server:list-active-bearers",
+  listHelpSessionBearers: "mcp-server:list-help-session-bearers",
   disconnectBearer: "mcp-server:disconnect-bearer",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
