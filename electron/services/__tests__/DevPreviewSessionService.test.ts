@@ -1601,7 +1601,7 @@ describe("DevPreviewSessionService", () => {
   });
 
   describe("getUpstreamPortForSubdomain (#9100)", () => {
-    it("resolves a panel's proxy subdomain to its allocated upstream port", async () => {
+    it("resolves a panel's proxy subdomain to its allocated upstream port (plain HTTP fallback)", async () => {
       vi.spyOn(portAllocator, "allocatePort").mockImplementation(
         async (registry: Map<string, number>, key: string) => {
           registry.set(key, 4321);
@@ -1612,11 +1612,56 @@ describe("DevPreviewSessionService", () => {
       await service.ensure(baseRequest);
 
       const subdomain = buildDevPreviewSubdomain(baseRequest.projectId, baseRequest.panelId);
-      expect(service.getUpstreamPortForSubdomain(subdomain)).toBe(4321);
+      // Before any URL is detected the allocated port is used with the safe plain-HTTP default.
+      expect(service.getUpstreamPortForSubdomain(subdomain)).toEqual({
+        port: 4321,
+        isHttps: false,
+      });
     });
 
     it("returns null for an unknown subdomain", () => {
       expect(service.getUpstreamPortForSubdomain("dp-nope-nope")).toBeNull();
+    });
+
+    it("returns the detected port with isHttps:true for an HTTPS dev server (#9974)", async () => {
+      const started = await service.ensure(baseRequest);
+      ptyClient.emitData(started.terminalId!, "ready at https://localhost:8443\n");
+
+      const subdomain = buildDevPreviewSubdomain(baseRequest.projectId, baseRequest.panelId);
+      await vi.waitFor(() => {
+        expect(service.getUpstreamPortForSubdomain(subdomain)).toEqual({
+          port: 8443,
+          isHttps: true,
+        });
+      });
+    });
+
+    it("returns the detected port with isHttps:false for an HTTP dev server (#9974)", async () => {
+      const started = await service.ensure(baseRequest);
+      ptyClient.emitData(started.terminalId!, "ready at http://localhost:5173\n");
+
+      const subdomain = buildDevPreviewSubdomain(baseRequest.projectId, baseRequest.panelId);
+      await vi.waitFor(() => {
+        expect(service.getUpstreamPortForSubdomain(subdomain)).toEqual({
+          port: 5173,
+          isHttps: false,
+        });
+      });
+    });
+
+    it("resolves the scheme-default port when an HTTPS URL omits the port (#9974)", async () => {
+      // WHATWG URL strips the default port, so `https://localhost/` surfaces an empty port — the
+      // resolver must still dial 443 over HTTPS rather than falling back to the wrong port/scheme.
+      const started = await service.ensure(baseRequest);
+      ptyClient.emitData(started.terminalId!, "ready at https://localhost/\n");
+
+      const subdomain = buildDevPreviewSubdomain(baseRequest.projectId, baseRequest.panelId);
+      await vi.waitFor(() => {
+        expect(service.getUpstreamPortForSubdomain(subdomain)).toEqual({
+          port: 443,
+          isHttps: true,
+        });
+      });
     });
 
     it("returns null once the session is stopped even though the registry entry lingers", async () => {
@@ -1629,7 +1674,10 @@ describe("DevPreviewSessionService", () => {
 
       await service.ensure(baseRequest);
       const subdomain = buildDevPreviewSubdomain(baseRequest.projectId, baseRequest.panelId);
-      expect(service.getUpstreamPortForSubdomain(subdomain)).toBe(4321);
+      expect(service.getUpstreamPortForSubdomain(subdomain)).toEqual({
+        port: 4321,
+        isHttps: false,
+      });
 
       await service.stop({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
 
