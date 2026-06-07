@@ -1,6 +1,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import { checkIgnoredPaths } from "../utils/gitCheckIgnore.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { FileTreeNode } from "../../shared/types/ipc.js";
 
 const _baseRealpathCache = new Map<string, Promise<string>>();
@@ -98,7 +99,7 @@ export class FileTreeService {
           _lastWarnAt.set(resolvedBasePath, now);
           console.warn("git check-ignore failed; hiding checked entries to prevent leak", {
             code: (error as NodeJS.ErrnoException)?.code,
-            message: error instanceof Error ? error.message : String(error),
+            message: formatErrorMessage(error, "Unknown git check-ignore error"),
             entryCount: pathsToCheck.length,
           });
         }
