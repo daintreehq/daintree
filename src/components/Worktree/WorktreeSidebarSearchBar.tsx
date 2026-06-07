@@ -124,6 +124,10 @@ export function WorktreeSidebarSearchBar({
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
+    // The "Clear all" button unmounts once fewer than two filter axes remain,
+    // so keep focus on the search input — matching the X button's behaviour
+    // above — rather than letting it fall to body (issue #10315).
+    internalRef.current?.focus();
     // `clearAll` resets both `query` and `liveQuery` in the store.
     clearAll();
   }, [clearAll]);

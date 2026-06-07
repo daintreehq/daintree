@@ -194,6 +194,7 @@ export function WorktreeFilterPopover({
   const setIsOpen = onOpenChange ?? setInternalOpen;
   const [localQuery, setLocalQuery] = useState("");
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const {
     query,
@@ -290,6 +291,10 @@ export function WorktreeFilterPopover({
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
     }
+    // The footer (and this button) unmount the moment hasActiveFilters() goes
+    // false, so move focus onto the still-mounted popover content first — else
+    // it drops to document.body inside the open popover (issue #10315).
+    contentRef.current?.focus();
     setLocalQuery("");
     clearAll();
   }, [clearAll]);
@@ -314,6 +319,7 @@ export function WorktreeFilterPopover({
         </button>
       </PopoverTrigger>
       <PopoverContent
+        ref={contentRef}
         align="start"
         sideOffset={8}
         className="w-72 p-0 max-h-[70vh] overflow-y-auto"
