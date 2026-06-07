@@ -364,6 +364,31 @@ export interface McpHelpDisplayImagePayload {
 }
 
 /**
+ * The subset of {@link TurnOutcomeClass} values that warrant a live, in-app
+ * ambient signal in the Assistant panel (#10018). Both are silent
+ * "needs-a-look" outcomes the user would otherwise only find by opening the
+ * Settings diagnostics tab: the watchdog-driven `agent-stuck` and the
+ * tight-tool-call-loop `reasoning-loop`. Narrowed via `Extract` so the alert
+ * channel and pip can never carry a non-alertable outcome.
+ */
+export type TurnOutcomeAlertClass = Extract<TurnOutcomeClass, "agent-stuck" | "reasoning-loop">;
+
+/**
+ * Live event pushed to the pinned help-session renderer when a turn for that
+ * session classifies as `agent-stuck` or `reasoning-loop` (#10018). Drives the
+ * Assistant footer's ambient outcome pip — a Tier 1 indicator, never a toast.
+ * Targeted at the WebContents that minted the session's bearer, never
+ * broadcast. `turnId` is the turn the outcome was recorded for (absent for
+ * `agent-stuck`, whose turn id is already cleared by the time the watchdog
+ * fires); the renderer uses it to auto-clear the pip when a fresh turn begins.
+ */
+export interface McpTurnOutcomeAlertPayload {
+  helpSessionId: string;
+  outcome: TurnOutcomeAlertClass;
+  turnId?: string;
+}
+
+/**
  * Result of a renderer-driven `revokeSessionGrants` IPC. The handler
  * deletes every grant for the named session and reports how many entries
  * were affected — useful for UI confirmation copy ("Revoked N grants").

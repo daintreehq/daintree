@@ -1482,6 +1482,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onDisplayImage(
       callback: (payload: import("./mcpServer.js").McpHelpDisplayImagePayload) => void
     ): () => void;
+    /**
+     * Subscribe to turn-outcome alerts (`agent-stuck` / `reasoning-loop`) for
+     * the pinned help-session in this WebContents. Drives the Assistant
+     * footer's ambient outcome pip (#10018). Targeted send — never broadcast.
+     */
+    onTurnOutcomeAlert(
+      callback: (payload: import("./mcpServer.js").McpTurnOutcomeAlertPayload) => void
+    ): () => void;
   };
   // helpAssistant is generated — see GeneratedElectronAPI.
   mcpBridge: {

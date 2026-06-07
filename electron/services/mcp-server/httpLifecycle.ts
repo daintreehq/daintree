@@ -26,6 +26,7 @@ import type {
   McpBearerIdentity,
   McpIssueGrantResult,
   McpRevokeSessionGrantsResult,
+  McpTurnOutcomeAlertPayload,
 } from "../../../shared/types/ipc/mcpServer.js";
 import {
   extractBearerToken,
@@ -426,6 +427,39 @@ export class HttpLifecycle {
     // (#10036), so every teardown needs a runtime-state push so an open tab
     // drops the row.
     this.deps.emitRuntimeStateChange();
+  }
+
+  /**
+   * Push a turn-outcome alert (`agent-stuck` / `reasoning-loop`) to the
+   * renderer pinned to the originating help session (#10018). The
+   * `TurnOutcomeService` only knows the help-session id, so resolve it to a
+   * live transport session via `sessionHelpIdMap` (transport → help), then to
+   * the pinned WebContents. At most one transport session maps to a given help
+   * session at a time, so the first match with a live pin wins. Targeted send
+   * with the same `fromId` + `isDestroyed` guard as every other push — a
+   * WebContents LRU-evicted between handshake and alert rejects harmlessly.
+   */
+  notifyTurnOutcomeAlert(payload: McpTurnOutcomeAlertPayload): void {
+    for (const [transportSessionId, helpId] of this.deps.sessionStore.sessionHelpIdMap.entries()) {
+      if (helpId !== payload.helpSessionId) continue;
+      const pinnedId = this.deps.sessionStore.sessionWebContentsMap.get(transportSessionId);
+      if (pinnedId === undefined) continue;
+      const wc = webContentsModule.fromId(pinnedId);
+      // A transport session whose WebContents was LRU-evicted/destroyed is
+      // skipped, not treated as the answer — a reconnect or concurrent
+      // transport for the same help session may still hold a live pin.
+      if (!wc || wc.isDestroyed()) continue;
+      try {
+        wc.send(CHANNELS.MCP_TURN_OUTCOME_ALERT, {
+          helpSessionId: payload.helpSessionId,
+          outcome: payload.outcome,
+          ...(payload.turnId !== undefined ? { turnId: payload.turnId } : {}),
+        });
+      } catch (err) {
+        console.error("[MCP] turn-outcome-alert send failed:", err);
+      }
+      return;
+    }
   }
 
   /**

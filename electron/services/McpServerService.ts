@@ -207,6 +207,19 @@ export class McpServerService {
       emitRuntimeStateChange: () => this.emitRuntimeStateChange(),
       setConfig: (patch) => this.persistConfig(patch),
     });
+
+    // Wire the live turn-outcome alert push now that both collaborators exist
+    // (#10018). The service classifies `agent-stuck` / `reasoning-loop` and
+    // hands the help-session id to httpLifecycle, which resolves the pinned
+    // WebContents and sends. Set after construction because the send path
+    // lives on httpLifecycle, built just above.
+    this.turnOutcomeService.setNotifyTurnOutcomeAlert((outcome, helpSessionId, turnId) => {
+      this.httpLifecycle.notifyTurnOutcomeAlert({
+        helpSessionId,
+        outcome,
+        ...(turnId !== undefined ? { turnId } : {}),
+      });
+    });
   }
 
   get isRunning(): boolean {

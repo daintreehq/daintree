@@ -1697,6 +1697,12 @@ export interface IpcEventMap {
    * validated image URL and session-assigned figure number (#9828).
    */
   "mcp-server:help-display-image": import("./mcpServer.js").McpHelpDisplayImagePayload;
+  /**
+   * Targeted push: a turn for the pinned help session classified as
+   * `agent-stuck` or `reasoning-loop` (#10018). Drives the Assistant footer's
+   * ambient outcome pip — Tier 1, never a toast.
+   */
+  "mcp-server:turn-outcome-alert": import("./mcpServer.js").McpTurnOutcomeAlertPayload;
 
   // Error events
   "error:notify": ErrorRecord;

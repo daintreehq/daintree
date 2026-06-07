@@ -209,6 +209,13 @@ export interface HelpSessionSnapshot {
   grantEnded: GrantEndedState | null;
   /** True while a user-initiated grant revoke is in flight (#10042). */
   isRevokingGrant: boolean;
+  /**
+   * Most recent alertable turn outcome (`agent-stuck` / `reasoning-loop`) for
+   * the bound help session (#10018); null when none is pending. Drives the
+   * footer's ambient outcome pip. Cleared on dismiss, on a fresh turn, or on
+   * session teardown/replacement.
+   */
+  outcomeAlert: import("@shared/types/ipc/mcpServer").TurnOutcomeAlertClass | null;
 }
 
 export interface HelpProjectRef {
@@ -520,6 +527,7 @@ const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
   activeGrant: null,
   grantEnded: null,
   isRevokingGrant: false,
+  outcomeAlert: null,
 });
 
 /**
@@ -578,6 +586,13 @@ export class HelpSessionController {
   private _snapshotBannerTimer: ReturnType<typeof setTimeout> | null = null;
   private _grantEndedBannerTimer: ReturnType<typeof setTimeout> | null = null;
   private _disposers: Array<() => void> = [];
+  /**
+   * Turn id the pending outcome alert (#10018) was recorded for, or null when
+   * the alert carried none (`agent-stuck`, whose turn id is already cleared by
+   * the time the watchdog fires). Used to auto-clear the pip when a tool call
+   * from a different turn arrives — i.e. the agent has resumed work.
+   */
+  private _outcomeAlertTurnId: string | null = null;
   private _lastInputs: HelpSessionInputs | null = null;
   private _hibernateArmedFor: {
     terminalId: string;
@@ -649,6 +664,11 @@ export class HelpSessionController {
       this._onToolCallSettled(payload);
     });
     this._disposers.push(disposeToolStarted, disposeToolSettled);
+
+    const disposeOutcomeAlert = window.electron.mcpServer.onTurnOutcomeAlert((payload) => {
+      this._onTurnOutcomeAlert(payload);
+    });
+    this._disposers.push(disposeOutcomeAlert);
 
     const disposeDisplayImage = window.electron.mcpServer.onDisplayImage((payload) => {
       // The main process already validated the URL and assigned the figure
@@ -756,10 +776,13 @@ export class HelpSessionController {
     this._hasAutoLaunched = false;
     store.clearTerminal();
     // The bound session is gone — drop any lingering activity row so the strip
-    // doesn't show stale tool calls for a dead session (#9759), and clear the
-    // grant countdown/notice so they don't outlive the session (#10042).
+    // doesn't show stale tool calls for a dead session (#9759), clear the
+    // grant countdown/notice so they don't outlive the session (#10042), and
+    // clear any pending outcome pip (#10018) so it can't bleed into the next
+    // session.
     this.clearMcpActivity();
     this._clearGrantState();
+    this._clearOutcomeAlert();
   }
 
   /**
@@ -910,6 +933,7 @@ export class HelpSessionController {
         useHelpPanelStore.getState().clearFigures();
         this.clearMcpActivity();
         this._clearGrantState();
+        this._clearOutcomeAlert();
       }
       // Discarding the current conversation invalidates any persisted
       // hibernate entry for this project — leaving it would resume the
@@ -1257,6 +1281,17 @@ export class HelpSessionController {
         isError: false,
       },
     });
+    // Auto-clear the outcome pip (#10018) once the agent resumes work in a
+    // fresh turn — a tool call whose turn differs from the alert's turn means
+    // the stuck/looping turn is behind us. `agent-stuck` alerts carry no turn
+    // id (`_outcomeAlertTurnId` is null), so any turn-stamped call clears them.
+    if (
+      this._snapshot.outcomeAlert !== null &&
+      payload.turnId !== undefined &&
+      payload.turnId !== this._outcomeAlertTurnId
+    ) {
+      this._patch({ outcomeAlert: null });
+    }
   }
 
   /**
@@ -1306,6 +1341,37 @@ export class HelpSessionController {
     });
   }
 
+  /**
+   * Handle a live turn-outcome alert push (#10018). Surfaces the `agent-stuck`
+   * / `reasoning-loop` outcome as the footer's ambient pip. The targeted send
+   * already routes only to this session's pinned WebContents, so no session
+   * filtering is needed here (matches `_onToolCallStarted`). The carried turn
+   * id (absent for `agent-stuck`) is retained so the pip auto-clears once the
+   * agent starts a fresh turn.
+   */
+  private _onTurnOutcomeAlert(
+    payload: import("@shared/types/ipc/mcpServer").McpTurnOutcomeAlertPayload
+  ): void {
+    this._outcomeAlertTurnId = payload.turnId ?? null;
+    this._patch({ outcomeAlert: payload.outcome });
+  }
+
+  /** Dismiss the ambient outcome pip (#10018). User-driven click-to-clear. */
+  dismissOutcomeAlert(): void {
+    this._clearOutcomeAlert();
+  }
+
+  /**
+   * Drop any pending outcome pip and its retained turn id (#10018). Shared by
+   * the user dismiss path and session teardown/replacement — a pip for a
+   * session that's gone must never linger into its successor.
+   */
+  private _clearOutcomeAlert(): void {
+    this._outcomeAlertTurnId = null;
+    if (this._snapshot.outcomeAlert === null) return;
+    this._patch({ outcomeAlert: null });
+  }
+
   /** Clear the live activity strip (e.g. on session teardown). */
   clearMcpActivity(): void {
     if (this._snapshot.mcpActivity === null) return;
@@ -1330,7 +1396,8 @@ export class HelpSessionController {
       next.sessionRevoked === this._snapshot.sessionRevoked &&
       next.activeGrant === this._snapshot.activeGrant &&
       next.grantEnded === this._snapshot.grantEnded &&
-      next.isRevokingGrant === this._snapshot.isRevokingGrant
+      next.isRevokingGrant === this._snapshot.isRevokingGrant &&
+      next.outcomeAlert === this._snapshot.outcomeAlert
     ) {
       return;
     }

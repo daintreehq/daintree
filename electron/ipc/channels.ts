@@ -699,6 +699,13 @@ export const CHANNELS = {
    * figure inline. Targeted at the pinned WebContents — never broadcast.
    */
   MCP_HELP_DISPLAY_IMAGE: "mcp-server:help-display-image",
+  /**
+   * Push channel: a turn for the help-session pinned to this renderer
+   * classified as `agent-stuck` or `reasoning-loop` (#10018). Drives the
+   * Assistant footer's ambient outcome pip — a Tier 1 indicator, never a
+   * toast. Targeted at the pinned WebContents — never broadcast.
+   */
+  MCP_TURN_OUTCOME_ALERT: "mcp-server:turn-outcome-alert",
 
   // Voice Input channels
   VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",

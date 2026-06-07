@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AssistantTurnRecord,
   McpAuditRecord,
+  TurnOutcomeAlertClass,
   TurnOutcomeClass,
 } from "../../../shared/types/ipc/mcpServer.js";
 import {
@@ -236,8 +237,30 @@ export class TurnOutcomeService {
    * dispatches should carry no turnId).
    */
   private turnIdBySession = new Map<string, string>();
+  /**
+   * Optional renderer push for the two alertable outcomes (`agent-stuck`,
+   * `reasoning-loop`). Wired after construction via
+   * {@link setNotifyTurnOutcomeAlert} because the send path lives in
+   * `HttpLifecycle`, which is constructed after this service. Null until then —
+   * the persistence path never depends on it.
+   */
+  private notifyTurnOutcomeAlert:
+    | ((outcome: TurnOutcomeAlertClass, helpSessionId: string, turnId: string | undefined) => void)
+    | null = null;
 
   constructor(private readonly deps: TurnOutcomeServiceDeps) {}
+
+  /**
+   * Wire the live alert push for `agent-stuck` / `reasoning-loop` outcomes
+   * (#10018). Called once by `McpServerService` after `HttpLifecycle` exists.
+   * Kept separate from the constructor deps because the send path depends on
+   * a collaborator built after this service.
+   */
+  setNotifyTurnOutcomeAlert(
+    cb: (outcome: TurnOutcomeAlertClass, helpSessionId: string, turnId: string | undefined) => void
+  ): void {
+    this.notifyTurnOutcomeAlert = cb;
+  }
 
   /**
    * Append a chunk of agent output to the per-terminal ring. Called from
@@ -392,6 +415,22 @@ export class TurnOutcomeService {
       record.turnId = turnId;
     }
     this.appendRecordInternal(record);
+    // Surface the two "needs-a-look" outcomes to the bound help-session panel
+    // as a live ambient pip (#10018). Best-effort and gated on the alert being
+    // wired — a send failure must never block record persistence. `sessionId`
+    // is the help-session id (the resolver's contract); `turnId` is absent for
+    // `agent-stuck` because the prior active→passive boundary already cleared
+    // it before the watchdog fired.
+    if (
+      this.notifyTurnOutcomeAlert &&
+      (outcome === "agent-stuck" || outcome === "reasoning-loop")
+    ) {
+      try {
+        this.notifyTurnOutcomeAlert(outcome, sessionId, turnId);
+      } catch (err) {
+        console.error("[MCP] turn-outcome alert callback threw:", err);
+      }
+    }
     // Drain the ring so the next active turn classifies on its own output
     // rather than re-matching the prior turn's trailing text.
     this.recentOutput.delete(transition.terminalId);
