@@ -436,7 +436,7 @@ export type DaintreeEventMap = {
     worktreeId: string;
     prNumber: number;
     prUrl: string;
-    prState: "open" | "merged" | "closed";
+    prState: import("../../shared/types/forge.js").NormalizedPRState;
     prCiStatus?: GitHubPRCIStatus;
     /**
      * True on the synchronous phase-1 emit that precedes a fire-and-forget CI

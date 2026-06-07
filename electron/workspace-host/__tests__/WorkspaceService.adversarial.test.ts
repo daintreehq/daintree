@@ -567,4 +567,53 @@ describe("WorkspaceService adversarial", () => {
       expect(setPRInfo).toHaveBeenCalledWith(expect.objectContaining({ prCiStatus: undefined }));
     });
   });
+
+  describe("onPRDetected declined state propagation (#9981)", () => {
+    type OnPRDetected = (worktreeId: string, data: Record<string, unknown>) => void;
+
+    function getOnPRDetected(): OnPRDetected {
+      return (service as unknown as { prService: { callbacks: { onPRDetected: OnPRDetected } } })
+        .prService.callbacks.onPRDetected;
+    }
+
+    it("keeps declined on linked.pr.state and collapses only the flat prState", () => {
+      let linked: { pr?: { state?: string } } | undefined;
+      const setPRInfo = vi.fn();
+      const monitor = {
+        branch: "feature/x",
+        get hasInitialStatus() {
+          return true;
+        },
+        getSnapshot() {
+          return { worktreeId: "/repo/wt", branch: "feature/x", linked };
+        },
+        setLinked(l: unknown) {
+          linked = l as typeof linked;
+        },
+        setPRInfo,
+      };
+      (service as unknown as { monitors: Map<string, unknown> }).monitors.set("/repo/wt", monitor);
+
+      getOnPRDetected()("/repo/wt", {
+        prNumber: 7,
+        prUrl: "https://bitbucket.example/pr/7",
+        prState: "declined",
+        prTitle: "PR",
+        branchName: "feature/x",
+        providerId: "p",
+        owner: "o",
+        repo: "r",
+      });
+
+      // The canonical projection and the monitor's private flat field keep
+      // the full provider state; only the outbound legacy field collapses.
+      expect(linked?.pr?.state).toBe("declined");
+      expect(setPRInfo).toHaveBeenCalledWith(expect.objectContaining({ prState: "declined" }));
+      const prDetected = sentEvents.find((e) => e.type === "pr-detected") as
+        | (WorkspaceHostEvent & { prState?: string; linked?: { pr?: { state?: string } } })
+        | undefined;
+      expect(prDetected?.prState).toBe("closed");
+      expect(prDetected?.linked?.pr?.state).toBe("declined");
+    });
+  });
 });

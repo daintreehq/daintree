@@ -142,7 +142,7 @@ export class WorktreeMonitor {
   private _issueNumber: number | undefined;
   private prNumber: number | undefined;
   private prUrl: string | undefined;
-  private prState: "open" | "closed" | "merged" | undefined;
+  private prState: import("../../shared/types/forge.js").NormalizedPRState | undefined;
   private prCiStatus: GitHubPRCIStatus | undefined;
   private prTitle: string | undefined;
   private issueTitle: string | undefined;
@@ -624,7 +624,7 @@ export class WorktreeMonitor {
   setPRInfo(info: {
     prNumber?: number;
     prUrl?: string;
-    prState?: "open" | "closed" | "merged";
+    prState?: import("../../shared/types/forge.js").NormalizedPRState;
     prCiStatus?: GitHubPRCIStatus;
     prTitle?: string;
     issueTitle?: string;
@@ -1098,7 +1098,7 @@ export class WorktreeMonitor {
       issueNumber: linkedIssue?.ref.number ?? this._issueNumber,
       prNumber: linkedPr?.ref.number ?? this.prNumber,
       prUrl: linkedPr?.url ?? this.prUrl,
-      prState: linkedPr ? linkedPrState : this.prState,
+      prState: linkedPr ? linkedPrState : this.prState === "declined" ? "closed" : this.prState,
       prCiStatus: linkedPr ? linkedPrCiStatus : this.prCiStatus,
       prTitle: linkedPr ? linkedPr.title : this.prTitle,
       issueTitle: linkedIssue ? linkedIssue.title : this.issueTitle,

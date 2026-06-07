@@ -29,7 +29,7 @@ export interface PRIntegrationCallbacks {
     data: {
       prNumber: number;
       prUrl: string;
-      prState: "open" | "closed" | "merged";
+      prState: import("../../shared/types/forge.js").NormalizedPRState;
       prCiStatus?: GitHubPRCIStatus;
       /** Phase-1 detection: CI status is still being fetched. The receiver preserves the prior rollup so the dot doesn't blink. */
       isCiStatusLoading?: boolean;

@@ -12,6 +12,7 @@ import type {
   PRSnapshot,
   RateLimitInfo,
   CIStatus,
+  NormalizedPRState,
 } from "../../shared/types/forge.js";
 
 // Focus-aware polling cadence: faster when any Daintree window is focused so
@@ -93,7 +94,7 @@ interface InternalLinkedPR {
   number: number;
   title: string;
   url: string;
-  state: "open" | "closed" | "merged";
+  state: NormalizedPRState;
   isDraft?: boolean;
   ciStatus?: import("../../shared/types/github.js").GitHubPRCIStatus;
   _ciStatus?: import("../../shared/types/forge.js").CIStatus;
@@ -111,7 +112,7 @@ export interface PRDetectionResult {
   worktreeId: string;
   prNumber: number;
   prUrl: string;
-  prState: "open" | "merged" | "closed";
+  prState: NormalizedPRState;
 }
 
 function isCandidateBranch(branchName: string | undefined): boolean {
@@ -1217,7 +1218,7 @@ class PullRequestService {
             continue;
           }
 
-          const newState = pr.state === "declined" ? "closed" : pr.state;
+          const newState = pr.state;
           const prChanged =
             detectedPR.state !== newState ||
             detectedPR.number !== pr.number ||
@@ -1582,7 +1583,7 @@ class PullRequestService {
           number: pr.number,
           title: pr.title,
           url: pr.url,
-          state: pr.state === "declined" ? "closed" : pr.state,
+          state: pr.state,
           isDraft: pr.isDraft,
           providerId,
           stagnantPollCount: 0,
@@ -1741,7 +1742,10 @@ class PullRequestService {
               worktreeId,
               prNumber: pr.number,
               prUrl: pr.url,
-              prState: pr.state,
+              // Read state from the live map entry, not the captured `pr` — a
+              // re-detection may have replaced the entry while this enrichment
+              // was in flight, and the stale capture would revert its state.
+              prState: detected.state,
               prCiStatus: pr.ciStatus,
               prTitle: pr.title,
               issueNumber: this.candidates.get(worktreeId)?.issueNumber,
