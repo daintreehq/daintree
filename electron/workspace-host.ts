@@ -125,8 +125,9 @@ async function handleWorktreePortRequest(
 
       case "refresh": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        await workspaceService.refresh(requestId, msg.payload.worktreeId);
-        result = { ok: true };
+        // Forward the host's bounded outcome so a watchdog-tripped refresh
+        // reaches the renderer as ok:false instead of a silent success.
+        result = await workspaceService.refresh(requestId, msg.payload.worktreeId);
         break;
       }
 
@@ -177,7 +178,7 @@ async function handleWorktreePortRequest(
       }
 
       case "reconcile-topology": {
-        workspaceService.scheduleTopologyReconcile();
+        workspaceService.scheduleTopologyReconcile(msg.payload.force ?? false);
         result = { ok: true };
         break;
       }

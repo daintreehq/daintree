@@ -28,12 +28,22 @@ export const DEFAULT_WORKTREE_PORT_TIMEOUT_MS = 10_000;
  *   - run-lifecycle-setup: arbitrary user-defined setup scripts.
  *   - create-worktree: git worktree add + branch creation on slow
  *     filesystems / large repos.
+ *   - refresh: the host AWAITS a full refresh and watchdogs it at 45s
+ *     (HOST_REFRESH_TIMEOUT_MS in WorkspaceService). The default 10s ceiling
+ *     would fire BEFORE the host's own bounded pass returns on a degraded repo,
+ *     turning the Refresh button into a spurious timeout. 60s sits just above
+ *     the host ceiling so the host stays the limiting factor.
+ *
+ * Note: `reconcile-topology` is intentionally absent — its handler only
+ * SCHEDULES a reconcile and replies immediately, so the default 10s is ample;
+ * a longer ceiling would be dead config (the reply never waits on the reconcile).
  */
 export const WORKTREE_PORT_TIMEOUTS_MS: Partial<Record<WorktreePortAction, number>> = {
   "create-worktree": 5 * 60_000,
   "delete-worktree": 10 * 60_000,
   "resource-action": 15 * 60_000,
   "run-lifecycle-setup": 15 * 60_000,
+  refresh: 60_000,
 };
 
 /**

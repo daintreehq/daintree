@@ -3034,4 +3034,69 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
   });
+
+  describe("poll watchdog (sidebar-freeze guard)", () => {
+    // Drive a single poll() in isolation: set _isRunning directly instead of
+    // start() so the deferred initial-status timer can't fire its own
+    // scheduleNextPoll during the watchdog advance and mask the path under test.
+    function makeRunningMonitor(): WorktreeMonitor {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      (monitor as unknown as { _isRunning: boolean })._isRunning = true;
+      return monitor;
+    }
+
+    it("reschedules the loop when a git status pass hangs instead of wedging forever", async () => {
+      // Simulate a hung git/fs call inside updateGitStatus — the exact failure
+      // that previously pinned the poll loop (and, via the shared pollQueue
+      // slot, the whole sidebar) permanently with no recovery.
+      mockGetWorktreeChangesWithStats.mockReturnValue(new Promise<never>(() => {}));
+
+      const monitor = makeRunningMonitor();
+      const scheduleSpy = vi
+        .spyOn(monitor as unknown as { scheduleNextPoll: () => void }, "scheduleNextPoll")
+        .mockImplementation(() => {});
+
+      const pollPromise = (monitor as unknown as { poll: () => Promise<void> }).poll();
+      await Promise.resolve();
+
+      // The poll actually entered updateGitStatus and is hanging on the git call
+      // (it did NOT early-return on a stale _isUpdating guard).
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+
+      // Before the watchdog fires the loop is legitimately in-flight.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(scheduleSpy).not.toHaveBeenCalled();
+
+      // Past the watchdog ceiling (40s): the hung pass is abandoned and the
+      // loop reschedules exactly once rather than dying.
+      await vi.advanceTimersByTimeAsync(45_000);
+      await pollPromise;
+
+      expect(scheduleSpy).toHaveBeenCalledTimes(1);
+
+      monitor.stop();
+    });
+
+    it("releases the in-flight promise after a watchdog timeout so the next poll can run", async () => {
+      mockGetWorktreeChangesWithStats.mockReturnValue(new Promise<never>(() => {}));
+
+      const monitor = makeRunningMonitor();
+      vi.spyOn(
+        monitor as unknown as { scheduleNextPoll: () => void },
+        "scheduleNextPoll"
+      ).mockImplementation(() => {});
+
+      const pollPromise = (monitor as unknown as { poll: () => Promise<void> }).poll();
+      await vi.advanceTimersByTimeAsync(45_000);
+      await pollPromise;
+
+      // _pendingPollPromise must be released so a subsequent poll isn't blocked
+      // by the abandoned one.
+      expect(
+        (monitor as unknown as { _pendingPollPromise: Promise<void> | null })._pendingPollPromise
+      ).toBeNull();
+
+      monitor.stop();
+    });
+  });
 });

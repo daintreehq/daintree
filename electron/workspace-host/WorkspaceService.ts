@@ -24,6 +24,7 @@ import type {
 } from "../../shared/types/plugin.js";
 import type { CIStatus, NormalizedPRState } from "../../shared/types/forge.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
+import { withTimeout } from "../utils/withTimeout.js";
 import { detectWslPath, getDefaultWslDistro } from "../utils/wsl.js";
 import {
   getGitDir,
@@ -89,9 +90,31 @@ function isTransientWorktreeRemoveLockError(error: unknown): boolean {
   );
 }
 
+// Ceiling for a single queued git-status pass holding a pollQueue slot. On
+// expiry p-queue rejects that task's add() promise and frees the slot (its
+// finally runs #next), so three slow/stuck worktrees can never permanently
+// starve the shared queue and freeze every other worktree. Every pollQueue
+// consumer tolerates the rejection (poll() catches, refreshAll uses
+// allSettled, forceRefreshAfterGap catches). The underlying work isn't
+// cancelled, but the individual fs/git awaits are independently bounded.
+const POLL_QUEUE_TASK_TIMEOUT_MS = 60_000;
+
+// Ceiling for a single topology reconcile holding the concurrency-1 queue. A
+// stuck `git worktree prune`/`list` would otherwise pin the only slot and the
+// pending flag forever, freezing all worktree add/remove detection.
+const TOPOLOGY_RECONCILE_TIMEOUT_MS = 60_000;
+
+// Overall ceiling for a user-initiated full refresh. Guarantees the port
+// request always replies so the sidebar's Refresh button can never hang or be
+// a silent no-op, even when the underlying pipelines are degraded.
+const HOST_REFRESH_TIMEOUT_MS = 45_000;
+
 export class WorkspaceService {
   private monitors = new Map<string, WorktreeMonitor>();
-  private pollQueue = new PQueue({ concurrency: 3 });
+  private pollQueue = new PQueue({
+    concurrency: 3,
+    timeout: POLL_QUEUE_TASK_TIMEOUT_MS,
+  });
   private mainBranch: string = "main";
   private activeWorktreeId: string | null = null;
   private pollIntervalActive: number = DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS;
@@ -162,6 +185,12 @@ export class WorkspaceService {
   // Topology watcher — watches `.git/worktrees/` for external worktree
   // create/delete and triggers serialized reconciliation.
   private topologyWatcherSubscription = new MutableDisposable();
+  // No constructor `timeout` here: this queue's task wraps runTopologyReconcile
+  // in withTimeout itself (and always resolves via its own try/catch/finally),
+  // so it can never pin the single slot. A p-queue constructor timeout would
+  // instead *reject* the add() promise (p-queue passes no fallback to
+  // pTimeout), and this add() call is fire-and-forget — that would surface as
+  // an unhandled rejection.
   private topologyReconcileQueue = new PQueue({ concurrency: 1 });
   private topologyReconcilePending = false;
   // App-owned worktree create/delete register the metadata-subdir basename
@@ -1657,15 +1686,23 @@ export class WorkspaceService {
    * recovery for the dark state, #9908) can drive it. Internal guards
    * (`topologyWatcherEnabled`, `pollingEnabled`, cooldown, in-flight) make it
    * safe to call from anywhere — concurrent requests coalesce.
+   *
+   * `force` is for user-initiated recovery (the Refresh / "Reconcile now"
+   * buttons): it bypasses the `pollingEnabled` gate and the post-reconcile
+   * cooldown so an explicit user action is never silently swallowed. It still
+   * respects the in-flight guard — concurrency is 1 — but coalesces into a
+   * follow-up so the user's request always results in a fresh pass.
    */
-  scheduleTopologyReconcile(): void {
+  scheduleTopologyReconcile(force = false): void {
     if (!this.topologyWatcherEnabled) return;
-    if (!this.pollingEnabled) return;
-    if (Date.now() < this.topologyWatchCooldownUntil) {
+    if (!force && !this.pollingEnabled) return;
+    if (!force && Date.now() < this.topologyWatchCooldownUntil) {
       this.topologyWatchCooldownDirty = true;
       return;
     }
     if (this.topologyReconcilePending) {
+      // A pass is already running. Mark dirty so a follow-up fires once it
+      // settles — for both coalesced watcher events and forced user requests.
       this.topologyWatchCooldownDirty = true;
       return;
     }
@@ -1673,7 +1710,14 @@ export class WorkspaceService {
     this.topologyReconcilePending = true;
     this.topologyReconcileQueue.add(async () => {
       try {
-        await this.runTopologyReconcile();
+        // Watchdog the reconcile so a stuck `git worktree prune`/`list` can't
+        // pin the only slot — and the pending flag — forever. The finally below
+        // always runs because withTimeout guarantees the await settles.
+        await withTimeout(
+          this.runTopologyReconcile(),
+          TOPOLOGY_RECONCILE_TIMEOUT_MS,
+          "topology reconcile watchdog"
+        );
       } catch (err) {
         console.warn(`[WorkspaceHost] topology reconciliation failed: ${(err as Error).message}`);
       } finally {
@@ -1883,26 +1927,53 @@ export class WorkspaceService {
     this.sendEvent({ type: "set-active-result", requestId, success: true });
   }
 
-  async refresh(requestId: string, worktreeId?: string): Promise<void> {
+  async refresh(requestId: string, worktreeId?: string): Promise<{ ok: boolean; error?: string }> {
     try {
       if (worktreeId) {
         const monitor = this.monitors.get(worktreeId);
         if (monitor) {
-          await monitor.refresh();
+          await withTimeout(
+            monitor.refresh(),
+            HOST_REFRESH_TIMEOUT_MS,
+            `refresh watchdog: ${worktreeId}`
+          );
         }
       } else {
-        await this.discoverAndSyncWorktrees();
-        await this.refreshAll();
-        await pullRequestService.refresh();
+        // The user-facing Refresh button lands here. It MUST always reply in
+        // bounded time and never let one slow phase abort the others, so the
+        // button is a real escape hatch rather than a silent no-op:
+        //  - topology re-discovery runs first (it reconciles the monitor set),
+        //    but its failure must not stop the status refresh of monitors we
+        //    already have;
+        //  - the per-monitor status refresh and the PR fetch then run under
+        //    allSettled so a slow PR fetch can't sink the worktree refresh;
+        //  - the whole pass is watchdogged so the port request always returns.
+        await withTimeout(
+          (async () => {
+            try {
+              await this.discoverAndSyncWorktrees();
+            } catch (err) {
+              console.warn(
+                `[WorkspaceHost] refresh: topology re-discovery failed: ${(err as Error).message}`
+              );
+            }
+            await Promise.allSettled([this.refreshAll(), pullRequestService.refresh()]);
+          })(),
+          HOST_REFRESH_TIMEOUT_MS,
+          "refresh watchdog: all worktrees"
+        );
       }
       this.sendEvent({ type: "refresh-result", requestId, success: true });
+      return { ok: true };
     } catch (error) {
-      this.sendEvent({
-        type: "refresh-result",
-        requestId,
-        success: false,
-        error: (error as Error).message,
-      });
+      // Reached only when the overall watchdog trips (the inner phases swallow
+      // their own failures). Report it in the request RESULT — the legacy
+      // refresh-result event has no renderer consumer, so without this the
+      // Refresh button would resolve "ok" on a host-side timeout and look like
+      // a silent no-op.
+      const message = (error as Error).message;
+      this.sendEvent({ type: "refresh-result", requestId, success: false, error: message });
+      return { ok: false, error: message };
     }
   }
 
@@ -1998,7 +2069,11 @@ export class WorkspaceService {
         }
       })
     );
-    await Promise.all(promises);
+    // allSettled, not all: a single worktree whose refresh rejects (or whose
+    // queue slot is dropped by the pollQueue watchdog) must not abort the
+    // refresh of every other worktree. The pollQueue's per-task timeout already
+    // guarantees each slot frees, so this resolves in bounded time.
+    await Promise.allSettled(promises);
   }
 
   async createWorktree(

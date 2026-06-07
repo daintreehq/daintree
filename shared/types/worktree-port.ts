@@ -50,7 +50,11 @@ export interface WorktreePortProtocol {
   };
   refresh: {
     payload: { worktreeId?: string };
-    result: { ok: true };
+    // `ok: false` (+ message) when the host's bounded refresh trips its overall
+    // watchdog, so the renderer can surface a real failure instead of treating
+    // every reply as success. The request still resolves (it only rejects on
+    // transport timeout / host exit).
+    result: { ok: boolean; error?: string };
   };
   "create-worktree": {
     payload: { rootPath: string; options: CreateWorktreeOptions };
@@ -80,9 +84,11 @@ export interface WorktreePortProtocol {
   };
   // Forces an immediate topology reconcile (full worktree re-discovery),
   // independent of the watcher. Backs the "Reconcile now" recovery action for
-  // the topology-watcher-dark state (#9908).
+  // the topology-watcher-dark state (#9908). `force` (user-initiated recovery)
+  // bypasses the post-reconcile cooldown and the `pollingEnabled` gate so an
+  // explicit request is never silently coalesced away.
   "reconcile-topology": {
-    payload: Record<string, never>;
+    payload: { force?: boolean };
     result: { ok: true };
   };
   "resource-action": {
