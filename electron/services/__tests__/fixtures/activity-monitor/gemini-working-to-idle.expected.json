@@ -3,6 +3,6 @@
   "settleMs": 6500,
   "transitions": [
     { "atMs": 0, "state": "busy", "trigger": "pattern" },
-    { "atMs": 8400, "state": "idle", "trigger": "pattern", "waitingReason": "prompt" }
+    { "atMs": 8500, "state": "idle", "trigger": "timeout", "waitingReason": "prompt" }
   ]
 }

@@ -5,6 +5,6 @@
   "promptFastPathMinQuietMs": 6000,
   "transitions": [
     { "atMs": 0, "state": "busy", "trigger": "pattern" },
-    { "atMs": 21000, "state": "idle", "trigger": "pattern" }
+    { "atMs": 21050, "state": "idle", "trigger": "timeout", "waitingReason": "prompt" }
   ]
 }
