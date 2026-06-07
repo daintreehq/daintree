@@ -105,11 +105,14 @@ export const startupScenarios: PerfScenario[] = [
       const executablePath = findPackagedExecutable(projectRoot);
 
       if (!executablePath) {
-        return {
-          durationMs: -1,
-          metrics: {},
-          notes: "Packaged binary not found — run `npm run package` first",
-        };
+        // Fail closed: returning a sentinel here let run.ts substitute
+        // wall-clock (~0ms) and report PASS without ever launching the
+        // binary (#10068).
+        throw new Error(
+          "PERF-004: packaged binary not found under release/ — build one first " +
+            "(`npm run build && npx electron-builder --config electron-builder.config.cjs --dir --publish never`, " +
+            "or `npm run package` locally)"
+        );
       }
 
       const iteration = Math.floor(Math.random() * 100_000);
@@ -117,6 +120,16 @@ export const startupScenarios: PerfScenario[] = [
         projectRoot,
         timeoutMs: 45_000,
       });
+
+      if (result.degraded) {
+        // Same fail-closed rationale as the missing-binary case: a wall-clock
+        // fallback means the NDJSON mark pipeline never produced
+        // APP_BOOT_START → RENDERER_READY, so the number is not the
+        // mark-to-mark cold start this scenario exists to measure.
+        throw new Error(
+          `PERF-004: launch succeeded but boot marks were not captured (${result.notes ?? "no notes"}) — instrumentation pipeline broken`
+        );
+      }
 
       return {
         durationMs: result.durationMs,

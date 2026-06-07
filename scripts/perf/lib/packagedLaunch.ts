@@ -34,43 +34,75 @@ interface MarkRecord {
 const PRODUCT_NAME = "Daintree";
 const VARIANT = "daintree";
 
-export function getPackagedExecutablePath(projectRoot: string): string {
+// A candidate only counts when it is a regular file — existsSync alone would
+// accept a directory or dangling placeholder at the executable path and turn
+// a clear "binary not found" into a cryptic Playwright launch error.
+function isRegularFile(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+export function getPackagedExecutablePath(
+  projectRoot: string,
+  platform: NodeJS.Platform = process.platform
+): string {
   const releaseDir = path.resolve(projectRoot, "release");
 
-  switch (process.platform) {
+  switch (platform) {
     case "darwin": {
       const arch = process.arch === "arm64" ? "arm64" : "x64";
-      return path.join(
-        releaseDir,
-        `${VARIANT}-${arch}`,
-        `${PRODUCT_NAME}.app`,
-        "Contents",
-        "MacOS",
-        PRODUCT_NAME
-      );
+      const appBinary = path.join(`${PRODUCT_NAME}.app`, "Contents", "MacOS", PRODUCT_NAME);
+      // electron-builder `--dir` default layouts first, then the legacy
+      // daintree-{arch} layout as a fallback.
+      const candidates = [
+        path.join(releaseDir, `mac-${arch}`, appBinary),
+        path.join(releaseDir, "mac", appBinary),
+        path.join(releaseDir, "mac-universal", appBinary),
+        path.join(releaseDir, `${VARIANT}-${arch}`, appBinary),
+      ];
+      for (const candidate of candidates) {
+        if (isRegularFile(candidate)) return candidate;
+      }
+      return candidates[0];
     }
     case "win32": {
       const arch = "x64";
-      return path.join(releaseDir, `${VARIANT}-${arch}`, `${PRODUCT_NAME}.exe`);
+      const candidates = [
+        path.join(releaseDir, "win-unpacked", `${PRODUCT_NAME}.exe`),
+        path.join(releaseDir, `${VARIANT}-${arch}`, `${PRODUCT_NAME}.exe`),
+      ];
+      for (const candidate of candidates) {
+        if (isRegularFile(candidate)) return candidate;
+      }
+      return candidates[0];
     }
     case "linux":
     default: {
       const arch = process.arch === "arm64" ? "arm64" : "x64";
-      const unpackedDir = path.join(
-        releaseDir,
-        `${VARIANT}-${arch}`,
-        "linux-unpacked",
-        PRODUCT_NAME.toLowerCase()
-      );
-      if (fs.existsSync(unpackedDir)) return unpackedDir;
+      // electron-builder `--linux --dir` outputs straight to
+      // release/linux-unpacked/ with no daintree-{arch} prefix — this is
+      // what the perf-nightly CI job builds (#10068).
+      const candidates = [
+        path.join(releaseDir, "linux-unpacked", PRODUCT_NAME.toLowerCase()),
+        path.join(releaseDir, `${VARIANT}-${arch}`, "linux-unpacked", PRODUCT_NAME.toLowerCase()),
+      ];
+      for (const candidate of candidates) {
+        if (isRegularFile(candidate)) return candidate;
+      }
       return path.join(releaseDir, `${VARIANT}-${arch}`, `${PRODUCT_NAME}-${arch}.AppImage`);
     }
   }
 }
 
-export function findPackagedExecutable(projectRoot: string): string | null {
-  const primary = getPackagedExecutablePath(projectRoot);
-  if (fs.existsSync(primary)) return primary;
+export function findPackagedExecutable(
+  projectRoot: string,
+  platform: NodeJS.Platform = process.platform
+): string | null {
+  const primary = getPackagedExecutablePath(projectRoot, platform);
+  if (isRegularFile(primary)) return primary;
 
   // Fallback: scan release/ for any matching executable
   const releaseDir = path.resolve(projectRoot, "release");
@@ -84,7 +116,7 @@ export function findPackagedExecutable(projectRoot: string): string | null {
       const stat = fs.statSync(entryPath);
       if (!stat.isDirectory()) continue;
 
-      if (process.platform === "darwin") {
+      if (platform === "darwin") {
         const appPath = path.join(
           entryPath,
           `${PRODUCT_NAME}.app`,
@@ -92,13 +124,13 @@ export function findPackagedExecutable(projectRoot: string): string | null {
           "MacOS",
           PRODUCT_NAME
         );
-        if (fs.existsSync(appPath)) return appPath;
-      } else if (process.platform === "win32") {
+        if (isRegularFile(appPath)) return appPath;
+      } else if (platform === "win32") {
         const exePath = path.join(entryPath, `${PRODUCT_NAME}.exe`);
-        if (fs.existsSync(exePath)) return exePath;
+        if (isRegularFile(exePath)) return exePath;
       } else {
         const unpacked = path.join(entryPath, "linux-unpacked", PRODUCT_NAME.toLowerCase());
-        if (fs.existsSync(unpacked)) return unpacked;
+        if (isRegularFile(unpacked)) return unpacked;
       }
     }
   } catch {
