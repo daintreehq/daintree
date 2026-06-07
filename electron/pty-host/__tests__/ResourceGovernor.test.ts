@@ -394,8 +394,77 @@ describe("ResourceGovernor", () => {
   });
 
   describe("coordination with other managers", () => {
-    it("disengageThrottle does not resume PTY when backpressure hold is active", () => {
-      const { coordinator, raw } = createMockCoordinator();
+    it.each(["ipc-queue", "port-queue", "port-queue-5"] as const)(
+      "disengageThrottle does not resume PTY when %s hold is active",
+      (queueToken) => {
+        const { coordinator, raw } = createMockCoordinator();
+        const deps = createMockDeps({
+          getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+          getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+          getTerminalActivity: vi
+            .fn()
+            .mockReturnValue([{ id: "t1", lastOutputTime: 100, lastInputTime: 100 }]),
+        });
+
+        vi.spyOn(process, "memoryUsage").mockReturnValue({
+          heapUsed: 900 * 1024 * 1024,
+          rss: 1024 * 1024 * 1024,
+          external: 0,
+          arrayBuffers: 0,
+        } as ReturnType<typeof process.memoryUsage>);
+
+        const governor = new ResourceGovernor(deps);
+        governor.start();
+
+        // Trigger engage
+        vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
+        expect(coordinator.hasToken("resource-governor")).toBe(true);
+
+        // Simulate a queue manager also holding a pause
+        coordinator.pause(queueToken);
+
+        // Now lower memory to trigger disengage
+        vi.spyOn(process, "memoryUsage").mockReturnValue({
+          heapUsed: 500 * 1024 * 1024,
+          rss: 1024 * 1024 * 1024,
+          external: 0,
+          arrayBuffers: 0,
+        } as ReturnType<typeof process.memoryUsage>);
+
+        raw.resume.mockClear();
+        (deps.emitTerminalStatus as ReturnType<typeof vi.fn>).mockClear();
+        vi.advanceTimersByTime(2000);
+
+        // Governor released its hold, but backpressure still holds — PTY must stay paused
+        expect(coordinator.hasToken("resource-governor")).toBe(false);
+        expect(coordinator.hasToken(queueToken)).toBe(true);
+        expect(coordinator.isPaused).toBe(true);
+        expect(raw.resume).not.toHaveBeenCalled();
+
+        // Should NOT emit "running" because backpressure still holds
+        const statusCalls = (deps.emitTerminalStatus as ReturnType<typeof vi.fn>).mock.calls;
+        const runningCalls = statusCalls.filter((c: unknown[]) => (c as string[])[1] === "running");
+        expect(runningCalls).toHaveLength(0);
+
+        // Should re-emit "paused-backpressure" so the renderer pill isn't stuck
+        // on the governor's stale "Paused (memory)" status
+        const backpressureCalls = statusCalls.filter(
+          (c: unknown[]) => (c as string[])[1] === "paused-backpressure"
+        );
+        expect(backpressureCalls).toHaveLength(1);
+        expect(backpressureCalls[0]).toEqual([
+          "t1",
+          "paused-backpressure",
+          undefined,
+          expect.any(Number),
+        ]);
+
+        governor.dispose();
+      }
+    );
+
+    it("dispose does not emit paused-backpressure for terminals with a queue hold", () => {
+      const { coordinator } = createMockCoordinator();
       const deps = createMockDeps({
         getTerminalIds: vi.fn().mockReturnValue(["t1"]),
         getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
@@ -414,38 +483,22 @@ describe("ResourceGovernor", () => {
       const governor = new ResourceGovernor(deps);
       governor.start();
 
-      // Trigger engage
       vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
       expect(coordinator.hasToken("resource-governor")).toBe(true);
+      coordinator.pause("ipc-queue");
 
-      // Simulate backpressure manager also holding a pause
-      coordinator.pause("backpressure");
-
-      // Now lower memory to trigger disengage
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 500 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
-
-      raw.resume.mockClear();
       (deps.emitTerminalStatus as ReturnType<typeof vi.fn>).mockClear();
-      vi.advanceTimersByTime(2000);
-
-      // Governor released its hold, but backpressure still holds — PTY must stay paused
-      expect(coordinator.hasToken("resource-governor")).toBe(false);
-      expect(coordinator.hasToken("backpressure")).toBe(true);
-      expect(coordinator.isPaused).toBe(true);
-      expect(raw.resume).not.toHaveBeenCalled();
-
-      // Should NOT emit "running" because backpressure still holds
-      const terminalStatusCalls = (
-        deps.emitTerminalStatus as ReturnType<typeof vi.fn>
-      ).mock.calls.filter((c: unknown[]) => (c as string[])[1] === "running");
-      expect(terminalStatusCalls).toHaveLength(0);
-
       governor.dispose();
+
+      // Teardown path deliberately has no backpressure-restore branch — queue
+      // managers emit their own events, and renderers are disconnected first
+      const statusCalls = (deps.emitTerminalStatus as ReturnType<typeof vi.fn>).mock.calls;
+      const backpressureCalls = statusCalls.filter(
+        (c: unknown[]) => (c as string[])[1] === "paused-backpressure"
+      );
+      expect(backpressureCalls).toHaveLength(0);
+      const runningCalls = statusCalls.filter((c: unknown[]) => (c as string[])[1] === "running");
+      expect(runningCalls).toHaveLength(0);
     });
   });
 
