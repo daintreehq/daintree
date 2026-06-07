@@ -1168,6 +1168,70 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
+    it("blocks completion while raw bytes stream past a static viewport", () => {
+      const onStateChange = vi.fn();
+      let visible = ["waiting 0"];
+      const monitor = new ActivityMonitor("simple-stream-quiet", 1000, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => visible,
+        getCursorLine: () => visible[visible.length - 1],
+        initialState: "idle",
+        skipInitialStateEmit: true,
+        completionPatterns: [/Total cost:/],
+      });
+
+      monitor.startPolling();
+      driveBusyViaOutputChanges(monitor, (text) => {
+        visible = [text];
+      });
+      onStateChange.mockClear();
+
+      // Viewport settles on a cost line, but raw PTY bytes keep arriving —
+      // lastDataTimestamp stays fresh, so the completion scan must not fire.
+      visible = ["Total cost: $2.00"];
+      for (let i = 0; i < 6; i++) {
+        vi.advanceTimersByTime(500);
+        monitor.onData("streaming bytes that never repaint the viewport");
+      }
+      expect(onStateChange.mock.calls.filter((call) => call[2] === "completed")).toHaveLength(0);
+
+      // Once the stream goes quiet, completion fires.
+      vi.advanceTimersByTime(1600);
+      expect(onStateChange.mock.calls.filter((call) => call[2] === "completed")).toHaveLength(1);
+
+      monitor.dispose();
+    });
+
+    it("exits boot early when a prompt appears in visible history", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("simple-boot-prompt", 1000, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => ["$", "waiting for setup"],
+        getCursorLine: () => "waiting for setup",
+        pollingMaxBootMs: 20000,
+      });
+
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      // History scan is locked for the first 3s — boot holds busy
+      vi.advanceTimersByTime(2000);
+      expect(monitor.getState()).toBe("busy");
+
+      // Prompt in history exits boot well before the 20s timeout, so the
+      // idle gate can fire at the normal 8s quiet mark
+      vi.advanceTimersByTime(6300);
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).toHaveBeenCalledWith(
+        "simple-boot-prompt",
+        1000,
+        "idle",
+        expect.objectContaining({ trigger: "timeout", waitingReason: "prompt" })
+      );
+
+      monitor.dispose();
+    });
+
     it("classifies a waiting reason when the idle transition fires", () => {
       const onStateChange = vi.fn();
       let visible = ["waiting 0"];
@@ -5960,6 +6024,7 @@ describe("ActivityMonitor", () => {
       expect(monitor.getState()).toBe("idle");
       expect(onStateChange).toHaveBeenCalledWith("ext-promo", 100, "idle", {
         trigger: "timeout",
+        waitingReason: "prompt",
       });
 
       monitor.dispose();
@@ -6030,6 +6095,7 @@ describe("ActivityMonitor", () => {
       expect(monitor.getState()).toBe("idle");
       expect(onStateChange).toHaveBeenCalledWith("ext-promo-quiet", 100, "idle", {
         trigger: "timeout",
+        waitingReason: "prompt",
       });
 
       monitor.dispose();

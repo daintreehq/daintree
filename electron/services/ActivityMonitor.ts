@@ -1441,7 +1441,11 @@ export class ActivityMonitor {
       this.completionTimer.emitted ||
       this.completionPatterns.length === 0 ||
       !this.getVisibleLines ||
-      now - this.lastActivityTimestamp < SIMPLE_COMPLETION_MIN_QUIET_MS ||
+      // Quiet on both clocks: lastActivityTimestamp only moves on visible
+      // snapshot changes, so raw PTY bytes streaming past a static viewport
+      // must also block the scan via lastDataTimestamp.
+      now - Math.max(this.lastActivityTimestamp, this.lastDataTimestamp) <
+        SIMPLE_COMPLETION_MIN_QUIET_MS ||
       now < this.workingHoldUntil
     ) {
       return false;
