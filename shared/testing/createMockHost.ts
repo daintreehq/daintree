@@ -193,10 +193,26 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const host: PluginHostApi & MockHostState = {
     pluginId,
     registerAction(descriptor, handler) {
-      // Mirror PluginService.registerAction: re-registering the same id
-      // replaces the prior descriptor + handler. Without this, the recording
-      // array would diverge from production semantics and any plugin test
-      // that re-registers an action would silently dispatch the stale handler.
+      // Mirrors PluginService.createHost L1577-L1631. Validation order matches
+      // production: non-object descriptor, non-function handler, non-empty
+      // string id, plugin-prefix not already in id. Re-registering the same id
+      // replaces the prior descriptor + handler (replace-by-id, see
+      // host-api.md). A plugin test that calls registerAction with the same id
+      // twice should see the second call win, not accumulate two entries.
+      if (!descriptor || typeof descriptor !== "object") {
+        throw new Error("registerAction: descriptor must be an object");
+      }
+      if (typeof handler !== "function") {
+        throw new Error("registerAction: handler must be a function");
+      }
+      if (typeof descriptor.id !== "string" || descriptor.id.length === 0) {
+        throw new Error("registerAction: descriptor.id must be a non-empty string");
+      }
+      if (descriptor.id.startsWith(`${pluginId}.`)) {
+        throw new Error(
+          `registerAction: descriptor.id "${descriptor.id}" must not include the plugin prefix`
+        );
+      }
       const existing = registeredActions.findIndex((r) => r.descriptor.id === descriptor.id);
       if (existing >= 0) {
         registeredActions[existing] = { descriptor, handler };
@@ -256,24 +272,81 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       };
     },
     registerForgeProvider(descriptor, impl) {
-      const record: RegisteredForgeProviderRecord = { descriptor, impl };
-      registeredForgeProviders.push(record);
+      // Mirrors PluginService.createHost L1738-L1817. Validation order matches
+      // production: non-object descriptor, non-empty string id, non-object impl.
+      // The manifest-declared-id check is intentionally skipped — the mock has
+      // no manifest model (see issue #9878). Re-registering the same id
+      // replaces the prior binding (replace-by-id). The disposer's identity
+      // guard compares the captured `impl` reference against the currently
+      // active entry's `impl`, matching `unregisterForgeProviderImpl`'s
+      // `expected` argument: a stale disposer from a re-bound id is a no-op.
+      if (!descriptor || typeof descriptor !== "object") {
+        throw new Error("registerForgeProvider: descriptor must be an object");
+      }
+      if (typeof descriptor.id !== "string" || descriptor.id.length === 0) {
+        throw new Error("registerForgeProvider: descriptor.id must be a non-empty string");
+      }
+      if (!impl || typeof impl !== "object") {
+        throw new Error("registerForgeProvider: impl must be an object");
+      }
+      const contributionId = descriptor.id;
+      const existing = registeredForgeProviders.findIndex(
+        (r) => r.descriptor.id === contributionId
+      );
+      if (existing >= 0) {
+        registeredForgeProviders[existing] = { descriptor, impl };
+      } else {
+        registeredForgeProviders.push({ descriptor, impl });
+      }
       let disposed = false;
       return () => {
         if (disposed) return;
         disposed = true;
-        const i = registeredForgeProviders.indexOf(record);
+        // Identity guard: only remove if the currently active entry is still
+        // the one this disposer was captured against. A re-registration with a
+        // different impl invalidates the prior disposer (matches production).
+        const i = registeredForgeProviders.findIndex(
+          (r) => r.descriptor.id === contributionId && r.impl === impl
+        );
         if (i >= 0) registeredForgeProviders.splice(i, 1);
       };
     },
     registerFileDecorationProvider(descriptor, impl) {
-      const record: RegisteredFileDecorationProviderRecord = { descriptor, impl };
-      registeredFileDecorationProviders.push(record);
+      // Mirrors PluginService.createHost L1818-L1875. Validation order matches
+      // production: non-object descriptor, non-empty string id, impl must be
+      // an object exposing `provideDecorations()`. The manifest-declared-id
+      // check is intentionally skipped — the mock has no manifest model (see
+      // issue #9878). Re-registering the same id replaces the prior binding
+      // (replace-by-id). The disposer's identity guard mirrors
+      // `unregisterFileDecorationProviderImpl`'s `expected` argument.
+      if (!descriptor || typeof descriptor !== "object") {
+        throw new Error("registerFileDecorationProvider: descriptor must be an object");
+      }
+      if (typeof descriptor.id !== "string" || descriptor.id.length === 0) {
+        throw new Error("registerFileDecorationProvider: descriptor.id must be a non-empty string");
+      }
+      if (!impl || typeof impl !== "object" || typeof impl.provideDecorations !== "function") {
+        throw new Error("registerFileDecorationProvider: impl must expose provideDecorations()");
+      }
+      const contributionId = descriptor.id;
+      const existing = registeredFileDecorationProviders.findIndex(
+        (r) => r.descriptor.id === contributionId
+      );
+      if (existing >= 0) {
+        registeredFileDecorationProviders[existing] = { descriptor, impl };
+      } else {
+        registeredFileDecorationProviders.push({ descriptor, impl });
+      }
       let disposed = false;
       return () => {
         if (disposed) return;
         disposed = true;
-        const i = registeredFileDecorationProviders.indexOf(record);
+        // Identity guard: only remove if the currently active entry is still
+        // the one this disposer was captured against. A re-registration with a
+        // different impl invalidates the prior disposer (matches production).
+        const i = registeredFileDecorationProviders.findIndex(
+          (r) => r.descriptor.id === contributionId && r.impl === impl
+        );
         if (i >= 0) registeredFileDecorationProviders.splice(i, 1);
       };
     },
