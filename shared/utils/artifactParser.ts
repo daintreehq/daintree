@@ -156,7 +156,12 @@ export function extractPatches(text: string): string[] {
     if (isBlockBodyLine(line)) {
       currentPatch.push(line);
     } else {
+      // A non-body line ends the current block. Commit it, then re-process this
+      // same line as a potential opener — back-to-back patches put the 2nd
+      // block's `diff --git ...` header here, and skipping it would drop that
+      // header (the body re-opens on the next `--- a/` line, masking the loss).
       finalize();
+      i--;
     }
   }
 

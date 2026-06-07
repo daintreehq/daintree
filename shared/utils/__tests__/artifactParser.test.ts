@@ -200,6 +200,12 @@ describe("artifactParser", () => {
     expect(patches).toHaveLength(2);
     expect(patches[0]).toContain("+new1");
     expect(patches[1]).toContain("+new2");
+    // The 2nd block's `diff --git` header sits on the line that ends the 1st
+    // block. The opener must be re-evaluated after finalize() so it isn't
+    // dropped (the `--- a/y` line independently re-opens the body, which would
+    // mask the loss if only the body were checked).
+    expect(patches[0]).toContain("diff --git a/x b/x");
+    expect(patches[1]).toContain("diff --git a/y b/y");
   });
 
   it("extracts a new file diff with --- /dev/null", () => {
