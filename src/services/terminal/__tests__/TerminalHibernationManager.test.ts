@@ -259,7 +259,10 @@ describe("TerminalHibernationManager", () => {
       managed.runtimeAgentId = undefined;
       managed.pendingWrites = 2;
       manager.hibernate("t1");
+      // Full no-op: no teardown side effects, not just an unset flag.
       expect(managed.isHibernated).toBeFalsy();
+      expect(managed.terminal.dispose).not.toHaveBeenCalled();
+      expect(deps.destroyRestoreState).not.toHaveBeenCalled();
     });
 
     it("should no-op for a resting-state agent with writes in flight (#9912)", () => {
@@ -269,6 +272,23 @@ describe("TerminalHibernationManager", () => {
       managed.pendingWrites = 1;
       manager.hibernate("t1");
       expect(managed.isHibernated).toBeFalsy();
+      expect(managed.terminal.dispose).not.toHaveBeenCalled();
+      expect(deps.destroyRestoreState).not.toHaveBeenCalled();
+    });
+
+    it("should no-op for a backgrounded active agent with writes in flight (#9912)", () => {
+      // Direct hibernate() path (not the eligibility facade): the burst
+      // guard must precede the backgrounded bypass.
+      managed.launchAgentId = "claude";
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "working";
+      managed.lastWriteAt = Date.now() - 1000;
+      managed.pendingWrites = 1;
+      (deps.getIsBackgrounded as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      manager.hibernate("t1");
+      expect(managed.isHibernated).toBeFalsy();
+      expect(managed.terminal.dispose).not.toHaveBeenCalled();
+      expect(deps.destroyRestoreState).not.toHaveBeenCalled();
     });
 
     it("should hibernate a working agent that has been silent past AGENT_IDLE_SILENCE_MS", () => {
@@ -519,6 +539,12 @@ describe("TerminalHibernationManager", () => {
       expect(managed.pendingWrites).toBe(0);
     });
 
+    it("should keep pendingWrites at 0 on wake when nothing was stranded (#9912)", () => {
+      managed.pendingWrites = 0;
+      manager.unhibernate("t1");
+      expect(managed.pendingWrites).toBe(0);
+    });
+
     it("notifies onHibernationChanged after the flag is cleared", () => {
       let seenFlag: boolean | undefined;
       (deps.onHibernationChanged as ReturnType<typeof vi.fn>).mockImplementation(() => {
@@ -578,6 +604,16 @@ describe("TerminalHibernationManager", () => {
       managed.runtimeAgentId = undefined;
       expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1")).toBe(
         true
+      );
+    });
+
+    it("rejects BACKGROUND for a non-agent terminal with writes in flight (#9912)", () => {
+      // Keeps the eligibility facade and the direct hibernate() guard in
+      // lockstep should the two paths ever diverge.
+      managed.runtimeAgentId = undefined;
+      managed.pendingWrites = 1;
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1")).toBe(
+        false
       );
     });
 
