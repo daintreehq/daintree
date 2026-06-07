@@ -5,6 +5,8 @@ import type { AgentDetectionConfig } from "../../../../shared/config/agentRegist
 import {
   createProcessStateValidator,
   buildActivityMonitorOptions,
+  buildBootCompletePatterns,
+  buildPatternConfig,
   buildPromptHintPatterns,
   UNIVERSAL_APPROVAL_HINT_PATTERNS,
 } from "../terminalActivityPatterns.js";
@@ -102,6 +104,22 @@ describe("createProcessStateValidator", () => {
     const cache = createMockProcessTreeCache(new Map([[1, children]]));
     const validator = createProcessStateValidator(1, cache)!;
     expect(validator.hasActiveChildren()).toBe(false);
+  });
+});
+
+describe("buildPatternConfig", () => {
+  it("returns undefined for empty primaryPatterns, dropping declared fallbacks (#9877)", () => {
+    const detection: AgentDetectionConfig = {
+      primaryPatterns: [],
+      fallbackPatterns: ["esc to interrupt"],
+    };
+    expect(buildPatternConfig(detection, "amp")).toBeUndefined();
+  });
+});
+
+describe("buildBootCompletePatterns", () => {
+  it("returns undefined for empty bootCompletePatterns (#9877)", () => {
+    expect(buildBootCompletePatterns({ bootCompletePatterns: [] }, "antigravity")).toBeUndefined();
   });
 });
 

@@ -1186,10 +1186,10 @@ export class ActivityMonitor {
     // exit busy immediately rather than waiting the full IDLE_DEBOUNCE_MS. This keeps
     // the idle transition snappy after the prompt appears, even when IDLE_DEBOUNCE_MS
     // has been raised to cover LLM API call silence gaps.
-    // Default: 3s quiet to avoid premature idle during inter-tool-call gaps (Claude
-    // bursts with 1-3s pauses, Codex has 3-5s gaps — Issue #3606). Agents with
-    // deterministic completion markers (e.g. Cursor, 700ms) can use a lower value
-    // via promptFastPathMinQuietMs in AgentDetectionConfig.
+    // The quiet requirement guards against premature idle during inter-tool-call
+    // gaps (Claude bursts with 1-3s pauses, Codex has 3-5s gaps — Issue #3606).
+    // buildActivityMonitorOptions floors promptFastPathMinQuietMs to the effective
+    // idle debounce (>= 8s), so sub-floor per-agent values are not honored.
     if (
       this.state === "busy" &&
       !this.completionTimer.emitted &&

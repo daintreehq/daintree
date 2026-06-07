@@ -480,6 +480,7 @@ describe("mistral configuration", () => {
 
   it("relies on prompt fast-path without a per-agent quiet override", () => {
     const detection = getAgentConfig("mistral")?.detection;
+    expect(detection).toBeDefined();
     expect(detection?.completionPatterns).toBeUndefined();
     expect(detection?.promptFastPathMinQuietMs).toBeUndefined();
   });
