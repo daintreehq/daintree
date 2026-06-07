@@ -48,7 +48,6 @@ import { useAppBoot } from "./hooks/app/useAppBoot";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
 import {
   useAppHydration,
-  useProjectSwitchRehydration,
   useShortcutHints,
   usePanelStoreBootstrap,
   useSemanticWorkerLifecycle,
@@ -668,7 +667,6 @@ function AppInner() {
     });
     return () => unsubscribe?.();
   }, []);
-  useProjectSwitchRehydration();
   useShortcutHints(isStateLoaded);
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
   const onboardingOverlayActive = gettingStarted.visible || gettingStarted.showCelebration;

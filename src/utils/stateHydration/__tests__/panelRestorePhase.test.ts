@@ -105,9 +105,8 @@ vi.mock("../batchScheduler", async () => {
 
 // --- Fixtures ---
 type RawContext = Parameters<typeof restorePanelsPhase>[1];
-type MockedContext = Omit<RawContext, "addPanel" | "checkCurrent" | "withHydrationBatch"> & {
+type MockedContext = Omit<RawContext, "addPanel" | "withHydrationBatch"> & {
   addPanel: Mock;
-  checkCurrent: Mock;
   withHydrationBatch: Mock;
 };
 
@@ -118,13 +117,11 @@ function makeContext(overrides: Partial<RawContext> = {}): MockedContext {
     async (args: { requestedId?: string; existingId?: string }) =>
       args.requestedId ?? args.existingId ?? `restored-${++restoredIdCounter}`
   );
-  const checkCurrent: Mock = vi.fn(() => true);
   const withHydrationBatch: Mock = vi.fn(async (run: () => Promise<void>) => {
     await run();
   });
   const ctx: MockedContext = {
     addPanel,
-    checkCurrent,
     withHydrationBatch,
     backendTerminalMap: new Map<string, BackendTerminalInfo>(),
     terminalSizes: {} as Record<string, { cols: number; rows: number }>,
@@ -133,7 +130,6 @@ function makeContext(overrides: Partial<RawContext> = {}): MockedContext {
     agentSettings: undefined,
     clipboardDirectory: undefined,
     projectPresetsByAgent: {},
-    _switchId: undefined,
     worktreesPromise: Promise.resolve([]),
     restoreTerminalOrder: undefined,
     safeMode: false,
@@ -211,35 +207,12 @@ describe("restorePanelsPhase — saved panels", () => {
     expect(ctx.backendTerminalMap.has("dead")).toBe(false);
   });
 
-  it("respawns a PTY panel when reconnect returns not_found on cold restart (_switchId undefined)", async () => {
+  it("respawns a PTY agent panel when reconnect returns not_found on cold restart", async () => {
     reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
-    const ctx = makeContext({ _switchId: undefined });
+    const ctx = makeContext();
     await restorePanelsPhase([panel("p1", { kind: "agent", launchAgentId: "claude" })], ctx);
     expect(ctx.addPanel).toHaveBeenCalledTimes(1);
     expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ requestedId: "p1" });
-  });
-
-  it("phantom-skips agent panel when reconnect returns not_found during a live switch (_switchId defined)", async () => {
-    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
-    const ctx = makeContext({ _switchId: "switch-123" });
-    await restorePanelsPhase([panel("p1", { kind: "agent", launchAgentId: "claude" })], ctx);
-    expect(ctx.addPanel).not.toHaveBeenCalled();
-  });
-
-  it("phantom-skips agent panel when _switchId is the empty string (defined-but-falsy)", async () => {
-    // Pins `_switchId !== undefined`. A regression to truthiness check (`if (_switchId)`)
-    // would silently break this case (#4973 phantom-agent guard).
-    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
-    const ctx = makeContext({ _switchId: "" });
-    await restorePanelsPhase([panel("p1", { kind: "agent", launchAgentId: "claude" })], ctx);
-    expect(ctx.addPanel).not.toHaveBeenCalled();
-  });
-
-  it("does NOT phantom-skip plain terminal panels during a live switch (only agent kind is gated)", async () => {
-    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
-    const ctx = makeContext({ _switchId: "switch-1" });
-    await restorePanelsPhase([panel("plain", { kind: "terminal" })], ctx);
-    expect(ctx.addPanel).toHaveBeenCalledTimes(1);
   });
 
   it("uses reconnected fallback args when reconnect succeeds", async () => {
@@ -259,40 +232,6 @@ describe("restorePanelsPhase — saved panels", () => {
     await restorePanelsPhase([panel("b1", { kind: "browser" })], ctx);
     expect(reconnectWithTimeoutMock).not.toHaveBeenCalled();
     expect(ctx.addPanel).toHaveBeenCalledTimes(1);
-  });
-
-  it("aborts before background-PTY phase when checkCurrent returns false after priority phase", async () => {
-    // Cancellation pin: priority PTY restored, background PTY skipped, orphan skipped.
-    const ctx = makeContext({ activeWorktreeId: "wA" });
-    let priorityRan = false;
-    ctx.checkCurrent.mockImplementation(() => {
-      // Returns true initially (entering priority phase) and false after the
-      // priority panel is restored (between priority and background PTY phases).
-      if (priorityRan) return false;
-      return true;
-    });
-    ctx.backendTerminalMap.set("t-prio", backend("t-prio"));
-    ctx.backendTerminalMap.set("t-bg", backend("t-bg"));
-    ctx.backendTerminalMap.set("orphan", backend("orphan"));
-
-    // Track when the priority panel is restored so the next checkCurrent call returns false.
-    const originalAddPanel = ctx.addPanel.getMockImplementation();
-    ctx.addPanel.mockImplementation(async (args: { existingId?: string; requestedId?: string }) => {
-      const id = await (originalAddPanel ?? (() => Promise.resolve("x")))(args);
-      if (args.existingId === "t-prio") priorityRan = true;
-      return id;
-    });
-
-    await restorePanelsPhase(
-      [panel("t-prio", { worktreeId: "wA" }), panel("t-bg", { worktreeId: "wB" })],
-      ctx
-    );
-
-    // Priority panel was restored; background and orphan were aborted.
-    const addPanelArgs = ctx.addPanel.mock.calls.map(
-      (call) => (call[0] as { existingId?: string }).existingId
-    );
-    expect(addPanelArgs).toEqual(["t-prio"]);
   });
 
   it("calls restoreTerminalOrder with addPanel-returned IDs in saved order (not saved IDs)", async () => {
