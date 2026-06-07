@@ -4,6 +4,7 @@ import { runSpringLoop } from "@/lib/demoSpring";
 import { EditorView } from "@codemirror/view";
 import { Transaction } from "@codemirror/state";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { usePanelStore } from "@/store/panelStore";
 import type {
   DemoMoveToPayload,
   DemoMoveToSelectorPayload,
@@ -995,7 +996,16 @@ export function DemoCursor() {
       })
     );
 
-    // --- waitForIdle handler: MutationObserver + getAnimations + double-rAF ---
+    // --- waitForIdle handler: MutationObserver + getAnimations + terminal
+    // onWriteParsed + video playback + double-rAF ---
+    //
+    // getAnimations() and the MutationObserver only see CSS/WAAPI animations and
+    // DOM mutations. They are blind to two activity channels that paint outside
+    // that pipeline: xterm WebGL canvas repaints (terminal output) and <video>
+    // playback. Without covering those, waitForIdle reports idle while a terminal
+    // is still streaming output or a video is mid-playback. We treat all three
+    // channels as independent activity signals — idle requires every channel
+    // quiet for settleMs simultaneously (see issue #10144).
     cleanups.push(
       demo.onExecCommand("demo:exec-wait-for-idle", async (raw: Record<string, unknown>) => {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
@@ -1007,7 +1017,66 @@ export function DemoCursor() {
           await new Promise<void>((resolve, reject) => {
             const start = performance.now();
             let timer: ReturnType<typeof setTimeout>;
+            let cleaned = false;
             const demoOverlay = document.querySelector("[data-demo-overlay]");
+
+            // Terminal output channel: subscribe to onWriteParsed on every live
+            // terminal. onWriteParsed fires at most once per frame after an async
+            // parse of terminal.write() completes — it never fires on cursor
+            // blink, scroll, or focus, so it is the correct settle signal (unlike
+            // onRender, which the blink cycle triggers continuously). We snapshot
+            // the terminals at entry; demo scripts are sequential, so no new
+            // terminal appears mid-wait.
+            const terminalDisposables: Array<{ dispose: () => void }> = [];
+            for (const panelId of usePanelStore.getState().panelIds) {
+              const managed = terminalInstanceService.get(panelId);
+              // Hibernated terminals have a disposed xterm instance — skip them.
+              if (!managed || managed.isHibernated) continue;
+              try {
+                terminalDisposables.push(managed.terminal.onWriteParsed(() => resetTimer()));
+              } catch {
+                // A terminal that disposes mid-snapshot cannot produce output.
+              }
+            }
+
+            // Video channel: media events do not bubble, so listen in the capture
+            // phase on document. The active set holds videos currently playing;
+            // idle requires it to be empty. `waiting` (buffering) counts as
+            // inactive so a stalled video can never permanently block idle —
+            // `playing` re-fires and resets the timer if playback resumes.
+            const activeVideos = new Set<HTMLVideoElement>();
+            for (const video of document.querySelectorAll("video")) {
+              if (!video.paused && !video.ended && video.readyState >= 3) {
+                activeVideos.add(video);
+              }
+            }
+            function onVideoPlaying(e: Event) {
+              if (e.target instanceof HTMLVideoElement) {
+                activeVideos.add(e.target);
+                resetTimer();
+              }
+            }
+            function onVideoInactive(e: Event) {
+              if (e.target instanceof HTMLVideoElement) {
+                activeVideos.delete(e.target);
+              }
+            }
+            document.addEventListener("playing", onVideoPlaying, true);
+            document.addEventListener("pause", onVideoInactive, true);
+            document.addEventListener("ended", onVideoInactive, true);
+            document.addEventListener("waiting", onVideoInactive, true);
+
+            function cleanup() {
+              if (cleaned) return;
+              cleaned = true;
+              clearTimeout(timer);
+              observer.disconnect();
+              for (const d of terminalDisposables) d.dispose();
+              document.removeEventListener("playing", onVideoPlaying, true);
+              document.removeEventListener("pause", onVideoInactive, true);
+              document.removeEventListener("ended", onVideoInactive, true);
+              document.removeEventListener("waiting", onVideoInactive, true);
+            }
 
             function isDemoOwned(el: Element | null): boolean {
               if (!el || !demoOverlay) return false;
@@ -1033,10 +1102,16 @@ export function DemoCursor() {
                 return;
               }
 
+              // A video still playing means the page is not idle yet.
+              if (activeVideos.size > 0) {
+                resetTimer();
+                return;
+              }
+
               // Double rAF to ensure paint is complete
               requestAnimationFrame(() => {
                 requestAnimationFrame(() => {
-                  observer.disconnect();
+                  cleanup();
                   resolve();
                 });
               });
@@ -1044,7 +1119,7 @@ export function DemoCursor() {
 
             function resetTimer() {
               if (performance.now() - start > timeoutMs) {
-                observer.disconnect();
+                cleanup();
                 reject(new Error("waitForIdle timed out"));
                 return;
               }
