@@ -249,10 +249,14 @@ export async function initPerWindowServices(
       if (payload.isWarning) {
         logInfo("pty-host-memory-warning", {
           utilizationPercent: payload.utilizationPercent,
+          heapMb: payload.heapMb,
+          externalMb: payload.externalMb,
         });
       } else {
         logInfo("pty-host-memory-warning-cleared", {
           utilizationPercent: payload.utilizationPercent,
+          heapMb: payload.heapMb,
+          externalMb: payload.externalMb,
         });
       }
       // Broadcast to all windows so renderer can surface the warning
@@ -266,6 +270,8 @@ export async function initPerWindowServices(
                 payload: {
                   isWarning: payload.isWarning,
                   utilizationPercent: payload.utilizationPercent,
+                  heapMb: payload.heapMb,
+                  externalMb: payload.externalMb,
                 },
               });
             } catch {

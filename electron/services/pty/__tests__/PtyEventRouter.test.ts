@@ -89,6 +89,33 @@ describe("routeHostEvent", () => {
     expect(dataListener).not.toHaveBeenCalled();
   });
 
+  it("forwards heapMb and externalMb on host-memory-warning", () => {
+    const { deps, emitter } = makeDeps();
+    const warningListener = vi.fn();
+    emitter.on("host-memory-warning", warningListener);
+
+    const handled = routeHostEvent(
+      {
+        type: "host-memory-warning",
+        isWarning: true,
+        utilizationPercent: 75,
+        heapMb: 300,
+        externalMb: 276,
+        timestamp: 1000,
+      } as PtyHostEvent,
+      deps
+    );
+
+    expect(handled).toBe(true);
+    expect(warningListener).toHaveBeenCalledWith({
+      isWarning: true,
+      utilizationPercent: 75,
+      heapMb: 300,
+      externalMb: 276,
+      timestamp: 1000,
+    });
+  });
+
   it("delegates domain events to bridgePtyEvent first", () => {
     const { deps } = makeDeps();
     const agentStateEvents: unknown[] = [];

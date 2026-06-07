@@ -21,14 +21,6 @@ vi.mock("../metrics.js", () => ({
   metricsEnabled: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock("node:v8", () => ({
-  default: {
-    getHeapStatistics: vi.fn().mockReturnValue({
-      heap_size_limit: 1024 * 1024 * 1024,
-    }),
-  },
-}));
-
 import { ResourceGovernor, type ResourceGovernorDeps } from "../ResourceGovernor.js";
 import { PtyPauseCoordinator } from "../PtyPauseCoordinator.js";
 import { metricsEnabled } from "../metrics.js";
@@ -50,6 +42,20 @@ function createMockDeps(overrides?: Partial<ResourceGovernorDeps>): ResourceGove
     trimBuffers: vi.fn(),
     ...overrides,
   };
+}
+
+// Mock process.memoryUsage with MB-denominated values. Utilization is the
+// binding constraint: max(heap / 512 heap budget, combined / 768 process
+// budget) — so mockMemoryUsage(450) = 87.9% (heap-bound) and
+// mockMemoryUsage(300, 276) = 75% (combined-bound).
+// Re-invoking returns the same spy, so later calls re-mock in place.
+function mockMemoryUsage(heapMb: number, externalMb = 0, arrayBuffersMb = 0) {
+  return vi.spyOn(process, "memoryUsage").mockReturnValue({
+    heapUsed: heapMb * 1024 * 1024,
+    rss: 1024 * 1024 * 1024,
+    external: externalMb * 1024 * 1024,
+    arrayBuffers: arrayBuffersMb * 1024 * 1024,
+  } as ReturnType<typeof process.memoryUsage>);
 }
 
 // After the EMA + warmup + trim-first changes, engage requires 6 ticks:
@@ -179,12 +185,7 @@ describe("ResourceGovernor", () => {
           ]),
       });
 
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -221,12 +222,7 @@ describe("ResourceGovernor", () => {
           .mockReturnValue([{ id: "t1", lastOutputTime: 100, lastInputTime: 100 }]),
       });
 
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -234,12 +230,7 @@ describe("ResourceGovernor", () => {
 
       // Drop memory below resume threshold — disengage uses raw utilization
       // so a single low tick resumes immediately.
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 500 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(250);
       vi.advanceTimersByTime(2000);
 
       const event = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls.find(
@@ -266,12 +257,7 @@ describe("ResourceGovernor", () => {
 
     it("disengages on raw utilization even when smoothed is still elevated", () => {
       const { coordinator } = createMockCoordinator();
-      const memSpy = vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
 
       const deps = createMockDeps({
         getTerminalIds: vi.fn().mockReturnValue(["t1"]),
@@ -290,15 +276,10 @@ describe("ResourceGovernor", () => {
       vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
       expect(coordinator.hasToken("resource-governor")).toBe(true);
 
-      // Drop raw to 53.7% (550MB) in a single tick — well below the 60%
+      // Drop raw to 53.7% (275MB) in a single tick — well below the 60%
       // resume threshold. Smoothed will only decay to ~81.7% on this tick,
       // still above 60%. Disengage must still fire because it uses RAW.
-      memSpy.mockReturnValue({
-        heapUsed: 550 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(275);
       vi.advanceTimersByTime(2000);
 
       expect(coordinator.hasToken("resource-governor")).toBe(false);
@@ -320,12 +301,7 @@ describe("ResourceGovernor", () => {
         getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
       });
 
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -356,12 +332,7 @@ describe("ResourceGovernor", () => {
         getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
       });
 
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -406,12 +377,7 @@ describe("ResourceGovernor", () => {
             .mockReturnValue([{ id: "t1", lastOutputTime: 100, lastInputTime: 100 }]),
         });
 
-        vi.spyOn(process, "memoryUsage").mockReturnValue({
-          heapUsed: 900 * 1024 * 1024,
-          rss: 1024 * 1024 * 1024,
-          external: 0,
-          arrayBuffers: 0,
-        } as ReturnType<typeof process.memoryUsage>);
+        mockMemoryUsage(450);
 
         const governor = new ResourceGovernor(deps);
         governor.start();
@@ -424,12 +390,7 @@ describe("ResourceGovernor", () => {
         coordinator.pause(queueToken);
 
         // Now lower memory to trigger disengage
-        vi.spyOn(process, "memoryUsage").mockReturnValue({
-          heapUsed: 500 * 1024 * 1024,
-          rss: 1024 * 1024 * 1024,
-          external: 0,
-          arrayBuffers: 0,
-        } as ReturnType<typeof process.memoryUsage>);
+        mockMemoryUsage(250);
 
         raw.resume.mockClear();
         (deps.emitTerminalStatus as ReturnType<typeof vi.fn>).mockClear();
@@ -473,12 +434,7 @@ describe("ResourceGovernor", () => {
           .mockReturnValue([{ id: "t1", lastOutputTime: 100, lastInputTime: 100 }]),
       });
 
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1327,12 +1283,7 @@ describe("ResourceGovernor", () => {
   describe("host-memory-warning", () => {
     it("emits host-memory-warning when crossing warning threshold", () => {
       const deps = createMockDeps();
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 750 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(375);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1351,24 +1302,14 @@ describe("ResourceGovernor", () => {
 
     it("clears warning when memory drops below clear threshold", () => {
       const deps = createMockDeps();
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 750 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(375);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
       vi.advanceTimersByTime(2000);
 
       // Drop below clear threshold
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 600 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(300);
       vi.advanceTimersByTime(2000);
 
       expect(deps.sendEvent).toHaveBeenCalledWith(
@@ -1383,12 +1324,7 @@ describe("ResourceGovernor", () => {
 
     it("does not re-emit warning on consecutive ticks above threshold", () => {
       const deps = createMockDeps();
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 750 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(375);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1400,6 +1336,220 @@ describe("ResourceGovernor", () => {
         (c: unknown[]) => (c[0] as Record<string, unknown>)?.type === "host-memory-warning"
       );
       expect(warningCalls).toHaveLength(1);
+
+      governor.dispose();
+    });
+  });
+
+  describe("external memory signal", () => {
+    it("engages from external-only pressure invisible to the heap signal", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+      });
+
+      // 64MB heap + 620MB external = 684MB → 89.1% of the 768MB budget.
+      // A heap-only signal would read far below every threshold.
+      mockMemoryUsage(64, 620);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
+
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+
+      governor.dispose();
+    });
+
+    it("engages immediately when external pushes combined past critical", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+      });
+
+      // 100MB heap + 640MB external = 740MB → 96.4%: the critical bypass
+      // fires on the first tick with no warmup or trim.
+      mockMemoryUsage(100, 640);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+      expect(deps.trimBuffers).not.toHaveBeenCalled();
+
+      governor.dispose();
+    });
+
+    it("computes utilizationPercent from combined heap + external and reports both in the payload", () => {
+      const deps = createMockDeps();
+      // 300MB heap + 276MB external = 576MB → exactly 75% of 768MB.
+      mockMemoryUsage(300, 276);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(deps.sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "host-memory-warning",
+          isWarning: true,
+          utilizationPercent: 75,
+          heapMb: 300,
+          externalMb: 276,
+        })
+      );
+
+      governor.dispose();
+    });
+
+    it("includes heapMb and externalMb on the warning-cleared event", () => {
+      const deps = createMockDeps();
+      mockMemoryUsage(300, 276);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      // 200MB heap + 100MB external = 300MB → 39.1%, below the clear band.
+      mockMemoryUsage(200, 100);
+      vi.advanceTimersByTime(2000);
+
+      expect(deps.sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "host-memory-warning",
+          isWarning: false,
+          heapMb: 200,
+          externalMb: 100,
+        })
+      );
+
+      governor.dispose();
+    });
+
+    it("still engages on heap-only pressure near the V8 cap (heap budget is the binding constraint)", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+      });
+
+      // 440MB heap + 5MB external = 445MB → only 57.9% of the 768MB process
+      // budget, but 440/512 = 85.9% of the heap cap. A combined-only signal
+      // would never see a runaway JS heap (heap maxes out at 67% of 768).
+      mockMemoryUsage(440, 5);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
+
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+
+      governor.dispose();
+    });
+
+    it("routes external-only pressure through warmup and trim, not a raw bypass", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+      });
+
+      // 89.1% from external — above engage, below critical.
+      mockMemoryUsage(64, 620);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // 4 ticks — below WARMUP_TICKS=5: no trim, no pause.
+      vi.advanceTimersByTime(8000);
+      expect(deps.trimBuffers).not.toHaveBeenCalled();
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+
+      // Tick 5: warmup satisfied, one-shot trim fires, still no pause.
+      vi.advanceTimersByTime(2000);
+      expect(deps.trimBuffers).toHaveBeenCalledTimes(1);
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+
+      // Tick 6: escalates to pause.
+      vi.advanceTimersByTime(2000);
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+
+      governor.dispose();
+    });
+
+    it("does not warn just below the external-driven warning boundary", () => {
+      const deps = createMockDeps();
+      // 537/768 = 69.9% — below the 70% warning threshold (strict >).
+      mockMemoryUsage(0, 537);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      const warningCalls = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) => (c[0] as Record<string, unknown>)?.type === "host-memory-warning"
+      );
+      expect(warningCalls).toHaveLength(0);
+
+      governor.dispose();
+    });
+
+    it("warns just above the external-driven warning boundary", () => {
+      const deps = createMockDeps();
+      // 538/768 = 70.05% — crosses the 70% warning threshold.
+      mockMemoryUsage(0, 538);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(deps.sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "host-memory-warning",
+          isWarning: true,
+        })
+      );
+
+      governor.dispose();
+    });
+
+    it("does not double-count arrayBuffers (a subset of external)", () => {
+      const deps = createMockDeps();
+      // 200MB heap + 200MB external (all of it ArrayBuffers) = 400MB → 52%.
+      // Summing arrayBuffers on top would read 600MB → 78% and falsely warn.
+      mockMemoryUsage(200, 200, 200);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      const warningCalls = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) => (c[0] as Record<string, unknown>)?.type === "host-memory-warning"
+      );
+      expect(warningCalls).toHaveLength(0);
 
       governor.dispose();
     });
@@ -1426,12 +1576,7 @@ describe("ResourceGovernor", () => {
         ]),
       });
 
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1465,12 +1610,7 @@ describe("ResourceGovernor", () => {
         ]),
       });
 
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 980 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(490);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1499,13 +1639,8 @@ describe("ResourceGovernor", () => {
       governor.setResourceProfile("efficiency");
       governor.start();
 
-      // 75% heap — below default 85% but above efficiency 70%
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 768 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      // 75% of budget — below default 85% but above efficiency 70%
+      mockMemoryUsage(384);
 
       vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
 
@@ -1529,13 +1664,8 @@ describe("ResourceGovernor", () => {
       governor.setResourceProfile("balanced");
       governor.start();
 
-      // 75% heap — above efficiency 70% but below default 85%
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 768 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      // 75% of budget — above efficiency 70% but below default 85%
+      mockMemoryUsage(384);
 
       // Advance past warmup to verify no throttle ever fires on balanced.
       vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
@@ -1552,13 +1682,8 @@ describe("ResourceGovernor", () => {
       governor.setResourceProfile("efficiency");
       governor.start();
 
-      // 60% heap — below default warning 70% but above efficiency warning 55%
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 614 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      // 60% of budget — below default warning 70% but above efficiency warning 55%
+      mockMemoryUsage(307);
 
       vi.advanceTimersByTime(2000);
 
@@ -1587,12 +1712,7 @@ describe("ResourceGovernor", () => {
       });
 
       // Baseline at 50% for first 5 ticks (warmup), then a single spike to 90%.
-      const memSpy = vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 512 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(256);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1602,21 +1722,11 @@ describe("ResourceGovernor", () => {
       expect(coordinator.hasToken("resource-governor")).toBe(false);
 
       // Single-tick spike to 90%.
-      memSpy.mockReturnValue({
-        heapUsed: 922 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(461);
       vi.advanceTimersByTime(2000);
 
       // Drop back. EMA pushes smoothed to ~0.18*90 + 0.82*50 = 57.2 — well below 85.
-      memSpy.mockReturnValue({
-        heapUsed: 512 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(256);
       vi.advanceTimersByTime(4000);
 
       // No throttle, no trim — smoothed never crossed 85%.
@@ -1638,12 +1748,7 @@ describe("ResourceGovernor", () => {
           ]),
       });
 
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1668,12 +1773,7 @@ describe("ResourceGovernor", () => {
           ]),
       });
 
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1702,12 +1802,7 @@ describe("ResourceGovernor", () => {
           ]),
       });
 
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1735,12 +1830,7 @@ describe("ResourceGovernor", () => {
         trimBuffers,
       });
 
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1754,12 +1844,7 @@ describe("ResourceGovernor", () => {
 
     it("re-arms trim attempt when pressure clears without ever engaging", () => {
       const { coordinator } = createMockCoordinator();
-      const memSpy = vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
 
       const deps = createMockDeps({
         getTerminalIds: vi.fn().mockReturnValue(["t1"]),
@@ -1781,23 +1866,13 @@ describe("ResourceGovernor", () => {
 
       // Pressure clears. EMA decays so smoothed eventually crosses below the
       // engage threshold and the re-arm branch fires.
-      memSpy.mockReturnValue({
-        heapUsed: 256 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(128);
       vi.advanceTimersByTime(40000);
       expect(coordinator.hasToken("resource-governor")).toBe(false);
 
       // Pressure returns. EMA needs ~16 ticks to climb from ~25% back above
       // the 85% engage threshold; trim must fire again for the new episode.
-      memSpy.mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
       vi.advanceTimersByTime(40000);
       expect(deps.trimBuffers).toHaveBeenCalledTimes(2);
 
@@ -1816,12 +1891,7 @@ describe("ResourceGovernor", () => {
           ]),
       });
 
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 980 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(490);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1847,12 +1917,7 @@ describe("ResourceGovernor", () => {
           ]),
       });
 
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1891,12 +1956,7 @@ describe("ResourceGovernor", () => {
           ]),
       });
 
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1917,12 +1977,7 @@ describe("ResourceGovernor", () => {
 
     it("threshold-based disengage also sets the cooldown gate", () => {
       const { coordinator, raw } = createMockCoordinator();
-      const memSpy = vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
 
       const deps = createMockDeps({
         getTerminalIds: vi.fn().mockReturnValue(["t1"]),
@@ -1941,22 +1996,12 @@ describe("ResourceGovernor", () => {
       vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
       expect(coordinator.hasToken("resource-governor")).toBe(true);
 
-      memSpy.mockReturnValue({
-        heapUsed: 500 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(250);
       vi.advanceTimersByTime(2000);
       expect(coordinator.hasToken("resource-governor")).toBe(false);
 
       // Pressure returns immediately. Cooldown gate must still block re-engage.
-      memSpy.mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
       raw.pause.mockClear();
       vi.advanceTimersByTime(10000);
       expect(coordinator.hasToken("resource-governor")).toBe(false);
@@ -1977,12 +2022,7 @@ describe("ResourceGovernor", () => {
         t3: c3,
       };
 
-      const memSpy = vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
 
       const deps = createMockDeps({
         getTerminalIds: vi.fn().mockReturnValue(["t1", "t2", "t3"]),
@@ -2001,12 +2041,7 @@ describe("ResourceGovernor", () => {
       vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
       (deps.emitTerminalStatus as ReturnType<typeof vi.fn>).mockClear();
 
-      memSpy.mockReturnValue({
-        heapUsed: 500 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(250);
       vi.advanceTimersByTime(2000);
 
       const resumeEmits = (deps.emitTerminalStatus as ReturnType<typeof vi.fn>).mock.calls
@@ -2027,12 +2062,7 @@ describe("ResourceGovernor", () => {
         t2: c2,
       };
 
-      const memSpy = vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(450);
 
       const deps = createMockDeps({
         // Only t1 is visible to the governor when engage fires.
@@ -2054,12 +2084,7 @@ describe("ResourceGovernor", () => {
       // t2 came online while paused, governed by another pause holder.
       c2.coordinator.pause("backpressure");
 
-      memSpy.mockReturnValue({
-        heapUsed: 500 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
+      mockMemoryUsage(250);
       c2.raw.resume.mockClear();
       vi.advanceTimersByTime(2000);
 

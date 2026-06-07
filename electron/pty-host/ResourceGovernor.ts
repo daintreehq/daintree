@@ -1,4 +1,3 @@
-import v8 from "node:v8";
 import type { AgentState } from "../../shared/types/agent.js";
 import type {
   PtyHostEvent,
@@ -74,6 +73,16 @@ export interface ResourceGovernorDeps {
     dataLossCountDelta: number;
   };
 }
+
+// Process memory budget for the combined heap + external signal. The pty-host
+// is forked with --max-old-space-size matching PtyClient's DEFAULT_CONFIG
+// memoryLimitMb (512) — keep HEAP_BUDGET_MB in sync with it. That flag bounds
+// only the V8 heap; ArrayBuffer backing stores (queued PTY output slabs,
+// xterm typed arrays) are allocated outside it and show up in
+// process.memoryUsage().external, so the governor budgets them separately.
+const HEAP_BUDGET_MB = 512;
+const EXTERNAL_HEADROOM_MB = 256;
+const TOTAL_PROCESS_BUDGET_MB = HEAP_BUDGET_MB + EXTERNAL_HEADROOM_MB;
 
 export class ResourceGovernor {
   private readonly MEMORY_LIMIT_PERCENT = 85;
@@ -190,9 +199,22 @@ export class ResourceGovernor {
   private checkResources(): void {
     const memory = process.memoryUsage();
     const heapUsedMb = memory.heapUsed / 1024 / 1024;
-    const heapStats = v8.getHeapStatistics();
-    const heapLimitMb = heapStats.heap_size_limit / 1024 / 1024;
-    const utilizationPercent = (heapUsedMb / heapLimitMb) * 100;
+    // `external` already includes all ArrayBuffer/Buffer backing stores —
+    // memory.arrayBuffers is a subset of it, so adding it would double-count.
+    const externalMb = (memory.external ?? 0) / 1024 / 1024;
+    // Combined signal: V8 heap + external. Heap-only was blind to the memory
+    // this governor actually manages — queued PTY output and xterm backing
+    // stores live in external, outside the --max-old-space-size cap (#9905).
+    const combinedMb = heapUsedMb + externalMb;
+    // Utilization is the binding constraint: heap against its own V8 cap AND
+    // combined against the total process budget. The combined ratio alone can
+    // never reach the engage thresholds on pure heap pressure — heap is capped
+    // at HEAP_BUDGET_MB, only ~67% of the total budget — so a runaway JS heap
+    // must be measured against its own ceiling. max() keeps this a single
+    // continuous signal feeding one EMA, and the disengage hysteresis then
+    // requires BOTH ratios to clear the resume threshold.
+    const utilizationPercent =
+      Math.max(combinedMb / TOTAL_PROCESS_BUDGET_MB, heapUsedMb / HEAP_BUDGET_MB) * 100;
 
     // EMA smoothing — rejects single-tick GC sawtooth spikes. Seeded with the
     // first real reading (not 0) to avoid a warmup ramp that falsely stays
@@ -217,24 +239,30 @@ export class ResourceGovernor {
     if (!this.isWarning && utilizationPercent > warnThreshold) {
       this.isWarning = true;
       console.warn(
-        `[ResourceGovernor] Memory warning: ${utilizationPercent.toFixed(1)}% heap used ` +
-          `(threshold: ${warnThreshold}%).`
+        `[ResourceGovernor] Memory warning: ${utilizationPercent.toFixed(1)}% of process budget ` +
+          `(heap ${Math.round(heapUsedMb)}MB + external ${Math.round(externalMb)}MB, ` +
+          `threshold: ${warnThreshold}%).`
       );
       this.deps.sendEvent({
         type: "host-memory-warning",
         isWarning: true,
         utilizationPercent: Math.round(utilizationPercent),
+        heapMb: Math.round(heapUsedMb),
+        externalMb: Math.round(externalMb),
         timestamp: Date.now(),
       });
     } else if (this.isWarning && utilizationPercent < warnClear) {
       this.isWarning = false;
       console.log(
-        `[ResourceGovernor] Memory warning cleared: ${utilizationPercent.toFixed(1)}% heap used.`
+        `[ResourceGovernor] Memory warning cleared: ${utilizationPercent.toFixed(1)}% of process budget ` +
+          `(heap ${Math.round(heapUsedMb)}MB + external ${Math.round(externalMb)}MB).`
       );
       this.deps.sendEvent({
         type: "host-memory-warning",
         isWarning: false,
         utilizationPercent: Math.round(utilizationPercent),
+        heapMb: Math.round(heapUsedMb),
+        externalMb: Math.round(externalMb),
         timestamp: Date.now(),
       });
     }
@@ -254,8 +282,9 @@ export class ResourceGovernor {
       if (isCritical || (aboveThreshold && warmedUp && cooledDown)) {
         if (!isCritical && !this.trimAttemptedForCurrentPressure && this.deps.trimBuffers) {
           // Trim first as a one-shot reclaim — drops JS references synchronously
-          // so the next GC can collect old-gen scrollback strings. heapUsed won't
-          // drop in this tick (GC hasn't run yet) so we wait one tick before
+          // so the next GC can collect old-gen scrollback strings and ArrayBuffer
+          // backing stores. Neither heapUsed nor external drops in this tick (GC
+          // hasn't run yet) so we wait one tick before
           // escalating to pause. Wrapped in try/catch because trim is best-effort:
           // a failure shouldn't block the eventual pause path.
           try {
@@ -269,7 +298,7 @@ export class ResourceGovernor {
           }
           this.trimAttemptedForCurrentPressure = true;
         } else {
-          this.engageThrottle(heapUsedMb, utilizationPercent);
+          this.engageThrottle(combinedMb, utilizationPercent);
         }
       } else if (!aboveThreshold && this.trimAttemptedForCurrentPressure) {
         // Pressure cleared after trim but before engage — preserve the
@@ -287,7 +316,7 @@ export class ResourceGovernor {
       const belowThreshold = utilizationPercent < resumePercent;
 
       if (maxPauseExceeded || belowThreshold) {
-        this.disengageThrottle(heapUsedMb, utilizationPercent, maxPauseExceeded);
+        this.disengageThrottle(combinedMb, utilizationPercent, maxPauseExceeded);
       }
     }
 
