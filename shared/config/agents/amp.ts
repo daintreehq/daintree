@@ -77,8 +77,11 @@ export const config: AgentConfig = {
   detection: {
     // Amp ships with empty primary/fallback patterns until on-device PTY
     // capture confirms the actual spinner glyphs and working strings emitted
-    // by the Ink TUI. Speculative patterns risk wrong-Unicode regressions
-    // (see #3941). Boot/prompt patterns are conservative and self-validating.
+    // by the Ink TUI; speculative patterns risk wrong-Unicode regressions
+    // (see #3941). Note: empty primaryPatterns is fallthrough, not opt-out —
+    // buildPatternConfig returns undefined (dropping fallbackPatterns too)
+    // and the universal pattern set applies. Opt-out semantics are #9873's
+    // scope. Boot/prompt patterns are conservative and self-validating.
     primaryPatterns: [
       // @generated:amp:primaryPatterns:start
       // @generated:amp:primaryPatterns:end
@@ -100,7 +103,6 @@ export const config: AgentConfig = {
     primaryConfidence: 0.95,
     fallbackConfidence: 0.75,
     promptConfidence: 0.85,
-    debounceMs: 6000,
   },
   // Amp resumes a thread by ID via `amp threads continue <id>`. There's no
   // session-ID emission on quit and no slash-quit command — Ctrl+C is the

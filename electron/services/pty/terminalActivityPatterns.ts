@@ -8,7 +8,9 @@ import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 import type { VisibleContentSnapshot } from "./SustainedChangeTracker.js";
 
 // Agent status is intentionally output-driven: any observed output means
-// working, and sustained silence means waiting.
+// working, and sustained silence means waiting. Also the floor for
+// debounceMs and promptFastPathMinQuietMs in buildActivityMonitorOptions —
+// an intentional jitter guard for silent inter-tool-call gaps (#3606).
 const AGENT_WAITING_QUIET_MS = 8000;
 
 export function buildPatternConfig(
