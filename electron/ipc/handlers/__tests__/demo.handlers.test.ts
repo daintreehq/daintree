@@ -486,9 +486,28 @@ describe("registerDemoHandlers", () => {
       ).toBe(14_600);
     });
 
+    it("type falls back to the 20ms keystroke floor at very high cps", async () => {
+      // 1000 chars at 1000 cps: nominal = 1000/1000*1000*8 = 8000, but the renderer
+      // floors each keystroke at 20ms => 1000*20 = 20000 wins; +5000 = 25000.
+      const text = "a".repeat(1000);
+      expect(await runAndCaptureDelay("demo:type", { selector: ".x", text, cps: 1000 })).toBe(
+        25_000
+      );
+    });
+
     it("moveTo falls back to the 3s default when durationMs is omitted", async () => {
       // 3000 * 1.2 + 5000 = 8600
       expect(await runAndCaptureDelay("demo:move-to", { x: 1, y: 2 })).toBe(8_600);
+    });
+
+    it("moveToSelector falls back to the 3s default when durationMs is omitted", async () => {
+      expect(await runAndCaptureDelay("demo:move-to-selector", { selector: ".x" })).toBe(8_600);
+    });
+
+    it("drag falls back to the 3s default when durationMs is omitted", async () => {
+      expect(await runAndCaptureDelay("demo:drag", { fromSelector: ".a", toSelector: ".b" })).toBe(
+        8_600
+      );
     });
 
     it("unbounded commands keep the 30s default watchdog", async () => {

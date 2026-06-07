@@ -55,9 +55,13 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
 
   // Typing duration is nondeterministic — getTypingDelay (renderer) humanizes each
   // keystroke around `1000 / cps` with post-punctuation pauses and rare ~2400ms
-  // outliers. An 8x multiplier over the nominal time covers that worst case.
+  // outliers. An 8x multiplier over the nominal time covers that worst case. The
+  // renderer also floors every keystroke at 20ms, so for very high cps the nominal
+  // time underestimates real time — take the larger of the two budgets.
   function typingTimeoutMs(text: string, cps?: number): number {
-    return Math.ceil((text.length / Math.max(1, cps ?? 12)) * 1000 * 8 + 5_000);
+    const nominalMs = (text.length / Math.max(1, cps ?? 12)) * 1000 * 8;
+    const keystrokeFloorMs = text.length * 20;
+    return Math.ceil(Math.max(nominalMs, keystrokeFloorMs) + 5_000);
   }
 
   function sendCommandAndAwait(
