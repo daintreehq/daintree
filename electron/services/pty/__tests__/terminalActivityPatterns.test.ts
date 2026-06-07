@@ -119,7 +119,8 @@ describe("buildPatternConfig", () => {
 
 describe("buildBootCompletePatterns", () => {
   it("returns undefined for empty bootCompletePatterns (#9877)", () => {
-    expect(buildBootCompletePatterns({ bootCompletePatterns: [] }, "antigravity")).toBeUndefined();
+    const detection: AgentDetectionConfig = { primaryPatterns: [], bootCompletePatterns: [] };
+    expect(buildBootCompletePatterns(detection, "antigravity")).toBeUndefined();
   });
 });
 
