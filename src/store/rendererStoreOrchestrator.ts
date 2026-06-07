@@ -14,6 +14,7 @@ import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
+import { removeArtifactsForTerminal } from "@/hooks/useArtifacts";
 import {
   setPanelStoreAccessor,
   setPanelStoreClearForSwitchAccessor,
@@ -203,6 +204,11 @@ export function initStoreOrchestrator(): () => void {
             useVoiceRecordingStore.getState().clearLockedTarget(removedId);
             unregisterInputController(removedId);
             semanticAnalysisService.unregisterTerminal(removedId);
+            // Drop the renderer-side artifact store entry so content strings
+            // don't pin the dead panel's heap for the rest of the renderer
+            // lifetime (#10023). The hook listener Set is owned by each
+            // mounted `useArtifacts` consumer's own `useEffect` cleanup.
+            removeArtifactsForTerminal(removedId);
 
             const removed = prevById[removedId];
             if (removed?.worktreeId) {
@@ -258,6 +264,33 @@ export function initStoreOrchestrator(): () => void {
           const lockedId = useVoiceRecordingStore.getState().lockedTarget?.panelId;
           if (lockedId) {
             useVoiceRecordingStore.getState().clearLockedTarget(lockedId);
+          }
+        }
+      )
+    )
+  );
+
+  // 3c. Artifact-store trash cleanup: same `trashPanel`-doesn't-shrink-
+  //     `panelIds` constraint as 3b above, but for the renderer-side artifact
+  //     Map. The user-close path (`trashPanel`) flips `panelsById[id].location`
+  //     to "trash" and adds the id to `trashedTerminals` — `panelIds` is
+  //     unchanged, so the section-3 subscriber bails. Watch the
+  //     `trashedTerminals` map's key set; for each newly-trashed id, drop
+  //     the artifact store entry. Selector returns a primitive (the key
+  //     count plus a sorted key fingerprint) so unrelated `panelsById`
+  //     mutations don't wake this subscription. The Map reference itself
+  //     swaps on every change in `registrySlice.trashPanel`, so ref
+  //     equality is a reliable trigger.
+  disposables.add(
+    toDisposable(
+      usePanelStore.subscribe(
+        (state) => state.trashedTerminals,
+        (trashed, prevTrashed) => {
+          if (trashed === prevTrashed) return;
+          for (const id of trashed.keys()) {
+            if (!prevTrashed.has(id)) {
+              removeArtifactsForTerminal(id);
+            }
           }
         }
       )
