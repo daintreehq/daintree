@@ -497,6 +497,16 @@ const resourceGovernor = new ResourceGovernor({
       agentState: t.agentState,
     })),
   trimBuffers: () => ptyManager.trimScrollback(SCROLLBACK_MIN),
+  getTerminalBufferSizes: () => ptyManager.getTerminalBufferSizes(),
+  trimBuffersTargeted: (targets) => {
+    for (const [id, targetLines] of targets) {
+      try {
+        ptyManager.trimTerminalScrollback(id, targetLines);
+      } catch (err) {
+        console.warn("[PtyHost] trimTerminalScrollback failed for", id, err);
+      }
+    }
+  },
   getPendingBytesSnapshot: () => {
     // Merge SAB-path, IPC-path, and per-window MessagePort-path queue depths so
     // the reliability gauge captures every in-flight byte the pty-host is holding.

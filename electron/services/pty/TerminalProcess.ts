@@ -1410,6 +1410,16 @@ export class TerminalProcess {
     this.terminalInfo.headlessTerminal.options.scrollback = targetLines;
   }
 
+  /**
+   * Current scrollback cap (in lines). Mirrors `headlessTerminal.options.scrollback`
+   * but reads the field directly so the resource governor can rank per-terminal
+   * buffer-memory contribution without touching the headless instance. Used as the
+   * line-count input to the `scrollbackLines × cols × 12` byte estimate.
+   */
+  getCurrentScrollback(): number {
+    return this._scrollback;
+  }
+
   dispose(): void {
     const recentOutput = this.forensicsBuffer.getRecentOutput();
     this.identityWatcher.dispose();

@@ -688,6 +688,7 @@ export interface TerminalReliabilityMetricPayload {
     | "pause-duration-gauge"
     | "queue-depth-gauge"
     | "data-loss-count"
+    | "buffer-memory-gauge"
     | "ipc-cap-drop";
   timestamp: number;
   durationMs?: number;
@@ -739,6 +740,26 @@ export interface TerminalReliabilityMetricPayload {
   droppedBytesDelta?: number;
   /** Used by `data-loss-count`: number of drop events since the last tick. */
   dataLossCountDelta?: number;
+  /**
+   * Used by `buffer-memory-gauge`: aggregate estimated scrollback-buffer memory
+   * across all terminals, in bytes (`Σ scrollbackLines × cols × 12`). This is the
+   * raw typed-array baseline (3 uint32s per cell) — a comparator for attribution,
+   * not a precise heap measure. Excludes pending/queue bytes (those are reported
+   * by `pending-bytes-gauge` / `queue-depth-gauge`) so the two never double-count.
+   */
+  estimatedBufferMemoryBytes?: number;
+  /**
+   * Used by `buffer-memory-gauge`: per-terminal scrollback-buffer estimate, sorted
+   * descending by `scrollbackEstimateBytes` so the heaviest contributor is first.
+   * This is the attribution signal that lets the governor (and operators) see which
+   * terminals drive buffer memory under sustained warning-band pressure.
+   */
+  perTerminalBufferMemory?: Array<{
+    terminalId: string;
+    scrollbackEstimateBytes: number;
+    scrollbackLines: number;
+    cols: number;
+  }>;
 }
 
 /**

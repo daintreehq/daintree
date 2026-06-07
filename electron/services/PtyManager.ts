@@ -108,6 +108,33 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Per-terminal scrollback dimensions for the resource governor's memory-aware
+   * trim/pause ranking. Returns the current scrollback cap and column width so the
+   * governor can estimate `scrollbackLines × cols × 12` bytes per terminal without
+   * serializing any buffer. `cols` falls back to 80 for a freshly-spawned terminal
+   * that hasn't been resized yet, so it never contributes a zero-byte estimate.
+   */
+  getTerminalBufferSizes(): Array<{ id: string; scrollbackLines: number; cols: number }> {
+    return this.registry.getAll().map((terminal) => ({
+      id: terminal.id,
+      scrollbackLines: terminal.getCurrentScrollback(),
+      cols: terminal.getPtyProcess().cols || 80,
+    }));
+  }
+
+  /**
+   * Trim a single terminal's scrollback to `targetLines`. Returns false when the
+   * terminal is unknown so the caller can log a skipped id without a throw. Used by
+   * the governor's targeted pre-pause reclaim to trim the heaviest contributors only.
+   */
+  trimTerminalScrollback(id: string, targetLines: number): boolean {
+    const terminal = this.registry.get(id);
+    if (!terminal) return false;
+    terminal.trimScrollback(targetLines);
+    return true;
+  }
+
+  /**
    * Check if SAB mode is enabled.
    */
   isSabMode(): boolean {
