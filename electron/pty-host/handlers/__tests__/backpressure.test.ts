@@ -323,7 +323,7 @@ describe("wake-terminal handler — late-wake tier reconciliation (#9906)", () =
       "wake-terminal-correction"
     );
     // ActivityMonitor returned to the 500ms background cadence.
-    expect(ctx.ptyManager.setActivityMonitorTier).toHaveBeenCalledWith("term-1", 500);
+    expect(ctx.ptyManager.setActivityMonitorTier).toHaveBeenCalledWith("term-1", "background", 500);
     // The renderer's dedup baseline is reset via the tier-changed broadcast.
     expect(conn.port.postMessage).toHaveBeenCalledWith({
       type: "tier-changed",

@@ -195,7 +195,7 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
       // recomputeActivityTiers.
       if (preWakeTier === "background") {
         backpressureManager.setActivityTier(msg.id, "background", "wake-terminal-correction");
-        ptyManager.setActivityMonitorTier(msg.id, 500);
+        ptyManager.setActivityMonitorTier(msg.id, "background", 500);
         const wakeTerminal = ptyManager.getTerminal(msg.id);
         const termProject = wakeTerminal?.projectId ?? null;
         for (const [windowId, conn] of ctx.rendererConnections) {
