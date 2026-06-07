@@ -391,8 +391,29 @@ export function setupLifecycleListeners(): DisposableStore {
           terminalInstanceService.injectDataLossMarker(id, droppedBytes ?? 0);
           return;
         }
+        // FUTURE_SAB: `suspended` and `paused-user` are excluded from
+        // `PersistableFlowStatus` (see #9900 / `shared/types/panel.ts`).
+        // `suspended` is only emitted by the disabled SAB transport path
+        // (`BackpressureManager.suspendVisualStream`,
+        // `electron/pty-host/backpressure.ts:277`); `paused-user` has no
+        // producer. Drop both at the listener boundary so the buffer
+        // (typed `PersistableFlowStatus`) is never asked to persist a
+        // skeleton value. When the SAB transport is revived, remove this
+        // guard, restore the suspended wake branch below, and re-widen
+        // the formatter/component prop types — see the // FUTURE_SAB:
+        // markers in `useAccessibilityAnnouncements.ts` and
+        // `TerminalHeaderContent.tsx`.
+        if (status === "suspended" || status === "paused-user") {
+          return;
+        }
         enqueueFlowStatusUpdate(id, status, timestamp);
-        if (status === "suspended" || status === "paused-backpressure") {
+        // FUTURE_SAB: the suspended wake branch was removed in #9900.
+        // The producer (`suspendVisualStream`) is unreachable in production,
+        // so waking on its emission would only ever fire in adversarial
+        // tests. If the SAB transport is revived and `suspended` becomes
+        // a real status again, re-add `|| status === "suspended"` here
+        // and remove the early-return guard above.
+        if (status === "paused-backpressure") {
           terminalInstanceService.wake(id);
         }
       })
@@ -411,6 +432,20 @@ export function setupLifecycleListeners(): DisposableStore {
           // data-loss-count, pending-bytes-gauge, throughput-rate) are
           // host-side telemetry sinks — observable via the host log
           // stream and ignored here.
+          //
+          // FUTURE_SAB: the `suspend` arm is the symmetric companion of the
+          // `suspended` `flowStatus` dropped in the onStatus boundary above.
+          // `suspendVisualStream` emits BOTH the `suspended` status and the
+          // `suspend` reliability metric (see `electron/pty-host/backpressure.ts:309+`).
+          // The flow-status half is now dropped at the listener boundary
+          // (#9900) but the metric half is still routed through
+          // `clearHeldDuration`. In production the SAB transport path is
+          // disabled so neither half can fire; the asymmetry is a forward-
+          // looking breadcrumb for the migration author. When the SAB
+          // transport is revived, EITHER drop the `suspend` metric arm
+          // alongside the `suspended` status, OR gate it on the same
+          // source/buffer the flow-status boundary uses, so the held-
+          // duration gauge and the pill stay in lockstep.
           if (payload.metricType === "pause-end" || payload.metricType === "suspend") {
             const terminal = usePanelStore.getState().panelsById[payload.terminalId];
             if (terminal && isPtyPanel(terminal)) {

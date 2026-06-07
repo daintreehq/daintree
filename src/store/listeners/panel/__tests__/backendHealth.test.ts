@@ -98,12 +98,19 @@ describe("onBackendReady — stale flow state cleared on host recovery (#9899)",
           flowStatus: "paused-backpressure",
           runtimeStatus: "paused-backpressure",
         },
+        // FUTURE_SAB: this test originally used `flowStatus: "suspended"`
+        // (and `runtimeStatus: "suspended"`) as a representative non-running
+        // status to assert the host-recovery clear pass. As of #9900 the
+        // panel-store types exclude `suspended` from `PersistableFlowStatus`
+        // (no production producer), so we substitute a persistable value
+        // here. The test's intent — multi-panel clear in one pass — is
+        // preserved.
         "term-2": {
           ...ptyBase,
           id: "term-2",
           isVisible: false,
-          flowStatus: "suspended",
-          runtimeStatus: "suspended",
+          flowStatus: "paused-resource-governor",
+          runtimeStatus: "paused-resource-governor",
         },
       },
       panelIds: ["term-1", "term-2"],

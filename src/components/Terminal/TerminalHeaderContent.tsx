@@ -1,11 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Pause, Cpu, Hourglass, Lock, CheckCircle2, Moon } from "lucide-react";
-import type {
-  AgentState,
-  PanelKind,
-  AgentStateChangeTrigger,
-  PersistableFlowStatus,
-} from "@/types";
+import type { AgentState, PanelKind, AgentStateChangeTrigger, TerminalFlowStatus } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -25,6 +20,13 @@ import { useErrorStore } from "@/store/errorStore";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+
+// FUTURE_SAB: the `flowStatus` prop is widened to `TerminalFlowStatus` (not
+// `PersistableFlowStatus`) so the Suspended pill below remains type-safe
+// while `suspended` is a skeleton value with no production producer (#9900).
+// Callers in practice only pass `PersistableFlowStatus` values; the wider
+// type is purely so the future-sab branch is reachable. When the SAB
+// transport path is revived, restore the narrow prop type.
 
 function ElapsedTime({ startedAt, now }: { startedAt: number; now: number }) {
   return <> · {formatElapsedDuration(now - startedAt)}</>;
@@ -51,7 +53,7 @@ export interface TerminalHeaderContentProps {
   isExited?: boolean;
   exitCode?: number | null;
   queueCount?: number;
-  flowStatus?: PersistableFlowStatus;
+  flowStatus?: TerminalFlowStatus;
   /**
    * True when the agent transitioned to `completed` and the pre-agent snapshot
    * confirms no file changes were made. Drives the "Finished, no changes" pill
@@ -406,8 +408,18 @@ export function TerminalHeaderContent({
         </Tooltip>
       )}
 
-      {/* Suspended badge — Tier-1 ambient. Distinguished by its `Hourglass` icon
-          (time-based wait, recovers on focus). */}
+      {/* FUTURE_SAB: Suspended badge — Tier-1 ambient. The `suspended` flowStatus
+          is only emitted by the SharedArrayBuffer transport path in the PTY host
+          (`BackpressureManager.suspendVisualStream`, see
+          `electron/pty-host/backpressure.ts:277`). That path is unreachable in
+          production — SharedArrayBuffer is not supported in Electron
+          UtilityProcess (PR #7724, issue #7653). The badge is kept as a
+          forward-looking skeleton for a potential Worker-thread migration
+          that could revive the SAB zero-copy data path. Mirror of the
+          // FUTURE_SAB: annotation in the producer. When the SAB transport
+          is revived, this branch is reachable again; until then it never
+          renders in production. See issue #9900. Distinguished by its
+          `Hourglass` icon (time-based wait, recovers on focus). */}
       {flowStatus === "suspended" && (
         <Tooltip>
           <TooltipTrigger asChild>
