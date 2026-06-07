@@ -36,6 +36,7 @@ import { TerminalHibernationManager } from "./TerminalHibernationManager";
 import { TerminalReflowController, forceXtermReflow } from "./TerminalReflowController";
 import { TerminalReconciliationWatchdog } from "./TerminalReconciliationWatchdog";
 import { TerminalWriteController } from "./TerminalWriteController";
+import { reportFileLinkFailure } from "./FileLinksAddon";
 import {
   installTerminalBoundListeners,
   type TerminalListenerInstallDeps,
@@ -420,16 +421,22 @@ class TerminalInstanceService {
    * method. File links route through the actionService (file.view); URL and
    * OSC 8 links route through TerminalLinkHandler (localhost → browser panel
    * when modifier pressed, external open otherwise).
+   *
+   * Async defensively: today's `FileLink.activate` returns void and owns
+   * its own `.then/.catch` (so the leaf-level notify() fires there), but
+   * a future `ILink` implementation may return a Promise — a sync
+   * try/catch would silently drop that rejection, so we wrap with await
+   * to keep the contract future-proof (#9925).
    */
-  openHoveredLink(id: string, event?: MouseEvent): void {
+  async openHoveredLink(id: string, event?: MouseEvent): Promise<void> {
     const managed = this.instances.get(id);
     const link = managed?.hoveredLink;
     if (!link) return;
     const mouseEvent = event ?? new MouseEvent("click");
     try {
-      link.activate(mouseEvent, link.text);
+      await Promise.resolve(link.activate(mouseEvent, link.text));
     } catch (error) {
-      logWarn("Failed to activate hovered link", { id, error });
+      reportFileLinkFailure("Failed to activate hovered link", error, link.text);
     }
   }
 
