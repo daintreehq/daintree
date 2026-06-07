@@ -646,6 +646,24 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
     expect(mockMcpResetDenialCounts).not.toHaveBeenCalled();
     ctrl.stop();
   });
+
+  it("dismissTierMismatch() clears the banner even if the denial-reset IPC rejects", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    // Fire-and-forget: a rejected reset (e.g. caller-pin mismatch after a view
+    // rebind) must not throw or leave the banner stuck open.
+    mockMcpResetDenialCounts.mockRejectedValueOnce(new Error("not the pinned renderer"));
+    tierListeners[0]?.({
+      sessionId: "sess-r",
+      toolId: "t1",
+      tier: "workbench",
+      targetTier: "action",
+    });
+    expect(() => ctrl.dismissTierMismatch()).not.toThrow();
+    expect(ctrl.getSnapshot().tierMismatch).toBeNull();
+    expect(mockMcpResetDenialCounts).toHaveBeenCalledWith({ sessionId: "sess-r" });
+    ctrl.stop();
+  });
 });
 
 describe("HelpSessionController — session revoked (#10017)", () => {
@@ -677,12 +695,15 @@ describe("HelpSessionController — session revoked (#10017)", () => {
     ctrl.stop();
   });
 
-  it("surfaces the revoke when no session is pinned yet (sessionId null)", () => {
+  it("ignores a revoke while no session is pinned (torn-down or mid-relaunch window)", () => {
     const ctrl = new HelpSessionController();
     ctrl.start();
+    // A null store sessionId means there is no live session to end — a revoke
+    // arriving now is for a session being torn down or replaced, and must not
+    // paint a banner over the fresh launch the user just started (#10017).
     helpPanelState.sessionId = null;
-    sessionRevokedListeners[0]?.({ sessionId: "sess-x", denialKind: "tierMismatch" });
-    expect(ctrl.getSnapshot().sessionRevoked?.sessionId).toBe("sess-x");
+    sessionRevokedListeners[0]?.({ sessionId: "sess-old", denialKind: "tierMismatch" });
+    expect(ctrl.getSnapshot().sessionRevoked).toBeNull();
     ctrl.stop();
   });
 

@@ -575,11 +575,14 @@ export class HelpSessionController {
     this._disposers.push(disposeTier);
 
     const disposeRevoked = window.electron.mcpServer.onSessionRevoked((payload) => {
-      // The push is targeted at the pinned WebContents, but guard against a
-      // late revoke for a session this panel has already replaced — it would
-      // otherwise paint a stale banner over the fresh session (#10017).
+      // Only surface a revoke that matches the session this panel currently
+      // holds. A live session always has its id committed to the store before
+      // any tool call (and thus before any denial/revoke), so a null or
+      // mismatched `sessionId` here means the revoke is for a torn-down or
+      // mid-relaunch session — painting its banner would stomp the fresh
+      // launch the user just started to escape it (#10017).
       const currentSessionId = useHelpPanelStore.getState().sessionId;
-      if (currentSessionId !== null && payload.sessionId !== currentSessionId) return;
+      if (currentSessionId === null || payload.sessionId !== currentSessionId) return;
       this._patch({
         sessionRevoked: { sessionId: payload.sessionId, denialKind: payload.denialKind },
       });
@@ -897,9 +900,12 @@ export class HelpSessionController {
     this._patch({ tierMismatch: null });
     if (!sessionId) return;
     // Dismissing the banner without approving must re-arm it: reset the
-    // per-(session,tool) denial counters so the next out-of-tier call shows
-    // the banner again instead of being silently suppressed once the abuse
-    // policy threshold is crossed (#10017). Grants are left untouched.
+    // denial counters so the next out-of-tier call shows the banner again
+    // instead of being silently suppressed once the abuse policy threshold is
+    // crossed (#10017). This clears the counters for ALL tools in the session,
+    // not just the dismissed one — Cancel means "show me again for anything in
+    // this session"; the threshold re-accrues from zero per tool. Grants
+    // (the per-tool approval lifecycle) are left untouched.
     safeFireAndForget(window.electron.mcpServer.resetDenialCounts({ sessionId }), {
       context: "Help: reset denial counts on tier-mismatch dismiss",
     });
