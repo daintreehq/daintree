@@ -95,6 +95,19 @@ function getHeatCellBackground(level: HeatCell["level"]): string {
   }
 }
 
+const EMPTY_CELL_BACKGROUND = "var(--pulse-empty-bg, var(--theme-surface-panel))";
+
+// Single source of truth for a heat level's fill, shared by the rendered cells
+// and the legend swatches. Level 0 is the empty (no-commits) cell. Routing the
+// legend through this guarantees its swatches span the same opacity ramp the
+// cells use — otherwise a theme that omits the opaque pulse-heat-1..4 stops
+// renders graduated cells but a flat, full-strength legend (levels 1-3 would
+// fall back to the un-mixed base colour), so "Less → More" wouldn't cover the
+// actual range on screen.
+export function getPulseHeatLevelBackground(level: 0 | 1 | 2 | 3 | 4): string {
+  return level === 0 ? EMPTY_CELL_BACKGROUND : getHeatCellBackground(level);
+}
+
 function getCellStyle(cell: RenderCell): CSSProperties {
   if (cell.isMissedDay) {
     // Destructive-tier streak-break signal. Backed by an opaque danger tint
@@ -107,7 +120,7 @@ function getCellStyle(cell: RenderCell): CSSProperties {
   }
 
   if (cell.count === 0) {
-    return { background: "var(--pulse-empty-bg, var(--theme-surface-panel))" };
+    return { background: EMPTY_CELL_BACKGROUND };
   }
 
   return {

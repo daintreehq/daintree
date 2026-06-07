@@ -22,7 +22,7 @@ import {
 import { Spinner } from "@/components/ui/Spinner";
 import { Activity } from "@/components/icons";
 import { GitHubIcon } from "@/components/icons/brands";
-import { PulseHeatmap, getPulseHeatmapRowWidth } from "./PulseHeatmap";
+import { PulseHeatmap, getPulseHeatmapRowWidth, getPulseHeatLevelBackground } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
 import { useProjectHealth } from "@/hooks/useProjectHealth";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
@@ -322,21 +322,11 @@ function OfflineHint() {
 
 const HEATMAP_LEGEND_GAP_PX = 3;
 
-// Explicit per-level switch (not a template literal) so the EXTENSION_KEYS
-// drift scanner registers each per-level var consumer individually. Mirrors
-// getHeatCellBackground() in PulseHeatmap.tsx.
-function getLegendSwatchBackground(level: 1 | 2 | 3 | 4): string {
-  switch (level) {
-    case 4:
-      return "var(--pulse-heat-4, var(--pulse-heat-color, var(--color-state-working)))";
-    case 3:
-      return "var(--pulse-heat-3, var(--pulse-heat-color, var(--color-state-working)))";
-    case 2:
-      return "var(--pulse-heat-2, var(--pulse-heat-color, var(--color-state-working)))";
-    default:
-      return "var(--pulse-heat-1, var(--pulse-heat-color, var(--color-state-working)))";
-  }
-}
+// Legend swatches: the empty (0) cell plus the four heat levels, matching the
+// GitHub contribution legend. Backgrounds come from getPulseHeatLevelBackground
+// so the swatches share the exact fill the cells use — including the opacity
+// ramp themes fall back to when they omit the opaque pulse-heat-1..4 stops.
+const LEGEND_LEVELS = [0, 1, 2, 3, 4] as const;
 
 function PulseHeatmapLegend({
   dayCount,
@@ -349,7 +339,7 @@ function PulseHeatmapLegend({
   return (
     <>
       <span id={descriptionId} className="sr-only">
-        Heat intensity from few to many commits
+        Heat intensity from no commits to many commits
       </span>
       <div
         aria-hidden="true"
@@ -358,22 +348,23 @@ function PulseHeatmapLegend({
         style={{ width: `${rowWidth}px`, gap: `${HEATMAP_LEGEND_GAP_PX}px` }}
       >
         <span>Less</span>
-        {([1, 2, 3, 4] as const).map((level) => (
+        {LEGEND_LEVELS.map((level) => (
           <span
             key={level}
             className="pulse-heat-cell relative overflow-hidden rounded-[2px] shrink-0"
-            data-heat-level={level}
+            data-heat-level={level > 0 ? level : undefined}
             style={{
               width: 10,
               height: 10,
-              background: getLegendSwatchBackground(level),
+              background: getPulseHeatLevelBackground(level),
             }}
           >
             {/* Inner shape span — display: none in default themes, flipped to
                 block by the @media (forced-colors: active) rule in
-                src/index.css. Reuses the cell-level size cue so the 4 swatches
-                stay distinguishable when the UA strips theme backgrounds. */}
-            <span aria-hidden="true" className="pulse-heat-cell-shape" />
+                src/index.css. Reuses the cell-level size cue so the swatches
+                stay distinguishable when the UA strips theme backgrounds. The
+                empty (level 0) swatch omits it, mirroring an empty cell. */}
+            {level > 0 && <span aria-hidden="true" className="pulse-heat-cell-shape" />}
           </span>
         ))}
         <span>More</span>

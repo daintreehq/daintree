@@ -3006,6 +3006,15 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   .pulse-heat-cell-missed {
     background: CanvasText !important;
   }
+  /* The empty (level 0) legend swatch is a <span>, so it misses both the
+     global button ButtonText border above and the shape-span cue (empty cells
+     carry neither a shape nor a data-heat-level). Left alone it paints Canvas
+     on Canvas — invisible. Grid empty cells stay visible because they're
+     <button>s with the border; give the legend's empty swatch an equivalent
+     CanvasText border so "Less" remains a visible box. */
+  [data-testid="pulse-heatmap-legend"] .pulse-heat-cell:not([data-heat-level]) {
+    border: 1px solid CanvasText;
+  }
 }
 
 /* Increased contrast mode — heavier borders for visibility.

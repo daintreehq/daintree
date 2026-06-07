@@ -245,17 +245,29 @@ describe("PulseHeatmap — legend (issue #9819)", () => {
     expect(content).toContain('data-testid="pulse-heatmap-legend"');
   });
 
-  it("legend swatches are keyed by data-heat-level 1..4", async () => {
+  it("legend spans the empty cell plus heat levels 1..4 (full Less→More range)", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain("data-heat-level={level}");
-    // Each per-level var is referenced explicitly (not via template literal)
-    // so the EXTENSION_KEYS drift scanner registers all four consumers.
+    // The legend iterates the empty (0) swatch and the four heat levels so
+    // "Less" starts at no-commits, matching the GitHub contribution legend.
+    expect(content).toContain("[0, 1, 2, 3, 4]");
+    // Non-empty swatches carry their data-heat-level (forced-colors shape cue);
+    // the empty swatch omits it, mirroring an empty cell.
+    expect(content).toContain("data-heat-level={level > 0 ? level : undefined}");
+    // Swatch fills route through the shared cell-background helper so the legend
+    // tracks the same opacity ramp the grid uses (the bug fixed here: a flat,
+    // full-strength legend on themes without opaque pulse-heat-1..4 stops).
+    expect(content).toContain("getPulseHeatLevelBackground(level)");
+  });
+
+  it("per-level heat vars stay referenced so the drift scanner registers them", async () => {
+    const content = await readFile(HEATMAP_PATH, "utf-8");
+    // Each per-level var is referenced explicitly (not via template literal) so
+    // the EXTENSION_KEYS drift scanner registers all four consumers. After the
+    // legend was routed through getPulseHeatLevelBackground, these live in the
+    // heatmap module rather than the card.
     for (const level of [1, 2, 3, 4]) {
       expect(content).toContain(`var(--pulse-heat-${level},`);
     }
-    // The template iterates [1,2,3,4]; verify the array is present so the
-    // literal substring check is anchored to the right loop.
-    expect(content).toContain("[1, 2, 3, 4]");
   });
 
   it("legend uses Less and More labels", async () => {
@@ -267,7 +279,7 @@ describe("PulseHeatmap — legend (issue #9819)", () => {
   it("legend is decorative (aria-hidden) and ships an sr-only description for aria-describedby", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
     expect(content).toContain('aria-hidden="true"');
-    expect(content).toContain("Heat intensity from few to many commits");
+    expect(content).toContain("Heat intensity from no commits to many commits");
     expect(content).toContain("useId()");
     expect(content).toContain("describedBy=");
   });
@@ -333,6 +345,19 @@ describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
     expect(block).toContain('.pulse-heat-cell[data-heat-level="2"] .pulse-heat-cell-shape');
     expect(block).toContain('.pulse-heat-cell[data-heat-level="3"] .pulse-heat-cell-shape');
     expect(block).toContain('.pulse-heat-cell[data-heat-level="4"] .pulse-heat-cell-shape');
+  });
+
+  it("forced-colors block borders the empty legend swatch so it stays visible", async () => {
+    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const block = mediaBlockSlice(content, "@media (forced-colors: active)");
+    // The level-0 legend swatch is a <span> (no button border) with no shape
+    // span, so it needs an explicit border or it paints Canvas-on-Canvas.
+    expect(block).toContain(
+      '[data-testid="pulse-heatmap-legend"] .pulse-heat-cell:not([data-heat-level])'
+    );
+    expect(block).toMatch(
+      /\[data-testid="pulse-heatmap-legend"\] \.pulse-heat-cell:not\(\[data-heat-level\]\)\s*{[^}]*border:\s*1px solid CanvasText/
+    );
   });
 
   it("forced-colors block distinguishes missed-day via a solid CanvasText fill", async () => {
