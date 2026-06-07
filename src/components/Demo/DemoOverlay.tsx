@@ -136,9 +136,10 @@ const wordSegmenter = new Intl.Segmenter(undefined, { granularity: "word" });
  * px (max-width minus horizontal padding). Honors explicit `\n` paragraph breaks
  * and approximates the CSS `overflow-wrap: break-word` behavior for unbreakable
  * tokens wider than the box. Returns the line count and the widest line so the
- * caller can size the box. Widths are biased by MEASURE_FUDGE.
+ * caller can size the box. Widths are biased by MEASURE_FUDGE. Exported for unit
+ * tests so the greedy-wrap and break-word behavior can be checked directly.
  */
-function estimateWrappedLines(
+export function estimateWrappedLines(
   text: string,
   contentWidth: number,
   ctx: TextMeasurer
