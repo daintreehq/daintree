@@ -24,6 +24,23 @@ const FITTS_B = 200;
 const FITTS_DEFAULT_W = 40;
 const TWO_PHASE_THRESHOLD = 300;
 
+// Short moves accelerate from rest with a bell-shaped velocity profile (ease-in-out),
+// matching the ballistic ease-in start the long-move path already uses.
+const SHORT_MOVE_EASING = "cubic-bezier(0.25, 0, 0.65, 1)";
+
+// Occasional subtle overshoot-and-correct on larger moves (Fitts's Law naturalism).
+// Probability scales with distance; magnitude stays small so the cursor never drifts
+// far enough to hover the wrong target. Purely cosmetic — left/top are committed to the
+// real target before the overshoot runs, so posRef stays accurate for click dispatch.
+const OVERSHOOT_FAR_THRESHOLD = 600;
+const OVERSHOOT_PROB_MID = 0.15;
+const OVERSHOOT_PROB_FAR = 0.2;
+const OVERSHOOT_DURATION_MS = 180;
+const OVERSHOOT_DISTANCE_FRACTION = 0.1;
+const OVERSHOOT_MAG_CAP = 20;
+const OVERSHOOT_PERP_FRACTION = 0.2;
+const OVERSHOOT_PEAK_OFFSET = 0.88;
+
 function getDemoApi() {
   return window.electron.demo!;
 }
@@ -162,6 +179,35 @@ function computeBezierKeyframes(
   return frames;
 }
 
+function shouldOvershoot(dist: number): boolean {
+  if (dist <= TWO_PHASE_THRESHOLD) return false;
+  const prob = dist >= OVERSHOOT_FAR_THRESHOLD ? OVERSHOOT_PROB_FAR : OVERSHOOT_PROB_MID;
+  return Math.random() < prob;
+}
+
+function computeOvershootKeyframes(
+  dx: number,
+  dy: number,
+  dist: number
+): Array<{ transform: string; offset: number }> {
+  const dirX = dist > 0 ? dx / dist : 0;
+  const dirY = dist > 0 ? dy / dist : 0;
+  const perpX = -dirY;
+  const perpY = dirX;
+
+  const magnitude = Math.min(dist * OVERSHOOT_DISTANCE_FRACTION, OVERSHOOT_MAG_CAP);
+  const perpMag = magnitude * OVERSHOOT_PERP_FRACTION * (Math.random() > 0.5 ? 1 : -1);
+
+  const peakX = dirX * magnitude + perpX * perpMag;
+  const peakY = dirY * magnitude + perpY * perpMag;
+
+  return [
+    { transform: "translate(0px, 0px)", offset: 0 },
+    { transform: `translate(${peakX}px, ${peakY}px)`, offset: OVERSHOOT_PEAK_OFFSET },
+    { transform: "translate(0px, 0px)", offset: 1 },
+  ];
+}
+
 export function DemoCursor() {
   const cursorRef = useRef<HTMLDivElement>(null);
   const svgWrapperRef = useRef<HTMLDivElement>(null);
@@ -269,19 +315,42 @@ export function DemoCursor() {
         el.style.top = `${targetY}px`;
         el.style.transform = "";
         acquisitionAnim.cancel();
-      } else {
-        const keyframes = computeBezierKeyframes(fromX, fromY, targetX, targetY, steps, seed);
-        const anim = el.animate(keyframes, {
-          duration: totalDuration,
-          easing: "ease-out",
-          fill: "forwards",
-        });
-        await anim.finished;
-        el.style.left = `${targetX}px`;
-        el.style.top = `${targetY}px`;
-        el.style.transform = "";
-        anim.cancel();
+
+        // Real target is committed; posRef is accurate before any cosmetic overshoot so a
+        // click dispatched after this resolves reads the true landing position.
+        posRef.current = { x: targetX, y: targetY };
+
+        if (shouldOvershoot(dist)) {
+          // The overshoot is purely cosmetic — the logical move already landed on the real
+          // target above. If the animation is aborted mid-flight, swallow it so a cosmetic
+          // failure never poisons the command result.
+          const overshootAnim = el.animate(computeOvershootKeyframes(dx, dy, dist), {
+            duration: OVERSHOOT_DURATION_MS,
+            easing: "ease-in-out",
+            fill: "forwards",
+          });
+          try {
+            await overshootAnim.finished;
+          } catch {
+            // animation cancelled — position is already committed, nothing to recover
+          }
+          el.style.transform = "";
+          overshootAnim.cancel();
+        }
+        return;
       }
+
+      const keyframes = computeBezierKeyframes(fromX, fromY, targetX, targetY, steps, seed);
+      const anim = el.animate(keyframes, {
+        duration: totalDuration,
+        easing: SHORT_MOVE_EASING,
+        fill: "forwards",
+      });
+      await anim.finished;
+      el.style.left = `${targetX}px`;
+      el.style.top = `${targetY}px`;
+      el.style.transform = "";
+      anim.cancel();
 
       posRef.current = { x: targetX, y: targetY };
     }
