@@ -20,6 +20,7 @@ describe("PtyManager Activity Tier", () => {
 
       const terminal = manager.getTerminal(id);
       expect(terminal).toBeDefined();
+      expect(manager.getActivityTier(id)).toBe("active");
     });
 
     it("should accept setActivityTier calls without error", async () => {
@@ -50,6 +51,15 @@ describe("PtyManager Activity Tier", () => {
 
       manager.setActivityMonitorTier(id, "active", 50);
       expect(manager.getActivityTier(id)).toBe("active");
+
+      // Inversion of the original bug: a 50ms interval must not force "active".
+      manager.setActivityMonitorTier(id, "background", 50);
+      expect(manager.getActivityTier(id)).toBe("background");
+    });
+
+    it("should no-op for an unknown terminal id", () => {
+      expect(() => manager.setActivityMonitorTier("nonexistent", "active", 200)).not.toThrow();
+      expect(manager.getActivityTier("nonexistent")).toBeUndefined();
     });
   });
 
