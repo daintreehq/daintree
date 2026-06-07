@@ -8,6 +8,7 @@ import {
 import { useFleetArmingStore, subscribeFleetArmingPanelPruning } from "./fleetArmingStore";
 import { subscribeFleetTargetOverridesPruning } from "./fleetTargetOverridesStore";
 import { useTerminalInputStore, unregisterInputController } from "./terminalInputStore";
+import { subscribeFleetBroadcastResult } from "@/components/Fleet/fleetRawInputBroadcast";
 import { semanticAnalysisService } from "@/services/SemanticAnalysisService";
 import { useConsoleCaptureStore } from "./consoleCaptureStore";
 import { useResourceMonitoringStore } from "./resourceMonitoringStore";
@@ -329,6 +330,15 @@ export function initStoreOrchestrator(): () => void {
   //     isn't silently excluded from the next broadcast by a stale skip (#9973).
   //     Same orchestrator-scoped lifecycle as the arming pruning above.
   disposables.add(toDisposable(subscribeFleetTargetOverridesPruning()));
+
+  // 5c. Fleet broadcast-result subscription: per-target write results for
+  //     keystroke broadcasts (dead-PTY auto-disarm + transient failure chip).
+  //     Lives here for the same HMR/`vi.resetModules()` reason as 5a — the
+  //     IIFE that previously owned this discarded its IPC unsubscribe and
+  //     gated re-registration on a `globalThis` flag, which left stale
+  //     callbacks firing against orphaned store instances after a module
+  //     reset (issue #9967).
+  disposables.add(toDisposable(subscribeFleetBroadcastResult()));
 
   // 5. Availability → agent-settings re-normalization: installed/missing state
   //    is the input to `normalizeAgentSelection`, so re-run normalization any
