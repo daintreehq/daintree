@@ -12,6 +12,17 @@ vi.mock("simple-git", () => ({
   simpleGit: vi.fn(() => mockSimpleGit),
 }));
 
+// These tests override process.platform to "win32" before importing
+// WorkspaceService. @parcel/watcher resolves its native binding from
+// process.platform at import time, so on a non-Windows CI runner the real
+// module throws ("No prebuild or local build of @parcel/watcher-win32-x64").
+// Mock it so the import never touches a platform-specific native binding.
+vi.mock("@parcel/watcher", () => ({
+  default: {
+    subscribe: vi.fn().mockResolvedValue({ unsubscribe: vi.fn() }),
+  },
+}));
+
 vi.mock("../../utils/fs.js", () => ({
   waitForPathExists: vi.fn().mockResolvedValue(undefined),
 }));
