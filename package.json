@@ -118,6 +118,8 @@
     "perf:ci": "tsx scripts/perf/run.ts --mode ci",
     "perf:nightly": "tsx scripts/perf/run.ts --mode nightly",
     "perf:soak": "tsx scripts/perf/run.ts --mode soak",
+    "perf:update-baselines:smoke": "tsx scripts/perf/run.ts --mode smoke --update-baseline",
+    "perf:update-baselines:ci": "tsx scripts/perf/run.ts --mode ci --update-baseline",
     "perf:update-baselines:nightly": "tsx scripts/perf/run.ts --mode nightly --update-baseline",
     "perf:update-baselines:soak": "tsx scripts/perf/run.ts --mode soak --update-baseline",
     "perf:cold-start": "tsx scripts/perf/cold-start.ts",

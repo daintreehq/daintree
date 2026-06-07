@@ -100,11 +100,24 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # A regenerated baseline is still written even when a scenario regresses
+      # against the old values (run.ts exits 1 in that case), so don't let the
+      # non-zero exit abort the job before the PR step runs.
+      - name: Regenerate smoke baseline
+        run: npm run perf:update-baselines:smoke
+        continue-on-error: true
+
+      - name: Regenerate CI baseline
+        run: npm run perf:update-baselines:ci
+        continue-on-error: true
+
       - name: Regenerate nightly baseline
         run: npm run perf:update-baselines:nightly
+        continue-on-error: true
 
       - name: Regenerate soak baseline
         run: npm run perf:update-baselines:soak
+        continue-on-error: true
 
       - name: Open baseline update PR
         uses: peter-evans/create-pull-request@v8
