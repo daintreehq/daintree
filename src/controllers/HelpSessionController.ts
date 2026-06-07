@@ -431,6 +431,7 @@ function notifyAssistantServicesUnavailable(
 function notifyInstallCorrupted(agentId: string): void {
   const cfg = getAgentConfig(agentId);
   const name = cfg?.name ?? agentId;
+  // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
   notify({
     type: "error",
     title: "Assistant files missing",
