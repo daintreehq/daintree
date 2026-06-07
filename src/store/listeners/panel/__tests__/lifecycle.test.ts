@@ -492,6 +492,18 @@ describe("onReliabilityMetric — pause-duration-gauge routing", () => {
     expect(getPtyHeldDuration("term-1")).toBeUndefined();
   });
 
+  it("does not clear heldDurationMs on an ipc-cap-drop (terminal still paused, #9902)", () => {
+    // The hard-cap drop pulse is a data-path telemetry signal, not a
+    // resume: the IPC backpressure pause is still held when it fires.
+    setupPanel({ heldDurationMs: 7000 });
+    const handler = getReliabilityHandler();
+
+    handler({ metricType: "ipc-cap-drop", terminalId: "term-1" });
+    flushPanelStatusBuffer();
+
+    expect(getPtyHeldDuration("term-1")).toBe(7000);
+  });
+
   it("ignores non-pause-duration-gauge metric types", () => {
     setupPanel();
     const handler = getReliabilityHandler();

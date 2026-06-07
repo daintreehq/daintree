@@ -801,19 +801,24 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
       // gated separately in ResourceGovernor.emitDataLossCount.
       dropAccumulator.droppedBytes += dataBytes;
       dropAccumulator.dataLossCount += 1;
-      // `null` source: the suspend pulse is a data-path signal, not a
-      // pause-source attribution. The funnel still forwards to the wire
-      // emission; it just doesn't touch the per-source tracking map.
-      // (The map entry is removed by the corresponding `pause-end` from
-      // the IPC queue's own backpressure path.)
+      // `ipc-cap-drop` is a data-path telemetry pulse, not a pause-source
+      // transition — the funnel forwards it to the wire without touching
+      // the per-source tracking map (a `suspend`/`pause-end` with `null`
+      // source would be read as a force-resume and wipe the terminal's
+      // entry while the IPC backpressure pause is still held; #9902).
+      // The map entry is removed by the corresponding `pause-end` from
+      // the IPC queue's own backpressure path. `forceEmit` bypasses the
+      // metric gate — data-loss pulses must reach the wire even when
+      // metrics are gated off.
       emitReliabilityMetricWithTracking(
         {
           terminalId: id,
-          metricType: "suspend",
+          metricType: "ipc-cap-drop",
           timestamp: Date.now(),
           bufferUtilization: utilization,
         },
-        null
+        null,
+        true
       );
       // Surface the drop to the renderer so a discontinuity marker is shown.
       // Bypasses BackpressureManager.emitTerminalStatus() because each drop

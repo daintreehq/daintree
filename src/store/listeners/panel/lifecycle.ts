@@ -429,9 +429,12 @@ export function setupLifecycleListeners(): DisposableStore {
           // value doesn't outlive the actual pause. `pause-duration-gauge`
           // is the skip-when-empty gauge that drives the held-duration
           // tooltip body. Other metric types (queue-depth-gauge,
-          // data-loss-count, pending-bytes-gauge, throughput-rate) are
-          // host-side telemetry sinks — observable via the host log
-          // stream and ignored here.
+          // data-loss-count, ipc-cap-drop, pending-bytes-gauge,
+          // throughput-rate) are host-side telemetry sinks — observable
+          // via the host log stream and ignored here. In particular,
+          // `ipc-cap-drop` (a chunk dropped at the IPC queue's hard cap)
+          // must NOT clear the gauge: the terminal is still paused when
+          // the drop fires (#9902).
           //
           // FUTURE_SAB: the `suspend` arm is the symmetric companion of the
           // `suspended` `flowStatus` dropped in the onStatus boundary above.
