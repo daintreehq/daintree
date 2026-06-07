@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Issue } from "../../../../shared/types/forge.js";
 
 const {
-  hasGitHubTokenMock,
-  getRepoContextMock,
-  getIssueUrlMock,
-  createClientMock,
+  hasActivatedForgeProviderMock,
+  resolveForCwdMock,
+  getIssueMock,
   getWorkspaceClientMock,
   getRepositoryRootMock,
   listBranchesMock,
@@ -14,10 +14,9 @@ const {
   validatePathPatternMock,
   resolveWorktreePatternMock,
 } = vi.hoisted(() => ({
-  hasGitHubTokenMock: vi.fn(),
-  getRepoContextMock: vi.fn(),
-  getIssueUrlMock: vi.fn(),
-  createClientMock: vi.fn(),
+  hasActivatedForgeProviderMock: vi.fn(),
+  resolveForCwdMock: vi.fn(),
+  getIssueMock: vi.fn(),
   getWorkspaceClientMock: vi.fn(),
   getRepositoryRootMock: vi.fn(),
   listBranchesMock: vi.fn(),
@@ -28,15 +27,17 @@ const {
   resolveWorktreePatternMock: vi.fn(),
 }));
 
-vi.mock("../../GitHubService.js", () => ({
-  hasGitHubToken: hasGitHubTokenMock,
-  getRepoContext: getRepoContextMock,
-  getIssueUrl: getIssueUrlMock,
+vi.mock("../../forgeProviderRegistry.js", () => ({
+  hasActivatedForgeProvider: hasActivatedForgeProviderMock,
 }));
 
-vi.mock("../../github/index.js", () => ({
-  GitHubAuth: { createClient: createClientMock },
-  GET_ISSUE_QUERY: "query",
+vi.mock("../../../ipc/handlers/forgeResolution.js", () => ({
+  resolveForCwd: resolveForCwdMock,
+}));
+
+vi.mock("../../forge/forgeAuditService.js", () => ({
+  auditForgeCall: (_meta: unknown, run: () => unknown) => run(),
+  summarizeForgeArgs: () => "",
 }));
 
 vi.mock("../../WorkspaceClient.js", () => ({
@@ -65,24 +66,28 @@ vi.mock("../../../utils/worktreePattern.js", () => ({
 
 import { githubWorkIssueCommand } from "../githubWorkIssue.js";
 
+/** Build a minimal forge Issue with sensible defaults for tests. */
+function makeIssue(overrides: Partial<Issue> = {}): Issue {
+  return {
+    number: 55,
+    title: "!!!",
+    url: "https://github.com/daintree/app/issues/55",
+    state: "open",
+    ...overrides,
+  } as Issue;
+}
+
 describe("githubWorkIssueCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    hasGitHubTokenMock.mockReturnValue(true);
-    getRepoContextMock.mockResolvedValue({ owner: "daintree", repo: "app" });
-    getIssueUrlMock.mockResolvedValue("https://github.com/daintree/app/issues/55");
-    createClientMock.mockReturnValue(
-      vi.fn().mockResolvedValue({
-        repository: {
-          issue: {
-            number: 55,
-            title: "!!!",
-            url: "https://github.com/daintree/app/issues/55",
-            state: "OPEN",
-          },
-        },
-      })
-    );
+    hasActivatedForgeProviderMock.mockReturnValue(true);
+    getIssueMock.mockResolvedValue(makeIssue());
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "builtin.github/github",
+      providerId: "github",
+      repoRef: { owner: "daintree", repo: "app" },
+      impl: { getIssue: getIssueMock },
+    });
     getRepositoryRootMock.mockResolvedValue("/repo");
     listBranchesMock.mockResolvedValue([{ name: "main", remote: false }]);
     findAvailableBranchNameMock.mockImplementation(async (name: string) => name);
@@ -120,30 +125,97 @@ describe("githubWorkIssueCommand", () => {
     );
   });
 
-  it("uses fetched issue URL when getIssueUrl throws", async () => {
-    getIssueUrlMock.mockRejectedValue(new Error("url lookup failed"));
+  it("resolves the forge provider against the repository root", async () => {
+    await githubWorkIssueCommand.execute({ cwd: "/repo/sub" } as never, {
+      issueNumber: 55,
+    });
+
+    expect(resolveForCwdMock).toHaveBeenCalledTimes(1);
+    expect(resolveForCwdMock).toHaveBeenCalledWith("/repo");
+    expect(getIssueMock).toHaveBeenCalledWith({ owner: "daintree", repo: "app" }, 55);
+  });
+
+  it("routes through a non-GitHub provider end-to-end", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "builtin.gitlab/gitlab",
+      providerId: "gitlab",
+      repoRef: { owner: "group", repo: "proj" },
+      impl: { getIssue: getIssueMock },
+    });
+    getIssueMock.mockResolvedValue(
+      makeIssue({
+        number: 12,
+        title: "Add widget",
+        url: "https://gitlab.com/group/proj/-/issues/12",
+      })
+    );
+
+    const result = await githubWorkIssueCommand.execute({ cwd: "/repo" } as never, {
+      issueNumber: 12,
+    });
+
+    expect(result.success).toBe(true);
+    expect(getIssueMock).toHaveBeenCalledWith({ owner: "group", repo: "proj" }, 12);
+    expect(result.data?.issueUrl).toBe("https://gitlab.com/group/proj/-/issues/12");
+    const workspaceClient = getWorkspaceClientMock.mock.results[0]?.value as {
+      createWorktree: ReturnType<typeof vi.fn>;
+    };
+    expect(workspaceClient.createWorktree).toHaveBeenCalledWith(
+      "/repo",
+      expect.objectContaining({ newBranch: "issue-12-add-widget" })
+    );
+  });
+
+  it("is enabled when a forge provider is active and disabled otherwise", () => {
+    hasActivatedForgeProviderMock.mockReturnValue(true);
+    expect(githubWorkIssueCommand.isEnabled?.({} as never)).toBe(true);
+    expect(githubWorkIssueCommand.disabledReason?.({} as never)).toBeUndefined();
+
+    hasActivatedForgeProviderMock.mockReturnValue(false);
+    expect(githubWorkIssueCommand.isEnabled?.({} as never)).toBe(false);
+    expect(githubWorkIssueCommand.disabledReason?.({} as never)).toMatch(/forge provider/i);
+  });
+
+  it("uses the issue URL returned by the forge provider", async () => {
+    getIssueMock.mockResolvedValue(
+      makeIssue({ url: "https://gitlab.com/daintree/app/-/issues/55" })
+    );
 
     const result = await githubWorkIssueCommand.execute({ cwd: "/repo" } as never, {
       issueNumber: 55,
     });
 
     expect(result.success).toBe(true);
-    expect(result.data?.issueUrl).toBe("https://github.com/daintree/app/issues/55");
+    expect(result.data?.issueUrl).toBe("https://gitlab.com/daintree/app/-/issues/55");
+  });
+
+  it("returns ISSUE_NOT_FOUND when the provider reports no issue", async () => {
+    getIssueMock.mockResolvedValue(null);
+
+    const result = await githubWorkIssueCommand.execute({ cwd: "/repo" } as never, {
+      issueNumber: 55,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.code).toBe("ISSUE_NOT_FOUND");
+  });
+
+  it("returns FORGE_PROVIDER_ERROR with no worktree side-effects when resolution fails", async () => {
+    resolveForCwdMock.mockRejectedValue(new Error("No remote URL found for this repository"));
+
+    const result = await githubWorkIssueCommand.execute({ cwd: "/repo" } as never, {
+      issueNumber: 55,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.code).toBe("FORGE_PROVIDER_ERROR");
+    expect(getIssueMock).not.toHaveBeenCalled();
+    expect(findAvailableBranchNameMock).not.toHaveBeenCalled();
+    expect(getWorkspaceClientMock).not.toHaveBeenCalled();
   });
 
   it("normalizes accented Latin characters in slugified branch names", async () => {
-    createClientMock.mockReturnValue(
-      vi.fn().mockResolvedValue({
-        repository: {
-          issue: {
-            number: 55,
-            title: "Café résumé",
-            url: "https://github.com/daintree/app/issues/55",
-            state: "OPEN",
-          },
-        },
-      })
-    );
+    getIssueMock.mockResolvedValue(makeIssue({ title: "Café résumé" }));
 
     const result = await githubWorkIssueCommand.execute({ cwd: "/repo" } as never, {
       issueNumber: 55,
@@ -154,18 +226,7 @@ describe("githubWorkIssueCommand", () => {
   });
 
   it("normalizes naïve to naive in slugified branch names", async () => {
-    createClientMock.mockReturnValue(
-      vi.fn().mockResolvedValue({
-        repository: {
-          issue: {
-            number: 7,
-            title: "Fix naïve approach",
-            url: "https://github.com/daintree/app/issues/7",
-            state: "OPEN",
-          },
-        },
-      })
-    );
+    getIssueMock.mockResolvedValue(makeIssue({ number: 7, title: "Fix naïve approach" }));
 
     const result = await githubWorkIssueCommand.execute({ cwd: "/repo" } as never, {
       issueNumber: 7,
@@ -195,10 +256,10 @@ describe("githubWorkIssueCommand", () => {
     );
   });
 
-  it("maps GraphQL TimeoutError to GITHUB_ERROR with timeout message", async () => {
+  it("maps provider TimeoutError to GITHUB_ERROR with timeout message", async () => {
     const timeoutError = new Error("The operation was aborted due to timeout");
     timeoutError.name = "TimeoutError";
-    createClientMock.mockReturnValue(vi.fn().mockRejectedValue(timeoutError));
+    getIssueMock.mockRejectedValue(timeoutError);
 
     const result = await githubWorkIssueCommand.execute({ cwd: "/repo" } as never, {
       issueNumber: 55,
@@ -209,11 +270,11 @@ describe("githubWorkIssueCommand", () => {
     expect(result.error?.message).toContain("Timed out");
   });
 
-  it("maps GraphQL fetch errors with cause.code to GITHUB_ERROR with network message", async () => {
+  it("maps provider fetch errors with cause.code to GITHUB_ERROR with network message", async () => {
     const transportError = Object.assign(new TypeError("fetch failed"), {
       cause: { code: "ECONNREFUSED" },
     });
-    createClientMock.mockReturnValue(vi.fn().mockRejectedValue(transportError));
+    getIssueMock.mockRejectedValue(transportError);
 
     const result = await githubWorkIssueCommand.execute({ cwd: "/repo" } as never, {
       issueNumber: 55,
