@@ -29,18 +29,29 @@ interface PendingRecipeConflict extends RecipeConflictRequest {
 
 interface RecipeConflictState {
   pendingConflict: PendingRecipeConflict | null;
+  /**
+   * Monotonic counter bumped on every request. Used as the always-mounted host's
+   * ErrorBoundary `resetKeys` signal so a crashed dialog auto-recovers when a new
+   * request arrives — including the back-to-back supersede case where
+   * `pendingConflict` never returns to null between requests (#9918).
+   */
+  requestSeq: number;
   requestConflict: (request: RecipeConflictRequest) => Promise<RecipeConflictResolution>;
   resolveConflict: (action: RecipeConflictResolution) => void;
 }
 
 export const useRecipeConflictStore = create<RecipeConflictState>()((set, get) => ({
   pendingConflict: null,
+  requestSeq: 0,
 
   requestConflict: (request) => {
     const existing = get().pendingConflict;
     if (existing) existing.resolve("cancel");
     return new Promise<RecipeConflictResolution>((resolve) => {
-      set({ pendingConflict: { ...request, resolve } });
+      set((state) => ({
+        pendingConflict: { ...request, resolve },
+        requestSeq: state.requestSeq + 1,
+      }));
     });
   },
 

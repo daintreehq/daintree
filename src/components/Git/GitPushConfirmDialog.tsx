@@ -182,8 +182,16 @@ function GitPushConfirmDialogInner() {
 }
 
 export function GitPushConfirmDialog() {
+  // Reset the boundary on each new request so a crashed inner dialog recovers
+  // when the next push confirm arrives (#9918). Without a changing key, an inner
+  // render crash leaves this boundary stuck for the session.
+  const requestSeq = useGitPushConfirmStore((s) => s.requestSeq);
   return (
-    <ErrorBoundary variant="component" componentName="GitPushConfirmDialog">
+    <ErrorBoundary
+      variant="component"
+      componentName="GitPushConfirmDialog"
+      resetKeys={[requestSeq]}
+    >
       <GitPushConfirmDialogInner />
     </ErrorBoundary>
   );

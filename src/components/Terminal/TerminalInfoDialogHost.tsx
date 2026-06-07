@@ -5,6 +5,10 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 export function TerminalInfoDialogHost() {
   const [isOpen, setIsOpen] = useState(false);
   const [terminalId, setTerminalId] = useState<string | null>(null);
+  // Monotonic open counter — `Number(isOpen)` would stay `[1]` across repeated
+  // opens while the dialog is already open, so a crashed boundary would never
+  // reset on the next open. The counter changes on every open event (#9918).
+  const [openSeq, setOpenSeq] = useState(0);
 
   useEffect(() => {
     const handleOpen = (e: Event) => {
@@ -14,6 +18,7 @@ export function TerminalInfoDialogHost() {
       if (!id) return;
       setTerminalId(id);
       setIsOpen(true);
+      setOpenSeq((s) => s + 1);
     };
 
     const controller = new AbortController();
@@ -24,11 +29,7 @@ export function TerminalInfoDialogHost() {
   }, []);
 
   return (
-    <ErrorBoundary
-      variant="component"
-      componentName="TerminalInfoDialog"
-      resetKeys={[Number(isOpen)]}
-    >
+    <ErrorBoundary variant="component" componentName="TerminalInfoDialog" resetKeys={[openSeq]}>
       <TerminalInfoDialog
         isOpen={isOpen}
         onClose={() => setIsOpen(false)}

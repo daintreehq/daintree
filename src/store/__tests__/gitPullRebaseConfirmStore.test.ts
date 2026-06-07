@@ -38,4 +38,26 @@ describe("gitPullRebaseConfirmStore", () => {
     expect(() => useGitPullRebaseConfirmStore.getState().resolveConfirmation(true)).not.toThrow();
     expect(useGitPullRebaseConfirmStore.getState().pendingConfirm).toBeNull();
   });
+
+  describe("requestSeq (ErrorBoundary reset signal, #9918)", () => {
+    it("strictly increases on each request, including back-to-back supersede", () => {
+      const before = useGitPullRebaseConfirmStore.getState().requestSeq;
+
+      useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo-a");
+      const afterFirst = useGitPullRebaseConfirmStore.getState().requestSeq;
+      expect(afterFirst).toBeGreaterThan(before);
+
+      useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo-b");
+      const afterSecond = useGitPullRebaseConfirmStore.getState().requestSeq;
+      expect(afterSecond).toBeGreaterThan(afterFirst);
+    });
+
+    it("does not change when a pending request is resolved", () => {
+      useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+      const afterRequest = useGitPullRebaseConfirmStore.getState().requestSeq;
+
+      useGitPullRebaseConfirmStore.getState().resolveConfirmation(true);
+      expect(useGitPullRebaseConfirmStore.getState().requestSeq).toBe(afterRequest);
+    });
+  });
 });

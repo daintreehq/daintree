@@ -6,6 +6,11 @@ import { usePanelLimitStore } from "@/store/panelLimitStore";
 export function PanelLimitConfirmDialog() {
   const pendingConfirm = usePanelLimitStore((state) => state.pendingConfirm);
   const resolveConfirmation = usePanelLimitStore((state) => state.resolveConfirmation);
+  // Reset on each new request. `requestSeq` (not a panelCount/memoryMB key)
+  // covers back-to-back requests with identical params — the batch-preflight
+  // path passes `memoryMB: null` every time, so a derived key wouldn't change
+  // and a crashed boundary would stay stuck (#9918).
+  const requestSeq = usePanelLimitStore((state) => state.requestSeq);
 
   // Resolve false on unmount to prevent leaked promises
   useEffect(() => {
@@ -24,7 +29,7 @@ export function PanelLimitConfirmDialog() {
     <ErrorBoundary
       variant="component"
       componentName="PanelLimitConfirmDialog"
-      resetKeys={[`${panelCount}-${memoryMB}`]}
+      resetKeys={[requestSeq]}
     >
       <ConfirmDialog
         isOpen={true}
