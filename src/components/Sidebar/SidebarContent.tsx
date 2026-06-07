@@ -1742,7 +1742,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               scale="sidebar"
               instant
               title={
-                hasQuery
+                deferredQuery.trim()
                   ? `No matches for "${truncateSearchQuery(deferredQuery.trim())}"`
                   : "No matching worktrees"
               }

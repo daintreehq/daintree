@@ -124,14 +124,19 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       const branch = source.slice(branchStart, branchEnd);
       expect(branch).toContain('"No matching worktrees"');
       expect(branch).toContain('No matches for "${truncateSearchQuery(deferredQuery.trim())}"');
-      // The search-aware copy is the hasQuery arm, the plain copy the fallback —
-      // guard against an inverted ternary by checking the query arm comes first.
+      // The title gates on the deferred query — same source the filtered list is
+      // computed from — not the instant hasQuery flag, which could diverge for a
+      // render and render `No matches for ""` (issue #10314). The search-aware
+      // copy is the gate's truthy arm, the plain copy the fallback — guard
+      // against an inverted ternary by checking the query arm comes first.
+      const gateIdx = branch.indexOf("deferredQuery.trim()");
       const queryIdx = branch.indexOf(
         'No matches for "${truncateSearchQuery(deferredQuery.trim())}"'
       );
       const fallbackIdx = branch.indexOf('"No matching worktrees"');
-      expect(branch.indexOf("hasQuery")).toBeLessThan(queryIdx);
+      expect(gateIdx).toBeLessThan(queryIdx);
       expect(queryIdx).toBeLessThan(fallbackIdx);
+      expect(branch).not.toContain("hasQuery");
       // The old title-cased, count-suffixed copy is gone.
       expect(branch).not.toContain("QUICK_STATE_LABELS[quickStateFilter]");
       expect(branch).not.toContain("activeFacetFilterCount");
