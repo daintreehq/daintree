@@ -44,8 +44,15 @@ export function createRendererBridge(
   // is read-only for freshness: callers never short-circuit on the resolved
   // `perWebContentsCache`, only on a live in-flight promise, so a pinned
   // `tools/list` always reflects runtime action-set changes (plugin
-  // enable/disable) exactly as the unpinned shared path does.
-  const perWebContentsInflight = new Map<number, Promise<ActionManifestEntry[]>>();
+  // enable/disable) exactly as the unpinned shared path does. Each entry pairs
+  // the coalesced promise with a stable identity `token`; the resurrection
+  // guard compares tokens (not the promise itself) so it never reads a
+  // not-yet-assigned `const` and stays correct even if a fetch were to resolve
+  // synchronously.
+  const perWebContentsInflight = new Map<
+    number,
+    { token: object; promise: Promise<ActionManifestEntry[]> }
+  >();
   // WebContents ids that already have a teardown-eviction listener wired, so we
   // never double-register one across repeated fetches or a server restart.
   const perWebContentsEvictionWired = new Set<number>();
@@ -286,8 +293,11 @@ export function createRendererBridge(
    */
   function requestManifestForWebContents(id: number): Promise<ActionManifestEntry[]> {
     const inflight = perWebContentsInflight.get(id);
-    if (inflight) return inflight;
+    if (inflight) return inflight.promise;
 
+    // Stable identity for this fetch, created before the request so the
+    // resurrection guard never dereferences a not-yet-assigned binding.
+    const token: object = {};
     const fetchPromise = sendManifestRequest(
       () => getPinnedWebContents(id),
       (manifest) => {
@@ -295,17 +305,17 @@ export function createRendererBridge(
         // is still the live in-flight request for the id. A view destroyed (or
         // a `clearCache()`) mid-flight drops the inflight entry, so a late
         // resolve must not repopulate a dead/cleared id.
-        if (perWebContentsInflight.get(id) === fetchPromise) {
+        if (perWebContentsInflight.get(id)?.token === token) {
           perWebContentsCache.set(id, manifest);
           perWebContentsInflight.delete(id);
         }
       }
     );
-    perWebContentsInflight.set(id, fetchPromise);
+    perWebContentsInflight.set(id, { token, promise: fetchPromise });
     // Drop the inflight marker on failure so the next call retries — never cache
     // errors. Identity-guarded so a stale rejection can't evict a newer fetch.
     fetchPromise.catch(() => {
-      if (perWebContentsInflight.get(id) === fetchPromise) {
+      if (perWebContentsInflight.get(id)?.token === token) {
         perWebContentsInflight.delete(id);
       }
     });

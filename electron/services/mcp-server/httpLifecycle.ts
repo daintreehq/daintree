@@ -1170,6 +1170,12 @@ export class HttpLifecycle {
     // not the MCP transport id `sessionId` — passing the transport id there
     // always missed, which broke same-turn coalescing and turnId stamping.
     const helpSessionId = this.deps.sessionStore.sessionHelpIdMap.get(sessionId) ?? null;
+    // Snapshot the pin at build time (set at handshake before this runs, and
+    // only ever deleted on teardown — never re-pointed). Capturing it makes the
+    // `getCachedManifest` closure below read strictly this session's own
+    // per-WebContents cache, so a session torn down mid-call can never flip to
+    // the shared cache and leak another window's tool surface (#7003 / #9887).
+    const pinnedWebContentsId = this.deps.sessionStore.sessionWebContentsMap.get(sessionId) ?? null;
 
     const requestManifest: import("./sessionServer.js").SessionServerDeps["requestManifest"] =
       () => {
@@ -1207,17 +1213,14 @@ export class HttpLifecycle {
       () => {
         // Pinned sessions never read the shared manifest cache (it could serve
         // another window's tool surface). Instead they read a per-WebContents
-        // cache keyed by the pinned id (#9887), so the per-call
-        // `lookupManifestEntry` hot path hits a warm cache rather than
+        // cache keyed by the build-time-captured pinned id (#9887), so the
+        // per-call `lookupManifestEntry` hot path hits a warm cache rather than
         // re-fetching the full manifest on every dispatch — while still never
-        // crossing windows. Falls back to `null` (fail-closed) when no
-        // per-WebContents cache is wired or the id isn't cached yet, exactly as
-        // before. The map read happens synchronously here (no await between the
-        // pin lookup and the cache read), so a session torn down mid-call can't
-        // flip from pinned to unpinned and leak the shared cache.
-        const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
-        if (id !== undefined) {
-          return this.deps.getCachedManifestForWebContents?.(id) ?? null;
+        // crossing windows. Reading the captured id (not a live map lookup)
+        // means a session torn down mid-call stays pinned here and fails closed
+        // to `null` (evicted cache) rather than flipping to the shared cache.
+        if (pinnedWebContentsId !== null) {
+          return this.deps.getCachedManifestForWebContents?.(pinnedWebContentsId) ?? null;
         }
         return this.deps.getCachedManifest();
       };

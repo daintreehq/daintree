@@ -53,6 +53,8 @@ interface FakeWebContents {
   once: ReturnType<typeof vi.fn>;
   removeListener: ReturnType<typeof vi.fn>;
   triggerDestroyed: () => void;
+  /** Live count of registered "destroyed" listeners (after cleanup removals). */
+  destroyedListenerCount: () => number;
 }
 
 function makeWebContents(
@@ -77,6 +79,7 @@ function makeWebContents(
       destroyedListeners.clear();
       for (const l of listeners) l();
     },
+    destroyedListenerCount: () => destroyedListeners.size,
   };
   return wc;
 }
@@ -410,6 +413,52 @@ describe("rendererBridge — per-WebContents manifest cache (#9887)", () => {
 
     // The late resolve must NOT repopulate the cleared cache.
     expect(bridge.getCachedManifestForWebContents(161)).toBeNull();
+  });
+
+  it("registers the teardown-eviction listener only once across repeated fetches", async () => {
+    const wc = makeWebContents(171);
+    mockWebContentsRegistry.set(171, wc);
+    autoReplyManifest(wc, [{ id: "x" }] as ActionManifestEntry[]);
+
+    // Three sequential fetches: each per-request destroyed listener is cleaned
+    // up on resolve, so only the single per-WebContents eviction listener
+    // should remain — the wired-id guard must not register a second one.
+    await bridge.requestManifestForWebContents(171);
+    await bridge.requestManifestForWebContents(171);
+    await bridge.requestManifestForWebContents(171);
+
+    expect(wc.destroyedListenerCount()).toBe(1);
+  });
+
+  it("rejects and caches nothing when the pinned view is destroyed mid-flight", async () => {
+    const wc = makeWebContents(181);
+    mockWebContentsRegistry.set(181, wc);
+    // Manual mode: the fetch stays in flight until we act.
+    autoReplyManifest(wc, [{ id: "never" }] as ActionManifestEntry[], { manual: true });
+
+    const inflight = bridge.requestManifestForWebContents(181);
+    await Promise.resolve();
+    wc.triggerDestroyed();
+
+    await expect(inflight).rejects.toThrow(/MCP renderer bridge destroyed/);
+    expect(bridge.getCachedManifestForWebContents(181)).toBeNull();
+  });
+
+  it("after clearCache, a fresh fetch repopulates the cache with the new manifest", async () => {
+    const wc = makeWebContents(191);
+    mockWebContentsRegistry.set(191, wc);
+    autoReplyManifest(wc, [{ id: "first" }] as ActionManifestEntry[]);
+
+    await bridge.requestManifestForWebContents(191);
+    bridge.clearCache();
+    expect(bridge.getCachedManifestForWebContents(191)).toBeNull();
+
+    // A legitimate subsequent fetch must still succeed and populate the cache —
+    // the resurrection guard only blocks stale writes, not new ones.
+    autoReplyManifest(wc, [{ id: "second" }] as ActionManifestEntry[]);
+    await bridge.requestManifestForWebContents(191);
+
+    expect(bridge.getCachedManifestForWebContents(191)).toEqual([{ id: "second" }]);
   });
 });
 
