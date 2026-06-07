@@ -297,7 +297,31 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const manifest = await requestManifest();
+    // Prefer a live fetch so runtime action-set changes (plugin enable/disable)
+    // are reflected. On failure (renderer bridge unavailable / timed out /
+    // destroyed) fall back to the last-known cached manifest instead of failing
+    // the whole tools/list (#9892). For pinned sessions (#7003) getCachedManifest
+    // always returns null, so they correctly fail closed rather than serve
+    // another window's tool surface. `=== null` (not `!manifest`) so an empty
+    // manifest — a valid zero-tool surface — is not misread as "unavailable".
+    //
+    // Snapshot the fallback BEFORE the await: getCachedManifest() reads the
+    // live session→WebContents map, and a pinned session can be torn down
+    // (map entry deleted) while requestManifest() is in flight. Reading it
+    // after the await would then see the session as unpinned and return the
+    // shared cache — another window's tool surface — defeating #7003. Taken
+    // synchronously here, the request is still in flight so the pin holds.
+    const cachedFallback = getCachedManifest();
+    let manifest: import("../../../shared/types/actions.js").ActionManifestEntry[];
+    try {
+      manifest = await requestManifest();
+    } catch (err) {
+      if (cachedFallback === null) {
+        throw new McpError(ErrorCode.InternalError, "Action manifest unavailable");
+      }
+      console.warn("[MCP] tools/list using cached manifest after live fetch failed:", err);
+      manifest = cachedFallback;
+    }
     const tier = sessionStore.getTier(sessionId);
     const fullToolSurface = getFullToolSurface();
     const tools = manifest

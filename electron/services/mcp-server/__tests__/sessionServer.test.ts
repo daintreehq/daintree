@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { ActionManifestEntry, ActionId } from "../../../../shared/types/actions.js";
 
 vi.mock("electron", () => ({
   app: {
@@ -175,6 +176,165 @@ async function callTool(
     }
   ) as Promise<{ content: unknown; isError?: boolean; structuredContent?: unknown }>;
 }
+
+async function listTools(server: ReturnType<typeof createSessionServer>) {
+  const handlers = (
+    server as unknown as {
+      _requestHandlers: Map<string, (req: unknown, extra: unknown) => Promise<unknown>>;
+    }
+  )._requestHandlers;
+  const handler = handlers.get("tools/list");
+  if (!handler) throw new Error("tools/list handler not found");
+  return handler(
+    {
+      method: "tools/list",
+      params: {},
+      jsonrpc: "2.0",
+      id: 1,
+    },
+    {
+      signal: new AbortController().signal,
+      _meta: {},
+      sendNotification: vi.fn(),
+      requestId: 1,
+    }
+  ) as Promise<{ tools: Array<{ name: string }> }>;
+}
+
+function makeManifestEntry(id: string): ActionManifestEntry {
+  return {
+    id: id as ActionId,
+    name: id,
+    title: id,
+    description: `description for ${id}`,
+    category: "test",
+    kind: "query",
+    danger: "safe" as const,
+    enabled: true,
+    requiresArgs: false,
+    inputSchema: { type: "object", properties: {} },
+  };
+}
+
+describe("sessionServer tools/list handler", () => {
+  // tier "external" + fullToolSurface bypasses the per-id allowlist in
+  // shouldExposeTool, so any non-restricted entry surfaces — keeps these tests
+  // decoupled from TIER_ALLOWLISTS membership.
+  function fullSurfaceDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
+    return fakeDeps({
+      sessionStore: fakeSessionStore("external"),
+      getFullToolSurface: vi.fn(() => true),
+      ...overrides,
+    });
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns the live manifest when requestManifest succeeds", async () => {
+    const deps = fullSurfaceDeps({
+      requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("fresh_tool")]),
+      getCachedManifest: vi.fn(() => [makeManifestEntry("stale_tool")]),
+    });
+    const server = createSessionServer("tools-list-fresh", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await listTools(server);
+
+    // Fresh result wins over the (different) cache, proving the live path is used.
+    expect(result.tools.map((t) => t.name)).toEqual(["fresh_tool"]);
+  });
+
+  it("falls back to the cached manifest, warning with the error, when requestManifest rejects", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const rejection = new Error("Manifest request timed out");
+    const deps = fullSurfaceDeps({
+      requestManifest: vi.fn().mockRejectedValue(rejection),
+      getCachedManifest: vi.fn(() => [makeManifestEntry("cached_tool")]),
+    });
+    const server = createSessionServer("tools-list-fallback", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await listTools(server);
+
+    expect(result.tools.map((t) => t.name)).toEqual(["cached_tool"]);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    // The rejection must reach the log so operators can diagnose the stale serve.
+    expect(warnSpy.mock.calls[0]).toContain(rejection);
+  });
+
+  it("applies the tier/visibility filter on the cached fallback path", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const deps = fullSurfaceDeps({
+      requestManifest: vi.fn().mockRejectedValue(new Error("Manifest request timed out")),
+      getCachedManifest: vi.fn(() => [
+        makeManifestEntry("allowed_tool"),
+        { ...makeManifestEntry("restricted_tool"), danger: "restricted" as const },
+      ]),
+    });
+    const server = createSessionServer("tools-list-filtered-cache", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await listTools(server);
+
+    // shouldExposeTool drops restricted entries even on the cache path.
+    expect(result.tools.map((t) => t.name)).toEqual(["allowed_tool"]);
+  });
+
+  it("fails closed with an McpError when requestManifest rejects and no cache exists", async () => {
+    const deps = fullSurfaceDeps({
+      requestManifest: vi.fn().mockRejectedValue(new Error("MCP renderer bridge unavailable")),
+      getCachedManifest: vi.fn(() => null),
+    });
+    const server = createSessionServer("tools-list-failclosed", deps);
+    await server.connect(makeMockTransport());
+
+    await expect(listTools(server)).rejects.toBeInstanceOf(McpError);
+    await expect(listTools(server)).rejects.toMatchObject({
+      code: ErrorCode.InternalError,
+      message: expect.stringContaining("Action manifest unavailable"),
+    });
+  });
+
+  it("fails closed even if the session is unpinned after the await (snapshot before async boundary)", async () => {
+    // Pinned session: getCachedManifest returns null while the request is in
+    // flight, then teardown flips it to a foreign manifest. The handler must
+    // use the pre-await snapshot (null) and fail closed — never serve the
+    // foreign cache (#7003 cross-window isolation).
+    let firstCall = true;
+    const deps = fullSurfaceDeps({
+      requestManifest: vi.fn().mockRejectedValue(new Error("MCP renderer bridge destroyed")),
+      getCachedManifest: vi.fn(() => {
+        if (firstCall) {
+          firstCall = false;
+          return null;
+        }
+        return [makeManifestEntry("foreign_tool")];
+      }),
+    });
+    const server = createSessionServer("tools-list-race", deps);
+    await server.connect(makeMockTransport());
+
+    await expect(listTools(server)).rejects.toBeInstanceOf(McpError);
+    // getCachedManifest was read exactly once — synchronously, before the await.
+    expect(deps.getCachedManifest).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an empty cached manifest as a valid zero-tool surface, not unavailable", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const deps = fullSurfaceDeps({
+      requestManifest: vi.fn().mockRejectedValue(new Error("MCP renderer bridge destroyed")),
+      getCachedManifest: vi.fn(() => []),
+    });
+    const server = createSessionServer("tools-list-empty-cache", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await listTools(server);
+
+    expect(result.tools).toEqual([]);
+  });
+});
 
 describe("sessionServer prompt handler", () => {
   it("renders start_issue prompt with valid string argument", async () => {
